@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>LED Installation</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Full-screen LED visualisation canvas -->
+  <canvas id="main-canvas"></canvas>
+
+  <!-- Artist identity — fades after a few seconds -->
+  <header id="artist-header">
+    <p id="artist-name">Adrian Rasmussen</p>
+    <h1 id="piece-name">—</h1>
+  </header>
+
+  <!-- Control panel — always visible at bottom -->
+  <footer id="control-footer">
+
+    <!-- Params panel — shown when active scene has sliders -->
+    <div id="params-panel" class="hidden"></div>
+
+    <!-- Tint panel — shown when tint is toggled open -->
+    <div id="tint-panel" class="hidden">
+      <div class="tint-row">
+        <label>Hue</label>
+        <input type="range" id="tint-hue" min="0" max="360" value="0" />
+        <span id="tint-hue-val">0°</span>
+      </div>
+      <div class="tint-row">
+        <label>Sat</label>
+        <input type="range" id="tint-sat" min="0" max="100" value="100" />
+        <span id="tint-sat-val">100%</span>
+      </div>
+      <div class="tint-row">
+        <label>Bri</label>
+        <input type="range" id="tint-bri" min="0" max="100" value="100" />
+        <span id="tint-bri-val">100%</span>
+      </div>
+      <button id="btn-reset-tint" class="tint-reset">Reset</button>
+    </div>
+
+    <!-- Scene selector -->
+    <div id="scenes-row"></div>
+
+    <!-- Status + brightness strip -->
+    <div id="bottom-strip">
+      <span id="conn-dot" class="conn-dot" title="WLED status"></span>
+
+      <label class="bri-label" for="sl-bri">BRI</label>
+      <input type="range" id="sl-bri" min="0" max="255" value="200" />
+      <span id="val-bri" class="bri-val">200</span>
+
+      <!-- New feature buttons -->
+      <button id="btn-tint"   class="strip-btn" title="Color tint">◐</button>
+      <button id="btn-audio"  class="strip-btn" title="Audio reactive">♪</button>
+      <div id="audio-meter" class="audio-meter hidden">
+        <div class="meter-bar" id="meter-bass"></div>
+        <div class="meter-bar" id="meter-mid"></div>
+        <div class="meter-bar" id="meter-treble"></div>
+      </div>
+      <button id="btn-seq"    class="strip-btn" title="Autoplay">▶</button>
+      <select id="seq-interval" class="seq-interval hidden">
+        <option value="15">15s</option>
+        <option value="30" selected>30s</option>
+        <option value="60">1m</option>
+        <option value="300">5m</option>
+      </select>
+      <button id="btn-fx"     class="strip-btn" title="WLED effects">FX</button>
+      <button id="btn-editor" class="strip-btn" title="Code editor">{ }</button>
+    </div>
+
+  </footer>
+
+  <!-- Demo shape picker — shown when no ledmap is loaded -->
+  <div id="demo-overlay">
+    <div class="demo-content">
+      <p class="demo-label">No LED map loaded — pick a shape to preview</p>
+      <div class="demo-shapes">
+        <button class="demo-shape-btn" data-shape="strip">
+          <span class="demo-icon">━━━</span>
+          <span>Strip</span>
+        </button>
+        <button class="demo-shape-btn" data-shape="grid">
+          <span class="demo-icon">⊞</span>
+          <span>Grid</span>
+        </button>
+        <button class="demo-shape-btn" data-shape="circle">
+          <span class="demo-icon">◯</span>
+          <span>Circle</span>
+        </button>
+        <button class="demo-shape-btn" data-shape="spiral">
+          <span class="demo-icon">🌀</span>
+          <span>Spiral</span>
+        </button>
+        <button class="demo-shape-btn" data-shape="rings">
+          <span class="demo-icon">⊚</span>
+          <span>Rings</span>
+        </button>
+      </div>
+      <div class="demo-count-row">
+        <label for="demo-count">LEDs</label>
+        <input type="range" id="demo-count" min="30" max="500" value="150" step="10" />
+        <span id="demo-count-val">150</span>
+      </div>
+      <p class="demo-hint">or drag &amp; drop a <code>ledmap.json</code> file anywhere</p>
+    </div>
+  </div>
+
+  <!-- WLED Effects browser -->
+  <div id="effects-panel" class="panel-overlay hidden">
+    <div class="panel-header">
+      <h2>WLED Effects</h2>
+      <button id="btn-fx-close">✕</button>
+    </div>
+    <div class="panel-search">
+      <input type="search" id="fx-search" placeholder="Search effects…" />
+    </div>
+    <div id="fx-list" class="fx-list"></div>
+  </div>
+
+  <!-- Code editor -->
+  <div id="editor-panel" class="panel-overlay hidden">
+    <div class="panel-header">
+      <select id="editor-scene-select"></select>
+      <button id="btn-new-scene">+ New</button>
+      <button id="btn-editor-close">✕</button>
+    </div>
+    <div id="editor-mount"></div>
+    <div class="editor-footer">
+      <button id="btn-compile">Compile &amp; Preview</button>
+      <button id="btn-save-scene">Save as New Scene</button>
+      <span id="editor-error" class="editor-error"></span>
+    </div>
+  </div>
+
+  <!-- Device picker — shown when multiple WLED devices found, or scan manually -->
+  <div id="device-picker" class="panel-overlay hidden">
+    <div class="panel-header">
+      <h2>WLED Devices</h2>
+      <button id="btn-picker-scan" class="picker-scan-btn">Scan network</button>
+      <button id="btn-picker-close">✕</button>
+    </div>
+    <div id="device-list" class="device-list">
+      <p class="device-scanning" id="device-scanning-msg">Scanning…</p>
+    </div>
+    <p class="device-hint">
+      Not seeing your device?
+      <button id="btn-picker-full-scan" class="link-btn">Run full subnet scan</button>
+    </p>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Light Weaver</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-mode="layout">
+  <header>
+    <div class="header-brand">Light Weaver</div>
+    <nav class="mode-nav">
+      <button class="mode-btn active" data-mode="layout">Layout</button>
+      <button class="mode-btn" data-mode="pattern">Pattern</button>
+      <button class="mode-btn" data-mode="export">Export</button>
+      <button class="mode-btn" data-mode="flash">Flash</button>
+    </nav>
+    <div class="header-actions">
+      <button id="btn-load-svg" title="Import SVG or AI — each Illustrator layer becomes one LED section">Import</button>
+      <input type="file" id="file-input" accept=".svg" hidden />
+      <div class="btn-group">
+        <button id="btn-save" title="Save project as JSON">Save</button>
+        <button id="btn-load" title="Load saved project">Load</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ── Drawing canvas ───────────────────────────────────────── -->
+    <div class="canvas-panel">
+      <div class="toolbar">
+        <button id="tool-select" class="tool active" title="Select strip — click to highlight, click canvas to deselect"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="margin-right:3px;vertical-align:-1px"><path d="M2 1l12 5.5-5 1.5L7.5 14z"/></svg>Select</button>
+        <button id="tool-delete" class="tool" title="Delete strip (click to remove)"><svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style="margin-right:3px;vertical-align:-1px"><path d="M5.5 1h5l1 1.5H14v1.5H2V2.5h2.5zm-2 3.5h9l-.8 10H4.3zm3 2v5.5h1V6.5zm3 0v5.5h1V6.5z"/></svg>Delete</button>
+        <button id="btn-undo" title="Undo (Cmd+Z)" disabled>↩ Undo</button>
+        <button id="btn-redo" title="Redo (Cmd+Shift+Z)" disabled>↪ Redo</button>
+        <span class="divider"></span>
+        <button id="btn-clear-canvas">Clear all</button>
+        <button id="btn-toggle-preview">Hide LEDs</button>
+        <button id="btn-toggle-dot-mode" title="Cycle glow mode: Center → Outward → Inward → Dots">◉ Glow</button>
+        <button id="btn-toggle-heatmap" title="Toggle LED coverage heatmap">⬡ Coverage</button>
+        <button id="btn-toggle-directed" title="Toggle directed glow — elongates bloom in each strip's emit direction">◈ Direct</button>
+        <span class="divider"></span>
+        <label class="toolbar-label" title="Glow intensity — scales the bloom radius around each LED">
+          Glow <input type="range" id="preview-glow" min="1" max="50" value="10" />
+          <span id="preview-glow-val" class="slider-val">1.0×</span>
+        </label>
+        <label class="toolbar-label" title="LED dot size in the preview">
+          Dot <input type="range" id="preview-scale" min="1" max="10" value="1" />
+          <span id="preview-scale-val" class="slider-val">1</span>
+        </label>
+        <span class="divider"></span>
+        <button id="btn-play-toolbar" class="tool btn-play-toolbar" title="Run pattern (Space)">▶ Play</button>
+      </div>
+      <div class="canvas-wrapper">
+        <svg id="drawing-canvas" xmlns="http://www.w3.org/2000/svg">
+          <g id="imported-svg"></g>
+          <g id="layer-hits"></g>
+          <g id="selection-overlay"></g>
+          <g id="strips-layer"></g>
+          <g id="connections-layer"></g>
+        </svg>
+
+        <div class="zoom-controls">
+          <button id="btn-zoom-in" title="Zoom in (scroll wheel)">+</button>
+          <div class="zoom-level" id="zoom-level">100%</div>
+          <button id="btn-zoom-out" title="Zoom out">−</button>
+          <button id="btn-zoom-reset" title="Reset zoom" style="font-size:9px;height:22px">1:1</button>
+        </div>
+        <div class="scale-overlay" id="scale-overlay">— × —</div>
+
+        <!-- Floating strip pixel-count editor -->
+        <div id="strip-popup" class="strip-popup hidden">
+          <button class="strip-popup-close" id="strip-popup-close" title="Close">×</button>
+          <div class="popup-strip-name strip-popup-title"></div>
+          <div class="strip-popup-row">
+            <label class="popup-lbl">LEDs</label>
+            <input type="number" id="popup-pixels-input" class="popup-pixels"
+                   min="1" max="4096" style="width:64px" />
+          </div>
+          <div class="strip-popup-row">
+            <label class="popup-lbl">Length</label>
+            <span class="popup-length"></span>
+          </div>
+          <div class="strip-popup-row">
+            <label class="popup-lbl">Pitch</label>
+            <span class="popup-pitch"></span>
+          </div>
+          <div class="strip-popup-row">
+            <label class="popup-lbl">Pattern</label>
+            <select id="popup-pattern-select" style="flex:1;font-size:11px"></select>
+          </div>
+          <div class="strip-popup-divider"></div>
+          <div class="strip-popup-row emit-row">
+            <label class="popup-lbl">Points</label>
+            <div class="emit-control">
+              <canvas id="popup-compass" width="58" height="58" title="Click or drag to set which direction this LED strip faces. Affects coverage visualization."></canvas>
+              <div class="emit-aside">
+                <span id="popup-emit-label" class="emit-label-text">Omnidirectional</span>
+                <button id="popup-emit-clear" class="btn-tiny" title="Reset to omnidirectional — light spreads in all directions">↻ Any dir</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Empty state / onboarding ────────────────────────── -->
+        <div id="canvas-empty">
+          <div class="empty-card">
+            <p class="empty-title">No LED map loaded — drop your file or pick a template</p>
+
+            <div class="empty-drop-zone" id="empty-drop-zone">
+              <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+                <path d="M6 30 L6 38 L38 38 L38 30" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M22 6 L22 28 M13 16 L22 6 L31 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <p>Drop a <strong>.svg</strong> file here<br>
+                <span>or <button id="btn-empty-browse" class="link-btn">browse to import</button></span>
+              </p>
+            </div>
+
+            <div class="empty-divider"><span>or start with a template</span></div>
+
+            <div class="empty-strip-config">
+              <label class="empty-strip-field">
+                <span>Strip type</span>
+                <select id="empty-led-type"></select>
+              </label>
+              <label class="empty-strip-field">
+                <span>Density</span>
+                <select id="empty-density">
+                  <option value="30">30 /m</option>
+                  <option value="60" selected>60 /m</option>
+                  <option value="96">96 /m</option>
+                  <option value="144">144 /m</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="empty-shapes">
+              <button class="shape-btn" data-shape="strip">
+                <svg viewBox="0 0 32 32" fill="none"><line x1="4" y1="16" x2="28" y2="16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+                <span>Strip</span>
+              </button>
+              <button class="shape-btn" data-shape="circle">
+                <svg viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" stroke="currentColor" stroke-width="2"/></svg>
+                <span>Circle</span>
+              </button>
+              <button class="shape-btn" data-shape="grid">
+                <svg viewBox="0 0 32 32" fill="none">
+                  <line x1="4"  y1="10" x2="28" y2="10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  <line x1="28" y1="16" x2="4"  y2="16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                  <line x1="4"  y1="22" x2="28" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <span>Grid</span>
+              </button>
+              <button class="shape-btn" data-shape="rings">
+                <svg viewBox="0 0 32 32" fill="none">
+                  <circle cx="16" cy="16" r="5"  stroke="currentColor" stroke-width="1.5"/>
+                  <circle cx="16" cy="16" r="9"  stroke="currentColor" stroke-width="1.5"/>
+                  <circle cx="16" cy="16" r="13" stroke="currentColor" stroke-width="1.5"/>
+                </svg>
+                <span>Rings</span>
+              </button>
+              <button class="shape-btn" data-shape="spiral">
+                <svg viewBox="0 0 32 32" fill="none"><path d="M16 16 C16 13 19 11 22 13 C25 15 24 20 21 22 C17 25 11 23 9 19 C7 13 11 7 17 6 C24 5 28 11 27 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <span>Spiral</span>
+              </button>
+            </div>
+
+            <label class="empty-led-row">
+              <span>LEDs</span>
+              <input type="range" id="empty-leds" min="10" max="500" value="144" step="1" />
+              <span id="empty-leds-val">144</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Side panel ───────────────────────────────────────────── -->
+    <div class="side-panel">
+
+      <!-- Sections tab -->
+      <div id="tab-strips" class="tab-content active">
+        <!-- Layer Inspector — shown when a canvas layer is clicked -->
+        <div id="layer-inspector" class="layer-inspector hidden">
+          <div class="inspector-header">
+            <span class="inspector-title">Configure Strip</span>
+            <button id="inspector-close-btn" class="btn-icon" title="Close inspector">×</button>
+          </div>
+          <div id="inspector-subpath-hint" class="inspector-subpath-hint" style="display:none"></div>
+          <div class="inspector-field-row">
+            <label class="inspector-lbl">Name</label>
+            <input type="text" id="inspector-name" placeholder="Strip name" style="flex:1" />
+          </div>
+          <div class="inspector-field-row">
+            <label class="inspector-lbl">Density</label>
+            <select id="inspector-density" style="flex:1"></select>
+          </div>
+          <div class="inspector-field-row" id="inspector-custom-row" style="display:none">
+            <label class="inspector-lbl">Custom</label>
+            <input type="number" id="inspector-custom-density" min="1" max="1000" value="60" style="width:60px" />
+            <span class="inspector-dim">LEDs/m</span>
+          </div>
+          <div class="inspector-field-row">
+            <label class="inspector-lbl">Length</label>
+            <span id="inspector-length" class="inspector-dim">—</span>
+          </div>
+          <div class="inspector-field-row">
+            <label class="inspector-lbl">LEDs</label>
+            <input type="number" id="inspector-led-count" min="1" max="4096" style="width:70px" />
+            <span id="inspector-count-note" class="inspector-dim">auto</span>
+          </div>
+          <div class="inspector-actions">
+            <button id="inspector-add-btn" class="btn-primary">+ Add Strip</button>
+            <button id="inspector-remove-btn" class="inspector-remove-btn" style="display:none">✕ Remove</button>
+          </div>
+        </div>
+
+        <!-- Path selection panel — shown when SVG paths are selected on canvas -->
+        <div id="path-selection-panel" class="path-sel-panel hidden">
+          <div class="path-sel-header">
+            <span class="path-sel-title">Selected Paths</span>
+            <span class="path-sel-hint">Shift+click to add more</span>
+            <button id="path-sel-clear" class="btn-icon" title="Clear selection">✕</button>
+          </div>
+          <ol id="path-sel-list" class="path-sel-list"></ol>
+          <div class="path-sel-actions">
+            <input type="text" id="path-sel-name" placeholder="Strip name…" class="path-sel-name-input" />
+            <button id="path-sel-add" class="btn-primary">+ Add as Strip</button>
+          </div>
+        </div>
+
+        <!-- Multi-select action bar (shown when 2+ sections are shift-selected) -->
+        <div id="multi-select-bar" class="multi-select-bar">
+          <span class="msel-count">0 sections selected</span>
+          <button id="btn-group-selected" title="Group the selected sections">⊞ Group</button>
+          <button id="btn-msel-clear" class="btn-icon" title="Clear selection" style="color:var(--dim)">✕</button>
+        </div>
+        <div class="layout-settings">
+          <label title="LED strip type used across this project">
+            Strip <select id="global-led-type" style="max-width:130px"></select>
+          </label>
+          <label title="Default LED density — sets pitch automatically">
+            Density <select id="default-density">
+              <option value="30">30 /m</option>
+              <option value="60" selected>60 /m</option>
+              <option value="96">96 /m</option>
+              <option value="144">144 /m</option>
+            </select>
+          </label>
+          <label title="Physical LED pitch in mm — controls auto LED count from path length">
+            Pitch <input type="number" id="pitch" value="16.6" step="0.1" style="width:52px" /> mm
+          </label>
+          <label title="SVG units per mm. Illustrator=2.8346, Inkscape=3.7795">
+            Scale <input type="number" id="px-per-mm" value="2.8346" step="0.0001" style="width:66px" /> px/mm
+          </label>
+        </div>
+        <div class="scenes-row">
+          <select id="scene-select" title="Saved scenes"><option value="">— no scene —</option></select>
+          <button id="btn-save-scene" title="Save current look as a scene">Save</button>
+          <button id="btn-delete-scene" title="Delete selected scene">✕</button>
+        </div>
+
+        <!-- Scene crossfade duration -->
+        <div class="crossfade-row">
+          <label for="crossfade-duration">Crossfade</label>
+          <input type="range" id="crossfade-duration" min="0" max="5000" step="100" value="1000" />
+          <span class="master-val" id="crossfade-duration-val">1.0s</span>
+        </div>
+        <div class="crossfade-progress" id="crossfade-progress"></div>
+
+        <div class="strips-header">
+          <span><span id="strip-count">0</span> sections</span>
+          <span>Total: <strong id="total-leds">0</strong> LEDs</span>
+          <button id="btn-new-group" title="Create a new section group">+ Group</button>
+        </div>
+        <input type="search" id="strips-search" class="strips-search" placeholder="Search sections…" aria-label="Filter sections" />
+
+        <ul id="strips-list"></ul>
+
+        <!-- Illustrator-style layers panel -->
+        <div id="artwork-layers-section" class="hidden">
+          <div class="strips-header alr-header">
+            <span class="alr-header-title">Layers <span id="artwork-layer-count" class="alr-count"></span></span>
+            <div class="alr-header-actions">
+              <button id="alr-group-btn" class="alr-action-btn hidden" title="Group selected paths">⊞ Group</button>
+              <button id="alr-toggle-all" class="alr-action-btn" title="Show or hide all">● All</button>
+            </div>
+          </div>
+          <ul id="artwork-layers-list" class="alr-tree"></ul>
+        </div>
+
+        <details class="section-hint">
+          <summary>Shortcuts &amp; tips</summary>
+          <p>
+            <strong>Import SVG</strong> → artwork loads on canvas, click a layer
+            to configure its LED strip type and pixel count.<br><br>
+            Or pick a <strong>template</strong> from the start screen.<br><br>
+            <kbd>S</kbd> select &nbsp;<kbd>X</kbd> delete &nbsp;<kbd>P</kbd> play/stop &nbsp;<kbd>Space</kbd>+drag pan
+          </p>
+        </details>
+      </div>
+
+      <!-- Pattern tab -->
+      <div id="tab-pattern" class="tab-content">
+        <div class="master-controls">
+          <div class="master-ctrl-row">
+            <label class="mc-label" for="master-speed" title="Scales animation speed for all patterns">Speed</label>
+            <input type="range" id="master-speed" min="0" max="400" value="100" step="1" />
+            <span class="mc-val" id="master-speed-val">1.00×</span>
+          </div>
+          <div class="master-ctrl-row">
+            <label class="mc-label" for="master-brightness" title="Master brightness">Bright</label>
+            <input type="range" id="master-brightness" min="0" max="100" value="100" />
+            <span class="mc-val" id="master-brightness-val">100%</span>
+          </div>
+          <div class="master-ctrl-row">
+            <label class="mc-label" for="master-saturation">Sat</label>
+            <input type="range" id="master-saturation" min="0" max="100" value="100" />
+            <span class="mc-val" id="master-saturation-val">100%</span>
+          </div>
+          <div class="master-ctrl-row">
+            <label class="mc-label">
+              <input type="checkbox" id="gamma-enabled" /> Gamma
+            </label>
+            <select id="gamma-value" title="Gamma correction value" style="flex:1">
+              <option value="2.2" selected>2.2 std</option>
+              <option value="2.8">2.8 warm</option>
+              <option value="1.8">1.8 lin</option>
+            </select>
+            <label class="mc-label" for="bpm-input" style="margin-left:6px" title="Tap to sync BPM with music">BPM</label>
+            <input type="number" id="bpm-input" value="120" min="20" max="600" step="1" style="width:42px" />
+            <button id="btn-tap-bpm" title="Tap in time with music">Tap</button>
+          </div>
+          <div class="master-ctrl-row">
+            <label class="mc-label">MIDI</label>
+            <button id="btn-midi-enable" title="Enable Web MIDI">Connect</button>
+            <button id="btn-midi-learn" title="MIDI learn: click then move a controller" style="margin-left:4px">Learn</button>
+            <span id="midi-status" class="mc-val" style="flex:1;text-align:right;font-size:9px;color:var(--dim)">off</span>
+          </div>
+        </div>
+
+        <!-- ── Pattern card picker ──────────────────────────────── -->
+        <div class="pattern-picker-header">
+          <span class="pattern-picker-label">Effect</span>
+          <div class="pattern-picker-actions">
+            <button id="btn-show-library" class="btn-library-toggle" title="Browse built-in effects">⊞ Library</button>
+            <button id="btn-play-cards" class="btn-play-inline" title="Play (P)">▶ Play</button>
+          </div>
+        </div>
+
+        <!-- ── Effect library drawer ────────────────────────────── -->
+        <div id="effect-library" class="effect-library hidden">
+          <div class="lib-header">
+            <span>Built-in Effects</span>
+            <button id="btn-close-library" class="btn-icon" title="Close">×</button>
+          </div>
+          <div id="library-cats" class="library-cats"></div>
+          <div id="library-list" class="library-list"></div>
+        </div>
+
+        <div id="pattern-cards" class="pattern-cards"></div>
+
+        <!-- ── Palette ──────────────────────────────────────────── -->
+        <div class="palette-row">
+          <span class="palette-label">Palette</span>
+          <input type="color" class="palette-swatch" id="pal-0" value="#ff6b6b" />
+          <input type="color" class="palette-swatch" id="pal-1" value="#ffd166" />
+          <input type="color" class="palette-swatch" id="pal-2" value="#06d6a0" />
+          <input type="color" class="palette-swatch" id="pal-3" value="#118ab2" />
+          <input type="color" class="palette-swatch" id="pal-4" value="#ef476f" />
+          <input type="color" class="palette-swatch" id="pal-5" value="#ff9f1c" />
+        </div>
+
+        <!-- ── Per-pattern knobs (auto-generated from @param) ───── -->
+        <div id="params-container"></div>
+
+        <!-- ── Code editor (advanced / collapsed by default) ────── -->
+        <details id="code-editor-details" class="code-editor-details">
+          <summary>Edit code</summary>
+          <div class="pattern-row" style="margin-top:6px">
+            <select id="pattern-select"></select>
+            <button id="btn-new-pattern"    title="New pattern">+</button>
+            <button id="btn-delete-pattern" title="Delete pattern">✕</button>
+            <button id="btn-export-pattern" title="Export pattern to file">↓</button>
+            <button id="btn-import-pattern" title="Import pattern from file">↑ Load</button>
+          </div>
+          <label style="margin:4px 0;display:flex;gap:6px;align-items:center">
+            <span style="color:var(--dim);min-width:36px">Name</span>
+            <input type="text" id="pattern-name" style="flex:1" />
+          </label>
+          <div id="pattern-editor"></div>
+          <div class="pattern-actions">
+            <button id="btn-run-pattern">▶ Run</button>
+            <button id="btn-stop-pattern" disabled>■ Stop</button>
+            <span id="pattern-error" class="error"></span>
+          </div>
+          <details class="api-ref">
+            <summary>API reference</summary>
+            <pre>// Per-pixel — return { r, g, b } each 0–255
+// index      LED index in strip (or chain if connected)
+// x, y       normalised position 0–1
+// t          elapsed seconds
+// time       0–1 cycling (~65 s period)
+// pixelCount total LEDs in strip or chain
+// palette[]  six {r,g,b} colour swatches (0–1)
+// beat       0–1 per BPM cycle
+// beatSin    sine of beat (0–1)
+// params.*   @param sliders
+//
+// stripId        strip identifier string
+// stripProgress  0–1 position along this strip
+//
+// helpers: hsv  rgb  wave  triangle  square  ping
+//          sin  cos  noise  fbm  randomF  polar
+//          clamp  lerp  fract  smoothstep  easeIn  easeOut
+//          samplePalette  map  norm  mix</pre>
+          </details>
+        </details>
+      </div>
+
+      <!-- Export tab -->
+      <div id="tab-export" class="tab-content">
+        <div class="export-info">
+          <div>Total LEDs: <strong id="export-total">0</strong></div>
+          <div>Canvas size: <strong id="export-canvas-size">—</strong></div>
+        </div>
+        <div class="wled-push-row">
+          <span class="wled-label">WLED IP</span>
+          <input type="text" id="wled-ip" placeholder="192.168.1.x" style="width:110px" />
+          <button id="btn-wled-connect">Connect</button>
+          <span id="wled-status" class="wled-status"></span>
+          <span class="wled-push-count" id="wled-push-count"></span>
+        </div>
+        <p class="wled-note">Streams live pixel data to WLED at 25 fps. Requires CORS enabled on WLED or a local proxy.</p>
+        <fieldset>
+          <legend>Coordinate options</legend>
+          <label><input type="checkbox" id="export-normalize" checked /> Normalize 0–1</label>
+          <div style="display:flex;gap:12px">
+            <label style="flex:1;gap:4px">Scale X <input type="number" id="export-scale-x" value="1" step="0.1" style="width:52px" /></label>
+            <label style="flex:1;gap:4px">Scale Y <input type="number" id="export-scale-y" value="1" step="0.1" style="width:52px" /></label>
+          </div>
+          <div style="display:flex;gap:12px">
+            <label style="flex:1;gap:4px">Offset X <input type="number" id="export-offset-x" value="0" style="width:52px" /></label>
+            <label style="flex:1;gap:4px">Offset Y <input type="number" id="export-offset-y" value="0" style="width:52px" /></label>
+          </div>
+        </fieldset>
+        <div class="export-buttons">
+          <button id="btn-export-wled" title="WLED web UI → Config → LED Preferences → 2D layout"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>WLED ledmap.json</button>
+          <button id="btn-export-fastled" title="PROGMEM C++ array for Arduino/ESP32"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>FastLED ledmap.h</button>
+          <button id="btn-export-csv"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>CSV</button>
+        </div>
+        <pre id="export-preview">(no sections yet)</pre>
+      </div>
+
+      <!-- Flash tab -->
+      <div id="tab-flash" class="tab-content">
+
+        <div class="flash-bootloader-steps">
+          <p class="flash-steps-title">Enter bootloader mode first</p>
+          <ol class="flash-steps-list">
+            <li>Hold <kbd>BOOT</kbd></li>
+            <li>Press + release <kbd>RESET</kbd></li>
+            <li>Release <kbd>BOOT</kbd></li>
+          </ol>
+        </div>
+
+        <div class="flash-firmware-row">
+          <button id="btn-flash-fetch" title="Check GitHub for the latest WLED release">↓ Latest WLED</button>
+          <span class="flash-firmware-or">or</span>
+          <button id="btn-flash-browse">Browse .bin</button>
+          <input type="file" id="flash-file-input" accept=".bin" hidden />
+        </div>
+
+        <div id="flash-release-confirm" class="flash-release-confirm hidden">
+          <div class="frc-version">
+            <span id="flash-confirm-version"></span>
+            <span class="frc-date" id="flash-confirm-date"></span>
+          </div>
+          <div class="frc-file">
+            <span id="flash-confirm-filename"></span>
+            <span class="frc-size" id="flash-confirm-size"></span>
+          </div>
+          <div class="frc-actions">
+            <button id="btn-flash-confirm-use" class="btn-primary">Use this firmware</button>
+            <button id="btn-flash-confirm-cancel">Cancel</button>
+          </div>
+        </div>
+
+        <div class="flash-file-row">
+          <span class="flash-file-label">Firmware:</span>
+          <span id="flash-filename" class="flash-filename">No file selected</span>
+        </div>
+
+        <div class="flash-addr-row">
+          <label for="flash-address">Address</label>
+          <input type="text" id="flash-address" value="0x0" style="width:72px" />
+          <span class="flash-addr-hint">0x0 for full WLED binary</span>
+        </div>
+
+        <label class="flash-erase-row" title="Wipe entire flash before writing — use this to clear old WiFi credentials or config">
+          <input type="checkbox" id="flash-erase-all" />
+          Erase all flash first
+          <span class="flash-erase-hint">(slower — use to clear old config)</span>
+        </label>
+
+        <div class="flash-connect-row">
+          <button id="btn-flash-connect">Connect</button>
+          <span id="flash-status" class="flash-status"></span>
+        </div>
+
+        <button id="btn-flash-write" disabled class="btn-primary flash-btn-write">⚡ Flash Firmware</button>
+
+        <div class="flash-progress-wrap">
+          <div class="flash-progress-track">
+            <div class="flash-progress-bar" id="flash-progress-bar"></div>
+          </div>
+          <span id="flash-progress-pct" class="flash-progress-pct">0%</span>
+        </div>
+
+        <pre id="flash-log" class="flash-log"></pre>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span id="status-fps">FPS: —</span>
+    <span id="status-mode">Tool: select</span>
+    <span id="status-coords">—</span>
+    <span id="status-leds"></span>
+  </footer>
+
+  <!-- ── Full-page drag overlay ─────────────────────────────────────────── -->
+  <div id="drag-overlay">
+    <div class="drag-overlay-inner">
+      <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+        <path d="M8 40 L8 48 L48 48 L48 40" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M28 8 L28 36 M17 20 L28 8 L39 20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <p>Drop SVG or Illustrator file</p>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

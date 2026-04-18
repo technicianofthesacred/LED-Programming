@@ -1,0 +1,467 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --accent:  #06d6a0;
+  --warn:    #ff6b6b;
+  --dim:     rgba(255,255,255,0.25);
+  --glass:   rgba(8, 8, 8, 0.82);
+  --border:  rgba(255,255,255,0.07);
+  --radius:  6px;
+  --font:    'SF Pro Display', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono:    'SF Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  cursor: none; /* hide system cursor — we want full immersion */
+}
+
+/* ── Main canvas — fills entire viewport ─────────────────────────────────── */
+
+#main-canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────────── */
+
+.top-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font);
+  transition: opacity .4s ease, transform .4s ease;
+}
+
+.top-bar.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px);
+}
+
+.app-wordmark {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 6px;
+  padding: 3px;
+}
+
+.toggle-btn {
+  padding: 4px 14px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--dim);
+  font: 11px/1 var(--font);
+  font-weight: 500;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.toggle-btn:hover  { color: #fff; }
+.toggle-btn.active { background: rgba(255,255,255,0.12); color: #fff; }
+
+.conn-widget {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conn-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #333;
+  flex-shrink: 0;
+  transition: background .3s;
+}
+.conn-dot.connected    { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.conn-dot.connecting   { background: #f5a623; animation: pulse-dot 1s infinite; }
+.conn-dot.error        { background: var(--warn); }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .3; }
+}
+
+.conn-widget input[type="text"] {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: rgba(255,255,255,0.7);
+  font: 11px var(--mono);
+  padding: 4px 9px;
+  width: 130px;
+}
+.conn-widget input:focus { outline: none; border-color: var(--accent); color: #fff; }
+
+/* Scan results dropdown */
+.scan-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 20px;
+  min-width: 220px;
+  background: rgba(14,14,14,0.97);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  overflow: hidden;
+  z-index: 400;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+
+.scan-results.hidden { display: none; }
+
+.scan-result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.12s;
+}
+.scan-result-item:hover { background: rgba(255,255,255,0.07); }
+
+.scan-result-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  flex-shrink: 0;
+}
+
+.scan-result-name {
+  font-size: 12px;
+  color: rgba(255,255,255,0.8);
+  flex: 1;
+}
+
+.scan-result-ip {
+  font: 10px var(--mono);
+  color: rgba(255,255,255,0.3);
+}
+
+.scan-msg {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  font-family: var(--font);
+}
+
+/* ── Drop overlay ─────────────────────────────────────────────────────────── */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.92);
+  transition: opacity .5s ease;
+}
+.drop-overlay.hidden { opacity: 0; pointer-events: none; }
+
+.drop-content {
+  text-align: center;
+  color: rgba(255,255,255,0.7);
+  font-family: var(--font);
+  max-width: 380px;
+  padding: 20px;
+}
+
+.drop-icon {
+  font-size: 56px;
+  line-height: 1;
+  color: var(--accent);
+  margin-bottom: 28px;
+  opacity: 0.7;
+}
+
+.drop-content h2 {
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: -.01em;
+  margin-bottom: 10px;
+  color: #fff;
+}
+
+.drop-content p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255,255,255,0.4);
+  margin-bottom: 28px;
+}
+
+.drop-content code {
+  font-family: var(--mono);
+  color: var(--accent);
+  font-size: 0.95em;
+}
+
+/* ── Control bar ──────────────────────────────────────────────────────────── */
+
+.control-bar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 20px 18px;
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  border-top: 1px solid var(--border);
+  font-family: var(--font);
+  transition: opacity .4s ease, transform .4s ease;
+}
+
+.control-bar.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+}
+
+/* Quick sliders */
+.quick-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.slider-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  color: rgba(255,255,255,0.3);
+  width: 22px;
+  text-align: right;
+}
+
+.slider-row input[type="range"] {
+  width: 90px;
+  height: 2px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,0.15);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+
+.slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(255,255,255,0.4);
+}
+
+.slider-val {
+  font: 10px var(--mono);
+  color: rgba(255,255,255,0.3);
+  width: 26px;
+  text-align: right;
+}
+
+/* Scene cards */
+.scenes-row {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 2px 0;
+  align-items: center;
+}
+.scenes-row::-webkit-scrollbar { display: none; }
+
+.scene-card {
+  flex-shrink: 0;
+  width: 96px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color .2s, transform .15s;
+  user-select: none;
+  position: relative;
+}
+
+.scene-card:hover {
+  border-color: rgba(255,255,255,0.25);
+  transform: translateY(-2px);
+}
+
+.scene-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 16px rgba(6,214,160,0.3), 0 0 0 1px var(--accent);
+}
+
+.scene-card.active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 7px;
+  background: rgba(6,214,160,0.06);
+  pointer-events: none;
+}
+
+.scene-canvas-wrap {
+  width: 96px;
+  height: 58px;
+  background: #000;
+  position: relative;
+  overflow: hidden;
+}
+
+.scene-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.scene-footer {
+  padding: 5px 7px 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.scene-name {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  color: rgba(255,255,255,0.8);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-preset {
+  font: 9px var(--mono);
+  color: rgba(255,255,255,0.25);
+}
+
+/* Keyboard shortcut badge */
+.scene-key {
+  position: absolute;
+  top: 4px; right: 5px;
+  font: 8px/1 var(--mono);
+  color: rgba(255,255,255,0.3);
+  background: rgba(0,0,0,0.5);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Bar actions */
+.bar-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.bar-btn {
+  width: 32px; height: 32px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+}
+.bar-btn:hover { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.9); }
+
+/* ── Shared button ────────────────────────────────────────────────────────── */
+
+button {
+  padding: 5px 14px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: var(--radius);
+  color: rgba(255,255,255,0.8);
+  font: 12px var(--font);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+  white-space: nowrap;
+}
+button:hover  { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.3); color: #fff; }
+button:active { background: rgba(255,255,255,0.06); }
+
+#btn-browse {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 700;
+  padding: 9px 24px;
+  font-size: 13px;
+  letter-spacing: .03em;
+}
+#btn-browse:hover { background: #05c490; border-color: #05c490; }
+
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  font: 11px var(--mono);
+  color: rgba(255,255,255,0.5);
+}
+
+.hint { font-size: 12px; color: rgba(255,255,255,0.25); }
+
+/* ── Drag-over state ──────────────────────────────────────────────────────── */
+
+body.drag-over .drop-overlay {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+body.drag-over .drop-content {
+  opacity: 1;
+}
+
+/* ── Custom cursor ────────────────────────────────────────────────────────── */
+
+/* Restore cursor over interactive elements */
+button, input, label, .scene-card, .slider-row, .toggle-btn, .bar-btn {
+  cursor: pointer;
+}
+input[type="text"] { cursor: text; }
+input[type="range"] { cursor: ew-resize; }

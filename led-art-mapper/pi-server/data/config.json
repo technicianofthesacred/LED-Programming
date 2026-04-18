@@ -1,0 +1,17 @@
+{
+  "artistName": "Adrian Rasmussen",
+  "pieceName":  "Untitled 01",
+  "wledIp":     "192.168.4.1",
+  "accent":     "#06d6a0",
+
+  "scenes": [
+    { "id": "fire",     "name": "Fire",     "preset": 1 },
+    { "id": "aurora",   "name": "Aurora",   "preset": 2 },
+    { "id": "plasma",   "name": "Plasma",   "preset": 3 },
+    { "id": "ocean",    "name": "Ocean",    "preset": 4 },
+    { "id": "ember",    "name": "Ember",    "preset": 5 },
+    { "id": "midnight", "name": "Midnight", "preset": 6 },
+    { "id": "pulse",    "name": "Pulse",    "preset": 7 },
+    { "id": "electric", "name": "Electric", "preset": 8 }
+  ]
+}
