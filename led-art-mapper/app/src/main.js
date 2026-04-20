@@ -142,11 +142,36 @@ const _history = [];
 let   _future  = [];
 const _MAX_HISTORY = 50;
 
+// Debounce for scroll-wheel inputs — one snapshot per gesture, not per tick
+let _wheelSnapTimer = null;
+let _wheelSnapPending = false;
+function _pushHistoryWheel() {
+  if (!_wheelSnapPending) {
+    _wheelSnapPending = true;
+    _pushHistory();
+  }
+  clearTimeout(_wheelSnapTimer);
+  _wheelSnapTimer = setTimeout(() => { _wheelSnapPending = false; }, 800);
+}
+
 function _snapshot() {
+  // Serialize artworkLayers without circular refs (drop any live DOM refs)
+  const serializeLayers = layers => layers.map(l => {
+    const { subPaths, ...rest } = l;
+    return {
+      ...rest,
+      subPaths: subPaths?.map(sp => ({ ...sp })) ?? [],
+    };
+  });
   return {
-    strips:      state.strips.map(({ pixels: _px, ...s }) => JSON.parse(JSON.stringify(s))),
-    connections: JSON.parse(JSON.stringify(state.connections)),
-    groups:      JSON.parse(JSON.stringify(state.groups)),
+    strips:            state.strips.map(({ pixels: _px, ...s }) => JSON.parse(JSON.stringify(s))),
+    connections:       JSON.parse(JSON.stringify(state.connections)),
+    groups:            JSON.parse(JSON.stringify(state.groups)),
+    svgSource:         state._svgSource ?? null,
+    artworkLayers:     JSON.parse(JSON.stringify(serializeLayers(state.artworkLayers))),
+    artworkLayerState: JSON.parse(JSON.stringify(state.artworkLayerState)),
+    layerOrder:        JSON.parse(JSON.stringify(state.layerOrder)),
+    layerGroups:       JSON.parse(JSON.stringify(state.layerGroups)),
   };
 }
 
@@ -158,7 +183,38 @@ function _pushHistory() {
 }
 
 function _restoreSnapshot(snap) {
-  canvasManager.clearCanvas();
+  // If artwork changed (e.g. layer deleted), re-import SVG and restore layer list
+  const artworkChanged = snap.svgSource !== state._svgSource ||
+    JSON.stringify(snap.artworkLayers.map(l => l.layerId)) !==
+    JSON.stringify(state.artworkLayers.map(l => l.layerId));
+
+  if (artworkChanged) {
+    if (snap.svgSource) {
+      state._svgSource = snap.svgSource;
+      canvasManager.clearCanvas();
+      canvasManager.importSVG(snap.svgSource, true);
+      const vb = svgEl.viewBox.baseVal;
+      if (vb && vb.width > 0) previewRenderer.setViewBox(vb.x, vb.y, vb.width, vb.height);
+    } else {
+      canvasManager.clearCanvas();
+    }
+  } else {
+    // Keep artwork intact — only remove strips
+    canvasManager.clearStripsOnly();
+  }
+
+  // Restore artwork layer metadata
+  state.artworkLayers     = snap.artworkLayers;
+  state.artworkLayerState = snap.artworkLayerState;
+  state.layerOrder        = snap.layerOrder;
+  state.layerGroups       = snap.layerGroups ?? [];
+
+  // Re-apply layer visibility from restored state
+  state.artworkLayers.forEach(l => {
+    canvasManager.setArtworkLayerVisible(l.layerId, !l._hidden);
+  });
+
+  // Restore strips
   state.strips = [];
   state.stripTimes.clear();
   for (const stripData of snap.strips) {
@@ -175,6 +231,7 @@ function _restoreSnapshot(snap) {
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   }
+
   state.connections = snap.connections;
   state.groups      = snap.groups;
   _reindex();
@@ -182,6 +239,7 @@ function _restoreSnapshot(snap) {
   state.strips.forEach(s => canvasManager.setStripDots(s.id, s.pixels));
   canvasManager.renderConnections(state.connections);
   renderStripsList();
+  renderArtworkLayersList();
   syncExportInfo();
   _updateEmptyState();
   _markDirty();
@@ -1150,10 +1208,10 @@ function _buildStripLi(strip, from, to, extraClass) {
   });
 
   // Scroll wheel on brightness input (IMPROVEMENT 2)
-  li.querySelector('.strip-brightness-input').addEventListener('focus', () => _pushHistory());
   li.querySelector('.strip-brightness-input').addEventListener('wheel', e => {
     e.preventDefault();
     e.stopPropagation();
+    _pushHistoryWheel();
     const input = /** @type {HTMLInputElement} */ (e.target);
     const delta = e.deltaY < 0 ? 0.05 : -0.05;
     strip.brightness = Math.round(Math.max(0, Math.min(1, (strip.brightness ?? 1.0) + delta)) * 100) / 100;
@@ -1171,10 +1229,10 @@ function _buildStripLi(strip, from, to, extraClass) {
   });
 
   // Scroll wheel on hue input (IMPROVEMENT 2)
-  li.querySelector('.strip-hue-input').addEventListener('focus', () => _pushHistory());
   li.querySelector('.strip-hue-input').addEventListener('wheel', e => {
     e.preventDefault();
     e.stopPropagation();
+    _pushHistoryWheel();
     const input = /** @type {HTMLInputElement} */ (e.target);
     const delta = e.deltaY < 0 ? 1 : -1;
     strip.hueShift = Math.max(-180, Math.min(180, (strip.hueShift ?? 0) + delta));
@@ -1210,10 +1268,10 @@ function _buildStripLi(strip, from, to, extraClass) {
   });
 
   // Scroll wheel on speed input for fine control without typing
-  li.querySelector('.strip-speed-input').addEventListener('focus', () => _pushHistory());
   li.querySelector('.strip-speed-input').addEventListener('wheel', e => {
     e.preventDefault();
     e.stopPropagation();
+    _pushHistoryWheel();
     const input = /** @type {HTMLInputElement} */ (e.target);
     const delta = e.deltaY < 0 ? 0.05 : -0.05;
     const next  = Math.max(0, Math.min(8, (strip.speed ?? 1) + delta));
@@ -1228,9 +1286,9 @@ function _buildStripLi(strip, from, to, extraClass) {
   li.querySelector('.strip-color-wrap').addEventListener('click', () => {
     li.querySelector('.strip-color-input').click();
   });
-  li.querySelector('.strip-color-input').addEventListener('focus', () => { _pushHistory(); }, { once: false });
   li.querySelector('.strip-color-input').addEventListener('input', e => {
     e.stopPropagation();
+    _pushHistoryWheel();
     const hex = /** @type {HTMLInputElement} */ (e.target).value;
     strip.color = hex;
     li.querySelector('.strip-swatch').style.background = hex;
@@ -3306,6 +3364,7 @@ function _toggleArtworkLayerVisible(layer) {
 }
 
 function _deleteArtworkLayer(layerId) {
+  _pushHistory();
   // Remove from SVG DOM
   const svgEl = canvasManager._findArtworkLayer?.(layerId);
   if (svgEl) svgEl.remove();
@@ -4052,6 +4111,8 @@ document.getElementById('btn-clear-canvas').addEventListener('click', async () =
   state.strips = [];
   state.groups = [];
   state.artworkLayers = [];
+  state.layerGroups = [];
+  state.layerOrder = [];
   state.pathSelection = [];
   state.stripTimes.clear();
   previewRenderer._frozenColorFn = null;

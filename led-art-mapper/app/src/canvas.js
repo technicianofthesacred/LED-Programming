@@ -1403,13 +1403,17 @@ export class CanvasManager {
     entry.emitArcEl = gr;
   }
 
-  clearCanvas() {
+  clearStripsOnly() {
     this._strips.forEach(entry => entry.g.remove());
     this._strips.clear();
     this.selectedId = null;
     this._cancelDraw();
     this.clearLayerHighlight();
     this._clearSelectionOverlay();
+  }
+
+  clearCanvas() {
+    this.clearStripsOnly();
     this.svg.querySelector('#imported-svg').innerHTML      = '';
     this.svg.querySelector('#layer-hits').innerHTML        = '';
     this.svg.querySelector('#selection-overlay').innerHTML = '';

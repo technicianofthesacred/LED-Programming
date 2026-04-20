@@ -16,12 +16,17 @@
       <button class="mode-btn" data-mode="flash">Flash</button>
     </nav>
     <div class="header-actions">
-      <button id="btn-load-svg" title="Import SVG or AI — each Illustrator layer becomes one LED section">Import</button>
+      <a class="btn-v2-link" href="http://localhost:9998" title="Switch to v2 — Lightweaver">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" width="12" height="12"><path d="M2 6h8M6 2l4 4-4 4"/></svg>
+        v2 Lightweaver
+      </a>
+      <button id="btn-load-svg" title="Import SVG — each Illustrator layer becomes one LED section">Import</button>
       <input type="file" id="file-input" accept=".svg" hidden />
       <div class="btn-group">
         <button id="btn-save" title="Save project as JSON">Save</button>
         <button id="btn-load" title="Load saved project">Load</button>
       </div>
+      <button id="btn-clear-canvas" title="Remove all strips and artwork">Clear</button>
     </div>
   </header>
 
@@ -34,8 +39,7 @@
         <button id="btn-undo" title="Undo (Cmd+Z)" disabled>↩ Undo</button>
         <button id="btn-redo" title="Redo (Cmd+Shift+Z)" disabled>↪ Redo</button>
         <span class="divider"></span>
-        <button id="btn-clear-canvas">Clear all</button>
-        <button id="btn-toggle-preview">Hide LEDs</button>
+<button id="btn-toggle-preview">Hide LEDs</button>
         <button id="btn-toggle-dot-mode" title="Cycle glow mode: Center → Outward → Inward → Dots">◉ Glow</button>
         <button id="btn-toggle-heatmap" title="Toggle LED coverage heatmap">⬡ Coverage</button>
         <button id="btn-toggle-directed" title="Toggle directed glow — elongates bloom in each strip's emit direction">◈ Direct</button>
