@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ headless: true });
+const page = await (await browser.newContext()).newPage();
+page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
+page.on('console', msg => { if (!msg.text().startsWith('[vite]')) console.log('LOG:', msg.text()); });
+await page.goto('http://localhost:9998/#screen=layout', { timeout: 10000 });
+await page.waitForTimeout(3000);
+console.log('URL:', page.url());
+await page.screenshot({ path: 'screenshot-check.png' });
+console.log('Screenshot saved');
+await browser.close();

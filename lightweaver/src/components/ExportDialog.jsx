@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useProject } from '../state/ProjectContext.jsx';
 
 const TARGETS = [
   { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'S-Play / S-Play Mini · 32 universes',    format: '.ssp',    hw: 'S-Play Mini' },
@@ -17,6 +18,7 @@ const FORMATS = [
 ];
 
 export function ExportDialog({ open, onClose }) {
+  const { projectName, showDuration, showClips, showTransitions, autoLanes, strips } = useProject();
   const [target, setTarget] = useState('splay');
   const [format, setFormat] = useState('native');
   const [fps, setFps] = useState(44);
@@ -48,7 +50,12 @@ export function ExportDialog({ open, onClose }) {
   if (!open) return null;
 
   const sel = TARGETS.find(t => t.id === target);
-  const totalFrames = 600 * fps;
+  const totalLEDs = strips.reduce((s, st) => s + (st.pixels?.length || 0), 0);
+  const safeName = (projectName || 'untitled').replace(/\s+/g, '_').toLowerCase();
+  const durationMins = Math.floor(showDuration / 60);
+  const durationSecs = showDuration % 60;
+  const durationStr = `${String(durationMins).padStart(2,'0')}:${String(durationSecs).padStart(2,'0')}`;
+  const totalFrames = showDuration * fps;
   const frameSize = 512 * universes;
   const totalBytes = totalFrames * frameSize;
   const mb = (totalBytes / 1024 / 1024).toFixed(1);
@@ -62,7 +69,7 @@ export function ExportDialog({ open, onClose }) {
         <div className="lw-modal-head">
           <div>
             <div className="title">Export show</div>
-            <div className="sub">Willow Canopy v3 · 10:00 · 4 universes · 520 LEDs</div>
+            <div className="sub">{projectName || 'Untitled'} · {durationStr} · {universes} universes · {totalLEDs > 0 ? totalLEDs : '—'} LEDs</div>
           </div>
           <button className="lw-modal-close" onClick={close}>×</button>
         </div>
@@ -126,11 +133,12 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-exp-sec">4 · Summary</div>
             <div className="lw-exp-summary">
-              <div><span className="k">Output</span><span className="v mono">show_willow_canopy_v3{sel.format}</span></div>
-              <div><span className="k">Frames</span><span className="v mono">{totalFrames.toLocaleString()} @ {fps} fps</span></div>
+              <div><span className="k">Output</span><span className="v mono">{safeName}{sel.format}</span></div>
+              <div><span className="k">Clips</span><span className="v mono">{showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} lanes</span></div>
+              <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
               <div><span className="k">Size</span><span className="v mono">~{mb} MB</span></div>
               <div><span className="k">Target</span><span className="v">{sel.hw}</span></div>
-              <div><span className="k">Destination</span><span className="v mono">SD card · /SHOW/willow_v3/</span></div>
+              <div><span className="k">Destination</span><span className="v mono">SD card · /SHOW/{safeName}/</span></div>
             </div>
 
             <div className="lw-modal-foot">
@@ -166,7 +174,7 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-stage-sub">
               {stage === 'rendering'
                 ? `Baking ${totalFrames.toLocaleString()} DMX frames at ${fps} fps across ${universes} universes`
-                : `Writing show_willow_canopy_v3${sel.format} to /SHOW/willow_v3/ on "KINGSTON 32GB"`}
+                : `Writing ${safeName}${sel.format} to /SHOW/${safeName}/ on "SD card"`}
             </div>
             <div className="lw-exp-bar"><div className="fill" style={{ width: `${progress * 100}%` }}/></div>
             <div className="lw-exp-bar-meta">
@@ -179,12 +187,12 @@ export function ExportDialog({ open, onClose }) {
               <span className="mono">{stage === 'rendering' ? '~2s remaining' : '~1s remaining'}</span>
             </div>
             <div className="lw-exp-log">
-              <div className="entry ok">✓ validated timeline · 600.0s · no gaps</div>
-              <div className="entry ok">✓ resolved 7 clips · 4 transitions · 3 automation lanes</div>
-              <div className="entry ok">✓ mapped 520 LEDs → 4 universes (2,080 channels)</div>
+              <div className="entry ok">✓ validated timeline · {durationStr} · no gaps</div>
+              <div className="entry ok">✓ resolved {showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} automation lanes</div>
+              <div className="entry ok">✓ mapped {totalLEDs || '—'} LEDs → {universes} universes ({universes * 512} channels)</div>
               {stage === 'writing' && <div className="entry ok">✓ baked {totalFrames.toLocaleString()} frames · {mb} MB</div>}
-              {stage === 'writing' && <div className="entry">→ mounting SD card · KINGSTON 32GB (FAT32)</div>}
-              {stage === 'writing' && <div className="entry">→ writing show_willow_canopy_v3{sel.format}</div>}
+              {stage === 'writing' && <div className="entry">→ mounting SD card (FAT32)</div>}
+              {stage === 'writing' && <div className="entry">→ writing {safeName}{sel.format}</div>}
             </div>
           </div>
         )}
@@ -202,10 +210,10 @@ export function ExportDialog({ open, onClose }) {
               Show written to SD card. Eject, insert into your {sel.hw}, and it'll start playing on power-up.
             </div>
             <div className="lw-exp-done-card">
-              <div className="row"><span className="k">File</span><span className="v mono">show_willow_canopy_v3{sel.format}</span></div>
-              <div className="row"><span className="k">Path</span><span className="v mono">KINGSTON 32GB / SHOW / willow_v3 /</span></div>
+              <div className="row"><span className="k">File</span><span className="v mono">{safeName}{sel.format}</span></div>
+              <div className="row"><span className="k">Path</span><span className="v mono">SD card / SHOW / {safeName} /</span></div>
               <div className="row"><span className="k">Size</span><span className="v mono">{mb} MB</span></div>
-              <div className="row"><span className="k">Duration</span><span className="v mono">10:00.00 · looping</span></div>
+              <div className="row"><span className="k">Duration</span><span className="v mono">{durationStr} · {loop ? 'looping' : 'one-shot'}</span></div>
               <div className="row"><span className="k">Target</span><span className="v">{sel.hw}</span></div>
             </div>
             <div className="lw-modal-foot">

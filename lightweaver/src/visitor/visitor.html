@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Lightweaver · Scene Control</title>
+  <link rel="icon" type="image/svg+xml" href="/vite.svg"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0a0a12;
+      --surface: #111120;
+      --border:  #222236;
+      --text:    #f0f0f8;
+      --text-2:  #a0a0b8;
+      --accent:  oklch(74% 0.13 210);
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+
+    body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100%; }
+
+    .header {
+      width: 100%; padding: 20px 24px 12px;
+      display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px oklch(74% 0.13 210 / 0.7);
+      flex-shrink: 0;
+      animation: pulse 2.8s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:.4;transform:scale(.9)} 50%{opacity:1;transform:scale(1.1)} }
+
+    .brand-name { font-size: 22px; font-weight: 300; letter-spacing: -0.02em; }
+    .brand-sub  { font-size: 12px; color: var(--text-2); margin-left: auto; }
+
+    .scenes {
+      width: 100%; max-width: 480px; padding: 20px 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+
+    .scene-btn {
+      width: 100%; padding: 20px 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 500;
+      text-align: left;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 16px;
+      transition: background 0.15s, border-color 0.15s, transform 0.1s;
+      position: relative;
+      overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .scene-btn::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: var(--color, #888);
+      opacity: 0.08;
+      transition: opacity 0.15s;
+    }
+    .scene-btn:active::before { opacity: 0.18; }
+    .scene-btn:active { transform: scale(0.98); }
+    .scene-btn.active {
+      border-color: var(--color, var(--accent));
+      box-shadow: 0 0 0 1px var(--color, var(--accent)), inset 0 0 0 1px var(--color, var(--accent));
+    }
+    .scene-btn.active::before { opacity: 0.15; }
+    .scene-dot {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--color, #888);
+      flex-shrink: 0;
+      box-shadow: 0 0 8px var(--color, #888);
+    }
+    .scene-active-badge {
+      margin-left: auto; font-size: 11px; color: var(--color, var(--accent));
+      font-weight: 400; opacity: 0.9;
+    }
+
+    .wled-connect {
+      width: 100%; max-width: 480px; padding: 0 16px 20px;
+    }
+    .wled-row {
+      display: flex; gap: 8px;
+    }
+    .wled-ip {
+      flex: 1; padding: 10px 14px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 14px;
+      outline: none;
+    }
+    .wled-ip:focus { border-color: var(--accent); }
+    .wled-btn {
+      padding: 10px 18px;
+      background: var(--accent); border: none; border-radius: 8px;
+      color: #000; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .wled-status {
+      margin-top: 8px; font-size: 12px; color: var(--text-2);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+    .master-controls {
+      width: 100%; max-width: 480px; padding: 0 16px 16px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .master-row {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .master-label {
+      font-size: 11px; color: var(--text-2); min-width: 60px; font-family: system-ui, sans-serif;
+    }
+    .master-slider {
+      flex: 1; accent-color: var(--accent);
+    }
+    .master-val {
+      font-size: 11px; color: var(--text-2); min-width: 36px; text-align: right; font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand-dot"></div>
+    <div class="brand-name">Lightweaver</div>
+    <div class="brand-sub">Scene Control</div>
+  </div>
+
+  <div class="wled-connect">
+    <div class="wled-row">
+      <input class="wled-ip" id="wledIp" type="text" placeholder="WLED IP (e.g. 192.168.1.42)"
+             value="" inputmode="url"/>
+      <button class="wled-btn" id="connectBtn">Connect</button>
+    </div>
+    <div class="wled-status">
+      <div class="status-dot" id="statusDot" style="background:#555"></div>
+      <span id="statusText">Not connected</span>
+    </div>
+  </div>
+
+  <div class="master-controls" id="masterControls" style="display:none">
+    <div class="master-row">
+      <span class="master-label">Brightness</span>
+      <input class="master-slider" id="brightnessSlider" type="range" min="0" max="255" value="128"/>
+      <span class="master-val" id="brightnessVal">50%</span>
+    </div>
+    <div class="master-row">
+      <span class="master-label">Speed</span>
+      <input class="master-slider" id="speedSlider" type="range" min="0" max="255" value="128"/>
+      <span class="master-val" id="speedVal">50%</span>
+    </div>
+  </div>
+
+  <div class="scenes" id="scenes"></div>
+
+  <script type="module">
+    // ── Scenes config ───────────────────────────────────────────────────────
+    const SCENES = [
+      { id: 'aurora',     name: 'Aurora',       color: '#5fb8d9', desc: 'Soft flowing polar lights' },
+      { id: 'breathe',    name: 'Breathe',      color: '#06d6a0', desc: 'Slow inhale / exhale' },
+      { id: 'calm',       name: 'Calm',         color: '#3a8a6a', desc: 'Gentle slow waves' },
+      { id: 'zen',        name: 'Zen',          color: '#334466', desc: 'Meditative geometric glow' },
+      { id: 'bloom',      name: 'Bloom',        color: '#c84a8a', desc: 'Growing floral bursts' },
+      { id: 'ember',      name: 'Ember',        color: '#e89a3a', desc: 'Warm glowing coals' },
+      { id: 'solar',      name: 'Solar',        color: '#ffcc00', desc: 'Radiant solar corona' },
+      { id: 'wave',       name: 'Wave',         color: '#3a6ac8', desc: 'Deep ocean pulses' },
+      { id: 'tide',       name: 'Tide',         color: '#006688', desc: 'Ocean tide lapping' },
+      { id: 'galaxy',     name: 'Galaxy',       color: '#8a4ac8', desc: 'Spiral star arms' },
+      { id: 'hyperspace', name: 'Hyperspace',   color: '#8888ff', desc: 'Warp speed jump' },
+      { id: 'drift',      name: 'Drift',        color: '#9a6ad8', desc: 'Drifting color clouds' },
+      { id: 'vortex',     name: 'Vortex',       color: '#ff44ff', desc: 'Spinning spiral arms' },
+      { id: 'mandala',    name: 'Mandala',      color: '#ffcc44', desc: 'Radial geometry' },
+      { id: 'prism',      name: 'Prism',        color: '#ff8800', desc: 'Rainbow light splitting' },
+      { id: 'nova',       name: 'Nova',         color: '#ff4488', desc: 'Supernova shockwave rings' },
+      { id: 'snowfield',  name: 'Snow',         color: '#aaddff', desc: 'Falling snowflakes' },
+      { id: 'bubble',     name: 'Bubbles',      color: '#aaccff', desc: 'Iridescent rising bubbles' },
+      { id: 'glitter',    name: 'Glitter',      color: '#ff88ff', desc: 'Holographic glitter shimmer' },
+      { id: 'fluid',      name: 'Fluid',        color: '#0088ff', desc: 'Flowing color currents' },
+    ];
+
+    const STORAGE_KEY = 'lw_visitor_ip';
+    let ws = null, connected = false, activeScene = null;
+
+    const ipInput          = document.getElementById('wledIp');
+    const connectBtn       = document.getElementById('connectBtn');
+    const statusDot        = document.getElementById('statusDot');
+    const statusText       = document.getElementById('statusText');
+    const scenesEl         = document.getElementById('scenes');
+    const masterControls   = document.getElementById('masterControls');
+    const brightnessSlider = document.getElementById('brightnessSlider');
+    const speedSlider      = document.getElementById('speedSlider');
+    const brightnessVal    = document.getElementById('brightnessVal');
+    const speedVal         = document.getElementById('speedVal');
+
+    ipInput.value = localStorage.getItem(STORAGE_KEY) || '';
+
+    function setStatus(state, msg) {
+      const colors = { disconnected: '#555', connecting: '#e89a3a', connected: '#3ae84a', error: '#e83a4a' };
+      statusDot.style.background = colors[state] || '#555';
+      statusText.textContent = msg;
+    }
+
+    function connect() {
+      const ip = ipInput.value.trim();
+      if (!ip) return;
+      localStorage.setItem(STORAGE_KEY, ip);
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      setStatus('connecting', `Connecting to ${ip}…`);
+      ws = new WebSocket(`ws://${ip}/ws`);
+      ws.onopen  = () => { connected = true;  setStatus('connected', `Connected · ${ip}`); connectBtn.textContent = 'Disconnect'; masterControls.style.display = ''; };
+      ws.onclose = () => { connected = false; setStatus('disconnected', 'Disconnected'); connectBtn.textContent = 'Connect'; masterControls.style.display = 'none'; };
+      ws.onerror = () => { setStatus('error', 'Connection failed'); };
+    }
+
+    connectBtn.addEventListener('click', () => {
+      if (connected) { ws?.close(); } else { connect(); }
+    });
+    ipInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+
+    // Map scene IDs to WLED preset numbers (configure to match your WLED setup)
+    const PRESET_MAP = {
+      aurora: 1, breathe: 2, calm: 3, zen: 4, bloom: 5,
+      ember: 6, solar: 7, wave: 8, tide: 9, galaxy: 10,
+      hyperspace: 11, drift: 12, vortex: 13, mandala: 14,
+      prism: 15, nova: 16, snowfield: 17, bubble: 18,
+      glitter: 19, fluid: 20,
+    };
+
+    function fireScene(id) {
+      activeScene = id;
+      renderScenes();
+      if (!connected || !ws) return;
+      const preset = PRESET_MAP[id];
+      if (preset != null) {
+        ws.send(JSON.stringify({ ps: preset }));
+      }
+    }
+
+    function renderScenes() {
+      scenesEl.innerHTML = '';
+      SCENES.forEach(scene => {
+        const btn = document.createElement('button');
+        btn.className = `scene-btn ${activeScene === scene.id ? 'active' : ''}`;
+        btn.style.setProperty('--color', scene.color);
+        btn.innerHTML = `
+          <div class="scene-dot"></div>
+          <div style="flex:1">
+            <div>${scene.name}</div>
+            ${scene.desc ? `<div style="font-size:11px;font-weight:400;opacity:0.55;margin-top:2px">${scene.desc}</div>` : ''}
+          </div>
+          ${activeScene === scene.id ? '<span class="scene-active-badge">● ACTIVE</span>' : ''}
+        `;
+        btn.addEventListener('click', () => fireScene(scene.id));
+        scenesEl.appendChild(btn);
+      });
+    }
+
+    // Brightness / speed sliders → WLED JSON API
+    function sendMaster() {
+      if (!connected || !ws) return;
+      ws.send(JSON.stringify({ bri: +brightnessSlider.value, sx: +speedSlider.value }));
+    }
+    brightnessSlider.addEventListener('input', () => {
+      brightnessVal.textContent = Math.round(brightnessSlider.value / 2.55) + '%';
+      sendMaster();
+    });
+    speedSlider.addEventListener('input', () => {
+      speedVal.textContent = Math.round(speedSlider.value / 2.55) + '%';
+      sendMaster();
+    });
+
+    renderScenes();
+
+    // Auto-connect if IP stored
+    if (ipInput.value) setTimeout(connect, 300);
+  </script>
+</body>
+</html>

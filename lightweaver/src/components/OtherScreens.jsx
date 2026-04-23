@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
 import { toWLEDLedmap, toFastLED, toCSV, download } from '../lib/export.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
@@ -149,12 +149,78 @@ function DirectionCompass({ angle, emit, onAngle, onEmit }) {
   );
 }
 
+// Sample a path at the given LED count — used for ProjectContext strip pixels
+function samplePathFull(d, count) {
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', d);
+  const len = p.getTotalLength?.() || 100;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const frac = count === 1 ? 0.5 : i / (count - 1);
+    const pt = p.getPointAtLength(frac * len);
+    out.push({ x: pt.x, y: pt.y });
+  }
+  return out;
+}
+
+// Parse an imported SVG text → array of layer objects
+function parseSvgLayers(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svg = doc.querySelector('svg');
+  if (!svg) return null;
+  const vb = svg.getAttribute('viewBox') || '0 0 640 400';
+
+  const COLORS = [
+    'oklch(72% 0.15 210)', 'oklch(78% 0.14 300)', 'oklch(78% 0.14 60)',
+    'oklch(80% 0.15 155)', 'oklch(78% 0.17 30)',  'oklch(74% 0.16 260)',
+  ];
+
+  const extractLayers = (els) => els.map((el, i) => {
+    const name = el.getAttribute('id') ||
+                 el.getAttribute('inkscape:label') ||
+                 el.getAttribute('data-name') ||
+                 (el.tagName === 'path' ? `Path ${i + 1}` : `Layer ${i + 1}`);
+    // Find first <path> in this element (or the element itself)
+    const pathEl = el.tagName === 'path' ? el : el.querySelector('path');
+    const d = pathEl?.getAttribute('d');
+    if (!d) return null;
+    const svgPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    svgPath.setAttribute('d', d);
+    const len = svgPath.getTotalLength?.() || 100;
+    const leds = Math.max(10, Math.round(len / 16.6)); // 60 LED/m at 16.6mm pitch
+    return {
+      id: el.getAttribute('id') || `L${i + 1}`,
+      name,
+      leds,
+      len: parseFloat((len / 96).toFixed(2)),
+      brightness: 1.0,
+      path: d,
+      emit: 'dir',
+      angle: 0,
+      color: COLORS[i % COLORS.length],
+    };
+  }).filter(Boolean);
+
+  // Try top-level <g> elements first, fall back to top-level <path> elements
+  const groups = [...svg.querySelectorAll(':scope > g')];
+  const layers = groups.length > 0
+    ? extractLayers(groups)
+    : extractLayers([...svg.querySelectorAll(':scope > path')]);
+
+  return { vb, layers, innerHTML: svg.innerHTML };
+}
+
 export function LayoutScreen() {
-  const [layers, setLayers] = useState(LAYERS);
-  const [selId, setSelId]   = useState('L1');
-  const [hidden, setHidden] = useState({});
+  const { setSvgText, setViewBox, setStrips } = useProject();
+  const [layers, setLayers]       = useState(LAYERS);
+  const [selId, setSelId]         = useState('L1');
+  const [hidden, setHidden]       = useState({});
   const [showLight, setShowLight] = useState(true);
   const [showLeds, setShowLeds]   = useState(true);
+  const [svgViewBox, setSvgViewBox] = useState('0 0 640 400');
+  const [artworkHTML, setArtworkHTML] = useState(null);
+  const [svgZoom, setSvgZoom] = useState(1.0);
+  const fileInputRef = useRef(null);
 
   const sel = layers.find(l => l.id === selId);
   const visibleLayers = layers.filter(l => !hidden[l.id]);
@@ -166,17 +232,55 @@ export function LayoutScreen() {
 
   const sampled = useMemo(() =>
     Object.fromEntries(visibleLayers.map(l => [l.id, samplePath(l.path, l.leds)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [visibleLayers.map(l => l.id + l.leds).join(',')]
   );
+
+  // Sync layers → ProjectContext strips whenever layers or their LED counts change
+  useEffect(() => {
+    const strips = layers
+      .filter(l => !hidden[l.id])
+      .map(l => ({
+        id:         l.id,
+        color:      l.color,
+        speed:      1,
+        brightness: l.brightness ?? 1,
+        hueShift:   0,
+        pixels:     samplePathFull(l.path, l.leds),
+      }));
+    setStrips(strips);
+  }, [layers, hidden, setStrips]);
+
+  const handleImportSVG = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target.result;
+      const parsed = parseSvgLayers(text);
+      if (!parsed || parsed.layers.length === 0) return;
+      setLayers(parsed.layers);
+      setSelId(parsed.layers[0].id);
+      setHidden({});
+      setSvgViewBox(parsed.vb);
+      setArtworkHTML(parsed.innerHTML);
+      setSvgText(text);
+      setViewBox(parsed.vb);
+    };
+    reader.readAsText(file);
+    // Reset input so re-importing the same file triggers onChange
+    e.target.value = '';
+  }, [setSvgText, setViewBox]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div className="lw-canvas-toolbar">
-          <button className="btn btn-primary">
+          <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M6 1v8M3 5l3-4 3 4M1 10h10"/></svg>
             Import SVG
           </button>
+          <input ref={fileInputRef} type="file" accept=".svg,image/svg+xml" style={{ display: 'none' }} onChange={handleImportSVG}/>
           <span className="tbar-divider"/>
           <div className="tbar-group">
             <button className="btn">Select</button>
@@ -201,12 +305,17 @@ export function LayoutScreen() {
         </div>
 
         <div className="lw-viewport" style={{ display: 'grid', placeItems: 'center' }}>
-          <svg viewBox="0 0 640 400" style={{ width: '92%', height: '92%' }}>
+          <svg viewBox={svgViewBox} style={{ width: `${svgZoom * 92}%`, height: `${svgZoom * 92}%`, maxWidth: 'none' }} overflow="visible">
             <defs>
               <filter id="led-bloom" x="-50%" y="-50%" width="200%" height="200%">
                 <feGaussianBlur stdDeviation="2.5"/>
               </filter>
             </defs>
+
+            {artworkHTML && (
+              <g dangerouslySetInnerHTML={{ __html: artworkHTML }}
+                 style={{ opacity: 0.18, filter: 'saturate(0) brightness(1.4)', pointerEvents: 'none' }}/>
+            )}
 
             {showLight && (
               <g>
@@ -267,7 +376,7 @@ export function LayoutScreen() {
           </svg>
 
           <div className="lw-viewport-overlay tl">
-            <div><span className="k">imported</span> <span className="v">willow-canopy.svg</span></div>
+            <div><span className="k">artwork</span> <span className="v">{artworkHTML ? svgViewBox : 'demo · no SVG imported'}</span></div>
             <div><span className="k">layers</span> <span className="v">{layers.length} · {totalLeds} LEDs</span></div>
           </div>
           <div className="lw-viewport-overlay br">
@@ -278,10 +387,10 @@ export function LayoutScreen() {
           </div>
 
           <div className="lw-zoom-controls">
-            <button>+</button>
-            <div className="lw-zoom-level">100%</div>
-            <button>−</button>
-            <button style={{ fontSize: 9 }}>1:1</button>
+            <button onClick={() => setSvgZoom(z => Math.min(4, z * 1.25))}>+</button>
+            <div className="lw-zoom-level">{Math.round(svgZoom * 100)}%</div>
+            <button onClick={() => setSvgZoom(z => Math.max(0.25, z / 1.25))}>−</button>
+            <button style={{ fontSize: 9 }} onClick={() => setSvgZoom(1)}>1:1</button>
           </div>
         </div>
       </div>

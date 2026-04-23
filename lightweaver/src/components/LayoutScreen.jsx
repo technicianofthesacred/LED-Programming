@@ -156,11 +156,11 @@ function calcArrow(pathData, reversed = false) {
   };
 }
 
-function sampleForViz(pathData, maxPts = 40) {
+function sampleForViz(pathData, count = 40) {
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   p.setAttribute('d', pathData);
   const len = p.getTotalLength ? p.getTotalLength() : 100;
-  const n = Math.min(maxPts, Math.max(2, Math.ceil(len / 20)));
+  const n = Math.max(2, count);
   const pts = [];
   for (let i = 0; i < n; i++) {
     const t = n === 1 ? 0.5 : i / (n - 1);
@@ -176,12 +176,10 @@ function ptsToD(pts) {
 }
 
 function svgPt(svgEl, clientX, clientY) {
-  const rect = svgEl.getBoundingClientRect();
-  const vb   = svgEl.viewBox.baseVal;
-  return {
-    x: vb.x + (clientX - rect.left) * (vb.width  / rect.width),
-    y: vb.y + (clientY - rect.top)  * (vb.height / rect.height),
-  };
+  const pt = svgEl.createSVGPoint();
+  pt.x = clientX;
+  pt.y = clientY;
+  return pt.matrixTransform(svgEl.getScreenCTM().inverse());
 }
 
 function parsedVb(viewBox) {
@@ -290,21 +288,19 @@ function InlineRename({ value, onCommit, className, style }) {
 function LightCone({ uid, cx, cy, angle, color, reach = 90, intensity = 0.5 }) {
   const gid = `lcg-${uid}`;
   const a = (angle - 90) * Math.PI / 180;
-  const px = cx + Math.cos(a - Math.PI / 2) * reach;
-  const py = cy + Math.sin(a - Math.PI / 2) * reach;
-  const qx = cx + Math.cos(a + Math.PI / 2) * reach;
-  const qy = cy + Math.sin(a + Math.PI / 2) * reach;
+  // Offset the gradient center forward — gives directional bias with no hard edges
+  const fx = cx + Math.cos(a) * reach * 0.35;
+  const fy = cy + Math.sin(a) * reach * 0.35;
   return (
     <>
       <defs>
-        <radialGradient id={gid} cx={cx} cy={cy} r={reach} gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   stopColor={color} stopOpacity={0.85 * intensity}/>
-          <stop offset="30%"  stopColor={color} stopOpacity={0.3 * intensity}/>
+        <radialGradient id={gid} cx={fx} cy={fy} r={reach} gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stopColor={color} stopOpacity={0.8 * intensity}/>
+          <stop offset="45%"  stopColor={color} stopOpacity={0.2 * intensity}/>
           <stop offset="100%" stopColor={color} stopOpacity="0"/>
         </radialGradient>
       </defs>
-      <path d={`M ${px} ${py} A ${reach} ${reach} 0 0 1 ${qx} ${qy} Z`}
-            fill={`url(#${gid})`} style={{ mixBlendMode: 'screen' }}/>
+      <circle cx={fx} cy={fy} r={reach} fill={`url(#${gid})`} style={{ mixBlendMode: 'screen' }}/>
     </>
   );
 }
@@ -361,10 +357,11 @@ export function LayoutScreen() {
   const [pendingDrawCount, setPendingDrawCount] = useState(0);
   const pendingDrawNameRef = useRef(null);
 
-  // Rubber-band lasso select
-  const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} SVG coords
+  // Rubber-band lasso select — coords stored in CLIENT (viewport px), not SVG
+  const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
   const rubberBandRef          = useRef(null);
   const justFinishedLassoRef   = useRef(false);
+  const lassoFinishRef         = useRef(null);
 
   // Canvas pan / zoom
   const [zoom, setZoom]   = useState(1.0);
@@ -403,13 +400,28 @@ export function LayoutScreen() {
   const loadRef     = useRef(null);
   const svgRef      = useRef(null);
   const artworkRef  = useRef(null);
+  const vpRef       = useRef(null);
   const stripListRef = useRef(null);
   const [hoveredLayerId, setHoveredLayerId] = useState(null);
   const [hoveredSubPathId, setHoveredSubPathId] = useState(null);
   const colorIdxRef = useRef(0);
   const nextColor   = () => STRIP_COLORS[colorIdxRef.current++ % STRIP_COLORS.length];
 
-  const { setStrips: setProjectStrips, setViewBox: setProjectViewBox, setSvgText: setProjectSvgText, setHidden: setProjectHidden } = useProject();
+  const {
+    setStrips: setProjectStrips,
+    setViewBox: setProjectViewBox,
+    setSvgText: setProjectSvgText,
+    setHidden: setProjectHidden,
+    // Pattern state
+    activePatternId, setActivePatternId,
+    masterSpeed, setMasterSpeed,
+    masterBrightness, setMasterBrightness,
+    masterSaturation, setMasterSaturation,
+    gammaEnabled, setGammaEnabled,
+    gammaValue, setGammaValue,
+    patternParams, setPatternParams,
+    bpm, setBpm,
+  } = useProject();
 
   useEffect(() => { setProjectStrips(strips); },    [strips, setProjectStrips]);
   useEffect(() => { setProjectViewBox(viewBox); },  [viewBox, setProjectViewBox]);
@@ -457,7 +469,7 @@ export function LayoutScreen() {
   const lsSave = useCallback((curStrips, curLayers, curEditCounts, curHidden, curSvgText, curViewBox, curDensity) => {
     try {
       const data = {
-        version: 1,
+        version: 2,
         strips:      curStrips.map(({ pixels: _px, ...s }) => s),
         layers:      curLayers,
         editCounts:  curEditCounts,
@@ -467,10 +479,16 @@ export function LayoutScreen() {
         density:     curDensity,
         layerGroups: layerGroupsRef.current,
         layerOrder:  layerOrderRef.current,
+        // Pattern state
+        activePatternId,
+        masterSpeed, masterBrightness, masterSaturation,
+        gammaEnabled, gammaValue,
+        patternParams,
+        bpm,
       };
       localStorage.setItem(LS_KEY, JSON.stringify(data));
     } catch {}
-  }, []);
+  }, [activePatternId, masterSpeed, masterBrightness, masterSaturation, gammaEnabled, gammaValue, patternParams, bpm]);
 
   // ── Restore strips from saved data ────────────────────────────────────────
 
@@ -784,6 +802,38 @@ export function LayoutScreen() {
     });
   }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
 
+  const resampleStrip = useCallback((id, newCount) => {
+    setStrips(prev => {
+      const next = prev.map(s => {
+        if (s.id !== id) return s;
+        return rebuildStrip({ ...s, pixelCount: newCount });
+      });
+      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
+      return next;
+    });
+  }, [layers, editCounts, hidden, svgText, viewBox, density, lsSave]);
+
+  const handleDensityChange = useCallback((newDensity) => {
+    let saved;
+    setStrips(prev => {
+      saved = prev.map(s => {
+        const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        pathEl.setAttribute('d', s.pathData);
+        const svgLen = pathEl.getTotalLength ? pathEl.getTotalLength() : 0;
+        const count = Math.max(1, Math.round((svgLen / pxPerMm) * newDensity / 1000));
+        let pixels = libSamplePath(pathEl, count);
+        if (s.reversed) pixels = pixels.slice().reverse();
+        return { ...s, pixelCount: count, pixels };
+      });
+      return saved;
+    });
+    setEditCounts({});
+    setDensity(newDensity);
+    setTimeout(() => {
+      if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, newDensity);
+    }, 0);
+  }, [pxPerMm, lsSave, layers, hidden, svgText, viewBox]);
+
   // ── Draw tool ──────────────────────────────────────────────────────────────
 
   const finishDraw = useCallback((pts) => {
@@ -881,7 +931,7 @@ export function LayoutScreen() {
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) return;
       const data = JSON.parse(raw);
-      if (!data || data.version !== 1) return;
+      if (!data || (data.version !== 1 && data.version !== 2)) return;
       if (data.svgText) {
         const doc = new DOMParser().parseFromString(data.svgText, 'image/svg+xml');
         const srcSvg = doc.querySelector('svg');
@@ -900,6 +950,15 @@ export function LayoutScreen() {
       if (data.editCounts) setEditCounts(data.editCounts);
       if (data.hidden) setHidden(data.hidden);
       if (data.strips?.length) setStrips(data.strips.map(rebuildStrip));
+      // Restore pattern state if present (version 2+)
+      if (data.activePatternId)          setActivePatternId(data.activePatternId);
+      if (data.masterSpeed     != null)  setMasterSpeed(data.masterSpeed);
+      if (data.masterBrightness != null) setMasterBrightness(data.masterBrightness);
+      if (data.masterSaturation != null) setMasterSaturation(data.masterSaturation);
+      if (data.gammaEnabled    != null)  setGammaEnabled(data.gammaEnabled);
+      if (data.gammaValue      != null)  setGammaValue(data.gammaValue);
+      if (data.patternParams)            setPatternParams(data.patternParams);
+      if (data.bpm             != null)  setBpm(data.bpm);
     } catch {}
   }, []); // mount only
 
@@ -908,12 +967,19 @@ export function LayoutScreen() {
   const saveProject = () => {
     const date = new Date().toISOString().slice(0, 10);
     const data = {
-      version: 1,
+      version: 2,
+      // Layout
       strips: strips.map(({ pixels: _px, ...s }) => s),
       layers: layers.map(({ subPaths: _sp, ...l }) => l),
       svgText, viewBox, density, editCounts,
+      // Pattern
+      activePatternId,
+      masterSpeed, masterBrightness, masterSaturation,
+      gammaEnabled, gammaValue,
+      patternParams,
+      bpm,
     };
-    download(`lightweaver-layout-${date}.json`, JSON.stringify(data, null, 2));
+    download(`lightweaver-project-${date}.json`, JSON.stringify(data, null, 2));
   };
 
   const handleLoad = async (e) => {
@@ -927,7 +993,7 @@ export function LayoutScreen() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      if (!data || data.version !== 1) { alert('Unrecognised file format.'); return; }
+      if (!data || (data.version !== 1 && data.version !== 2)) { alert('Unrecognised file format.'); return; }
       pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
       if (data.svgText) {
         const doc = new DOMParser().parseFromString(data.svgText, 'image/svg+xml');
@@ -950,6 +1016,15 @@ export function LayoutScreen() {
       if (data.strips?.length) setStrips(data.strips.map(rebuildStrip));
       else setStrips([]);
       resetView();
+      // Restore pattern state if present (version 2+)
+      if (data.activePatternId)          setActivePatternId(data.activePatternId);
+      if (data.masterSpeed     != null)  setMasterSpeed(data.masterSpeed);
+      if (data.masterBrightness != null) setMasterBrightness(data.masterBrightness);
+      if (data.masterSaturation != null) setMasterSaturation(data.masterSaturation);
+      if (data.gammaEnabled    != null)  setGammaEnabled(data.gammaEnabled);
+      if (data.gammaValue      != null)  setGammaValue(data.gammaValue);
+      if (data.patternParams)            setPatternParams(data.patternParams);
+      if (data.bpm             != null)  setBpm(data.bpm);
     } catch (err) {
       alert('Could not load file: ' + err.message);
     }
@@ -1064,7 +1139,7 @@ export function LayoutScreen() {
   // ── Memoised visualisation data ────────────────────────────────────────────
 
   const stripSamples = useMemo(() =>
-    Object.fromEntries(strips.map(s => [s.id, sampleForViz(s.pathData)])), [strips]);
+    Object.fromEntries(strips.map(s => [s.id, sampleForViz(s.pathData, s.pixelCount)])), [strips]);
 
   const stripArrows = useMemo(() =>
     Object.fromEntries(strips.map(s => [s.id, calcArrow(s.pathData, s.reversed ?? false)])), [strips]);
@@ -1077,6 +1152,43 @@ export function LayoutScreen() {
     const vb = parsedVb(viewBox);
     return Math.max(vb.w, vb.h) / 600;
   }, [viewBox]);
+
+  // ── Lasso hit-test (runs on global mouseup, uses latest layers/hidden via ref) ─
+
+  const finishLasso = useCallback((ev) => {
+    const rb = rubberBandRef.current;
+    rubberBandRef.current = null;
+    setRubberBand(null);
+    if (!rb || (Math.abs(rb.x2 - rb.x1) < 4 && Math.abs(rb.y2 - rb.y1) < 4)) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    // Convert viewport-relative lasso corners → client coords → SVG user coords
+    const vl = rb.vpLeft ?? 0, vt = rb.vpTop ?? 0;
+    const tl = svgPt(svg, Math.min(rb.x1, rb.x2) + vl, Math.min(rb.y1, rb.y2) + vt);
+    const br = svgPt(svg, Math.max(rb.x1, rb.x2) + vl, Math.max(rb.y1, rb.y2) + vt);
+    const hits = [];
+    layers.forEach(l => {
+      if (hidden[l.layerId] || !l.pathData) return;
+      const targets = l.subPaths?.length > 0
+        ? l.subPaths
+        : [{ pathId: l.layerId, pathData: l.pathData, name: l.name, svgLength: l.svgLength }];
+      targets.forEach(t => {
+        if (!hidden[t.pathId] && pathIntersectsRect(t.pathData, tl.x, tl.y, br.x, br.y)) {
+          hits.push({ layerId: l.layerId, pathId: t.pathId, pathData: t.pathData,
+                      name: l.subPaths?.length > 0 ? `${l.name} · ${t.name}` : l.name,
+                      svgLength: t.svgLength });
+        }
+      });
+    });
+    if (hits.length > 0) {
+      justFinishedLassoRef.current = true;
+      setPathSel(prev => ev.shiftKey
+        ? [...prev, ...hits.filter(h => !prev.some(p => p.pathId === h.pathId))]
+        : hits);
+      setSelLayerId(null);
+    }
+  }, [layers, hidden]);
+  useEffect(() => { lassoFinishRef.current = finishLasso; }, [finishLasso]);
 
   // ── Draw mode SVG events ───────────────────────────────────────────────────
 
@@ -1092,10 +1204,28 @@ export function LayoutScreen() {
     if (!drawMode && svgRef.current) {
       const onBackground = e.target === svgRef.current || e.target.tagName === 'svg';
       if (onBackground) {
-        const pt = svgPt(svgRef.current, e.clientX, e.clientY);
-        rubberBandRef.current = { x1: pt.x, y1: pt.y, x2: pt.x, y2: pt.y };
+        // Store viewport-relative coords so position:absolute lasso div tracks correctly
+        // (position:fixed breaks when any ancestor has backdrop-filter)
+        const vpRect = vpRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+        const rx = e.clientX - vpRect.left;
+        const ry = e.clientY - vpRect.top;
+        rubberBandRef.current = { x1: rx, y1: ry, x2: rx, y2: ry, vpLeft: vpRect.left, vpTop: vpRect.top };
         setRubberBand({ ...rubberBandRef.current });
         e.preventDefault();
+        // Global listeners so drag continues even outside SVG bounds
+        const onWinMove = (ev) => {
+          if (!rubberBandRef.current) return;
+          const rb = rubberBandRef.current;
+          rubberBandRef.current = { ...rb, x2: ev.clientX - rb.vpLeft, y2: ev.clientY - rb.vpTop };
+          setRubberBand({ ...rubberBandRef.current });
+        };
+        const onWinUp = (ev) => {
+          window.removeEventListener('mousemove', onWinMove);
+          window.removeEventListener('mouseup', onWinUp);
+          lassoFinishRef.current?.(ev);
+        };
+        window.addEventListener('mousemove', onWinMove);
+        window.addEventListener('mouseup', onWinUp);
       }
     }
   };
@@ -1144,54 +1274,15 @@ export function LayoutScreen() {
       const pt = svgPt(svgRef.current, e.clientX, e.clientY);
       setCursorSvgPt(pt);
       if (drawMode) { setGhostPt(pt); return; }
-      // Update rubber-band
-      if (rubberBandRef.current) {
-        rubberBandRef.current = { ...rubberBandRef.current, x2: pt.x, y2: pt.y };
-        setRubberBand({ ...rubberBandRef.current });
-      }
     }
   };
 
-  const handleSvgMouseUp = (e) => {
+  const handleSvgMouseUp = () => {
     if (isPanningRef.current) {
       isPanningRef.current = false;
       setIsPanning(false);
     }
-    // Finish rubber-band lasso
-    const rb = rubberBandRef.current;
-    if (rb) {
-      rubberBandRef.current = null;
-      setRubberBand(null);
-      const minX = Math.min(rb.x1, rb.x2);
-      const maxX = Math.max(rb.x1, rb.x2);
-      const minY = Math.min(rb.y1, rb.y2);
-      const maxY = Math.max(rb.y1, rb.y2);
-      // Only act if the rect has meaningful size
-      if (maxX - minX > 4 || maxY - minY > 4) {
-        const hits = [];
-        layers.forEach(l => {
-          if (hidden[l.layerId] || !l.pathData) return;
-          const targets = l.subPaths?.length > 0
-            ? l.subPaths
-            : [{ pathId: l.layerId, pathData: l.pathData, name: l.name, svgLength: l.svgLength }];
-          targets.forEach(t => {
-            if (!hidden[t.pathId] && pathIntersectsRect(t.pathData, minX, minY, maxX, maxY)) {
-              const isSub = l.subPaths?.length > 0;
-              hits.push({ layerId: l.layerId, pathId: t.pathId, pathData: t.pathData,
-                          name: isSub ? `${l.name} · ${t.name}` : l.name,
-                          svgLength: t.svgLength });
-            }
-          });
-        });
-        if (hits.length > 0) {
-          justFinishedLassoRef.current = true;
-          setPathSel(prev => e.shiftKey
-            ? [...prev, ...hits.filter(h => !prev.some(p => p.pathId === h.pathId))]
-            : hits);
-          setSelLayerId(null);
-        }
-      }
-    }
+    // Lasso finish is handled by the global window listener added in handleSvgMouseDown
   };
 
   const handleSvgMouseLeave = () => {
@@ -1297,7 +1388,7 @@ export function LayoutScreen() {
             {DENSITY_OPTIONS.map(d => (
               <button key={d} className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
                       style={{ padding: '3px 8px', fontSize: 11 }}
-                      onClick={() => setDensity(d)}>{d}/m</button>
+                      onClick={() => handleDensityChange(d)}>{d}/m</button>
             ))}
           </div>
 
@@ -1365,6 +1456,7 @@ export function LayoutScreen() {
 
         {/* Viewport */}
         <div
+          ref={vpRef}
           className={`lw-viewport${dragOver ? ' lw-viewport--drop' : ''}`}
           style={{ display: 'grid', placeItems: 'center', cursor: isPanning ? 'grabbing' : 'default' }}
           onDragOver={handleDragOver}
@@ -1384,6 +1476,7 @@ export function LayoutScreen() {
           <svg
             ref={svgRef}
             viewBox={computedViewBox}
+            overflow="visible"
             style={{
               width: '92%', height: '92%',
               cursor: drawMode ? 'crosshair' : rubberBand ? 'crosshair' : isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
@@ -1398,12 +1491,15 @@ export function LayoutScreen() {
             onWheel={handleWheel}
           >
             <defs>
-              {/* Single stable bloom filter — stdDeviation changes dynamically */}
               {glowMode !== 'dots' && (
                 <filter id="lw-led-bloom" x="-60%" y="-60%" width="220%" height="220%">
                   <feGaussianBlur stdDeviation={glowStdDev}/>
                 </filter>
               )}
+              {/* Single filter for all ambient light — one blur op on the whole group, not per-element */}
+              <filter id="lw-light-glow" x="-150%" y="-150%" width="400%" height="400%">
+                <feGaussianBlur stdDeviation={vbScale * 14}/>
+              </filter>
               <radialGradient id="heat-grad" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stopColor="oklch(80% 0.2 30)" stopOpacity="1"/>
                 <stop offset="100%" stopColor="oklch(80% 0.2 30)" stopOpacity="0"/>
@@ -1413,7 +1509,8 @@ export function LayoutScreen() {
             {/* ── Artwork background ── */}
             {artworkHTML && (
               <g ref={artworkRef}
-                 style={{ pointerEvents: 'none', filter: 'saturate(3) brightness(1.4)', transition: 'opacity 0.2s' }}
+                 style={{ pointerEvents: 'none', filter: 'saturate(3) brightness(1.4)', mixBlendMode: 'screen',
+                          opacity: showLight ? 0 : 1, transition: 'opacity 0.2s' }}
                  dangerouslySetInnerHTML={{ __html: artworkHTML }}/>
             )}
 
@@ -1495,28 +1592,15 @@ export function LayoutScreen() {
                        ?? (l.layerId === hoveredSubPathId ? { pathData: l.pathData } : null);
                 if (t?.pathData) return (
                   <path key="hover-sp" d={t.pathData} fill="none"
-                        stroke="oklch(74% 0.13 210)" strokeWidth="3" strokeOpacity={0.4}
+                        stroke="oklch(76% 0.18 290)" strokeWidth="3" strokeOpacity={0.55}
                         strokeLinecap="round" pointerEvents="none"/>
                 );
               }
               return null;
             })()}
 
-            {/* ── Rubber-band lasso ── */}
-            {rubberBand && (
-              <rect
-                x={Math.min(rubberBand.x1, rubberBand.x2)}
-                y={Math.min(rubberBand.y1, rubberBand.y2)}
-                width={Math.abs(rubberBand.x2 - rubberBand.x1)}
-                height={Math.abs(rubberBand.y2 - rubberBand.y1)}
-                fill="oklch(74% 0.13 210 / 0.08)"
-                stroke="oklch(74% 0.13 210)"
-                strokeWidth="1"
-                strokeDasharray="5 3"
-                pointerEvents="none"/>
-            )}
 
-            {/* ── Path selection highlight ── */}
+            {/* ── Path selection highlight (marching ants = canvas path-pick for strip assignment) ── */}
             {pathSel.map((p, idx) => {
               const midEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
               midEl.setAttribute('d', p.pathData);
@@ -1524,27 +1608,30 @@ export function LayoutScreen() {
               const midPt = midEl.getPointAtLength ? midEl.getPointAtLength(len * 0.5) : { x: 0, y: 0 };
               return (
                 <g key={'sel-' + p.pathId} style={{ pointerEvents: 'none' }}>
-                  <path d={p.pathData} stroke="#4cc9f0" strokeWidth="10" fill="none" opacity={0.18} strokeLinecap="round"/>
-                  <path d={p.pathData} stroke="#4cc9f0" strokeWidth="5"  fill="none" opacity={0.55} strokeLinecap="round"/>
-                  <path d={p.pathData} stroke="white"   strokeWidth="2"  fill="none" opacity={1}    strokeLinecap="round"/>
-                  <circle cx={midPt.x} cy={midPt.y} r={vbScale * 9} fill="#4cc9f0" opacity={0.85}/>
-                  <text x={midPt.x} y={midPt.y + vbScale * 4} textAnchor="middle" fill="white" fontSize={vbScale * 9}
+                  <path d={p.pathData} stroke="oklch(84% 0.28 138)" strokeWidth="8" fill="none" opacity={0.14} strokeLinecap="round"/>
+                  <path d={p.pathData} stroke="oklch(84% 0.28 138)" strokeWidth="2.5" fill="none" opacity={0.9}
+                        strokeDasharray="10 5" strokeLinecap="round"
+                        style={{ animation: 'lw-march 0.5s linear infinite' }}/>
+                  <circle cx={midPt.x} cy={midPt.y} r={vbScale * 9} fill="oklch(84% 0.28 138)" opacity={0.9}/>
+                  <text x={midPt.x} y={midPt.y + vbScale * 4} textAnchor="middle" fill="oklch(12% 0.04 138)" fontSize={vbScale * 9}
                         fontWeight="bold" style={{ userSelect: 'none' }}>{idx + 1}</text>
                 </g>
               );
             })}
 
-            {/* ── Light visualization ── */}
-            {showLight && strips.map(s =>
-              !hidden[s.id] && (stripSamples[s.id] || []).map((pt, i) => (
-                s.emit === 'omni'
-                  ? <OmniHalo key={i} uid={`${s.id}-${i}`} cx={pt.x} cy={pt.y} color={s.color} reach={vbScale * 50} intensity={0.5}/>
-                  : <LightCone key={i} uid={`${s.id}-${i}`} cx={pt.x} cy={pt.y}
-                               angle={Math.atan2(pt.tx, -pt.ty) * 180 / Math.PI + 90 + (s.angle || 0)}
-                               color={s.color}
-                               reach={vbScale * (directedGlow ? 90 * 1.3 : 90)}
-                               intensity={directedGlow ? 0.7 : 0.5}/>
-              ))
+            {/* ── Light visualization — one feGaussianBlur on the whole group ── */}
+            {/* Plain filled circles, single filter pass: no per-element gradients,  */}
+            {/* no hard cone edges, purely additive via mixBlendMode screen.         */}
+            {showLight && (
+              <g filter="url(#lw-light-glow)" style={{ mixBlendMode: 'screen' }}>
+                {strips.map(s => !hidden[s.id] && (stripSamples[s.id] || []).map((pt, i) => (
+                  <circle key={`${s.id}-${i}`}
+                          cx={pt.x} cy={pt.y}
+                          r={vbScale * 32}
+                          fill={s.color}
+                          opacity={0.55}/>
+                )))}
+              </g>
             )}
 
             {/* ── Strip paths ── */}
@@ -1561,25 +1648,25 @@ export function LayoutScreen() {
               );
             })}
 
-            {/* ── LED dots ── */}
+            {/* ── LED dots — white so they read clearly against any strip color ── */}
             {showLeds && strips.filter(s => !hidden[s.id]).map(s => (
               glowMode === 'dots' ? (
                 <g key={s.id + '-dots'}>
                   {s.pixels.map((px, i) => (
                     <circle key={i} cx={px.x} cy={px.y}
-                            r={s.id === selStripId ? vbScale * 3.5 : vbScale * 3}
-                            fill={s.color} opacity={1}/>
+                            r={s.id === selStripId ? vbScale * 3.5 : vbScale * 2.8}
+                            fill="white" opacity={s.id === selStripId ? 1 : 0.85}/>
                   ))}
                 </g>
               ) : (
                 <g key={s.id + '-dots'} filter="url(#lw-led-bloom)">
                   {s.pixels.map((px, i) => (
                     <circle key={i} cx={px.x} cy={px.y}
-                            r={s.id === selStripId ? vbScale * 3 : vbScale * 2.5}
-                            fill={s.color}
+                            r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
+                            fill="white"
                             opacity={glowMode === 'outward'
-                              ? (s.id === selStripId ? 0.7 : 0.63)
-                              : (s.id === selStripId ? 1 : 0.9)}/>
+                              ? (s.id === selStripId ? 0.55 : 0.42)
+                              : (s.id === selStripId ? 0.75 : 0.55)}/>
                   ))}
                 </g>
               )
@@ -1668,6 +1755,22 @@ export function LayoutScreen() {
               </>
             )}
           </svg>
+
+          {/* ── Rubber-band lasso overlay (absolute inside viewport — position:fixed breaks with backdrop-filter ancestors) ── */}
+          {rubberBand && (
+            <div style={{
+              position: 'absolute',
+              left:   Math.min(rubberBand.x1, rubberBand.x2),
+              top:    Math.min(rubberBand.y1, rubberBand.y2),
+              width:  Math.abs(rubberBand.x2 - rubberBand.x1),
+              height: Math.abs(rubberBand.y2 - rubberBand.y1),
+              border: '1px dashed oklch(84% 0.28 138)',
+              background: 'oklch(84% 0.28 138 / 0.07)',
+              pointerEvents: 'none',
+              zIndex: 9999,
+              userSelect: 'none',
+            }}/>
+          )}
 
           {/* Canvas coordinate overlay */}
           {cursorSvgPt && (
@@ -2045,7 +2148,7 @@ export function LayoutScreen() {
                     <button key={d}
                             className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
                             style={{ padding: '2px 6px', fontSize: 10 }}
-                            onClick={() => setDensity(d)}>{d}</button>
+                            onClick={() => handleDensityChange(d)}>{d}</button>
                   ))}
                 </div>
               </div>
@@ -2065,8 +2168,14 @@ export function LayoutScreen() {
                            const val = Math.max(1, +e.target.value);
                            setEditCounts(c => ({ ...c, [selLayer.layerId]: val }));
                          }}
+                         onBlur={() => {
+                           if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer));
+                         }}
                          onKeyDown={e => {
-                           if (e.key === 'Enter') addStrip();
+                           if (e.key === 'Enter') {
+                             if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer));
+                             else addStrip();
+                           }
                          }}
                          style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 12, textAlign: 'right',
                                   background: 'var(--bg)', border: `1px solid ${editCounts[selLayer.layerId] != null ? 'var(--accent)' : 'var(--border)'}`,
@@ -2235,6 +2344,18 @@ export function LayoutScreen() {
                             <option value="">Inherited</option>
                             {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                           </select>
+                        </div>
+                        {/* LED count */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>LEDs</span>
+                          <input type="number" min="1" max="1500"
+                                 value={s.pixelCount}
+                                 style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 11, textAlign: 'right',
+                                          background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', color: 'var(--text)' }}
+                                 onChange={e => updateStrip(s.id, { pixelCount: Math.max(1, +e.target.value) })}
+                                 onBlur={e => resampleStrip(s.id, Math.max(1, +e.target.value))}
+                                 onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, Math.max(1, +e.target.value)); }}
+                                 onClick={e => e.stopPropagation()}/>
                         </div>
                         {/* Strip actions */}
                         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ProjectProvider, useProject } from './state/ProjectContext.jsx';
 import { TopBar, LeftRail, CanvasToolbar, Transport, StatusBar } from './components/Chrome.jsx';
 import { LEDPreview } from './components/Preview.jsx';
@@ -7,9 +7,17 @@ import { SymmetryMode } from './components/SymmetryMode.jsx';
 import { ExportScreen, FlashScreen } from './components/OtherScreens.jsx';
 import { LayoutScreen } from './components/LayoutScreen.jsx';
 import { TimelineScreen } from './components/TimelineScreen.jsx';
+import { LiveScreen } from './components/LiveScreen.jsx';
+import { DevicesPanel } from './components/DevicesPanel.jsx';
+import { SettingsScreen } from './components/SettingsScreen.jsx';
 import { ExportDialog } from './components/ExportDialog.jsx';
+import { KeyboardHelp } from './components/KeyboardHelp.jsx';
+import { CommandPalette } from './components/CommandPalette.jsx';
 import { useTweaks, TweaksPanel } from './components/Tweaks.jsx';
-import { PATTERNS, PALETTE_DEFAULT } from './data.js';
+import { WledBar } from './components/WledBar.jsx';
+import { useAudio } from './hooks/useAudio.js';
+import { useMidi } from './hooks/useMidi.js';
+import { PATTERNS } from './data.js';
 
 const ModeIcon = {
   cards: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><rect x="2" y="2" width="5" height="5" rx="0.5"/><rect x="9" y="2" width="5" height="5" rx="0.5"/><rect x="2" y="9" width="5" height="5" rx="0.5"/><rect x="9" y="9" width="5" height="5" rx="0.5"/></svg>,
@@ -22,17 +30,19 @@ function PatternPanel({
   panelMode, setPanelMode,
   patternId, onSelectPattern,
   params, setParams,
-  palette,
+  palette, onPaletteChange,
   onCodeChange,
   masterSpeed, setMasterSpeed,
   masterBrightness, setMasterBrightness,
   masterSaturation, setMasterSaturation,
   gammaEnabled, setGammaEnabled,
   gammaValue, setGammaValue,
+  onCollapse,
 }) {
   return (
     <div className="lw-panel">
       <div className="lw-panel-mode-switch">
+        <button className="lw-panel-collapse-btn" onClick={onCollapse} title="Collapse panel">‹</button>
         {[['cards','Cards',ModeIcon.cards],['code','Code',ModeIcon.code],['graph','Graph',ModeIcon.graph],['sym','Symmetry',ModeIcon.sym]].map(([v,l,ic]) => (
           <button key={v} className={`lw-panel-mode-btn ${panelMode === v ? 'active' : ''}`} onClick={() => setPanelMode(v)}>
             {ic}<span>{l}</span>
@@ -43,9 +53,16 @@ function PatternPanel({
         {panelMode === 'cards' && (
           <CardsMode patternId={patternId} onSelectPattern={onSelectPattern}
                      params={params} onParamChange={(k, v) => setParams({ ...params, [k]: v })}
-                     palette={palette}/>
+                     palette={palette} onPaletteChange={onPaletteChange}/>
         )}
-        {panelMode === 'code'  && <CodeMode patternId={patternId} onCodeChange={onCodeChange}/>}
+        {panelMode === 'code'  && (
+          <CodeMode
+            patternId={patternId}
+            onCodeChange={onCodeChange}
+            params={params}
+            onParamChange={(k, v) => setParams({ ...params, [k]: v })}
+          />
+        )}
         {panelMode === 'graph' && <GraphMode/>}
         {panelMode === 'sym'   && <SymmetryMode/>}
         <div className="lw-sec-header" style={{ marginTop: 24 }}>
@@ -71,8 +88,7 @@ function PatternPanel({
           <span className="lbl">Gamma</span>
           <input type="checkbox" checked={gammaEnabled} onChange={e => setGammaEnabled(e.target.checked)}/>
           <input type="range" min="1.0" max="3.0" step="0.1" value={gammaValue}
-                 onChange={e => setGammaValue(+e.target.value)}
-                 disabled={!gammaEnabled}/>
+                 onChange={e => setGammaValue(+e.target.value)} disabled={!gammaEnabled}/>
           <span className="v">{gammaValue.toFixed(1)}</span>
         </div>
       </div>
@@ -80,115 +96,321 @@ function PatternPanel({
   );
 }
 
-function PatternScreen({ panelMode, setPanelMode, panelWide }) {
-  const { strips: projectStrips, viewBox: projectViewBox, svgText: projectSvgText, hidden: projectHidden } = useProject();
-  const [patternId, setPatternId]           = useState('aurora');
-  const [playing, setPlaying]               = useState(true);
-  const [bpm, setBpm]                       = useState(120);
-  const [glow, setGlow]                     = useState(1.2);
-  const [dot, setDot]                       = useState(2.5);
-  const [heat, setHeat]                     = useState(false);
-  const [params, setParams]                 = useState({});
-  const [masterSpeed,      setMasterSpeed]      = useState(1.0);
-  const [masterBrightness, setMasterBrightness] = useState(1.0);
-  const [masterSaturation, setMasterSaturation] = useState(1.0);
-  const [gammaEnabled,     setGammaEnabled]     = useState(false);
-  const [gammaValue,       setGammaValue]       = useState(2.2);
-  const [compiledFn,       setCompiledFn]       = useState(null);
-  const [zoom,             setZoom]             = useState(1.0);
-  const [liveT,            setLiveT]            = useState(0);
-  const [projectName]                       = useState('Untitled Project');
+function PatternScreen({ panelMode, setPanelMode }) {
+  const [panelWidth, setPanelWidth] = useState(
+    () => parseInt(localStorage.getItem('lw-panel-width') || '300', 10)
+  );
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [compareMode,    setCompareMode]    = useState(false);
+  const [compareId,      setCompareId]      = useState('aurora');
 
-  const handleCodeChange = useCallback(({ fn, error }) => {
+  const handleDividerMouseDown = (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = panelWidth;
+    const el = e.currentTarget;
+    el.classList.add('dragging');
+    const onMove = (ev) => {
+      const newW = Math.max(180, Math.min(600, startW + (startX - ev.clientX)));
+      setPanelWidth(newW);
+      localStorage.setItem('lw-panel-width', String(newW));
+    };
+    const onUp = () => {
+      el.classList.remove('dragging');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const {
+    strips: projectStrips, viewBox: projectViewBox, svgText: projectSvgText, hidden: projectHidden,
+    activePatternId: patternId, setActivePatternId: setPatternId,
+    palette, setPalette,
+    masterSpeed, setMasterSpeed,
+    masterBrightness, setMasterBrightness,
+    masterSaturation, setMasterSaturation,
+    masterHueShift,
+    gammaEnabled, setGammaEnabled,
+    gammaValue, setGammaValue,
+    patternParams, setPatternParams,
+    bpm, setBpm,
+    wledPush,
+    symSettings,
+    audioBands,
+  } = useProject();
+
+  // Read URL hash for initial pattern on mount
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    const params = new URLSearchParams(hash.includes('=') ? hash : '');
+    const pid = params.get('pattern');
+    if (pid && PATTERNS.find(p => p.id === pid)) setPatternId(pid);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [playing, setPlaying]             = useState(true);
+  const [glow, setGlow]                   = useState(1.2);
+  const [dot, setDot]                     = useState(1.0);
+  const [heat, setHeat]                   = useState(false);
+  const [compiledFn, setCompiledFn]       = useState(null);
+  const [zoom, setZoom]                   = useState(1.0);
+  const [liveT, setLiveT]                 = useState(0);
+  const [liveFps, setLiveFps]             = useState(0);
+
+  const params    = patternParams[patternId] || {};
+  const setParams = useCallback((newParams) => {
+    setPatternParams(prev => ({ ...prev, [patternId]: newParams }));
+  }, [patternId, setPatternParams]);
+
+  const handleFrame = useCallback((pixels) => { wledPush(pixels); }, [wledPush]);
+
+  const handleCodeChange = useCallback(({ fn, error, parsedParams }) => {
     setCompiledFn(error ? null : () => fn);
-  }, []);
+    // Auto-populate default param values from @param annotations
+    if (parsedParams?.length > 0) {
+      setPatternParams(prev => {
+        const existing = prev[patternId] || {};
+        const defaults = Object.fromEntries(parsedParams.map(p => [p.name, p.value]));
+        return { ...prev, [patternId]: { ...defaults, ...existing } };
+      });
+    }
+  }, [patternId, setPatternParams]);
 
-  // Selecting a library card clears any custom compiledFn so the library version plays
   const handleSelectPattern = useCallback((id) => {
     setPatternId(id);
     setCompiledFn(null);
-  }, []);
+  }, [setPatternId]);
 
   const cur = PATTERNS.find(p => p.id === patternId);
+  const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
 
   return (
-    <div className={`lw-pattern-screen ${panelWide ? 'panel-wide' : ''}`}>
+    <div className="lw-pattern-screen" style={{ gridTemplateColumns: gridCols }}>
       <div className="lw-canvas-col">
-        <CanvasToolbar glow={glow} setGlow={setGlow} dot={dot} setDot={setDot} heat={heat} setHeat={setHeat}/>
+        <CanvasToolbar glow={glow} setGlow={setGlow} dot={dot} setDot={setDot} heat={heat} setHeat={setHeat}>
+          <button
+            className={`btn btn-ghost ${compareMode ? 'active' : ''}`}
+            style={{ fontSize: 10 }}
+            onClick={() => setCompareMode(m => !m)}
+            title="A/B compare mode">
+            A|B
+          </button>
+        </CanvasToolbar>
         <div className="lw-viewport" style={{ overflow: 'hidden' }}>
-          <div style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
-            <LEDPreview
-              patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
-              strips={projectStrips.length > 0 ? projectStrips : undefined}
-              viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
-              svgText={projectSvgText}
-              masterSpeed={masterSpeed}
-              masterBrightness={masterBrightness}
-              masterSaturation={masterSaturation}
-              gammaEnabled={gammaEnabled}
-              gammaValue={gammaValue}
-              hidden={projectHidden}
-              compiledFn={compiledFn}
-              bpm={bpm}
-              params={params}
-              onTick={t => setLiveT(t)}
-            />
-          </div>
-          <div className="lw-viewport-overlay tl">
-            <div><span className="k">project</span> <span className="v">{projectName}</span></div>
-            <div><span className="k">view</span> <span className="v">preview · directed glow</span></div>
-          </div>
-          <div className="lw-viewport-overlay br">
-            <div><span className="k">running</span> <span className="v">{cur?.name}</span></div>
-            <div><span className="k">t</span> <span className="v">{liveT.toFixed(2)}s</span></div>
-          </div>
-          <div className="lw-zoom-controls">
-            <button onClick={() => setZoom(z => Math.min(3, z * 1.25))}>+</button>
-            <div className="lw-zoom-level">{Math.round(zoom * 100)}%</div>
-            <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))}>−</button>
-            <button style={{ fontSize: 9 }} onClick={() => setZoom(1)}>1:1</button>
-          </div>
+          {compareMode ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', width: '100%', height: '100%' }}>
+              <div style={{ position: 'relative', overflow: 'hidden', borderRight: '1px solid var(--border)' }}>
+                <LEDPreview
+                  patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
+                  strips={projectStrips.length > 0 ? projectStrips : undefined}
+                  viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
+                  svgText={projectSvgText}
+                  masterSpeed={masterSpeed} masterBrightness={masterBrightness}
+                  masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
+                  gammaValue={gammaValue} hidden={projectHidden} compiledFn={compiledFn}
+                  bpm={bpm} params={params} symSettings={symSettings} audioBands={audioBands}
+                  onTick={setLiveT} onFrame={handleFrame}
+                />
+                <div className="lw-viewport-overlay tl" style={{ fontSize: 9 }}>
+                  <span style={{ background: 'var(--accent)', color: '#000', padding: '1px 5px', borderRadius: 2 }}>A</span>
+                  <span className="v">{cur?.name || patternId}</span>
+                </div>
+              </div>
+              <div style={{ position: 'relative', overflow: 'hidden' }}>
+                <LEDPreview
+                  patternId={compareId} playing={playing} glow={glow} dotSize={dot} speed={1}
+                  strips={projectStrips.length > 0 ? projectStrips : undefined}
+                  viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
+                  svgText={projectSvgText}
+                  masterSpeed={masterSpeed} masterBrightness={masterBrightness}
+                  masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
+                  gammaValue={gammaValue} hidden={projectHidden}
+                  bpm={bpm} params={{}} symSettings={symSettings} audioBands={audioBands}
+                />
+                <div className="lw-viewport-overlay tl" style={{ fontSize: 9 }}>
+                  <span style={{ background: 'oklch(64% 0.20 25)', color: '#fff', padding: '1px 5px', borderRadius: 2 }}>B</span>
+                  <select value={compareId} onChange={e => setCompareId(e.target.value)}
+                    style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)',
+                             fontSize: 9, padding: '1px 4px', borderRadius: 2, cursor: 'pointer' }}>
+                    {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
+              <LEDPreview
+                patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
+                strips={projectStrips.length > 0 ? projectStrips : undefined}
+                viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
+                svgText={projectSvgText}
+                masterSpeed={masterSpeed}
+                masterBrightness={masterBrightness}
+                masterSaturation={masterSaturation}
+                masterHueShift={masterHueShift}
+                gammaEnabled={gammaEnabled}
+                gammaValue={gammaValue}
+                hidden={projectHidden}
+                compiledFn={compiledFn}
+                bpm={bpm}
+                params={params}
+                symSettings={symSettings}
+                audioBands={audioBands}
+                palette={palette}
+                onTick={setLiveT}
+                onFrame={handleFrame}
+                onFps={setLiveFps}
+              />
+            </div>
+          )}
+          {!compareMode && (
+            <>
+              <div className="lw-viewport-overlay tl">
+                <div><span className="k">pattern</span> <span className="v">{cur?.name || patternId}</span></div>
+                <div><span className="k">view</span> <span className="v">preview · directed glow</span></div>
+              </div>
+              <div className="lw-viewport-overlay br">
+                <div><span className="k">t</span> <span className="v">{liveT.toFixed(2)}s</span></div>
+                <div><span className="k">fps</span> <span className="v" style={{ color: liveFps >= 55 ? 'var(--mint)' : liveFps >= 30 ? 'var(--accent)' : 'var(--danger)' }}>{liveFps}</span></div>
+              </div>
+              <div className="lw-zoom-controls">
+                <button onClick={() => setZoom(z => Math.min(3, z * 1.25))}>+</button>
+                <div className="lw-zoom-level">{Math.round(zoom * 100)}%</div>
+                <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))}>−</button>
+                <button style={{ fontSize: 9 }} onClick={() => setZoom(1)}>1:1</button>
+              </div>
+            </>
+          )}
         </div>
-        <Transport playing={playing} onPlay={() => setPlaying(!playing)} bpm={bpm} setBpm={setBpm} time={liveT}/>
+        <Transport playing={playing} onPlay={() => setPlaying(!playing)} bpm={bpm} setBpm={setBpm} time={liveT} fps={liveFps}/>
+        <WledBar/>
       </div>
-      <PatternPanel
-        panelMode={panelMode} setPanelMode={setPanelMode}
-        patternId={patternId} onSelectPattern={handleSelectPattern}
-        params={params} setParams={setParams}
-        palette={PALETTE_DEFAULT}
-        onCodeChange={handleCodeChange}
-        masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}
-        masterBrightness={masterBrightness} setMasterBrightness={setMasterBrightness}
-        masterSaturation={masterSaturation} setMasterSaturation={setMasterSaturation}
-        gammaEnabled={gammaEnabled} setGammaEnabled={setGammaEnabled}
-        gammaValue={gammaValue} setGammaValue={setGammaValue}
-      />
+
+      {panelCollapsed ? (
+        <div className="lw-panel-collapsed-strip">
+          <button className="lw-panel-collapse-btn" onClick={() => setPanelCollapsed(false)} title="Expand panel">›</button>
+        </div>
+      ) : (
+        <>
+          <div className="lw-resize-handle" onMouseDown={handleDividerMouseDown}/>
+          <PatternPanel
+            panelMode={panelMode} setPanelMode={setPanelMode}
+            patternId={patternId} onSelectPattern={handleSelectPattern}
+            params={params} setParams={setParams}
+            palette={palette} onPaletteChange={setPalette}
+            onCodeChange={handleCodeChange}
+            masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}
+            masterBrightness={masterBrightness} setMasterBrightness={setMasterBrightness}
+            masterSaturation={masterSaturation} setMasterSaturation={setMasterSaturation}
+            gammaEnabled={gammaEnabled} setGammaEnabled={setGammaEnabled}
+            gammaValue={gammaValue} setGammaValue={setGammaValue}
+            onCollapse={() => setPanelCollapsed(true)}
+          />
+        </>
+      )}
     </div>
   );
 }
 
+// ── Audio bridge: runs inside ProjectProvider, syncs bands to context ────
+function AudioBridge({ audio }) {
+  const { setAudioBands } = useProject();
+  useEffect(() => {
+    if (audio.enabled) setAudioBands(audio.bands);
+  }, [audio.bands, audio.enabled, setAudioBands]);
+  return null;
+}
+
+// ── MIDI bridge: maps CC to master controls ───────────────────────────────
+function MidiBridgeInner() {
+  const { setMasterSpeed, setMasterBrightness, setMasterSaturation } = useProject();
+  // Expose CC handler globally so useMidi cbRef can pick it up
+  useEffect(() => {
+    window.__lwMidiCC = (_ch, cc, val) => {
+      if (cc === 1)  setMasterSpeed(val * 4);
+      if (cc === 7)  setMasterBrightness(val);
+      if (cc === 11) setMasterSaturation(val);
+    };
+    return () => { delete window.__lwMidiCC; };
+  }, [setMasterSpeed, setMasterBrightness, setMasterSaturation]);
+  return null;
+}
+
+function MidiBridge() {
+  return <MidiBridgeInner/>;
+}
+
 export default function App() {
-  const [screen, setScreen]       = useState('layout');
-  const [panelMode, setPanelMode] = useState('cards');
+  const [screen, setScreen]         = useState(() => {
+    const hash = window.location.hash.slice(1);
+    const params = new URLSearchParams(hash.includes('=') ? hash : '');
+    return params.get('screen') || 'layout';
+  });
+  const [panelMode, setPanelMode]   = useState(
+    () => localStorage.getItem('lw-panel-mode') || 'cards'
+  );
   const [exportOpen, setExportOpen] = useState(false);
-  const { tweaks, visible, set }  = useTweaks();
+  const [kbdOpen,    setKbdOpen]    = useState(false);
+  const [cmdOpen,    setCmdOpen]    = useState(false);
+  const { tweaks, visible, set }    = useTweaks();
+  const audio                       = useAudio();
+  const midi                        = useMidi();
+
+  // Persist panel mode
+  const handleSetPanelMode = useCallback((m) => {
+    setPanelMode(m);
+    localStorage.setItem('lw-panel-mode', m);
+  }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      // Don't fire when typing in inputs
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+
+      if (e.key === '?') { setKbdOpen(o => !o); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdOpen(o => !o); return; }
+
+      // Screen nav: 1-5 keys
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+        const screenMap = { '1': 'layout', '2': 'pattern', '3': 'timeline', '4': 'live', '5': 'export' };
+        if (screenMap[e.key]) { setScreen(screenMap[e.key]); return; }
+      }
+
+      // Audio toggle: A
+      if (e.key === 'a' && !e.metaKey && !e.ctrlKey) { audio.toggle(); return; }
+
+      // Compare mode toggle on pattern screen: C
+      // (handled inline in PatternScreen via callback)
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   return (
     <ProjectProvider>
-    <div className="lw-app">
-      <TopBar theme={tweaks.theme}/>
-      <div className="lw-main">
-        <LeftRail screen={screen} onScreen={setScreen}/>
-        {screen === 'pattern'  && <PatternScreen panelMode={panelMode} setPanelMode={setPanelMode} panelWide={tweaks.panelWidth === 'wide'}/>}
-        {screen === 'layout'   && <LayoutScreen/>}
-        {screen === 'timeline' && <TimelineScreen onExport={() => setExportOpen(true)}/>}
-        {screen === 'export'   && <ExportScreen/>}
-        {screen === 'flash'    && <FlashScreen/>}
+      <AudioBridge audio={audio}/>
+      <MidiBridge/>
+      <div className="lw-app">
+        <TopBar theme={tweaks.theme} onKbdHelp={() => setKbdOpen(true)}
+                audio={audio} midi={midi}/>
+        <div className="lw-main">
+          <LeftRail screen={screen} onScreen={setScreen}/>
+          {screen === 'pattern'  && <PatternScreen panelMode={panelMode} setPanelMode={handleSetPanelMode}/>}
+          {screen === 'layout'   && <LayoutScreen/>}
+          {screen === 'timeline' && <TimelineScreen onExport={() => setExportOpen(true)}/>}
+          {screen === 'live'     && <LiveScreen/>}
+          {screen === 'export'   && <ExportScreen/>}
+          {screen === 'flash'    && <FlashScreen/>}
+          {screen === 'settings' && <SettingsScreen/>}
+        </div>
+        <StatusBar/>
+        <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
+        <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}/>
+        <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>
+        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={setScreen}/>
+        {screen === 'devices' && <DevicesPanel onClose={() => setScreen('layout')}/>}
       </div>
-      <StatusBar/>
-      <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
-      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}/>
-    </div>
     </ProjectProvider>
   );
 }

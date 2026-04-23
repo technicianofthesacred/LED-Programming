@@ -1,25 +1,19 @@
-import { useState, useEffect } from 'react';
-import { useWled } from '../hooks/useWled.js';
+import { useState, useEffect, useMemo } from 'react';
+import { useProject } from '../state/ProjectContext.jsx';
 
 /**
  * WledBar — compact WLED connection bar.
- *
- * Props:
- *   onPush  (optional)  Called with the `push(pixels)` function once mounted,
- *                       so parent screens can drive live push without managing
- *                       the connection themselves.
+ * Reads the shared WLED connection from ProjectContext (one WebSocket for the whole app).
  */
-export function WledBar({ onPush }) {
-  const { ip, setIp, connected, connect, disconnect, push } = useWled();
+const WLED_LED_WARN = 500;
+
+export function WledBar() {
+  const { wledIp: ip, setWledIp: setIp, wledConnected: connected, wledConnect: connect, wledDisconnect: disconnect, strips } = useProject();
+  const totalLEDs = useMemo(() => strips.reduce((s, st) => s + (st.pixels?.length || 0), 0), [strips]);
 
   // Track whether a connection attempt is in flight (between connect() call and
   // the WebSocket open/error event).
   const [connecting, setConnecting] = useState(false);
-
-  // Expose push to parent via callback
-  useEffect(() => {
-    if (onPush) onPush(push);
-  }, [onPush, push]);
 
   // Clear "connecting" spinner once state resolves
   useEffect(() => {
@@ -99,6 +93,13 @@ export function WledBar({ onPush }) {
       {/* Push rate hint when connected */}
       {connected && (
         <span style={styles.hint}>25 fps max</span>
+      )}
+      {/* LED count warning */}
+      {totalLEDs > WLED_LED_WARN && (
+        <span style={{ ...styles.hint, color: 'oklch(80% 0.18 70)' }}
+              title={`${totalLEDs} LEDs — WLED WebSocket may have trouble above ~500 LEDs per segment. Consider splitting into segments.`}>
+          ⚠ {totalLEDs} LEDs
+        </span>
       )}
     </div>
   );

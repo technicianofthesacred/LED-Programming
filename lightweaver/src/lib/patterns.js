@@ -187,7 +187,7 @@ export function compile(code) {
   try {
     const fn = new Function(
       'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
-      'stripId', 'stripProgress',
+      'stripId', 'stripProgress', 'bass', 'mid', 'hi',
       BUILTINS + '\n' + code,
     );
     return { fn, error: null };
@@ -214,9 +214,9 @@ export function compile(code) {
  * @param {number}    stripProgress 0–1 position along this strip only
  * @returns {{ r: number, g: number, b: number }}
  */
-export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress) {
+export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress, bass = 0, mid = 0, hi = 0) {
   try {
-    const result = fn(index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId || 0, stripProgress || 0);
+    const result = fn(index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId || 0, stripProgress || 0, bass, mid, hi);
     if (!result || typeof result !== 'object') return { r: 0, g: 0, b: 0 };
     return {
       r: _clamp255(Math.round(result.r ?? 0)),
