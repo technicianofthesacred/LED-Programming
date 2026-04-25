@@ -133,14 +133,14 @@ function DirectionCompass({ angle, emit, onAngle, onEmit }) {
         </div>
         {emit === 'dir' && (
           <>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 'var(--fs-xs)' }}>
               <span style={{ width: 48, color: 'var(--text-3)' }}>Offset</span>
               <input type="range" min="0" max="359" value={angle} onChange={e => onAngle(+e.target.value)} style={{ flex: 1 }}/>
               <span style={{ fontFamily: 'var(--mono-font)', width: 34, textAlign: 'right' }}>{angle}°</span>
             </div>
             <div style={{ display: 'flex', gap: 4 }}>
-              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 9 }} onClick={() => onAngle(0)}>↑ Left</button>
-              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 9 }} onClick={() => onAngle(180)}>↓ Right</button>
+              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 'var(--fs-2xs)' }} onClick={() => onAngle(0)}>↑ Left</button>
+              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 'var(--fs-2xs)' }} onClick={() => onAngle(180)}>↓ Right</button>
             </div>
           </>
         )}
@@ -293,7 +293,7 @@ export function LayoutScreen() {
             <option value="96">96 /m</option><option value="144">144 /m</option>
           </select>
           <span className="tbar-label" style={{ marginLeft: 12 }}>PITCH</span>
-          <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--text-2)', fontSize: 11 }}>16.6 mm</span>
+          <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>16.6 mm</span>
           <div style={{ flex: 1 }}/>
           <button className={`btn ${showLight ? 'btn-primary' : ''}`} onClick={() => setShowLight(!showLight)}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6" cy="6" r="2"/><path d="M6 1v1.5M6 9.5V11M1 6h1.5M9.5 6H11M2.5 2.5l1 1M8.5 8.5l1 1M2.5 9.5l1-1M8.5 3.5l1-1"/></svg>
@@ -390,7 +390,7 @@ export function LayoutScreen() {
             <button onClick={() => setSvgZoom(z => Math.min(4, z * 1.25))}>+</button>
             <div className="lw-zoom-level">{Math.round(svgZoom * 100)}%</div>
             <button onClick={() => setSvgZoom(z => Math.max(0.25, z / 1.25))}>−</button>
-            <button style={{ fontSize: 9 }} onClick={() => setSvgZoom(1)}>1:1</button>
+            <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={() => setSvgZoom(1)}>1:1</button>
           </div>
         </div>
       </div>
@@ -424,11 +424,11 @@ export function LayoutScreen() {
                       : <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1"><path d="M1 6s2-3 5-3 5 3 5 3-2 3-5 3-5-3-5-3z"/><circle cx="6" cy="6" r="1.5"/></svg>}
                   </button>
                   <span style={{ width: 10, height: 10, borderRadius: 2, background: l.color, boxShadow: '0 0 6px ' + l.color, flexShrink: 0 }}/>
-                  <span style={{ fontSize: 12, flex: 1, fontFamily: 'var(--mono-font)', color: isSel ? 'var(--text)' : 'var(--text-2)' }}>{l.name}</span>
-                  <span style={{ fontSize: 10, color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
+                  <span style={{ fontSize: 'var(--fs-md)', flex: 1, fontFamily: 'var(--mono-font)', color: isSel ? 'var(--text)' : 'var(--text-2)' }}>{l.name}</span>
+                  <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
                     {l.emit === 'omni' ? '◉' : `↗${l.angle}°`}
                   </span>
-                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', minWidth: 32, textAlign: 'right' }}>{l.leds}</span>
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 32, textAlign: 'right' }}>{l.leds}</span>
                 </div>
               );
             })}
@@ -440,13 +440,13 @@ export function LayoutScreen() {
                 <span>Inspector · {sel.name}</span>
                 <span className="meta">{sel.emit}</span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', fontSize: 11, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', fontSize: 'var(--fs-sm)', marginBottom: 14 }}>
                 <span style={{ color: 'var(--text-3)' }}>Length</span>
                 <span style={{ fontFamily: 'var(--mono-font)' }}>{sel.len.toFixed(2)} m</span>
                 <span style={{ color: 'var(--text-3)' }}>LEDs</span>
                 <input type="number" value={sel.leds} min="1" max="512"
                        onChange={e => updateSel({ leds: +e.target.value })}
-                       style={{ fontFamily: 'var(--mono-font)', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 70 }}/>
+                       style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 70 }}/>
                 <span style={{ color: 'var(--text-3)' }}>Color tag</span>
                 <div style={{ width: 20, height: 16, borderRadius: 3, background: sel.color, border: '1px solid var(--border-2)' }}/>
                 <span style={{ color: 'var(--text-3)' }}>Brightness</span>
@@ -454,7 +454,7 @@ export function LayoutScreen() {
                   <input type="range" min="0" max="2" step="0.05" value={sel.brightness ?? 1}
                          onChange={e => updateSel({ brightness: +e.target.value })}
                          style={{ flex: 1 }}/>
-                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, width: 34, textAlign: 'right', color: 'var(--text-2)' }}>
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', width: 34, textAlign: 'right', color: 'var(--text-2)' }}>
                     {Math.round((sel.brightness ?? 1) * 100)}%
                   </span>
                 </div>
@@ -470,7 +470,7 @@ export function LayoutScreen() {
                 onEmit={e => updateSel({ emit: e })}
               />
 
-              <div style={{ marginTop: 12, fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-4)', lineHeight: 1.5, padding: 10, background: 'var(--bg)', border: '1px dashed var(--border)', borderRadius: 'var(--r-sm)' }}>
+              <div style={{ marginTop: 12, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', lineHeight: 1.5, padding: 10, background: 'var(--bg)', border: '1px dashed var(--border)', borderRadius: 'var(--r-sm)' }}>
                 Affects the preview's directed glow — not the pattern math. Drag the compass or use sliders.
               </div>
             </>
@@ -534,7 +534,7 @@ export function ExportScreen() {
     <input
       type="number" value={val} step={step}
       onChange={e => setter(parseFloat(e.target.value) || 0)}
-      style={{ fontFamily: 'var(--mono-font)', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 72 }}
+      style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 72 }}
     />
   );
 
@@ -542,19 +542,19 @@ export function ExportScreen() {
     <div style={{ padding: 40, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, overflow: 'auto', height: '100%' }}>
       <div>
         {usingDemo && (
-          <div style={{ padding: '10px 14px', marginBottom: 20, background: 'var(--surface)', border: '1px dashed var(--border-2)', borderRadius: 'var(--r-sm)', fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>
+          <div style={{ padding: '10px 14px', marginBottom: 20, background: 'var(--surface)', border: '1px dashed var(--border-2)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)', color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>
             No strips in project — showing demo data. Draw strips on the Layout screen to export your real layout.
           </div>
         )}
 
         <div className="lw-sec-header"><span>Layout summary</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '6px 12px', fontSize: 11, marginBottom: 20, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '6px 12px', fontSize: 'var(--fs-sm)', marginBottom: 20, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
           <span style={{ color: 'var(--text-3)' }}>Total LEDs</span>
           <span style={{ fontFamily: 'var(--mono-font)', fontWeight: 600 }}>{totalLeds.toLocaleString()}</span>
           <span style={{ color: 'var(--text-3)' }}>Strips</span>
           <span style={{ fontFamily: 'var(--mono-font)' }}>{sourceStrips.length}</span>
           <span style={{ color: 'var(--text-3)' }}>View box</span>
-          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)' }}>{viewBox || '0 0 640 400'}</span>
+          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>{viewBox || '0 0 640 400'}</span>
         </div>
 
         <div className="lw-sec-header" style={{ marginTop: 4 }}>
@@ -562,11 +562,11 @@ export function ExportScreen() {
           <span className="meta">WLED + FastLED exports</span>
         </div>
         <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, marginBottom: 12, cursor: 'pointer' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', marginBottom: 12, cursor: 'pointer' }}>
             <input type="checkbox" checked={normalize} onChange={e => setNormalize(e.target.checked)}/>
             <span style={{ color: 'var(--text-2)' }}>Normalize coordinates</span>
           </label>
-          <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 64px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 11 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 64px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 'var(--fs-sm)' }}>
             <span style={{ color: 'var(--text-3)' }}>Scale X</span>
             {numInput(scaleX, setScaleX, 0.01)}
             <span style={{ color: 'var(--text-3)' }}>Scale Y</span>
@@ -584,12 +584,12 @@ export function ExportScreen() {
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 20 }}>
           {sourceStrips.map(s => (
-            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 11 }}>
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)' }}>
               {s.color && (
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, boxShadow: `0 0 5px ${s.color}`, flexShrink: 0 }}/>
               )}
               <span style={{ flex: 1, fontFamily: 'var(--mono-font)', color: 'var(--text-2)' }}>{s.name}</span>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{s.leds}</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{s.leds}</span>
             </div>
           ))}
         </div>
@@ -602,8 +602,8 @@ export function ExportScreen() {
           <div key={file} style={{ display:'flex', alignItems:'center', gap: 12, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 6 }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" strokeWidth="1.3"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg>
             <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: 'var(--mono-font)', fontSize: 12 }}>{file}</div>
-              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>{desc} · {size}</div>
+              <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)' }}>{file}</div>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>{desc} · {size}</div>
             </div>
             <button className="btn" onClick={action}>Download</button>
           </div>
@@ -612,7 +612,7 @@ export function ExportScreen() {
 
       <div>
         <div className="lw-sec-header"><span>ledmap.json preview</span><span className="meta">live</span></div>
-        <pre style={{ fontFamily: 'var(--mono-font)', fontSize: 11, color: 'var(--text-2)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 14, lineHeight: 1.5, overflow: 'auto', maxHeight: 400 }}>
+        <pre style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', color: 'var(--text-2)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 14, lineHeight: 1.5, overflow: 'auto', maxHeight: 400 }}>
           {previewJson}
         </pre>
       </div>
@@ -763,7 +763,7 @@ export function FlashScreen() {
     <div style={{ padding: 40, maxWidth: 680, margin: '0 auto', height: '100%', overflow: 'auto' }}>
 
       {!hasWebSerial && (
-        <div style={{ padding: '10px 14px', marginBottom: 20, background: 'oklch(28% 0.04 30)', border: '1px solid oklch(45% 0.12 30)', borderRadius: 'var(--r-sm)', fontSize: 11, color: 'oklch(72% 0.15 30)' }}>
+        <div style={{ padding: '10px 14px', marginBottom: 20, background: 'oklch(28% 0.04 30)', border: '1px solid oklch(45% 0.12 30)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)', color: 'oklch(72% 0.15 30)' }}>
           Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.
         </div>
       )}
@@ -776,9 +776,9 @@ export function FlashScreen() {
           { step: 3, label: 'Release BOOT', sub: 'then click Connect' },
         ].map(({ step, label, sub }) => (
           <div key={step} style={{ flex: 1, padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)' }}>
-            <div style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-4)' }}>STEP {step}</div>
-            <div style={{ fontSize: 13, marginTop: 4, fontWeight: 500 }}>{label}</div>
-            <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3 }}>{sub}</div>
+            <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>STEP {step}</div>
+            <div style={{ fontSize: 'var(--fs-md)', marginTop: 4, fontWeight: 500 }}>{label}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', marginTop: 3 }}>{sub}</div>
           </div>
         ))}
       </div>
@@ -789,13 +789,13 @@ export function FlashScreen() {
           <button className="btn" onClick={handleFetchRelease} disabled={fetchingRelease}>
             {fetchingRelease ? 'Checking…' : 'Fetch latest WLED'}
           </button>
-          <span style={{ fontSize: 11, color: 'var(--text-4)' }}>or</span>
+          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>or</span>
           <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse…</button>
           <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange}/>
         </div>
 
         {release && (
-          <div style={{ padding: '10px 12px', marginBottom: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 11 }}>
+          <div style={{ padding: '10px 12px', marginBottom: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', gap: '4px 10px', alignItems: 'baseline' }}>
                 <span style={{ color: 'var(--text-4)' }}>Version</span>
@@ -803,7 +803,7 @@ export function FlashScreen() {
                 <span style={{ color: 'var(--text-4)' }}>Date</span>
                 <span style={{ fontFamily: 'var(--mono-font)' }}>{release.date}</span>
                 <span style={{ color: 'var(--text-4)' }}>File</span>
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, wordBreak: 'break-all' }}>{release.asset.name}</span>
+                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', wordBreak: 'break-all' }}>{release.asset.name}</span>
                 <span style={{ color: 'var(--text-4)' }}>Size</span>
                 <span style={{ fontFamily: 'var(--mono-font)' }}>{fmtSize(release.asset.size)}</span>
               </div>
@@ -811,14 +811,14 @@ export function FlashScreen() {
                 Open download
               </button>
             </div>
-            <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
+            <div style={{ marginTop: 8, fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
               Save the file, then use Browse above to select it.
             </div>
           </div>
         )}
 
         {selectedFile && (
-          <div style={{ fontSize: 11, fontFamily: 'var(--mono-font)', color: 'var(--text-2)', padding: '6px 0' }}>
+          <div style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: 'var(--text-2)', padding: '6px 0' }}>
             {selectedFile.name} ({fmtSize(selectedFile.size)})
           </div>
         )}
@@ -826,17 +826,17 @@ export function FlashScreen() {
 
       <div className="lw-sec-header"><span>Flash options</span></div>
       <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 11 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 'var(--fs-sm)' }}>
           <span style={{ color: 'var(--text-3)' }}>Address</span>
           <input
             type="text" value={address}
             onChange={e => setAddress(e.target.value)}
-            style={{ fontFamily: 'var(--mono-font)', fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', width: 90 }}
+            style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', width: 90 }}
           />
           <span style={{ color: 'var(--text-3)' }}>Erase all</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>
-            <span style={{ color: 'var(--text-4)', fontSize: 10 }}>takes ~15 s</span>
+            <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>takes ~15 s</span>
           </label>
         </div>
       </div>
@@ -858,7 +858,7 @@ export function FlashScreen() {
           Flash firmware
         </button>
         {status && (
-          <span style={{ fontSize: 11, fontFamily: 'var(--mono-font)', color: statusColor, flex: 1 }}>
+          <span style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: statusColor, flex: 1 }}>
             {status}
           </span>
         )}
@@ -875,7 +875,7 @@ export function FlashScreen() {
         value={log}
         style={{
           width: '100%', height: 180, resize: 'vertical', boxSizing: 'border-box',
-          fontFamily: 'var(--mono-font)', fontSize: 10, lineHeight: 1.6,
+          fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', lineHeight: 1.6,
           background: 'var(--bg)', color: 'var(--text-2)',
           border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px',
         }}

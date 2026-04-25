@@ -190,7 +190,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
         <CanvasToolbar glow={glow} setGlow={setGlow} dot={dot} setDot={setDot} heat={heat} setHeat={setHeat}>
           <button
             className={`btn btn-ghost ${compareMode ? 'active' : ''}`}
-            style={{ fontSize: 10 }}
+            style={{ fontSize: 'var(--fs-xs)' }}
             onClick={() => setCompareMode(m => !m)}
             title="A/B compare mode">
             A|B
@@ -211,8 +211,8 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   bpm={bpm} params={params} symSettings={symSettings} audioBands={audioBands}
                   onTick={setLiveT} onFrame={handleFrame}
                 />
-                <div className="lw-viewport-overlay tl" style={{ fontSize: 9 }}>
-                  <span style={{ background: 'var(--accent)', color: '#000', padding: '1px 5px', borderRadius: 2 }}>A</span>
+                <div className="lw-viewport-overlay tl" style={{ fontSize: 'var(--fs-2xs)' }}>
+                  <span style={{ background: 'var(--accent)', color: 'var(--on-accent)', padding: '1px 5px', borderRadius: 2 }}>A</span>
                   <span className="v">{cur?.name || patternId}</span>
                 </div>
               </div>
@@ -227,11 +227,11 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   gammaValue={gammaValue} hidden={projectHidden}
                   bpm={bpm} params={{}} symSettings={symSettings} audioBands={audioBands}
                 />
-                <div className="lw-viewport-overlay tl" style={{ fontSize: 9 }}>
-                  <span style={{ background: 'oklch(64% 0.20 25)', color: '#fff', padding: '1px 5px', borderRadius: 2 }}>B</span>
+                <div className="lw-viewport-overlay tl" style={{ fontSize: 'var(--fs-2xs)' }}>
+                  <span style={{ background: 'var(--danger)', color: 'var(--on-accent)', padding: '1px 5px', borderRadius: 2 }}>B</span>
                   <select value={compareId} onChange={e => setCompareId(e.target.value)}
                     style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', color: 'var(--text)',
-                             fontSize: 9, padding: '1px 4px', borderRadius: 2, cursor: 'pointer' }}>
+                             fontSize: 'var(--fs-2xs)', padding: '1px 4px', borderRadius: 2, cursor: 'pointer' }}>
                     {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
@@ -277,7 +277,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <button onClick={() => setZoom(z => Math.min(3, z * 1.25))}>+</button>
                 <div className="lw-zoom-level">{Math.round(zoom * 100)}%</div>
                 <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))}>−</button>
-                <button style={{ fontSize: 9 }} onClick={() => setZoom(1)}>1:1</button>
+                <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={() => setZoom(1)}>1:1</button>
               </div>
             </>
           )}

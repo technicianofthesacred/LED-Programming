@@ -1372,14 +1372,14 @@ export function LayoutScreen() {
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
               <path d="M2 5 L5 2 M2 5 L5 8 M2 5 Q6 2 10 6" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            {histLen > 0 && <span style={{ fontSize: 9, fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{histLen}</span>}
+            {histLen > 0 && <span style={{ fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{histLen}</span>}
           </button>
           <button className="btn btn-ghost" onClick={doRedo} disabled={futLen === 0}
                   title={`Redo (⌘⇧Z) · ${futLen} step${futLen !== 1 ? 's' : ''}`}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
               <path d="M10 5 L7 2 M10 5 L7 8 M10 5 Q6 2 2 6" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            {futLen > 0 && <span style={{ fontSize: 9, fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{futLen}</span>}
+            {futLen > 0 && <span style={{ fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{futLen}</span>}
           </button>
 
           <span className="tbar-divider"/>
@@ -1387,7 +1387,7 @@ export function LayoutScreen() {
           <div style={{ display: 'flex', gap: 2 }}>
             {DENSITY_OPTIONS.map(d => (
               <button key={d} className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
-                      style={{ padding: '3px 8px', fontSize: 11 }}
+                      style={{ padding: '3px 8px', fontSize: 'var(--fs-sm)' }}
                       onClick={() => handleDensityChange(d)}>{d}/m</button>
             ))}
           </div>
@@ -1396,13 +1396,13 @@ export function LayoutScreen() {
 
           {/* Zoom controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 11 }}
+            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 'var(--fs-sm)' }}
                     onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
-            <button className="btn btn-ghost" style={{ padding: '3px 5px', fontSize: 9, fontFamily: 'var(--mono-font)', minWidth: 38, textAlign: 'center' }}
+            <button className="btn btn-ghost" style={{ padding: '3px 5px', fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', minWidth: 38, textAlign: 'center' }}
                     onClick={resetView} title="Reset view (F)">
               {Math.round(zoom * 100)}%
             </button>
-            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 11 }}
+            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 'var(--fs-sm)' }}
                     onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
           </div>
 
@@ -1470,7 +1470,7 @@ export function LayoutScreen() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: 'oklch(16% 0.02 210 / 0.4)',
             }}>
-              <span style={{ color: 'var(--accent)', fontSize: 13, fontWeight: 500 }}>Drop SVG here</span>
+              <span style={{ color: 'var(--accent)', fontSize: 'var(--fs-md)', fontWeight: 500 }}>Drop SVG here</span>
             </div>
           )}
           <svg
@@ -1797,24 +1797,24 @@ export function LayoutScreen() {
       <div style={{ borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
         {error && (
-          <div style={{ padding: '10px 14px', background: 'oklch(25% 0.08 30)', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'oklch(80% 0.12 30)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <div style={{ padding: '10px 14px', background: 'oklch(25% 0.08 30)', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.12 30)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <span style={{ flex: 1 }}>{error}</span>
-            <button style={{ color: 'oklch(60% 0.10 30)', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+            <button style={{ color: 'oklch(60% 0.10 30)', fontSize: 'var(--fs-lg)', lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
                     onClick={() => setError(null)}>✕</button>
           </div>
         )}
 
         {/* Draw mode hint */}
         {drawMode && (
-          <div style={{ padding: '8px 14px', background: 'oklch(22% 0.06 210)', borderBottom: '1px solid var(--border)', fontSize: 11, color: 'oklch(78% 0.12 210)', lineHeight: 1.6 }}>
+          <div style={{ padding: '8px 14px', background: 'oklch(22% 0.06 210)', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', color: 'oklch(78% 0.12 210)', lineHeight: 1.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <strong>Drawing mode</strong>
-              <button style={{ fontSize: 10, color: 'oklch(60% 0.10 210)', padding: '0 4px' }}
+              <button style={{ fontSize: 'var(--fs-xs)', color: 'oklch(60% 0.10 210)', padding: '0 4px' }}
                       onClick={() => { setDrawMode(false); setWaypoints([]); setGhostPt(null); }}>
                 Cancel (Esc)
               </button>
             </div>
-            <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, display: 'block' }}>
+            <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', display: 'block' }}>
               {waypoints.length} point{waypoints.length !== 1 ? 's' : ''}
               {waypoints.length >= 2 && ` · ~${drawEstimatedLeds} LEDs · double-click to finish`}
               {waypoints.length < 2 && ' · click to place, ⌫ undo, right-click cancel'}
@@ -1825,7 +1825,7 @@ export function LayoutScreen() {
         {/* Pending draw naming panel */}
         {pendingDraw && (
           <div style={{ padding: '12px 14px', background: 'oklch(20% 0.06 210)', borderBottom: '1px solid var(--border)', flex: '0 0 auto' }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)', marginBottom: 8 }}>
+            <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--accent)', marginBottom: 8 }}>
               Name your new strip
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1836,23 +1836,23 @@ export function LayoutScreen() {
                 onChange={e => setPendingDrawName(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') confirmDraw(); if (e.key === 'Escape') cancelDraw(); }}
                 placeholder="Strip name…"
-                style={{ fontSize: 12, background: 'var(--bg)', border: '1px solid var(--accent)', borderRadius: 4, padding: '5px 9px', color: 'var(--text)', width: '100%' }}
+                style={{ fontSize: 'var(--fs-md)', background: 'var(--bg)', border: '1px solid var(--accent)', borderRadius: 4, padding: '5px 9px', color: 'var(--text)', width: '100%' }}
                 autoFocus
               />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                 <span style={{ color: 'var(--text-3)', width: 72, flexShrink: 0 }}>LED count</span>
                 <input type="number" min="1" max="2000"
                        value={pendingDrawCount}
                        onChange={e => setPendingDrawCount(Math.max(1, +e.target.value))}
-                       style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 12, textAlign: 'right',
+                       style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', textAlign: 'right',
                                 background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4,
                                 padding: '3px 8px', color: 'var(--text)' }}/>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-primary" style={{ flex: 1, fontSize: 11 }} onClick={confirmDraw}>
+                <button className="btn btn-primary" style={{ flex: 1, fontSize: 'var(--fs-sm)' }} onClick={confirmDraw}>
                   + Add Strip
                 </button>
-                <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={cancelDraw}>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-sm)' }} onClick={cancelDraw}>
                   Cancel
                 </button>
               </div>
@@ -1867,11 +1867,11 @@ export function LayoutScreen() {
               <span>Artwork layers</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className="meta">{layers.length} · {layers.reduce((n, l) => n + (l.subPaths?.length || 0), 0)} paths</span>
-                <button style={{ fontSize: 10, color: 'var(--text-4)', padding: '0 4px' }} title="Show all"
+                <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }} title="Show all"
                         onClick={() => setHidden(h => { const n={...h}; layers.forEach(l=>{n[l.layerId]=false;}); return n; })}>
                   <EyeIcon/>
                 </button>
-                <button style={{ fontSize: 10, color: 'var(--text-4)', padding: '0 4px' }} title="Hide all"
+                <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }} title="Hide all"
                         onClick={() => setHidden(h => { const n={...h}; layers.forEach(l=>{n[l.layerId]=true;}); return n; })}>
                   <EyeOffIcon/>
                 </button>
@@ -1914,29 +1914,29 @@ export function LayoutScreen() {
                           </button>
                           <span style={{ color: 'oklch(80% 0.14 270)', display:'flex', alignItems:'center' }}><GroupIcon/></span>
                           <InlineRename value={group.name} onCommit={n => renameGroup(group.groupId, n)}
-                                        className="lw-layer-name" style={{ fontSize: 12, flex: 1 }}/>
-                          <span style={{ fontSize: 9, color: 'var(--text-4)', fontFamily: 'var(--mono-font)', flexShrink: 0 }}>
+                                        className="lw-layer-name" style={{ fontSize: 'var(--fs-md)', flex: 1 }}/>
+                          <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)', flexShrink: 0 }}>
                             {group.members.length}p
                           </span>
                           <button title="Ungroup" onClick={e => { e.stopPropagation(); deleteLayerGroup(group.groupId); }}
-                                  style={{ fontSize: 11, color: 'var(--text-4)', padding: '0 3px', lineHeight:1, flexShrink:0 }}
+                                  style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)', padding: '0 3px', lineHeight:1, flexShrink:0 }}
                                   className="lw-btn-danger-hover">⊠</button>
                         </div>
                         {group._expanded && group.members.map((m, mi) => (
                           <div key={m.pathId} className="lw-subpath-row"
                                style={{ paddingLeft: 32, background: 'oklch(80% 0.14 270 / 0.04)' }}>
-                            <span style={{ fontFamily:'var(--mono-font)', fontSize:9, color:'oklch(80% 0.14 270)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
+                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-2xs)', color:'oklch(80% 0.14 270)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
                             <button className="lw-layer-eye" style={{ marginLeft:2 }}
                                     onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [m.pathId]: !h[m.pathId] })); }}>
                               {hidden[m.pathId] ? <EyeOffIcon/> : <EyeIcon/>}
                             </button>
-                            <span style={{ flex:1, fontSize:11, color:'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
+                            <span style={{ flex:1, fontSize:'var(--fs-sm)', color:'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
                             {m.svgLength > 0 && (
-                              <span style={{ fontFamily:'var(--mono-font)', fontSize:10, color:'var(--text-4)', flexShrink:0 }}>
+                              <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-4)', flexShrink:0 }}>
                                 {Math.round(m.svgLength / pxPerMm)}mm
                               </span>
                             )}
-                            <button style={{ fontSize:11, padding:'0 4px', color:'var(--text-4)', flexShrink:0 }}
+                            <button style={{ fontSize:'var(--fs-sm)', padding:'0 4px', color:'var(--text-4)', flexShrink:0 }}
                                     onClick={e => { e.stopPropagation(); setLayerGroups(prev => prev.map(g => g.groupId !== group.groupId ? g : { ...g, members: g.members.filter((_,i)=>i!==mi) })); }}>✕</button>
                           </div>
                         ))}
@@ -1983,21 +1983,21 @@ export function LayoutScreen() {
                         }
                         <span className="lw-layer-dot" style={{ background: l._color }}/>
                         <InlineRename value={l.name} onCommit={n => renameLayer(l.layerId, n)}
-                                      className="lw-layer-name" style={{ fontSize: 12, flex: 1 }}/>
+                                      className="lw-layer-name" style={{ fontSize: 'var(--fs-md)', flex: 1 }}/>
                         {canExpand && (
-                          <span style={{ fontSize:9, color:'var(--text-4)', fontFamily:'var(--mono-font)', flexShrink:0 }}>
+                          <span style={{ fontSize:'var(--fs-2xs)', color:'var(--text-4)', fontFamily:'var(--mono-font)', flexShrink:0 }}>
                             {l.subPaths.length}p
                           </span>
                         )}
                         {hasStrip && (
-                          <button style={{ fontSize:9, color:'var(--mint)', fontFamily:'var(--mono-font)', flexShrink:0, lineHeight:1, padding:'0 2px' }}
+                          <button style={{ fontSize:'var(--fs-2xs)', color:'var(--mint)', fontFamily:'var(--mono-font)', flexShrink:0, lineHeight:1, padding:'0 2px' }}
                                   title="Select strip" onClick={e => { e.stopPropagation(); if (stripForLayer) selectStrip(stripForLayer.id); }}>●</button>
                         )}
                         {l.svgLength > 0 && (
                           <span className="lw-layer-len">{Math.round(l.svgLength / pxPerMm)}mm</span>
                         )}
                         <button title="Delete layer" onClick={e => { e.stopPropagation(); deleteLayer(l.layerId); }}
-                                style={{ fontSize:13, color:'var(--text-4)', padding:'0 3px', lineHeight:1, flexShrink:0 }}
+                                style={{ fontSize:'var(--fs-md)', color:'var(--text-4)', padding:'0 3px', lineHeight:1, flexShrink:0 }}
                                 className="lw-btn-danger-hover">×</button>
                       </div>
 
@@ -2022,11 +2022,11 @@ export function LayoutScreen() {
                               {spHidden ? <EyeOffIcon/> : <EyeIcon/>}
                             </button>
                             <InlineRename value={sp.name} onCommit={n => renameSubPath(l.layerId, sp.pathId, n)}
-                                          style={{ flex:1, fontSize:11, color: spHidden ? 'var(--text-4)' : 'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}/>
-                            <span style={{ fontFamily:'var(--mono-font)', fontSize:10, color:'var(--text-3)', flexShrink:0 }}>
+                                          style={{ flex:1, fontSize:'var(--fs-sm)', color: spHidden ? 'var(--text-4)' : 'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}/>
+                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-3)', flexShrink:0 }}>
                               {sp.svgLength > 0 ? `${Math.round(sp.svgLength / pxPerMm)}mm` : ''}
                             </span>
-                            <button className="btn btn-primary" style={{ padding:'2px 7px', fontSize:10, flexShrink:0 }}
+                            <button className="btn btn-primary" style={{ padding:'2px 7px', fontSize:'var(--fs-xs)', flexShrink:0 }}
                                     onClick={e => { e.stopPropagation(); addSubPathStrip(sp, l); }}>+</button>
                           </div>
                         );
@@ -2036,7 +2036,7 @@ export function LayoutScreen() {
                 });
               })()}
 
-              <div style={{ padding:'6px 12px', fontSize:10, color:'var(--text-4)', lineHeight:1.5 }}>
+              <div style={{ padding:'6px 12px', fontSize:'var(--fs-xs)', color:'var(--text-4)', lineHeight:1.5 }}>
                 Click to select · <strong style={{ color:'var(--text-3)' }}>⇧+click</strong> canvas paths · ☐ checkboxes to combine
               </div>
             </div>
@@ -2047,33 +2047,33 @@ export function LayoutScreen() {
         {pathSel.length > 0 && (
           <div style={{ borderBottom: '1px solid var(--border)', padding: '10px 14px', background: 'oklch(18% 0.04 270)', flex: '0 0 auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)' }}>
+              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text-2)' }}>
                 {pathSel.length} path{pathSel.length > 1 ? 's' : ''} selected
               </span>
-              <button style={{ color: 'var(--text-4)', padding: '0 4px', fontSize: 12 }}
+              <button style={{ color: 'var(--text-4)', padding: '0 4px', fontSize: 'var(--fs-md)' }}
                       onClick={() => { setPathSel([]); setPathSelName(''); }}>✕</button>
             </div>
             <div style={{ maxHeight: 80, overflow: 'auto', marginBottom: 8 }}>
               {pathSel.map((p, i) => (
-                <div key={p.pathId} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11,
+                <div key={p.pathId} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 'var(--fs-sm)',
                                               color: 'var(--text-3)', padding: '2px 0' }}>
-                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 9, color: '#4cc9f0',
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-2xs)', color: '#4cc9f0',
                                  fontWeight: 'bold', width: 14, flexShrink: 0, textAlign: 'center' }}>{i + 1}</span>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                   {p.svgLength > 0 && (
-                    <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, flexShrink: 0, color: 'var(--text-4)' }}>
+                    <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', flexShrink: 0, color: 'var(--text-4)' }}>
                       {Math.round(p.svgLength / pxPerMm)}mm
                     </span>
                   )}
-                  <button disabled={i === 0} style={{ fontSize: 10, padding: '0 3px', color: 'var(--text-4)', opacity: i === 0 ? 0.3 : 1 }}
+                  <button disabled={i === 0} style={{ fontSize: 'var(--fs-xs)', padding: '0 3px', color: 'var(--text-4)', opacity: i === 0 ? 0.3 : 1 }}
                           onClick={() => setPathSel(prev => {
                             const a = [...prev]; [a[i-1], a[i]] = [a[i], a[i-1]]; return a;
                           })}>↑</button>
-                  <button disabled={i === pathSel.length - 1} style={{ fontSize: 10, padding: '0 3px', color: 'var(--text-4)', opacity: i === pathSel.length - 1 ? 0.3 : 1 }}
+                  <button disabled={i === pathSel.length - 1} style={{ fontSize: 'var(--fs-xs)', padding: '0 3px', color: 'var(--text-4)', opacity: i === pathSel.length - 1 ? 0.3 : 1 }}
                           onClick={() => setPathSel(prev => {
                             const a = [...prev]; [a[i], a[i+1]] = [a[i+1], a[i]]; return a;
                           })}>↓</button>
-                  <button style={{ fontSize: 11, padding: '0 4px', color: 'var(--text-4)' }}
+                  <button style={{ fontSize: 'var(--fs-sm)', padding: '0 4px', color: 'var(--text-4)' }}
                           onClick={() => setPathSel(prev => prev.filter((_, j) => j !== i))}>✕</button>
                 </div>
               ))}
@@ -2081,9 +2081,9 @@ export function LayoutScreen() {
             <div style={{ display: 'flex', gap: 6 }}>
               <input type="text" value={pathSelName} onChange={e => setPathSelName(e.target.value)}
                      placeholder="Name…"
-                     style={{ flex: 1, fontSize: 11, background: 'var(--bg)', border: '1px solid var(--border)',
+                     style={{ flex: 1, fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)',
                               borderRadius: 4, padding: '4px 8px', color: 'var(--text)' }}/>
-              <button className="btn btn-primary" style={{ fontSize: 11 }}
+              <button className="btn btn-primary" style={{ fontSize: 'var(--fs-sm)' }}
                       onClick={() => {
                         if (!pathSel.length) return;
                         const combinedPathData = pathSel.map(p => p.pathData).join(' ');
@@ -2111,7 +2111,7 @@ export function LayoutScreen() {
                 + Strip
               </button>
               {pathSel.length >= 2 && (
-                <button className="btn" style={{ fontSize: 11, color: 'oklch(80% 0.14 270)', borderColor: 'oklch(80% 0.14 270 / 0.4)', background: 'oklch(80% 0.14 270 / 0.08)' }}
+                <button className="btn" style={{ fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.14 270)', borderColor: 'oklch(80% 0.14 270 / 0.4)', background: 'oklch(80% 0.14 270 / 0.08)' }}
                         title="Group these paths in the layer panel (not a strip)"
                         onClick={createLayerGroup}>
                   <GroupIcon/> Group
@@ -2129,34 +2129,34 @@ export function LayoutScreen() {
               <span className="meta">inspector</span>
             </div>
             <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 9, flex: '0 0 auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
                 <span style={{ color: 'var(--text-3)' }}>Length</span>
                 <span style={{ fontFamily: 'var(--mono-font)' }}>
                   {selLayer.svgLength > 0 ? `${Math.round(selLayer.svgLength / pxPerMm)} mm` : '—'}
                 </span>
               </div>
               {selLayer.subPaths?.length > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
                   <span style={{ color: 'var(--text-3)' }}>Sub-paths</span>
                   <span style={{ fontFamily: 'var(--mono-font)' }}>{selLayer.subPaths.length}</span>
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
                 <span style={{ color: 'var(--text-3)' }}>Density</span>
                 <div style={{ display: 'flex', gap: 2 }}>
                   {DENSITY_OPTIONS.map(d => (
                     <button key={d}
                             className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ padding: '2px 6px', fontSize: 10 }}
+                            style={{ padding: '2px 6px', fontSize: 'var(--fs-xs)' }}
                             onClick={() => handleDensityChange(d)}>{d}</button>
                   ))}
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
                 <span style={{ color: 'var(--text-3)' }}>LED count</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {editCounts[selLayer.layerId] != null && (
-                    <button style={{ fontSize: 10, color: 'var(--text-4)', padding: '0 4px' }}
+                    <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }}
                             title="Reset to calculated"
                             onClick={() => setEditCounts(c => { const next = { ...c }; delete next[selLayer.layerId]; return next; })}>
                       ↺
@@ -2177,13 +2177,13 @@ export function LayoutScreen() {
                              else addStrip();
                            }
                          }}
-                         style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 12, textAlign: 'right',
+                         style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', textAlign: 'right',
                                   background: 'var(--bg)', border: `1px solid ${editCounts[selLayer.layerId] != null ? 'var(--accent)' : 'var(--border)'}`,
                                   borderRadius: 4, padding: '3px 8px', color: 'var(--text)' }}/>
                 </div>
               </div>
               {selLayer.svgLength > 0 && getLedCount(selLayer) > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
                   <span style={{ color: 'var(--text-3)' }}>Pitch</span>
                   <span style={{ fontFamily: 'var(--mono-font)' }}>
                     {((selLayer.svgLength / pxPerMm) / getLedCount(selLayer)).toFixed(1)} mm/LED
@@ -2192,12 +2192,12 @@ export function LayoutScreen() {
               )}
 
               {/* Emit controls */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
                 <span style={{ color: 'var(--text-3)' }}>Emit</span>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', opacity: existingStrip ? 1 : 0.4 }}>
                   <button
                     className={`btn ${existingStrip?.emit === 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '2px 8px', fontSize: 10 }}
+                    style={{ padding: '2px 8px', fontSize: 'var(--fs-xs)' }}
                     disabled={!existingStrip}
                     title={existingStrip ? 'Omnidirectional glow' : 'Add strip first'}
                     onClick={() => {
@@ -2206,7 +2206,7 @@ export function LayoutScreen() {
                     }}>Omni</button>
                   <button
                     className={`btn ${existingStrip && existingStrip.emit !== 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '2px 8px', fontSize: 10 }}
+                    style={{ padding: '2px 8px', fontSize: 'var(--fs-xs)' }}
                     disabled={!existingStrip}
                     title={existingStrip ? 'Directed emission' : 'Add strip first'}
                     onClick={() => {
@@ -2218,7 +2218,7 @@ export function LayoutScreen() {
 
               {/* Angle slider — only when directed */}
               {existingStrip?.emit !== 'omni' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, opacity: existingStrip ? 1 : 0.4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', opacity: existingStrip ? 1 : 0.4 }}>
                   <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Angle</span>
                   <input type="range" min="0" max="360" step="1"
                          value={existingStrip?.angle || 0}
@@ -2230,13 +2230,13 @@ export function LayoutScreen() {
                          }}/>
                   <input type="number" min="0" max="360" value={existingStrip?.angle || 0}
                          disabled={!existingStrip}
-                         style={{ width: 48, fontFamily: 'var(--mono-font)', fontSize: 11, textAlign: 'right',
+                         style={{ width: 48, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
                                   background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 5px', color: 'var(--text)' }}
                          onChange={e => {
                            if (!existingStrip) return;
                            updateStrip(existingStrip.id, { angle: +e.target.value });
                          }}/>
-                  <span style={{ color: 'var(--text-3)', fontSize: 10, flexShrink: 0 }}>°</span>
+                  <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-xs)', flexShrink: 0 }}>°</span>
                 </div>
               )}
 
@@ -2277,66 +2277,66 @@ export function LayoutScreen() {
                        style={{ opacity: hidden[s.id] ? 0.4 : 1 }}
                        onClick={() => selectStrip(s.id)}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-4)', width: 16, flexShrink: 0, textAlign: 'right' }}>{i + 1}</span>
+                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', width: 16, flexShrink: 0, textAlign: 'right' }}>{i + 1}</span>
                       <span style={{ width: 9, height: 9, borderRadius: '50%', background: s.color, flexShrink: 0,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : 'none' }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
-                                    style={{ flex: 1, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}/>
+                                    style={{ flex: 1, fontSize: 'var(--fs-md)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}/>
                       {s.reversed && (
-                        <span style={{ fontSize: 9, fontFamily: 'var(--mono-font)', color: 'var(--accent-2)',
+                        <span style={{ fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', color: 'var(--accent-2)',
                                        background: 'oklch(80% 0.13 70 / 0.15)', border: '1px solid oklch(80% 0.13 70 / 0.3)',
                                        borderRadius: 3, padding: '1px 4px', flexShrink: 0 }}>REV</span>
                       )}
-                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', flexShrink: 0 }}>{s.pixelCount}</span>
-                      <button style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 12, lineHeight: 1, flexShrink: 0 }}
+                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', flexShrink: 0 }}>{s.pixelCount}</span>
+                      <button style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 'var(--fs-md)', lineHeight: 1, flexShrink: 0 }}
                               title={hidden[s.id] ? 'Show (H)' : 'Hide (H)'}
                               onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [s.id]: !h[s.id] })); }}>
                         {hidden[s.id] ? <EyeOffIcon/> : <EyeIcon/>}
                       </button>
-                      <button style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 11, lineHeight: 1, flexShrink: 0 }}
+                      <button style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 'var(--fs-sm)', lineHeight: 1, flexShrink: 0 }}
                               title="Duplicate strip"
                               onClick={e => { e.stopPropagation(); duplicateStrip(s.id); }}>⧉</button>
-                      <button className="lw-btn-danger-hover" style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 15, lineHeight: 1, flexShrink: 0 }}
+                      <button className="lw-btn-danger-hover" style={{ color: 'var(--text-4)', padding: '0 3px', fontSize: 'var(--fs-lg)', lineHeight: 1, flexShrink: 0 }}
                               title="Delete strip (X)"
                               onClick={e => { e.stopPropagation(); removeStrip(s.id); }}>×</button>
                     </div>
                     {isSel && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 0 2px 0', borderTop: '1px solid var(--border)', marginTop: 6 }}>
                         {/* Speed */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Speed</span>
                           <input type="range" min="0.1" max="4" step="0.05" value={s.speed ?? 1}
                                  style={{ flex: 1 }}
                                  onChange={e => updateStrip(s.id, { speed: +e.target.value })}
                                  onPointerUp={e => updateStripWithHistory(s.id, { speed: +e.target.value })}
                                  onDoubleClick={() => updateStrip(s.id, { speed: 1 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{(s.speed ?? 1).toFixed(2)}×</span>
+                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{(s.speed ?? 1).toFixed(2)}×</span>
                         </div>
                         {/* Brightness */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Bright</span>
                           <input type="range" min="0" max="1" step="0.01" value={s.brightness ?? 1}
                                  style={{ flex: 1 }}
                                  onChange={e => updateStrip(s.id, { brightness: +e.target.value })}
                                  onPointerUp={e => updateStripWithHistory(s.id, { brightness: +e.target.value })}
                                  onDoubleClick={() => updateStrip(s.id, { brightness: 1 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{Math.round((s.brightness ?? 1) * 100)}%</span>
+                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{Math.round((s.brightness ?? 1) * 100)}%</span>
                         </div>
                         {/* Hue shift */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Hue</span>
                           <input type="range" min="-180" max="180" step="1" value={s.hueShift ?? 0}
                                  style={{ flex: 1 }}
                                  onChange={e => updateStrip(s.id, { hueShift: +e.target.value })}
                                  onPointerUp={e => updateStripWithHistory(s.id, { hueShift: +e.target.value })}
                                  onDoubleClick={() => updateStrip(s.id, { hueShift: 0 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{s.hueShift ?? 0}°</span>
+                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{s.hueShift ?? 0}°</span>
                         </div>
                         {/* Per-strip pattern override */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Pattern</span>
                           <select value={s.patternId ?? ''}
-                                  style={{ flex: 1, fontSize: 10, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', padding: '2px 4px' }}
+                                  style={{ flex: 1, fontSize: 'var(--fs-xs)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', padding: '2px 4px' }}
                                   onChange={e => {
                                     const v = e.target.value || null;
                                     updateStrip(s.id, { patternId: v });
@@ -2346,11 +2346,11 @@ export function LayoutScreen() {
                           </select>
                         </div>
                         {/* LED count */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>LEDs</span>
                           <input type="number" min="1" max="1500"
                                  value={s.pixelCount}
-                                 style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 11, textAlign: 'right',
+                                 style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
                                           background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', color: 'var(--text)' }}
                                  onChange={e => updateStrip(s.id, { pixelCount: Math.max(1, +e.target.value) })}
                                  onBlur={e => resampleStrip(s.id, Math.max(1, +e.target.value))}
@@ -2359,11 +2359,11 @@ export function LayoutScreen() {
                         </div>
                         {/* Strip actions */}
                         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
-                          <button className="btn btn-ghost" style={{ flex: 1, fontSize: 10 }}
+                          <button className="btn btn-ghost" style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
                                   onClick={e => { e.stopPropagation(); reverseStrip(s.id); }}>
                             ↔ Reverse
                           </button>
-                          <button className="btn btn-ghost lw-btn-danger" style={{ flex: 1, fontSize: 10 }}
+                          <button className="btn btn-ghost lw-btn-danger" style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
                                   onClick={e => { e.stopPropagation(); removeStrip(s.id); }}>
                             Remove
                           </button>
@@ -2386,8 +2386,8 @@ export function LayoutScreen() {
               <path d="M14 14h16M14 22h16M14 30h10"/>
               <path d="M28 28l8 8M32 28h4v4" strokeLinecap="round"/>
             </svg>
-            <div style={{ fontSize: 13 }}>Import an SVG to map LED strips</div>
-            <div style={{ fontSize: 11, color: 'var(--text-4)', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--fs-md)' }}>Import an SVG to map LED strips</div>
+            <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)', lineHeight: 1.5 }}>
               Works with Illustrator CC, Inkscape,<br/>and any SVG with layer groups.<br/>Drag and drop onto the canvas.
             </div>
             <button className="btn btn-primary" onClick={() => fileRef.current?.click()}>

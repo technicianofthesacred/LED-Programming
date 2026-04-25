@@ -108,7 +108,7 @@ export function CommandPalette({ open, onClose, navigate }) {
   return (
     <div className="lw-modal-overlay" onClick={onClose} style={{ alignItems: 'flex-start', paddingTop: '15vh' }}>
       <div style={{ width: 480, background: 'var(--surface)', border: '1px solid var(--border-2)',
-                    borderRadius: 10, boxShadow: '0 24px 80px #0008', overflow: 'hidden' }}
+                    borderRadius: 10, boxShadow: '0 24px 80px var(--shadow-strong)', overflow: 'hidden' }}
            onClick={e => e.stopPropagation()}>
 
         <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -121,15 +121,15 @@ export function CommandPalette({ open, onClose, navigate }) {
             onChange={e => setQuery(e.target.value)}
             placeholder="Type a command or pattern name…"
             style={{ flex: 1, background: 'none', border: 'none', outline: 'none',
-                     color: 'var(--text)', fontSize: 13, fontFamily: 'inherit' }}
+                     color: 'var(--text)', fontSize: 'var(--fs-md)', fontFamily: 'inherit' }}
           />
-          <kbd style={{ fontSize: 9, color: 'var(--text-4)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px' }}>esc</kbd>
+          <kbd style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 4px' }}>esc</kbd>
         </div>
 
         <div style={{ maxHeight: 360, overflowY: 'auto', padding: '6px 0' }}>
           {Object.entries(grouped).map(([cat, cmds]) => (
             <div key={cat}>
-              <div style={{ fontSize: 9, color: 'var(--text-4)', padding: '4px 12px 2px',
+              <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', padding: '4px 12px 2px',
                             textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {cat}
               </div>
@@ -141,12 +141,12 @@ export function CommandPalette({ open, onClose, navigate }) {
                           style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
                                    padding: '8px 12px', background: isActive ? 'var(--surface-2)' : 'none',
                                    border: 'none', cursor: 'pointer', textAlign: 'left',
-                                   color: 'var(--text)', fontSize: 12, borderRadius: 0 }}
+                                   color: 'var(--text)', fontSize: 'var(--fs-md)', borderRadius: 0 }}
                           onMouseEnter={() => setIdx(rowIdx - 1)}
                           onClick={() => { cmd.action(); onClose(); }}>
                     <span style={{ flex: 1 }}>{cmd.label}</span>
                     {isActive && (
-                      <kbd style={{ fontSize: 9, color: 'var(--text-4)', border: '1px solid var(--border)',
+                      <kbd style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', border: '1px solid var(--border)',
                                     borderRadius: 3, padding: '1px 4px' }}>↵</kbd>
                     )}
                   </button>
@@ -155,7 +155,7 @@ export function CommandPalette({ open, onClose, navigate }) {
             </div>
           ))}
           {filtered.length === 0 && (
-            <div style={{ padding: '16px', color: 'var(--text-4)', fontSize: 12, textAlign: 'center' }}>
+            <div style={{ padding: '16px', color: 'var(--text-4)', fontSize: 'var(--fs-md)', textAlign: 'center' }}>
               No results for "{query}"
             </div>
           )}

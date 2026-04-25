@@ -19,7 +19,7 @@ function BlackoutButton() {
   return (
     <button
       className={`btn ${active ? '' : 'btn-ghost'}`}
-      style={{ fontSize: 10, letterSpacing: '0.08em',
+      style={{ fontSize: 'var(--fs-xs)', letterSpacing: '0.08em',
                ...(active ? { background: 'oklch(25% 0.01 0)', borderColor: 'var(--danger)', color: 'var(--danger)' } : {}) }}
       title="Blackout — cut all output to black (B key in Live screen)"
       onClick={() => {
@@ -89,7 +89,7 @@ export function TopBar({ projectName: _pn, onSave, onOpen, onKbdHelp, audio, mid
             onBlur={commitName}
             onKeyDown={e => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }}
             style={{ background: 'none', border: 'none', borderBottom: '1px solid var(--accent)',
-                     color: 'var(--text)', fontSize: 13, fontWeight: 500, outline: 'none', width: 180 }}
+                     color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 500, outline: 'none', width: 180 }}
           />
         ) : (
           <strong onDoubleClick={() => setEditingName(true)} title="Double-click to rename"
@@ -210,7 +210,7 @@ export function CanvasToolbar({ glow, setGlow, dot, setDot, heat, setHeat, child
       </button>
       {children}
       <div style={{ flex: 1 }}/>
-      <span style={{ fontFamily: 'var(--mono-font)', textTransform: 'none', letterSpacing: 0, color: 'var(--text-4)', fontSize: 10 }}>
+      <span style={{ fontFamily: 'var(--mono-font)', textTransform: 'none', letterSpacing: 0, color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
         640 × 400 mm · 2.8346 px/mm
       </span>
     </div>
@@ -244,7 +244,7 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
       </button>
       <div className="lw-transport-meta">
         <span><span style={{color:'var(--text-4)'}}>BPM</span>&nbsp;&nbsp;<strong>{bpm}</strong></span>
-        <button onClick={handleTap} style={{ fontSize: 10, padding: '2px 8px', fontFamily: 'var(--mono-font)',
+        <button onClick={handleTap} style={{ fontSize: 'var(--fs-xs)', padding: '2px 8px', fontFamily: 'var(--mono-font)',
                background: 'var(--surface-2)', border: '1px solid var(--border)',
                borderRadius: 3, color: 'var(--text-2)', cursor: 'pointer', lineHeight: 1.4 }}>
           TAP
@@ -319,7 +319,7 @@ export function StatusBar() {
       )}
       <div style={{ flex: 1 }}/>
       {lastSaved && (
-        <span style={{ fontSize: 10, color: 'var(--text-4)' }}>
+        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
           autosaved {savedAgo < 5 ? 'just now' : `${savedAgo}s ago`}
         </span>
       )}

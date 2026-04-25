@@ -62,7 +62,7 @@ function renderFrame(canvas, t, p) {
   const W = canvas.width, H = canvas.height;
   if (!W || !H || !p.vb) return [];
 
-  ctx.fillStyle = '#000';
+  ctx.fillStyle = getComputedStyle(canvas).getPropertyValue('--preview-bg').trim() || '#050608';
   ctx.fillRect(0, 0, W, H);
 
   const {

@@ -111,7 +111,7 @@ export function KeyboardHelp({ open, onClose }) {
             </div>
           ))}
           {grouped.length === 0 && (
-            <div style={{ color: 'var(--text-4)', fontSize: 11, padding: '16px 0' }}>
+            <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-sm)', padding: '16px 0' }}>
               No shortcuts match "{search}"
             </div>
           )}

@@ -97,14 +97,14 @@ export function SymmetryMode() {
       </div>
 
       {/* Enable toggle */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0 10px', fontSize:11 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0 10px', fontSize:'var(--fs-sm)' }}>
         <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
           <input type="checkbox" checked={symSettings.enabled}
                  onChange={e => update({ enabled: e.target.checked })}/>
           <span>Enable symmetry transform</span>
         </label>
         {symSettings.enabled && (
-          <span style={{ color:'var(--mint)', fontFamily:'var(--mono-font)', fontSize:10 }}>
+          <span style={{ color:'var(--mint)', fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)' }}>
             ● {symSettings.type}
           </span>
         )}
@@ -202,7 +202,7 @@ export function SymmetryMode() {
                   </button>
                 ))}
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:10 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
                 <span style={{ width:60, color:'var(--text-3)' }}>Phase</span>
                 <input type="range" min="0" max="100" step="1"
                        value={Math.round((symSettings.phase||0)*100)}
@@ -220,13 +220,13 @@ export function SymmetryMode() {
                 {[3,4,5,6,8,12].map(n => (
                   <button key={n}
                           className={`btn ${symSettings.count===n&&symSettings.enabled?'btn-primary':''}`}
-                          style={{ flex:1, fontSize:11, fontFamily:'var(--mono-font)' }}
+                          style={{ flex:1, fontSize:'var(--fs-sm)', fontFamily:'var(--mono-font)' }}
                           onClick={() => update({ count: n, type: 'radial', enabled: true })}>
                     {n}
                   </button>
                 ))}
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:10 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
                 <span style={{ width:60, color:'var(--text-3)' }}>Twist</span>
                 <input type="range" min="-100" max="100" step="1"
                        value={Math.round((symSettings.twist||0)*1000)}
@@ -240,7 +240,7 @@ export function SymmetryMode() {
 
           {selNode.kind === 'kaleido' && (
             <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:10 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
                 <span style={{ width:60, color:'var(--text-3)' }}>Slices</span>
                 <input type="range" min="2" max="16" step="1"
                        value={symSettings.slices||6}
@@ -249,7 +249,7 @@ export function SymmetryMode() {
                   {symSettings.slices||6}
                 </span>
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:10 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
                 <span style={{ width:60, color:'var(--text-3)' }}>Phase</span>
                 <input type="range" min="0" max="100" step="1"
                        value={Math.round((symSettings.phase||0)*100)}
@@ -262,17 +262,17 @@ export function SymmetryMode() {
           )}
 
           {selNode.kind === 'source' && (
-            <div style={{ fontSize:11, color:'var(--text-2)', lineHeight:1.55 }}>
+            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
               Uses the pattern from <strong>Cards</strong> / <strong>Code</strong>. Enable symmetry above to route through operators.
             </div>
           )}
           {selNode.kind === 'group' && (
-            <div style={{ fontSize:11, color:'var(--text-2)', lineHeight:1.55 }}>
+            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
               Physical strips from Layout. Edit membership on the Layout screen.
             </div>
           )}
           {selNode.kind === 'output' && (
-            <div style={{ fontSize:11, color:'var(--text-2)', lineHeight:1.55 }}>
+            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
               Combined per-LED buffer pushed to device.
               {symSettings.enabled && <div style={{marginTop:6,color:'var(--mint)'}}>● Symmetry active: {symSettings.type}</div>}
             </div>
@@ -298,8 +298,8 @@ export function SymmetryMode() {
                onClick={activate}>
             <OpPreview kind={k}/>
             <div>
-              <div style={{ fontSize:11, fontWeight:600 }}>{name}</div>
-              <div style={{ fontSize:9, color:'var(--text-3)', fontFamily:'var(--mono-font)' }}>{desc}</div>
+              <div style={{ fontSize:'var(--fs-sm)', fontWeight:600 }}>{name}</div>
+              <div style={{ fontSize:'var(--fs-2xs)', color:'var(--text-3)', fontFamily:'var(--mono-font)' }}>{desc}</div>
             </div>
           </div>
         ))}

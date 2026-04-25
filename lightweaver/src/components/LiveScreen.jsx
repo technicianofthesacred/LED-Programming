@@ -329,28 +329,28 @@ export function LiveScreen() {
             <span className="v">{clipDur}s</span>
           </div>
           <div className="lw-live-ctrl-row">
-            <span className="k" style={{ fontSize: 9 }}>Brightness</span>
+            <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Brightness</span>
             <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
                    onChange={e => setMasterBrightness(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 9, minWidth: 28 }}>{Math.round(masterBrightness * 100)}%</span>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 28 }}>{Math.round(masterBrightness * 100)}%</span>
           </div>
           <div className="lw-live-ctrl-row">
-            <span className="k" style={{ fontSize: 9 }}>Speed</span>
+            <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Speed</span>
             <input type="range" min="0" max="4" step="0.05" value={masterSpeed}
                    onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 9, minWidth: 28 }}>{masterSpeed.toFixed(1)}×</span>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 28 }}>{masterSpeed.toFixed(1)}×</span>
           </div>
           <div className="lw-live-ctrl-row">
-            <span className="k" style={{ fontSize: 9 }}>Hue</span>
+            <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Hue</span>
             <input type="range" min="-0.5" max="0.5" step="0.01" value={masterHueShift}
                    onChange={e => setMasterHueShift(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 9, minWidth: 30 }}>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 30 }}>
               {masterHueShift >= 0 ? '+' : ''}{Math.round(masterHueShift * 360)}°
             </span>
           </div>
 
           {blendFrom && (
-            <div className="lw-live-ctrl-row" style={{ fontSize: 10, color: 'var(--text-3)' }}>
+            <div className="lw-live-ctrl-row" style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>
               <span className="k">Blend</span>
               <div style={{ flex: 1, height: 4, background: 'var(--surface-2)', borderRadius: 2 }}>
                 <div style={{ width: `${blendAmt * 100}%`, height: '100%', background: 'var(--accent)', borderRadius: 2 }}/>
@@ -367,7 +367,7 @@ export function LiveScreen() {
             >
               <span className="dot" style={{
                 display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                background: liveRecording ? '#fff' : 'currentColor', marginRight: 5,
+                background: liveRecording ? 'var(--on-accent)' : 'currentColor', marginRight: 5,
               }}/>
               {liveRecording ? '● REC ARMED' : 'Arm Record'}
             </button>
@@ -386,7 +386,7 @@ export function LiveScreen() {
             <button
               className="btn"
               style={{ flex: 1, background: 'oklch(20% 0.01 0)', color: 'var(--text-3)',
-                       border: '1px solid oklch(30% 0.01 0)', fontSize: 11, fontWeight: 600,
+                       border: '1px solid oklch(30% 0.01 0)', fontSize: 'var(--fs-sm)', fontWeight: 600,
                        letterSpacing: '0.06em' }}
               title="Blackout — send all-black frame (B)"
               onClick={() => {
@@ -400,7 +400,7 @@ export function LiveScreen() {
             </button>
             <button
               className={`btn ${frozen ? 'active' : 'btn-ghost'}`}
-              style={{ flex: 1, fontSize: 11, fontWeight: frozen ? 600 : 400 }}
+              style={{ flex: 1, fontSize: 'var(--fs-sm)', fontWeight: frozen ? 600 : 400 }}
               title="Freeze — pause pattern animation (F)"
               onClick={() => setFrozen(f => !f)}>
               {frozen ? '❚❚ FROZEN' : '❚❚ Freeze'}
@@ -438,7 +438,7 @@ export function LiveScreen() {
           {LIVE_CATS.map(c => (
             <button key={c}
                     className={`btn btn-ghost ${livecat === c ? 'active' : ''}`}
-                    style={{ fontSize: 9, padding: '2px 7px', borderRadius: 99, textTransform: 'capitalize' }}
+                    style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px', borderRadius: 99, textTransform: 'capitalize' }}
                     onClick={() => setLiveCat(c)}>
               {c === 'bpm' ? '♩ bpm' : c === 'audio' ? '♪ audio' : c}
             </button>
@@ -447,11 +447,11 @@ export function LiveScreen() {
         {/* Scenes */}
         {scenes.length > 0 && (
           <div style={{ padding: '2px 12px 6px', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 9, color: 'var(--text-4)', alignSelf: 'center', marginRight: 2 }}>Scenes:</span>
+            <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', alignSelf: 'center', marginRight: 2 }}>Scenes:</span>
             {scenes.map((sc, i) => (
               <button key={i}
                       className={`btn btn-ghost ${sc.cat === livecat && sc.search === search ? 'active' : ''}`}
-                      style={{ fontSize: 9, padding: '2px 8px', borderRadius: 99 }}
+                      style={{ fontSize: 'var(--fs-2xs)', padding: '2px 8px', borderRadius: 99 }}
                       title={`Recall: cat=${sc.cat}, search="${sc.search}"`}
                       onClick={() => { setLiveCat(sc.cat); setSearch(sc.search); }}
                       onContextMenu={e => {
@@ -468,7 +468,7 @@ export function LiveScreen() {
           </div>
         )}
         <div style={{ padding: '0 12px 4px' }}>
-          <button className="btn btn-ghost" style={{ fontSize: 9, width: '100%' }}
+          <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', width: '100%' }}
                   onClick={() => {
                     const name = prompt('Scene name:');
                     if (!name?.trim()) return;
@@ -485,7 +485,7 @@ export function LiveScreen() {
             <div key={pattern.id} style={{ position: 'relative' }}>
               {idx < 9 && (
                 <span style={{ position: 'absolute', top: 3, right: 3, zIndex: 3,
-                               fontSize: 8, fontFamily: 'var(--mono-font)',
+                               fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)',
                                background: 'oklch(20%/0.7)', color: 'var(--text-3)',
                                borderRadius: 2, padding: '1px 3px', pointerEvents: 'none' }}>
                   {idx + 1}

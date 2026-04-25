@@ -343,7 +343,7 @@ function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, v
             onFrame={handleFrame}
           />
         ) : (
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text-4)', fontSize:11 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text-4)', fontSize:'var(--fs-sm)' }}>
             No clip at playhead
           </div>
         )}
@@ -432,7 +432,7 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                 onBlur={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, label: e.target.value } : c))}
                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                 style={{ background: 'none', border: 'none', borderBottom: '1px solid var(--border-2)',
-                         color: 'var(--text)', fontSize: 13, fontWeight: 500, flex: 1, outline: 'none' }}
+                         color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 500, flex: 1, outline: 'none' }}
               />
               <span className="kbd">C</span>
             </div>
@@ -452,11 +452,11 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                        value={selectedClip.color || CLIP_COLORS[selectedClip.patternId] || '#888888'}
                        style={{ opacity: 0, width: 0, height: 0, position: 'absolute' }}
                        onChange={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, color: e.target.value } : c))}/>
-                <span style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>
                   {selectedClip.color || 'default'}
                 </span>
                 {selectedClip.color && (
-                  <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 5px' }}
+                  <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 5px' }}
                           onClick={() => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, color: undefined } : c))}>
                     Reset
                   </button>
@@ -480,11 +480,11 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                        value={selectedClip.speed ?? 1}
                        style={{ flex: 1 }}
                        onChange={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, speed: +e.target.value } : c))}/>
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 11, minWidth: 34 }}>
+                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', minWidth: 34 }}>
                   {(selectedClip.speed ?? 1).toFixed(2)}×
                 </span>
                 {(selectedClip.speed ?? 1) !== 1 && (
-                  <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 5px' }}
+                  <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 5px' }}
                           onClick={() => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, speed: 1 } : c))}>
                     Reset
                   </button>
@@ -497,7 +497,7 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                        value={selectedClip.brightness ?? 1}
                        style={{ flex: 1 }}
                        onChange={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, brightness: +e.target.value } : c))}/>
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 11, minWidth: 34 }}>
+                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', minWidth: 34 }}>
                   {Math.round((selectedClip.brightness ?? 1) * 100)}%
                 </span>
               </div>
@@ -509,7 +509,7 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                 onBlur={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, notes: e.target.value } : c))}
                 onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                 style={{ flex: 1, background: 'none', border: 'none', borderBottom: '1px solid var(--border)',
-                         color: 'var(--text)', fontSize: 11, outline: 'none' }}
+                         color: 'var(--text)', fontSize: 'var(--fs-sm)', outline: 'none' }}
               />
             </div>
             <div className="lw-insp-divider"/>
@@ -572,68 +572,68 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                 ['Duration', `${Math.floor(showDuration / 60)}m ${showDuration % 60}s`],
               ].map(([label, val]) => (
                 <div key={label} style={{ background: 'var(--surface)', borderRadius: 4, padding: '4px 8px' }}>
-                  <div style={{ fontSize: 9, color: 'var(--text-4)' }}>{label}</div>
-                  <div style={{ fontSize: 12, fontFamily: 'var(--mono-font)', color: 'var(--text)' }}>{val}</div>
+                  <div style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)' }}>{label}</div>
+                  <div style={{ fontSize: 'var(--fs-md)', fontFamily: 'var(--mono-font)', color: 'var(--text)' }}>{val}</div>
                 </div>
               ))}
             </div>
             <div className="lw-insp-section" style={{ marginBottom: 8 }}>Cue markers</div>
             {showCues.map((c, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', fontSize: 11 }}>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', fontSize: 'var(--fs-sm)' }}>
                 <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--accent)', minWidth: 24 }}>{c.kbd}</span>
                 <input
                   defaultValue={c.name}
                   onBlur={e => setShowCues(cs => cs.map((q, j) => j === i ? { ...q, name: e.target.value } : q))}
                   onKeyDown={e => e.key === 'Enter' && e.target.blur()}
                   style={{ flex: 1, background: 'none', border: 'none', borderBottom: '1px solid var(--border)',
-                           color: 'var(--text)', fontSize: 11, outline: 'none' }}
+                           color: 'var(--text)', fontSize: 'var(--fs-sm)', outline: 'none' }}
                 />
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-3)', minWidth: 40 }}>{fmt(c.t)}</span>
+                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 40 }}>{fmt(c.t)}</span>
                 <button onClick={() => setShowCues(cs => cs.filter((_, j) => j !== i))}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-4)', cursor: 'pointer', fontSize: 12 }}>×</button>
+                        style={{ background: 'none', border: 'none', color: 'var(--text-4)', cursor: 'pointer', fontSize: 'var(--fs-md)' }}>×</button>
               </div>
             ))}
-            <button className="btn btn-ghost" style={{ fontSize: 10, width: '100%', marginTop: 6 }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)', width: '100%', marginTop: 6 }}
                     onClick={() => setShowCues(cs => [...cs, { t: Math.round(showDuration * 0.5), name: `Cue ${cs.length + 1}`, kbd: `Q${cs.length + 1}` }])}>
               + Add cue
             </button>
           </div>
         )}
         {activeTab !== 'show' && !selectedClip && !selectedTrans && multiSel?.size > 0 && (
-          <div style={{ padding: '12px 0', fontSize: 11, textAlign: 'center' }}>
+          <div style={{ padding: '12px 0', fontSize: 'var(--fs-sm)', textAlign: 'center' }}>
             <div style={{ color: 'var(--accent)', marginBottom: 8 }}>{multiSel.size} clips selected</div>
-            <button className="btn btn-ghost lw-btn-danger" style={{ fontSize: 11, width: '80%' }}
+            <button className="btn btn-ghost lw-btn-danger" style={{ fontSize: 'var(--fs-sm)', width: '80%' }}
                     onClick={() => { setShowClips(cs => cs.filter(c => !multiSel.has(c.id))); onClearMultiSel?.(); }}>
               Delete {multiSel.size} clips
             </button>
           </div>
         )}
         {activeTab !== 'show' && !selectedClip && !selectedTrans && (!multiSel || multiSel.size === 0) && (
-          <div style={{ padding: '20px 0', color: 'var(--text-4)', fontSize: 11, textAlign: 'center' }}>
+          <div style={{ padding: '20px 0', color: 'var(--text-4)', fontSize: 'var(--fs-sm)', textAlign: 'center' }}>
             Click a clip or transition to inspect<br/>
-            <span style={{ fontSize: 10, opacity: 0.7 }}>Shift+click to multi-select · ⌘A to select all</span>
+            <span style={{ fontSize: 'var(--fs-xs)', opacity: 0.7 }}>Shift+click to multi-select · ⌘A to select all</span>
           </div>
         )}
         <div className="lw-insp-divider" style={{ marginTop: 'auto' }}/>
         {selectedClip && (
           <>
-            <button className="btn btn-ghost" style={{ width: '100%', fontSize: 11, marginBottom: 4 }}
+            <button className="btn btn-ghost" style={{ width: '100%', fontSize: 'var(--fs-sm)', marginBottom: 4 }}
                     onClick={() => onAddTransition?.(selectedClip.id)}>
               + Transition After Clip
             </button>
             <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
-              <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }}
+              <button className="btn btn-ghost" style={{ flex: 1, fontSize: 'var(--fs-sm)' }}
                       title="Split clip at playhead position"
                       onClick={() => onSplitClip?.(selectedClip.id)}>
                 Split
               </button>
-              <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }}
+              <button className="btn btn-ghost" style={{ flex: 1, fontSize: 'var(--fs-sm)' }}
                       onClick={() => onDuplicateClip?.(selectedClip.id)}>
                 Duplicate
               </button>
             </div>
             <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
-              <button className="btn btn-ghost lw-btn-danger" style={{ flex: 1, fontSize: 11 }}
+              <button className="btn btn-ghost lw-btn-danger" style={{ flex: 1, fontSize: 'var(--fs-sm)' }}
                       onClick={() => onDeleteClip?.(selectedClip.id)}>
                 Delete
               </button>
@@ -1079,14 +1079,14 @@ export function TimelineScreen({ onExport }) {
               <button
                 style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
                          background: 'none', border: 'none', color: 'var(--text-4)',
-                         cursor: 'pointer', fontSize: 11, padding: '2px 4px' }}
+                         cursor: 'pointer', fontSize: 'var(--fs-sm)', padding: '2px 4px' }}
                 title="Remove lane"
                 onClick={() => setAutoLanes(ls => ls.filter(l => l.id !== lane.id))}>×</button>
             </div>
           ))}
           <button
             className="btn btn-ghost"
-            style={{ margin: '2px 4px', fontSize: 10, width: 'calc(100% - 8px)' }}
+            style={{ margin: '2px 4px', fontSize: 'var(--fs-xs)', width: 'calc(100% - 8px)' }}
             onClick={() => {
               const colors = ['#e84ac8','#3ae84a','#e8a03a','#4ac8c8','#8a8ad9'];
               const params = ['hueShift','speed','brightness','saturation','size'];
@@ -1246,7 +1246,7 @@ export function TimelineScreen({ onExport }) {
                   title="Loop playback · Shift+drag ruler to set region · L to clear region">
             <svg width="11" height="10" viewBox="0 0 11 10" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M2 4a3 3 0 013-3h3l-1.5-1M9 6a3 3 0 01-3 3H3l1.5 1"/></svg>
             <span>Loop</span>
-            {loopRegion && <span style={{ fontSize: 8, opacity: 0.7, marginLeft: 2 }}>●</span>}
+            {loopRegion && <span style={{ fontSize: 'var(--fs-2xs)', opacity: 0.7, marginLeft: 2 }}>●</span>}
           </button>
           <button className="lw-tl-tbtn" onClick={() => handleAddClip(0)} title="Add clip at playhead">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.3"><line x1="5" y1="1" x2="5" y2="9"/><line x1="1" y1="5" x2="9" y2="5"/></svg>
@@ -1337,13 +1337,13 @@ export function TimelineScreen({ onExport }) {
             </span>
             {loopEnabled && loopRegion && (
               <><span className="sep">·</span>
-              <span style={{ color: 'var(--accent)', fontSize: 10 }}>
+              <span style={{ color: 'var(--accent)', fontSize: 'var(--fs-xs)' }}>
                 ↺ {fmt(loopRegion.start)}–{fmt(loopRegion.end)}
               </span></>
             )}
             {strips?.length > 0 && (
               <><span className="sep">·</span>
-              <span style={{ color: 'var(--text-4)', fontSize: 10 }}>
+              <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
                 {strips.reduce((s, st) => s + (st.pixels?.length || 0), 0)} LEDs
               </span></>
             )}
@@ -1364,7 +1364,7 @@ export function TimelineScreen({ onExport }) {
           </div>
           <div className="lw-tl-zoom">
             <span>Speed</span>
-            <div className="lw-tweaks-seg" style={{ fontSize: 9 }}>
+            <div className="lw-tweaks-seg" style={{ fontSize: 'var(--fs-2xs)' }}>
               {[0.25, 0.5, 1, 2].map(r => (
                 <button key={r}
                         className={Math.abs(playRate - r) < 0.01 ? 'active' : ''}
@@ -1379,7 +1379,7 @@ export function TimelineScreen({ onExport }) {
             <input type="range" min="0.5" max="4" step="0.1" value={zoom}
                    onChange={e => setZoom(+e.target.value)}/>
             <span className="v">{zoom.toFixed(1)}×</span>
-            <button className="btn btn-ghost" style={{ fontSize: 9, padding: '2px 5px' }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '2px 5px' }}
                     title="Fit all clips into view"
                     onClick={() => {
                       if (!scrollRef.current) return;

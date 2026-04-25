@@ -211,7 +211,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
       <div className="lw-sec-header">
         <span>Library</span>
         <span className="meta">{PATTERNS.length + customPatterns.length} effects</span>
-        <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 6px', marginLeft: 'auto' }}
+        <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px', marginLeft: 'auto' }}
                 title="Add current pattern as a clip at the timeline playhead"
                 onClick={() => {
                   const id = `clip_${Date.now()}`;
@@ -241,28 +241,28 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
             <button onClick={() => setSearch('')}
                     style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
                              background: 'none', border: 'none', cursor: 'pointer',
-                             color: 'var(--text-4)', fontSize: 12, lineHeight: 1, padding: '0 2px' }}>
+                             color: 'var(--text-4)', fontSize: 'var(--fs-md)', lineHeight: 1, padding: '0 2px' }}>
               ×
             </button>
           )}
         </div>
         <button
           className={`btn btn-ghost ${showFavs ? 'active' : ''}`}
-          style={{ fontSize: 12, padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-md)', padding: '4px 8px', flexShrink: 0 }}
           title={showFavs ? 'Show all' : 'Show favorites'}
           onClick={() => setShowFavs(f => !f)}>
           ★
         </button>
         <button
           className={`btn btn-ghost ${sortMode !== 'default' ? 'active' : ''}`}
-          style={{ fontSize: 9, padding: '4px 7px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-2xs)', padding: '4px 7px', flexShrink: 0 }}
           title="Cycle sort: default → A-Z → shuffle"
           onClick={() => setSortMode(m => m === 'default' ? 'alpha' : m === 'alpha' ? 'random' : 'default')}>
           {sortMode === 'alpha' ? 'A-Z' : sortMode === 'random' ? '⟳' : '···'}
         </button>
         <button
           className="btn btn-ghost"
-          style={{ fontSize: 10, padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
           title="Previous pattern"
           onClick={() => {
             const idx = PATTERNS.findIndex(p => p.id === patternId);
@@ -273,7 +273,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
         </button>
         <button
           className="btn btn-ghost"
-          style={{ fontSize: 10, padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
           title="Next pattern"
           onClick={() => {
             const idx = PATTERNS.findIndex(p => p.id === patternId);
@@ -284,7 +284,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
         </button>
         <button
           className="btn btn-ghost"
-          style={{ fontSize: 10, padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
           title="Random pattern"
           onClick={() => {
             const pool = showFavs && favs.size > 0 ? PATTERNS.filter(p => favs.has(p.id)) : PATTERNS;
@@ -300,7 +300,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
         {CATS.map(c => (
           <button key={c}
                   className={`btn btn-ghost ${cat === c ? 'active' : ''}`}
-                  style={{ fontSize: 9, padding: '2px 7px', borderRadius: 99, textTransform: 'capitalize' }}
+                  style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px', borderRadius: 99, textTransform: 'capitalize' }}
                   onClick={() => setCat(c)}>
             {c === 'audio' ? '♪ audio' : c === 'geo' ? 'geometric' : c}
           </button>
@@ -308,7 +308,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
       </div>
 
       {search && filtered.length === 0 && (
-        <div style={{ padding: '16px', color: 'var(--text-4)', fontSize: 11, textAlign: 'center' }}>
+        <div style={{ padding: '16px', color: 'var(--text-4)', fontSize: 'var(--fs-sm)', textAlign: 'center' }}>
           No patterns match "{search}"
         </div>
       )}
@@ -328,19 +328,19 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
               </span>
             </div>
             {p.custom && (
-              <div style={{ position: 'absolute', top: 3, left: 3, fontSize: 7, background: 'oklch(78% 0.14 300/0.85)',
-                            color: '#000', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
+              <div style={{ position: 'absolute', top: 3, left: 3, fontSize: 'var(--fs-2xs)', background: 'oklch(78% 0.14 300/0.85)',
+                            color: 'var(--bg)', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
                 ✏ CUSTOM
               </div>
             )}
             {!p.custom && p.code && (p.code.includes('bass') || p.code.includes('mid') || p.code.includes('hi')) && (
-              <div style={{ position: 'absolute', top: 3, left: 3, fontSize: 7, background: 'oklch(74% 0.13 210/0.8)',
-                            color: '#000', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
+              <div style={{ position: 'absolute', top: 3, left: 3, fontSize: 'var(--fs-2xs)', background: 'oklch(74% 0.13 210/0.8)',
+                            color: 'var(--bg)', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
                 AUDIO
               </div>
             )}
             {!p.custom && cardIdx < 9 && (
-              <div style={{ position: 'absolute', bottom: 3, right: 3, fontSize: 7,
+              <div style={{ position: 'absolute', bottom: 3, right: 3, fontSize: 'var(--fs-2xs)',
                             background: 'oklch(20%/0.7)', color: 'var(--text-3)',
                             borderRadius: 2, padding: '1px 4px', fontFamily: 'var(--mono-font)' }}>
                 {cardIdx + 1}
@@ -349,7 +349,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
             {p.custom && (
               <button
                 style={{ position: 'absolute', top: 3, right: 3, background: 'oklch(30%/0.7)', border: 'none',
-                         color: '#fff', fontSize: 9, borderRadius: 2, cursor: 'pointer', padding: '1px 4px',
+                         color: 'var(--on-accent)', fontSize: 'var(--fs-2xs)', borderRadius: 2, cursor: 'pointer', padding: '1px 4px',
                          opacity: 0, transition: 'opacity 0.1s' }}
                 className="lw-pattern-delete-btn"
                 title="Delete custom pattern"
@@ -374,11 +374,11 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
         <>
           <div className="lw-sec-header">
             <span>{cur?.name} · params</span>
-            <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 6px' }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px' }}
                     onClick={() => knobs.forEach(k => onParamChange(k.name, k.value))}>
               Reset
             </button>
-            <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 6px' }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px' }}
                     title="Randomize all params"
                     onClick={() => knobs.forEach(k => {
                       const rand = k.min + Math.random() * (k.max - k.min);
@@ -386,7 +386,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
                     })}>
               ⟳
             </button>
-            <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 6px' }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px' }}
                     onClick={savePreset} title="Save current params as preset">
               + Preset
             </button>
@@ -409,12 +409,12 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '4px 0 8px' }}>
               {myPresets.map(key => (
                 <button key={key} onClick={() => loadPreset(key)}
-                        style={{ fontSize: 9, padding: '2px 7px', background: 'var(--surface-2)',
+                        style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px', background: 'var(--surface-2)',
                                  border: '1px solid var(--border)', borderRadius: 99, cursor: 'pointer',
                                  color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   {key.replace(`${patternId}/`, '')}
                   <span onClick={e => deletePreset(key, e)}
-                        style={{ opacity: 0.5, fontSize: 10, lineHeight: 1 }}>×</span>
+                        style={{ opacity: 0.5, fontSize: 'var(--fs-xs)', lineHeight: 1 }}>×</span>
                 </button>
               ))}
             </div>
@@ -512,7 +512,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
           <div className="lw-code-tab">api.md</div>
           <button
             className="btn btn-ghost"
-            style={{ marginLeft: 'auto', fontSize: 9, padding: '2px 7px' }}
+            style={{ marginLeft: 'auto', fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
             title="Copy code to clipboard"
             onClick={() => {
               const code = viewRef.current?.state.doc.toString() || '';
@@ -522,7 +522,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
           </button>
           <button
             className="btn btn-ghost"
-            style={{ fontSize: 9, padding: '2px 7px' }}
+            style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
             title="Paste code from clipboard"
             onClick={async () => {
               try {
@@ -536,7 +536,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
           </button>
           <button
             className="btn btn-ghost"
-            style={{ fontSize: 9, padding: '2px 7px' }}
+            style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
             title="Load library source for this pattern"
             onClick={() => {
               const lib = LIB_PATTERNS.find(p => p.id === patternId);
@@ -548,7 +548,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
           </button>
           <button
             className="btn btn-ghost"
-            style={{ fontSize: 9, padding: '2px 7px' }}
+            style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
             title="Save as custom pattern (appears in Cards tab)"
             onClick={() => {
               const code = viewRef.current?.state.doc.toString() || '';
@@ -561,7 +561,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
           </button>
           <button
             className="btn btn-ghost"
-            style={{ fontSize: 9, padding: '2px 7px' }}
+            style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
             title="Download as .js file"
             onClick={() => {
               const code = viewRef.current?.state.doc.toString() || '';
@@ -623,7 +623,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
         ].map(([label, code]) => (
           <button key={label}
                   className="btn btn-ghost"
-                  style={{ fontSize: 9, padding: '2px 7px', borderRadius: 99 }}
+                  style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px', borderRadius: 99 }}
                   title={code}
                   onClick={() => {
                     if (!viewRef.current) return;

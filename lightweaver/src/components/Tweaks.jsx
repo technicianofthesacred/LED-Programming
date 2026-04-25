@@ -47,7 +47,7 @@ export function TweaksPanel({ tweaks, visible, set }) {
     <div className="lw-tweaks">
       <div className="lw-tweaks-header">
         <h3>Tweaks</h3>
-        <span style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-4)' }}>live</span>
+        <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>live</span>
       </div>
       <div className="lw-tweaks-row">
         <label>Direction</label>
@@ -65,7 +65,7 @@ export function TweaksPanel({ tweaks, visible, set }) {
         <label>Panel width</label>
         <Seg k="panelWidth" opts={[['normal','Normal'],['wide','Wide']]}/>
       </div>
-      <div style={{ fontFamily: 'var(--mono-font)', fontSize: 10, color: 'var(--text-4)', lineHeight: 1.4, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', lineHeight: 1.4, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
         Three directions, one IA. All tweaks persist on refresh.
       </div>
     </div>

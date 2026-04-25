@@ -16,8 +16,8 @@ function Row({ label, hint, children }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
       <div>
-        <div style={{ fontSize: 12, color: 'var(--text)' }}>{label}</div>
-        {hint && <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 2 }}>{hint}</div>}
+        <div style={{ fontSize: 'var(--fs-md)', color: 'var(--text)' }}>{label}</div>
+        {hint && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', marginTop: 2 }}>{hint}</div>}
       </div>
       <div>{children}</div>
     </div>
@@ -76,7 +76,7 @@ export function SettingsScreen() {
   return (
     <div className="lw-settings-screen">
       <div className="lw-settings-inner">
-        <h2 style={{ fontSize: 18, fontWeight: 500, marginBottom: 24, color: 'var(--text)' }}>Settings</h2>
+        <h2 style={{ fontSize: 'var(--fs-xl)', fontWeight: 500, marginBottom: 24, color: 'var(--text)' }}>Settings</h2>
 
         <Section title="Project">
           <Row label="Project name">
@@ -92,7 +92,7 @@ export function SettingsScreen() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="range" min="20" max="300" step="1" value={bpm}
                      onChange={e => setBpm(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 12, minWidth: 40 }}>{bpm}</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{bpm}</span>
             </div>
           </Row>
           <Row label="Show duration" hint="Total timeline length">
@@ -100,7 +100,7 @@ export function SettingsScreen() {
               <input type="number" min="60" max="7200" step="30" value={showDuration}
                      onChange={e => setShowDuration(+e.target.value)}
                      className="lw-search-input" style={{ width: 80 }}/>
-              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>
                 = {durationMins}m {durationSecs}s
               </span>
             </div>
@@ -125,11 +125,11 @@ export function SettingsScreen() {
                          }}/>
                 </label>
               ))}
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       onClick={() => setPalette(PALETTE_DEFAULT)}>
                 Reset
               </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       title="Copy palette as CSS custom properties"
                       onClick={() => {
                         const css = (palette || PALETTE_DEFAULT).map((c, i) => `  --pal-${i}: ${c};`).join('\n');
@@ -137,7 +137,7 @@ export function SettingsScreen() {
                       }}>
                 CSS
               </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       title="Copy palette as hex list"
                       onClick={() => {
                         navigator.clipboard?.writeText((palette || PALETTE_DEFAULT).join(', '));
@@ -147,12 +147,12 @@ export function SettingsScreen() {
             </div>
           </Row>
           <Row label="Add color" hint="Expand palette">
-            <button className="btn btn-ghost" style={{ fontSize: 10 }}
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                     onClick={() => setPalette(p => [...(p || PALETTE_DEFAULT), '#ffffff'])}>
               + Color
             </button>
             {(palette || PALETTE_DEFAULT).length > 1 && (
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       onClick={() => setPalette(p => (p || PALETTE_DEFAULT).slice(0, -1))}>
                 – Last
               </button>
@@ -190,32 +190,32 @@ export function SettingsScreen() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="range" min="0" max="4" step="0.05" value={masterSpeed}
                      onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 12, minWidth: 40 }}>{masterSpeed.toFixed(2)}×</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{masterSpeed.toFixed(2)}×</span>
             </div>
           </Row>
           <Row label="Master brightness">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
                      onChange={e => setMasterBrightness(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 12, minWidth: 40 }}>{Math.round(masterBrightness * 100)}%</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{Math.round(masterBrightness * 100)}%</span>
             </div>
           </Row>
           <Row label="Master saturation">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="range" min="0" max="1" step="0.01" value={masterSaturation}
                      onChange={e => setMasterSaturation(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 12, minWidth: 40 }}>{Math.round(masterSaturation * 100)}%</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{Math.round(masterSaturation * 100)}%</span>
             </div>
           </Row>
           <Row label="Master hue shift" hint="Rotates all colors on the wheel">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="range" min="-0.5" max="0.5" step="0.01" value={masterHueShift}
                      onChange={e => setMasterHueShift(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 12, minWidth: 50 }}>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 50 }}>
                 {masterHueShift >= 0 ? '+' : ''}{Math.round(masterHueShift * 360)}°
               </span>
               {masterHueShift !== 0 && (
-                <button className="btn btn-ghost" style={{ fontSize: 10 }} onClick={() => setMasterHueShift(0)}>Reset</button>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }} onClick={() => setMasterHueShift(0)}>Reset</button>
               )}
             </div>
             <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
@@ -227,7 +227,7 @@ export function SettingsScreen() {
                 { label: '💚 Green', value: 0.18 },
               ].map(p => (
                 <button key={p.label} className={`btn btn-ghost ${Math.abs(masterHueShift - p.value) < 0.01 ? 'active' : ''}`}
-                        style={{ fontSize: 9, padding: '2px 7px' }}
+                        style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px' }}
                         onClick={() => setMasterHueShift(p.value)}>
                   {p.label}
                 </button>
@@ -240,7 +240,7 @@ export function SettingsScreen() {
               {GAMMA_PRESETS.map(p => (
                 <button key={p.v}
                         className={`btn btn-ghost ${gammaEnabled && Math.abs(gammaValue - p.v) < 0.05 ? 'active' : ''}`}
-                        style={{ fontSize: 10, padding: '2px 7px' }}
+                        style={{ fontSize: 'var(--fs-xs)', padding: '2px 7px' }}
                         disabled={!gammaEnabled}
                         onClick={() => setGammaValue(p.v)}>
                   {p.label}
@@ -278,11 +278,11 @@ export function SettingsScreen() {
         <Section title="Project File">
           <Row label="Save project" hint="Download .lwproj.json file">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={handleDownload}>
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-sm)' }} onClick={handleDownload}>
                 ↓ Download
               </button>
               {lastSaved && (
-                <span style={{ fontSize: 10, color: 'var(--text-4)' }}>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
                   Auto-saved {new Date(lastSaved).toLocaleTimeString()}
                 </span>
               )}
@@ -290,13 +290,13 @@ export function SettingsScreen() {
           </Row>
           <Row label="Load project" hint="Import a .lwproj.json file">
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-ghost" style={{ fontSize: 11 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-sm)' }}
                       onClick={() => importRef.current?.click()}>
                 ↑ Import
               </button>
               <input ref={importRef} type="file" accept=".json,.lwproj.json" style={{ display: 'none' }}
                      onChange={handleImport}/>
-              <button className="btn btn-ghost" style={{ fontSize: 11 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-sm)' }}
                       onClick={() => { if (window.confirm('Discard all changes and start a new project?')) newProject(); }}>
                 New project
               </button>
@@ -305,7 +305,7 @@ export function SettingsScreen() {
         </Section>
 
         <Section title="About">
-          <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.8 }}>
+          <div style={{ fontSize: 'var(--fs-md)', color: 'var(--text-3)', lineHeight: 1.8 }}>
             <div>Lightweaver · LED installation controller</div>
             <div>Pattern engine: per-pixel JS sandbox · WLED WebSocket push</div>
             <div>Hardware: ESP32-S3 N16R8 · WS2812B strips</div>

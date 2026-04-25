@@ -14,9 +14,9 @@ function Section({ title, children }) {
 function Row({ label, children, hint }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-      <span style={{ color: 'var(--text-2)', fontSize: 11, minWidth: 90 }}>{label}</span>
+      <span style={{ color: 'var(--text-2)', fontSize: 'var(--fs-sm)', minWidth: 90 }}>{label}</span>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>{children}</div>
-      {hint && <span style={{ fontSize: 10, color: 'var(--text-4)' }}>{hint}</span>}
+      {hint && <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>{hint}</span>}
     </div>
   );
 }
@@ -124,8 +124,8 @@ export function DevicesPanel({ onClose }) {
           <Section title="WLED Controller">
             <Row label="Status">
               <Dot color={wledConnected ? 'oklch(72% 0.18 155)' : 'oklch(64% 0.20 25)'}/>
-              <span style={{ fontSize: 12 }}>{wledConnected ? 'Connected' : 'Disconnected'}</span>
-              {wledConnected && pingMs !== null && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{pingMs} ms</span>}
+              <span style={{ fontSize: 'var(--fs-md)' }}>{wledConnected ? 'Connected' : 'Disconnected'}</span>
+              {wledConnected && pingMs !== null && <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>{pingMs} ms</span>}
             </Row>
             <Row label="IP Address">
               <input
@@ -145,23 +145,23 @@ export function DevicesPanel({ onClose }) {
               <button className="btn btn-ghost" onClick={handleScan} disabled={scanning}>
                 {scanning ? 'Scanning…' : 'Scan LAN'}
               </button>
-              <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+              <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>
                 {scanning ? 'Checking subnet…' : scanResults.length > 0 ? `${scanResults.length} found` : 'searches local /24'}
               </span>
             </Row>
             {wledConnected && (
               <Row label="Test pattern">
-                <button className="btn btn-ghost" style={{ fontSize: 10 }} onClick={sendTestPattern}>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }} onClick={sendTestPattern}>
                   Send Rainbow
                 </button>
-                <span style={{ fontSize: 10, color: 'var(--text-4)' }}>Sends rainbow chase to verify connection</span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>Sends rainbow chase to verify connection</span>
               </Row>
             )}
             {wledInfo && (
               <Row label="Device info">
-                <span style={{ fontSize: 11, fontFamily: 'var(--mono-font)' }}>{wledInfo.name}</span>
-                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>v{wledInfo.ver}</span>
-                <span style={{ fontSize: 10, color: 'var(--text-4)' }}>{wledInfo.leds?.count} LEDs · {wledInfo.leds?.fps} fps</span>
+                <span style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)' }}>{wledInfo.name}</span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>v{wledInfo.ver}</span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>{wledInfo.leds?.count} LEDs · {wledInfo.leds?.fps} fps</span>
               </Row>
             )}
             {scanResults.length > 0 && (
@@ -169,13 +169,13 @@ export function DevicesPanel({ onClose }) {
                 {scanResults.map(d => (
                   <div key={d.ip}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0',
-                             fontSize: 12, borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                             fontSize: 'var(--fs-md)', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
                     onClick={() => { setWledIp(d.ip); wledConnect(); }}
                   >
                     <Dot color="oklch(74% 0.13 210)"/>
                     <span style={{ flex: 1 }}>{d.name}</span>
                     <span style={{ color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>{d.ip}</span>
-                    {d.leds && <span style={{ color: 'var(--text-4)', fontSize: 10 }}>{d.leds} LEDs</span>}
+                    {d.leds && <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>{d.leds} LEDs</span>}
                   </div>
                 ))}
               </div>
@@ -185,70 +185,70 @@ export function DevicesPanel({ onClose }) {
           <Section title="MIDI">
             <Row label="Status">
               <Dot color={midi.enabled ? 'oklch(74% 0.13 210)' : '#555'}/>
-              <span style={{ fontSize: 12 }}>{midi.enabled ? `${midi.devices.length} device(s)` : 'Disabled'}</span>
-              {midi.error && <span style={{ fontSize: 11, color: 'var(--danger)' }}>{midi.error}</span>}
+              <span style={{ fontSize: 'var(--fs-md)' }}>{midi.enabled ? `${midi.devices.length} device(s)` : 'Disabled'}</span>
+              {midi.error && <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--danger)' }}>{midi.error}</span>}
               <button className="btn btn-ghost" style={{ marginLeft: 'auto' }} onClick={midi.toggle}>
                 {midi.enabled ? 'Disable' : 'Enable MIDI'}
               </button>
             </Row>
             {midi.enabled && midi.devices.map(d => (
               <Row key={d.id} label={d.name || 'Unknown'}>
-                <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{d.manufacturer}</span>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>{d.manufacturer}</span>
                 <Dot color="oklch(72% 0.18 155)"/>
-                <span style={{ fontSize: 11, color: 'oklch(72% 0.18 155)' }}>active</span>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'oklch(72% 0.18 155)' }}>active</span>
               </Row>
             ))}
             {midi.enabled && midi.devices.length === 0 && (
-              <div style={{ padding: '8px 0', fontSize: 11, color: 'var(--text-3)' }}>
+              <div style={{ padding: '8px 0', fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>
                 No MIDI devices found. Connect a device and refresh.
               </div>
             )}
             {midi.enabled && (
-              <div style={{ padding: '8px 0', fontSize: 10, color: 'var(--text-4)' }}>
+              <div style={{ padding: '8px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
                 CC 1 → master speed · CC 7 → master brightness · CC 11 → master saturation
               </div>
             )}
           </Section>
 
           <Section title="Visitor Page">
-            <div style={{ padding: '6px 0', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
+            <div style={{ padding: '6px 0', fontSize: 'var(--fs-sm)', color: 'var(--text-3)', lineHeight: 1.6 }}>
               The visitor page lets gallery guests control scenes from their phone.
               Share this URL with guests on the local network.
             </div>
             <Row label="Local URL">
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 11, flex: 1, color: 'var(--accent)', wordBreak: 'break-all' }}>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', flex: 1, color: 'var(--accent)', wordBreak: 'break-all' }}>
                 {window.location.origin}/src/visitor/visitor.html
               </span>
             </Row>
             <Row label="Actions">
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/src/visitor/visitor.html`)}>
                 Copy URL
               </button>
-              <button className="btn btn-ghost" style={{ fontSize: 10 }}
+              <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
                       onClick={() => window.open(`${window.location.origin}/src/visitor/visitor.html`, '_blank')}>
                 Open ↗
               </button>
             </Row>
-            <div style={{ padding: '6px 0', fontSize: 10, color: 'var(--text-4)', lineHeight: 1.5 }}>
+            <div style={{ padding: '6px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', lineHeight: 1.5 }}>
               In production, the visitor page is served at <code style={{ fontFamily: 'var(--mono-font)' }}>/visitor/</code> on the Pi.
               Configure PRESET_MAP in visitor.html to match your WLED preset numbers.
             </div>
           </Section>
 
           <Section title="WLED Segments">
-            <div style={{ padding: '4px 0 8px', fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            <div style={{ padding: '4px 0 8px', fontSize: 'var(--fs-sm)', color: 'var(--text-3)', lineHeight: 1.5 }}>
               Map layout strips to WLED segment numbers. WLED uses segments to address independent LED groups.
             </div>
             {strips.length === 0 && (
-              <div style={{ fontSize: 11, color: 'var(--text-4)', padding: '4px 0' }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)', padding: '4px 0' }}>
                 No strips defined — add strips in Layout screen.
               </div>
             )}
             {strips.map((strip, i) => (
               <Row key={strip.id} label={strip.name || strip.id}>
-                <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 60 }}>{strip.pixels?.length || 0} LEDs</span>
-                <span style={{ fontSize: 11, color: 'var(--text-4)' }}>→ seg</span>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)', minWidth: 60 }}>{strip.pixels?.length || 0} LEDs</span>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>→ seg</span>
                 <input
                   type="number" min="0" max="31" step="1"
                   value={segMap[strip.id] ?? i}
@@ -291,16 +291,16 @@ export function DevicesPanel({ onClose }) {
                   }}>
                   Push to WLED
                 </button>
-                {pushStatus && <span style={{ fontSize: 11, color: 'var(--accent)' }}>{pushStatus}</span>}
+                {pushStatus && <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent)' }}>{pushStatus}</span>}
               </div>
             )}
           </Section>
 
           <Section title="Audio">
             <Row label="Microphone">
-              <span style={{ fontSize: 12 }}>Enable via Audio toggle in toolbar</span>
+              <span style={{ fontSize: 'var(--fs-md)' }}>Enable via Audio toggle in toolbar</span>
             </Row>
-            <div style={{ padding: '6px 0', fontSize: 10, color: 'var(--text-4)' }}>
+            <div style={{ padding: '6px 0', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
               Audio analysis feeds bass/mid/hi bands into pattern engine in real-time.
             </div>
           </Section>
