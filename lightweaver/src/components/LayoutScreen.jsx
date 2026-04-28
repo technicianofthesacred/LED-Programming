@@ -1477,8 +1477,12 @@ export function LayoutScreen() {
             ref={svgRef}
             viewBox={computedViewBox}
             overflow="visible"
+            preserveAspectRatio="xMidYMid meet"
             style={{
-              width: '92%', height: '92%',
+              width: '100%', height: '100%',
+              maxWidth: '100%', maxHeight: '100%',
+              aspectRatio: `${parsedVb(viewBox).w} / ${parsedVb(viewBox).h}`,
+              objectFit: 'contain',
               cursor: drawMode ? 'crosshair' : rubberBand ? 'crosshair' : isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
             }}
             onClick={handleSvgClick}
