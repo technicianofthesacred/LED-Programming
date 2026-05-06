@@ -8,3 +8,20 @@
 ```
 └── playwright.config.ts  (31 lines)
 ```
+
+## Documentation
+
+- `CLAUDE.md` — project overview, architectural decisions, next steps.
+- `research.md` — hardware, firmware, protocol, and color-management research.
+- `branded-installation-ui.md` — visitor-facing branded UI design spec (captive portal, scene selector).
+- `docs/deployment-checklist.md` — bench-to-gallery checklist: WLED config, AP setup, Madrix, Pi, smoke test, recovery.
+- `docs/segments.md` — WLED segments template; fill in as artwork zones are finalised.
+- `docs/hardware-setup.md` — physical setup actions: flashing, WLED verification, LED config, Art-Net test.
+
+## Apps and tools
+
+- `led-art-mapper/` — canonical LED layout / pattern design tool (Vite, vanilla JS); exports `ledmap.json`.
+- `lightweaver/` — React building blocks (WLED WebSocket hook, ESP32 Web Serial flasher) for reuse.
+- `visitor-ui/` — Pi-hosted branded React UI for the captive-portal scene selector.
+- `e2e/` — Playwright end-to-end tests.
+- `scripts/debug/` — archived diagnostic scripts.
