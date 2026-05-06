@@ -26,16 +26,25 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 ## Project name
 **Lightweaver** — use this name in UI copy, WiFi SSIDs, and any public-facing branding.
 
+## Architectural decisions
+- `led-art-mapper/` is the **canonical design tool** (vanilla JS Vite app): pattern editor, LED layout over artwork SVGs, `ledmap.json` export. All zone definitions originate here.
+- `lightweaver/` (React) provides **reusable building blocks** — WLED WebSocket hook, ESP32 Web Serial flasher. To be repurposed / borrowed-from for the visitor UI rather than shipped as-is.
+- `visitor-ui/` is the new **Pi-hosted branded React UI** — a small, separate app implementing the captive-portal scene selector per `branded-installation-ui.md`.
+- **Tests** live under `/e2e/` using `@playwright/test`. **Diagnostic scripts** are archived in `/scripts/debug/`.
+
 ## Tools already built
 - `led-art-mapper/` — design tool: draw LED strip paths over artwork, set pixel counts, write live patterns (JS), export `ledmap.json` / FastLED header / CSV
 
 ## Next steps
-1. Flash WLED onto ESP32-S3 N16R8 (bin files in root: `WLED 0.15.4 ESP32-S3 16MB.bin`)
-2. Configure Art-Net output from Madrix
-3. Define WLED segments matching laser-cut zones
-4. Build Lightweaver React control UI (Vite + React project, Pi-hosted)
+- [x] Tooling: led-art-mapper design tool, lightweaver React building blocks, visitor-ui scaffold
+- [x] Operational docs: `docs/deployment-checklist.md`, `docs/hardware-setup.md`, `docs/segments.md`
+- [ ] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root)
+- [ ] Configure Art-Net output from Madrix; verify WLED reception
+- [ ] Define WLED segments matching laser-cut zones; fill in `docs/segments.md`
+- [ ] Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
 ## Where to look for…
+- **Project roadmap (living source of truth)** → `docs/roadmap.md`
 - **Hardware research** → `research.md`
 - **Visitor UI design plan** → `branded-installation-ui.md`
 - **LED layout design tool** → `led-art-mapper/`

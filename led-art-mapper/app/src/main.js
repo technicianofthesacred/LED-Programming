@@ -18,7 +18,7 @@ import { oneDark }                                   from '@codemirror/theme-one
 
 import { CanvasManager }                             from './canvas.js';
 import { samplePath, assignIndices, getAllPixels }   from './mapper.js';
-import { compile, evalPixel }                        from './patterns.js';
+import { compile, evalPixel, _evalErrorState }       from './patterns.js';
 import { PreviewRenderer }                           from './preview.js';
 import { toWLEDLedmap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
@@ -134,8 +134,9 @@ const state = {
   _crossfadeTarget:  null, // scene id to reach
 };
 
-// BUG 4: pre-allocated reusable buffer for WLED push (avoids Array.from allocation every 40ms)
-let _wledBuf = [];
+// BUG 4: reusable Uint8Array buffer for WLED push — resized only when pixel count changes,
+// avoids per-frame allocations at 30 fps. First byte reserved for WLED native WS opcode (0x02).
+let _wledBuf = new Uint8Array(0);
 
 // ── Undo / Redo ───────────────────────────────────────────────────────────────
 const _history = [];
@@ -1088,6 +1089,60 @@ function _showError(msg) {
   document.getElementById('pattern-error').textContent = msg ? `⚠ ${msg}` : '';
 }
 
+// ── Pattern runtime error log (Task 7) ────────────────────────────────────
+// Keeps the last 5 distinct runtime errors raised inside evalPixel.
+// Dedupes consecutive identical messages — bumps the existing entry's count
+// instead of spamming the panel at 30 fps × hundreds of pixels.
+const _ERR_LOG_MAX = 5;
+const _errLog = []; // [{ message, ts, count }]
+let _lastEvalErrorCount = 0;
+
+function _logRuntimeError(message) {
+  if (!message) return;
+  const last = _errLog[0];
+  if (last && last.message === message) {
+    last.count++;
+    last.ts = Date.now();
+  } else {
+    _errLog.unshift({ message, ts: Date.now(), count: 1 });
+    if (_errLog.length > _ERR_LOG_MAX) _errLog.length = _ERR_LOG_MAX;
+  }
+  _renderErrLog();
+}
+
+function _renderErrLog() {
+  let panel = document.getElementById('pattern-err-log');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'pattern-err-log';
+    panel.className = 'pattern-err-log';
+    panel.style.cssText = 'position:fixed;right:10px;bottom:10px;max-width:340px;font:11px/1.3 ui-monospace,monospace;background:rgba(40,8,8,0.94);color:#fdd;border:1px solid #a44;border-radius:6px;padding:6px 8px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+    document.body.appendChild(panel);
+  }
+  if (!_errLog.length) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const rows = _errLog.map(e => {
+    const ts = new Date(e.ts).toLocaleTimeString();
+    const cnt = e.count > 1 ? ` ×${e.count}` : '';
+    const msg = e.message.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]);
+    return `<div style="margin:2px 0"><span style="color:#faa">${ts}</span> ${msg}${cnt}</div>`;
+  }).join('');
+  panel.innerHTML = `<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+      <strong style="flex:1">Pattern errors</strong>
+      <button id="pattern-err-log-clear" style="background:#622;color:#fdd;border:1px solid #a44;border-radius:3px;padding:1px 6px;cursor:pointer;font:inherit">Clear</button>
+      <button id="pattern-err-log-dismiss" style="background:#622;color:#fdd;border:1px solid #a44;border-radius:3px;padding:1px 6px;cursor:pointer;font:inherit">×</button>
+    </div>${rows}`;
+  panel.querySelector('#pattern-err-log-clear').addEventListener('click', () => { _errLog.length = 0; _renderErrLog(); });
+  panel.querySelector('#pattern-err-log-dismiss').addEventListener('click', () => { panel.style.display = 'none'; });
+}
+
+function _pollPatternRuntimeErrors() {
+  if (_evalErrorState.count !== _lastEvalErrorCount) {
+    _lastEvalErrorCount = _evalErrorState.count;
+    if (_evalErrorState.message) _logRuntimeError(_evalErrorState.message);
+  }
+}
+
 // ── Sections (strips) list ────────────────────────────────────────────────
 
 function _buildStripLi(strip, from, to, extraClass) {
@@ -1149,7 +1204,7 @@ function _buildStripLi(strip, from, to, extraClass) {
              title="Hue shift (degrees)" />
       <button class="strip-reverse-btn${reversed ? ' active' : ''}" title="Reverse pixel order">⇄</button>
       <span class="speed-label" title="Speed multiplier">×</span>
-      <input class="strip-speed-input${paused ? ' speed-zero' : ''}${speed !== 1.0 ? ' speed-modified' : ''}" type="number"
+      <input class="strip-speed-input${paused ? ' speed-zero' : ''}${Math.abs(speed - 1.0) > 1e-4 ? ' speed-modified' : ''}" type="number"
              value="${speed}" min="0" max="8" step="0.05"
              title="Speed multiplier — 0 freezes this section" />
     </div>
@@ -1263,7 +1318,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     const input = /** @type {HTMLInputElement} */ (e.target);
     input.value = strip.speed;
     input.classList.toggle('speed-zero',     strip.speed === 0);
-    input.classList.toggle('speed-modified', strip.speed !== 1.0); // BUG 5
+    input.classList.toggle('speed-modified', Math.abs(strip.speed - 1.0) > 1e-4); // BUG 3: epsilon comparison avoids flicker on fine wheel
     li.classList.toggle('strip-paused', strip.speed === 0);
   });
 
@@ -1278,7 +1333,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     strip.speed = Math.round(next * 100) / 100;
     input.value = strip.speed;
     input.classList.toggle('speed-zero',     strip.speed === 0);
-    input.classList.toggle('speed-modified', strip.speed !== 1.0); // BUG 5
+    input.classList.toggle('speed-modified', Math.abs(strip.speed - 1.0) > 1e-4); // BUG 3: epsilon comparison avoids flicker on fine wheel
     li.classList.toggle('strip-paused', strip.speed === 0);
   }, { passive: false });
 
@@ -2047,7 +2102,9 @@ function recallScene(id, crossfade = true) {
       canvasManager.toggleStripVisible(strip.id);
       strip.visible = saved.visible;
     }
-    // BUG 2: re-sample pixels so reversed order is actually applied
+    // BUG 2: reverse must happen AFTER sampling — sampling always returns pixels in path order,
+    // so we resample fresh then apply the reversal flag, otherwise stale pixel arrays carry
+    // a stale orientation and scene restore produces wrong pixel order.
     const pathEl2 = canvasManager.getPathEl(strip.id);
     if (pathEl2) {
       strip.pixels = samplePath(pathEl2, strip.pixelCount);
@@ -2123,7 +2180,7 @@ function startAnim() {
   // C2: start WLED push if connected
   if (state.wledConnected) {
     clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLED, 40);
+    state.wledPushHandle = setInterval(_pushToWLED, 33); // ~30 fps throttle
   }
   // Sync toolbar play/stop buttons
   const pb = document.getElementById('btn-play-toolbar');
@@ -2294,6 +2351,9 @@ function _tick(ts) {
 
     state.lastFrame = lastFrame;
 
+    // Task 7: surface any runtime errors raised inside evalPixel during this frame
+    _pollPatternRuntimeErrors();
+
     // Feature 14: crossfade blend
     if (state._crossfadeFrom && state._crossfadeStart) {
       const elapsed  = performance.now() - state._crossfadeStart;
@@ -2315,11 +2375,14 @@ function _tick(ts) {
 function _pushToWLED() {
   if (!state.wledConnected || !state.lastFrame.length) return;
   if (!state.wledWs || state.wledWs.readyState !== WebSocket.OPEN) return;
-  const len = state.lastFrame.length;
-  if (_wledBuf.length !== len) _wledBuf = new Array(len);
-  for (let i = 0; i < len; i++) _wledBuf[i] = state.lastFrame[i];
+  const rgbLen = state.lastFrame.length;
+  // WLED native WS protocol: byte 0x02 then RGB triples for each pixel
+  const wsLen = rgbLen + 1;
+  if (_wledBuf.length !== wsLen) _wledBuf = new Uint8Array(wsLen);
+  _wledBuf[0] = 0x02;
+  _wledBuf.set(state.lastFrame, 1);
   try {
-    state.wledWs.send(JSON.stringify({ on: true, seg: [{ i: _wledBuf }] }));
+    state.wledWs.send(_wledBuf);
     state.wledPushCount++;
     const el = document.getElementById('wled-push-count');
     if (el) el.textContent = `${state.wledPushCount} sent`;
@@ -2328,13 +2391,20 @@ function _pushToWLED() {
 
 function _pushToWLEDHttp() {
   if (!state.wledConnected || !state.lastFrame.length) return;
-  const len = state.lastFrame.length;
-  if (_wledBuf.length !== len) _wledBuf = new Array(len);
-  for (let i = 0; i < len; i++) _wledBuf[i] = state.lastFrame[i];
+  const rgbLen = state.lastFrame.length;
+  // HTTP path uses JSON; build hex strings into seg.i — buffer holds RGB bytes (no opcode).
+  if (_wledBuf.length !== rgbLen) _wledBuf = new Uint8Array(rgbLen);
+  _wledBuf.set(state.lastFrame);
+  const pixelCount = (rgbLen / 3) | 0;
+  const colors = new Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    const o = i * 3;
+    colors[i] = ((_wledBuf[o] << 16) | (_wledBuf[o + 1] << 8) | _wledBuf[o + 2]).toString(16).padStart(6, '0');
+  }
   fetch(`http://${state.wledIp}/json`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ on: true, seg: [{ i: _wledBuf }] }),
+    body:    JSON.stringify({ on: true, seg: [{ i: colors }] }),
   })
   .then(() => {
     state.wledPushCount++;
@@ -2344,22 +2414,48 @@ function _pushToWLEDHttp() {
   .catch(() => {});
 }
 
+let _wledReconnectTimer = null;
+let _wledReconnectDelay = 1000;
+
 function _openWledWs(ip) {
   if (state.wledWs) { try { state.wledWs.close(); } catch {} state.wledWs = null; }
   const ws = new WebSocket(`ws://${ip}/ws`);
   ws.onopen = () => {
     state.wledWs = ws;
+    _wledReconnectDelay = 1000; // reset backoff on successful open
+    _setWledStatus('connected', 'WLED Connected');
     showToast('WLED WebSocket open', 'success');
   };
   ws.onerror = () => {
-    // Fall back gracefully — HTTP push still works but won't be used
     showToast('WLED WS unavailable — using HTTP fallback', '');
     state.wledWs = null;
     // Switch back to HTTP push mode
     clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLEDHttp, 40);
+    state.wledPushHandle = setInterval(_pushToWLEDHttp, 33); // ~30 fps
   };
-  ws.onclose = () => { state.wledWs = null; };
+  ws.onclose = () => {
+    state.wledWs = null;
+    if (!state.wledConnected) return; // user-initiated disconnect
+    _setWledStatus('reconnecting', 'WLED Reconnecting…');
+    clearTimeout(_wledReconnectTimer);
+    _wledReconnectTimer = setTimeout(() => {
+      if (state.wledConnected && state.wledIp) _openWledWs(state.wledIp);
+    }, _wledReconnectDelay);
+    _wledReconnectDelay = Math.min(_wledReconnectDelay * 2, 15000);
+  };
+}
+
+function _setWledStatus(cls, label) {
+  const status = document.getElementById('wled-status');
+  const btn    = document.getElementById('btn-wled-connect');
+  if (status) {
+    status.textContent = `● ${label}`;
+    status.className = 'wled-status' + (cls === 'connected' ? ' wled-connected' : cls === 'reconnecting' ? ' wled-reconnecting' : '');
+  }
+  if (btn) {
+    btn.classList.toggle('wled-btn-connected', cls === 'connected');
+    btn.classList.toggle('wled-btn-reconnecting', cls === 'reconnecting');
+  }
 }
 
 async function _wledConnect() {
@@ -2370,9 +2466,12 @@ async function _wledConnect() {
   if (state.wledConnected) {
     clearInterval(state.wledPushHandle);
     state.wledPushHandle = null;
+    clearTimeout(_wledReconnectTimer);
+    _wledReconnectTimer = null;
+    state.wledConnected  = false;             // set BEFORE close so onclose skips reconnect
     if (state.wledWs) { try { state.wledWs.close(); } catch {} state.wledWs = null; }
-    state.wledConnected  = false;
     btn.textContent      = 'Connect';
+    btn.classList.remove('wled-btn-connected', 'wled-btn-reconnecting');
     status.textContent   = '';
     status.className     = 'wled-status';
     return;
@@ -2411,7 +2510,7 @@ async function _wledConnect() {
 
   if (state.animating) {
     clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLED, 40);
+    state.wledPushHandle = setInterval(_pushToWLED, 33); // ~30 fps throttle
   }
 }
 

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 const STORAGE_KEY = 'lw_wled_ip';
 const MIN_PUSH_INTERVAL = 40; // 25fps max
 const RECONNECT_DELAY   = 3000;
+const HTTP_TIMEOUT_MS   = 3000;
 
 export function useWled() {
   const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
@@ -96,6 +97,66 @@ export function useWled() {
     } catch { /* socket may be closing */ }
   }, []);
 
+  // ── HTTP JSON API (visitor UI controls) ────────────────────────────────
+  // WLED docs: https://kno.wled.ge/interfaces/json-api/
+
+  /** Internal: fetch with AbortController-based timeout. */
+  const _fetchWithTimeout = useCallback((url, opts = {}) => {
+    const addr = (opts._ip ?? ip).trim();
+    if (!addr) return Promise.reject(new Error('No WLED IP configured'));
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+    const { _ip, ...fetchOpts } = opts;
+    return fetch(url, { ...fetchOpts, signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`WLED HTTP ${res.status}`);
+        return res.json();
+      })
+      .finally(() => clearTimeout(timer));
+  }, [ip]);
+
+  /** POST a partial state object to /json/state. */
+  const _postState = useCallback((body) => {
+    const addr = ip.trim();
+    if (!addr) return Promise.reject(new Error('No WLED IP configured'));
+    return _fetchWithTimeout(`http://${addr}/json/state`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+  }, [ip, _fetchWithTimeout]);
+
+  /** Apply a stored WLED preset by id. */
+  const setPreset = useCallback((presetId) => {
+    return _postState({ ps: Number(presetId) });
+  }, [_postState]);
+
+  /** Turn output on/off. */
+  const setPower = useCallback((on) => {
+    return _postState({ on: !!on });
+  }, [_postState]);
+
+  /** Set master brightness, clamped to 0..255. */
+  const setBrightness = useCallback((bri) => {
+    const v = Math.max(0, Math.min(255, Math.round(Number(bri) || 0)));
+    return _postState({ bri: v });
+  }, [_postState]);
+
+  /** GET parsed /json/state. */
+  const getState = useCallback(() => {
+    const addr = ip.trim();
+    if (!addr) return Promise.reject(new Error('No WLED IP configured'));
+    return _fetchWithTimeout(`http://${addr}/json/state`);
+  }, [ip, _fetchWithTimeout]);
+
+  /** GET parsed /json/info. */
+  const getInfo = useCallback(() => {
+    const addr = ip.trim();
+    if (!addr) return Promise.reject(new Error('No WLED IP configured'));
+    return _fetchWithTimeout(`http://${addr}/json/info`);
+  }, [ip, _fetchWithTimeout]);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -106,5 +167,8 @@ export function useWled() {
     };
   }, []);
 
-  return { ip, setIp, connected, connect, disconnect, push };
+  return {
+    ip, setIp, connected, connect, disconnect, push,
+    setPreset, setPower, setBrightness, getState, getInfo,
+  };
 }

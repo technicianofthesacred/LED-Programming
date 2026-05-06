@@ -1,0 +1,25 @@
+{
+  "name": "lightweaver-visitor-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lightweaver visitor-facing branded UI (Pi-hosted, talks to WLED)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

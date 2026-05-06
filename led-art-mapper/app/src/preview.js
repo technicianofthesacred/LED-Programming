@@ -45,6 +45,7 @@ export class PreviewRenderer {
     this._vbY     = 0;     // SVG viewBox origin y
     this._vbW     = 0;     // SVG viewBox width  (0 = match canvas CSS width)
     this._vbH     = 0;     // SVG viewBox height
+    this._normalsCache = {}; // { [stripId]: { hash, nx, ny, indices } }
 
     const ro = new ResizeObserver(() => this._resize());
     ro.observe(wrapperEl);
@@ -53,7 +54,11 @@ export class PreviewRenderer {
 
   // ── Internal ─────────────────────────────────────────────────────────────
 
-  /** Compute per-pixel normals (perpendicular to strip path tangent). */
+  /**
+   * Compute per-pixel normals (perpendicular to strip path tangent).
+   * Per-strip normals are cached and only recomputed when the strip's pixel
+   * coordinates change (detected via a cheap hash of length + first/last x,y).
+   */
   _computeNormals(pixels) {
     const N = pixels.length;
     const nx = new Float32Array(N);
@@ -64,18 +69,52 @@ export class PreviewRenderer {
       if (!byStrip.has(sid)) byStrip.set(sid, []);
       byStrip.get(sid).push(i);
     }
-    for (const indices of byStrip.values()) {
-      for (let j = 0; j < indices.length; j++) {
-        const i    = indices[j];
-        const prev = indices[Math.max(0, j - 1)];
-        const next = indices[Math.min(indices.length - 1, j + 1)];
-        const dx   = pixels[next].x - pixels[prev].x;
-        const dy   = pixels[next].y - pixels[prev].y;
-        const len  = Math.hypot(dx, dy) || 1;
-        nx[i] = -dy / len;
-        ny[i] =  dx / len;
+
+    const seenStrips = new Set();
+    for (const [sid, indices] of byStrip.entries()) {
+      seenStrips.add(sid);
+      const len = indices.length;
+      const first = pixels[indices[0]];
+      const last  = pixels[indices[len - 1]];
+      // Cheap geometry hash — invalidates if count or endpoints move.
+      const hash = `${len}|${first.x},${first.y}|${last.x},${last.y}`;
+
+      const cached = this._normalsCache[sid];
+      let stripNx, stripNy;
+      if (cached && cached.hash === hash) {
+        stripNx = cached.nx;
+        stripNy = cached.ny;
+      } else {
+        stripNx = new Float32Array(len);
+        stripNy = new Float32Array(len);
+        for (let j = 0; j < len; j++) {
+          const prev = indices[Math.max(0, j - 1)];
+          const next = indices[Math.min(len - 1, j + 1)];
+          const dx   = pixels[next].x - pixels[prev].x;
+          const dy   = pixels[next].y - pixels[prev].y;
+          const d    = Math.hypot(dx, dy) || 1;
+          stripNx[j] = -dy / d;
+          stripNy[j] =  dx / d;
+        }
+        this._normalsCache[sid] = { hash, nx: stripNx, ny: stripNy };
+      }
+
+      // Scatter cached per-strip normals back to the global pixel-indexed arrays.
+      for (let j = 0; j < len; j++) {
+        const i = indices[j];
+        nx[i] = stripNx[j];
+        ny[i] = stripNy[j];
       }
     }
+
+    // Evict cache entries for strips that no longer exist.
+    for (const sid of Object.keys(this._normalsCache)) {
+      // Object keys are strings; compare loosely to handle numeric stripIds.
+      if (!seenStrips.has(sid) && !seenStrips.has(Number(sid))) {
+        delete this._normalsCache[sid];
+      }
+    }
+
     return { nx, ny };
   }
 

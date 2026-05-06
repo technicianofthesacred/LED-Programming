@@ -214,6 +214,10 @@ export function compile(code) {
  * @param {number}    stripProgress 0–1 position along this strip only
  * @returns {{ r: number, g: number, b: number }}
  */
+// Last runtime error observed inside evalPixel — main.js polls this each frame to log.
+// Stored as a single object so we don't allocate per-pixel.
+export const _evalErrorState = { message: null, stack: null, count: 0 };
+
 export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress) {
   try {
     const result = fn(index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId || 0, stripProgress || 0);
@@ -223,7 +227,10 @@ export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, b
       g: _clamp255(Math.round(result.g ?? 0)),
       b: _clamp255(Math.round(result.b ?? 0)),
     };
-  } catch {
+  } catch (e) {
+    _evalErrorState.message = e?.message || String(e);
+    _evalErrorState.stack   = e?.stack || null;
+    _evalErrorState.count++;
     return { r: 35, g: 0, b: 0 }; // dim red = runtime error indicator
   }
 }
