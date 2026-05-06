@@ -44,6 +44,7 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 - [ ] Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
 ## Where to look for…
+- **Project roadmap (living source of truth)** → `docs/roadmap.md`
 - **Hardware research** → `research.md`
 - **Visitor UI design plan** → `branded-installation-ui.md`
 - **LED layout design tool** → `led-art-mapper/`

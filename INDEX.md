@@ -17,6 +17,7 @@
 - `docs/deployment-checklist.md` — bench-to-gallery checklist: WLED config, AP setup, Madrix, Pi, smoke test, recovery.
 - `docs/segments.md` — WLED segments template; fill in as artwork zones are finalised.
 - `docs/hardware-setup.md` — physical setup actions: flashing, WLED verification, LED config, Art-Net test.
+- `docs/roadmap.md` — living source of truth for project work (done / open / deferred). Update as items move.
 
 ## Apps and tools
 
