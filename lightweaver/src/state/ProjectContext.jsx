@@ -161,6 +161,9 @@ export function ProjectProvider({ children }) {
     ...DEFAULT_SYM_SETTINGS,
   });
 
+  // ── Device/project hardware config ───────────────────────────────────────
+  const [wledSegmentMap, setWledSegmentMap] = useState(defaults.devices.segmentMap || {});
+
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
 
@@ -192,7 +195,7 @@ export function ProjectProvider({ children }) {
   const applyProject = useCallback((rawProject) => {
     const data = migrateProject(rawProject);
     if (!data) return false;
-    const { layout, pattern, show, live } = data;
+    const { layout, pattern, show, live, devices } = data;
     setProjectName(data.name || defaults.name);
     setStrips(restoreStripPixels(layout.strips || []));
     setViewBox(layout.viewBox || defaults.layout.viewBox);
@@ -222,10 +225,12 @@ export function ProjectProvider({ children }) {
     setLiveRecording(!!live.recording);
     setLiveQuantize(live.quantize || defaults.live.quantize);
     setSymSettings({ ...DEFAULT_SYM_SETTINGS, ...(pattern.symSettings || {}) });
+    setWledSegmentMap(devices.segmentMap || {});
+    setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);
     return true;
-  }, []);
+  }, [setWledIp]);
 
   // ── Auto-load from localStorage on mount ─────────────────────────────────
   const didLoadRef = useRef(false);
@@ -273,6 +278,7 @@ export function ProjectProvider({ children }) {
     },
     devices: {
       wledIp,
+      segmentMap: wledSegmentMap,
     },
   }), [
     projectName, strips, viewBox, svgText, hidden,
@@ -280,7 +286,7 @@ export function ProjectProvider({ children }) {
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     showClips, showTransitions, showCues, autoLanes, showDuration,
-    liveRecording, liveQuantize, wledIp,
+    liveRecording, liveQuantize, wledIp, wledSegmentMap,
   ]);
 
   useEffect(() => {
@@ -350,6 +356,7 @@ export function ProjectProvider({ children }) {
       wledIp,          setWledIp,
       wledConnected,   wledConnect,
       wledDisconnect,  wledPush,
+      wledSegmentMap,  setWledSegmentMap,
       // Project persistence
       serializeProject,
       loadProject,

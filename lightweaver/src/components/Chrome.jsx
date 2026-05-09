@@ -174,26 +174,9 @@ export function LeftRail({ screen, onScreen }) {
   );
 }
 
-export function CanvasToolbar({ glow, setGlow, dot, setDot, heat, setHeat, children }) {
+export function CanvasToolbar({ glow, setGlow, dot, setDot, heat, setHeat, onResetPreview, children }) {
   return (
     <div className="lw-canvas-toolbar">
-      <div className="tbar-group">
-        <button className="btn btn-ghost" title="Select (S)">
-          <svg viewBox="0 0 12 12" fill="currentColor"><path d="M2 1l8 4-3.5 1-1 3.5z"/></svg>
-        </button>
-        <button className="btn btn-ghost" title="Pan (space)">
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M6 1v6M3 4l3-3 3 3M1 6h6M4 9l-3-3 3-3M6 11V5M3 8l3 3 3-3M11 6H5M8 3l3 3-3 3"/></svg>
-        </button>
-        <button className="btn btn-ghost" title="Delete (X)">
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M3 3l6 6M9 3l-6 6"/></svg>
-        </button>
-      </div>
-      <span className="tbar-divider"/>
-      <div className="tbar-group">
-        <button className="btn btn-ghost">Undo</button>
-        <button className="btn btn-ghost">Redo</button>
-      </div>
-      <span className="tbar-divider"/>
       <span className="tbar-label">LEDs</span>
       <div className="tbar-slider">
         <span>Glow</span>
@@ -208,6 +191,9 @@ export function CanvasToolbar({ glow, setGlow, dot, setDot, heat, setHeat, child
       <button className={`btn ${heat ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setHeat(!heat)}>
         <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M6 1c-2 2-3 3-3 5a3 3 0 006 0c0-2-1-3-3-5z"/></svg>
         Coverage
+      </button>
+      <button className="btn btn-ghost" onClick={onResetPreview} title="Reset preview zoom and time">
+        Reset
       </button>
       {children}
       <div style={{ flex: 1 }}/>

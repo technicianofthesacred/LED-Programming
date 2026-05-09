@@ -163,22 +163,15 @@ export function SettingsScreen() {
         <Section title="Appearance">
           <Row label="Theme">
             <div className="lw-tweaks-seg">
-              {['dark', 'darker', 'light'].map(t => (
-                <button key={t}
-                        className={tweaks.theme === t ? 'active' : ''}
-                        onClick={() => set('theme', t)}>
-                  {t}
-                </button>
-              ))}
-            </div>
-          </Row>
-          <Row label="Accent color">
-            <div className="lw-tweaks-seg">
-              {['blue', 'violet', 'mint', 'orange'].map(c => (
-                <button key={c}
-                        className={tweaks.accent === c ? 'active' : ''}
-                        onClick={() => set('accent', c)}>
-                  {c}
+              {[
+                ['studio', 'Studio'],
+                ['lab', 'Lab'],
+                ['neon', 'Neon'],
+              ].map(([value, label]) => (
+                <button key={value}
+                        className={tweaks.theme === value ? 'active' : ''}
+                        onClick={() => set('theme', value)}>
+                  {label}
                 </button>
               ))}
             </div>

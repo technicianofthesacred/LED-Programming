@@ -25,6 +25,7 @@ for (const pattern of PATTERNS) {
 
 const defaultProject = createDefaultProject();
 assert.equal(defaultProject.version, PROJECT_VERSION);
+assert.deepEqual(defaultProject.devices, { wledIp: '', segmentMap: {} });
 const migratedV1 = migrateProject({
   version: 1,
   name: 'Legacy',
@@ -34,6 +35,13 @@ const migratedV1 = migrateProject({
 assert.equal(migratedV1.version, PROJECT_VERSION);
 assert.equal(migratedV1.layout.strips.length, 1);
 assert.equal(migratedV1.show.clips.length, 1);
+const migratedV3 = migrateProject({
+  version: PROJECT_VERSION,
+  name: 'Hardware',
+  devices: { wledIp: '192.168.4.22', segmentMap: { s1: 2 } },
+});
+assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
+assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
 
 const frame = renderPixelFrame({
   t: 0.2,

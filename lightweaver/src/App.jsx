@@ -1,15 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
 import { ProjectProvider, useProject } from './state/ProjectContext.jsx';
 import { TopBar, LeftRail, CanvasToolbar, Transport, StatusBar } from './components/Chrome.jsx';
 import { LEDPreview } from './components/Preview.jsx';
-import { CardsMode, CodeMode, GraphMode } from './components/PatternModes.jsx';
-import { SymmetryMode } from './components/SymmetryMode.jsx';
-import { ExportScreen, FlashScreen } from './components/OtherScreens.jsx';
-import { LayoutScreen } from './components/LayoutScreen.jsx';
-import { TimelineScreen } from './components/TimelineScreen.jsx';
-import { LiveScreen } from './components/LiveScreen.jsx';
-import { DevicesPanel } from './components/DevicesPanel.jsx';
-import { SettingsScreen } from './components/SettingsScreen.jsx';
 import { ExportDialog } from './components/ExportDialog.jsx';
 import { KeyboardHelp } from './components/KeyboardHelp.jsx';
 import { CommandPalette } from './components/CommandPalette.jsx';
@@ -18,6 +10,20 @@ import { WledBar } from './components/WledBar.jsx';
 import { useAudio } from './hooks/useAudio.js';
 import { useMidi } from './hooks/useMidi.js';
 import { PATTERNS } from './data.js';
+
+const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
+
+const CardsMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CardsMode })));
+const CodeMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CodeMode })));
+const GraphMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.GraphMode })));
+const SymmetryMode = lazy(() => import('./components/SymmetryMode.jsx').then(m => ({ default: m.SymmetryMode })));
+const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
+const TimelineScreen = lazy(() => import('./components/TimelineScreen.jsx').then(m => ({ default: m.TimelineScreen })));
+const LiveScreen = lazy(() => import('./components/LiveScreen.jsx').then(m => ({ default: m.LiveScreen })));
+const ExportScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.ExportScreen })));
+const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.FlashScreen })));
+const DevicesPanel = lazy(() => import('./components/DevicesPanel.jsx').then(m => ({ default: m.DevicesPanel })));
+const SettingsScreen = lazy(() => import('./components/SettingsScreen.jsx').then(m => ({ default: m.SettingsScreen })));
 
 const ModeIcon = {
   cards: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><rect x="2" y="2" width="5" height="5" rx="0.5"/><rect x="9" y="2" width="5" height="5" rx="0.5"/><rect x="2" y="9" width="5" height="5" rx="0.5"/><rect x="9" y="9" width="5" height="5" rx="0.5"/></svg>,
@@ -156,6 +162,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
   const [zoom, setZoom]                   = useState(1.0);
   const [liveT, setLiveT]                 = useState(0);
   const [liveFps, setLiveFps]             = useState(0);
+  const [previewResetKey, setPreviewResetKey] = useState(0);
 
   const params    = patternParams[patternId] || {};
   const setParams = useCallback((newParams) => {
@@ -187,7 +194,15 @@ function PatternScreen({ panelMode, setPanelMode }) {
   return (
     <div className="lw-pattern-screen" style={{ gridTemplateColumns: gridCols }}>
       <div className="lw-canvas-col">
-        <CanvasToolbar glow={glow} setGlow={setGlow} dot={dot} setDot={setDot} heat={heat} setHeat={setHeat}>
+        <CanvasToolbar
+          glow={glow}
+          setGlow={setGlow}
+          dot={dot}
+          setDot={setDot}
+          heat={heat}
+          setHeat={setHeat}
+          onResetPreview={() => { setZoom(1); setPreviewResetKey(k => k + 1); }}
+        >
           <button
             className={`btn btn-ghost ${compareMode ? 'active' : ''}`}
             style={{ fontSize: 'var(--fs-xs)' }}
@@ -201,6 +216,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', width: '100%', height: '100%' }}>
               <div style={{ position: 'relative', overflow: 'hidden', borderRight: '1px solid var(--border)' }}>
                 <LEDPreview
+                  key={`a-${previewResetKey}`}
                   patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
                   strips={projectStrips.length > 0 ? projectStrips : undefined}
                   viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
@@ -209,6 +225,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden} compiledFn={compiledFn}
                   bpm={bpm} params={params} symSettings={symSettings} audioBands={audioBands}
+                  heat={heat}
                   onTick={setLiveT} onFrame={handleFrame}
                 />
                 <div className="lw-viewport-overlay tl" style={{ fontSize: 'var(--fs-2xs)' }}>
@@ -218,6 +235,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
               </div>
               <div style={{ position: 'relative', overflow: 'hidden' }}>
                 <LEDPreview
+                  key={`b-${previewResetKey}`}
                   patternId={compareId} playing={playing} glow={glow} dotSize={dot} speed={1}
                   strips={projectStrips.length > 0 ? projectStrips : undefined}
                   viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
@@ -226,6 +244,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden}
                   bpm={bpm} params={{}} symSettings={symSettings} audioBands={audioBands}
+                  heat={heat}
                 />
                 <div className="lw-viewport-overlay tl" style={{ fontSize: 'var(--fs-2xs)' }}>
                   <span style={{ background: 'var(--danger)', color: 'var(--on-accent)', padding: '1px 5px', borderRadius: 2 }}>B</span>
@@ -240,6 +259,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
           ) : (
             <div style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
               <LEDPreview
+                key={previewResetKey}
                 patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
                 strips={projectStrips.length > 0 ? projectStrips : undefined}
                 viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
@@ -257,6 +277,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 symSettings={symSettings}
                 audioBands={audioBands}
                 palette={palette}
+                heat={heat}
                 onTick={setLiveT}
                 onFrame={handleFrame}
                 onFps={setLiveFps}
@@ -396,20 +417,24 @@ export default function App() {
                 audio={audio} midi={midi}/>
         <div className="lw-main">
           <LeftRail screen={screen} onScreen={setScreen}/>
-          {screen === 'pattern'  && <PatternScreen panelMode={panelMode} setPanelMode={handleSetPanelMode}/>}
-          {screen === 'layout'   && <LayoutScreen/>}
-          {screen === 'timeline' && <TimelineScreen onExport={() => setExportOpen(true)}/>}
-          {screen === 'live'     && <LiveScreen/>}
-          {screen === 'export'   && <ExportScreen/>}
-          {screen === 'flash'    && <FlashScreen/>}
-          {screen === 'settings' && <SettingsScreen/>}
+          <Suspense fallback={<LoadingPane/>}>
+            {screen === 'pattern'  && <PatternScreen panelMode={panelMode} setPanelMode={handleSetPanelMode}/>}
+            {screen === 'layout'   && <LayoutScreen/>}
+            {screen === 'timeline' && <TimelineScreen onExport={() => setExportOpen(true)}/>}
+            {screen === 'live'     && <LiveScreen/>}
+            {screen === 'export'   && <ExportScreen/>}
+            {screen === 'flash'    && <FlashScreen/>}
+            {screen === 'settings' && <SettingsScreen/>}
+          </Suspense>
         </div>
         <StatusBar/>
         <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
         <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}/>
         <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>
         <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={setScreen}/>
-        {screen === 'devices' && <DevicesPanel onClose={() => setScreen('layout')}/>}
+        <Suspense fallback={null}>
+          {screen === 'devices' && <DevicesPanel onClose={() => setScreen('layout')}/>}
+        </Suspense>
       </div>
     </ProjectProvider>
   );

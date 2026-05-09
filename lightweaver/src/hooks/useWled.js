@@ -3,6 +3,7 @@ import { DEFAULT_WLED_PUSH_FPS, makeWledFrameMessage } from '../lib/deviceContro
 
 const STORAGE_KEY = 'lw_wled_ip';
 const MIN_PUSH_INTERVAL = 1000 / DEFAULT_WLED_PUSH_FPS;
+const PUSH_FPS_KEY = 'lw_wled_push_fps';
 const RECONNECT_DELAY   = 3000;
 const HTTP_TIMEOUT_MS   = 3000;
 
@@ -82,7 +83,9 @@ export function useWled() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
     const now = performance.now();
-    if (now - lastPushRef.current < MIN_PUSH_INTERVAL) return;
+    const configuredFps = Number(localStorage.getItem(PUSH_FPS_KEY)) || DEFAULT_WLED_PUSH_FPS;
+    const minInterval = 1000 / Math.max(1, Math.min(60, configuredFps));
+    if (now - lastPushRef.current < minInterval) return;
     lastPushRef.current = now;
 
     try {

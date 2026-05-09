@@ -1,9 +1,25 @@
 import { useState, useEffect } from 'react';
 
-const DEFAULTS = { theme: 'studio', density: 'comfy', font: 'sans', panelWidth: 'normal' };
+const STORAGE_KEY = 'lw_tweaks_v2';
+const DEFAULTS = {
+  theme: 'studio',
+  density: 'comfy',
+  font: 'sans',
+  panelWidth: 'normal',
+  dpr: 1,
+  wledFps: 25,
+};
+
+function loadTweaks() {
+  try {
+    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') };
+  } catch {
+    return DEFAULTS;
+  }
+}
 
 export function useTweaks() {
-  const [tweaks, setTweaks] = useState(DEFAULTS);
+  const [tweaks, setTweaks] = useState(loadTweaks);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -24,6 +40,12 @@ export function useTweaks() {
     document.documentElement.style.setProperty('--density',
       tweaks.density === 'compact' ? '0.82' :
       tweaks.density === 'cozy'    ? '1' : '1.15');
+    document.documentElement.style.setProperty('--preview-dpr', String(tweaks.dpr || 1));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tweaks));
+      localStorage.setItem('lw_wled_push_fps', String(tweaks.wledFps || 25));
+    } catch {}
+    window.dispatchEvent(new Event('lw-preview-settings'));
   }, [tweaks]);
 
   const set = (k, v) => {

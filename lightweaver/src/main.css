@@ -153,6 +153,15 @@ input, select, textarea { font: inherit; color: inherit; }
 
 /* ── Left rail (mode nav) ───────────────────────────────────────── */
 .lw-main { display: grid; grid-template-columns: 52px 1fr; min-height: 0; }
+.lw-loading-pane {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
 
 .lw-rail {
   background: var(--surface);
@@ -767,6 +776,12 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 }
 .lw-graph-toolbar button:hover { background: var(--surface-2); color: var(--text); }
 .lw-graph-toolbar button svg { width: 11px; height: 11px; }
+.lw-graph-toolbar span {
+  padding: 5px 8px;
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
 .lw-graph-legend {
   position: absolute; bottom: 8px; left: 8px;
   display: flex; gap: var(--s-4);
@@ -1577,6 +1592,95 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 .lw-search-input:focus { border-color: var(--accent); }
 .lw-search-input::placeholder { color: var(--text-4); }
+
+@media (max-width: 720px) {
+  .lw-app {
+    grid-template-rows: 40px 1fr 36px;
+    width: 100vw;
+    overflow: hidden;
+  }
+
+  .lw-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s-3);
+    padding: 0 var(--s-3);
+  }
+
+  .lw-brand {
+    font-size: var(--fs-lg);
+  }
+
+  .lw-projbreadcrumbs,
+  .lw-version-link,
+  .lw-topbar-actions .btn:not(:first-child):not(:last-child) {
+    display: none;
+  }
+
+  .lw-main {
+    grid-template-columns: 52px minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .lw-layout-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(220px, 40vh);
+  }
+
+  .lw-pattern-screen {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) minmax(260px, 42vh);
+  }
+
+  .lw-pattern-screen .lw-resize-handle,
+  .lw-pattern-screen .lw-panel-collapsed-strip {
+    display: none;
+  }
+
+  .lw-pattern-screen .lw-panel {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    min-width: 0;
+  }
+
+  .lw-canvas-toolbar {
+    gap: var(--s-2);
+    padding: var(--s-3);
+    max-height: 124px;
+    overflow-y: auto;
+  }
+
+  .tbar-divider {
+    margin: 0 var(--s-1);
+  }
+
+  .tbar-slider input[type=range] {
+    width: 58px;
+  }
+
+  .lw-transport {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .lw-transport .lw-timeline,
+  .lw-transport-meta:last-child {
+    display: none;
+  }
+
+  .lw-transport-meta span:last-child {
+    display: none;
+  }
+
+  .lw-statusbar {
+    gap: var(--s-3);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .lw-settings-screen {
+    padding: 18px 14px;
+  }
+}
 
 /* ── Rec armed state ──────────────────────────────────────────────────── */
 .lw-tl-tbtn.armed { color: var(--danger); }

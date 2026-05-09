@@ -664,13 +664,11 @@ export function GraphMode() {
     <div>
       <div className="lw-sec-header">
         <span>Node graph</span>
-        <span className="meta">experimental · patch editor</span>
+        <span className="meta">read-only signal map</span>
       </div>
       <div className="lw-graph-wrap">
-        <div className="lw-graph-toolbar">
-          <button><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M6 2v8M2 6h8" strokeWidth="1.5"/></svg>Add</button>
-          <button><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M3 3l6 6M9 3l-6 6" strokeWidth="1.5"/></svg>Unlink</button>
-          <button>Fit</button>
+        <div className="lw-graph-toolbar" aria-label="Graph mode status">
+          <span>Compiled from current pattern chain</span>
         </div>
         <svg className="lw-graph-svg">
           {GRAPH_EDGES.map(([a, b], i) => {
@@ -721,9 +719,8 @@ export function GraphMode() {
       </div>
       <div className="lw-knobs">
         {(nodeById[sel]?.rows || []).map((r, i) => (
-          <div className="lw-knob" key={i}>
+          <div className="lw-knob lw-knob-readonly" key={i}>
             <div className="lw-knob-name">{r[0]}</div>
-            <input type="range" min="0" max="1" step="0.01" defaultValue={0.5}/>
             <div className="lw-knob-val">{r[1]}</div>
           </div>
         ))}

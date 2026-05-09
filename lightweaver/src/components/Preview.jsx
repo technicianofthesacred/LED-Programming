@@ -60,6 +60,10 @@ function calcSpacing(pts) {
   return total / n;
 }
 
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
 // Pure canvas draw — no React, no DOM elements per LED, GPU shadowBlur for glow
 function renderFrame(canvas, t, p) {
   const ctx = canvas.getContext('2d');
@@ -74,7 +78,7 @@ function renderFrame(canvas, t, p) {
     activeFn, blendFn, glow, dotSize, bpm, resolvedParams, paletteNorm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, blendAmount, blendType,
-    perStripFns, vb,
+    perStripFns, vb, heat,
   } = p;
 
   // ViewBox → canvas pixel mapping (letterbox, maintain aspect ratio)
@@ -98,12 +102,11 @@ function renderFrame(canvas, t, p) {
   // with blur. Gaussian blur of a solid dot ≈ radial gradient, at a fraction
   // of the cost. Two passes: wide halo + tight corona.
   if (glow > 0) {
-    const sp    = medianSpacing * scale;
+    const sp    = clamp(medianSpacing * scale, 2, 18);
     const TAU   = Math.PI * 2;
-    // Dot radius grows with glow so blur has real energy to spread
-    const dotPx = Math.max(2, sp * dotSize * glow * 0.7);
-    const wBlur = (sp * dotSize * glow * 1.6).toFixed(1);
-    const tBlur = (sp * dotSize * glow * 0.28).toFixed(1);
+    const dotPx = clamp(sp * dotSize * 0.36, 1.5, 5.5);
+    const wBlur = clamp(sp * glow * 0.95, 2, 16).toFixed(1);
+    const tBlur = clamp(sp * glow * 0.24, 1, 5).toFixed(1);
 
     // Reuse offscreen canvas across frames
     if (!canvas._glow || canvas._glow.width !== W || canvas._glow.height !== H) {
@@ -129,7 +132,7 @@ function renderFrame(canvas, t, p) {
     ctx.globalCompositeOperation = 'lighter';
 
     // Wide ambient halo
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = clamp(glow * 0.30, 0.10, 0.42);
     ctx.filter = `blur(${wBlur}px)`;
     ctx.drawImage(off, 0, 0);
 
@@ -143,7 +146,22 @@ function renderFrame(canvas, t, p) {
   }
 
   // ── Core dots — individual LED colors ────────────────────────────────────
-  const coreR = Math.max(1, medianSpacing * scale * dotSize * 0.3);
+  if (heat) {
+    const heatR = clamp(medianSpacing * scale * Math.max(0.5, dotSize) * 0.95, 3, 18);
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    for (const sd of stripData) {
+      for (const l of sd.leds) {
+        ctx.fillStyle = 'rgba(255, 180, 70, 0.10)';
+        ctx.beginPath();
+        ctx.arc(toX(l.x), toY(l.y), heatR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  const coreR = clamp(medianSpacing * scale * dotSize * 0.28, 1, 5);
   ctx.save();
   for (const sd of stripData) {
     for (const l of sd.leds) {
@@ -172,11 +190,13 @@ export function LEDPreview({
   blendPatternId = null, blendAmount = 0, blendCompiledFn = null, blendType = 'crossfade',
   symSettings = null, audioBands = null, onFps = null,
   palette: paletteProp = null,
+  heat = false,
 }) {
   const canvasRef = useRef(null);
   const rafRef    = useRef(0);
   const tRef      = useRef(0);
   const fpsRef    = useRef({ count: 0, last: 0 });
+  const staticRenderRef = useRef(0);
   const propsRef  = useRef({});
 
   const paletteNorm = useMemo(
@@ -290,7 +310,7 @@ export function LEDPreview({
     activeFn, blendFn, blendAmount, blendType,
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    gammaLUT, symSettings, audioBands, vb,
+    gammaLUT, symSettings, audioBands, vb, heat,
     onFrame, onFps, onTick,
   };
 
@@ -299,7 +319,8 @@ export function LEDPreview({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const setSize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      const dprCap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--preview-dpr')) || 1;
+      const dpr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, dprCap));
       const w = canvas.clientWidth  || canvas.offsetWidth  || 800;
       const h = canvas.clientHeight || canvas.offsetHeight || 600;
       canvas.width  = w * dpr;
@@ -308,7 +329,11 @@ export function LEDPreview({
     setSize();
     const ro = new ResizeObserver(setSize);
     ro.observe(canvas);
-    return () => ro.disconnect();
+    window.addEventListener('lw-preview-settings', setSize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('lw-preview-settings', setSize);
+    };
   }, []);
 
   // Single persistent RAF loop — never restarts, reads fresh propsRef each tick
@@ -332,8 +357,10 @@ export function LEDPreview({
       }
 
       const canvas = canvasRef.current;
-      if (canvas?.width && canvas?.height) {
+      const shouldRender = p.playing || now - staticRenderRef.current > 250;
+      if (canvas?.width && canvas?.height && shouldRender) {
         const pixels = renderFrame(canvas, tRef.current, p);
+        staticRenderRef.current = now;
         if (p.playing) p.onFrame?.(pixels);
       }
 

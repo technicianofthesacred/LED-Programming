@@ -26,15 +26,14 @@ function Dot({ color }) {
   return <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }}/>;
 }
 
-const LS_SEGS_KEY = 'lw_wled_segments';
-function loadSegments() { try { return JSON.parse(localStorage.getItem(LS_SEGS_KEY) || '{}'); } catch { return {}; } }
-
 export function DevicesPanel({ onClose }) {
-  const { wledIp, setWledIp, wledConnected, wledConnect, wledDisconnect, strips } = useProject();
+  const {
+    wledIp, setWledIp, wledConnected, wledConnect, wledDisconnect, strips,
+    wledSegmentMap, setWledSegmentMap,
+  } = useProject();
   const [scanResults, setScanResults] = useState([]);
   const [scanning,    setScanning]    = useState(false);
   const [pingMs,      setPingMs]      = useState(null);
-  const [segMap, setSegMap] = useState(loadSegments); // { stripId: segIndex }
   const [pushStatus, setPushStatus] = useState('');
 
   const [wledInfo, setWledInfo] = useState(null);
@@ -66,13 +65,7 @@ export function DevicesPanel({ onClose }) {
   const sendTestPattern = async () => {
     if (!wledIp) return;
     try {
-      // Chase pattern: send rainbow preset
-      await fetch(`http://${wledIp}/json/state`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ on: true, bri: 200, seg: [{ id: 0, fx: 9, col: [[255,0,0]] }] }),
-        signal: AbortSignal.timeout(3000),
-      });
+      await postWledState(wledIp, { on: true, bri: 200, seg: [{ id: 0, fx: 9, col: [[255, 0, 0]] }] });
     } catch (e) { console.warn('Test pattern failed:', e); }
   };
 
@@ -177,7 +170,7 @@ export function DevicesPanel({ onClose }) {
                   <div key={d.ip}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0',
                              fontSize: 'var(--fs-md)', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                    onClick={() => { setWledIp(d.ip); wledConnect(); }}
+                    onClick={() => { setWledIp(d.ip); wledConnect(d.ip); }}
                   >
                     <Dot color="oklch(74% 0.13 210)"/>
                     <span style={{ flex: 1 }}>{d.name}</span>
@@ -258,13 +251,11 @@ export function DevicesPanel({ onClose }) {
                 <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>→ seg</span>
                 <input
                   type="number" min="0" max="31" step="1"
-                  value={segMap[strip.id] ?? i}
+                  value={wledSegmentMap[strip.id] ?? i}
                   className="lw-search-input"
                   style={{ width: 48, textAlign: 'center' }}
                   onChange={e => {
-                    const next = { ...segMap, [strip.id]: +e.target.value };
-                    setSegMap(next);
-                    try { localStorage.setItem(LS_SEGS_KEY, JSON.stringify(next)); } catch {}
+                    setWledSegmentMap({ ...wledSegmentMap, [strip.id]: +e.target.value });
                   }}
                 />
               </Row>
@@ -278,7 +269,7 @@ export function DevicesPanel({ onClose }) {
                   onClick={async () => {
                     setPushStatus('Pushing…');
                     try {
-                      await postWledState(wledIp, { seg: makeWledSegments(strips, segMap) });
+                      await postWledState(wledIp, { seg: makeWledSegments(strips, wledSegmentMap) });
                       setPushStatus('✓ Pushed');
                     } catch (err) {
                       setPushStatus(`Error: ${err.message}`);
