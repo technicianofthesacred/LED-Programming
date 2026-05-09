@@ -2,14 +2,15 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { LEDPreview } from './Preview.jsx';
+import { makeBlackoutFrame } from '../lib/deviceController.js';
 
 const LIVE_CATS = ['all', 'audio', 'fire', 'water', 'space', 'chill', 'geo', 'glitch', 'bpm'];
 const LIVE_CATEGORY_RULES = {
   audio: ['bass-pulse','spectrum','vortex','comet','color-organ','lissajous','galaxy','volt','waterfall','mandala','snowfield','bass-bloom','spectrum-waterfall'],
-  fire:  ['fire','ember','lava','candle','nova','solar','sunrise','thermal','lava-flow','particle-burst'],
-  water: ['ocean','ripple','wave','fluid','tide','bubble','smoke','oil-slick'],
+  fire:  ['fire','ember','lava','candle','nova','solar','sunrise','sunrise-v2','thermal','lava-flow','particle-burst'],
+  water: ['ocean','ripple','wave','fluid','tide','bubble','smoke','smoke-haze','oil-slick'],
   space: ['aurora','galaxy','hyperspace','nebula','plasma','warp','meteor','nova','northern','fractal','jellyfish','starfield','aurora-curtain','plasma-ball'],
-  chill: ['calm','breathe','drift','zen','aurora','tide','watercolor','northern','smoke','breathing-grid','aurora-curtain'],
+  chill: ['calm','breathe','drift','zen','aurora','tide','watercolor','northern','smoke','smoke-haze','breathing-grid','aurora-curtain'],
   geo:   ['circuit','blocks','binary-pulse','pulse-ring','stained','mandala','dna','kaleido','pixelate','breathing-grid','kaleidoscope-v2','tie-dye'],
   glitch:['glitch','matrix','neon','strobe','lightning','morse','digitrain','thermal','digital-rain-v2','strobe-color','neon-sign'],
   bpm:   ['strobe-bpm','kick-flash','beat-grid','pulse-expand','confetti-bpm','heartbeat','strobe-color'],
@@ -44,7 +45,7 @@ const CARD_COLORS = {
   // more
   northern: '#00eeaa', kaleido: '#ff44aa', watercolor: '#ff9988', digitrain: '#00ff41',
   sunrise: '#ff8800', fractal: '#8844ff', thermal: '#ff4400', jellyfish: '#8800ff',
-  pixelate: '#ffcc00', smoke: '#888899',
+    pixelate: '#ffcc00', smoke: '#888899', 'smoke-haze': '#888899',
   // extra
   ribbons: '#ff88cc', tesseract: '#0088ff', zodiac: '#8800cc', constellation: '#aaccff',
   pendulum: '#ffaa00', iceberg: '#44aaff', soundwave: '#4488ff', mandelbrot: '#ff6600',
@@ -71,7 +72,7 @@ const CARD_COLORS = {
   'watercolor-wash': '#ffaacc', 'pixel-sort': '#ff0088', 'prism-split': '#ffffff',
   'fiber-optic': '#aaaaff', 'mirror-tunnel': '#8844ff', 'bubble-wrap': '#88ccff',
   'lightning-storm': '#ffffff', 'neon-grid': '#00ffff', 'oil-painting': '#cc6622',
-  'sunrise-horizon': '#ff8800',
+    'sunrise-horizon': '#ff8800', 'sunrise-v2': '#ff8800',
 };
 
 function PatternCard({ pattern, isActive, isNextUp, onFire, recording }) {
@@ -179,25 +180,6 @@ export function LiveScreen() {
     }
   }, [setBpm]);
 
-  // Keyboard shortcuts for live performance
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      if (e.key === 'r' || e.key === 'R') { setLiveRecording(r => !r); return; }
-      if (e.key === 't' || e.key === 'T') { handleTap(); return; }
-      if (e.key === 'b' || e.key === 'B') { setActivePatternId(null); return; }
-      if (e.key === 'f' || e.key === 'F') { setFrozen(fr => !fr); return; }
-      // 1–9 keys fire the first 9 visible pattern cards
-      const n = parseInt(e.key);
-      if (!isNaN(n) && n >= 1 && n <= 9 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-        const p = filtered[n - 1];
-        if (p) firePattern(p.id);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [setLiveRecording, handleTap, filtered, firePattern]);
-
   const startCrossfade = useCallback((fromId, toId) => {
     setBlendFrom(fromId);
     setBlendAmt(1);
@@ -228,6 +210,25 @@ export function LiveScreen() {
       stampClip(patternId, clipDur);
     }
   }, [liveQuantize, activePatternId, startCrossfade, liveRecording, stampClip, clipDur]);
+
+  // Keyboard shortcuts for live performance
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === 'r' || e.key === 'R') { setLiveRecording(r => !r); return; }
+      if (e.key === 't' || e.key === 'T') { handleTap(); return; }
+      if (e.key === 'b' || e.key === 'B') { setActivePatternId(null); return; }
+      if (e.key === 'f' || e.key === 'F') { setFrozen(fr => !fr); return; }
+      // 1-9 keys fire the first 9 visible pattern cards.
+      const n = parseInt(e.key);
+      if (!isNaN(n) && n >= 1 && n <= 9 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        const p = filtered[n - 1];
+        if (p) firePattern(p.id);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [setLiveRecording, handleTap, filtered, firePattern, setActivePatternId]);
 
   // Fire queued pattern on beat/bar boundary
   useEffect(() => {
@@ -390,10 +391,7 @@ export function LiveScreen() {
                        letterSpacing: '0.06em' }}
               title="Blackout — send all-black frame (B)"
               onClick={() => {
-                if (wledPush) {
-                  const black = new Array(1000).fill(0);
-                  wledPush(black.map(() => ({ r: 0, g: 0, b: 0 })));
-                }
+                if (wledPush) wledPush(makeBlackoutFrame(strips.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0)));
                 setActivePatternId(null);
               }}>
               BLACKOUT

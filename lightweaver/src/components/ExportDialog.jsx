@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useProject } from '../state/ProjectContext.jsx';
+import { resolveTimelinePlayback, sampleLane, useProject } from '../state/ProjectContext.jsx';
+import { download, makeManifest, pixelsFromStrips, toCSV, toDmxCsv, toFastLED, toRawFrameDump, toWLEDLedmap } from '../lib/export.js';
+import { buildGammaLut, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
 
 const TARGETS = [
   { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'S-Play / S-Play Mini · 32 universes',    format: '.ssp',    hw: 'S-Play Mini' },
@@ -18,7 +20,13 @@ const FORMATS = [
 ];
 
 export function ExportDialog({ open, onClose }) {
-  const { projectName, showDuration, showClips, showTransitions, autoLanes, strips } = useProject();
+  const project = useProject();
+  const {
+    projectName, showDuration, showClips, showTransitions, autoLanes, strips,
+    activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
+    masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+    serializeProject,
+  } = project;
   const [target, setTarget] = useState('splay');
   const [format, setFormat] = useState('native');
   const [fps, setFps] = useState(44);
@@ -27,6 +35,7 @@ export function ExportDialog({ open, onClose }) {
   const [universes, setUniverses] = useState(4);
   const [stage, setStage] = useState('config');
   const [progress, setProgress] = useState(0);
+  const [artifact, setArtifact] = useState(null);
 
   useEffect(() => {
     if (stage === 'config' || stage === 'done') return;
@@ -62,6 +71,94 @@ export function ExportDialog({ open, onClose }) {
 
   const reset = () => { setStage('config'); setProgress(0); };
   const close = () => { reset(); onClose(); };
+  const buildFrames = () => {
+    const renderStrips = strips.map(strip => ({
+      id: strip.id,
+      speed: strip.speed,
+      brightness: strip.brightness,
+      hueShift: strip.hueShift,
+      patternId: strip.patternId,
+      pts: (strip.pixels || []).map((px, i, arr) => ({
+        x: px.x,
+        y: px.y,
+        p: arr.length > 1 ? i / (arr.length - 1) : 0.5,
+      })),
+    }));
+    const gammaLUT = buildGammaLut(gammaEnabled, gammaValue);
+    const paletteNorm = normalizePalette(palette);
+    const frameCount = Math.max(1, Math.round(showDuration * fps));
+    const frames = [];
+    for (let f = 0; f < frameCount; f++) {
+      const t = f / fps;
+      const playback = resolveTimelinePlayback(t, showClips, showTransitions);
+      const laneValues = Object.fromEntries(autoLanes.map(lane => [lane.param, sampleLane(lane, t)]));
+      const frame = renderPixelFrame({
+        t,
+        strips: renderStrips,
+        patternId: playback.patternId || activePatternId,
+        blendPatternId: playback.blendPatternId,
+        blendAmount: playback.blendAmount,
+        blendType: playback.transType || 'crossfade',
+        params: patternParams[playback.patternId || activePatternId] || {},
+        paletteNorm,
+        bpm,
+        masterSpeed: bakeAuto && laneValues.speed != null ? laneValues.speed * 4 : masterSpeed,
+        masterBrightness: bakeAuto && laneValues.brightness != null ? laneValues.brightness : masterBrightness,
+        masterSaturation,
+        masterHueShift: bakeAuto && laneValues.hueShift != null ? laneValues.hueShift - 0.5 : masterHueShift,
+        gammaLUT,
+        symSettings,
+      });
+      frames.push(frame.pixels);
+    }
+    return frames;
+  };
+
+  const renderExport = () => {
+    setStage('rendering');
+    setProgress(0);
+    requestAnimationFrame(() => {
+      const projectData = serializeProject();
+      const mapPixels = pixelsFromStrips(strips);
+      const manifest = makeManifest(projectData, { target, format, fps });
+      let filename = `${safeName}.json`;
+      let content;
+      let mime = 'application/json';
+
+      if (format === 'csv') {
+        const frames = buildFrames();
+        filename = `${safeName}-dmx.csv`;
+        content = toDmxCsv(frames);
+        mime = 'text/csv';
+      } else if (format === 'bin') {
+        const frames = buildFrames();
+        filename = `${safeName}-frames.bin`;
+        content = toRawFrameDump(frames);
+        mime = 'application/octet-stream';
+      } else if (target === 'pi') {
+        filename = `${safeName}-lightweaver-pi.json`;
+        content = JSON.stringify({
+          manifest: JSON.parse(manifest),
+          project: projectData,
+          ledmap: JSON.parse(toWLEDLedmap(mapPixels)),
+        }, null, 2);
+      } else {
+        filename = `${safeName}-show.json`;
+        content = JSON.stringify({
+          manifest: JSON.parse(manifest),
+          project: projectData,
+          ledmap: JSON.parse(toWLEDLedmap(mapPixels)),
+          fastledHeader: toFastLED(mapPixels),
+          positionsCsv: toCSV(mapPixels),
+        }, null, 2);
+      }
+
+      download(content, filename, mime);
+      setArtifact({ filename, bytes: content.byteLength || content.length || 0 });
+      setProgress(1);
+      setStage('done');
+    });
+  };
 
   return (
     <div className="lw-modal-backdrop" onClick={close}>
@@ -143,8 +240,8 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-modal-foot">
               <button className="btn btn-ghost" onClick={close}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => { setStage('rendering'); setProgress(0); }}>
-                Render &amp; write →
+              <button className="btn btn-primary" onClick={renderExport}>
+                Render &amp; download →
               </button>
             </div>
           </div>
@@ -170,11 +267,11 @@ export function ExportDialog({ open, onClose }) {
                 </svg>
               )}
             </div>
-            <div className="lw-exp-stage-title">{stage === 'rendering' ? 'Rendering frames…' : 'Writing to SD card…'}</div>
+            <div className="lw-exp-stage-title">{stage === 'rendering' ? 'Rendering export…' : 'Preparing download…'}</div>
             <div className="lw-exp-stage-sub">
               {stage === 'rendering'
-                ? `Baking ${totalFrames.toLocaleString()} DMX frames at ${fps} fps across ${universes} universes`
-                : `Writing ${safeName}${sel.format} to /SHOW/${safeName}/ on "SD card"`}
+                ? `Building ${format === 'csv' || format === 'bin' ? totalFrames.toLocaleString() + ' frames' : 'project bundle'} for ${sel.hw}`
+                : `Preparing ${safeName}${sel.format}`}
             </div>
             <div className="lw-exp-bar"><div className="fill" style={{ width: `${progress * 100}%` }}/></div>
             <div className="lw-exp-bar-meta">
@@ -207,18 +304,17 @@ export function ExportDialog({ open, onClose }) {
             </div>
             <div className="lw-exp-stage-title" style={{ color: 'var(--mint)' }}>Export complete</div>
             <div className="lw-exp-stage-sub">
-              Show written to SD card. Eject, insert into your {sel.hw}, and it'll start playing on power-up.
+              Export generated and downloaded. The file contains the project, layout map, and target metadata for {sel.hw}.
             </div>
             <div className="lw-exp-done-card">
-              <div className="row"><span className="k">File</span><span className="v mono">{safeName}{sel.format}</span></div>
-              <div className="row"><span className="k">Path</span><span className="v mono">SD card / SHOW / {safeName} /</span></div>
-              <div className="row"><span className="k">Size</span><span className="v mono">{mb} MB</span></div>
+              <div className="row"><span className="k">File</span><span className="v mono">{artifact?.filename || `${safeName}${sel.format}`}</span></div>
+              <div className="row"><span className="k">Path</span><span className="v mono">browser download</span></div>
+              <div className="row"><span className="k">Size</span><span className="v mono">{artifact ? `${(artifact.bytes / 1024).toFixed(1)} KB` : `${mb} MB`}</span></div>
               <div className="row"><span className="k">Duration</span><span className="v mono">{durationStr} · {loop ? 'looping' : 'one-shot'}</span></div>
               <div className="row"><span className="k">Target</span><span className="v">{sel.hw}</span></div>
             </div>
             <div className="lw-modal-foot">
               <button className="btn btn-ghost" onClick={reset}>Export again</button>
-              <button className="btn btn-ghost">Reveal in Finder</button>
               <button className="btn btn-primary" onClick={close}>Done</button>
             </div>
           </div>

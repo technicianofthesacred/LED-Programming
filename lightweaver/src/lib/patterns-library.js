@@ -399,7 +399,7 @@ const h  = mix(0.55, 0.65, mix(w1, w2, 0.5));
 return hsv(h, 0.9, mix(w1, w2, 0.5));`,
   },
   {
-    id: 'sunrise', name: 'Sunrise',
+    id: 'sunrise-v2', name: 'Sunrise Horizon Soft',
     desc: 'Gradual warm dawn gradient rising from base to top',
     preview: 'linear-gradient(0deg,#330011 0%,#cc2200 30%,#ff6600 60%,#ffcc44 85%,#ffffaa 100%)',
     code:
@@ -1210,7 +1210,7 @@ const h = fract(sin(seed * 127.1 + 311.7) * 43758.5);
 return hsv(h, 0.9, 0.9);`,
   },
   {
-    id: 'smoke', name: 'Smoke & Haze',
+    id: 'smoke-haze', name: 'Smoke & Haze',
     desc: 'Billowing smoke tendrils with shifting opacity',
     preview: 'linear-gradient(180deg, #cccccc 0%, #888888 40%, #444444 70%, #111111 100%)',
     code:
@@ -1621,15 +1621,15 @@ return hsv(hue, 1, clamp(v, 0, 1));`,
 // @param borderWidth float 0.04 0.01 0.15
 // @param hueOffset float 0.0 0.0 1.0
 const N = int(params.cells);
-float minD1 = 99.0, minD2 = 99.0;
-float cellHue = 0.0;
-for (int i = 0; i < 12; i++) {
+let minD1 = 99.0, minD2 = 99.0;
+let cellHue = 0.0;
+for (let i = 0; i < 12; i++) {
   if (i >= N) break;
-  float sx = fract(sin(float(i) * 127.1 + 0.3) * 43758.5);
-  float sy = fract(sin(float(i) * 311.7 + 0.9) * 18731.2);
-  float cx = sx + sin(time * 0.2 + float(i) * 2.1) * 0.1;
-  float cy = sy + cos(time * 0.17 + float(i) * 1.7) * 0.1;
-  float d = distance(x, y, cx, cy);
+  const sx = fract(sin(float(i) * 127.1 + 0.3) * 43758.5);
+  const sy = fract(sin(float(i) * 311.7 + 0.9) * 18731.2);
+  const cx = sx + sin(time * 0.2 + float(i) * 2.1) * 0.1;
+  const cy = sy + cos(time * 0.17 + float(i) * 1.7) * 0.1;
+  const d = distance(x, y, cx, cy);
   if (d < minD1) { minD2 = minD1; minD1 = d; cellHue = fract(sx + params.hueOffset); }
   else if (d < minD2) minD2 = d;
 }
@@ -1749,7 +1749,7 @@ return hsv(hue, 1, clamp(drip, 0, 1));`,
 // @param speed float 0.2 0.05 1.0
 let v = 0;
 const N = int(params.flakes);
-for (int i = 0; i < 60; i++) {
+for (let i = 0; i < 60; i++) {
   if (i >= N) break;
   const fi = float(i);
   const fx = fract(sin(fi * 73.1) * 4375.8);
@@ -1882,7 +1882,7 @@ return hsv(hue, 0.7 + depth * 0.3, grid * (0.3 + (1 - depth) * 0.7));`,
 // @param iridescence float 0.4 0.0 1.0
 let v = 0, hue = 0.55;
 const N = int(params.count);
-for (int i = 0; i < 20; i++) {
+for (let i = 0; i < 20; i++) {
   if (i >= N) break;
   const fi = float(i);
   const bx = fract(sin(fi * 73.1) * 4375.8);
@@ -1908,7 +1908,7 @@ const bolt = floor(time * params.frequency);
 const bx = fract(sin(bolt * 73.1) * 43758.5);
 const age = fract(time * params.frequency);
 let v = 0;
-for (float b = 0.0; b < params.branches; b++) {
+for (let b = 0; b < params.branches; b++) {
   const offset = fract(sin(bolt * 137.1 + b * 73.2) * 6183.4) * 0.15;
   const seg = floor(y * 8);
   const wobble = fract(sin(bolt * 217.3 + b + seg * 31.4) * 8173.2) * 0.08;

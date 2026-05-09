@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useMidi } from '../hooks/useMidi.js';
+import { makeWledSegments, postWledState } from '../lib/deviceController.js';
 
 function Section({ title, children }) {
   return (
@@ -37,6 +38,12 @@ export function DevicesPanel({ onClose }) {
   const [pushStatus, setPushStatus] = useState('');
 
   const [wledInfo, setWledInfo] = useState(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   const midi = useMidi({
     onCC: (ch, cc, val) => console.debug('[MIDI CC]', ch, cc, val),
@@ -270,20 +277,9 @@ export function DevicesPanel({ onClose }) {
                   title={wledConnected ? 'Push segment config to WLED' : 'Connect to WLED first'}
                   onClick={async () => {
                     setPushStatus('Pushing…');
-                    const segs = strips.map((strip, i) => ({
-                      id: segMap[strip.id] ?? i,
-                      start: 0,
-                      stop: strip.pixels?.length || 30,
-                      on: true,
-                    }));
                     try {
-                      const r = await fetch(`http://${wledIp}/json/state`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ seg: segs }),
-                        signal: AbortSignal.timeout(3000),
-                      });
-                      setPushStatus(r.ok ? '✓ Pushed' : `Error ${r.status}`);
+                      await postWledState(wledIp, { seg: makeWledSegments(strips, segMap) });
+                      setPushStatus('✓ Pushed');
                     } catch (err) {
                       setPushStatus(`Error: ${err.message}`);
                     }

@@ -735,101 +735,6 @@ export function TimelineScreen({ onExport }) {
     }
   }, [timelinePlayhead, timelinePlaying, autoLanes, setMasterSpeed, setMasterBrightness]);
 
-  // ── Keyboard shortcuts ────────────────────────────────────────────────────
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-      // Space = play/stop
-      if (e.key === ' ') { e.preventDefault(); setTimelinePlaying(p => !p); return; }
-      // Home = go to start
-      if (e.key === 'Home') { e.preventDefault(); setTimelinePlayhead(0); return; }
-      // End = go to end
-      if (e.key === 'End') { e.preventDefault(); setTimelinePlayhead(showDuration); return; }
-      // Arrow keys = nudge selected clip (Alt), jog 1s (plain), or jog 10s (shift)
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        if (e.altKey && selected.kind === 'clip' && selected.id) {
-          const nudge = e.shiftKey ? 10 : 1;
-          setShowClips(cs => cs.map(c => {
-            if (c.id !== selected.id) return c;
-            const dur = c.end - c.start;
-            const s = Math.max(0, c.start - nudge);
-            return { ...c, start: s, end: s + dur };
-          }));
-        } else {
-          setTimelinePlayhead(p => Math.max(0, p - (e.shiftKey ? 10 : 1)));
-        }
-        return;
-      }
-      if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        if (e.altKey && selected.kind === 'clip' && selected.id) {
-          const nudge = e.shiftKey ? 10 : 1;
-          setShowClips(cs => cs.map(c => {
-            if (c.id !== selected.id) return c;
-            const dur = c.end - c.start;
-            const s = Math.min(showDuration - dur, c.start + nudge);
-            return { ...c, start: s, end: s + dur };
-          }));
-        } else {
-          setTimelinePlayhead(p => Math.min(showDuration, p + (e.shiftKey ? 10 : 1)));
-        }
-        return;
-      }
-      // Delete / Backspace = remove selected clip/transition (or multi-selection)
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (selected.id || multiSel.size > 0)) {
-        if (multiSel.size > 0) {
-          setShowClips(cs => cs.filter(c => !multiSel.has(c.id)));
-          setMultiSel(new Set());
-          setSelected({ kind: 'clip', id: null });
-        } else {
-          if (selected.kind === 'clip') setShowClips(cs => cs.filter(c => c.id !== selected.id));
-          if (selected.kind === 'trans') setShowTransitions(ts => ts.filter(t => t.id !== selected.id));
-          setSelected({ kind: 'clip', id: null });
-        }
-        return;
-      }
-      // Cmd+A = select all clips
-      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-        e.preventDefault();
-        setMultiSel(new Set(showClips.map(c => c.id)));
-        return;
-      }
-      // Cue hotkeys: Shift+1–9
-      if (e.shiftKey) {
-        const idx = parseInt(e.key) - 1;
-        if (!isNaN(idx) && showCues[idx]) { setTimelinePlayhead(showCues[idx].t); return; }
-      }
-      // Undo/redo
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoTimeline(); return; }
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redoTimeline(); return; }
-      // Copy/paste clip
-      if ((e.metaKey || e.ctrlKey) && e.key === 'c' && selected.kind === 'clip' && selected.id) {
-        const clip = showClips.find(c => c.id === selected.id);
-        if (clip) { clipboardRef.current = clip; e.preventDefault(); }
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'v' && clipboardRef.current) {
-        e.preventDefault();
-        const src = clipboardRef.current;
-        const dur = src.end - src.start;
-        const newId = `clip_${Date.now()}`;
-        const newClip = { ...src, id: newId, start: timelinePlayhead, end: Math.min(showDuration, timelinePlayhead + dur) };
-        setShowClips(cs => [...cs, newClip]);
-        setSelected({ kind: 'clip', id: newId });
-        return;
-      }
-      // L = clear loop region
-      if (e.key === 'l' && !e.metaKey && !e.ctrlKey && !e.shiftKey) { setLoopRegion(null); return; }
-      // S = split selected clip at playhead
-      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !e.shiftKey && selected.id && selected.kind === 'clip') {
-        handleSplitClip(selected.id); return;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [showCues, showDuration, selected, multiSel, showClips, timelinePlayhead, setTimelinePlayhead, setTimelinePlaying, setShowClips, setShowTransitions, undoTimeline, redoTimeline, handleSplitClip]);
-
   // ── Scroll playhead into view ─────────────────────────────────────────────
   useEffect(() => {
     if (!timelinePlaying || !scrollRef.current) return;
@@ -964,6 +869,101 @@ export function TimelineScreen({ onExport }) {
     }));
     setSelected({ kind: 'clip', id: newId });
   }, [showClips, timelinePlayhead, setShowClips]);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      // Space = play/stop
+      if (e.key === ' ') { e.preventDefault(); setTimelinePlaying(p => !p); return; }
+      // Home = go to start
+      if (e.key === 'Home') { e.preventDefault(); setTimelinePlayhead(0); return; }
+      // End = go to end
+      if (e.key === 'End') { e.preventDefault(); setTimelinePlayhead(showDuration); return; }
+      // Arrow keys = nudge selected clip (Alt), jog 1s (plain), or jog 10s (shift)
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (e.altKey && selected.kind === 'clip' && selected.id) {
+          const nudge = e.shiftKey ? 10 : 1;
+          setShowClips(cs => cs.map(c => {
+            if (c.id !== selected.id) return c;
+            const dur = c.end - c.start;
+            const s = Math.max(0, c.start - nudge);
+            return { ...c, start: s, end: s + dur };
+          }));
+        } else {
+          setTimelinePlayhead(p => Math.max(0, p - (e.shiftKey ? 10 : 1)));
+        }
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (e.altKey && selected.kind === 'clip' && selected.id) {
+          const nudge = e.shiftKey ? 10 : 1;
+          setShowClips(cs => cs.map(c => {
+            if (c.id !== selected.id) return c;
+            const dur = c.end - c.start;
+            const s = Math.min(showDuration - dur, c.start + nudge);
+            return { ...c, start: s, end: s + dur };
+          }));
+        } else {
+          setTimelinePlayhead(p => Math.min(showDuration, p + (e.shiftKey ? 10 : 1)));
+        }
+        return;
+      }
+      // Delete / Backspace = remove selected clip/transition (or multi-selection)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (selected.id || multiSel.size > 0)) {
+        if (multiSel.size > 0) {
+          setShowClips(cs => cs.filter(c => !multiSel.has(c.id)));
+          setMultiSel(new Set());
+          setSelected({ kind: 'clip', id: null });
+        } else {
+          if (selected.kind === 'clip') setShowClips(cs => cs.filter(c => c.id !== selected.id));
+          if (selected.kind === 'trans') setShowTransitions(ts => ts.filter(t => t.id !== selected.id));
+          setSelected({ kind: 'clip', id: null });
+        }
+        return;
+      }
+      // Cmd+A = select all clips
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault();
+        setMultiSel(new Set(showClips.map(c => c.id)));
+        return;
+      }
+      // Cue hotkeys: Shift+1-9
+      if (e.shiftKey) {
+        const idx = parseInt(e.key) - 1;
+        if (!isNaN(idx) && showCues[idx]) { setTimelinePlayhead(showCues[idx].t); return; }
+      }
+      // Undo/redo
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoTimeline(); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redoTimeline(); return; }
+      // Copy/paste clip
+      if ((e.metaKey || e.ctrlKey) && e.key === 'c' && selected.kind === 'clip' && selected.id) {
+        const clip = showClips.find(c => c.id === selected.id);
+        if (clip) { clipboardRef.current = clip; e.preventDefault(); }
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'v' && clipboardRef.current) {
+        e.preventDefault();
+        const src = clipboardRef.current;
+        const dur = src.end - src.start;
+        const newId = `clip_${Date.now()}`;
+        const newClip = { ...src, id: newId, start: timelinePlayhead, end: Math.min(showDuration, timelinePlayhead + dur) };
+        setShowClips(cs => [...cs, newClip]);
+        setSelected({ kind: 'clip', id: newId });
+        return;
+      }
+      // L = clear loop region
+      if (e.key === 'l' && !e.metaKey && !e.ctrlKey && !e.shiftKey) { setLoopRegion(null); return; }
+      // S = split selected clip at playhead
+      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !e.shiftKey && selected.id && selected.kind === 'clip') {
+        handleSplitClip(selected.id); return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [showCues, showDuration, selected, multiSel, showClips, timelinePlayhead, setTimelinePlayhead, setTimelinePlaying, setShowClips, setShowTransitions, undoTimeline, redoTimeline, handleSplitClip]);
 
   const handleDuplicateClip = useCallback((id) => {
     const clip = showClips.find(c => c.id === id);

@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
 deploy: web interface (phone/browser, hosted on Raspberry Pi or publicly)
 family: installation
-last_reviewed: 2026-04-28
+last_reviewed: 2026-05-09
 ---
 
 # Lightweaver — branded LED installation controller

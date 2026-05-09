@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:core": "node tests/project-frame-audit.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

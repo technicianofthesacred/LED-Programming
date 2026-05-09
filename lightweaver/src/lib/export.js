@@ -79,6 +79,61 @@ export function toCSV(pixels) {
   return `index,x,y\n${rows.join('\n')}`;
 }
 
+export function pixelsFromStrips(strips = []) {
+  const out = [];
+  let index = 0;
+  for (const strip of strips) {
+    for (const px of strip.pixels || []) {
+      out.push({
+        index,
+        stripId: strip.id,
+        stripName: strip.name,
+        x: px.x,
+        y: px.y,
+      });
+      index++;
+    }
+  }
+  return out;
+}
+
+export function toDmxCsv(frames = []) {
+  const rows = ['frame,channel,value'];
+  frames.forEach((frame, frameIndex) => {
+    frame.forEach((px, i) => {
+      const base = i * 3 + 1;
+      rows.push(`${frameIndex},${base},${px.r}`);
+      rows.push(`${frameIndex},${base + 1},${px.g}`);
+      rows.push(`${frameIndex},${base + 2},${px.b}`);
+    });
+  });
+  return rows.join('\n');
+}
+
+export function toRawFrameDump(frames = []) {
+  const bytes = [];
+  for (const frame of frames) {
+    for (const px of frame) bytes.push(px.r || 0, px.g || 0, px.b || 0);
+  }
+  return new Uint8Array(bytes);
+}
+
+export function makeManifest(project, opts = {}) {
+  const totalLeds = project.layout?.strips?.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0) || 0;
+  return JSON.stringify({
+    app: 'Lightweaver',
+    version: project.version,
+    project: project.name,
+    exportedAt: new Date().toISOString(),
+    target: opts.target,
+    format: opts.format,
+    fps: opts.fps,
+    duration: project.show?.duration,
+    totalLeds,
+    strips: project.layout?.strips?.map(s => ({ id: s.id, name: s.name, pixelCount: s.pixels?.length || s.pixelCount || 0 })) || [],
+  }, null, 2);
+}
+
 /**
  * Trigger a browser file download.
  * @param {string} content

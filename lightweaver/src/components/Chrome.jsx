@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
+import { makeBlackoutFrame } from '../lib/deviceController.js';
 
 const Icon = {
   layout:  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/></svg>,
@@ -14,7 +15,7 @@ const Icon = {
 };
 
 function BlackoutButton() {
-  const { setActivePatternId, wledPush } = useProject();
+  const { setActivePatternId, wledPush, strips } = useProject();
   const [active, setActive] = useState(false);
   return (
     <button
@@ -26,8 +27,8 @@ function BlackoutButton() {
         setActive(a => !a);
         setActivePatternId(null);
         if (wledPush) {
-          const black = Array.from({ length: 1000 }, () => ({ r: 0, g: 0, b: 0 }));
-          wledPush(black);
+          const total = strips.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0);
+          wledPush(makeBlackoutFrame(total));
         }
       }}>
       BLKOUT

@@ -1,8 +1,12 @@
 import { useEffect, useRef, useMemo } from 'react';
-import { compile, evalPixel } from '../lib/patterns.js';
-import { PATTERNS } from '../lib/patterns-library.js';
-import { applySymmetry } from '../lib/symmetry.js';
-import { DEMO_STRIPS, PALETTE_DEFAULT, DEFAULT_PARAMS } from '../data.js';
+import {
+  buildGammaLut,
+  compilePattern,
+  normalizePalette,
+  renderPixelFrame,
+  resolvePatternParams,
+} from '../lib/frameEngine.js';
+import { DEMO_STRIPS, PALETTE_DEFAULT } from '../data.js';
 
 function hexToNorm(hex) {
   const n = parseInt(hex.replace('#', ''), 16);
@@ -80,91 +84,14 @@ function renderFrame(canvas, t, p) {
   const toX = x => x * scale + offX;
   const toY = y => y * scale + offY;
 
-  const beat    = (t * bpm / 60) % 1;
-  const beatSin = Math.sin(beat * Math.PI);
-  const bass = audioBands?.bass ?? 0, mid = audioBands?.mid ?? 0, hi = audioBands?.hi ?? 0;
-
-  let globalIdx = 0;
-  const stripData   = [];
-  const framePixels = [];
-
-  for (const s of visibleStrips) {
-    const stripT    = t * masterSpeed * (s.speed ?? 1);
-    const stripTime = (stripT / 65.536) % 1;
-    const stripFn   = (s.patternId ? perStripFns.get(s.patternId) : null) ?? activeFn;
-
-    let rSum = 0, gSum = 0, bSum = 0;
-    const leds = [];
-
-    for (const pt of s.pts) {
-      let nx = (pt.x - normBounds.minX) / normBounds.range;
-      let ny = (pt.y - normBounds.minY) / normBounds.range;
-
-      if (symSettings?.enabled) {
-        const sym = applySymmetry(nx, ny, symSettings, t);
-        nx = sym.x; ny = sym.y;
-      }
-
-      let r = 0, g = 0, b = 0;
-      if (stripFn) {
-        const colA = evalPixel(stripFn, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
-        r = colA.r; g = colA.g; b = colA.b;
-
-        if (blendFn && blendAmount > 0) {
-          const colB = evalPixel(blendFn, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
-          if (blendType === 'fade-black') {
-            const a2 = blendAmount < 0.5 ? 1 - blendAmount * 2 : 0;
-            const b2 = blendAmount > 0.5 ? (blendAmount - 0.5) * 2 : 0;
-            r = colA.r * a2 + colB.r * b2; g = colA.g * a2 + colB.g * b2; b = colA.b * a2 + colB.b * b2;
-          } else if (blendType === 'dissolve') {
-            const a_ = 1 - blendAmount, b_ = blendAmount;
-            r = Math.min(255, colA.r * a_ + colB.r * b_ + colA.r * colB.r * blendAmount / 255);
-            g = Math.min(255, colA.g * a_ + colB.g * b_ + colA.g * colB.g * blendAmount / 255);
-            b = Math.min(255, colA.b * a_ + colB.b * b_ + colA.b * colB.b * blendAmount / 255);
-          } else {
-            r = colA.r * (1 - blendAmount) + colB.r * blendAmount;
-            g = colA.g * (1 - blendAmount) + colB.g * blendAmount;
-            b = colA.b * (1 - blendAmount) + colB.b * blendAmount;
-          }
-        }
-      }
-
-      const bright = (s.brightness ?? 1) * masterBrightness;
-      r *= bright; g *= bright; b *= bright;
-
-      if (masterSaturation < 0.999) {
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        r = gray + (r - gray) * masterSaturation;
-        g = gray + (g - gray) * masterSaturation;
-        b = gray + (b - gray) * masterSaturation;
-      }
-
-      r = Math.max(0, Math.min(255, r));
-      g = Math.max(0, Math.min(255, g));
-      b = Math.max(0, Math.min(255, b));
-
-      if (gammaLUT) { r = gammaLUT[Math.round(r)]; g = gammaLUT[Math.round(g)]; b = gammaLUT[Math.round(b)]; }
-
-      if (s.hueShift || masterHueShift) {
-        const [h, sat, l] = rgbToHsl(r, g, b);
-        [r, g, b] = hslToRgb(h + (s.hueShift || 0) + masterHueShift, sat, l);
-      }
-
-      framePixels.push({ r: Math.round(r), g: Math.round(g), b: Math.round(b) });
-      rSum += r; gSum += g; bSum += b;
-      leds.push({ x: pt.x, y: pt.y, r: Math.round(r), g: Math.round(g), b: Math.round(b) });
-      globalIdx++;
-    }
-
-    const n = leds.length;
-    stripData.push({
-      leds,
-      avgR: n ? Math.round(rSum / n) : 0,
-      avgG: n ? Math.round(gSum / n) : 0,
-      avgB: n ? Math.round(bSum / n) : 0,
-      spacing: s.spacing ?? medianSpacing,
-    });
-  }
+  const frame = renderPixelFrame({
+    t, strips: visibleStrips, patternId: p.patternId, activeFn, blendFn,
+    blendAmount, blendType, params: resolvedParams, paletteNorm, bpm,
+    masterSpeed, masterBrightness, masterSaturation, masterHueShift,
+    gammaLUT, symSettings, audioBands, normBounds, perStripFns,
+  });
+  const framePixels = frame.pixels;
+  const stripData = frame.stripFrames.map(s => ({ ...s, spacing: s.spacing ?? medianSpacing }));
 
   // ── Glow — offscreen dots + GPU blur ────────────────────────────────────
   // Draw all LEDs as solid dots onto one offscreen canvas, then composite
@@ -253,33 +180,27 @@ export function LEDPreview({
   const propsRef  = useRef({});
 
   const paletteNorm = useMemo(
-    () => paletteProp ? paletteProp.map(hexToNorm) : PALETTE_NORM,
+    () => paletteProp ? normalizePalette(paletteProp) : PALETTE_NORM,
     [paletteProp],
   );
 
   const resolvedParams = useMemo(() => {
-    const defaults = Object.fromEntries((DEFAULT_PARAMS[patternId] || []).map(k => [k.name, k.value]));
-    return { ...defaults, ...params };
+    return resolvePatternParams(patternId, params);
   }, [patternId, params]);
 
   const activeFn = useMemo(() => {
     if (compiledFn) return compiledFn;
-    const pat = PATTERNS.find(p => p.id === patternId);
-    return pat ? compile(pat.code).fn : null;
+    return compilePattern(patternId);
   }, [patternId, compiledFn]);
 
   const blendFn = useMemo(() => {
     if (!blendPatternId) return null;
     if (blendCompiledFn) return blendCompiledFn;
-    const pat = PATTERNS.find(p => p.id === blendPatternId);
-    return pat ? compile(pat.code).fn : null;
+    return compilePattern(blendPatternId);
   }, [blendPatternId, blendCompiledFn]);
 
   const gammaLUT = useMemo(() => {
-    if (!gammaEnabled) return null;
-    const lut = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) lut[i] = Math.round(Math.pow(i / 255, gammaValue) * 255);
-    return lut;
+    return buildGammaLut(gammaEnabled, gammaValue);
   }, [gammaEnabled, gammaValue]);
 
   const useRealStrips = !!(propStrips && propStrips.length > 0);
@@ -289,8 +210,8 @@ export function LEDPreview({
     const map = new Map();
     for (const s of (propStrips || [])) {
       if (s.patternId && !map.has(s.patternId)) {
-        const pat = PATTERNS.find(p => p.id === s.patternId);
-        if (pat) { const { fn } = compile(pat.code); if (fn) map.set(s.patternId, fn); }
+        const fn = compilePattern(s.patternId);
+        if (fn) map.set(s.patternId, fn);
       }
     }
     return map;
@@ -365,7 +286,7 @@ export function LEDPreview({
 
   // Refresh propsRef every render — RAF closure always reads fresh values
   propsRef.current = {
-    playing, speed, glow, dotSize, bpm, resolvedParams, paletteNorm,
+    patternId, playing, speed, glow, dotSize, bpm, resolvedParams, paletteNorm,
     activeFn, blendFn, blendAmount, blendType,
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,

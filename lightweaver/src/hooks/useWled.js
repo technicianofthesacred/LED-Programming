@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { DEFAULT_WLED_PUSH_FPS, makeWledFrameMessage } from '../lib/deviceController.js';
 
 const STORAGE_KEY = 'lw_wled_ip';
-const MIN_PUSH_INTERVAL = 40; // 25fps max
+const MIN_PUSH_INTERVAL = 1000 / DEFAULT_WLED_PUSH_FPS;
 const RECONNECT_DELAY   = 3000;
 const HTTP_TIMEOUT_MS   = 3000;
 
@@ -84,16 +85,8 @@ export function useWled() {
     if (now - lastPushRef.current < MIN_PUSH_INTERVAL) return;
     lastPushRef.current = now;
 
-    // Build flat [r0,g0,b0, r1,g1,b1, ...] array
-    const flat = new Array(pixels.length * 3);
-    for (let i = 0; i < pixels.length; i++) {
-      flat[i * 3]     = pixels[i].r;
-      flat[i * 3 + 1] = pixels[i].g;
-      flat[i * 3 + 2] = pixels[i].b;
-    }
-
     try {
-      ws.send(JSON.stringify({ v: true, seg: [{ i: flat }] }));
+      ws.send(JSON.stringify(makeWledFrameMessage(pixels)));
     } catch { /* socket may be closing */ }
   }, []);
 

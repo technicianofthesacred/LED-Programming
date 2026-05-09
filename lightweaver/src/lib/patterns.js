@@ -56,6 +56,8 @@ function fract(x)        { return x - Math.floor(x); }
 function abs(x)          { return x < 0 ? -x : x; }
 function floor(x)        { return Math.floor(x); }
 function ceil(x)         { return Math.ceil(x); }
+function int(x)          { return Math.floor(x); }
+function float(x)        { return +x; }
 function min(a, b)       { return a < b ? a : b; }
 function max(a, b)       { return a > b ? a : b; }
 function pow(a, b)       { return Math.pow(a, b); }
@@ -69,15 +71,30 @@ function round(x)            { return Math.round(x); }
 function map(x, inMin, inMax, outMin, outMax) {
   return outMin + (x - inMin) / (inMax - inMin) * (outMax - outMin);
 }
+/** GLSL-style step: 0 when x < edge, otherwise 1. */
+function step(edge, x) { return x < edge ? 0 : 1; }
 /** Hermite smoothstep, output 0–1. */
 function smoothstep(edge0, edge1, x) {
   const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 }
-/** Alias for lerp. */
-function mix(a, b, t) { return a + (b - a) * t; }
+/** Alias for lerp. Supports numbers and RGB arrays. */
+function mix(a, b, t) {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.map((v, i) => v + ((b[i] || 0) - v) * t);
+  }
+  return a + (b - a) * t;
+}
+function mod(a, b) { return ((a % b) + b) % b; }
+function vec2(x, y) { return { x, y }; }
+function length(v) { return sqrt((v.x || 0) * (v.x || 0) + (v.y || 0) * (v.y || 0)); }
+function distance(x1, y1, x2, y2) {
+  const dx = x1 - x2, dy = y1 - y2;
+  return sqrt(dx * dx + dy * dy);
+}
 const PI  = Math.PI;
 const TAU = Math.PI * 2;
+const TWO_PI = TAU;
 function sin(x)          { return Math.sin(x); }
 function cos(x)          { return Math.cos(x); }
 
@@ -188,7 +205,7 @@ export function compile(code) {
     const fn = new Function(
       'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
       'stripId', 'stripProgress', 'bass', 'mid', 'hi',
-      BUILTINS + '\n' + code,
+      `${BUILTINS}\n{\n${code}\n}`,
     );
     return { fn, error: null };
   } catch (e) {
@@ -217,6 +234,14 @@ export function compile(code) {
 export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress, bass = 0, mid = 0, hi = 0) {
   try {
     const result = fn(index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId || 0, stripProgress || 0, bass, mid, hi);
+    if (Array.isArray(result)) {
+      const scale = result.some(v => Math.abs(v) > 1) ? 1 : 255;
+      return {
+        r: _clamp255(Math.round((result[0] ?? 0) * scale)),
+        g: _clamp255(Math.round((result[1] ?? 0) * scale)),
+        b: _clamp255(Math.round((result[2] ?? 0) * scale)),
+      };
+    }
     if (!result || typeof result !== 'object') return { r: 0, g: 0, b: 0 };
     return {
       r: _clamp255(Math.round(result.r ?? 0)),
@@ -228,6 +253,9 @@ export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, b
   }
 }
 
-function _clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+function _clamp255(v) {
+  if (!Number.isFinite(v)) return 0;
+  return v < 0 ? 0 : v > 255 ? 255 : v;
+}
 
 if (import.meta.hot) import.meta.hot.accept();

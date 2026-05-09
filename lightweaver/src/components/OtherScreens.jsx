@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
-import { toWLEDLedmap, toFastLED, toCSV, download } from '../lib/export.js';
+import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromStrips } from '../lib/export.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
 import { DEMO_STRIPS } from '../data.js';
 import { useProject } from '../state/ProjectContext.jsx';
@@ -495,6 +495,7 @@ export function ExportScreen() {
   const usingDemo = !(projectStrips && projectStrips.length > 0);
 
   const pixels = useMemo(() => {
+    if (!usingDemo) return pixelsFromStrips(sourceStrips);
     const withPixels = sourceStrips.map(s => {
       const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       pathEl.setAttribute('d', s.path);
@@ -503,14 +504,14 @@ export function ExportScreen() {
     });
     assignIndices(withPixels);
     return getAllPixels(withPixels);
-  }, [sourceStrips]);
+  }, [sourceStrips, usingDemo]);
 
   const exportOpts = { normalize, scaleX, scaleY, offsetX, offsetY };
 
   const ledmapJson = useMemo(() => toWLEDLedmap(pixels, exportOpts), [pixels, normalize, scaleX, scaleY, offsetX, offsetY]);
   const previewJson = ledmapJson.slice(0, 400) + '\n  …';
 
-  const totalLeds = sourceStrips.reduce((a, s) => a + (s.leds || 0), 0);
+  const totalLeds = sourceStrips.reduce((a, s) => a + (s.leds || s.pixelCount || s.pixels?.length || 0), 0);
 
   const artifacts = [
     {
@@ -589,7 +590,7 @@ export function ExportScreen() {
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, boxShadow: `0 0 5px ${s.color}`, flexShrink: 0 }}/>
               )}
               <span style={{ flex: 1, fontFamily: 'var(--mono-font)', color: 'var(--text-2)' }}>{s.name}</span>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{s.leds}</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{s.leds || s.pixelCount || s.pixels?.length || 0}</span>
             </div>
           ))}
         </div>

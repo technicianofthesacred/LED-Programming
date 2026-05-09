@@ -324,21 +324,22 @@ function OmniHalo({ uid, cx, cy, color, reach = 90, intensity = 0.5 }) {
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function LayoutScreen() {
-  const [viewBox, setViewBox]       = useState('0 0 640 400');
-  const [svgText, setSvgText]       = useState(null);
-  const [layers, setLayers]         = useState([]);
-  const [strips, setStrips]         = useState([]);
-  const [density, setDensity]       = useState(60);
-  const [pxPerMm, setPxPerMm]       = useState(3.7795);
+  const project = useProject();
+  const [viewBox, setViewBox]       = useState(project.viewBox || '0 0 640 400');
+  const [svgText, setSvgText]       = useState(project.svgText ?? null);
+  const [layers, setLayers]         = useState(project.layoutLayers || []);
+  const [strips, setStrips]         = useState(project.strips || []);
+  const [density, setDensity]       = useState(project.layoutDensity ?? 60);
+  const [pxPerMm, setPxPerMm]       = useState(project.layoutPxPerMm ?? 3.7795);
   const [selLayerId, setSelLayerId] = useState(null);
   const [selStripId, setSelStripId] = useState(null);
-  const [hidden, setHidden]         = useState({});
+  const [hidden, setHidden]         = useState(project.hidden || {});
   const [showLight, setShowLight]   = useState(true);
   const [showLeds, setShowLeds]     = useState(true);
   const [glowMode, setGlowMode]     = useState('center');
   const [directedGlow, setDirectedGlow] = useState(false);
   const [showHeat, setShowHeat]     = useState(false);
-  const [editCounts, setEditCounts] = useState({});
+  const [editCounts, setEditCounts] = useState(project.layoutEditCounts || {});
   const [error, setError]           = useState(null);
 
   // Layer panel state
@@ -385,8 +386,8 @@ export function LayoutScreen() {
   const [futLen,  setFutLen]    = useState(0);
 
   // Layer groups + ordering (V1 parity)
-  const [layerGroups, setLayerGroups]     = useState([]);  // [{groupId,name,_hidden,_expanded,members:[{layerId,pathId,pathData,name,svgLength}]}]
-  const [layerOrder, setLayerOrder]       = useState([]);  // [{type:'layer'|'group', id}]
+  const [layerGroups, setLayerGroups]     = useState(project.layoutLayerGroups || []);  // [{groupId,name,_hidden,_expanded,members:[{layerId,pathId,pathData,name,svgLength}]}]
+  const [layerOrder, setLayerOrder]       = useState(project.layoutLayerOrder || []);  // [{type:'layer'|'group', id}]
   const [layerDragging, setLayerDragging] = useState(null);
   const [layerDragOver, setLayerDragOver] = useState(null);
 
@@ -408,10 +409,29 @@ export function LayoutScreen() {
   const nextColor   = () => STRIP_COLORS[colorIdxRef.current++ % STRIP_COLORS.length];
 
   const {
+    strips: projectStrips,
+    viewBox: projectViewBox,
+    svgText: projectSvgText,
+    hidden: projectHidden,
+    layoutLayers,
+    setLayoutLayers,
+    layoutDensity,
+    setLayoutDensity,
+    layoutPxPerMm,
+    setLayoutPxPerMm,
+    layoutEditCounts,
+    setLayoutEditCounts,
+    layoutLayerGroups,
+    setLayoutLayerGroups,
+    layoutLayerOrder,
+    setLayoutLayerOrder,
+    projectRevision,
     setStrips: setProjectStrips,
     setViewBox: setProjectViewBox,
     setSvgText: setProjectSvgText,
     setHidden: setProjectHidden,
+    serializeProject,
+    loadProject,
     // Pattern state
     activePatternId, setActivePatternId,
     masterSpeed, setMasterSpeed,
@@ -421,12 +441,18 @@ export function LayoutScreen() {
     gammaValue, setGammaValue,
     patternParams, setPatternParams,
     bpm, setBpm,
-  } = useProject();
+  } = project;
 
   useEffect(() => { setProjectStrips(strips); },    [strips, setProjectStrips]);
   useEffect(() => { setProjectViewBox(viewBox); },  [viewBox, setProjectViewBox]);
   useEffect(() => { setProjectSvgText(svgText); },  [svgText, setProjectSvgText]);
   useEffect(() => { setProjectHidden(hidden); },    [hidden, setProjectHidden]);
+  useEffect(() => { setLayoutLayers(layers); },      [layers, setLayoutLayers]);
+  useEffect(() => { setLayoutDensity(density); },    [density, setLayoutDensity]);
+  useEffect(() => { setLayoutPxPerMm(pxPerMm); },    [pxPerMm, setLayoutPxPerMm]);
+  useEffect(() => { setLayoutEditCounts(editCounts); }, [editCounts, setLayoutEditCounts]);
+  useEffect(() => { setLayoutLayerGroups(layerGroups); }, [layerGroups, setLayoutLayerGroups]);
+  useEffect(() => { setLayoutLayerOrder(layerOrder); }, [layerOrder, setLayoutLayerOrder]);
 
   // ── Computed viewBox with pan/zoom ────────────────────────────────────────
 
@@ -499,6 +525,22 @@ export function LayoutScreen() {
     if (stripData.reversed) pixels = pixels.slice().reverse();
     return { ...stripData, pixels };
   };
+
+  useEffect(() => {
+    setViewBox(projectViewBox || '0 0 640 400');
+    setSvgText(projectSvgText ?? null);
+    setHidden(projectHidden || {});
+    setLayers(layoutLayers || []);
+    setDensity(layoutDensity ?? 60);
+    setPxPerMm(layoutPxPerMm ?? 3.7795);
+    setEditCounts(layoutEditCounts || {});
+    setLayerGroups(layoutLayerGroups || []);
+    setLayerOrder(layoutLayerOrder || (layoutLayers || []).map(l => ({ type: 'layer', id: l.layerId })));
+    setStrips((projectStrips || []).map(s => s.pixels ? s : rebuildStrip(s)));
+    setSelLayerId(null);
+    setSelStripId(null);
+    resetView();
+  }, [projectRevision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── File processing (shared by button + drag-drop) ────────────────────────
 
@@ -924,60 +966,25 @@ export function LayoutScreen() {
     // Intentionally using full pathSel as dep so name updates when selection changes
   }, [pathSel]);
 
-  // ── Restore from localStorage on mount ────────────────────────────────────
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      if (!data || (data.version !== 1 && data.version !== 2)) return;
-      if (data.svgText) {
-        const doc = new DOMParser().parseFromString(data.svgText, 'image/svg+xml');
-        const srcSvg = doc.querySelector('svg');
-        if (srcSvg) {
-          setSvgText(data.svgText);
-          setViewBox(data.viewBox || '0 0 640 400');
-          setPxPerMm(getPxPerMm(srcSvg));
-        }
-      }
-      if (data.density) setDensity(data.density);
-      if (data.layers?.length) {
-        setLayers(data.layers);
-        setLayerGroups(data.layerGroups || []);
-        setLayerOrder(data.layerOrder || data.layers.map(l => ({ type: 'layer', id: l.layerId })));
-      }
-      if (data.editCounts) setEditCounts(data.editCounts);
-      if (data.hidden) setHidden(data.hidden);
-      if (data.strips?.length) setStrips(data.strips.map(rebuildStrip));
-      // Restore pattern state if present (version 2+)
-      if (data.activePatternId)          setActivePatternId(data.activePatternId);
-      if (data.masterSpeed     != null)  setMasterSpeed(data.masterSpeed);
-      if (data.masterBrightness != null) setMasterBrightness(data.masterBrightness);
-      if (data.masterSaturation != null) setMasterSaturation(data.masterSaturation);
-      if (data.gammaEnabled    != null)  setGammaEnabled(data.gammaEnabled);
-      if (data.gammaValue      != null)  setGammaValue(data.gammaValue);
-      if (data.patternParams)            setPatternParams(data.patternParams);
-      if (data.bpm             != null)  setBpm(data.bpm);
-    } catch {}
-  }, []); // mount only
-
   // ── Save / Load project ────────────────────────────────────────────────────
 
   const saveProject = () => {
     const date = new Date().toISOString().slice(0, 10);
     const data = {
-      version: 2,
-      // Layout
-      strips: strips.map(({ pixels: _px, ...s }) => s),
-      layers: layers.map(({ subPaths: _sp, ...l }) => l),
-      svgText, viewBox, density, editCounts,
-      // Pattern
-      activePatternId,
-      masterSpeed, masterBrightness, masterSaturation,
-      gammaEnabled, gammaValue,
-      patternParams,
-      bpm,
+      ...serializeProject(),
+      layout: {
+        ...serializeProject().layout,
+        strips,
+        layers,
+        svgText,
+        viewBox,
+        density,
+        pxPerMm,
+        editCounts,
+        hidden,
+        layerGroups,
+        layerOrder,
+      },
     };
     download(`lightweaver-project-${date}.json`, JSON.stringify(data, null, 2));
   };
@@ -993,38 +1000,7 @@ export function LayoutScreen() {
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      if (!data || (data.version !== 1 && data.version !== 2)) { alert('Unrecognised file format.'); return; }
-      pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
-      if (data.svgText) {
-        const doc = new DOMParser().parseFromString(data.svgText, 'image/svg+xml');
-        const srcSvg = doc.querySelector('svg');
-        if (srcSvg) {
-          setSvgText(data.svgText);
-          setViewBox(data.viewBox || '0 0 640 400');
-          setPxPerMm(getPxPerMm(srcSvg));
-        }
-      }
-      if (data.density) setDensity(data.density);
-      const loadedLayers = data.layers || [];
-      setLayers(loadedLayers);
-      setEditCounts(data.editCounts || {});
-      setHidden({});
-      setSelLayerId(null);
-      setSelStripId(null);
-      setLayerGroups(data.layerGroups || []);
-      setLayerOrder(data.layerOrder || loadedLayers.map(l => ({ type: 'layer', id: l.layerId })));
-      if (data.strips?.length) setStrips(data.strips.map(rebuildStrip));
-      else setStrips([]);
-      resetView();
-      // Restore pattern state if present (version 2+)
-      if (data.activePatternId)          setActivePatternId(data.activePatternId);
-      if (data.masterSpeed     != null)  setMasterSpeed(data.masterSpeed);
-      if (data.masterBrightness != null) setMasterBrightness(data.masterBrightness);
-      if (data.masterSaturation != null) setMasterSaturation(data.masterSaturation);
-      if (data.gammaEnabled    != null)  setGammaEnabled(data.gammaEnabled);
-      if (data.gammaValue      != null)  setGammaValue(data.gammaValue);
-      if (data.patternParams)            setPatternParams(data.patternParams);
-      if (data.bpm             != null)  setBpm(data.bpm);
+      if (!loadProject(data)) { alert('Unrecognised file format.'); return; }
     } catch (err) {
       alert('Could not load file: ' + err.message);
     }
