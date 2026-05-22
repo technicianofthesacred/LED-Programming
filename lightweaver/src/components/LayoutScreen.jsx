@@ -3,6 +3,13 @@ import { samplePath as libSamplePath } from '../lib/mapper.js';
 import { WledBar } from './WledBar.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { PATTERNS } from '../data.js';
+import {
+  buildGammaLut,
+  compilePattern,
+  normalizePalette,
+  renderPixelFrame,
+} from '../lib/frameEngine.js';
+import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -60,6 +67,104 @@ function measurePathLen(d) {
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   p.setAttribute('d', d);
   return p.getTotalLength ? p.getTotalLength() : 0;
+}
+
+function offsetPixels(pixels = [], dx = 0, dy = 0) {
+  if (!dx && !dy) return pixels;
+  return pixels.map(px => ({ ...px, x: px.x + dx, y: px.y + dy }));
+}
+
+function offsetSamplePoints(points = [], dx = 0, dy = 0) {
+  if (!dx && !dy) return points;
+  return points.map(pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy }));
+}
+
+function offsetArrow(arrow, dx = 0, dy = 0) {
+  if (!arrow || (!dx && !dy)) return arrow;
+  const move = pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy });
+  return { tip: move(arrow.tip), left: move(arrow.left), right: move(arrow.right), start: move(arrow.start), end: move(arrow.end) };
+}
+
+function translateStripFromStart(strip, dx, dy) {
+  const nextX = (strip.x || 0) + dx;
+  const nextY = (strip.y || 0) + dy;
+  return {
+    ...strip,
+    x: nextX,
+    y: nextY,
+    pixels: sampleStripPixels(strip.pathData, strip.pixelCount, strip.reversed, nextX, nextY),
+  };
+}
+
+function sampleStripPixels(pathData, pixelCount, reversed = false, x = 0, y = 0) {
+  const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  pathEl.setAttribute('d', pathData);
+  let pixels = libSamplePath(pathEl, pixelCount);
+  if (reversed) pixels = pixels.slice().reverse();
+  return offsetPixels(pixels, x || 0, y || 0);
+}
+
+function rgbCss(rgb, fallback = 'white') {
+  if (!rgb) return fallback;
+  const r = Math.round(rgb.r ?? rgb.avgR ?? 0);
+  const g = Math.round(rgb.g ?? rgb.avgG ?? 0);
+  const b = Math.round(rgb.b ?? rgb.avgB ?? 0);
+  if (r + g + b <= 3) return fallback;
+  return `rgb(${r} ${g} ${b})`;
+}
+
+function startedFromDragHandle(e) {
+  return !!e.target?.closest?.('[data-drag-handle="true"]');
+}
+
+function translatePathData(pathData = '', dx = 0, dy = 0) {
+  if (!pathData || (!dx && !dy)) return pathData;
+  const tokens = pathData.match(/[a-zA-Z]|[-+]?(?:\d*\.\d+|\d+)(?:e[-+]?\d+)?/gi) || [];
+  const counts = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7 };
+  const out = [];
+  let i = 0;
+  let command = '';
+  const fmt = n => Number.parseFloat(Number(n).toFixed(3)).toString();
+  const isCommand = token => /^[a-zA-Z]$/.test(token);
+  const transform = (cmd, nums) => {
+    const upper = cmd.toUpperCase();
+    const absolute = cmd === upper;
+    if (!absolute) return nums;
+    const next = [...nums];
+    if (upper === 'H') next[0] += dx;
+    else if (upper === 'V') next[0] += dy;
+    else if (upper === 'A') {
+      next[5] += dx;
+      next[6] += dy;
+    } else {
+      for (let j = 0; j < next.length; j += 2) {
+        next[j] += dx;
+        next[j + 1] += dy;
+      }
+    }
+    return next;
+  };
+  while (i < tokens.length) {
+    if (isCommand(tokens[i])) command = tokens[i++];
+    if (!command) break;
+    const upper = command.toUpperCase();
+    if (upper === 'Z') {
+      out.push(command);
+      command = '';
+      continue;
+    }
+    const count = counts[upper];
+    if (!count) break;
+    out.push(command);
+    while (i < tokens.length && !isCommand(tokens[i])) {
+      const nums = tokens.slice(i, i + count).map(Number);
+      if (nums.length < count || nums.some(Number.isNaN)) break;
+      out.push(...transform(command, nums).map(fmt));
+      i += count;
+      if (upper === 'M') command = command === 'M' ? 'L' : 'l';
+    }
+  }
+  return out.join(' ');
 }
 
 function pathIntersectsRect(pathData, minX, minY, maxX, maxY) {
@@ -203,7 +308,7 @@ const STRIP_COLORS = [
 const DENSITY_OPTIONS = [30, 60, 96, 144];
 const MAX_HISTORY = 50;
 const LS_KEY = 'lw-layout-autosave';
-const GLOW_MODES = ['center', 'outward', 'inward', 'dots'];
+const GLOW_MODES = ['dots', 'center', 'outward', 'inward'];
 
 // ── SVG icon helpers ───────────────────────────────────────────────────────
 
@@ -288,19 +393,28 @@ function InlineRename({ value, onCommit, className, style }) {
 function LightCone({ uid, cx, cy, angle, color, reach = 90, intensity = 0.5 }) {
   const gid = `lcg-${uid}`;
   const a = (angle - 90) * Math.PI / 180;
-  // Offset the gradient center forward — gives directional bias with no hard edges
-  const fx = cx + Math.cos(a) * reach * 0.35;
-  const fy = cy + Math.sin(a) * reach * 0.35;
+  const spread = 34 * Math.PI / 180;
+  const fx = cx + Math.cos(a) * reach * 0.42;
+  const fy = cy + Math.sin(a) * reach * 0.42;
+  const left = { x: cx + Math.cos(a - spread) * reach, y: cy + Math.sin(a - spread) * reach };
+  const right = { x: cx + Math.cos(a + spread) * reach, y: cy + Math.sin(a + spread) * reach };
+  const far = { x: cx + Math.cos(a) * reach * 1.08, y: cy + Math.sin(a) * reach * 1.08 };
   return (
     <>
       <defs>
         <radialGradient id={gid} cx={fx} cy={fy} r={reach} gradientUnits="userSpaceOnUse">
-          <stop offset="0%"   stopColor={color} stopOpacity={0.8 * intensity}/>
-          <stop offset="45%"  stopColor={color} stopOpacity={0.2 * intensity}/>
+          <stop offset="0%"   stopColor={color} stopOpacity={0.95 * intensity}/>
+          <stop offset="48%"  stopColor={color} stopOpacity={0.28 * intensity}/>
           <stop offset="100%" stopColor={color} stopOpacity="0"/>
         </radialGradient>
       </defs>
-      <circle cx={fx} cy={fy} r={reach} fill={`url(#${gid})`} style={{ mixBlendMode: 'screen' }}/>
+      <path
+        data-light-cone={uid}
+        d={`M ${cx} ${cy} L ${left.x} ${left.y} Q ${far.x} ${far.y} ${right.x} ${right.y} Z`}
+        fill={`url(#${gid})`}
+        opacity={0.9}
+        style={{ mixBlendMode: 'screen' }}
+      />
     </>
   );
 }
@@ -325,6 +439,11 @@ function OmniHalo({ uid, cx, cy, color, reach = 90, intensity = 0.5 }) {
 
 export function LayoutScreen() {
   const project = useProject();
+  const [panelWidth, , beginPanelResize] = usePersistentPanelSize('lw-layout-panel-width', {
+    defaultValue: 360,
+    min: 280,
+    max: 680,
+  });
   const [viewBox, setViewBox]       = useState(project.viewBox || '0 0 640 400');
   const [svgText, setSvgText]       = useState(project.svgText ?? null);
   const [layers, setLayers]         = useState(project.layoutLayers || []);
@@ -334,9 +453,9 @@ export function LayoutScreen() {
   const [selLayerId, setSelLayerId] = useState(null);
   const [selStripId, setSelStripId] = useState(null);
   const [hidden, setHidden]         = useState(project.hidden || {});
-  const [showLight, setShowLight]   = useState(true);
+  const [showLight, setShowLight]   = useState(false);
   const [showLeds, setShowLeds]     = useState(true);
-  const [glowMode, setGlowMode]     = useState('center');
+  const [glowMode, setGlowMode]     = useState('dots');
   const [directedGlow, setDirectedGlow] = useState(false);
   const [showHeat, setShowHeat]     = useState(false);
   const [editCounts, setEditCounts] = useState(project.layoutEditCounts || {});
@@ -346,6 +465,8 @@ export function LayoutScreen() {
   const [expandedLayers, setExpandedLayers] = useState({});
   const [pathSel, setPathSel]       = useState([]);
   const [pathSelName, setPathSelName] = useState('');
+  const [selectedStripIds, setSelectedStripIds] = useState([]);
+  const [stripSelectionName, setStripSelectionName] = useState('');
 
   // Draw tool state
   const [drawMode, setDrawMode]     = useState(false);
@@ -372,6 +493,12 @@ export function LayoutScreen() {
   const isPanningRef      = useRef(false);
   const panAnchorRef      = useRef(null);
   const [isPanning, setIsPanning] = useState(false);
+  const stripDragRef      = useRef(null);
+  const stripDragFrameRef = useRef(0);
+  const stripDragPointRef = useRef(null);
+  const stripDragSuppressClickRef = useRef(false);
+  const stripsRef         = useRef(strips);
+  const [movingStripIds, setMovingStripIds] = useState([]);
 
   // Drag-and-drop
   const [dragOver, setDragOver] = useState(false);
@@ -390,6 +517,7 @@ export function LayoutScreen() {
   const [layerOrder, setLayerOrder]       = useState(project.layoutLayerOrder || []);  // [{type:'layer'|'group', id}]
   const [layerDragging, setLayerDragging] = useState(null);
   const [layerDragOver, setLayerDragOver] = useState(null);
+  const [stripGroupDragOver, setStripGroupDragOver] = useState(null);
 
   // Refs so snapshot/save always capture latest values without dependency churn
   const layerGroupsRef = useRef(layerGroups);
@@ -434,16 +562,21 @@ export function LayoutScreen() {
     loadProject,
     // Pattern state
     activePatternId, setActivePatternId,
+    palette,
     masterSpeed, setMasterSpeed,
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
+    masterHueShift,
     gammaEnabled, setGammaEnabled,
     gammaValue, setGammaValue,
     patternParams, setPatternParams,
     bpm, setBpm,
+    symSettings,
+    audioBands,
   } = project;
 
   useEffect(() => { setProjectStrips(strips); },    [strips, setProjectStrips]);
+  useEffect(() => { stripsRef.current = strips; },   [strips]);
   useEffect(() => { setProjectViewBox(viewBox); },  [viewBox, setProjectViewBox]);
   useEffect(() => { setProjectSvgText(svgText); },  [svgText, setProjectSvgText]);
   useEffect(() => { setProjectHidden(hidden); },    [hidden, setProjectHidden]);
@@ -453,6 +586,9 @@ export function LayoutScreen() {
   useEffect(() => { setLayoutEditCounts(editCounts); }, [editCounts, setLayoutEditCounts]);
   useEffect(() => { setLayoutLayerGroups(layerGroups); }, [layerGroups, setLayoutLayerGroups]);
   useEffect(() => { setLayoutLayerOrder(layerOrder); }, [layerOrder, setLayoutLayerOrder]);
+  useEffect(() => {
+    setSelectedStripIds(prev => prev.filter(id => strips.some(s => s.id === id)));
+  }, [strips]);
 
   // ── Computed viewBox with pan/zoom ────────────────────────────────────────
 
@@ -519,11 +655,10 @@ export function LayoutScreen() {
   // ── Restore strips from saved data ────────────────────────────────────────
 
   const rebuildStrip = (stripData) => {
-    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    pathEl.setAttribute('d', stripData.pathData);
-    let pixels = libSamplePath(pathEl, stripData.pixelCount);
-    if (stripData.reversed) pixels = pixels.slice().reverse();
-    return { ...stripData, pixels };
+    return {
+      ...stripData,
+      pixels: sampleStripPixels(stripData.pathData, stripData.pixelCount, stripData.reversed, stripData.x || 0, stripData.y || 0),
+    };
   };
 
   useEffect(() => {
@@ -648,6 +783,7 @@ export function LayoutScreen() {
       id: layer.layerId, name: layer.name,
       pathData: layer.pathData, pixelCount: count,
       pixels, color: layer._color,
+      x: 0, y: 0,
       emit: layer._emit || 'dir', angle: layer._angle || 0,
       reversed: false,
       speed: 1.0,
@@ -663,6 +799,144 @@ export function LayoutScreen() {
       el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
   };
+
+  const stripGroupMember = (s) => ({
+    type: 'strip',
+    stripId: s.id,
+    pathId: s.id,
+    layerId: s.id,
+    pathData: s.pathData,
+    name: s.name,
+    svgLength: s.svgLength || 0,
+    pixelCount: s.pixelCount,
+    color: s.color,
+  });
+
+  const readDraggedStripIds = (e) => {
+    try {
+      const raw = e.dataTransfer.getData('application/x-lightweaver-strip');
+      const ids = JSON.parse(raw || '[]');
+      return Array.isArray(ids) ? ids.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const readDraggedPathEntries = (e) => {
+    try {
+      const raw = e.dataTransfer.getData('application/x-lightweaver-path');
+      const entries = JSON.parse(raw || '[]');
+      return Array.isArray(entries) ? entries.filter(entry => entry?.pathId && entry?.pathData) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const createLayerGroupFromEntries = useCallback((entries, nameOverride = '') => {
+    const unique = [];
+    const seen = new Set();
+    for (const entry of entries) {
+      if (!entry?.pathId || seen.has(entry.pathId)) continue;
+      seen.add(entry.pathId);
+      unique.push(entry);
+    }
+    if (unique.length < 2) return;
+    const groupId = `grp-${Date.now()}`;
+    const baseName = unique[0].name?.split('·')[0]?.trim();
+    const name = nameOverride.trim() || baseName || `Group ${layerGroups.length + 1}`;
+    const newGroup = { groupId, name, _hidden: false, _expanded: true, members: unique.map(p => ({ ...p })) };
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayerGroups(prev => [...prev, newGroup]);
+    setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
+    setPathSel(unique);
+  }, [layerGroups.length, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+
+  const addPathsToGroup = useCallback((groupId, entries) => {
+    const group = layerGroups.find(g => g.groupId === groupId);
+    if (!group || group.type === 'strip') return;
+    const incoming = entries.filter(entry => entry?.pathId && entry?.pathData);
+    if (!incoming.length) return;
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayerGroups(prev => prev.map(g => {
+      if (g.groupId !== groupId) return g;
+      const existingIds = new Set(g.members.map(m => m.pathId));
+      const nextMembers = [...g.members];
+      incoming.forEach(entry => {
+        if (!existingIds.has(entry.pathId)) nextMembers.push({ ...entry });
+      });
+      return { ...g, _expanded: true, members: nextMembers };
+    }));
+    setPathSel(incoming);
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+
+  const togglePathSelection = useCallback((entry, additive = false) => {
+    setSelLayerId(null);
+    setSelStripId(null);
+    setSelectedStripIds([]);
+    setStripSelectionName('');
+    setPathSel(prev => {
+      if (!additive) return [entry];
+      return prev.some(p => p.pathId === entry.pathId)
+        ? prev.filter(p => p.pathId !== entry.pathId)
+        : [...prev, entry];
+    });
+  }, []);
+
+  const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
+    const uniqueIds = [...new Set(stripIds)].filter(Boolean);
+    const picked = strips.filter(s => uniqueIds.includes(s.id));
+    if (picked.length < 2) return;
+
+    const pickedIds = new Set(picked.map(s => s.id));
+    const emptiedGroupIds = new Set(layerGroups
+      .filter(g => g.members.length > 0 && g.members.every(m => pickedIds.has(m.stripId || m.pathId)))
+      .map(g => g.groupId));
+    const groupId = `strip-grp-${Date.now()}`;
+    const name = nameOverride.trim() || stripSelectionName.trim() || `Strip Group ${layerGroups.length + 1}`;
+    const newGroup = {
+      groupId,
+      type: 'strip',
+      name,
+      _hidden: false,
+      _expanded: true,
+      members: picked.map(stripGroupMember),
+    };
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayerGroups(prev => [
+      ...prev
+        .map(g => ({ ...g, members: g.members.filter(m => !pickedIds.has(m.stripId || m.pathId)) }))
+        .filter(g => g.members.length > 0),
+      newGroup,
+    ]);
+    setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev.filter(item => item.id !== groupId && !emptiedGroupIds.has(item.id))]);
+    setSelectedStripIds(picked.map(s => s.id));
+    setStripSelectionName('');
+  }, [strips, layerGroups, stripSelectionName, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+
+  const addStripsToGroup = useCallback((groupId, stripIds) => {
+    const group = layerGroups.find(g => g.groupId === groupId);
+    if (!group || group.type !== 'strip') return;
+    const ids = [...new Set(stripIds)].filter(Boolean);
+    const picked = strips.filter(s => ids.includes(s.id));
+    if (!picked.length) return;
+    const pickedIds = new Set(picked.map(s => s.id));
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayerGroups(prev => prev
+      .map(g => {
+        const existing = g.members.filter(m => !pickedIds.has(m.stripId || m.pathId));
+        if (g.groupId !== groupId) return { ...g, members: existing };
+        return {
+          ...g,
+          type: 'strip',
+          _expanded: true,
+          members: [...existing, ...picked.map(stripGroupMember)],
+        };
+      })
+      .filter(g => g.members.length > 0));
+    setSelectedStripIds(picked.map(s => s.id));
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
 
   const addStrip = () => {
     if (!selLayer) return;
@@ -687,6 +961,7 @@ export function LayoutScreen() {
       pixelCount: count,
       pixels,
       color: layer._color,
+      x: 0, y: 0,
       emit: 'dir',
       angle: 0,
       reversed: false,
@@ -703,6 +978,82 @@ export function LayoutScreen() {
     scrollToStrip(newStrip.id);
   };
 
+  const addSelectedPathsAsStrips = useCallback((mode = 'merged') => {
+    if (!pathSel.length) return;
+    const now = Date.now();
+
+    if (mode === 'merged') {
+      const combinedPathData = pathSel.map(p => p.pathData).join(' ');
+      const totalLen = pathSel.reduce((s, p) => s + p.svgLength, 0);
+      const count = Math.max(1, Math.round((totalLen / pxPerMm) * density / 1000));
+      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pathEl.setAttribute('d', combinedPathData);
+      const pixels = libSamplePath(pathEl, count);
+      const name = pathSelName.trim() || `Strip ${strips.length + 1}`;
+      const newStrip = {
+        id: `sel-${now}`, name,
+        pathData: combinedPathData, pixelCount: count, pixels,
+        x: 0, y: 0,
+        color: nextColor(), emit: 'dir', angle: 0, reversed: false,
+        speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
+      };
+      const newStrips = [...strips, newStrip];
+      pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+      setStrips(newStrips);
+      setSelStripId(newStrip.id);
+      setSelectedStripIds([newStrip.id]);
+      lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
+      setPathSel([]);
+      setPathSelName('');
+      scrollToStrip(newStrip.id);
+      return;
+    }
+
+    const created = pathSel.map((p, index) => {
+      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pathEl.setAttribute('d', p.pathData);
+      const count = Math.max(1, Math.round((p.svgLength / pxPerMm) * density / 1000));
+      const pixels = libSamplePath(pathEl, count);
+      const layerColor = layers.find(l => l.layerId === p.layerId)?._color;
+      return {
+        id: `sel-${now}-${index}`,
+        name: p.name,
+        pathData: p.pathData,
+        pixelCount: count,
+        pixels,
+        x: 0, y: 0,
+        color: layerColor || nextColor(),
+        emit: 'dir', angle: 0, reversed: false,
+        speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
+      };
+    });
+    const newStrips = [...strips, ...created];
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setStrips(newStrips);
+    setSelStripId(created[0]?.id || null);
+    setSelectedStripIds(created.map(s => s.id));
+
+    if (mode === 'grouped' && created.length > 1) {
+      const groupId = `strip-grp-${now}`;
+      const name = pathSelName.trim() || `Strip Group ${layerGroups.length + 1}`;
+      const newGroup = {
+        groupId,
+        type: 'strip',
+        name,
+        _hidden: false,
+        _expanded: true,
+        members: created.map(stripGroupMember),
+      };
+      setLayerGroups(prev => [...prev, newGroup]);
+      setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
+    }
+
+    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
+    setPathSel([]);
+    setPathSelName('');
+    scrollToStrip(created[0]?.id);
+  }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushHistory, lsSave]);
+
   const addAllStrips = useCallback(() => {
     const newStrips = layers.filter(l => l.pathData).map(l => makeStrip(l, getLedCount(l)));
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
@@ -716,12 +1067,20 @@ export function LayoutScreen() {
     const newStrips = strips.filter(s => s.id !== id);
     const newEditCounts = { ...editCounts };
     delete newEditCounts[id];
+    const emptiedGroupIds = new Set(layerGroups
+      .filter(g => g.members.length > 0 && g.members.every(m => (m.stripId || m.pathId) === id))
+      .map(g => g.groupId));
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);
+    setLayerGroups(prev => prev
+      .map(g => ({ ...g, members: g.members.filter(m => (m.stripId || m.pathId) !== id) }))
+      .filter(g => g.members.length > 0));
+    setLayerOrder(prev => prev.filter(item => !emptiedGroupIds.has(item.id)));
+    setSelectedStripIds(prev => prev.filter(stripId => stripId !== id));
     setEditCounts(newEditCounts);
     if (selStripId === id) setSelStripId(null);
     lsSave(newStrips, layers, newEditCounts, hidden, svgText, viewBox, density);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushHistory, lsSave]);
 
   const reverseStrip = (id) => {
     const newStrips = strips.map(s => {
@@ -735,12 +1094,116 @@ export function LayoutScreen() {
     lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
   };
 
-  const selectLayer = (layerId) => { setSelLayerId(layerId); setSelStripId(null); };
+  const selectLayer = (layerId) => {
+    setSelLayerId(layerId);
+    setSelStripId(null);
+    setSelectedStripIds([]);
+    setStripSelectionName('');
+  };
+
   const selectStrip = (id) => {
     setSelStripId(id);
+    setSelectedStripIds([id]);
+    setStripSelectionName('');
+    setPathSel([]);
+    setPathSelName('');
     const s = strips.find(st => st.id === id);
     if (s) setSelLayerId(s.id);
   };
+
+  const toggleStripSelection = useCallback((id) => {
+    setSelectedStripIds(prev => {
+      const base = prev.length ? prev : (selStripId ? [selStripId] : []);
+      return base.includes(id) ? base.filter(x => x !== id) : [...base, id];
+    });
+    setSelStripId(id);
+    setSelLayerId(null);
+    setPathSel([]);
+    setPathSelName('');
+  }, [selStripId]);
+
+  const startStripMove = useCallback((event, strip) => {
+    if (event.button !== 0 || drawMode || !svgRef.current) return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      toggleStripSelection(strip.id);
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const ids = selectedStripIds.includes(strip.id) ? selectedStripIds : [strip.id];
+    const idSet = new Set(ids);
+    const startPoint = svgPt(svgRef.current, event.clientX, event.clientY);
+    const startStrips = strips.filter(s => idSet.has(s.id)).map(s => ({
+      ...s,
+      pixels: (s.pixels || []).map(px => ({ ...px })),
+    }));
+    if (!startStrips.length) return;
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setSelectedStripIds(ids);
+    setSelStripId(strip.id);
+    setSelLayerId(null);
+    setPathSel([]);
+    setPathSelName('');
+    setMovingStripIds(ids);
+    stripDragSuppressClickRef.current = false;
+    stripDragPointRef.current = null;
+    stripDragRef.current = {
+      ids,
+      startPoint,
+      startStrips,
+      startMap: new Map(startStrips.map(s => [s.id, s])),
+    };
+
+    const applyStripDragPoint = (clientX, clientY, commitPixels = false) => {
+      const drag = stripDragRef.current;
+      if (!drag || !svgRef.current) return stripsRef.current;
+      const pt = svgPt(svgRef.current, clientX, clientY);
+      const dx = pt.x - drag.startPoint.x;
+      const dy = pt.y - drag.startPoint.y;
+      if (Math.hypot(dx, dy) > 1.5) stripDragSuppressClickRef.current = true;
+      const next = stripsRef.current.map(s => {
+        const start = drag.startMap.get(s.id);
+        if (!start) return s;
+        return commitPixels
+          ? translateStripFromStart(start, dx, dy)
+          : { ...s, x: (start.x || 0) + dx, y: (start.y || 0) + dy };
+      });
+      stripsRef.current = next;
+      setStrips(next);
+      return next;
+    };
+
+    const onMove = (moveEvent) => {
+      stripDragPointRef.current = { clientX: moveEvent.clientX, clientY: moveEvent.clientY };
+      if (stripDragFrameRef.current) return;
+      stripDragFrameRef.current = requestAnimationFrame(() => {
+        stripDragFrameRef.current = 0;
+        const point = stripDragPointRef.current;
+        if (point) applyStripDragPoint(point.clientX, point.clientY, false);
+      });
+    };
+
+    const onUp = (upEvent) => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      if (stripDragFrameRef.current) {
+        cancelAnimationFrame(stripDragFrameRef.current);
+        stripDragFrameRef.current = 0;
+      }
+      const finalPoint = stripDragPointRef.current ?? { clientX: upEvent.clientX, clientY: upEvent.clientY };
+      const finalStrips = applyStripDragPoint(finalPoint.clientX, finalPoint.clientY, true);
+      stripDragPointRef.current = null;
+      stripDragRef.current = null;
+      setMovingStripIds([]);
+      lsSave(finalStrips, layers, editCounts, hidden, svgText, viewBox, density);
+      setTimeout(() => { stripDragSuppressClickRef.current = false; }, 0);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave, toggleStripSelection]);
 
   // ── Rename helpers ─────────────────────────────────────────────────────────
 
@@ -788,16 +1251,88 @@ export function LayoutScreen() {
   // ── Layer group management ─────────────────────────────────────────────────
 
   const createLayerGroup = useCallback(() => {
-    if (pathSel.length < 2) return;
-    const groupId = `grp-${Date.now()}`;
-    const baseName = pathSel[0].name.split('·')[0].trim();
-    const name = baseName || `Group ${layerGroups.length + 1}`;
-    const newGroup = { groupId, name, _hidden: false, _expanded: true, members: pathSel.map(p => ({ ...p })) };
-    setLayerGroups(prev => [...prev, newGroup]);
-    setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
+    createLayerGroupFromEntries(pathSel);
     setPathSel([]);
     setPathSelName('');
-  }, [pathSel, layerGroups.length]);
+  }, [pathSel, createLayerGroupFromEntries]);
+
+  const groupSelectedStrips = useCallback(() => {
+    createStripGroupFromIds(selectedStripIds);
+  }, [selectedStripIds, createStripGroupFromIds]);
+
+  const mergeSelectedStrips = useCallback(() => {
+    const selected = new Set(selectedStripIds);
+    const picked = strips.filter(s => selected.has(s.id));
+    if (picked.length < 2) return;
+
+    const first = picked[0];
+    const pickedIds = new Set(picked.map(s => s.id));
+    const emptiedGroupIds = new Set(layerGroups
+      .filter(g => g.members.length > 0 && g.members.every(m => pickedIds.has(m.stripId || m.pathId)))
+      .map(g => g.groupId));
+    const mergedId = `merged-${Date.now()}`;
+    const mergedName = stripSelectionName.trim() || `Merged Strip ${strips.length - picked.length + 1}`;
+    const pixels = picked.flatMap(s => s.pixels?.length ? s.pixels : []);
+    const mergedStrip = {
+      ...first,
+      id: mergedId,
+      name: mergedName,
+      pathData: picked.map(s => translatePathData(s.pathData, s.x || 0, s.y || 0)).filter(Boolean).join(' '),
+      pixelCount: picked.reduce((sum, s) => sum + (s.pixelCount || 0), 0),
+      pixels,
+      x: 0,
+      y: 0,
+      color: first.color || nextColor(),
+      reversed: false,
+      mergedFrom: picked.map(s => ({ id: s.id, name: s.name, pixelCount: s.pixelCount })),
+    };
+    const insertAt = strips.findIndex(s => pickedIds.has(s.id));
+    const remaining = strips.filter(s => !pickedIds.has(s.id));
+    const newStrips = [...remaining];
+    newStrips.splice(Math.max(0, insertAt), 0, mergedStrip);
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayerGroups(prev => prev
+      .map(g => ({ ...g, members: g.members.filter(m => !pickedIds.has(m.stripId || m.pathId)) }))
+      .filter(g => g.members.length > 0));
+    setLayerOrder(prev => prev.filter(item => !emptiedGroupIds.has(item.id)));
+    setStrips(newStrips);
+    setHidden(prev => {
+      const next = { ...prev };
+      pickedIds.forEach(id => { delete next[id]; });
+      return next;
+    });
+    setSelLayerId(null);
+    setSelStripId(mergedId);
+    setSelectedStripIds([mergedId]);
+    setStripSelectionName('');
+    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
+    scrollToStrip(mergedId);
+  }, [selectedStripIds, strips, stripSelectionName, layerGroups, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+
+  const removeSelectedStrips = useCallback(() => {
+    const selected = new Set(selectedStripIds);
+    if (selected.size < 2) return;
+    const newStrips = strips.filter(s => !selected.has(s.id));
+    const emptiedGroupIds = new Set(layerGroups
+      .filter(g => g.members.length > 0 && g.members.every(m => selected.has(m.stripId || m.pathId)))
+      .map(g => g.groupId));
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setStrips(newStrips);
+    setLayerGroups(prev => prev
+      .map(g => ({ ...g, members: g.members.filter(m => !selected.has(m.stripId || m.pathId)) }))
+      .filter(g => g.members.length > 0));
+    setLayerOrder(prev => prev.filter(item => !emptiedGroupIds.has(item.id)));
+    setHidden(prev => {
+      const next = { ...prev };
+      selected.forEach(id => { delete next[id]; });
+      return next;
+    });
+    setSelectedStripIds([]);
+    setStripSelectionName('');
+    if (selected.has(selStripId)) setSelStripId(null);
+    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
+  }, [selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushHistory, lsSave]);
 
   const deleteLayerGroup = useCallback((groupId) => {
     setLayerGroups(prev => prev.filter(g => g.groupId !== groupId));
@@ -807,8 +1342,17 @@ export function LayoutScreen() {
   const toggleGroupExpanded = (groupId) =>
     setLayerGroups(prev => prev.map(g => g.groupId === groupId ? { ...g, _expanded: !g._expanded } : g));
 
-  const toggleGroupHidden = (groupId) =>
-    setLayerGroups(prev => prev.map(g => g.groupId === groupId ? { ...g, _hidden: !g._hidden } : g));
+  const toggleGroupHidden = useCallback((groupId) => {
+    const group = layerGroups.find(g => g.groupId === groupId);
+    if (!group) return;
+    const nextHidden = !group._hidden;
+    setLayerGroups(prev => prev.map(g => g.groupId === groupId ? { ...g, _hidden: nextHidden } : g));
+    setHidden(prev => {
+      const next = { ...prev };
+      group.members.forEach(m => { next[m.stripId || m.pathId] = nextHidden; });
+      return next;
+    });
+  }, [layerGroups]);
 
   // ── Layer order (drag-and-drop) ────────────────────────────────────────────
 
@@ -844,6 +1388,23 @@ export function LayoutScreen() {
     });
   }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
 
+  const setStripOffset = useCallback((id, nextX, nextY, withHistory = false) => {
+    setStrips(prev => {
+      if (withHistory) pushHistory(prev, layers, editCounts, hidden, svgText, viewBox, density);
+      const next = prev.map(s => {
+        if (s.id !== id) return s;
+        return {
+          ...s,
+          x: nextX,
+          y: nextY,
+          pixels: sampleStripPixels(s.pathData, s.pixelCount, s.reversed, nextX, nextY),
+        };
+      });
+      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
+      return next;
+    });
+  }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+
   const resampleStrip = useCallback((id, newCount) => {
     setStrips(prev => {
       const next = prev.map(s => {
@@ -863,8 +1424,7 @@ export function LayoutScreen() {
         pathEl.setAttribute('d', s.pathData);
         const svgLen = pathEl.getTotalLength ? pathEl.getTotalLength() : 0;
         const count = Math.max(1, Math.round((svgLen / pxPerMm) * newDensity / 1000));
-        let pixels = libSamplePath(pathEl, count);
-        if (s.reversed) pixels = pixels.slice().reverse();
+        const pixels = sampleStripPixels(s.pathData, count, s.reversed, s.x || 0, s.y || 0);
         return { ...s, pixelCount: count, pixels };
       });
       return saved;
@@ -906,6 +1466,7 @@ export function LayoutScreen() {
       id: `drawn-${Date.now()}`,
       name,
       pathData, pixelCount: count, pixels, color,
+      x: 0, y: 0,
       emit: 'dir', angle: 0, reversed: false,
       speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
     };
@@ -1066,7 +1627,14 @@ export function LayoutScreen() {
       if (e.key === 'Escape') {
         if (drawMode) { setDrawMode(false); setWaypoints([]); setGhostPt(null); }
         else if (pendingDraw) { cancelDraw(); }
-        else { setSelLayerId(null); setSelStripId(null); }
+        else {
+          setSelLayerId(null);
+          setSelStripId(null);
+          setSelectedStripIds([]);
+          setStripSelectionName('');
+          setPathSel([]);
+          setPathSelName('');
+        }
         return;
       }
 
@@ -1082,7 +1650,15 @@ export function LayoutScreen() {
         case 'd': setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); break;
         case 'x':
         case 'Delete':
-          if (selStripId) removeStrip(selStripId);
+          if (selectedStripIds.length > 1) removeSelectedStrips();
+          else if (selStripId) removeStrip(selStripId);
+          break;
+        case 'g':
+          if (selectedStripIds.length > 1) groupSelectedStrips();
+          else if (pathSel.length > 1) createLayerGroup();
+          break;
+        case 'm':
+          if (selectedStripIds.length > 1) mergeSelectedStrips();
           break;
         case 'h':
           if (selStripId) setHidden(h => ({ ...h, [selStripId]: !h[selStripId] }));
@@ -1110,17 +1686,92 @@ export function LayoutScreen() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selStripId, selLayerId, removeStrip, doUndo, doRedo, layers, addAllStrips]);
+  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
 
   // ── Memoised visualisation data ────────────────────────────────────────────
 
-  const stripSamples = useMemo(() =>
-    Object.fromEntries(strips.map(s => [s.id, sampleForViz(s.pathData, s.pixelCount)])), [strips]);
+  const isEditingGesture = movingStripIds.length > 0 || !!rubberBand;
 
-  const stripArrows = useMemo(() =>
-    Object.fromEntries(strips.map(s => [s.id, calcArrow(s.pathData, s.reversed ?? false)])), [strips]);
+  const layoutPatternFrame = useMemo(() => {
+    if (!strips.length) return new Map();
+    const frameStrips = strips
+      .filter(s => !hidden[s.id])
+      .map(s => ({
+        id: s.id,
+        patternId: s.patternId || null,
+        speed: s.speed,
+        brightness: s.brightness,
+        hueShift: s.hueShift,
+        pts: (s.pixels || []).map((px, i) => ({
+          x: px.x,
+          y: px.y,
+          p: (s.pixels || []).length > 1 ? i / ((s.pixels || []).length - 1) : 0.5,
+          i,
+        })),
+      }));
+    if (!frameStrips.length) return new Map();
+
+    const perStripFns = new Map();
+    for (const s of frameStrips) {
+      if (s.patternId && !perStripFns.has(s.patternId)) {
+        const fn = compilePattern(s.patternId);
+        if (fn) perStripFns.set(s.patternId, fn);
+      }
+    }
+
+    const frame = renderPixelFrame({
+      t: 8.75,
+      strips: frameStrips,
+      patternId: activePatternId,
+      activeFn: compilePattern(activePatternId),
+      params: patternParams?.[activePatternId] || {},
+      patternParamsById: patternParams,
+      paletteNorm: normalizePalette(palette),
+      bpm,
+      masterSpeed,
+      masterBrightness,
+      masterSaturation,
+      masterHueShift,
+      gammaLUT: buildGammaLut(gammaEnabled, gammaValue),
+      symSettings,
+      audioBands: null,
+      perStripFns,
+    });
+    return new Map(frame.stripFrames.map(stripFrame => [stripFrame.id, stripFrame]));
+  }, [
+    strips,
+    hidden,
+    activePatternId,
+    patternParams,
+    palette,
+    bpm,
+    masterSpeed,
+    masterBrightness,
+    masterSaturation,
+    masterHueShift,
+    gammaEnabled,
+    gammaValue,
+    symSettings,
+  ]);
+
+  const stripSamples = useMemo(() => {
+    if (!showLight || isEditingGesture || glowMode === 'dots') return {};
+    return Object.fromEntries(strips.map(s => [
+      s.id,
+      offsetSamplePoints(sampleForViz(s.pathData, s.pixelCount), s.x || 0, s.y || 0),
+    ]));
+  }, [strips, showLight, isEditingGesture, glowMode]);
+
+  const stripArrows = useMemo(() => {
+    if (isEditingGesture) return {};
+    return Object.fromEntries(strips.map(s => [s.id, offsetArrow(calcArrow(s.pathData, s.reversed ?? false), s.x || 0, s.y || 0)]));
+  }, [strips, isEditingGesture]);
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
+  const selectedStrips = useMemo(() => {
+    const selected = new Set(selectedStripIds);
+    return strips.filter(s => selected.has(s.id));
+  }, [strips, selectedStripIds]);
 
   // ── Viewport scale for adaptive sizing ────────────────────────────────────
 
@@ -1162,6 +1813,8 @@ export function LayoutScreen() {
         ? [...prev, ...hits.filter(h => !prev.some(p => p.pathId === h.pathId))]
         : hits);
       setSelLayerId(null);
+      setSelectedStripIds([]);
+      setStripSelectionName('');
     }
   }, [layers, hidden]);
   useEffect(() => { lassoFinishRef.current = finishLasso; }, [finishLasso]);
@@ -1221,6 +1874,8 @@ export function LayoutScreen() {
       setPathSelName('');
       setSelLayerId(null);
       setSelStripId(null);
+      setSelectedStripIds([]);
+      setStripSelectionName('');
     }
   };
 
@@ -1299,12 +1954,19 @@ export function LayoutScreen() {
 
   const existingStrip = selLayer ? strips.find(s => s.id === selLayer.layerId) : null;
 
+  const enableLightPreview = useCallback(() => {
+    setShowLight(true);
+    setGlowMode(mode => mode === 'dots' ? 'center' : mode);
+  }, []);
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const glowStdDev = glowMode === 'outward' ? 5 : glowMode === 'inward' ? 1 : 2.5;
+  const effectiveGlowMode = isEditingGesture ? 'dots' : glowMode;
+  const effectiveShowLight = showLight && !isEditingGesture && effectiveGlowMode !== 'dots';
+  const glowStdDev = effectiveGlowMode === 'outward' ? 2.8 : effectiveGlowMode === 'inward' ? 0.8 : 1.6;
 
   return (
-    <div className="lw-layout-screen">
+    <div className="lw-layout-screen" style={{ '--lw-layout-panel-width': `${panelWidth}px` }}>
 
       {/* ── Hidden file inputs ─────────────────────────────────────── */}
       <input ref={fileRef} type="file" accept=".svg"  style={{ display: 'none' }} onChange={handleFile}/>
@@ -1402,7 +2064,7 @@ export function LayoutScreen() {
           <span className="tbar-divider"/>
 
           <button className={`btn ${showLight ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setShowLight(v => !v)}
-                  title="Toggle light visualization">
+                  title="Toggle ambient light preview (pauses while dragging for speed)">
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3">
               <circle cx="6" cy="6" r="2"/>
               <path d="M6 1v1.5M6 9.5V11M1 6h1.5M9.5 6H11M2.5 2.5l1 1M8.5 8.5l1 1M2.5 9.5l1-1M8.5 3.5l1-1"/>
@@ -1419,13 +2081,16 @@ export function LayoutScreen() {
             Heat
           </button>
           <button className={`btn ${directedGlow ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => setDirectedGlow(v => !v)}
+                  onClick={() => {
+                    setDirectedGlow(v => !v);
+                    enableLightPreview();
+                  }}
                   title="Directed glow — elongate bloom along strip direction">
             ◈
           </button>
           <button className="btn btn-ghost"
                   onClick={() => setGlowMode(m => GLOW_MODES[(GLOW_MODES.indexOf(m) + 1) % GLOW_MODES.length])}
-                  title="Cycle glow mode">
+                  title="Cycle glow mode (dots is fastest for editing)">
             ◉ {glowMode}
           </button>
         </div>
@@ -1471,14 +2136,14 @@ export function LayoutScreen() {
             onWheel={handleWheel}
           >
             <defs>
-              {glowMode !== 'dots' && (
+              {effectiveGlowMode !== 'dots' && (
                 <filter id="lw-led-bloom" x="-60%" y="-60%" width="220%" height="220%">
                   <feGaussianBlur stdDeviation={glowStdDev}/>
                 </filter>
               )}
               {/* Single filter for all ambient light — one blur op on the whole group, not per-element */}
               <filter id="lw-light-glow" x="-150%" y="-150%" width="400%" height="400%">
-                <feGaussianBlur stdDeviation={vbScale * 14}/>
+                <feGaussianBlur stdDeviation={vbScale * 4}/>
               </filter>
               <radialGradient id="heat-grad" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stopColor="oklch(80% 0.2 30)" stopOpacity="1"/>
@@ -1490,7 +2155,7 @@ export function LayoutScreen() {
             {artworkHTML && (
               <g ref={artworkRef}
                  style={{ pointerEvents: 'none', filter: 'saturate(3) brightness(1.4)', mixBlendMode: 'screen',
-                          opacity: showLight ? 0 : 1, transition: 'opacity 0.2s' }}
+                          opacity: effectiveShowLight ? 0.18 : 1, transition: isEditingGesture ? 'none' : 'opacity 0.2s' }}
                  dangerouslySetInnerHTML={{ __html: artworkHTML }}/>
             )}
 
@@ -1509,15 +2174,15 @@ export function LayoutScreen() {
             )}
 
             {/* ── Selected layer glow (only when selected from panel, not canvas path-click) ── */}
-            {selLayer && pathSel.length === 0 && (() => {
+            {selLayer && !selStripId && pathSel.length === 0 && (() => {
               const glowPaths = selLayer.subPaths?.length > 0
                 ? selLayer.subPaths.map(sp => ({ id: sp.pathId, d: sp.pathData }))
                 : [{ id: selLayer.layerId, d: selLayer.pathData }];
               return glowPaths.filter(p => p.d).map(p => (
                 <g key={p.id} style={{ pointerEvents: 'none' }}>
                   <path d={p.d} stroke={selLayer._color} strokeWidth="2" strokeOpacity={0.5} fill="none" strokeLinecap="round"/>
-                  <path d={p.d} stroke="#4cc9f0" strokeWidth="10" strokeOpacity={0.15} fill="none" strokeLinecap="round"/>
-                  <path d={p.d} stroke="#4cc9f0" strokeWidth="4"  strokeOpacity={0.6}  fill="none" strokeLinecap="round"/>
+                  <path d={p.d} stroke="#4cc9f0" strokeWidth="7" strokeOpacity={0.12} fill="none" strokeLinecap="round"/>
+                  <path d={p.d} stroke="#4cc9f0" strokeWidth="3" strokeOpacity={0.55} fill="none" strokeLinecap="round"/>
                   <path d={p.d} stroke="white"   strokeWidth="1"  strokeOpacity={0.85} fill="none" strokeLinecap="round"/>
                 </g>
               ));
@@ -1546,20 +2211,22 @@ export function LayoutScreen() {
                         onMouseLeave={() => { setHoveredLayerId(null); setHoveredSubPathId(null); }}
                         onClick={e => {
                           e.stopPropagation();
-                          if (e.shiftKey) {
-                            // Shift-click: toggle this path in/out of selection
-                            setPathSel(prev => prev.some(p => p.pathId === t.pathId)
-                              ? prev.filter(p => p.pathId !== t.pathId)
-                              : [...prev, entry]);
-                          } else {
+	                          if (e.shiftKey) {
+	                            // Shift-click: toggle this path in/out of selection
+	                            setPathSel(prev => prev.some(p => p.pathId === t.pathId)
+	                              ? prev.filter(p => p.pathId !== t.pathId)
+	                              : [...prev, entry]);
+	                          } else {
                             // Single click: select only this individual path
                             setPathSel([entry]);
                             setSelStripId(null);
                             // Clear inspector — canvas clicks don't open the layer inspector
-                            // (use the layer panel rows for that)
-                            setSelLayerId(null);
-                          }
-                        }}/>
+	                            // (use the layer panel rows for that)
+	                            setSelLayerId(null);
+	                          }
+	                          setSelectedStripIds([]);
+	                          setStripSelectionName('');
+	                        }}/>
                 );
               });
             })}
@@ -1599,18 +2266,30 @@ export function LayoutScreen() {
               );
             })}
 
-            {/* ── Light visualization — one feGaussianBlur on the whole group ── */}
-            {/* Plain filled circles, single filter pass: no per-element gradients,  */}
-            {/* no hard cone edges, purely additive via mixBlendMode screen.         */}
-            {showLight && (
-              <g filter="url(#lw-light-glow)" style={{ mixBlendMode: 'screen' }}>
-                {strips.map(s => !hidden[s.id] && (stripSamples[s.id] || []).map((pt, i) => (
-                  <circle key={`${s.id}-${i}`}
-                          cx={pt.x} cy={pt.y}
-                          r={vbScale * 32}
-                          fill={s.color}
-                          opacity={0.55}/>
-                )))}
+            {/* ── Light visualization ── */}
+            {effectiveShowLight && (
+              <g filter={directedGlow ? undefined : 'url(#lw-light-glow)'} style={{ mixBlendMode: 'screen', pointerEvents: 'none' }}>
+                {strips.map(s => !hidden[s.id] && (stripSamples[s.id] || []).map((pt, i) => {
+                  const stripFrame = layoutPatternFrame.get(s.id);
+                  const lightColor = rgbCss(stripFrame?.leds?.[i] || stripFrame, s.color);
+                  const reach = vbScale * (effectiveGlowMode === 'inward' ? 24 : effectiveGlowMode === 'outward' ? 50 : 38);
+                  const intensity = s.id === selStripId ? 0.42 : 0.28;
+                  if (directedGlow) {
+                    const isOmni = s.emit === 'omni';
+                    const tangentAngle = Math.atan2(pt.ty || 0, pt.tx || 1) * 180 / Math.PI + 90;
+                    const angle = Number.isFinite(Number(s.angle)) ? Number(s.angle) : tangentAngle;
+                    return isOmni
+                      ? <OmniHalo key={`${s.id}-${i}`} uid={`${s.id}-${i}`} cx={pt.x} cy={pt.y} color={lightColor} reach={reach * 0.72} intensity={intensity}/>
+                      : <LightCone key={`${s.id}-${i}`} uid={`${s.id}-${i}`} cx={pt.x} cy={pt.y} angle={angle} color={lightColor} reach={reach} intensity={intensity}/>;
+                  }
+                  return (
+                    <circle key={`${s.id}-${i}`}
+                            cx={pt.x} cy={pt.y}
+                            r={vbScale * 22}
+                            fill={lightColor}
+                            opacity={0.28}/>
+                  );
+                }))}
               </g>
             )}
 
@@ -1618,42 +2297,80 @@ export function LayoutScreen() {
             {strips.map(s => {
               const isSel = s.id === selStripId;
               const isHid = !!hidden[s.id];
+              const isMoving = movingStripIds.includes(s.id);
+              const stripFrame = layoutPatternFrame.get(s.id);
+              const stripColor = rgbCss(stripFrame, s.color);
               return (
-                <path key={s.id} d={s.pathData}
-                      stroke={isHid ? 'oklch(40% 0.01 260)' : s.color}
-                      strokeWidth={isSel ? 3.5 : 1.8} fill="none"
-                      opacity={isHid ? 0.25 : isSel ? 1 : 0.7}
-                      style={{ cursor: 'pointer', filter: isSel ? `drop-shadow(0 0 6px ${s.color})` : 'none' }}
-                      onClick={e => { e.stopPropagation(); selectStrip(s.id); }}/>
+                <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
+                  <path d={s.pathData}
+                        data-strip-path={s.id}
+                        fill="none"
+                        stroke="white"
+                        strokeOpacity="0.001"
+                        strokeWidth="18"
+                        strokeLinecap="round"
+                        pointerEvents="visibleStroke"
+                        style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
+                        onMouseDown={e => startStripMove(e, s)}
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (stripDragSuppressClickRef.current) return;
+                          if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSelection(s.id);
+                          else selectStrip(s.id);
+                        }}/>
+                  <path d={s.pathData}
+                        stroke={isHid ? 'oklch(40% 0.01 260)' : stripColor}
+                        strokeWidth={isSel ? 8 : 4.5} fill="none"
+                        strokeOpacity={isHid ? 0 : isSel ? 0.22 : 0.1}
+                        strokeLinecap="round"
+                        pointerEvents="none"/>
+                  <path d={s.pathData}
+                        stroke={isHid ? 'oklch(40% 0.01 260)' : stripColor}
+                        strokeWidth={isSel ? 3.5 : 1.8} fill="none"
+                        pointerEvents="none"
+                        opacity={isHid ? 0.25 : isMoving ? 1 : isSel ? 1 : 0.7}
+                        style={{ filter: isSel && !isEditingGesture ? `drop-shadow(0 0 3px ${stripColor})` : 'none' }}/>
+                </g>
               );
             })}
 
             {/* ── LED dots — white so they read clearly against any strip color ── */}
-            {showLeds && strips.filter(s => !hidden[s.id]).map(s => (
-              glowMode === 'dots' ? (
-                <g key={s.id + '-dots'}>
-                  {s.pixels.map((px, i) => (
-                    <circle key={i} cx={px.x} cy={px.y}
-                            r={s.id === selStripId ? vbScale * 3.5 : vbScale * 2.8}
-                            fill="white" opacity={s.id === selStripId ? 1 : 0.85}/>
-                  ))}
+            {showLeds && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
+              effectiveGlowMode === 'dots' ? (
+	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
+                  {s.pixels.map((px, i) => {
+                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    return (
+                    <g key={i}>
+                      <circle cx={px.x} cy={px.y}
+                              r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
+                              fill={ledColor} opacity={s.id === selStripId ? 0.2 : 0.13}/>
+                      <circle cx={px.x} cy={px.y}
+                              r={s.id === selStripId ? vbScale * 2.9 : vbScale * 2.25}
+                              fill={ledColor} opacity={s.id === selStripId ? 0.95 : 0.78}/>
+                    </g>
+                    );
+                  })}
                 </g>
               ) : (
-                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)">
-                  {s.pixels.map((px, i) => (
+	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
+                  {s.pixels.map((px, i) => {
+                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    return (
                     <circle key={i} cx={px.x} cy={px.y}
                             r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
-                            fill="white"
-                            opacity={glowMode === 'outward'
-                              ? (s.id === selStripId ? 0.55 : 0.42)
-                              : (s.id === selStripId ? 0.75 : 0.55)}/>
-                  ))}
+                            fill={ledColor}
+                            opacity={effectiveGlowMode === 'outward'
+                              ? (s.id === selStripId ? 0.4 : 0.3)
+                              : (s.id === selStripId ? 0.55 : 0.4)}/>
+                    );
+                  })}
                 </g>
               )
             ))}
 
             {/* ── Strip mid-path labels (selected strip only) ── */}
-            {strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
+            {!isEditingGesture && strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
               const mid = s.pixels[Math.floor(s.pixels.length / 2)];
               return (
                 <text key={s.id + '-lbl'}
@@ -1670,7 +2387,7 @@ export function LayoutScreen() {
             })}
 
             {/* ── Direction arrows (all visible strips) ── */}
-            {strips.filter(s => !hidden[s.id]).map(s => {
+            {!isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => {
               const arrow = stripArrows[s.id];
               if (!arrow) return null;
               const isSel = s.id === selStripId;
@@ -1773,8 +2490,14 @@ export function LayoutScreen() {
         <WledBar/>
       </div>
 
+      <div
+        className="lw-resize-handle lw-resize-handle--vertical lw-layout-resize-handle"
+        data-resize-key="lw-layout-panel-width"
+        onMouseDown={e => beginPanelResize(e, { axis: 'x', invert: true })}
+      />
+
       {/* ── Right panel ────────────────────────────────────────────── */}
-      <div style={{ borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+      <div className="lw-layout-panel" style={{ borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
         {error && (
           <div style={{ padding: '10px 14px', background: 'oklch(25% 0.08 30)', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.12 30)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -1870,20 +2593,45 @@ export function LayoutScreen() {
                   if (item.type === 'group') {
                     const group = layerGroups.find(g => g.groupId === item.id);
                     if (!group) return null;
-                    const isGroupHidden = !!group._hidden;
-                    const isDragTarget = layerDragOver === group.groupId;
-                    return (
+	                    const isGroupHidden = !!group._hidden;
+	                    const isStripGroup = group.type === 'strip';
+	                    const isDragTarget = layerDragOver === group.groupId;
+	                    return (
                       <div key={group.groupId}
                            draggable
-                           onDragStart={e => { e.dataTransfer.effectAllowed='move'; setLayerDragging(group.groupId); }}
-                           onDragOver={e => { e.preventDefault(); setLayerDragOver(group.groupId); }}
-                           onDrop={e => { e.preventDefault(); if (layerDragging) reorderLayerOrder(layerDragging, group.groupId); setLayerDragging(null); setLayerDragOver(null); }}
-                           onDragEnd={() => { setLayerDragging(null); setLayerDragOver(null); }}>
-                        <div className="lw-layer-row"
-                             style={{ background: isDragTarget ? 'oklch(74% 0.13 210 / 0.08)' : undefined,
-                                      borderLeft: `3px solid oklch(80% 0.14 270 / 0.6)`,
-                                      opacity: isGroupHidden ? 0.45 : 1 }}>
-                          <span style={{ cursor: 'grab', color: 'var(--text-4)', display:'flex', alignItems:'center', paddingRight: 2 }}>
+                           onDragStart={e => {
+                             if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
+                             e.dataTransfer.effectAllowed='move';
+                             setLayerDragging(group.groupId);
+                           }}
+	                           onDragOver={e => {
+	                             e.preventDefault();
+	                             if (isStripGroup && Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) {
+	                               setStripGroupDragOver(group.groupId);
+	                             } else if (!isStripGroup && Array.from(e.dataTransfer.types).includes('application/x-lightweaver-path')) {
+	                               setLayerDragOver(group.groupId);
+	                             } else {
+	                               setLayerDragOver(group.groupId);
+	                             }
+	                           }}
+	                           onDrop={e => {
+	                             e.preventDefault();
+	                             const draggedStripIds = readDraggedStripIds(e);
+	                             const draggedPaths = readDraggedPathEntries(e);
+	                             if (isStripGroup && draggedStripIds.length) addStripsToGroup(group.groupId, draggedStripIds);
+	                             else if (!isStripGroup && draggedPaths.length) addPathsToGroup(group.groupId, draggedPaths);
+	                             else if (layerDragging) reorderLayerOrder(layerDragging, group.groupId);
+                             setLayerDragging(null);
+                             setLayerDragOver(null);
+                             setStripGroupDragOver(null);
+                           }}
+                           onDragLeave={() => setStripGroupDragOver(null)}
+                           onDragEnd={() => { setLayerDragging(null); setLayerDragOver(null); setStripGroupDragOver(null); }}>
+	                        <div className={`lw-layer-row${isStripGroup ? ' lw-layer-row--strip-group' : ''}`}
+	                             style={{ background: stripGroupDragOver === group.groupId ? 'oklch(74% 0.13 210 / 0.14)' : isDragTarget ? 'oklch(74% 0.13 210 / 0.08)' : undefined,
+	                                      borderLeft: `3px solid oklch(80% 0.14 270 / 0.6)`,
+	                                      opacity: isGroupHidden ? 0.45 : 1 }}>
+                          <span data-drag-handle="true" style={{ cursor: 'grab', color: 'var(--text-4)', display:'flex', alignItems:'center', paddingRight: 2 }}>
                             <DragHandleIcon/>
                           </span>
                           <button className="lw-layer-eye" onClick={e => { e.stopPropagation(); toggleGroupHidden(group.groupId); }}>
@@ -1893,33 +2641,50 @@ export function LayoutScreen() {
                             {group._expanded ? <ChevronDownIcon/> : <ChevronRightIcon/>}
                           </button>
                           <span style={{ color: 'oklch(80% 0.14 270)', display:'flex', alignItems:'center' }}><GroupIcon/></span>
-                          <InlineRename value={group.name} onCommit={n => renameGroup(group.groupId, n)}
-                                        className="lw-layer-name" style={{ fontSize: 'var(--fs-md)', flex: 1 }}/>
-                          <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)', flexShrink: 0 }}>
-                            {group.members.length}p
-                          </span>
+	                          <InlineRename value={group.name} onCommit={n => renameGroup(group.groupId, n)}
+	                                        className="lw-layer-name" style={{ fontSize: 'var(--fs-md)', flex: 1 }}/>
+	                          <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)', flexShrink: 0 }}>
+	                            {group.members.length}{isStripGroup ? 's' : 'p'}
+	                          </span>
                           <button title="Ungroup" onClick={e => { e.stopPropagation(); deleteLayerGroup(group.groupId); }}
                                   style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)', padding: '0 3px', lineHeight:1, flexShrink:0 }}
                                   className="lw-btn-danger-hover">⊠</button>
                         </div>
-                        {group._expanded && group.members.map((m, mi) => (
-                          <div key={m.pathId} className="lw-subpath-row"
-                               style={{ paddingLeft: 32, background: 'oklch(80% 0.14 270 / 0.04)' }}>
-                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-2xs)', color:'oklch(80% 0.14 270)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
-                            <button className="lw-layer-eye" style={{ marginLeft:2 }}
-                                    onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [m.pathId]: !h[m.pathId] })); }}>
-                              {hidden[m.pathId] ? <EyeOffIcon/> : <EyeIcon/>}
-                            </button>
-                            <span style={{ flex:1, fontSize:'var(--fs-sm)', color:'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
-                            {m.svgLength > 0 && (
-                              <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-4)', flexShrink:0 }}>
-                                {Math.round(m.svgLength / pxPerMm)}mm
-                              </span>
-                            )}
-                            <button style={{ fontSize:'var(--fs-sm)', padding:'0 4px', color:'var(--text-4)', flexShrink:0 }}
-                                    onClick={e => { e.stopPropagation(); setLayerGroups(prev => prev.map(g => g.groupId !== group.groupId ? g : { ...g, members: g.members.filter((_,i)=>i!==mi) })); }}>✕</button>
-                          </div>
-                        ))}
+	                        {group._expanded && group.members.map((m, mi) => {
+	                          const memberId = m.stripId || m.pathId;
+	                          const memberHidden = !!hidden[memberId];
+	                          return (
+	                          <div key={memberId} className="lw-subpath-row"
+	                               style={{ paddingLeft: 32, background: 'oklch(80% 0.14 270 / 0.04)', cursor: isStripGroup ? 'pointer' : undefined }}
+	                               onClick={() => { if (isStripGroup) selectStrip(memberId); }}>
+	                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-2xs)', color:'oklch(80% 0.14 270)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
+	                            <button className="lw-layer-eye" style={{ marginLeft:2 }}
+	                                    onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [memberId]: !h[memberId] })); }}>
+	                              {memberHidden ? <EyeOffIcon/> : <EyeIcon/>}
+	                            </button>
+	                            {isStripGroup && (
+	                              <span className="lw-layer-dot" style={{ background: m.color || 'var(--accent)' }}/>
+	                            )}
+	                            <span style={{ flex:1, fontSize:'var(--fs-sm)', color:'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{m.name}</span>
+	                            {isStripGroup ? (
+	                              <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-4)', flexShrink:0 }}>
+	                                {(m.pixelCount || 0).toLocaleString()}px
+	                              </span>
+	                            ) : m.svgLength > 0 && (
+	                              <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-4)', flexShrink:0 }}>
+	                                {Math.round(m.svgLength / pxPerMm)}mm
+	                              </span>
+	                            )}
+	                            <button style={{ fontSize:'var(--fs-sm)', padding:'0 4px', color:'var(--text-4)', flexShrink:0 }}
+	                                    onClick={e => {
+	                                      e.stopPropagation();
+	                                      setLayerGroups(prev => prev
+	                                        .map(g => g.groupId !== group.groupId ? g : { ...g, members: g.members.filter((_,i)=>i!==mi) })
+	                                        .filter(g => g.members.length > 0));
+	                                    }}>✕</button>
+	                          </div>
+	                          );
+	                        })}
                       </div>
                     );
                   }
@@ -1936,9 +2701,20 @@ export function LayoutScreen() {
                   const isDragTarget  = layerDragOver === l.layerId;
 
                   return (
-                    <div key={l.layerId}
-                         draggable
-                         onDragStart={e => { e.dataTransfer.effectAllowed='move'; setLayerDragging(l.layerId); }}
+	                    <div key={l.layerId}
+	                         draggable
+	                         onDragStart={e => {
+	                           if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
+	                           e.dataTransfer.effectAllowed='move';
+	                           e.dataTransfer.setData('application/x-lightweaver-path', JSON.stringify([{
+	                             layerId: l.layerId,
+	                             pathId: l.layerId,
+	                             pathData: l.pathData,
+	                             name: l.name,
+	                             svgLength: l.svgLength,
+	                           }]));
+	                           setLayerDragging(l.layerId);
+	                         }}
                          onDragOver={e => { e.preventDefault(); setLayerDragOver(l.layerId); }}
                          onDrop={e => { e.preventDefault(); if (layerDragging) reorderLayerOrder(layerDragging, l.layerId); setLayerDragging(null); setLayerDragOver(null); }}
                          onDragEnd={() => { setLayerDragging(null); setLayerDragOver(null); }}>
@@ -1947,7 +2723,7 @@ export function LayoutScreen() {
                            onClick={() => selectLayer(l.layerId)}
                            onMouseEnter={() => setHoveredLayerId(l.layerId)}
                            onMouseLeave={() => setHoveredLayerId(null)}>
-                        <span style={{ cursor:'grab', color:'var(--text-4)', display:'flex', alignItems:'center', paddingRight:2 }}>
+                        <span data-drag-handle="true" style={{ cursor:'grab', color:'var(--text-4)', display:'flex', alignItems:'center', paddingRight:2 }}>
                           <DragHandleIcon/>
                         </span>
                         <button className="lw-layer-eye" title={isHidden?'Show':'Hide'}
@@ -1981,26 +2757,46 @@ export function LayoutScreen() {
                                 className="lw-btn-danger-hover">×</button>
                       </div>
 
-                      {isExpanded && l.subPaths?.map(sp => {
-                        const spHidden = !!hidden[sp.pathId];
-                        const spSel    = pathSel.some(p => p.pathId === sp.pathId);
-                        return (
-                          <div key={sp.pathId}
-                               className={`lw-subpath-row${hoveredSubPathId === sp.pathId ? ' lw-subpath-row--hover' : ''}`}
-                               onMouseEnter={() => setHoveredSubPathId(sp.pathId)}
-                               onMouseLeave={() => setHoveredSubPathId(null)}>
-                            {/* Checkbox for path selection */}
-                            <input type="checkbox" checked={spSel}
-                                   style={{ margin:'0 2px 0 4px', accentColor:'var(--accent)', cursor:'pointer', flexShrink:0 }}
-                                   onChange={e => {
-                                     const entry = { layerId: l.layerId, pathId: sp.pathId, pathData: sp.pathData, name: `${l.name} · ${sp.name}`, svgLength: sp.svgLength };
-                                     setPathSel(prev => e.target.checked ? [...prev, entry] : prev.filter(p => p.pathId !== sp.pathId));
-                                   }}
-                                   onClick={e => e.stopPropagation()}/>
-                            <button className="lw-layer-eye" style={{ padding:'0 1px' }}
-                                    onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [sp.pathId]: !h[sp.pathId] })); }}>
-                              {spHidden ? <EyeOffIcon/> : <EyeIcon/>}
-                            </button>
+	                      {isExpanded && l.subPaths?.map(sp => {
+	                        const spHidden = !!hidden[sp.pathId];
+	                        const spSel    = pathSel.some(p => p.pathId === sp.pathId);
+	                        const entry = { layerId: l.layerId, pathId: sp.pathId, pathData: sp.pathData, name: `${l.name} · ${sp.name}`, svgLength: sp.svgLength };
+	                        return (
+	                          <div key={sp.pathId}
+	                               draggable
+	                               className={`lw-subpath-row${hoveredSubPathId === sp.pathId ? ' lw-subpath-row--hover' : ''}${spSel ? ' lw-subpath-row--sel' : ''}`}
+	                               onClick={e => togglePathSelection(entry, e.shiftKey || e.metaKey || e.ctrlKey)}
+	                               onDragStart={e => {
+	                                 if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
+	                                 const payload = spSel && pathSel.length > 0 ? pathSel : [entry];
+	                                 e.dataTransfer.effectAllowed = 'move';
+	                                 e.dataTransfer.setData('application/x-lightweaver-path', JSON.stringify(payload));
+	                                 e.dataTransfer.setData('text/plain', payload.map(p => p.name).join(', '));
+	                                 if (!spSel) setPathSel([entry]);
+	                               }}
+	                               onDragOver={e => {
+	                                 if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-path')) return;
+	                                 e.preventDefault();
+	                                 setLayerDragOver(sp.pathId);
+	                               }}
+	                               onDragLeave={() => setLayerDragOver(null)}
+	                               onDrop={e => {
+	                                 const draggedPaths = readDraggedPathEntries(e);
+	                                 if (!draggedPaths.length) return;
+	                                 e.preventDefault();
+	                                 e.stopPropagation();
+	                                 createLayerGroupFromEntries([...draggedPaths, entry]);
+	                                 setLayerDragOver(null);
+	                               }}
+	                               onMouseEnter={() => setHoveredSubPathId(sp.pathId)}
+	                               onMouseLeave={() => setHoveredSubPathId(null)}>
+	                            <span data-drag-handle="true" style={{ cursor: 'grab', color: spSel ? 'var(--accent)' : 'var(--text-4)', display:'flex', alignItems:'center', paddingRight: 1, flexShrink: 0 }}>
+	                              <DragHandleIcon/>
+	                            </span>
+	                            <button className="lw-layer-eye" style={{ padding:'0 1px' }}
+	                                    onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [sp.pathId]: !h[sp.pathId] })); }}>
+	                              {spHidden ? <EyeOffIcon/> : <EyeIcon/>}
+	                            </button>
                             <InlineRename value={sp.name} onCommit={n => renameSubPath(l.layerId, sp.pathId, n)}
                                           style={{ flex:1, fontSize:'var(--fs-sm)', color: spHidden ? 'var(--text-4)' : 'var(--text-2)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}/>
                             <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)', color:'var(--text-3)', flexShrink:0 }}>
@@ -2016,9 +2812,9 @@ export function LayoutScreen() {
                 });
               })()}
 
-              <div style={{ padding:'6px 12px', fontSize:'var(--fs-xs)', color:'var(--text-4)', lineHeight:1.5 }}>
-                Click to select · <strong style={{ color:'var(--text-3)' }}>⇧+click</strong> canvas paths · ☐ checkboxes to combine
-              </div>
+	              <div style={{ padding:'6px 12px', fontSize:'var(--fs-xs)', color:'var(--text-4)', lineHeight:1.5 }}>
+	                Click rows to select · <strong style={{ color:'var(--text-3)' }}>⇧/⌘ click</strong> adds · drag rows into groups
+	              </div>
             </div>
           </>
         )}
@@ -2064,40 +2860,34 @@ export function LayoutScreen() {
                      style={{ flex: 1, fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)',
                               borderRadius: 4, padding: '4px 8px', color: 'var(--text)' }}/>
               <button className="btn btn-primary" style={{ fontSize: 'var(--fs-sm)' }}
-                      onClick={() => {
-                        if (!pathSel.length) return;
-                        const combinedPathData = pathSel.map(p => p.pathData).join(' ');
-                        const totalLen = pathSel.reduce((s, p) => s + p.svgLength, 0);
-                        const count = Math.max(1, Math.round((totalLen / pxPerMm) * density / 1000));
-                        const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                        pathEl.setAttribute('d', combinedPathData);
-                        const pixels = libSamplePath(pathEl, count);
-                        const name = pathSelName.trim() || `Strip ${strips.length + 1}`;
-                        const newStrip = {
-                          id: `sel-${Date.now()}`, name,
-                          pathData: combinedPathData, pixelCount: count, pixels,
-                          color: nextColor(), emit: 'dir', angle: 0, reversed: false,
-                          speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
-                        };
-                        const newStrips = [...strips, newStrip];
-                        pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
-                        setStrips(newStrips);
-                        setSelStripId(newStrip.id);
-                        lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
-                        setPathSel([]);
-                        setPathSelName('');
-                        scrollToStrip(newStrip.id);
-                      }}>
-                + Strip
+                      title="Create one composite strip from the selected paths"
+                      onClick={() => addSelectedPathsAsStrips('merged')}>
+                Merge Strip
               </button>
               {pathSel.length >= 2 && (
-                <button className="btn" style={{ fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.14 270)', borderColor: 'oklch(80% 0.14 270 / 0.4)', background: 'oklch(80% 0.14 270 / 0.08)' }}
-                        title="Group these paths in the layer panel (not a strip)"
-                        onClick={createLayerGroup}>
-                  <GroupIcon/> Group
-                </button>
+                <>
+                  <button className="btn" style={{ fontSize: 'var(--fs-sm)' }}
+                          title="Create separate LED strips from the selected paths"
+                          onClick={() => addSelectedPathsAsStrips('separate')}>
+                    Separate
+                  </button>
+                  <button className="btn" style={{ fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.14 270)', borderColor: 'oklch(80% 0.14 270 / 0.4)', background: 'oklch(80% 0.14 270 / 0.08)' }}
+                          title="Create separate LED strips and place them in one strip group"
+                          onClick={() => addSelectedPathsAsStrips('grouped')}>
+                    <GroupIcon/> Strip Group
+                  </button>
+                </>
               )}
             </div>
+            {pathSel.length >= 2 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
+                        title="Group the source artwork paths without creating LED strips"
+                        onClick={createLayerGroup}>
+                  Layer Group
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -2189,10 +2979,12 @@ export function LayoutScreen() {
                     style={{ padding: '2px 8px', fontSize: 'var(--fs-xs)' }}
                     disabled={!existingStrip}
                     title={existingStrip ? 'Directed emission' : 'Add strip first'}
-                    onClick={() => {
-                      if (!existingStrip) return;
-                      updateStrip(existingStrip.id, { emit: 'dir' });
-                    }}>Dir</button>
+	                    onClick={() => {
+	                      if (!existingStrip) return;
+	                      setDirectedGlow(true);
+	                      enableLightPreview();
+	                      updateStrip(existingStrip.id, { emit: 'dir' });
+	                    }}>Dir</button>
                 </div>
               </div>
 
@@ -2204,18 +2996,22 @@ export function LayoutScreen() {
                          value={existingStrip?.angle || 0}
                          style={{ flex: 1 }}
                          disabled={!existingStrip}
-                         onChange={e => {
-                           if (!existingStrip) return;
-                           updateStrip(existingStrip.id, { angle: +e.target.value });
-                         }}/>
+	                         onChange={e => {
+	                           if (!existingStrip) return;
+	                           setDirectedGlow(true);
+	                           enableLightPreview();
+	                           updateStrip(existingStrip.id, { angle: +e.target.value });
+	                         }}/>
                   <input type="number" min="0" max="360" value={existingStrip?.angle || 0}
                          disabled={!existingStrip}
                          style={{ width: 48, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
                                   background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 5px', color: 'var(--text)' }}
-                         onChange={e => {
-                           if (!existingStrip) return;
-                           updateStrip(existingStrip.id, { angle: +e.target.value });
-                         }}/>
+	                         onChange={e => {
+	                           if (!existingStrip) return;
+	                           setDirectedGlow(true);
+	                           enableLightPreview();
+	                           updateStrip(existingStrip.id, { angle: +e.target.value });
+	                         }}/>
                   <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-xs)', flexShrink: 0 }}>°</span>
                 </div>
               )}
@@ -2241,23 +3037,89 @@ export function LayoutScreen() {
         )}
 
         {/* ── Strips list ── */}
-        {strips.length > 0 && (
-          <>
-            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <span>LED strips</span>
-              <span className="meta">{strips.length} strips · {totalLeds.toLocaleString()} LEDs</span>
-            </div>
-            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto' }}>
-              {strips.map((s, i) => {
-                const isSel = s.id === selStripId;
-                return (
-                  <div key={s.id}
-                       data-strip-id={s.id}
-                       className={`lw-strip-row${isSel ? ' lw-strip-row--sel' : ''}`}
-                       style={{ opacity: hidden[s.id] ? 0.4 : 1 }}
-                       onClick={() => selectStrip(s.id)}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', width: 16, flexShrink: 0, textAlign: 'right' }}>{i + 1}</span>
+	        {strips.length > 0 && (
+	          <>
+	            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+	              <span>LED strips</span>
+	              <span className="meta">
+	                {selectedStrips.length > 1 ? `${selectedStrips.length} selected · ` : ''}
+	                {strips.length} strips · {totalLeds.toLocaleString()} LEDs
+	              </span>
+	            </div>
+	            {selectedStrips.length > 1 && (
+	              <div className="lw-strip-batch">
+	                <div className="lw-strip-batch-head">
+	                  <span>{selectedStrips.length} strips selected</span>
+	                  <button title="Clear strip selection" onClick={() => { setSelectedStripIds([]); setStripSelectionName(''); }}>✕</button>
+	                </div>
+	                <div className="lw-strip-batch-list">
+	                  {selectedStrips.map((s, i) => (
+	                    <span key={s.id} className="lw-strip-chip" title={s.name}>
+	                      <span className="lw-layer-dot" style={{ background: s.color }}/>
+	                      {i + 1}. {s.name}
+	                    </span>
+	                  ))}
+	                </div>
+	                <div className="lw-strip-batch-actions">
+	                  <input
+	                    type="text"
+	                    value={stripSelectionName}
+	                    onChange={e => setStripSelectionName(e.target.value)}
+	                    placeholder="Group or merged strip name..."
+	                  />
+	                  <button className="btn" title="Organize selected strips as one expandable group (G)" onClick={groupSelectedStrips}>
+	                    <GroupIcon/> Group
+	                  </button>
+	                  <button className="btn btn-primary" title="Paste selected strips into one composite strip (M)" onClick={mergeSelectedStrips}>
+	                    Merge
+	                  </button>
+	                </div>
+	              </div>
+	            )}
+	            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto' }}>
+	              {strips.map((s, i) => {
+	                const isSel = s.id === selStripId;
+	                const isBatchSel = selectedStripIds.includes(s.id);
+	                return (
+	                  <div key={s.id}
+	                       data-strip-id={s.id}
+	                       className={`lw-strip-row${isSel ? ' lw-strip-row--sel' : ''}${isBatchSel ? ' lw-strip-row--batch-sel' : ''}`}
+	                       draggable
+	                       onDragStart={e => {
+	                         if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
+	                         const ids = selectedStripIds.includes(s.id) ? selectedStripIds : [s.id];
+	                         e.dataTransfer.effectAllowed = 'move';
+	                         e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
+	                         e.dataTransfer.setData('text/plain', ids.join(','));
+	                         setSelectedStripIds(ids);
+	                       }}
+	                       onDragOver={e => {
+	                         if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
+	                         e.preventDefault();
+	                         setStripGroupDragOver(`strip:${s.id}`);
+	                       }}
+	                       onDragLeave={() => setStripGroupDragOver(null)}
+	                       onDrop={e => {
+	                         const draggedStripIds = readDraggedStripIds(e);
+	                         if (!draggedStripIds.length) return;
+	                         e.preventDefault();
+	                         e.stopPropagation();
+	                         createStripGroupFromIds([...draggedStripIds, s.id]);
+	                         setStripGroupDragOver(null);
+	                       }}
+	                       onDragEnd={() => setStripGroupDragOver(null)}
+	                       style={{ opacity: hidden[s.id] ? 0.4 : 1,
+	                                outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
+	                                outlineOffset: -1 }}
+	                       onClick={e => {
+	                         if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSelection(s.id);
+	                         else selectStrip(s.id);
+	                       }}>
+	                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+	                      <span data-drag-handle="true" style={{ cursor: 'grab', color: isBatchSel ? 'var(--accent)' : 'var(--text-4)', display:'flex', alignItems:'center', flexShrink:0 }}>
+	                        <DragHandleIcon/>
+	                      </span>
+	                      <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', width: 16, flexShrink: 0, textAlign: 'right' }}>{i + 1}</span>
                       <span style={{ width: 9, height: 9, borderRadius: '50%', background: s.color, flexShrink: 0,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : 'none' }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
@@ -2313,20 +3175,68 @@ export function LayoutScreen() {
                           <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{s.hueShift ?? 0}°</span>
                         </div>
                         {/* Per-strip pattern override */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Pattern</span>
-                          <select value={s.patternId ?? ''}
-                                  style={{ flex: 1, fontSize: 'var(--fs-xs)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', padding: '2px 4px' }}
-                                  onChange={e => {
-                                    const v = e.target.value || null;
-                                    updateStrip(s.id, { patternId: v });
-                                  }}>
-                            <option value="">Inherited</option>
-                            {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                        </div>
-                        {/* LED count */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+	                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Pattern</span>
+	                          <select value={s.patternId ?? ''}
+	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', padding: '2px 4px' }}
+	                                  onChange={e => {
+	                                    const v = e.target.value || null;
+	                                    updateStrip(s.id, { patternId: v });
+	                                  }}>
+	                            <option value="">Inherited</option>
+	                            {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+	                          </select>
+	                        </div>
+	                        {/* Position */}
+	                        <div style={{ display: 'grid', gridTemplateColumns: '52px 1fr 1fr', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+	                          <span style={{ color: 'var(--text-3)' }}>Move</span>
+	                          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-3)' }}>
+	                            X
+	                            <input type="number" step="1" value={Math.round(s.x || 0)}
+	                                   style={{ width: '100%', minWidth: 0, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
+	                                            background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', color: 'var(--text)' }}
+	                                   onClick={e => e.stopPropagation()}
+	                                   onChange={e => setStripOffset(s.id, Number(e.target.value) || 0, s.y || 0)}
+	                                   onBlur={e => setStripOffset(s.id, Number(e.target.value) || 0, s.y || 0, true)}/>
+	                          </label>
+	                          <label style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-3)' }}>
+	                            Y
+	                            <input type="number" step="1" value={Math.round(s.y || 0)}
+	                                   style={{ width: '100%', minWidth: 0, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
+	                                            background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', color: 'var(--text)' }}
+	                                   onClick={e => e.stopPropagation()}
+	                                   onChange={e => setStripOffset(s.id, s.x || 0, Number(e.target.value) || 0)}
+	                                   onBlur={e => setStripOffset(s.id, s.x || 0, Number(e.target.value) || 0, true)}/>
+	                          </label>
+	                        </div>
+	                        <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)', paddingLeft: 60 }}>
+	                          Drag this strip on the canvas to reposition it.
+	                        </div>
+	                        {/* Emit */}
+	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+	                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Emit</span>
+	                          <button className={`btn ${(s.emit || 'dir') === 'omni' ? 'btn-primary' : 'btn-ghost'}`}
+	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
+	                                  onClick={e => { e.stopPropagation(); updateStrip(s.id, { emit: 'omni', angle: 0 }); }}>
+	                            Omni
+	                          </button>
+	                          <button className={`btn ${(s.emit || 'dir') !== 'omni' ? 'btn-primary' : 'btn-ghost'}`}
+	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
+	                                  onClick={e => { e.stopPropagation(); setDirectedGlow(true); enableLightPreview(); updateStrip(s.id, { emit: 'dir' }); }}>
+	                            Dir
+	                          </button>
+	                        </div>
+	                        {(s.emit || 'dir') !== 'omni' && (
+	                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+	                            <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Angle</span>
+	                            <input type="range" min="0" max="360" step="1" value={s.angle || 0}
+	                                   style={{ flex: 1 }}
+	                                   onChange={e => { setDirectedGlow(true); enableLightPreview(); updateStrip(s.id, { angle: +e.target.value }); }}/>
+	                            <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 36, textAlign: 'right' }}>{Math.round(s.angle || 0)}°</span>
+	                          </div>
+	                        )}
+	                        {/* LED count */}
+	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>LEDs</span>
                           <input type="number" min="1" max="1500"
                                  value={s.pixelCount}

@@ -1,22 +1,21 @@
 import { useState, useEffect } from 'react';
-import { resolveTimelinePlayback, sampleLane, useProject } from '../state/ProjectContext.jsx';
+import { resolveTimelinePlayback, resolveTimelineTargets, sampleLane, useProject } from '../state/ProjectContext.jsx';
 import { download, makeManifest, pixelsFromStrips, toCSV, toDmxCsv, toFastLED, toRawFrameDump, toWLEDLedmap } from '../lib/export.js';
-import { buildGammaLut, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
+import { buildGammaLut, compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
 
 const TARGETS = [
-  { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'S-Play / S-Play Mini · 32 universes',    format: '.ssp',    hw: 'S-Play Mini' },
-  { id: 'pixlite', name: 'Advatek PixLite',     sub: '16 MkII / 4 MkII · Show mode',           format: '.pxshow', hw: 'PixLite 16 MkII' },
-  { id: 'pharos',  name: 'Pharos LPC',          sub: 'LPC X / TPC / VLC',                      format: '.pls',    hw: 'LPC X' },
-  { id: 'madrix',  name: 'Madrix Nebula',       sub: 'Nebula / Luna · standalone record',      format: '.madr',   hw: 'Nebula' },
-  { id: 'pi',      name: 'Raspberry Pi + OLA',  sub: 'Pi 4/5 running ola · or WLED Ledmap',    format: '.json',   hw: 'Pi 4B' },
-  { id: 'raw',     name: 'Raw ArtNet frames',   sub: 'Universal · .bin frame dump + .csv map', format: '.bin',    hw: 'Any SD reader' },
+  { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'Adapter bundle, not native .ssp',           tag: 'bundle', hw: 'S-Play Mini' },
+  { id: 'pixlite', name: 'Advatek PixLite',     sub: 'Adapter bundle, not PixLite show mode',     tag: 'bundle', hw: 'PixLite 16 MkII' },
+  { id: 'pharos',  name: 'Pharos LPC',          sub: 'Adapter bundle, not native Pharos project', tag: 'bundle', hw: 'LPC X' },
+  { id: 'madrix',  name: 'Madrix / Art-Net',    sub: 'DMX/Art-Net interchange data',              tag: 'DMX',    hw: 'Madrix Art-Net' },
+  { id: 'pi',      name: 'Raspberry Pi + WLED', sub: 'Pi-hosted Lightweaver project + ledmap',    tag: 'Pi JSON', hw: 'Pi 5' },
+  { id: 'raw',     name: 'Raw RGB frames',      sub: 'Universal .bin frame dump or DMX CSV',      tag: 'frames', hw: 'Any player' },
 ];
 
 const FORMATS = [
-  { id: 'native', name: 'Native show file',  sub: "Target's own format — plug in and go" },
-  { id: 'pcap',   name: 'ArtNet pcap',       sub: 'Packet capture at 44 fps · replayable with artnetplayer' },
-  { id: 'csv',    name: 'DMX CSV',           sub: 'Frame × channel matrix · editable in Excel' },
-  { id: 'bin',    name: 'Raw frame dump',    sub: '.bin · 512 bytes × universes × frames' },
+  { id: 'bundle', name: 'Lightweaver bundle', sub: 'Project JSON + ledmap + metadata for adapter scripts', ext: '.json' },
+  { id: 'csv',    name: 'DMX CSV',            sub: 'Frame x channel matrix, editable and importable', ext: '.csv' },
+  { id: 'bin',    name: 'Raw RGB frame dump', sub: 'RGB bytes in LED order, one frame after another', ext: '.bin' },
 ];
 
 export function ExportDialog({ open, onClose }) {
@@ -28,7 +27,7 @@ export function ExportDialog({ open, onClose }) {
     serializeProject,
   } = project;
   const [target, setTarget] = useState('splay');
-  const [format, setFormat] = useState('native');
+  const [format, setFormat] = useState('bundle');
   const [fps, setFps] = useState(44);
   const [loop, setLoop] = useState(true);
   const [bakeAuto, setBakeAuto] = useState(true);
@@ -56,9 +55,22 @@ export function ExportDialog({ open, onClose }) {
     return () => cancelAnimationFrame(raf);
   }, [stage]);
 
+  const reset = () => { setStage('config'); setProgress(0); };
+  const close = () => { reset(); onClose(); };
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open]);
+
   if (!open) return null;
 
   const sel = TARGETS.find(t => t.id === target);
+  const selectedFormat = FORMATS.find(f => f.id === format);
   const totalLEDs = strips.reduce((s, st) => s + (st.pixels?.length || 0), 0);
   const safeName = (projectName || 'untitled').replace(/\s+/g, '_').toLowerCase();
   const durationMins = Math.floor(showDuration / 60);
@@ -69,10 +81,8 @@ export function ExportDialog({ open, onClose }) {
   const totalBytes = totalFrames * frameSize;
   const mb = (totalBytes / 1024 / 1024).toFixed(1);
 
-  const reset = () => { setStage('config'); setProgress(0); };
-  const close = () => { reset(); onClose(); };
   const buildFrames = () => {
-    const renderStrips = strips.map(strip => ({
+    const baseRenderStrips = strips.map(strip => ({
       id: strip.id,
       speed: strip.speed,
       brightness: strip.brightness,
@@ -86,20 +96,33 @@ export function ExportDialog({ open, onClose }) {
     }));
     const gammaLUT = buildGammaLut(gammaEnabled, gammaValue);
     const paletteNorm = normalizePalette(palette);
+    const uniquePatternIds = new Set([
+      activePatternId,
+      ...showClips.map(clip => clip.patternId),
+      ...strips.map(strip => strip.patternId).filter(Boolean),
+    ]);
+    const perStripFns = new Map([...uniquePatternIds].map(id => [id, compilePattern(id)]).filter(([, fn]) => fn));
     const frameCount = Math.max(1, Math.round(showDuration * fps));
     const frames = [];
     for (let f = 0; f < frameCount; f++) {
       const t = f / fps;
       const playback = resolveTimelinePlayback(t, showClips, showTransitions);
+      const targetState = resolveTimelineTargets(t, showClips, strips);
+      const targetPatternId = targetState.globalClip?.patternId || playback.patternId || activePatternId;
+      const renderStrips = baseRenderStrips.map(strip => ({
+        ...strip,
+        patternId: targetState.byStripId[strip.id] || strip.patternId || null,
+      }));
       const laneValues = Object.fromEntries(autoLanes.map(lane => [lane.param, sampleLane(lane, t)]));
       const frame = renderPixelFrame({
         t,
         strips: renderStrips,
-        patternId: playback.patternId || activePatternId,
+        patternId: targetPatternId,
         blendPatternId: playback.blendPatternId,
         blendAmount: playback.blendAmount,
         blendType: playback.transType || 'crossfade',
-        params: patternParams[playback.patternId || activePatternId] || {},
+        params: patternParams[targetPatternId] || {},
+        patternParamsById: patternParams,
         paletteNorm,
         bpm,
         masterSpeed: bakeAuto && laneValues.speed != null ? laneValues.speed * 4 : masterSpeed,
@@ -108,6 +131,7 @@ export function ExportDialog({ open, onClose }) {
         masterHueShift: bakeAuto && laneValues.hueShift != null ? laneValues.hueShift - 0.5 : masterHueShift,
         gammaLUT,
         symSettings,
+        perStripFns,
       });
       frames.push(frame.pixels);
     }
@@ -161,14 +185,14 @@ export function ExportDialog({ open, onClose }) {
   };
 
   return (
-    <div className="lw-modal-backdrop" onClick={close}>
-      <div className="lw-modal" onClick={e => e.stopPropagation()}>
+    <div className="lw-modal-backdrop lw-export-backdrop" onClick={close} role="presentation">
+      <div className="lw-modal lw-export-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="lw-export-title">
         <div className="lw-modal-head">
           <div>
-            <div className="title">Export show</div>
+            <div className="title" id="lw-export-title">Export show</div>
             <div className="sub">{projectName || 'Untitled'} · {durationStr} · {universes} universes · {totalLEDs > 0 ? totalLEDs : '—'} LEDs</div>
           </div>
-          <button className="lw-modal-close" onClick={close}>×</button>
+          <button className="lw-modal-close" onClick={close} aria-label="Close export dialog">×</button>
         </div>
 
         {stage === 'config' && (
@@ -179,12 +203,12 @@ export function ExportDialog({ open, onClose }) {
                 <button key={t.id} className={`lw-exp-target ${target === t.id ? 'active' : ''}`} onClick={() => setTarget(t.id)}>
                   <div className="name">{t.name}</div>
                   <div className="sub">{t.sub}</div>
-                  <div className="tag">{t.format}</div>
+                  <div className="tag">{t.tag}</div>
                 </button>
               ))}
             </div>
 
-            <div className="lw-exp-sec">2 · Format</div>
+            <div className="lw-exp-sec">2 · Output format</div>
             <div className="lw-exp-formats">
               {FORMATS.map(f => (
                 <label key={f.id} className={`lw-exp-fmt ${format === f.id ? 'active' : ''}`}>
@@ -230,12 +254,12 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-exp-sec">4 · Summary</div>
             <div className="lw-exp-summary">
-              <div><span className="k">Output</span><span className="v mono">{safeName}{sel.format}</span></div>
+              <div><span className="k">Output</span><span className="v mono">{safeName}{selectedFormat?.ext || '.json'}</span></div>
               <div><span className="k">Clips</span><span className="v mono">{showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} lanes</span></div>
               <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
               <div><span className="k">Size</span><span className="v mono">~{mb} MB</span></div>
               <div><span className="k">Target</span><span className="v">{sel.hw}</span></div>
-              <div><span className="k">Destination</span><span className="v mono">SD card · /SHOW/{safeName}/</span></div>
+              <div><span className="k">Destination</span><span className="v mono">browser download · adapter/import pipeline</span></div>
             </div>
 
             <div className="lw-modal-foot">
@@ -271,7 +295,7 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-stage-sub">
               {stage === 'rendering'
                 ? `Building ${format === 'csv' || format === 'bin' ? totalFrames.toLocaleString() + ' frames' : 'project bundle'} for ${sel.hw}`
-                : `Preparing ${safeName}${sel.format}`}
+                : `Preparing ${safeName}${selectedFormat?.ext || '.json'}`}
             </div>
             <div className="lw-exp-bar"><div className="fill" style={{ width: `${progress * 100}%` }}/></div>
             <div className="lw-exp-bar-meta">
@@ -288,8 +312,8 @@ export function ExportDialog({ open, onClose }) {
               <div className="entry ok">✓ resolved {showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} automation lanes</div>
               <div className="entry ok">✓ mapped {totalLEDs || '—'} LEDs → {universes} universes ({universes * 512} channels)</div>
               {stage === 'writing' && <div className="entry ok">✓ baked {totalFrames.toLocaleString()} frames · {mb} MB</div>}
-              {stage === 'writing' && <div className="entry">→ mounting SD card (FAT32)</div>}
-              {stage === 'writing' && <div className="entry">→ writing {safeName}{sel.format}</div>}
+              {stage === 'writing' && <div className="entry">→ preparing browser download</div>}
+              {stage === 'writing' && <div className="entry">→ writing {safeName}{selectedFormat?.ext || '.json'}</div>}
             </div>
           </div>
         )}
@@ -304,10 +328,10 @@ export function ExportDialog({ open, onClose }) {
             </div>
             <div className="lw-exp-stage-title" style={{ color: 'var(--mint)' }}>Export complete</div>
             <div className="lw-exp-stage-sub">
-              Export generated and downloaded. The file contains the project, layout map, and target metadata for {sel.hw}.
+              Export generated and downloaded. Native controller project files are not generated here; this is a Lightweaver bundle or interchange file for {sel.hw}.
             </div>
             <div className="lw-exp-done-card">
-              <div className="row"><span className="k">File</span><span className="v mono">{artifact?.filename || `${safeName}${sel.format}`}</span></div>
+              <div className="row"><span className="k">File</span><span className="v mono">{artifact?.filename || `${safeName}${selectedFormat?.ext || '.json'}`}</span></div>
               <div className="row"><span className="k">Path</span><span className="v mono">browser download</span></div>
               <div className="row"><span className="k">Size</span><span className="v mono">{artifact ? `${(artifact.bytes / 1024).toFixed(1)} KB` : `${mb} MB`}</span></div>
               <div className="row"><span className="k">Duration</span><span className="v mono">{durationStr} · {loop ? 'looping' : 'one-shot'}</span></div>

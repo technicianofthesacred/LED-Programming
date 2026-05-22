@@ -71,12 +71,21 @@ function renderFrame(canvas, t, p) {
   const W = canvas.width, H = canvas.height;
   if (!W || !H || !p.vb) return [];
 
-  ctx.fillStyle = getComputedStyle(canvas).getPropertyValue('--preview-bg').trim() || '#050608';
-  ctx.fillRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, H);
+  const bg = getComputedStyle(canvas).getPropertyValue('--preview-bg').trim();
+  if (bg && bg !== 'transparent') {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    // Keep the canvas visually transparent over the viewport grid while avoiding
+    // fully black transparent pixels that read as dark seams in glow analysis.
+    ctx.fillStyle = 'rgba(20, 22, 28, 0.08)';
+    ctx.fillRect(0, 0, W, H);
+  }
 
   const {
     visibleStrips, normBounds, medianSpacing, pixelCount,
-    activeFn, blendFn, glow, dotSize, bpm, resolvedParams, paletteNorm,
+    activeFn, blendFn, glow, dotSize, bpm, resolvedParams, patternParamsById, paletteNorm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, blendAmount, blendType,
     perStripFns, vb, heat, motionSmoothing, previousPixels, frameDt,
@@ -93,22 +102,77 @@ function renderFrame(canvas, t, p) {
     t, strips: visibleStrips, patternId: p.patternId, activeFn, blendFn,
     blendAmount, blendType, params: resolvedParams, paletteNorm, bpm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    gammaLUT, symSettings, audioBands, normBounds, perStripFns,
+    gammaLUT, symSettings, audioBands, normBounds, perStripFns, patternParamsById,
   });
   const framePixels = smoothPixelFrame(frame.pixels, previousPixels, {
     mode: motionSmoothing,
     dt: frameDt,
   });
+  const stripMetaById = new Map(visibleStrips.map(s => [s.id, s]));
   let pixelOffset = 0;
   const stripData = frame.stripFrames.map(s => {
+    const meta = stripMetaById.get(s.id) || {};
     const sourceLeds = s.leds || [];
     const leds = sourceLeds.map((led, i) => ({
       ...led,
       ...(framePixels[pixelOffset + i] || {}),
     }));
     pixelOffset += sourceLeds.length;
-    return { ...s, leds, spacing: s.spacing ?? medianSpacing };
+    return {
+      ...s,
+      leds,
+      spacing: s.spacing ?? medianSpacing,
+      pathData: meta.pathData || '',
+      x: meta.x || 0,
+      y: meta.y || 0,
+    };
   });
+
+  // ── Physical strip paths — keep the mapper line visible in Pattern preview ─
+  if (stripData.length) {
+    const lineWidth = clamp(medianSpacing * scale * 0.17, 1.0, 3.4);
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const sd of stripData) {
+      const leds = sd.leds || [];
+      if (leds.length < 2) continue;
+      const strokeRail = () => {
+        ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+        ctx.lineWidth = lineWidth + 1.2;
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+        ctx.lineWidth = lineWidth;
+        ctx.stroke();
+      };
+      if (sd.pathData && typeof Path2D !== 'undefined') {
+        let pathContextSaved = false;
+        try {
+          const path = new Path2D(sd.pathData);
+          ctx.save();
+          pathContextSaved = true;
+          ctx.setTransform(scale, 0, 0, scale, offX + sd.x * scale, offY + sd.y * scale);
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+          ctx.lineWidth = (lineWidth + 1.2) / scale;
+          ctx.stroke(path);
+          ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+          ctx.lineWidth = lineWidth / scale;
+          ctx.stroke(path);
+          ctx.restore();
+          continue;
+        } catch {
+          if (pathContextSaved) ctx.restore();
+        }
+      }
+      ctx.beginPath();
+      ctx.moveTo(toX(leds[0].x), toY(leds[0].y));
+      for (let i = 1; i < leds.length; i++) ctx.lineTo(toX(leds[i].x), toY(leds[i].y));
+      strokeRail();
+    }
+    ctx.restore();
+  }
 
   // ── Glow — offscreen dots + GPU blur ────────────────────────────────────
   // Draw all LEDs as solid dots onto one offscreen canvas, then composite
@@ -117,9 +181,9 @@ function renderFrame(canvas, t, p) {
   if (glow > 0) {
     const sp    = clamp(medianSpacing * scale, 2, 18);
     const TAU   = Math.PI * 2;
-    const dotPx = clamp(sp * dotSize * 0.36, 1.5, 5.5);
-    const wBlur = clamp(sp * glow * 0.95, 2, 16).toFixed(1);
-    const tBlur = clamp(sp * glow * 0.24, 1, 5).toFixed(1);
+    const dotPx = clamp(sp * dotSize * 0.40, 1.8, 6.8);
+    const wBlur = clamp(sp * glow * 0.78, 2.2, 15).toFixed(1);
+    const tBlur = clamp(sp * glow * 0.22, 0.9, 4.8).toFixed(1);
 
     // Reuse offscreen canvas across frames
     if (!canvas._glow || canvas._glow.width !== W || canvas._glow.height !== H) {
@@ -145,12 +209,12 @@ function renderFrame(canvas, t, p) {
     ctx.globalCompositeOperation = 'lighter';
 
     // Wide ambient halo
-    ctx.globalAlpha = clamp(glow * 0.30, 0.10, 0.42);
+    ctx.globalAlpha = clamp(glow * 0.20, 0.06, 0.28);
     ctx.filter = `blur(${wBlur}px)`;
     ctx.drawImage(off, 0, 0);
 
     // Tight corona
-    ctx.globalAlpha = 1.0;
+    ctx.globalAlpha = clamp(0.42 + glow * 0.18, 0.46, 0.72);
     ctx.filter = `blur(${tBlur}px)`;
     ctx.drawImage(off, 0, 0);
 
@@ -174,13 +238,44 @@ function renderFrame(canvas, t, p) {
     ctx.restore();
   }
 
-  const coreR = clamp(medianSpacing * scale * dotSize * 0.28, 1, 5);
+  const sp = clamp(medianSpacing * scale, 2, 18);
+  const beadR = clamp(sp * dotSize * 0.28, 1.2, 4.3);
+  const coronaR = clamp(sp * dotSize * 0.42, 2.2, 7.5);
+  const coreR = clamp(sp * dotSize * 0.34, 1.25, 6.5);
+  const centerR = clamp(coreR * 0.42, 0.65, 2.4);
+  const TAU = Math.PI * 2;
   ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
+      ctx.fillStyle = 'rgba(238, 246, 255, 0.58)';
+      ctx.beginPath();
+      ctx.arc(toX(l.x), toY(l.y), beadR, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.globalCompositeOperation = 'screen';
+  for (const sd of stripData) {
+    for (const l of sd.leds) {
+      if ((l.r | l.g | l.b) === 0) continue;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},0.14)`;
+      ctx.beginPath();
+      ctx.arc(toX(l.x), toY(l.y), coronaR, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const sd of stripData) {
+    for (const l of sd.leds) {
+      if ((l.r | l.g | l.b) === 0) continue;
+      const brightness = Math.max(l.r, l.g, l.b) / 255;
       ctx.fillStyle = `rgb(${l.r},${l.g},${l.b})`;
       ctx.beginPath();
-      ctx.arc(toX(l.x), toY(l.y), coreR, 0, Math.PI * 2);
+      ctx.arc(toX(l.x), toY(l.y), coreR, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = `rgba(245, 250, 255, ${clamp(0.20 + brightness * 0.50, 0.24, 0.72)})`;
+      ctx.beginPath();
+      ctx.arc(toX(l.x), toY(l.y), centerR, 0, TAU);
       ctx.fill();
     }
   }
@@ -194,7 +289,7 @@ function renderFrame(canvas, t, p) {
 export function LEDPreview({
   patternId, playing,
   glow = 1, dotSize = 2.5, speed = 1,
-  params = {}, bpm = 120,
+  params = {}, patternParamsById = {}, bpm = 120,
   strips: propStrips, viewBox: propViewBox, svgText,
   masterSpeed = 1, masterBrightness = 1, masterSaturation = 1, masterHueShift = 0,
   gammaEnabled = false, gammaValue = 2.2,
@@ -209,9 +304,9 @@ export function LEDPreview({
   const canvasRef = useRef(null);
   const rafRef    = useRef(0);
   const tRef      = useRef(0);
+  const previousPixelsRef = useRef(null);
   const fpsRef    = useRef({ count: 0, last: 0 });
   const staticRenderRef = useRef(0);
-  const previousPixelsRef = useRef(null);
   const propsRef  = useRef({});
 
   const paletteNorm = useMemo(
@@ -238,7 +333,7 @@ export function LEDPreview({
     return buildGammaLut(gammaEnabled, gammaValue);
   }, [gammaEnabled, gammaValue]);
 
-  const useRealStrips = !!(propStrips && propStrips.length > 0);
+  const useRealStrips = Array.isArray(propStrips);
 
   const perStripFns = useMemo(() => {
     if (!useRealStrips) return new Map();
@@ -259,7 +354,19 @@ export function LEDPreview({
         x: px.x, y: px.y,
         p: s.pixels.length > 1 ? i / (s.pixels.length - 1) : 0.5, i,
       }));
-      return { id: s.id, color: s.color, speed: s.speed, brightness: s.brightness, hueShift: s.hueShift, pts, spacing: calcSpacing(pts) };
+      return {
+        id: s.id,
+        color: s.color,
+        speed: s.speed,
+        brightness: s.brightness,
+        hueShift: s.hueShift,
+        patternId: s.patternId || null,
+        pts,
+        spacing: calcSpacing(pts),
+        pathData: s.pathData || '',
+        x: s.x || 0,
+        y: s.y || 0,
+      };
     });
   }, [propStrips, useRealStrips]);
 
@@ -275,7 +382,7 @@ export function LEDPreview({
         const p = pathEl.getPointAtLength(frac * len);
         pts.push({ x: p.x, y: p.y, p: frac, i });
       }
-      return { id: s.id, color: '#88aaff', pts, spacing: calcSpacing(pts) };
+      return { id: s.id, color: '#88aaff', pts, spacing: calcSpacing(pts), pathData: s.path, x: 0, y: 0 };
     });
   }, [useRealStrips]);
 
@@ -290,7 +397,9 @@ export function LEDPreview({
     return doc.querySelector('svg')?.getAttribute('viewBox') || null;
   }, [svgText]);
 
-  const svgViewBox = artworkViewBox || (useRealStrips ? propViewBox : '0 0 640 400');
+  const svgViewBox = useRealStrips
+    ? (propViewBox || artworkViewBox || '0 0 640 400')
+    : (artworkViewBox || '0 0 640 400');
   const vb = useMemo(() => parseViewBox(svgViewBox), [svgViewBox]);
 
   const visibleStrips = useMemo(
@@ -321,11 +430,12 @@ export function LEDPreview({
 
   // Refresh propsRef every render — RAF closure always reads fresh values
   propsRef.current = {
-    patternId, playing, speed, glow, dotSize, bpm, resolvedParams, paletteNorm,
+    patternId, playing, speed, glow, dotSize, bpm, resolvedParams, patternParamsById, paletteNorm,
     activeFn, blendFn, blendAmount, blendType,
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    gammaLUT, symSettings, audioBands, vb, heat, motionSmoothing,
+    gammaLUT, symSettings, audioBands, vb, heat,
+    motionSmoothing,
     onFrame, onFps, onTick,
   };
 
@@ -391,5 +501,5 @@ export function LEDPreview({
     return () => cancelAnimationFrame(rafRef.current);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }}/>;
+  return <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', '--preview-bg': 'transparent' }}/>;
 }

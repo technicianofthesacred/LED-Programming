@@ -175,20 +175,27 @@ export function LeftRail({ screen, onScreen }) {
 }
 
 export function CanvasToolbar({ glow, setGlow, dot, setDot, heat, setHeat, onResetPreview, children }) {
+  const glowLabel = glow <= 0 ? 'Off' : glow < 0.8 ? 'Tune' : 'Show';
+  const cycleGlow = () => {
+    const next = glow <= 0 ? 0.45 : glow < 0.8 ? 1.05 : 0;
+    setGlow(next);
+  };
+  const dotLabel = dot < 0.8 ? 'Small' : dot < 1.45 ? 'Normal' : 'Large';
+  const cycleDot = () => {
+    const next = dot < 0.8 ? 1 : dot < 1.45 ? 1.75 : 0.55;
+    setDot(next);
+  };
+
   return (
     <div className="lw-canvas-toolbar">
       <span className="tbar-label">LEDs</span>
-      <div className="tbar-slider">
-        <span>Glow</span>
-        <input type="range" min="0" max="3" step="0.1" value={glow} onChange={e => setGlow(+e.target.value)}/>
-        <span className="v">{glow.toFixed(1)}×</span>
-      </div>
-      <div className="tbar-slider">
-        <span>Dot</span>
-        <input type="range" min="0.3" max="2.5" step="0.05" value={dot} onChange={e => setDot(+e.target.value)}/>
-        <span className="v">{dot.toFixed(2)}×</span>
-      </div>
-      <button className={`btn ${heat ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setHeat(!heat)}>
+      <button className={`btn ${glow > 0 ? 'btn-primary' : 'btn-ghost'}`} onClick={cycleGlow} title="Cycle glow strength">
+        Glow {glowLabel}
+      </button>
+      <button className="btn btn-ghost" onClick={cycleDot} title="Cycle LED dot size">
+        Dot {dotLabel}
+      </button>
+      <button className={`btn ${heat ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setHeat(!heat)} title="Toggle coverage view" aria-pressed={heat}>
         <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M6 1c-2 2-3 3-3 5a3 3 0 006 0c0-2-1-3-3-5z"/></svg>
         Coverage
       </button>
@@ -223,7 +230,7 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
   };
   return (
     <div className="lw-transport">
-      <button className={`lw-play-btn ${playing ? 'stop' : ''}`} onClick={onPlay}>
+      <button className={`lw-play-btn ${playing ? 'stop' : ''}`} onClick={onPlay} aria-label={playing ? 'Stop preview' : 'Play preview'}>
         {playing
           ? <><svg width="9" height="9" viewBox="0 0 9 9"><rect width="3" height="9" fill="currentColor"/><rect x="6" width="3" height="9" fill="currentColor"/></svg>Stop</>
           : <><svg width="9" height="9" viewBox="0 0 9 9"><path d="M1 0 L8 4.5 L1 9 Z" fill="currentColor"/></svg>Play</>}
@@ -231,7 +238,7 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
       </button>
       <div className="lw-transport-meta">
         <span><span style={{color:'var(--text-4)'}}>BPM</span>&nbsp;&nbsp;<strong>{bpm}</strong></span>
-        <button onClick={handleTap} style={{ fontSize: 'var(--fs-xs)', padding: '2px 8px', fontFamily: 'var(--mono-font)',
+        <button onClick={handleTap} aria-label="Tap tempo" style={{ fontSize: 'var(--fs-xs)', padding: '2px 8px', fontFamily: 'var(--mono-font)',
                background: 'var(--surface-2)', border: '1px solid var(--border)',
                borderRadius: 3, color: 'var(--text-2)', cursor: 'pointer', lineHeight: 1.4 }}>
           TAP

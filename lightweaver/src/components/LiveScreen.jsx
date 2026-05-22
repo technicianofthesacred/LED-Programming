@@ -3,11 +3,8 @@ import { useProject } from '../state/ProjectContext.jsx';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { LEDPreview } from './Preview.jsx';
 import { makeBlackoutFrame } from '../lib/deviceController.js';
-import {
-  easeCrossfade,
-  formatMotionSpeed,
-  MOTION_SMOOTHING_MODES,
-} from '../lib/motionSmoothing.js';
+import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
+import { easeCrossfade, formatMotionSpeed, MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 
 const LIVE_CATS = ['all', 'audio', 'fire', 'water', 'space', 'chill', 'geo', 'glitch', 'bpm'];
 const LIVE_CATEGORY_RULES = {
@@ -21,13 +18,18 @@ const LIVE_CATEGORY_RULES = {
   bpm:   ['strobe-bpm','kick-flash','beat-grid','pulse-expand','confetti-bpm','heartbeat','strobe-color'],
 };
 
-function clampCrossfadeDuration(value) {
-  const n = Number.isFinite(+value) ? +value : 0;
-  return Math.max(0, Math.min(120, n));
+function formatCrossfadeDuration(seconds) {
+  const n = Math.max(0, Number.isFinite(+seconds) ? +seconds : 0);
+  if (n >= 60) {
+    const mins = Math.floor(n / 60);
+    const secs = Math.round(n % 60);
+    return secs ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  return `${n.toFixed(n % 1 ? 1 : 0)}s`;
 }
 
-function formatCrossfadeDuration(seconds) {
-  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+function clampCrossfadeDuration(value) {
+  return Math.max(0, Math.min(120, Number.isFinite(+value) ? +value : 0));
 }
 
 // ── Color map for pattern cards ────────────────────────────────────────────
@@ -99,6 +101,7 @@ function PatternCard({ pattern, isActive, isNextUp, onFire, recording }) {
       className={`lw-live-card ${isActive ? 'active' : ''} ${isNextUp ? 'next-up' : ''}`}
       onClick={() => onFire(pattern.id)}
       title={pattern.desc || pattern.name}
+      aria-label={`${isActive ? 'Live pattern' : isNextUp ? 'Queued pattern' : 'Fade to pattern'} ${pattern.name}`}
     >
       <div className="lw-live-card-bg" style={
         pattern.preview
@@ -106,10 +109,12 @@ function PatternCard({ pattern, isActive, isNextUp, onFire, recording }) {
           : { background: `linear-gradient(135deg, ${color}88, ${color}22)` }
       }/>
       <div className="lw-live-card-scrim"/>
+      <div className="lw-live-card-affordance">{isActive ? 'LIVE' : isNextUp ? 'NEXT' : 'FADE'}</div>
       <div className="lw-live-card-body">
         <div className="lw-live-card-name">{pattern.name}</div>
-        {isActive && <div className="lw-live-card-playing">▶ LIVE</div>}
-        {recording && !isActive && <div className="lw-live-card-rec-hint">tap to stamp</div>}
+        <div className="lw-live-card-action">
+          {isActive ? 'playing now' : isNextUp ? 'queued' : recording ? 'record fade' : 'fade'}
+        </div>
       </div>
       {isActive && <div className="lw-live-card-pulse"/>}
     </button>
@@ -132,21 +137,23 @@ function BeatIndicator({ bpm, t }) {
   );
 }
 
-export function LiveScreen() {
+export function LiveScreen({ onOpenShow }) {
   const {
     activePatternId, setActivePatternId,
     bpm, setBpm,
     liveRecording, setLiveRecording,
     liveQuantize, setLiveQuantize,
-    timelinePlaying, timelinePlayhead,
-    stampClip,
+    timelinePlaying, setTimelinePlaying, timelinePlayhead,
+    showClips, setShowClips,
+    showTransitions, setShowTransitions,
+    recordLivePattern,
     strips, viewBox, svgText, hidden,
     masterSpeed, setMasterSpeed,
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
     masterHueShift, setMasterHueShift,
-    motionSmoothing, setMotionSmoothing,
     gammaEnabled, gammaValue,
+    motionSmoothing, setMotionSmoothing,
     wledPush, symSettings,
   } = useProject();
 
@@ -156,8 +163,12 @@ export function LiveScreen() {
   const [liveT, setLiveT]               = useState(0);
   const [nextUp, setNextUp]             = useState(null); // queued for next bar
   const [fullscreen, setFullscreen]     = useState(false);
-  const [clipDur, setClipDur]           = useState(10);
   const [frozen, setFrozen]             = useState(false); // pause pattern animation
+  const [leftWidth, , beginLeftResize] = usePersistentPanelSize('lw-live-left-width', {
+    defaultValue: 340,
+    min: 260,
+    max: 620,
+  });
   const [scenes, setScenes]             = useState(() => {
     try { return JSON.parse(localStorage.getItem('lw_live_scenes') || '[]'); } catch { return []; }
   });
@@ -166,6 +177,14 @@ export function LiveScreen() {
   const [blendAmt, setBlendAmt]         = useState(0);    // 0 = all active, 1 = all blendFrom
   const blendStartRef = useRef(null);
   const tapsRef = useRef([]);
+
+  const toggleRecording = useCallback(() => {
+    setLiveRecording(recording => {
+      const next = !recording;
+      if (next) setTimelinePlaying(true);
+      return next;
+    });
+  }, [setLiveRecording, setTimelinePlaying]);
 
   const filtered = useMemo(() => {
     let base = PATTERNS;
@@ -180,6 +199,42 @@ export function LiveScreen() {
       (p.desc && p.desc.toLowerCase().includes(q)) ||
       p.id.includes(q));
   }, [search, livecat]);
+
+  const recordedClips = useMemo(() => {
+    return [...(showClips || [])]
+      .filter(clip => clip.recorded)
+      .sort((a, b) => a.start - b.start);
+  }, [showClips]);
+
+  const recordedTransitions = useMemo(() => {
+    return [...(showTransitions || [])]
+      .filter(transition => transition.recorded)
+      .sort((a, b) => a.start - b.start);
+  }, [showTransitions]);
+
+  const lastRecordedClip = recordedClips[recordedClips.length - 1] || null;
+  const recentRecordedClips = recordedClips.slice(-6);
+
+  const undoLastRecorded = useCallback(() => {
+    if (!lastRecordedClip) return;
+    setShowClips(clips => clips
+      .filter(clip => clip.id !== lastRecordedClip.id)
+      .map(clip => {
+        if (!clip.recorded || (clip.track ?? 0) !== 0) return clip;
+        if (clip.start < lastRecordedClip.start && clip.end > lastRecordedClip.start) {
+          return { ...clip, end: lastRecordedClip.start };
+        }
+        return clip;
+      }));
+    setShowTransitions(transitions => transitions.filter(transition =>
+      transition.clipA !== lastRecordedClip.id && transition.clipB !== lastRecordedClip.id
+    ));
+  }, [lastRecordedClip, setShowClips, setShowTransitions]);
+
+  const clearRecordedTake = useCallback(() => {
+    setShowClips(clips => clips.filter(clip => !clip.recorded));
+    setShowTransitions(transitions => transitions.filter(transition => !transition.recorded));
+  }, [setShowClips, setShowTransitions]);
 
   const handleTap = useCallback(() => {
     const now = Date.now();
@@ -214,10 +269,10 @@ export function LiveScreen() {
     if (blendFrom === null || blendAmt <= 0) return;
     const rafId = requestAnimationFrame(() => {
       const elapsed = (performance.now() - (blendStartRef.current || performance.now())) / 1000;
-      const progress = crossfadeDur <= 0 ? 0 : Math.max(0, 1 - elapsed / crossfadeDur);
-      const newAmt = easeCrossfade(progress, 'ease-in-out');
+      const progress = crossfadeDur <= 0 ? 1 : Math.min(1, elapsed / crossfadeDur);
+      const newAmt = Math.max(0, 1 - easeCrossfade(progress, 'ease-in-out'));
       setBlendAmt(newAmt);
-      if (progress <= 0) setBlendFrom(null);
+      if (newAmt <= 0) setBlendFrom(null);
     });
     return () => cancelAnimationFrame(rafId);
   }, [blendFrom, blendAmt, crossfadeDur]);
@@ -228,17 +283,17 @@ export function LiveScreen() {
     } else {
       startCrossfade(activePatternId, patternId);
       setNextUp(null);
+      if (liveRecording) {
+        recordLivePattern(patternId, { crossfadeSecs: crossfadeDur });
+      }
     }
-    if (liveRecording) {
-      stampClip(patternId, clipDur);
-    }
-  }, [liveQuantize, activePatternId, startCrossfade, liveRecording, stampClip, clipDur]);
+  }, [liveQuantize, activePatternId, startCrossfade, liveRecording, recordLivePattern, crossfadeDur]);
 
   // Keyboard shortcuts for live performance
   useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      if (e.key === 'r' || e.key === 'R') { setLiveRecording(r => !r); return; }
+      if (e.key === 'r' || e.key === 'R') { toggleRecording(); return; }
       if (e.key === 't' || e.key === 'T') { handleTap(); return; }
       if (e.key === 'b' || e.key === 'B') { setActivePatternId(null); return; }
       if (e.key === 'f' || e.key === 'F') { setFrozen(fr => !fr); return; }
@@ -251,7 +306,7 @@ export function LiveScreen() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [setLiveRecording, handleTap, filtered, firePattern, setActivePatternId]);
+  }, [toggleRecording, handleTap, filtered, firePattern, setActivePatternId]);
 
   // Fire queued pattern on beat/bar boundary
   useEffect(() => {
@@ -264,17 +319,23 @@ export function LiveScreen() {
     const delay = (nextBoundary - now) * 1000;
     const tid = setTimeout(() => {
       startCrossfade(activePatternId, nextUp);
+      if (liveRecording) {
+        recordLivePattern(nextUp, { crossfadeSecs: crossfadeDur });
+      }
       setNextUp(null);
     }, Math.max(0, delay));
     return () => clearTimeout(tid);
-  }, [nextUp, bpm, liveQuantize, liveT, activePatternId, startCrossfade]);
+  }, [nextUp, bpm, liveQuantize, liveT, activePatternId, startCrossfade, liveRecording, recordLivePattern, crossfadeDur]);
 
   const handleFrame = useCallback((pixels) => {
     if (wledPush) wledPush(pixels);
   }, [wledPush]);
 
   return (
-    <div className={`lw-live-screen ${fullscreen ? 'fullscreen' : ''}`}>
+    <div
+      className={`lw-live-screen ${fullscreen ? 'fullscreen' : ''}`}
+      style={{ '--lw-live-left-width': `${leftWidth}px` }}
+    >
 
       {/* ── Left: preview + controls ── */}
       <div className="lw-live-left">
@@ -282,7 +343,7 @@ export function LiveScreen() {
           <LEDPreview
             patternId={activePatternId}
             playing={!frozen}
-            glow={1.6}
+            glow={0.85}
             dotSize={1.1}
             strips={strips?.length > 0 ? strips : undefined}
             viewBox={viewBox}
@@ -296,10 +357,10 @@ export function LiveScreen() {
             gammaValue={gammaValue}
             bpm={bpm}
             symSettings={symSettings}
-            motionSmoothing={motionSmoothing}
             blendPatternId={blendFrom}
             blendAmount={blendAmt}
             blendType="crossfade"
+            motionSmoothing={motionSmoothing}
             onTick={setLiveT}
             onFrame={handleFrame}
           />
@@ -317,58 +378,106 @@ export function LiveScreen() {
         </div>
 
         <div className="lw-live-controls">
-          <BeatIndicator bpm={bpm} t={liveT}/>
+          <div className={`lw-live-record-dock ${liveRecording ? 'recording' : ''}`}>
+            <div className="lw-live-record-head">
+              <div>
+                <div className="lw-live-record-title">
+                  {liveRecording ? 'Recording to Show' : recordedClips.length ? 'Take ready' : 'Record to Show'}
+                </div>
+                <div className="lw-live-record-meta">
+                  {recordedClips.length} clips · {recordedTransitions.length} fades · {liveQuantize}
+                </div>
+              </div>
+              <button
+                className={`btn ${liveRecording ? 'btn-danger' : 'btn-primary'} lw-live-record-main`}
+                onClick={toggleRecording}
+              >
+                {liveRecording ? 'Stop Recording' : 'Start Recording to Show'}
+              </button>
+            </div>
 
-          <div className="lw-live-ctrl-row">
-            <span className="k">BPM</span>
-            <input type="number" min="20" max="600" value={bpm}
-                   onChange={e => setBpm(Math.max(20, Math.min(600, +e.target.value)))}
-                   className="lw-live-bpm-input"/>
-            <button className="btn" onClick={handleTap}>TAP</button>
-          </div>
+            <div className="lw-live-flow">
+              <span className={`lw-live-flow-step ${liveRecording ? 'active' : recordedClips.length ? 'done' : ''}`}>1 Start</span>
+              <span className={`lw-live-flow-step ${liveRecording ? 'active' : recordedClips.length ? 'done' : ''}`}>2 Tap effects</span>
+              <span className={`lw-live-flow-step ${recordedClips.length && !liveRecording ? 'active' : ''}`}>3 Open Show</span>
+            </div>
 
-          <div className="lw-live-ctrl-row">
-            <span className="k">Quantize</span>
-            <div className="lw-tweaks-seg" style={{ flex: 1 }}>
-              {['free','beat','bar'].map(q => (
-                <button key={q}
-                        className={liveQuantize === q ? 'active' : ''}
-                        onClick={() => setLiveQuantize(q)}>
-                  {q}
-                </button>
-              ))}
+            <div className="lw-live-take-strip" aria-label="Recorded take">
+              {recentRecordedClips.length ? recentRecordedClips.map((clip, idx) => {
+                const pattern = PATTERNS.find(p => p.id === clip.patternId);
+                const color = CARD_COLORS[clip.patternId] || '#888';
+                return (
+                  <div key={clip.id} className="lw-live-take-item" title={`${pattern?.name || clip.patternId} · ${clip.start.toFixed(1)}s`}>
+                    <span className="dot" style={{ background: color }}/>
+                    <span>{pattern?.name || clip.patternId}</span>
+                    {idx < recentRecordedClips.length - 1 && <span className="fade">→</span>}
+                  </div>
+                );
+              }) : (
+                <div className="lw-live-take-empty">No take recorded</div>
+              )}
+            </div>
+
+            <div className="lw-live-record-actions">
+              <button className="btn btn-ghost" onClick={undoLastRecorded} disabled={!lastRecordedClip}>Undo last</button>
+              <button className="btn btn-ghost" onClick={clearRecordedTake} disabled={!recordedClips.length}>Clear take</button>
+              <button className="btn btn-ghost" onClick={onOpenShow} disabled={!recordedClips.length}>Open Show</button>
             </div>
           </div>
 
-          <div className="lw-live-ctrl-row">
-            <span className="k">Crossfade</span>
-            <input type="range" min="0" max="120" step="0.5" value={crossfadeDur}
-                   onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))} style={{ flex: 1 }}/>
-            <input type="number" min="0" max="120" step="0.5" value={crossfadeDur}
-                   onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))}
-                   className="lw-live-bpm-input" style={{ width: 58 }}/>
-            <span className="v">{formatCrossfadeDuration(crossfadeDur)}</span>
-          </div>
+          <details className="lw-live-timing" open={liveRecording || liveQuantize !== 'free'}>
+            <summary>
+              <span>Timing</span>
+              <span>{formatCrossfadeDuration(crossfadeDur)} fade · {liveQuantize}</span>
+            </summary>
 
-          <div className="lw-live-ctrl-row">
-            <span className="k">Motion</span>
-            <div className="lw-tweaks-seg" style={{ flex: 1 }}>
-              {MOTION_SMOOTHING_MODES.map(mode => (
-                <button key={mode}
-                        className={motionSmoothing === mode ? 'active' : ''}
-                        onClick={() => setMotionSmoothing(mode)}>
-                  {mode}
-                </button>
-              ))}
+            <BeatIndicator bpm={bpm} t={liveT}/>
+
+            <div className="lw-live-ctrl-row">
+              <span className="k">BPM</span>
+              <input type="number" min="20" max="600" value={bpm}
+                     onChange={e => setBpm(Math.max(20, Math.min(600, +e.target.value)))}
+                     className="lw-live-bpm-input"/>
+              <button className="btn" onClick={handleTap}>TAP</button>
             </div>
-          </div>
 
-          <div className="lw-live-ctrl-row">
-            <span className="k">Clip dur</span>
-            <input type="range" min="2" max="60" step="1" value={clipDur}
-                   onChange={e => setClipDur(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v">{clipDur}s</span>
-          </div>
+            <div className="lw-live-ctrl-row">
+              <span className="k">Quantize</span>
+              <div className="lw-tweaks-seg" style={{ flex: 1 }}>
+                {['free','beat','bar'].map(q => (
+                  <button key={q}
+                          className={liveQuantize === q ? 'active' : ''}
+                          onClick={() => setLiveQuantize(q)}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="lw-live-ctrl-row">
+              <span className="k">Crossfade</span>
+              <input type="range" min="0" max="120" step="0.5" value={crossfadeDur}
+                     onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))} style={{ flex: 1 }}/>
+              <input type="number" min="0" max="120" step="0.5" value={crossfadeDur}
+                     onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))}
+                     className="lw-live-bpm-input" style={{ width: 62 }}/>
+              <span className="v">{formatCrossfadeDuration(crossfadeDur)}</span>
+            </div>
+
+            <div className="lw-live-ctrl-row">
+              <span className="k">Motion</span>
+              <div className="lw-tweaks-seg" style={{ flex: 1 }}>
+                {MOTION_SMOOTHING_MODES.map(mode => (
+                  <button key={mode}
+                          className={motionSmoothing === mode ? 'active' : ''}
+                          onClick={() => setMotionSmoothing(mode)}>
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </details>
+
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Brightness</span>
             <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
@@ -379,7 +488,7 @@ export function LiveScreen() {
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Speed</span>
             <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
                    onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 28 }}>{formatMotionSpeed(masterSpeed)}</span>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 38 }}>{formatMotionSpeed(masterSpeed)}</span>
           </div>
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Hue</span>
@@ -401,17 +510,6 @@ export function LiveScreen() {
           )}
 
           <div className="lw-live-ctrl-row">
-            <button
-              className={`btn ${liveRecording ? 'btn-danger' : 'btn-ghost'}`}
-              onClick={() => setLiveRecording(r => !r)}
-              style={{ flex: 1 }}
-            >
-              <span className="dot" style={{
-                display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-                background: liveRecording ? 'var(--on-accent)' : 'currentColor', marginRight: 5,
-              }}/>
-              {liveRecording ? '● REC ARMED' : 'Arm Record'}
-            </button>
             <button
               className={`btn btn-ghost ${fullscreen ? 'active' : ''}`}
               onClick={() => setFullscreen(f => !f)}
@@ -453,12 +551,18 @@ export function LiveScreen() {
           )}
           {liveRecording && (
             <div className="lw-live-rec-status">
-              ● Recording · tap a pattern to stamp clip at playhead
+              ● Recording · tap an effect to write the next fade
               {liveQuantize !== 'free' && ` · quantized to ${liveQuantize}`}
             </div>
           )}
         </div>
       </div>
+
+      <div
+        className="lw-resize-handle lw-resize-handle--vertical lw-live-resize-handle"
+        data-resize-key="lw-live-left-width"
+        onMouseDown={e => beginLeftResize(e, { axis: 'x' })}
+      />
 
       {/* ── Right: pattern grid ── */}
       <div className="lw-live-right">
@@ -522,10 +626,7 @@ export function LiveScreen() {
           {filtered.map((pattern, idx) => (
             <div key={pattern.id} style={{ position: 'relative' }}>
               {idx < 9 && (
-                <span style={{ position: 'absolute', top: 3, right: 3, zIndex: 3,
-                               fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)',
-                               background: 'oklch(20%/0.7)', color: 'var(--text-3)',
-                               borderRadius: 2, padding: '1px 3px', pointerEvents: 'none' }}>
+                <span className="lw-live-card-hotkey">
                   {idx + 1}
                 </span>
               )}

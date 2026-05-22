@@ -1,7 +1,28 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+function writeGlowFixture(tmp: string) {
+  const fixture = path.join(tmp, 'glow-layout.svg');
+  fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 320" width="420" height="320">
+  <g id="glow-path" data-name="Glow Path">
+    <path d="M 60 230 C 130 80 290 80 360 230" fill="none" stroke="#8aa8ff" stroke-width="5"/>
+  </g>
+</svg>`);
+  return fixture;
+}
 
 test('glow has no dark lines — pixel score < 5%', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-glow-'));
+  const fixture = writeGlowFixture(tmp);
+
   await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
   await page.locator('.lw-rail-btn', { hasText: 'Pattern' }).click();
   await page.waitForSelector('canvas', { timeout: 10000 });
   await page.waitForTimeout(3000);

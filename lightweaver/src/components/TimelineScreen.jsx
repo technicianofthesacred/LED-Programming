@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useProject, resolveTimelinePlayback, sampleLane } from '../state/ProjectContext.jsx';
+import { useProject, resolveTimelinePlayback, resolveTimelineTargets, sampleLane } from '../state/ProjectContext.jsx';
 import { LEDPreview } from './Preview.jsx';
 import { PATTERNS } from '../data.js';
+import { clampClipMove, clampClipResize, placeClipInTrackGap } from '../lib/timelineLayout.js';
+import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 
 function fmt(t) {
   const m = Math.floor(t / 60), s = Math.floor(t % 60), ms = Math.floor((t % 1) * 100);
@@ -74,6 +76,15 @@ function lanePath(keys, width, height, duration) {
   }).join(' ');
 }
 
+function applyTransitionCurve(t, curve) {
+  switch (curve) {
+    case 'ease-in-out': return t * t * (3 - 2 * t);
+    case 'exp':         return 1 - Math.pow(1 - t, 3);
+    case 's-curve':     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    default:            return t;
+  }
+}
+
 function Ruler({ width, pxPerSec, cues, duration, loopRegion, onMouseDown, onContextMenu }) {
   const ticks = [];
   const step = pxPerSec >= 2 ? 30 : pxPerSec >= 1 ? 60 : 120;
@@ -142,6 +153,7 @@ function Clip({ clip, pxPerSec, selected, multiSelected, onSelect, onResize, onM
 
   const handleBodyDown = useCallback((e) => {
     if (e.target.classList.contains('clip-handle')) return;
+    e.preventDefault();
     const startX    = e.clientX;
     const origStart = clip.start;
     const dur       = clip.end - clip.start;
@@ -181,16 +193,27 @@ function Clip({ clip, pxPerSec, selected, multiSelected, onSelect, onResize, onM
   );
 }
 
-function TransitionZone({ trans, pxPerSec, selected, onSelect }) {
+function TransitionZone({ trans, clips = [], pxPerSec, selected, onSelect }) {
   const left  = trans.start * pxPerSec;
   const width = Math.max(4, (trans.end - trans.start) * pxPerSec);
   const icon  = { crossfade: '⤫', 'fade-black': '◐', 'fade-white': '◑', dissolve: '▦', wipe: '▶' }[trans.type] || '⤫';
+  const clipA = clips.find(c => c.id === trans.clipA);
+  const clipB = clips.find(c => c.id === trans.clipB);
+  const colorA = clipA?.color || CLIP_COLORS[clipA?.patternId] || 'var(--border-2)';
+  const colorB = clipB?.color || CLIP_COLORS[clipB?.patternId] || 'var(--accent)';
+  const duration = Math.max(0, trans.end - trans.start);
   return (
-    <div className={`lw-tl-trans ${selected ? 'selected' : ''}`}
-         style={{ left, width }}
+    <div className={`lw-tl-trans ${selected ? 'selected' : ''} ${trans.recorded ? 'recorded' : ''}`}
+         style={{ left, width, '--fade-a': colorA, '--fade-b': colorB }}
          onClick={e => { e.stopPropagation(); onSelect(); }}
-         title={trans.type}>
+         title={`${trans.type} · ${duration.toFixed(1)}s`}>
       <div className="trans-glyph">{icon}</div>
+      {width >= 56 && (
+        <div className="trans-label">
+          <span>{trans.type === 'crossfade' ? 'FADE' : trans.type}</span>
+          <span>{duration.toFixed(1)}s</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -290,8 +313,14 @@ function AudioLane({ width }) {
   );
 }
 
-function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, wledPush, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue, motionSmoothing }) {
+function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, wledPush, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue, palette, patternParams, motionSmoothing }) {
+  const targetState = resolveTimelineTargets(playhead, clips, strips || []);
+  const targetStrips = (strips || []).map(strip => ({
+    ...strip,
+    patternId: targetState.byStripId[strip.id] || strip.patternId || null,
+  }));
   const { patternId, blendPatternId, blendAmount, transType } = resolveTimelinePlayback(playhead, clips, transitions);
+  const activePatternId = targetState.globalClip?.patternId || patternId;
   const curvedBlend = blendAmount;
 
   const handleFrame = useCallback((pixels) => {
@@ -305,22 +334,22 @@ function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, v
         <span className="sep">·</span>
         <span>{fmt(playhead)}</span>
         <span className="sep">·</span>
-        <span>{patternId || '—'}</span>
+        <span>{activePatternId || '—'}</span>
         {blendPatternId && (
           <><span className="sep">·</span>
           <span className="trans-badge">{transType} {Math.round(curvedBlend * 100)}%</span></>
         )}
       </div>
       <div className="lw-tl-preview-stage">
-        {patternId ? (
+        {activePatternId ? (
           <LEDPreview
-            patternId={patternId}
+            patternId={activePatternId}
             blendPatternId={blendPatternId}
             blendAmount={curvedBlend}
             playing={true}
-            glow={1.4}
+            glow={0.75}
             dotSize={1.0}
-            strips={strips?.length > 0 ? strips : undefined}
+            strips={targetStrips.length > 0 ? targetStrips : undefined}
             viewBox={viewBox}
             svgText={svgText}
             hidden={hidden}
@@ -331,6 +360,9 @@ function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, v
             gammaEnabled={gammaEnabled}
             gammaValue={gammaValue}
             bpm={bpm}
+            params={patternParams?.[activePatternId] || {}}
+            patternParamsById={patternParams}
+            palette={palette}
             motionSmoothing={motionSmoothing}
             onFrame={handleFrame}
           />
@@ -399,7 +431,7 @@ function EnvelopeEditor({ clip, onUpdate }) {
   );
 }
 
-function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDeleteClip, onDeleteTrans, onDuplicateClip, onAddTransition, onSplitClip, multiSel, onClearMultiSel }) {
+function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, strips = [], onDeleteClip, onDeleteTrans, onDuplicateClip, onAddTransition, onSplitClip, multiSel, onClearMultiSel }) {
   const { setShowTransitions, setShowClips, showCues, setShowCues, showDuration } = useProject();
   const [inspTab, setInspTab] = useState('auto'); // 'auto' | 'show'
   const activeTab = inspTab === 'show' ? 'show' : (selectedTrans && !selectedClip) ? 'trans' : selectedClip ? 'clip' : 'show';
@@ -455,7 +487,25 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, onDel
                 )}
               </label>
             </div>
-            <div className="lw-insp-row"><span className="k">Target</span><span className="v">{selectedClip.group || 'All groups'}</span></div>
+            <div className="lw-insp-row"><span className="k">Target</span>
+              <select className="lw-insp-select" value={selectedClip.target || 'all'}
+                      onChange={e => setShowClips(cs => cs.map(c => {
+                        if (c.id !== selectedClip.id) return c;
+                        const target = e.target.value;
+                        const strip = strips.find(s => s.id === target);
+                        return {
+                          ...c,
+                          target,
+                          group: target === 'all' ? undefined : strip?.name || c.group,
+                          track: target === 'all' ? 0 : (c.track ?? 1),
+                        };
+                      }))}>
+                <option value="all">All layers</option>
+                {strips.map(strip => (
+                  <option key={strip.id} value={strip.id}>{strip.name}</option>
+                ))}
+              </select>
+            </div>
             <div className="lw-insp-row"><span className="k">Start</span><span className="v mono">{fmt(selectedClip.start)}</span></div>
             <div className="lw-insp-row"><span className="k">End</span><span className="v mono">{fmt(selectedClip.end)}</span></div>
             <div className="lw-insp-row"><span className="k">Length</span><span className="v mono">{fmt(selectedClip.end - selectedClip.start)}</span></div>
@@ -660,12 +710,13 @@ export function TimelineScreen({ onExport }) {
     bpm,
     strips, viewBox, svgText, hidden,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    motionSmoothing,
     gammaEnabled, gammaValue,
     setShowDuration,
     wledPush,
     setActivePatternId,
+    palette,
     patternParams,
+    motionSmoothing,
     undoTimeline, redoTimeline,
     setBpm,
   } = useProject();
@@ -680,6 +731,16 @@ export function TimelineScreen({ onExport }) {
   const [playRate,    setPlayRate]     = useState(1.0); // playback speed multiplier
   const [mutedTracks, setMutedTracks] = useState(new Set()); // set of muted track numbers
   const [soloTrack,   setSoloTrack]   = useState(null);      // null or track number
+  const [inspectorWidth, , beginInspectorResize] = usePersistentPanelSize('lw-show-inspector-width', {
+    defaultValue: 380,
+    min: 280,
+    max: 620,
+  });
+  const [previewHeight, , beginPreviewHeightResize] = usePersistentPanelSize('lw-show-preview-height', {
+    defaultValue: 280,
+    min: 180,
+    max: 460,
+  });
   const scrollRef    = useRef(null);
   const rafRef       = useRef(null);
   const lastRef      = useRef(null);
@@ -757,8 +818,8 @@ export function TimelineScreen({ onExport }) {
     const snapped = snap(newVal);
     setShowClips(cs => cs.map(c => {
       if (c.id !== id) return c;
-      if (edge === 'start') return { ...c, start: Math.max(0, Math.min(c.end - 1, snapped)) };
-      return { ...c, end: Math.max(c.start + 1, Math.min(showDuration, snapped)) };
+      const next = clampClipResize(cs, id, edge, snapped, showDuration);
+      return next ? { ...c, ...next } : c;
     }));
   }, [setShowClips, showDuration, snap]);
 
@@ -766,8 +827,8 @@ export function TimelineScreen({ onExport }) {
     const snapped = snap(newStart);
     setShowClips(cs => cs.map(c => {
       if (c.id !== id) return c;
-      const s = Math.max(0, Math.min(showDuration - dur, snapped));
-      return { ...c, start: s, end: s + dur };
+      const next = clampClipMove(cs, id, snapped, showDuration);
+      return next ? { ...c, ...next } : c;
     }));
   }, [setShowClips, showDuration, snap]);
 
@@ -795,6 +856,8 @@ export function TimelineScreen({ onExport }) {
       const dur = 4;
       transitions.push({
         id: `ftrans_${Date.now()}_${i}`, type: 'crossfade', curve: 'ease-in-out',
+        clipA: a.id,
+        clipB: b.id,
         start: a.end - dur / 2, end: b.start + dur / 2,
       });
     }
@@ -826,24 +889,34 @@ export function TimelineScreen({ onExport }) {
   const handleAddClip = useCallback((track = 0) => {
     const { patternId: suggestId } = resolveTimelinePlayback(timelinePlayhead, showClips, showTransitions);
     const id = `clip_${Date.now()}`;
+    const placed = placeClipInTrackGap(showClips, {
+      track,
+      preferredStart: snap(timelinePlayhead),
+      duration: 30,
+      showDuration,
+    });
+    if (!placed) return;
     const newClip = {
       id, track,
       patternId: suggestId || 'aurora',
-      start: timelinePlayhead,
-      end: Math.min(showDuration, timelinePlayhead + 30),
+      start: placed.start,
+      end: placed.end,
       label: suggestId || 'aurora',
     };
     setShowClips(cs => [...cs, newClip]);
     setSelected({ kind: 'clip', id });
-  }, [timelinePlayhead, showClips, showTransitions, showDuration, setShowClips]);
+  }, [timelinePlayhead, showClips, showTransitions, showDuration, snap, setShowClips]);
 
   const handleAddTransition = useCallback((clipId) => {
     const clip = showClips.find(c => c.id === clipId);
     if (!clip) return;
+    const nextClip = [...showClips]
+      .filter(c => c.id !== clip.id && (c.track ?? 0) === (clip.track ?? 0) && c.start >= clip.end)
+      .sort((a, b) => a.start - b.start)[0];
     const dur = Math.min(4, (clip.end - clip.start) * 0.2);
     const id = `trans_${Date.now()}`;
     setShowTransitions(ts => [...ts, {
-      id, type: 'crossfade', curve: 'ease-in-out',
+      id, clipA: clip.id, clipB: nextClip?.id || null, type: 'crossfade', curve: 'ease-in-out',
       start: clip.end - dur / 2,
       end: clip.end + dur / 2,
     }]);
@@ -880,9 +953,8 @@ export function TimelineScreen({ onExport }) {
           const nudge = e.shiftKey ? 10 : 1;
           setShowClips(cs => cs.map(c => {
             if (c.id !== selected.id) return c;
-            const dur = c.end - c.start;
-            const s = Math.max(0, c.start - nudge);
-            return { ...c, start: s, end: s + dur };
+            const next = clampClipMove(cs, selected.id, c.start - nudge, showDuration);
+            return next ? { ...c, ...next } : c;
           }));
         } else {
           setTimelinePlayhead(p => Math.max(0, p - (e.shiftKey ? 10 : 1)));
@@ -895,9 +967,8 @@ export function TimelineScreen({ onExport }) {
           const nudge = e.shiftKey ? 10 : 1;
           setShowClips(cs => cs.map(c => {
             if (c.id !== selected.id) return c;
-            const dur = c.end - c.start;
-            const s = Math.min(showDuration - dur, c.start + nudge);
-            return { ...c, start: s, end: s + dur };
+            const next = clampClipMove(cs, selected.id, c.start + nudge, showDuration);
+            return next ? { ...c, ...next } : c;
           }));
         } else {
           setTimelinePlayhead(p => Math.min(showDuration, p + (e.shiftKey ? 10 : 1)));
@@ -942,7 +1013,14 @@ export function TimelineScreen({ onExport }) {
         const src = clipboardRef.current;
         const dur = src.end - src.start;
         const newId = `clip_${Date.now()}`;
-        const newClip = { ...src, id: newId, start: timelinePlayhead, end: Math.min(showDuration, timelinePlayhead + dur) };
+        const placed = placeClipInTrackGap(showClips, {
+          track: src.track ?? 0,
+          preferredStart: snap(timelinePlayhead),
+          duration: dur,
+          showDuration,
+        });
+        if (!placed) return;
+        const newClip = { ...src, id: newId, ...placed };
         setShowClips(cs => [...cs, newClip]);
         setSelected({ kind: 'clip', id: newId });
         return;
@@ -956,17 +1034,24 @@ export function TimelineScreen({ onExport }) {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [showCues, showDuration, selected, multiSel, showClips, timelinePlayhead, setTimelinePlayhead, setTimelinePlaying, setShowClips, setShowTransitions, undoTimeline, redoTimeline, handleSplitClip]);
+  }, [showCues, showDuration, selected, multiSel, showClips, timelinePlayhead, snap, setTimelinePlayhead, setTimelinePlaying, setShowClips, setShowTransitions, undoTimeline, redoTimeline, handleSplitClip]);
 
   const handleDuplicateClip = useCallback((id) => {
     const clip = showClips.find(c => c.id === id);
     if (!clip) return;
     const dur = clip.end - clip.start;
     const newId = `clip_${Date.now()}`;
-    const newClip = { ...clip, id: newId, start: clip.end, end: Math.min(showDuration, clip.end + dur) };
+    const placed = placeClipInTrackGap(showClips, {
+      track: clip.track ?? 0,
+      preferredStart: snap(clip.end),
+      duration: dur,
+      showDuration,
+    });
+    if (!placed) return;
+    const newClip = { ...clip, id: newId, ...placed };
     setShowClips(cs => [...cs, newClip]);
     setSelected({ kind: 'clip', id: newId });
-  }, [showClips, showDuration, setShowClips]);
+  }, [showClips, showDuration, snap, setShowClips]);
 
   const handleTapTempo = useCallback(() => {
     const now = performance.now();
@@ -992,7 +1077,13 @@ export function TimelineScreen({ onExport }) {
   };
 
   return (
-    <div className="lw-timeline-screen">
+    <div
+      className="lw-timeline-screen"
+      style={{
+        '--lw-show-inspector-width': `${inspectorWidth}px`,
+        '--lw-show-preview-height': `${previewHeight}px`,
+      }}
+    >
       <div className="lw-tl-top">
         <LiveTimelinePreview
           playhead={timelinePlayhead}
@@ -1009,15 +1100,23 @@ export function TimelineScreen({ onExport }) {
           masterBrightness={masterBrightness}
           masterSaturation={masterSaturation}
           masterHueShift={masterHueShift}
-          motionSmoothing={motionSmoothing}
           gammaEnabled={gammaEnabled}
           gammaValue={gammaValue}
+          palette={palette}
+          patternParams={patternParams}
+          motionSmoothing={motionSmoothing}
+        />
+        <div
+          className="lw-resize-handle lw-resize-handle--vertical lw-show-inspector-resize"
+          data-resize-key="lw-show-inspector-width"
+          onMouseDown={e => beginInspectorResize(e, { axis: 'x', invert: true })}
         />
         <TimelineInspector
           selectedClip={selectedClip}
           selectedTrans={selectedTrans}
           onExport={onExport}
           clips={showClips}
+          strips={strips}
           onDeleteClip={(id) => { setShowClips(cs => cs.filter(c => c.id !== id)); setSelected({ kind: 'clip', id: null }); }}
           onDeleteTrans={(id) => { setShowTransitions(ts => ts.filter(t => t.id !== id)); setSelected({ kind: 'trans', id: null }); }}
           onDuplicateClip={handleDuplicateClip}
@@ -1027,6 +1126,12 @@ export function TimelineScreen({ onExport }) {
           onClearMultiSel={() => setMultiSel(new Set())}
         />
       </div>
+
+      <div
+        className="lw-resize-handle lw-resize-handle--horizontal lw-show-preview-resize"
+        data-resize-key="lw-show-preview-height"
+        onMouseDown={e => beginPreviewHeightResize(e, { axis: 'y' })}
+      />
 
       <div className="lw-tl-editor">
         <div className="lw-tl-headers">
@@ -1135,7 +1240,7 @@ export function TimelineScreen({ onExport }) {
                       onMove={handleMoveClip}/>
               ))}
               {showTransitions.map(t => (
-                <TransitionZone key={t.id} trans={t} pxPerSec={pxPerSec}
+                <TransitionZone key={t.id} trans={t} clips={showClips} pxPerSec={pxPerSec}
                                 selected={selected.kind === 'trans' && selected.id === t.id}
                                 onSelect={() => setSelected({ kind: 'trans', id: t.id })}/>
               ))}

@@ -6,16 +6,22 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "serve:pi": "node server/index.js",
+    "pi:build": "npm run build",
+    "pi:start": "npm run build && npm run serve:pi",
     "test:core": "node tests/project-frame-audit.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/theme-one-dark": "^6.1.3",
+    "bonjour-service": "^1.3.0",
     "codemirror": "^6.0.2",
     "esptool-js": "^0.6.0",
+    "express": "^4.22.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

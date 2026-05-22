@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ProjectProvider, useProject } from './state/ProjectContext.jsx';
 import { TopBar, LeftRail, CanvasToolbar, Transport, StatusBar } from './components/Chrome.jsx';
 import { LEDPreview } from './components/Preview.jsx';
@@ -9,13 +9,13 @@ import { useTweaks, TweaksPanel } from './components/Tweaks.jsx';
 import { WledBar } from './components/WledBar.jsx';
 import { useAudio } from './hooks/useAudio.js';
 import { useMidi } from './hooks/useMidi.js';
+import { usePersistentPanelSize } from './hooks/usePersistentPanelSize.js';
 import { PATTERNS } from './data.js';
 
 const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 
 const CardsMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CardsMode })));
 const CodeMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CodeMode })));
-const GraphMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.GraphMode })));
 const SymmetryMode = lazy(() => import('./components/SymmetryMode.jsx').then(m => ({ default: m.SymmetryMode })));
 const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
 const TimelineScreen = lazy(() => import('./components/TimelineScreen.jsx').then(m => ({ default: m.TimelineScreen })));
@@ -25,6 +25,40 @@ const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m =>
 const DevicesPanel = lazy(() => import('./components/DevicesPanel.jsx').then(m => ({ default: m.DevicesPanel })));
 const SettingsScreen = lazy(() => import('./components/SettingsScreen.jsx').then(m => ({ default: m.SettingsScreen })));
 
+function parseViewBoxRect(viewBox) {
+  const parts = String(viewBox || '0 0 640 400').trim().split(/[\s,]+/).map(Number);
+  return { x: parts[0] || 0, y: parts[1] || 0, w: parts[2] || 640, h: parts[3] || 400 };
+}
+
+function stripBoundsViewBox(strips, fallbackViewBox) {
+  const pts = [];
+  for (const strip of strips || []) {
+    for (const px of strip.pixels || []) {
+      if (Number.isFinite(px.x) && Number.isFinite(px.y)) pts.push(px);
+    }
+  }
+  if (!pts.length) return fallbackViewBox || '0 0 640 400';
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const pt of pts) {
+    minX = Math.min(minX, pt.x);
+    minY = Math.min(minY, pt.y);
+    maxX = Math.max(maxX, pt.x);
+    maxY = Math.max(maxY, pt.y);
+  }
+
+  const fallback = parseViewBoxRect(fallbackViewBox);
+  const w = Math.max(maxX - minX, fallback.w * 0.08, 1);
+  const h = Math.max(maxY - minY, fallback.h * 0.08, 1);
+  const pad = Math.max(Math.max(w, h) * 0.18, 18);
+  return [
+    (minX - pad).toFixed(2),
+    (minY - pad).toFixed(2),
+    (w + pad * 2).toFixed(2),
+    (h + pad * 2).toFixed(2),
+  ].join(' ');
+}
+
 const ModeIcon = {
   cards: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><rect x="2" y="2" width="5" height="5" rx="0.5"/><rect x="9" y="2" width="5" height="5" rx="0.5"/><rect x="2" y="9" width="5" height="5" rx="0.5"/><rect x="9" y="9" width="5" height="5" rx="0.5"/></svg>,
   code:  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><path d="M5 4 L2 8 L5 12 M11 4 L14 8 L11 12 M9 3 L7 13" strokeLinecap="round"/></svg>,
@@ -32,11 +66,207 @@ const ModeIcon = {
   sym:   <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5V13.5M2.5 8H13.5M4.1 4.1L11.9 11.9M11.9 4.1L4.1 11.9"/></svg>,
 };
 
+function GeometryGuideOverlay({ symSettings, setSymSettings, editing, setEditing }) {
+  const overlayRef = useRef(null);
+  const dragRef = useRef(null);
+  const pendingAxisRef = useRef(null);
+  const axisRafRef = useRef(0);
+  const guide = symSettings?.guide || {};
+  const axis = guide.axis || { x1: 0.5, y1: 0.08, x2: 0.5, y2: 0.92 };
+  const enabled = symSettings?.enabled && symSettings?.type === 'guide-mirror';
+
+  const clampAxis = useCallback((nextAxis) => ({
+    x1: Math.max(0, Math.min(1, nextAxis.x1)),
+    y1: Math.max(0, Math.min(1, nextAxis.y1)),
+    x2: Math.max(0, Math.min(1, nextAxis.x2)),
+    y2: Math.max(0, Math.min(1, nextAxis.y2)),
+  }), []);
+
+  const commitAxis = useCallback((nextAxis) => {
+    const clamped = clampAxis(nextAxis);
+    setSymSettings(prev => ({
+      ...prev,
+      enabled: true,
+      type: 'guide-mirror',
+      guide: {
+        ...(prev.guide || {}),
+        mode: prev.guide?.mode || 'fold',
+        axis: clamped,
+      },
+    }));
+  }, [clampAxis, setSymSettings]);
+
+  const scheduleAxis = useCallback((nextAxis) => {
+    pendingAxisRef.current = nextAxis;
+    if (axisRafRef.current) return;
+    axisRafRef.current = requestAnimationFrame(() => {
+      axisRafRef.current = 0;
+      if (pendingAxisRef.current) commitAxis(pendingAxisRef.current);
+    });
+  }, [commitAxis]);
+
+  useEffect(() => () => {
+    if (axisRafRef.current) cancelAnimationFrame(axisRafRef.current);
+  }, []);
+
+  const pointFromPointer = useCallback((e) => {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return null;
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    return { x, y };
+  }, []);
+
+  const beginGuideDrag = useCallback((e, mode) => {
+    if (!enabled) return;
+    const point = pointFromPointer(e);
+    if (!point) return;
+    const startAxis = clampAxis(axis);
+    const nextAxis = mode === 'draw'
+      ? { x1: point.x, y1: point.y, x2: point.x, y2: point.y }
+      : startAxis;
+    dragRef.current = { pointerId: e.pointerId, mode, point, axis: nextAxis };
+    if (mode === 'draw') commitAxis(nextAxis);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setEditing(true);
+    e.preventDefault();
+    e.stopPropagation();
+  }, [axis, clampAxis, commitAxis, enabled, pointFromPointer, setEditing]);
+
+  const handleDrawPointerDown = useCallback((e) => {
+    if (!editing) return;
+    beginGuideDrag(e, 'draw');
+  }, [beginGuideDrag, editing]);
+
+  const handlePointerMove = useCallback((e) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const point = pointFromPointer(e);
+    if (!point) return;
+    let nextAxis = drag.axis;
+    if (drag.mode === 'draw') {
+      nextAxis = { ...drag.axis, x2: point.x, y2: point.y };
+    } else if (drag.mode === 'start') {
+      nextAxis = { ...drag.axis, x1: point.x, y1: point.y };
+    } else if (drag.mode === 'end') {
+      nextAxis = { ...drag.axis, x2: point.x, y2: point.y };
+    } else if (drag.mode === 'move') {
+      const dx = point.x - drag.point.x;
+      const dy = point.y - drag.point.y;
+      nextAxis = {
+        x1: drag.axis.x1 + dx,
+        y1: drag.axis.y1 + dy,
+        x2: drag.axis.x2 + dx,
+        y2: drag.axis.y2 + dy,
+      };
+    }
+    scheduleAxis(nextAxis);
+    e.preventDefault();
+  }, [pointFromPointer, scheduleAxis]);
+
+  const handlePointerUp = useCallback((e) => {
+    if (dragRef.current?.pointerId === e.pointerId) {
+      if (pendingAxisRef.current) commitAxis(pendingAxisRef.current);
+      dragRef.current = null;
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+      setEditing(false);
+    }
+  }, [commitAxis, setEditing]);
+
+  if (!enabled) return null;
+  const x1 = axis.x1 * 100;
+  const y1 = axis.y1 * 100;
+  const x2 = axis.x2 * 100;
+  const y2 = axis.y2 * 100;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.max(0.001, Math.hypot(dx, dy));
+  const nx = (-dy / len) * 7;
+  const ny = (dx / len) * 7;
+  const flowPoints = [0.28, 0.5, 0.72].map((p, i) => ({
+    x: x1 + dx * p,
+    y: y1 + dy * p,
+    a: Math.atan2(dy, dx) * 180 / Math.PI,
+    i,
+  }));
+  const modeLabel = {
+    fold: 'flow from guide',
+    reflect: 'mirror one side',
+    split: 'split color field',
+  }[guide.mode || 'fold'] || 'motion guide';
+  return (
+    <div
+      ref={overlayRef}
+      className={`lw-geometry-guide-overlay ${editing ? 'is-editing' : ''}`}
+      onPointerDown={handleDrawPointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
+    >
+      <svg className="lw-geometry-guide-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <line className="lw-geometry-guide-band band-3" x1={x1 + nx * 3} y1={y1 + ny * 3} x2={x2 + nx * 3} y2={y2 + ny * 3} vectorEffect="non-scaling-stroke" />
+        <line className="lw-geometry-guide-band band-2" x1={x1 + nx * 2} y1={y1 + ny * 2} x2={x2 + nx * 2} y2={y2 + ny * 2} vectorEffect="non-scaling-stroke" />
+        <line className="lw-geometry-guide-band band-1" x1={x1 + nx} y1={y1 + ny} x2={x2 + nx} y2={y2 + ny} vectorEffect="non-scaling-stroke" />
+        <line className="lw-geometry-guide-band band-1" x1={x1 - nx} y1={y1 - ny} x2={x2 - nx} y2={y2 - ny} vectorEffect="non-scaling-stroke" />
+        <line className="lw-geometry-guide-band band-2" x1={x1 - nx * 2} y1={y1 - ny * 2} x2={x2 - nx * 2} y2={y2 - ny * 2} vectorEffect="non-scaling-stroke" />
+        <line className="lw-geometry-guide-band band-3" x1={x1 - nx * 3} y1={y1 - ny * 3} x2={x2 - nx * 3} y2={y2 - ny * 3} vectorEffect="non-scaling-stroke" />
+        <line
+          className="lw-geometry-guide-ghost"
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          vectorEffect="non-scaling-stroke"
+          onPointerDown={e => beginGuideDrag(e, 'move')}
+        />
+        <line
+          className="lw-geometry-guide-line"
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          vectorEffect="non-scaling-stroke"
+          onPointerDown={e => beginGuideDrag(e, 'move')}
+        />
+        {flowPoints.map(point => (
+          <g
+            key={point.i}
+            className="lw-geometry-guide-arrow"
+            transform={`translate(${point.x} ${point.y}) rotate(${point.a})`}
+          >
+            <path d="M -2.8 -2 L 2.8 0 L -2.8 2 Z" vectorEffect="non-scaling-stroke" />
+          </g>
+        ))}
+        <circle
+          className="lw-geometry-guide-handle"
+          cx={x1}
+          cy={y1}
+          r="1.8"
+          onPointerDown={e => beginGuideDrag(e, 'start')}
+        />
+        <circle
+          className="lw-geometry-guide-handle"
+          cx={x2}
+          cy={y2}
+          r="1.8"
+          onPointerDown={e => beginGuideDrag(e, 'end')}
+        />
+      </svg>
+      <div className="lw-geometry-guide-label">
+        <span>{editing ? 'draw motion axis' : modeLabel}</span>
+        <button onClick={() => setEditing(true)}>Redraw</button>
+      </div>
+    </div>
+  );
+}
+
 function PatternPanel({
   panelMode, setPanelMode,
   patternId, onSelectPattern,
   params, setParams,
+  patternParams, setPatternParams,
   palette, onPaletteChange,
+  strips, onAssignStripPattern,
   onCodeChange,
   masterSpeed, setMasterSpeed,
   masterBrightness, setMasterBrightness,
@@ -45,23 +275,29 @@ function PatternPanel({
   gammaValue, setGammaValue,
   onCollapse,
 }) {
+  const safePanelMode = panelMode === 'graph' ? 'cards' : panelMode;
+
   return (
     <div className="lw-panel">
       <div className="lw-panel-mode-switch">
         <button className="lw-panel-collapse-btn" onClick={onCollapse} title="Collapse panel">‹</button>
-        {[['cards','Cards',ModeIcon.cards],['code','Code',ModeIcon.code],['graph','Graph',ModeIcon.graph],['sym','Symmetry',ModeIcon.sym]].map(([v,l,ic]) => (
-          <button key={v} className={`lw-panel-mode-btn ${panelMode === v ? 'active' : ''}`} onClick={() => setPanelMode(v)}>
+        {[['cards','Effects',ModeIcon.cards],['sym','Geometry',ModeIcon.sym],['code','Code',ModeIcon.code]].map(([v,l,ic]) => (
+          <button key={v} className={`lw-panel-mode-btn ${safePanelMode === v ? 'active' : ''}`} onClick={() => setPanelMode(v)}>
             {ic}<span>{l}</span>
           </button>
         ))}
       </div>
-      <div className="lw-panel-body">
-        {panelMode === 'cards' && (
+      <div className={`lw-panel-body ${safePanelMode === 'cards' ? 'lw-panel-body--effects' : ''}`}>
+        {safePanelMode === 'cards' && (
           <CardsMode patternId={patternId} onSelectPattern={onSelectPattern}
                      params={params} onParamChange={(k, v) => setParams({ ...params, [k]: v })}
-                     palette={palette} onPaletteChange={onPaletteChange}/>
+                     patternParams={patternParams}
+                     onPatternParamsChange={(targetPatternId, nextParams) => setPatternParams(prev => ({ ...prev, [targetPatternId]: nextParams }))}
+                     palette={palette} onPaletteChange={onPaletteChange}
+                     strips={strips}
+                     onAssignStripPattern={onAssignStripPattern}/>
         )}
-        {panelMode === 'code'  && (
+        {safePanelMode === 'code'  && (
           <CodeMode
             patternId={patternId}
             onCodeChange={onCodeChange}
@@ -69,33 +305,34 @@ function PatternPanel({
             onParamChange={(k, v) => setParams({ ...params, [k]: v })}
           />
         )}
-        {panelMode === 'graph' && <GraphMode/>}
-        {panelMode === 'sym'   && <SymmetryMode/>}
-        <div className="lw-sec-header" style={{ marginTop: 24 }}>
-          <span>Master</span>
-          <span className="meta">applies globally</span>
-        </div>
-        <div className="lw-master">
-          <span className="lbl">Speed</span>
-          <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
-                 onChange={e => setMasterSpeed(+e.target.value)}/>
-          <span className="v">{masterSpeed.toFixed(2)}×</span>
+        {safePanelMode === 'sym'   && <SymmetryMode/>}
+        <div className={`lw-panel-master-block ${safePanelMode === 'cards' ? 'lw-panel-master-block--effects' : ''}`}>
+          <div className="lw-sec-header">
+            <span>Master</span>
+            <span className="meta">applies globally</span>
+          </div>
+          <div className="lw-master">
+            <span className="lbl">Speed</span>
+            <input aria-label="Master speed" type="range" min="0" max="4" step="0.01" value={masterSpeed}
+                   onChange={e => setMasterSpeed(+e.target.value)}/>
+            <span className="v">{masterSpeed.toFixed(2)}×</span>
 
-          <span className="lbl">Bright</span>
-          <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
-                 onChange={e => setMasterBrightness(+e.target.value)}/>
-          <span className="v">{Math.round(masterBrightness * 100)}%</span>
+            <span className="lbl">Bright</span>
+            <input aria-label="Master brightness" type="range" min="0" max="1" step="0.01" value={masterBrightness}
+                   onChange={e => setMasterBrightness(+e.target.value)}/>
+            <span className="v">{Math.round(masterBrightness * 100)}%</span>
 
-          <span className="lbl">Sat</span>
-          <input type="range" min="0" max="1" step="0.01" value={masterSaturation}
-                 onChange={e => setMasterSaturation(+e.target.value)}/>
-          <span className="v">{Math.round(masterSaturation * 100)}%</span>
+            <span className="lbl">Sat</span>
+            <input aria-label="Master saturation" type="range" min="0" max="1" step="0.01" value={masterSaturation}
+                   onChange={e => setMasterSaturation(+e.target.value)}/>
+            <span className="v">{Math.round(masterSaturation * 100)}%</span>
 
-          <span className="lbl">Gamma</span>
-          <input type="checkbox" checked={gammaEnabled} onChange={e => setGammaEnabled(e.target.checked)}/>
-          <input type="range" min="1.0" max="3.0" step="0.1" value={gammaValue}
-                 onChange={e => setGammaValue(+e.target.value)} disabled={!gammaEnabled}/>
-          <span className="v">{gammaValue.toFixed(1)}</span>
+            <span className="lbl">Gamma</span>
+            <input aria-label="Enable gamma correction" type="checkbox" checked={gammaEnabled} onChange={e => setGammaEnabled(e.target.checked)}/>
+            <input aria-label="Gamma value" type="range" min="1.0" max="3.0" step="0.1" value={gammaValue}
+                   onChange={e => setGammaValue(+e.target.value)} disabled={!gammaEnabled}/>
+            <span className="v">{gammaValue.toFixed(1)}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -103,47 +340,31 @@ function PatternPanel({
 }
 
 function PatternScreen({ panelMode, setPanelMode }) {
-  const [panelWidth, setPanelWidth] = useState(
-    () => parseInt(localStorage.getItem('lw-panel-width') || '300', 10)
-  );
+  const [panelWidth, , beginPanelResize] = usePersistentPanelSize('lw-panel-width', {
+    defaultValue: 520,
+    min: 420,
+    max: 760,
+  });
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [compareMode,    setCompareMode]    = useState(false);
   const [compareId,      setCompareId]      = useState('aurora');
 
-  const handleDividerMouseDown = (e) => {
-    e.preventDefault();
-    const startX = e.clientX, startW = panelWidth;
-    const el = e.currentTarget;
-    el.classList.add('dragging');
-    const onMove = (ev) => {
-      const newW = Math.max(180, Math.min(600, startW + (startX - ev.clientX)));
-      setPanelWidth(newW);
-      localStorage.setItem('lw-panel-width', String(newW));
-    };
-    const onUp = () => {
-      el.classList.remove('dragging');
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  };
-
   const {
     strips: projectStrips, viewBox: projectViewBox, svgText: projectSvgText, hidden: projectHidden,
+    setStrips: setProjectStrips,
     activePatternId: patternId, setActivePatternId: setPatternId,
     palette, setPalette,
     masterSpeed, setMasterSpeed,
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
     masterHueShift,
-    motionSmoothing,
     gammaEnabled, setGammaEnabled,
     gammaValue, setGammaValue,
     patternParams, setPatternParams,
     bpm, setBpm,
+    motionSmoothing,
     wledPush,
-    symSettings,
+    symSettings, setSymSettings,
     audioBands,
   } = useProject();
 
@@ -156,14 +377,25 @@ function PatternScreen({ panelMode, setPanelMode }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [playing, setPlaying]             = useState(true);
-  const [glow, setGlow]                   = useState(1.2);
+  const [glow, setGlow]                   = useState(0.45);
   const [dot, setDot]                     = useState(1.0);
   const [heat, setHeat]                   = useState(false);
   const [compiledFn, setCompiledFn]       = useState(null);
   const [zoom, setZoom]                   = useState(1.0);
+  const [previewPan, setPreviewPan]       = useState({ x: 0, y: 0 });
+  const [isPreviewPanning, setIsPreviewPanning] = useState(false);
+  const [isSpacePan, setIsSpacePan]       = useState(false);
+  const [fitLeds, setFitLeds]             = useState(true);
+  const [editingGuide, setEditingGuide]   = useState(false);
   const [liveT, setLiveT]                 = useState(0);
   const [liveFps, setLiveFps]             = useState(0);
   const [previewResetKey, setPreviewResetKey] = useState(0);
+  const previewViewportRef = useRef(null);
+  const previewPanRef = useRef(previewPan);
+  const previewDragRef = useRef(null);
+  const spacePanRef = useRef(false);
+
+  useEffect(() => { previewPanRef.current = previewPan; }, [previewPan]);
 
   const params    = patternParams[patternId] || {};
   const setParams = useCallback((newParams) => {
@@ -189,6 +421,118 @@ function PatternScreen({ panelMode, setPanelMode }) {
     setCompiledFn(null);
   }, [setPatternId]);
 
+  const handleAssignStripPattern = useCallback((stripId, nextPatternId) => {
+    setProjectStrips(prev => prev.map(strip => (
+      strip.id === stripId ? { ...strip, patternId: nextPatternId || null } : strip
+    )));
+  }, [setProjectStrips]);
+
+  const visibleProjectStrips = useMemo(
+    () => projectStrips.filter(strip => !projectHidden[strip.id]),
+    [projectStrips, projectHidden],
+  );
+
+  const fittedPatternViewBox = useMemo(
+    () => stripBoundsViewBox(visibleProjectStrips, projectViewBox),
+    [visibleProjectStrips, projectViewBox],
+  );
+  const previewViewBox = fitLeds ? fittedPatternViewBox : projectViewBox;
+
+  const resetPatternView = useCallback(() => {
+    setZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
+  }, []);
+
+  const handlePreviewPointerDown = useCallback((e) => {
+    if (compareMode) return;
+    if (e.button !== 0 && e.button !== 1) return;
+    if (e.target?.closest?.('button,input,select,.lw-zoom-controls')) return;
+    if (e.button === 0 && !spacePanRef.current) return;
+    previewDragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      pan: previewPanRef.current,
+      target: e.currentTarget,
+    };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setIsPreviewPanning(true);
+    e.preventDefault();
+  }, [compareMode]);
+
+  const handlePreviewPointerMove = useCallback((e) => {
+    const drag = previewDragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    setPreviewPan({
+      x: drag.pan.x + e.clientX - drag.startX,
+      y: drag.pan.y + e.clientY - drag.startY,
+    });
+  }, []);
+
+  const finishPreviewPan = useCallback((e) => {
+    const drag = previewDragRef.current;
+    const target = e?.currentTarget || drag?.target;
+    if (drag && target?.releasePointerCapture) {
+      try { target.releasePointerCapture(drag.pointerId); } catch {}
+    }
+    previewDragRef.current = null;
+    setIsPreviewPanning(false);
+  }, []);
+
+  const handlePreviewWheel = useCallback((e) => {
+    if (compareMode) return;
+    e.preventDefault();
+    const rect = previewViewportRef.current?.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const nextZoom = Math.max(0.25, Math.min(6, zoom * factor));
+    if (rect && nextZoom !== zoom) {
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const cursorX = e.clientX - cx;
+      const cursorY = e.clientY - cy;
+      const pan = previewPanRef.current;
+      const ratio = 1 - nextZoom / zoom;
+      const nextPan = {
+        x: pan.x + (cursorX - pan.x) * ratio,
+        y: pan.y + (cursorY - pan.y) * ratio,
+      };
+      previewPanRef.current = nextPan;
+      setPreviewPan(nextPan);
+    }
+    setZoom(nextZoom);
+  }, [compareMode, zoom]);
+
+  useEffect(() => {
+    const el = previewViewportRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handlePreviewWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handlePreviewWheel);
+  }, [handlePreviewWheel]);
+
+  useEffect(() => {
+    const isEditableTarget = (target) => ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable;
+    const onKeyDown = (e) => {
+      if (e.code !== 'Space' || isEditableTarget(e.target)) return;
+      spacePanRef.current = true;
+      setIsSpacePan(true);
+      e.preventDefault();
+    };
+    const onKeyUp = (e) => {
+      if (e.code !== 'Space') return;
+      spacePanRef.current = false;
+      setIsSpacePan(false);
+      finishPreviewPan();
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      spacePanRef.current = false;
+    };
+  }, [finishPreviewPan]);
+
   const cur = PATTERNS.find(p => p.id === patternId);
   const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
 
@@ -202,8 +546,22 @@ function PatternScreen({ panelMode, setPanelMode }) {
           setDot={setDot}
           heat={heat}
           setHeat={setHeat}
-          onResetPreview={() => { setZoom(1); setPreviewResetKey(k => k + 1); }}
+          onResetPreview={() => { resetPatternView(); setPreviewResetKey(k => k + 1); }}
         >
+          <button
+            className={`btn btn-ghost ${fitLeds ? 'active' : ''}`}
+            style={{ fontSize: 'var(--fs-xs)' }}
+            onClick={() => { setFitLeds(v => !v); resetPatternView(); }}
+            title="Fit the preview to the LED bounds instead of the full SVG artboard">
+            Fit LEDs
+          </button>
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 'var(--fs-xs)' }}
+            onClick={resetPatternView}
+            title="Center the pattern preview">
+            Center
+          </button>
           <button
             className={`btn btn-ghost ${compareMode ? 'active' : ''}`}
             style={{ fontSize: 'var(--fs-xs)' }}
@@ -211,21 +569,44 @@ function PatternScreen({ panelMode, setPanelMode }) {
             title="A/B compare mode">
             A|B
           </button>
+          <button
+            className={`btn btn-ghost ${symSettings.enabled && symSettings.type === 'guide-mirror' ? 'active' : ''}`}
+            style={{ fontSize: 'var(--fs-xs)' }}
+            onClick={() => {
+              setSymSettings(prev => ({
+                ...prev,
+                enabled: true,
+                type: 'guide-mirror',
+                guide: prev.guide || { mode: 'fold', axis: { x1: 0.5, y1: 0.08, x2: 0.5, y2: 0.92 } },
+              }));
+              setEditingGuide(true);
+              setPanelMode('sym');
+            }}
+            title="Draw a motion guide that patterns flow from">
+            Motion Guide
+          </button>
         </CanvasToolbar>
         <div className="lw-viewport" style={{ overflow: 'hidden' }}>
+          {projectStrips.length === 0 && (
+            <div className="lw-pattern-empty">
+              <div className="title">No Layout strips</div>
+              <div className="meta">Create strips in Layout to preview effects here.</div>
+            </div>
+          )}
           {compareMode ? (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', width: '100%', height: '100%' }}>
               <div style={{ position: 'relative', overflow: 'hidden', borderRight: '1px solid var(--border)' }}>
                 <LEDPreview
                   key={`a-${previewResetKey}`}
                   patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                  strips={projectStrips.length > 0 ? projectStrips : undefined}
-                  viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
+                  strips={projectStrips}
+                  viewBox={previewViewBox}
                   svgText={projectSvgText}
                   masterSpeed={masterSpeed} masterBrightness={masterBrightness}
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden} compiledFn={compiledFn}
                   bpm={bpm} params={params} symSettings={symSettings} audioBands={audioBands}
+                  patternParamsById={patternParams}
                   motionSmoothing={motionSmoothing}
                   heat={heat}
                   onTick={setLiveT} onFrame={handleFrame}
@@ -239,13 +620,14 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <LEDPreview
                   key={`b-${previewResetKey}`}
                   patternId={compareId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                  strips={projectStrips.length > 0 ? projectStrips : undefined}
-                  viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
+                  strips={projectStrips}
+                  viewBox={previewViewBox}
                   svgText={projectSvgText}
                   masterSpeed={masterSpeed} masterBrightness={masterBrightness}
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden}
                   bpm={bpm} params={{}} symSettings={symSettings} audioBands={audioBands}
+                  patternParamsById={patternParams}
                   motionSmoothing={motionSmoothing}
                   heat={heat}
                 />
@@ -260,32 +642,54 @@ function PatternScreen({ panelMode, setPanelMode }) {
               </div>
             </div>
           ) : (
-            <div style={{ transform: `scale(${zoom})`, transformOrigin: 'center center', width: '100%', height: '100%' }}>
-              <LEDPreview
-                key={previewResetKey}
-                patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                strips={projectStrips.length > 0 ? projectStrips : undefined}
-                viewBox={projectStrips.length > 0 ? projectViewBox : undefined}
-                svgText={projectSvgText}
-                masterSpeed={masterSpeed}
-                masterBrightness={masterBrightness}
-                masterSaturation={masterSaturation}
-                masterHueShift={masterHueShift}
-                gammaEnabled={gammaEnabled}
-                gammaValue={gammaValue}
-                hidden={projectHidden}
-                compiledFn={compiledFn}
-                bpm={bpm}
-                params={params}
-                symSettings={symSettings}
-                audioBands={audioBands}
-                palette={palette}
-                motionSmoothing={motionSmoothing}
-                heat={heat}
-                onTick={setLiveT}
-                onFrame={handleFrame}
-                onFps={setLiveFps}
-              />
+            <div
+              ref={previewViewportRef}
+              className={`lw-pattern-pan-stage ${isSpacePan ? 'is-space-panning' : ''} ${isPreviewPanning ? 'is-panning' : ''}`}
+              onPointerDown={handlePreviewPointerDown}
+              onPointerMove={handlePreviewPointerMove}
+              onPointerUp={finishPreviewPan}
+              onPointerCancel={finishPreviewPan}
+              onDoubleClick={resetPatternView}
+            >
+              <div
+                className="lw-pattern-pan-content"
+                style={{
+                  transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${zoom})`,
+                }}
+              >
+                <LEDPreview
+                  key={previewResetKey}
+                  patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
+                  strips={projectStrips}
+                  viewBox={previewViewBox}
+                  svgText={projectSvgText}
+                  masterSpeed={masterSpeed}
+                  masterBrightness={masterBrightness}
+                  masterSaturation={masterSaturation}
+                  masterHueShift={masterHueShift}
+                  gammaEnabled={gammaEnabled}
+                  gammaValue={gammaValue}
+                  hidden={projectHidden}
+                  compiledFn={compiledFn}
+                  bpm={bpm}
+                  params={params}
+                  patternParamsById={patternParams}
+                  symSettings={symSettings}
+                  audioBands={audioBands}
+                  palette={palette}
+                  motionSmoothing={motionSmoothing}
+                  heat={heat}
+                  onTick={setLiveT}
+                  onFrame={handleFrame}
+                  onFps={setLiveFps}
+                />
+                <GeometryGuideOverlay
+                  symSettings={symSettings}
+                  setSymSettings={setSymSettings}
+                  editing={editingGuide}
+                  setEditing={setEditingGuide}
+                />
+              </div>
             </div>
           )}
           {!compareMode && (
@@ -299,10 +703,10 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <div><span className="k">fps</span> <span className="v" style={{ color: liveFps >= 55 ? 'var(--mint)' : liveFps >= 30 ? 'var(--accent)' : 'var(--danger)' }}>{liveFps}</span></div>
               </div>
               <div className="lw-zoom-controls">
-                <button onClick={() => setZoom(z => Math.min(3, z * 1.25))}>+</button>
+                <button onClick={() => setZoom(z => Math.min(3, z * 1.25))} title="Zoom in" aria-label="Zoom in">+</button>
                 <div className="lw-zoom-level">{Math.round(zoom * 100)}%</div>
-                <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))}>−</button>
-                <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={() => setZoom(1)}>1:1</button>
+                <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))} title="Zoom out" aria-label="Zoom out">−</button>
+                <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={resetPatternView} title="Fit and center preview">Fit</button>
               </div>
             </>
           )}
@@ -317,12 +721,19 @@ function PatternScreen({ panelMode, setPanelMode }) {
         </div>
       ) : (
         <>
-          <div className="lw-resize-handle" onMouseDown={handleDividerMouseDown}/>
+          <div
+            className="lw-resize-handle lw-resize-handle--vertical"
+            data-resize-key="lw-panel-width"
+            onMouseDown={e => beginPanelResize(e, { axis: 'x', invert: true })}
+          />
           <PatternPanel
             panelMode={panelMode} setPanelMode={setPanelMode}
             patternId={patternId} onSelectPattern={handleSelectPattern}
             params={params} setParams={setParams}
+            patternParams={patternParams} setPatternParams={setPatternParams}
             palette={palette} onPaletteChange={setPalette}
+            strips={projectStrips}
+            onAssignStripPattern={handleAssignStripPattern}
             onCodeChange={handleCodeChange}
             masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}
             masterBrightness={masterBrightness} setMasterBrightness={setMasterBrightness}
@@ -381,6 +792,13 @@ export default function App() {
   const audio                       = useAudio();
   const midi                        = useMidi();
 
+  const navigate = useCallback((nextScreen) => {
+    setScreen(nextScreen);
+    setExportOpen(false);
+    setKbdOpen(false);
+    setCmdOpen(false);
+  }, []);
+
   // Persist panel mode
   const handleSetPanelMode = useCallback((m) => {
     setPanelMode(m);
@@ -399,7 +817,7 @@ export default function App() {
       // Screen nav: 1-5 keys
       if (!e.metaKey && !e.ctrlKey && !e.altKey) {
         const screenMap = { '1': 'layout', '2': 'pattern', '3': 'timeline', '4': 'live', '5': 'export' };
-        if (screenMap[e.key]) { setScreen(screenMap[e.key]); return; }
+        if (screenMap[e.key]) { navigate(screenMap[e.key]); return; }
       }
 
       // Audio toggle: A
@@ -410,7 +828,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [navigate, audio]);
 
   return (
     <ProjectProvider>
@@ -420,12 +838,12 @@ export default function App() {
         <TopBar theme={tweaks.theme} onKbdHelp={() => setKbdOpen(true)}
                 audio={audio} midi={midi}/>
         <div className="lw-main">
-          <LeftRail screen={screen} onScreen={setScreen}/>
+          <LeftRail screen={screen} onScreen={navigate}/>
           <Suspense fallback={<LoadingPane/>}>
             {screen === 'pattern'  && <PatternScreen panelMode={panelMode} setPanelMode={handleSetPanelMode}/>}
             {screen === 'layout'   && <LayoutScreen/>}
             {screen === 'timeline' && <TimelineScreen onExport={() => setExportOpen(true)}/>}
-            {screen === 'live'     && <LiveScreen/>}
+            {screen === 'live'     && <LiveScreen onOpenShow={() => navigate('timeline')}/>}
             {screen === 'export'   && <ExportScreen/>}
             {screen === 'flash'    && <FlashScreen/>}
             {screen === 'settings' && <SettingsScreen/>}
@@ -435,9 +853,9 @@ export default function App() {
         <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
         <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}/>
         <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>
-        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={setScreen}/>
+        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate}/>
         <Suspense fallback={null}>
-          {screen === 'devices' && <DevicesPanel onClose={() => setScreen('layout')}/>}
+          {screen === 'devices' && <DevicesPanel onClose={() => navigate('layout')}/>}
         </Suspense>
       </div>
     </ProjectProvider>

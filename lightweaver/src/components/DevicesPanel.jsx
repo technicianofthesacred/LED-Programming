@@ -28,7 +28,8 @@ function Dot({ color }) {
 
 export function DevicesPanel({ onClose }) {
   const {
-    wledIp, setWledIp, wledConnected, wledConnect, wledDisconnect, strips,
+    wledIp, setWledIp, wledConnected, wledTransport, wledConnect, wledDisconnect,
+    wledGetInfo, strips,
     wledSegmentMap, setWledSegmentMap,
   } = useProject();
   const [scanResults, setScanResults] = useState([]);
@@ -52,15 +53,14 @@ export function DevicesPanel({ onClose }) {
   const fetchWledInfo = async () => {
     if (!wledIp) return;
     try {
-      const r = await fetch(`http://${wledIp}/json/info`, { signal: AbortSignal.timeout(2000) });
-      if (r.ok) setWledInfo(await r.json());
+      setWledInfo(await wledGetInfo());
     } catch {}
   };
 
   useEffect(() => {
     if (wledConnected && wledIp) fetchWledInfo();
     else setWledInfo(null);
-  }, [wledConnected, wledIp]);
+  }, [wledConnected, wledIp, wledGetInfo]);
 
   const sendTestPattern = async () => {
     if (!wledIp) return;
@@ -76,19 +76,34 @@ export function DevicesPanel({ onClose }) {
     const doPing = async () => {
       const t0 = performance.now();
       try {
-        await fetch(`http://${wledIp}/json/info`, { method: 'GET', signal: AbortSignal.timeout(2000) });
+        await wledGetInfo();
         if (!cancelled) setPingMs(Math.round(performance.now() - t0));
       } catch { if (!cancelled) setPingMs(null); }
     };
     doPing();
     const iv = setInterval(doPing, 5000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [wledConnected, wledIp]);
+  }, [wledConnected, wledIp, wledGetInfo]);
 
   // Subnet scan — tries common WLED IPs on the local /24 via HTTP
   const handleScan = async () => {
     setScanning(true);
     setScanResults([]);
+    try {
+      const params = new URLSearchParams();
+      if (wledIp) params.set('ip', wledIp);
+      params.set('scan', '1');
+      const r = await fetch(`/api/wled/discover?${params.toString()}`, { signal: AbortSignal.timeout(6000) });
+      if (r.ok) {
+        const data = await r.json();
+        setScanResults(data.devices || []);
+        setScanning(false);
+        return;
+      }
+    } catch {
+      // Dev fallback below handles direct browser-to-WLED probing when the Pi API is absent.
+    }
+
     // Best-effort: ping x.x.x.1-254 on common ports
     const subnet = wledIp ? wledIp.split('.').slice(0, 3).join('.') : '192.168.1';
     const candidates = [];
@@ -125,6 +140,7 @@ export function DevicesPanel({ onClose }) {
             <Row label="Status">
               <Dot color={wledConnected ? 'oklch(72% 0.18 155)' : 'oklch(64% 0.20 25)'}/>
               <span style={{ fontSize: 'var(--fs-md)' }}>{wledConnected ? 'Connected' : 'Disconnected'}</span>
+              {wledConnected && <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>{wledTransport}</span>}
               {wledConnected && pingMs !== null && <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>{pingMs} ms</span>}
             </Row>
             <Row label="IP Address">
@@ -146,7 +162,7 @@ export function DevicesPanel({ onClose }) {
                 {scanning ? 'Scanning…' : 'Scan LAN'}
               </button>
               <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>
-                {scanning ? 'Checking subnet…' : scanResults.length > 0 ? `${scanResults.length} found` : 'searches local /24'}
+                {scanning ? 'Checking Pi service / LAN…' : scanResults.length > 0 ? `${scanResults.length} found` : 'uses Pi discovery, falls back in dev'}
               </span>
             </Row>
             {wledConnected && (

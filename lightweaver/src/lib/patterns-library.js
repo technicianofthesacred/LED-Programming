@@ -1747,6 +1747,9 @@ return hsv(hue, 1, clamp(drip, 0, 1));`,
     code:
 `// @param flakes float 40.0 10.0 100.0
 // @param speed float 0.2 0.05 1.0
+// @param flakeSize float 0.025 0.01 0.07
+// @param globeSize float 0.25 0.12 0.6
+// @param warmth float 0.3 0.0 0.8
 let v = 0;
 const N = int(params.flakes);
 for (let i = 0; i < 60; i++) {
@@ -1755,10 +1758,10 @@ for (let i = 0; i < 60; i++) {
   const fx = fract(sin(fi * 73.1) * 4375.8);
   const fy = fract(cos(fi * 149.3) * 9182.1 + time * params.speed * (0.4 + fract(sin(fi * 31.7) * 2718.3) * 0.6));
   const d = distance(x, y, fx, fy);
-  v += smoothstep(0.025, 0, d);
+  v += smoothstep(params.flakeSize, 0, d);
 }
-const globe = exp(-distance(x, y, 0.5, 0.6) * 4);
-return mix([v * 0.9, v * 0.95, v], [1, 0.85, 0.5], globe * 0.3);`,
+const globe = exp(-distance(x, y, 0.5, 0.6) / params.globeSize);
+return mix([v * 0.9, v * 0.95, v], [1, 0.85, 0.5], globe * params.warmth);`,
   },
 
   {

@@ -8,7 +8,15 @@ import { useProject } from '../state/ProjectContext.jsx';
 const WLED_LED_WARN = 500;
 
 export function WledBar() {
-  const { wledIp: ip, setWledIp: setIp, wledConnected: connected, wledConnect: connect, wledDisconnect: disconnect, strips } = useProject();
+  const {
+    wledIp: ip,
+    setWledIp: setIp,
+    wledConnected: connected,
+    wledTransport,
+    wledConnect: connect,
+    wledDisconnect: disconnect,
+    strips,
+  } = useProject();
   const totalLEDs = useMemo(() => strips.reduce((s, st) => s + (st.pixels?.length || 0), 0), [strips]);
 
   // Track whether a connection attempt is in flight (between connect() call and
@@ -63,6 +71,7 @@ export function WledBar() {
 
       {/* IP input */}
       <input
+        aria-label="WLED IP address"
         type="text"
         value={ip}
         onChange={e => setIp(e.target.value)}
@@ -79,6 +88,7 @@ export function WledBar() {
 
       {/* Connect / Disconnect button */}
       <button
+        aria-label={connected ? 'Disconnect from WLED' : 'Connect to WLED'}
         onClick={handleConnect}
         disabled={connecting && !connected}
         style={{
@@ -92,7 +102,7 @@ export function WledBar() {
 
       {/* Push rate hint when connected */}
       {connected && (
-        <span style={styles.hint}>25 fps max</span>
+        <span style={styles.hint}>{wledTransport === 'proxy' ? 'Pi proxy' : 'direct'} · 25 fps max</span>
       )}
       {/* LED count warning */}
       {totalLEDs > WLED_LED_WARN && (
@@ -139,6 +149,7 @@ const styles = {
     borderRadius: '3px',
     padding: '2px 7px',
     width: '120px',
+    minHeight: '24px',
     outline: 'none',
     transition: 'border-color 0.15s',
   },
@@ -148,6 +159,7 @@ const styles = {
     fontWeight: '500',
     letterSpacing: '0.04em',
     padding: '2px 9px',
+    minHeight: '24px',
     borderRadius: '3px',
     border: '1px solid transparent',
     cursor: 'pointer',

@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-test('imports SVG, creates strips, saves, reloads, previews, and exports real ledmap', async ({ page }) => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-workflow-'));
-  const fixture = path.join(tmp, 'workflow-layers.svg');
+function writeLayerFixture(tmp: string, fileName = 'workflow-layers.svg') {
+  const fixture = path.join(tmp, fileName);
   fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
   <g id="bg-layer" data-name="Background">
@@ -18,6 +17,12 @@ test('imports SVG, creates strips, saves, reloads, previews, and exports real le
     <path d="M 60 230 H 340" fill="none" stroke="#27ae60" stroke-width="4"/>
   </g>
 </svg>`);
+  return fixture;
+}
+
+test('imports SVG, creates strips, saves, reloads, previews, and exports real ledmap', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-workflow-'));
+  const fixture = writeLayerFixture(tmp);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
@@ -74,4 +79,67 @@ test('imports SVG, creates strips, saves, reloads, previews, and exports real le
   const ledmapData = JSON.parse(fs.readFileSync(ledmapPath, 'utf8'));
   expect(ledmapData.n).toBe(projectData.layout.strips.reduce((sum: number, strip: any) => sum + strip.pixels.length, 0));
   expect(ledmapData.map).toHaveLength(ledmapData.n);
+});
+
+test('groups selected strips and merges them into one composite strip', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-strip-groups-'));
+  const fixture = writeLayerFixture(tmp, 'strip-groups.svg');
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(3\)/ }).click();
+  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+
+  await page.locator('.lw-strip-row').nth(0).click();
+  await page.locator('.lw-strip-row').nth(1).click({ modifiers: ['Shift'] });
+  await page.locator('.lw-strip-row').nth(2).click({ modifiers: ['Shift'] });
+  await expect(page.getByText('3 strips selected')).toBeVisible();
+
+  await page.locator('.lw-strip-batch-actions input').fill('Heart outline');
+  await page.getByRole('button', { name: 'Group' }).click();
+  await expect(page.getByText('Heart outline')).toBeVisible();
+  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+
+  await page.locator('.lw-strip-row').nth(0).click();
+  await page.locator('.lw-strip-row').nth(1).click({ modifiers: ['Shift'] });
+  await page.locator('.lw-strip-row').nth(2).click({ modifiers: ['Shift'] });
+  await page.locator('.lw-strip-batch-actions input').fill('Heart merged');
+  await page.getByRole('button', { name: 'Merge' }).click();
+
+  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+  await expect(page.locator('.lw-strip-row').getByText('Heart merged', { exact: true })).toBeVisible();
+  await expect(page.getByText('3 strips selected')).toHaveCount(0);
+
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const start = await stripPath.evaluate((path: SVGPathElement) => {
+    const len = path.getTotalLength();
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    for (let i = 1; i < 20; i++) {
+      const pt = path.getPointAtLength((i / 20) * len);
+      const x = pt.x * ctm.a + pt.y * ctm.c + ctm.e;
+      const y = pt.x * ctm.b + pt.y * ctm.d + ctm.f;
+      if (x > 20 && y > 20 && x < window.innerWidth - 20 && y < window.innerHeight - 20) return { x, y };
+    }
+    return null;
+  });
+  expect(start).not.toBeNull();
+  await page.mouse.move(start!.x, start!.y);
+  await page.mouse.down();
+  await page.mouse.move(start!.x + 36, start!.y + 24, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => {
+    const moved = await stripPath.evaluate((path: SVGPathElement) => {
+      const pt = path.getPointAtLength(path.getTotalLength() * 0.5);
+      const ctm = path.getScreenCTM();
+      if (!ctm) return null;
+      return { x: pt.x * ctm.a + pt.y * ctm.c + ctm.e, y: pt.x * ctm.b + pt.y * ctm.d + ctm.f };
+    });
+    return Math.round((moved?.x || 0) - start!.x);
+  }).not.toBe(0);
+
+  await page.getByTitle('Directed glow — elongate bloom along strip direction').click();
+  await expect.poll(() => page.locator('[data-light-cone]').count()).toBeGreaterThan(0);
 });

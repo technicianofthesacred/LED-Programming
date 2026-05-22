@@ -42,7 +42,7 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 ## 4. Pi setup
 
 - [ ] **Hostname:** `lightweaver.local` (mDNS) so the visitor-ui server is discoverable without an IP.
-- [ ] **Autostart visitor-ui server** — systemd unit pointing at the visitor-ui build, restart on failure, start after network-online.target.
+- [ ] **Autostart Lightweaver Pi server** — build `lightweaver/dist/`, run `npm run serve:pi`, restart on failure, start after network-online.target. See `docs/pi-hosted-deployment.md`.
 - [ ] **Network:** Ethernet to the gallery switch when available; fall back to WiFi STA on the WLED AP for tabletop pieces.
 - [ ] **Static IP** (or DHCP reservation) so Madrix and the visitor-ui both have a stable target.
 - [ ] **Firewall:** open ports 80 (UI), 6454 (Art-Net) if the Pi is also bridging.

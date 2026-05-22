@@ -82,6 +82,7 @@ export function renderPixelFrame({
   audioBands = null,
   normBounds = null,
   perStripFns = new Map(),
+  patternParamsById = {},
 }) {
   const visibleStrips = strips.filter(s => s && !s.hidden);
   const allPts = visibleStrips.flatMap(s => s.pts || []);
@@ -90,6 +91,15 @@ export function renderPixelFrame({
   const fnA = activeFn || compilePattern(patternId);
   const fnB = blendFn || (blendPatternId ? compilePattern(blendPatternId) : null);
   const resolvedParams = resolvePatternParams(patternId, params);
+  const blendParams = blendPatternId
+    ? resolvePatternParams(blendPatternId, patternParamsById[blendPatternId] || {})
+    : resolvedParams;
+  const paramsForPattern = new Map([[patternId, resolvedParams]]);
+  for (const s of visibleStrips) {
+    if (s.patternId && !paramsForPattern.has(s.patternId)) {
+      paramsForPattern.set(s.patternId, resolvePatternParams(s.patternId, patternParamsById[s.patternId] || {}));
+    }
+  }
   const beat = (t * bpm / 60) % 1;
   const beatSin = Math.sin(beat * Math.PI);
   const bass = audioBands?.bass ?? 0, mid = audioBands?.mid ?? 0, hi = audioBands?.hi ?? 0;
@@ -101,6 +111,7 @@ export function renderPixelFrame({
     const stripT = t * masterSpeed * (s.speed ?? 1);
     const stripTime = (stripT / 65.536) % 1;
     const stripFn = (s.patternId ? perStripFns.get(s.patternId) : null) ?? fnA;
+    const stripParams = s.patternId ? paramsForPattern.get(s.patternId) || resolvedParams : resolvedParams;
     const leds = [];
     let rSum = 0, gSum = 0, bSum = 0;
 
@@ -108,18 +119,28 @@ export function renderPixelFrame({
       let nx = (pt.x - bounds.minX) / bounds.range;
       let ny = (pt.y - bounds.minY) / bounds.range;
 
+      let symSide = 0;
+      let symSplit = false;
+      let stripProgress = pt.p;
+      let evalIndex = globalIdx;
       if (symSettings?.enabled) {
         const sym = applySymmetry(nx, ny, symSettings, t);
         nx = sym.x; ny = sym.y;
+        symSide = sym.side || 0;
+        symSplit = !!sym.split;
+        stripProgress = Number.isFinite(sym.progress) ? sym.progress : stripProgress;
+        if (Number.isFinite(sym.progress) && pixelCount > 1) {
+          evalIndex = Math.round(stripProgress * (pixelCount - 1));
+        }
       }
 
       let r = 0, g = 0, b = 0;
       if (stripFn) {
-        const colA = evalPixel(stripFn, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
+        const colA = evalPixel(stripFn, evalIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, stripParams, s.id, stripProgress, bass, mid, hi);
         r = colA.r; g = colA.g; b = colA.b;
 
         if (fnB && blendAmount > 0) {
-          const colB = evalPixel(fnB, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
+          const colB = evalPixel(fnB, evalIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, blendParams, s.id, stripProgress, bass, mid, hi);
           if (blendType === 'fade-black') {
             const a2 = blendAmount < 0.5 ? 1 - blendAmount * 2 : 0;
             const b2 = blendAmount > 0.5 ? (blendAmount - 0.5) * 2 : 0;
@@ -147,6 +168,12 @@ export function renderPixelFrame({
         r = gray + (r - gray) * masterSaturation;
         g = gray + (g - gray) * masterSaturation;
         b = gray + (b - gray) * masterSaturation;
+      }
+
+      if (symSplit) {
+        const [h, sat, l] = rgbToHsl(r, g, b);
+        const offset = symSide >= 0 ? 28 : -28;
+        [r, g, b] = hslToRgb(h + offset, sat, l);
       }
 
       r = clamp255(r); g = clamp255(g); b = clamp255(b);

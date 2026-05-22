@@ -13,6 +13,7 @@ import {
   migrateProject,
   PROJECT_VERSION,
 } from '../lib/projectModel.js';
+import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js';
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
@@ -52,7 +53,7 @@ export function sampleLane(lane, t) {
 
 // ── Resolve active pattern + blend from playhead ──────────────────────────
 export function resolveTimelinePlayback(playhead, clips, transitions) {
-  const track0Clips = clips.filter(c => c.track === 0);
+  const track0Clips = clips.filter(c => (c.track ?? 0) === 0 && (!c.target || c.target === 'all'));
   const active = track0Clips.find(c => playhead >= c.start && playhead <= c.end) || null;
   const trans  = transitions.find(t => playhead >= t.start && playhead <= t.end) || null;
 
@@ -60,7 +61,7 @@ export function resolveTimelinePlayback(playhead, clips, transitions) {
     ? Math.max(0, Math.min(1, (playhead - trans.start) / (trans.end - trans.start)))
     : 0;
   const blend = trans ? easeCrossfade(rawBlend, trans.curve || 'linear') : 0;
-  const nextClip = trans ? clips.find(c => c.id === trans.clipB) : null;
+  const nextClip = trans ? clips.find(c => c.id === trans.clipB && (!c.target || c.target === 'all')) : null;
 
   return {
     patternId:      active?.patternId || null,
@@ -69,6 +70,27 @@ export function resolveTimelinePlayback(playhead, clips, transitions) {
     transType:      trans?.type || null,
     transCurve:     trans?.curve || 'linear',
   };
+}
+
+export function resolveTimelineTargets(playhead, clips, strips = []) {
+  const active = clips
+    .filter(c => playhead >= c.start && playhead <= c.end)
+    .sort((a, b) => (a.track ?? 0) - (b.track ?? 0) || a.start - b.start);
+  const globalClip = active.find(c => (c.track ?? 0) === 0 || c.target === 'all') || null;
+  const byStripId = {};
+  for (const clip of active) {
+    if (!clip.target || clip.target === 'all') continue;
+    if (clip.target === 'strip-group' && clip.group) {
+      for (const strip of strips) {
+        if (strip.group === clip.group || strip.layerName === clip.group || strip.name === clip.group) {
+          byStripId[strip.id] = clip.patternId;
+        }
+      }
+      continue;
+    }
+    byStripId[clip.target] = clip.patternId;
+  }
+  return { globalClip, byStripId };
 }
 
 export function ProjectProvider({ children }) {
@@ -98,8 +120,8 @@ export function ProjectProvider({ children }) {
   const [masterHueShift,   setMasterHueShift]   = useState(0); // -0.5 to 0.5, added to all hues
   const [patternParams,    setPatternParams]     = useState({});
   const [bpm,              setBpm]              = useState(120);
-  const [motionSmoothing,  setMotionSmoothing]  = useState(defaults.pattern.motionSmoothing);
   const [projectName,      setProjectName]      = useState('Untitled Project');
+  const [motionSmoothing,  setMotionSmoothing]  = useState(defaults.pattern.motionSmoothing);
 
   // ── Timeline / show ──────────────────────────────────────────────────────
   const [showClips,        setShowClipsRaw]     = useState(DEFAULT_CLIPS);
@@ -159,7 +181,7 @@ export function ProjectProvider({ children }) {
 
   // ── Live recording ────────────────────────────────────────────────────────
   const [liveRecording, setLiveRecording] = useState(false);
-  const [liveQuantize,  setLiveQuantize]  = useState('beat'); // 'free' | 'beat' | 'bar'
+  const [liveQuantize,  setLiveQuantize]  = useState('free'); // 'free' | 'beat' | 'bar'
 
   // ── Symmetry settings ────────────────────────────────────────────────────
   const [symSettings, setSymSettings] = useState({
@@ -173,7 +195,17 @@ export function ProjectProvider({ children }) {
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
 
   // ── WLED ──────────────────────────────────────────────────────────────────
-  const { ip: wledIp, setIp: setWledIp, connected: wledConnected, connect: wledConnect, disconnect: wledDisconnect, push: wledPush } = useWled();
+  const {
+    ip: wledIp,
+    setIp: setWledIp,
+    connected: wledConnected,
+    transport: wledTransport,
+    connect: wledConnect,
+    disconnect: wledDisconnect,
+    push: wledPush,
+    getInfo: wledGetInfo,
+    getState: wledGetState,
+  } = useWled();
 
   // ── Live clip stamping ────────────────────────────────────────────────────
   const stampClip = useCallback((patternId, durationSecs = 10) => {
@@ -193,6 +225,24 @@ export function ProjectProvider({ children }) {
       { id, track: 0, patternId, start, end, label: patternId, recorded: true },
     ]);
   }, [liveRecording, liveQuantize, bpm, timelinePlayhead, showDuration]);
+
+  const recordLivePattern = useCallback((patternId, { crossfadeSecs = 3, at = timelinePlayhead } = {}) => {
+    if (!patternId) return;
+    const recorded = buildLiveRecording({
+      clips: showClips,
+      transitions: showTransitions,
+      patternId,
+      at,
+      bpm,
+      quantize: liveQuantize,
+      crossfadeSecs,
+      showDuration,
+    });
+    if (recorded.clips === showClips && recorded.transitions === showTransitions) return;
+    pushHistory(showClips, showTransitions);
+    setShowClipsRaw(recorded.clips);
+    setShowTransitionsRaw(recorded.transitions);
+  }, [bpm, liveQuantize, pushHistory, showClips, showDuration, showTransitions, timelinePlayhead]);
 
   // ── Auto-save state ───────────────────────────────────────────────────────
   const [lastSaved, setLastSaved] = useState(null);
@@ -269,7 +319,8 @@ export function ProjectProvider({ children }) {
     },
     pattern: {
       activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
-      masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, motionSmoothing, symSettings,
+      masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+      motionSmoothing,
     },
     show: {
       clips: showClips,
@@ -290,7 +341,8 @@ export function ProjectProvider({ children }) {
     projectName, strips, viewBox, svgText, hidden,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
-    masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, motionSmoothing, symSettings,
+    masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+    motionSmoothing,
     showClips, showTransitions, showCues, autoLanes, showDuration,
     liveRecording, liveQuantize, wledIp, wledSegmentMap,
   ]);
@@ -302,7 +354,7 @@ export function ProjectProvider({ children }) {
         localStorage.setItem(LS_AUTOSAVE_KEY, JSON.stringify(serializeProject()));
         setLastSaved(Date.now());
       } catch {}
-    }, 2000);
+    }, 500);
     return () => clearTimeout(saveTimerRef.current);
   }, [serializeProject]);
 
@@ -339,8 +391,8 @@ export function ProjectProvider({ children }) {
       masterHueShift,  setMasterHueShift,
       patternParams,   setPatternParams,
       bpm,             setBpm,
-      motionSmoothing, setMotionSmoothing,
       projectName,     setProjectName,
+      motionSmoothing, setMotionSmoothing,
       // Timeline
       showClips,       setShowClips,
       showTransitions, setShowTransitions,
@@ -353,6 +405,7 @@ export function ProjectProvider({ children }) {
       liveRecording,   setLiveRecording,
       liveQuantize,    setLiveQuantize,
       stampClip,
+      recordLivePattern,
       // Timeline undo/redo
       undoTimeline,    redoTimeline,
       // Symmetry
@@ -361,8 +414,10 @@ export function ProjectProvider({ children }) {
       audioBands,      setAudioBands,
       // WLED
       wledIp,          setWledIp,
-      wledConnected,   wledConnect,
-      wledDisconnect,  wledPush,
+      wledConnected,   wledTransport,
+      wledConnect,     wledDisconnect,
+      wledPush,        wledGetInfo,
+      wledGetState,
       wledSegmentMap,  setWledSegmentMap,
       // Project persistence
       serializeProject,

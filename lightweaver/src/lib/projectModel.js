@@ -17,6 +17,10 @@ export const DEFAULT_SYM_SETTINGS = {
   phase: 0,
   twist: 0,
   seam: 0.1,
+  guide: {
+    mode: 'fold',
+    axis: { x1: 0.5, y1: 0.08, x2: 0.5, y2: 0.92 },
+  },
 };
 
 export function createDefaultProject() {
@@ -46,8 +50,8 @@ export function createDefaultProject() {
       gammaValue: 2.2,
       patternParams: {},
       bpm: 120,
-      motionSmoothing: 'soft',
       symSettings: DEFAULT_SYM_SETTINGS,
+      motionSmoothing: 'soft',
     },
     show: {
       clips: DEFAULT_CLIPS,
@@ -57,7 +61,7 @@ export function createDefaultProject() {
       duration: 600,
     },
     live: {
-      quantize: 'beat',
+      quantize: 'free',
       recording: false,
     },
     devices: {
@@ -78,7 +82,7 @@ export function migrateProject(data) {
       ...base,
       ...data,
       layout: { ...base.layout, ...(data.layout || {}) },
-      pattern,
+      pattern: { ...pattern, symSettings: { ...base.pattern.symSettings, ...(pattern.symSettings || {}) } },
       show: { ...base.show, ...(data.show || {}) },
       live: { ...base.live, ...(data.live || {}) },
       devices: { ...base.devices, ...(data.devices || {}) },
@@ -115,8 +119,8 @@ export function migrateProject(data) {
         gammaValue: data.gammaValue ?? base.pattern.gammaValue,
         patternParams: data.patternParams || {},
         bpm: data.bpm || base.pattern.bpm,
-        motionSmoothing: normalizeMotionSmoothing(data.motionSmoothing || base.pattern.motionSmoothing),
         symSettings: data.symSettings ? { ...base.pattern.symSettings, ...data.symSettings } : base.pattern.symSettings,
+        motionSmoothing: normalizeMotionSmoothing(data.motionSmoothing || base.pattern.motionSmoothing),
       },
       show: {
         ...base.show,
@@ -154,8 +158,8 @@ export function toLegacyProject(project) {
     gammaValue: p.pattern.gammaValue,
     patternParams: p.pattern.patternParams,
     bpm: p.pattern.bpm,
-    motionSmoothing: p.pattern.motionSmoothing,
     symSettings: p.pattern.symSettings,
+    motionSmoothing: p.pattern.motionSmoothing,
     showClips: p.show.clips,
     showTransitions: p.show.transitions,
     showCues: p.show.cues,

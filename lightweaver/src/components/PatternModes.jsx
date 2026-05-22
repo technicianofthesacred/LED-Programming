@@ -1,11 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { EditorView, basicSetup } from 'codemirror';
-import { javascript } from '@codemirror/lang-javascript';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
-import { useProject } from '../state/ProjectContext.jsx';
 
 // ── @param live parser ──────────────────────────────────────────────────────
 function parseParamsFromCode(code) {
@@ -83,12 +79,98 @@ function savePresets(presets) {
 
 const CATS = ['all', 'recent', 'custom', 'audio', 'fire', 'water', 'space', 'geo', 'chill', 'glitch'];
 
-export function CardsMode({ patternId, onSelectPattern, params, onParamChange, palette, onPaletteChange }) {
-  const { timelinePlayhead, showDuration, setShowClips } = useProject();
+const PARAM_META = {
+  speed: { label: 'Speed', group: 'Motion', desc: 'How fast the animation moves.', unit: 'x' },
+  rate: { label: 'Rate', group: 'Motion', desc: 'Pulse or flicker frequency.', unit: 'x' },
+  rise: { label: 'Upward drift', group: 'Motion', desc: 'How quickly the motion travels upward.', unit: 'x' },
+  wind: { label: 'Wind', group: 'Motion', desc: 'Horizontal drift and turbulence.', unit: 'x' },
+  drift: { label: 'Drift', group: 'Motion', desc: 'Slow movement through the pattern.', unit: 'x' },
+  spin: { label: 'Spin', group: 'Motion', desc: 'Rotation speed around the center.', unit: 'x' },
+  hueSpeed: { label: 'Hue speed', group: 'Motion', desc: 'How quickly the color cycles.', unit: 'x' },
+  freq: { label: 'Wave count', group: 'Shape', desc: 'Number of waves across the artwork.' },
+  freqX: { label: 'Horizontal waves', group: 'Shape', desc: 'Wave count across X.' },
+  freqY: { label: 'Vertical waves', group: 'Shape', desc: 'Wave count across Y.' },
+  scale: { label: 'Texture scale', group: 'Shape', desc: 'Size of the noise or texture detail.' },
+  width: { label: 'Width', group: 'Shape', desc: 'Thickness of the visible band or beam.' },
+  thick: { label: 'Line thickness', group: 'Shape', desc: 'Thickness of the drawn light line.' },
+  dotSize: { label: 'Dot size', group: 'Shape', desc: 'Size of the moving point.' },
+  tailLen: { label: 'Tail length', group: 'Shape', desc: 'Length of the fading trail.' },
+  ringWidth: { label: 'Ring width', group: 'Shape', desc: 'Thickness of each pulse ring.' },
+  rings: { label: 'Rings', group: 'Shape', desc: 'Number of visible rings.' },
+  arms: { label: 'Arms', group: 'Shape', desc: 'Number of spiral arms.' },
+  petals: { label: 'Petals', group: 'Shape', desc: 'Number of repeated petal shapes.' },
+  layers: { label: 'Layers', group: 'Shape', desc: 'Number of overlapping shape layers.' },
+  facets: { label: 'Facets', group: 'Shape', desc: 'Number of crystal-like angular sections.' },
+  count: { label: 'Count', group: 'Shape', desc: 'Number or amount of repeated elements.' },
+  cols: { label: 'Columns', group: 'Shape', desc: 'Number of vertical columns.' },
+  rows: { label: 'Rows', group: 'Shape', desc: 'Number of horizontal rows.' },
+  size: { label: 'Size', group: 'Shape', desc: 'Overall element size.' },
+  zoom: { label: 'Zoom', group: 'Shape', desc: 'Pattern magnification.' },
+  twist: { label: 'Twist', group: 'Shape', desc: 'How strongly the geometry bends or spirals.' },
+  warp: { label: 'Warp', group: 'Shape', desc: 'Amount of spatial distortion.' },
+  spread: { label: 'Spread', group: 'Shape', desc: 'How far the light separates or expands.' },
+  angle: { label: 'Angle', group: 'Shape', desc: 'Direction of the effect.', unit: 'turn' },
+  density: { label: 'Density', group: 'Intensity', desc: 'How many particles, sparks, or details appear.' },
+  chaos: { label: 'Randomness', group: 'Intensity', desc: 'How unpredictable the effect becomes.' },
+  flicker: { label: 'Flicker', group: 'Intensity', desc: 'Amount or speed of unstable flicker.' },
+  duty: { label: 'Flash length', group: 'Intensity', desc: 'How long the light stays on during each pulse.' },
+  glow: { label: 'Glow', group: 'Intensity', desc: 'Soft halo or bloom strength.' },
+  intensity: { label: 'Intensity', group: 'Intensity', desc: 'Overall force of the effect.' },
+  hue: { label: 'Hue', group: 'Color', desc: 'Base color around the color wheel.', unit: 'hue' },
+  saturation: { label: 'Saturation', group: 'Color', desc: 'Color purity.' },
+  contrast: { label: 'Contrast', group: 'Color', desc: 'Difference between dark and bright areas.' },
+  hour: { label: 'Sun position', group: 'Color', desc: 'Position through the sunrise/sunset gradient.' },
+  bands: { label: 'Color bands', group: 'Color', desc: 'Number of distinct color bands.' },
+  creatures: { label: 'Creatures', group: 'Shape', desc: 'Number of moving organic forms.' },
+  dunes: { label: 'Dunes', group: 'Shape', desc: 'Number of dune ridges.' },
+};
+
+const PARAM_GROUP_ORDER = ['Motion', 'Shape', 'Color', 'Intensity', 'Audio', 'Advanced'];
+
+function titleizeParam(name) {
+  return String(name)
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function getParamMeta(param) {
+  return PARAM_META[param.name] || {
+    label: titleizeParam(param.name),
+    group: ['bass', 'mid', 'hi', 'audio'].some(k => param.name.toLowerCase().includes(k)) ? 'Audio' : 'Advanced',
+    desc: 'Effect-specific control.',
+  };
+}
+
+function formatParamValue(value, param, meta) {
+  if (meta.unit === 'hue') return `${Math.round(value * 360)}°`;
+  if (meta.unit === 'turn') return `${Math.round(value * 360)}°`;
+  if (meta.unit === 'x') return `${value.toFixed(param.step < 0.05 ? 2 : 1)}×`;
+  if (param.max <= 1 && param.min >= 0) return `${Math.round(value * 100)}%`;
+  return value.toFixed(param.step < 0.05 ? 3 : param.step < 0.5 ? 2 : 1);
+}
+
+function patternUsesPalette(patternId) {
+  const code = PATTERN_CODE[patternId] || LIB_PATTERNS.find(p => p.id === patternId)?.code || '';
+  return /\bsamplePalette\s*\(|\bpalette\b/.test(code);
+}
+
+export function CardsMode({
+  patternId,
+  onSelectPattern,
+  params,
+  onParamChange,
+  patternParams = {},
+  onPatternParamsChange = null,
+  palette,
+  onPaletteChange,
+  strips = [],
+  onAssignStripPattern = null,
+}) {
   const [search, setSearch]     = useState('');
   const [showFavs, setShowFavs] = useState(false);
   const [cat, setCat]           = useState('all');
-  const [sortMode, setSortMode] = useState('default'); // 'default' | 'alpha' | 'random'
+  const [effectTarget, setEffectTarget] = useState('global');
   const [favs, setFavsState]    = useState(loadFavs);
   const [presets, setPresetsState] = useState(loadPresets);
   const [customPatterns, setCustomPatterns] = useState(loadCustomPatterns);
@@ -105,7 +187,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
   const savePreset = () => {
     const name = prompt('Preset name:');
     if (!name?.trim()) return;
-    const next = { ...presets, [`${patternId}/${name.trim()}`]: { ...params } };
+    const next = { ...presets, [`${tuningPatternId}/${name.trim()}`]: { ...tuningParams } };
     setPresetsState(next);
     savePresets(next);
   };
@@ -113,7 +195,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
   const loadPreset = (key) => {
     const p = presets[key];
     if (!p) return;
-    Object.entries(p).forEach(([k, v]) => onParamChange(k, v));
+    Object.entries(p).forEach(([k, v]) => handleParamChange(k, v));
   };
 
   const deletePreset = (key, e) => {
@@ -123,8 +205,6 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
     setPresetsState(next);
     savePresets(next);
   };
-
-  const myPresets = Object.keys(presets).filter(k => k.startsWith(`${patternId}/`));
 
   const setFavs = (updater) => {
     setFavsState(prev => {
@@ -143,14 +223,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
     });
   };
 
-  const cur   = PATTERNS.find(p => p.id === patternId);
-
-  // Merge static DEFAULT_PARAMS with @param annotations from library code
-  const activeLibPattern = LIB_PATTERNS.find(p => p.id === patternId);
-  const libKnobs  = activeLibPattern?.code ? parseParamsFromCode(activeLibPattern.code) : [];
-  const knobs     = (DEFAULT_PARAMS[patternId] || []).length > 0
-                      ? DEFAULT_PARAMS[patternId] || []
-                      : libKnobs;
+  const globalPattern = PATTERNS.find(p => p.id === patternId);
 
   const audioIds = useMemo(() =>
     new Set(LIB_PATTERNS.filter(p => p.code && (p.code.includes('bass') || p.code.includes(' mid') || p.code.includes(' hi'))).map(p => p.id)),
@@ -158,12 +231,59 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
   );
 
   const handleSelectPattern = (id) => {
-    onSelectPattern(id);
+    if (effectTarget === 'global') {
+      onSelectPattern(id);
+    } else {
+      onAssignStripPattern?.(effectTarget, id);
+    }
     setRecentIds(prev => {
       const next = [id, ...prev.filter(r => r !== id)].slice(0, 12);
       localStorage.setItem(LS_RECENT_KEY, JSON.stringify(next));
       return next;
     });
+  };
+
+  const clearStripPattern = (stripId) => {
+    onAssignStripPattern?.(stripId, null);
+  };
+
+  const selectedTargetStrip = strips.find(s => s.id === effectTarget);
+  const activeTargetPatternId = effectTarget === 'global'
+    ? patternId
+    : selectedTargetStrip?.patternId || patternId;
+  const tuningPatternId = activeTargetPatternId;
+  const tuningPattern = PATTERNS.find(p => p.id === tuningPatternId);
+  const tuningParams = patternParams?.[tuningPatternId] || (tuningPatternId === patternId ? params : {});
+  const paletteIsUsed = patternUsesPalette(tuningPatternId);
+
+  // Merge static DEFAULT_PARAMS with @param annotations from library code.
+  const activeLibPattern = LIB_PATTERNS.find(p => p.id === tuningPatternId);
+  const libKnobs  = activeLibPattern?.code ? parseParamsFromCode(activeLibPattern.code) : [];
+  const knobs     = (DEFAULT_PARAMS[tuningPatternId] || []).length > 0
+                      ? DEFAULT_PARAMS[tuningPatternId] || []
+                      : libKnobs;
+  const groupedKnobs = PARAM_GROUP_ORDER.map(group => ({
+    group,
+    knobs: knobs.filter(k => getParamMeta(k).group === group),
+  })).filter(entry => entry.knobs.length > 0);
+  const myPresets = Object.keys(presets).filter(k => k.startsWith(`${tuningPatternId}/`));
+
+  const handleParamChange = (name, value) => {
+    if (onPatternParamsChange) {
+      onPatternParamsChange(tuningPatternId, {
+        ...tuningParams,
+        [name]: value,
+      });
+    } else {
+      onParamChange(name, value);
+    }
+  };
+
+  const selectAdjacentPattern = (direction) => {
+    const idx = PATTERNS.findIndex(p => p.id === activeTargetPatternId);
+    const baseIdx = idx >= 0 ? idx : PATTERNS.findIndex(p => p.id === patternId);
+    const next = PATTERNS[(baseIdx + direction + PATTERNS.length) % PATTERNS.length];
+    handleSelectPattern(next.id);
   };
 
   const filtered = useMemo(() => {
@@ -187,10 +307,8 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
       p.id.toLowerCase().includes(q) ||
       (p.desc && p.desc.toLowerCase().includes(q))
     ) : base;
-    if (sortMode === 'alpha') result = [...result].sort((a, b) => a.name.localeCompare(b.name));
-    if (sortMode === 'random') result = [...result].sort(() => Math.random() - 0.5);
     return result;
-  }, [search, showFavs, favs, cat, audioIds, recentIds, customPatterns, sortMode]);
+  }, [search, showFavs, favs, cat, audioIds, recentIds, customPatterns]);
 
   // Number keys 1-9 quick-select first 9 visible cards (must be after filtered + handleSelectPattern)
   useEffect(() => {
@@ -207,31 +325,58 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
   }, [filtered, handleSelectPattern]);
 
   return (
-    <div>
+    <div className="lw-cards-mode">
       <div className="lw-sec-header">
-        <span>Library</span>
-        <span className="meta">{PATTERNS.length + customPatterns.length} effects</span>
-        <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px', marginLeft: 'auto' }}
-                title="Add current pattern as a clip at the timeline playhead"
-                onClick={() => {
-                  const id = `clip_${Date.now()}`;
-                  setShowClips(cs => [...cs, {
-                    id, track: 0,
-                    patternId,
-                    label: PATTERNS.find(p => p.id === patternId)?.name || patternId,
-                    start: timelinePlayhead,
-                    end: Math.min(showDuration, timelinePlayhead + 30),
-                  }]);
-                }}>
-          → Timeline
-        </button>
+        <span>Effects</span>
+        <span className="meta">{effectTarget === 'global' ? 'global' : selectedTargetStrip?.name || 'layer'} target</span>
       </div>
 
-      <div style={{ padding: '0 0 6px', display: 'flex', gap: 6 }}>
+      <div className="lw-effect-targets">
+        <button
+          className={`lw-effect-target ${effectTarget === 'global' ? 'active' : ''}`}
+          onClick={() => setEffectTarget('global')}
+          title="Apply clicked effects as the default effect for the whole piece">
+          <span className="lw-effect-target-dot" style={{ background: 'var(--accent)' }}/>
+          <span className="name">Global default</span>
+          <span className="meta">{globalPattern?.name || patternId}</span>
+        </button>
+        {strips.map(strip => {
+          const override = strip.patternId ? PATTERNS.find(p => p.id === strip.patternId)?.name || strip.patternId : 'Inherited';
+          return (
+            <button
+              key={strip.id}
+              className={`lw-effect-target ${effectTarget === strip.id ? 'active' : ''}`}
+              onClick={() => setEffectTarget(strip.id)}
+              title="Select this layer as the target for clicked effects">
+              <span className="lw-effect-target-dot" style={{ background: strip.color || 'var(--accent)' }}/>
+              <span className="name">{strip.name}</span>
+              <span className="meta">{override}</span>
+              {strip.patternId && (
+                <span
+                  className="clear"
+                  title="Clear layer effect override"
+                  onClick={e => { e.stopPropagation(); clearStripPattern(strip.id); }}>
+                  ×
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {effectTarget !== 'global' && (
+        <div className="lw-effect-target-note">
+          Clicking an effect applies it to <strong>{selectedTargetStrip?.name || 'selected layer'}</strong>. Clear the override to inherit Global.
+        </div>
+      )}
+
+      <div className="lw-effect-workspace">
+        <div className="lw-effect-browser">
+      <div className="lw-effect-searchbar">
         <div style={{ flex: 1, position: 'relative' }}>
           <input
             className="lw-search-input"
-            style={{ width: '100%' }}
+            aria-label="Search patterns"
             placeholder="Search patterns…"
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -248,43 +393,28 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
         </div>
         <button
           className={`btn btn-ghost ${showFavs ? 'active' : ''}`}
-          style={{ fontSize: 'var(--fs-md)', padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-sm)', padding: '3px 7px', flexShrink: 0 }}
           title={showFavs ? 'Show all' : 'Show favorites'}
           onClick={() => setShowFavs(f => !f)}>
           ★
         </button>
         <button
-          className={`btn btn-ghost ${sortMode !== 'default' ? 'active' : ''}`}
-          style={{ fontSize: 'var(--fs-2xs)', padding: '4px 7px', flexShrink: 0 }}
-          title="Cycle sort: default → A-Z → shuffle"
-          onClick={() => setSortMode(m => m === 'default' ? 'alpha' : m === 'alpha' ? 'random' : 'default')}>
-          {sortMode === 'alpha' ? 'A-Z' : sortMode === 'random' ? '⟳' : '···'}
-        </button>
-        <button
           className="btn btn-ghost"
-          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '3px 7px', flexShrink: 0 }}
           title="Previous pattern"
-          onClick={() => {
-            const idx = PATTERNS.findIndex(p => p.id === patternId);
-            const prev = PATTERNS[(idx - 1 + PATTERNS.length) % PATTERNS.length];
-            handleSelectPattern(prev.id);
-          }}>
+          onClick={() => selectAdjacentPattern(-1)}>
           ‹
         </button>
         <button
           className="btn btn-ghost"
-          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '3px 7px', flexShrink: 0 }}
           title="Next pattern"
-          onClick={() => {
-            const idx = PATTERNS.findIndex(p => p.id === patternId);
-            const next = PATTERNS[(idx + 1) % PATTERNS.length];
-            handleSelectPattern(next.id);
-          }}>
+          onClick={() => selectAdjacentPattern(1)}>
           ›
         </button>
         <button
           className="btn btn-ghost"
-          style={{ fontSize: 'var(--fs-xs)', padding: '4px 8px', flexShrink: 0 }}
+          style={{ fontSize: 'var(--fs-xs)', padding: '3px 7px', flexShrink: 0 }}
           title="Random pattern"
           onClick={() => {
             const pool = showFavs && favs.size > 0 ? PATTERNS.filter(p => favs.has(p.id)) : PATTERNS;
@@ -316,7 +446,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
       <div className="lw-pattern-grid">
         {filtered.map((p, cardIdx) => (
           <div key={p.id}
-               className={`lw-pattern-card ${p.id === patternId ? 'selected' : ''}`}
+               className={`lw-pattern-card ${p.id === activeTargetPatternId ? 'selected' : ''}`}
                onClick={() => handleSelectPattern(p.id)}
                title={p.desc || ''}>
             <div className="bg" style={{ background: p.preview }}/>
@@ -337,6 +467,13 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
               <div style={{ position: 'absolute', top: 3, left: 3, fontSize: 'var(--fs-2xs)', background: 'oklch(74% 0.13 210/0.8)',
                             color: 'var(--bg)', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
                 AUDIO
+              </div>
+            )}
+            {!p.custom && patternUsesPalette(p.id) && (
+              <div style={{ position: 'absolute', top: 3, left: (p.code && (p.code.includes('bass') || p.code.includes('mid') || p.code.includes('hi'))) ? 38 : 3,
+                            fontSize: 'var(--fs-2xs)', background: 'oklch(78% 0.11 80/0.86)',
+                            color: 'var(--bg)', borderRadius: 2, padding: '1px 3px', fontWeight: 600 }}>
+                PAL
               </div>
             )}
             {!p.custom && cardIdx < 9 && (
@@ -369,20 +506,32 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
           </div>
         ))}
       </div>
+        </div>
+
+        <div className="lw-effect-inspector">
+          <div className="lw-effect-inspector-head">
+            <div>
+              <div className="eyebrow">{effectTarget === 'global' ? 'Global tune' : selectedTargetStrip?.name || 'Layer tune'}</div>
+              <div className="title">{tuningPattern?.name || tuningPatternId}</div>
+            </div>
+            <div className={`palette-state ${paletteIsUsed ? 'used' : ''}`}>
+              {paletteIsUsed ? 'uses palette' : 'palette unused'}
+            </div>
+          </div>
 
       {knobs.length > 0 && (
         <>
           <div className="lw-sec-header">
-            <span>{cur?.name} · params</span>
+            <span>Parameters</span>
             <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px' }}
-                    onClick={() => knobs.forEach(k => onParamChange(k.name, k.value))}>
+                    onClick={() => knobs.forEach(k => handleParamChange(k.name, k.value))}>
               Reset
             </button>
             <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px' }}
                     title="Randomize all params"
                     onClick={() => knobs.forEach(k => {
                       const rand = k.min + Math.random() * (k.max - k.min);
-                      onParamChange(k.name, parseFloat(rand.toFixed(k.step < 0.05 ? 3 : 2)));
+                      handleParamChange(k.name, parseFloat(rand.toFixed(k.step < 0.05 ? 3 : 2)));
                     })}>
               ⟳
             </button>
@@ -391,16 +540,31 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
               + Preset
             </button>
           </div>
-          <div className="lw-knobs">
-            {knobs.map((k) => (
-              <div className="lw-knob" key={k.name}>
-                <div className="lw-knob-name">{k.name}</div>
-                <input type="range"
-                       min={k.min} max={k.max} step={k.step}
-                       value={params[k.name] ?? k.value}
-                       onChange={e => onParamChange(k.name, +e.target.value)}/>
-                <div className="lw-knob-val">
-                  {(params[k.name] ?? k.value).toFixed(k.step < 0.05 ? 3 : 2)}
+          <div className="lw-param-groups">
+            {groupedKnobs.map(({ group, knobs: groupKnobs }) => (
+              <div className="lw-param-group" key={group}>
+                <div className="lw-param-group-title">{group}</div>
+                <div className="lw-knobs">
+                  {groupKnobs.map((k) => {
+                    const meta = getParamMeta(k);
+                    const value = tuningParams[k.name] ?? k.value;
+                    return (
+                      <div className="lw-knob" key={k.name}>
+                        <div className="lw-knob-name">
+                          <span>{meta.label}</span>
+                          <small>{meta.desc}</small>
+                        </div>
+                        <input type="range"
+                               aria-label={meta.label}
+                               min={k.min} max={k.max} step={k.step}
+                               value={value}
+                               onChange={e => handleParamChange(k.name, +e.target.value)}/>
+                        <div className="lw-knob-val">
+                          {formatParamValue(value, k, meta)}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -412,7 +576,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
                         style={{ fontSize: 'var(--fs-2xs)', padding: '2px 7px', background: 'var(--surface-2)',
                                  border: '1px solid var(--border)', borderRadius: 99, cursor: 'pointer',
                                  color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {key.replace(`${patternId}/`, '')}
+                  {key.replace(`${tuningPatternId}/`, '')}
                   <span onClick={e => deletePreset(key, e)}
                         style={{ opacity: 0.5, fontSize: 'var(--fs-xs)', lineHeight: 1 }}>×</span>
                 </button>
@@ -421,10 +585,20 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
           )}
         </>
       )}
+      {knobs.length === 0 && (
+        <div className="lw-effect-empty">
+          This effect has no exposed controls yet.
+        </div>
+      )}
 
       <div className="lw-sec-header">
         <span>Palette</span>
-        <span className="meta">6 colors · click to edit</span>
+        <span className="meta">{paletteIsUsed ? 'used by this effect' : 'not used by this effect'}</span>
+      </div>
+      <div className="lw-palette-note">
+        {paletteIsUsed
+          ? 'These swatches feed palette-aware effects and exports.'
+          : 'This effect uses fixed colors or hue controls, so palette changes will not visibly affect it.'}
       </div>
       <div className="lw-palette">
         {palette.map((c, i) => (
@@ -439,6 +613,8 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
                    }}/>
           </label>
         ))}
+      </div>
+        </div>
       </div>
     </div>
   );
@@ -468,27 +644,47 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
 
   useEffect(() => {
     if (!editorRef.current) return;
-    const updateListener = EditorView.updateListener.of(update => {
-      if (update.docChanged) tryCompileRef.current?.(update.state.doc.toString());
+    let cancelled = false;
+    let view = null;
+
+    async function mountEditor() {
+      const [{ EditorView, basicSetup }, { javascript }, { oneDark }] = await Promise.all([
+        import('codemirror'),
+        import('@codemirror/lang-javascript'),
+        import('@codemirror/theme-one-dark'),
+      ]);
+      if (cancelled || !editorRef.current) return;
+      const updateListener = EditorView.updateListener.of(update => {
+        if (update.docChanged) tryCompileRef.current?.(update.state.doc.toString());
+      });
+      view = new EditorView({
+        doc: initialCode,
+        extensions: [
+          basicSetup,
+          javascript(),
+          oneDark,
+          updateListener,
+          EditorView.theme({
+            '&': { fontSize: '11px', height: '100%' },
+            '.cm-scroller': { fontFamily: 'var(--mono-font)', lineHeight: '1.6' },
+            '.cm-content': { padding: '6px 0' },
+          }),
+        ],
+        parent: editorRef.current,
+      });
+      viewRef.current = view;
+      tryCompileRef.current?.(initialCode);
+    }
+
+    mountEditor().catch(error => {
+      if (!cancelled) setStatus({ ok: false, error: error.message || 'Editor failed to load', lines: 0, bytes: 0 });
     });
-    const view = new EditorView({
-      doc: initialCode,
-      extensions: [
-        basicSetup,
-        javascript(),
-        oneDark,
-        updateListener,
-        EditorView.theme({
-          '&': { fontSize: '11px', height: '100%' },
-          '.cm-scroller': { fontFamily: 'var(--mono-font)', lineHeight: '1.6' },
-          '.cm-content': { padding: '6px 0' },
-        }),
-      ],
-      parent: editorRef.current,
-    });
-    viewRef.current = view;
-    tryCompileRef.current?.(initialCode);
-    return () => view.destroy();
+
+    return () => {
+      cancelled = true;
+      viewRef.current = null;
+      if (view) view.destroy();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -595,6 +791,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
               <div className="lw-knob" key={k.name}>
                 <div className="lw-knob-name">{k.name}</div>
                 <input type="range"
+                       aria-label={`Code parameter ${k.name}`}
                        min={k.min} max={k.max} step={k.step}
                        value={params?.[k.name] ?? k.value}
                        onChange={e => onParamChange?.(k.name, +e.target.value)}/>
