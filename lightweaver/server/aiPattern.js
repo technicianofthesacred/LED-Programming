@@ -4,13 +4,14 @@ import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 
 export const AI_PATTERN_TIMEOUT_MS = 30000;
+export const AI_PATTERN_CODE_MAX_LENGTH = 4000;
 
 export const AiPatternDraftSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().min(1).max(220),
   changeSummary: z.array(z.string().min(1).max(140)).min(1).max(6),
   palette: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).min(2).max(8),
-  code: z.string().min(1).max(6000),
+  code: z.string().min(1).max(AI_PATTERN_CODE_MAX_LENGTH),
   suggestedParams: z
     .array(
       z.object({
@@ -189,15 +190,6 @@ export function createAiPatternRouter({
   const router = express.Router();
 
   router.post('/pattern', async (req, res) => {
-    if (!env.OPENAI_API_KEY && !client) {
-      return res.status(501).json({
-        error: {
-          code: 'missing_api_key',
-          message: 'Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.',
-        },
-      });
-    }
-
     const parsedRequest = validateAiPatternRequest(req.body || {});
     if (!parsedRequest.success) {
       return res.status(400).json({
@@ -205,6 +197,15 @@ export function createAiPatternRouter({
           code: 'invalid_request',
           message: 'AI pattern request is invalid.',
           issues: parsedRequest.error.issues,
+        },
+      });
+    }
+
+    if (!env.OPENAI_API_KEY && !client) {
+      return res.status(501).json({
+        error: {
+          code: 'missing_api_key',
+          message: 'Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.',
         },
       });
     }

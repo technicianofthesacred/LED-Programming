@@ -83,6 +83,18 @@ assert.match(input[1].content, /"ledCount":128/);
 const textFormat = zodTextFormat(AiPatternDraftSchema, 'lightweaver_pattern_draft');
 assert.equal(findObjectAdditionalProperties(textFormat), null);
 
+const validDraft = {
+  name: 'Length Check',
+  description: 'Checks the maximum code length.',
+  changeSummary: ['Checked length'],
+  palette: ['#000000', '#ffffff'],
+  code: 'x'.repeat(4000),
+  suggestedParams: [],
+  notes: '',
+};
+assert.equal(AiPatternDraftSchema.safeParse(validDraft).success, true);
+assert.equal(AiPatternDraftSchema.safeParse({ ...validDraft, code: 'x'.repeat(4001) }).success, false);
+
 const providerError = normalizeAiProviderError(Object.assign(new Error('Rate limit'), { status: 429 }));
 assert.equal(providerError.status, 429);
 assert.equal(providerError.code, 'rate_limited');
@@ -98,6 +110,14 @@ const missingKeyApp = createLightweaverServer({
   },
 });
 await withServer(missingKeyApp, async (baseUrl) => {
+  const invalid = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: '' }),
+  });
+  assert.equal(invalid.response.status, 400);
+  assert.equal(invalid.body.error.code, 'invalid_request');
+
   const { response, body } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
