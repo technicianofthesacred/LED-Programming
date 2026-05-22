@@ -39,8 +39,8 @@
   - Browser helper for `POST /api/ai/pattern`.
 - Create `lightweaver/server/aiPattern.js`
   - Express router and pure helper functions for the OpenAI draft endpoint.
-- Modify `lightweaver/server/index.js`
-  - Mounts the AI route before static file serving.
+- Create `lightweaver/server/index.js`
+  - Serves the built Vite app and mounts the AI route before static file serving.
 - Create `lightweaver/src/components/AiPatternAssistant.jsx`
   - Assistant drawer UI, draft state, refine requests, errors, and accept actions.
 - Modify `lightweaver/src/App.jsx`
@@ -699,7 +699,7 @@ Expected: commit succeeds.
 - Modify: `lightweaver/package.json`
 - Modify: `lightweaver/package-lock.json`
 - Create: `lightweaver/server/aiPattern.js`
-- Modify: `lightweaver/server/index.js`
+- Create: `lightweaver/server/index.js`
 - Create: `lightweaver/tests/ai-pattern-server.mjs`
 
 - [ ] **Step 1: Install server dependencies**
@@ -708,10 +708,10 @@ Run:
 
 ```bash
 cd lightweaver
-npm install openai zod
+npm install express openai zod
 ```
 
-Expected: `package.json` contains `openai` and `zod`, and `package-lock.json` is updated.
+Expected: `package.json` contains `express`, `openai`, and `zod`, and `package-lock.json` is updated.
 
 - [ ] **Step 2: Add failing server helper tests**
 
@@ -890,25 +890,53 @@ export function createAiPatternRouter({ env = process.env, client = null } = {})
 }
 ```
 
-- [ ] **Step 5: Mount route in server**
+- [ ] **Step 5: Create server entry and mount route**
 
-In `lightweaver/server/index.js`, add:
+Create `lightweaver/server/index.js`:
 
 ```js
+import express from 'express';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createAiPatternRouter } from './aiPattern.js';
-```
 
-Mount before static serving:
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const rootDir = join(__dirname, '..');
+const distDir = join(rootDir, 'dist');
+const app = express();
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 
-```js
+app.use(express.json({ limit: '2mb' }));
 app.use('/api/ai', createAiPatternRouter());
-```
 
-Place it before:
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, app: 'Lightweaver' });
+});
 
-```js
 if (existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get('*', (_req, res) => res.sendFile(join(distDir, 'index.html')));
+} else {
+  app.get('*', (_req, res) => {
+    res.status(404).send('Lightweaver dist/ not found. Run npm run build first.');
+  });
+}
+
+app.listen(PORT, () => {
+  console.log(`Lightweaver server listening on http://localhost:${PORT}`);
+});
 ```
+
+Add Pi/server scripts to `lightweaver/package.json`:
+
+```json
+"serve:pi": "node server/index.js",
+"pi:build": "npm run build",
+"pi:start": "npm run build && npm run serve:pi"
+```
+
+Keep existing scripts unchanged.
 
 - [ ] **Step 6: Add server test script and run**
 
