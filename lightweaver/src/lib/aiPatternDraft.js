@@ -1,5 +1,5 @@
 import { compile } from './patterns.js';
-import { normalizePalette, renderPixelFrame, resolvePatternParams } from './frameEngine.js';
+import { normalizePalette, renderPixelFrame } from './frameEngine.js';
 import { parseParamsFromCode } from './patternParams.js';
 
 const REQUIRED_STRING_FIELDS = ['name', 'description', 'code'];
@@ -61,6 +61,13 @@ function allowsBlackout(instruction = '') {
   return /\b(blackout|turn off|all off|off|dark|darkness)\b/i.test(instruction);
 }
 
+function buildDraftParamValues(draft) {
+  return {
+    ...Object.fromEntries(parseParamsFromCode(draft.code).map(param => [param.name, param.value])),
+    ...(draft.suggestedParams || {}),
+  };
+}
+
 export function buildAiPatternPreviewFrame(draft, {
   strips = [],
   t = 0.5,
@@ -75,10 +82,7 @@ export function buildAiPatternPreviewFrame(draft, {
     t,
     strips: stripPixelsToFrameStrips(strips),
     activeFn: compiled.fn,
-    params: {
-      ...Object.fromEntries(parseParamsFromCode(draft.code).map(param => [param.name, param.value])),
-      ...(draft.suggestedParams || {}),
-    },
+    params: buildDraftParamValues(draft),
     paletteNorm: normalizePalette(draft.palette),
     bpm,
     audioBands,
@@ -87,6 +91,39 @@ export function buildAiPatternPreviewFrame(draft, {
 
 function frameHasLight(frame) {
   return (frame?.pixels || []).some(pixel => Math.max(pixel.r || 0, pixel.g || 0, pixel.b || 0) > 8);
+}
+
+function probeDraftRuntime(fn, draft, {
+  strips = [],
+  t = 0.5,
+  bpm = 120,
+  audioBands = null,
+} = {}) {
+  const frameStrips = stripPixelsToFrameStrips(strips);
+  const samples = frameStrips.flatMap(strip => (strip.pts || []).map(pt => ({ stripId: strip.id, pt })));
+  const selected = samples.length ? [
+    samples[0],
+    samples[Math.floor(samples.length / 2)],
+    samples[samples.length - 1],
+  ] : [{ stripId: 'draft-default', pt: { x: 0.5, y: 0.5, p: 0.5 } }];
+  const paletteNorm = normalizePalette(draft.palette);
+  const params = buildDraftParamValues(draft);
+  const beat = (t * bpm / 60) % 1;
+  const beatSin = Math.sin(beat * Math.PI);
+  const time = (t / 65.536) % 1;
+  const pixelCount = Math.max(samples.length, selected.length);
+  const bass = audioBands?.bass ?? 0;
+  const mid = audioBands?.mid ?? 0;
+  const hi = audioBands?.hi ?? 0;
+
+  try {
+    selected.forEach((sample, index) => {
+      fn(index, sample.pt.x, sample.pt.y, t, time, pixelCount, paletteNorm, beat, beatSin, params, sample.stripId, sample.pt.p, bass, mid, hi);
+    });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: { kind: 'runtime-error', message: error.message || 'Draft failed during preview.' } };
+  }
 }
 
 export function validateAiPatternDraft(rawDraft, options = {}) {
@@ -101,6 +138,8 @@ export function validateAiPatternDraft(rawDraft, options = {}) {
     return { ok: false, error: { kind: 'compile-error', message: compiled.error || 'Draft did not compile.' } };
   }
   const params = parseParamsFromCode(draft.code);
+  const runtimeProbe = probeDraftRuntime(compiled.fn, draft, options);
+  if (!runtimeProbe.ok) return runtimeProbe;
   try {
     const frame = buildAiPatternPreviewFrame(draft, options);
     if (!frameHasLight(frame) && !allowsBlackout(options.instruction)) {

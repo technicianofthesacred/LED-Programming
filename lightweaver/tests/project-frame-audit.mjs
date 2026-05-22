@@ -128,6 +128,45 @@ const unsafeDraft = validateAiPatternDraft({
 assert.equal(unsafeDraft.ok, false);
 assert.equal(unsafeDraft.error.kind, 'unsafe-code');
 
+const invalidShapeDraft = validateAiPatternDraft({
+  description: 'Missing required name.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1,1,1);',
+});
+assert.equal(invalidShapeDraft.ok, false);
+assert.equal(invalidShapeDraft.error.kind, 'invalid-shape');
+
+const invalidPaletteDraft = validateAiPatternDraft({
+  name: 'Bad Palette',
+  description: 'Contains invalid colors.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', 'white'],
+  code: 'return rgb(1,1,1);',
+});
+assert.equal(invalidPaletteDraft.ok, false);
+assert.equal(invalidPaletteDraft.error.kind, 'invalid-palette');
+
+const compileErrorDraft = validateAiPatternDraft({
+  name: 'Syntax Error',
+  description: 'Contains malformed code.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1,1,1',
+});
+assert.equal(compileErrorDraft.ok, false);
+assert.equal(compileErrorDraft.error.kind, 'compile-error');
+
+const runtimeErrorDraft = validateAiPatternDraft({
+  name: 'Runtime Error',
+  description: 'Throws while rendering.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'throw new Error("boom");',
+});
+assert.equal(runtimeErrorDraft.ok, false);
+assert.equal(runtimeErrorDraft.error.kind, 'runtime-error');
+
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',
   description: 'Accidental blackout.',
@@ -168,6 +207,18 @@ const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
 });
 assert.equal(previewFrame.pixels.length, 2);
+
+const suggestedParamFrame = buildAiPatternPreviewFrame({
+  name: 'Param Brightness',
+  description: 'Uses suggested params.',
+  changeSummary: ['Sets brightness'],
+  palette: ['#000000', '#ffffff'],
+  code: '// @param brightness float 0.1 0.0 1.0\nreturn rgb(params.brightness, 0, 0);',
+  suggestedParams: { brightness: 0.8 },
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.ok(Math.abs(suggestedParamFrame.pixels[0].r - 204) < Math.abs(suggestedParamFrame.pixels[0].r - 26));
 
 const customParamEntry = saveCustomPattern({
   name: 'Param Glow',
