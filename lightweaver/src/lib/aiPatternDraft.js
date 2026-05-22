@@ -17,16 +17,24 @@ const STRING_LITERAL_RE = /["'`]/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
 const FBM_OCTAVE_LIMIT = 12;
+const MAX_CODE_LENGTH = 4000;
+const MAX_HELPER_CALLS = 80;
+const MAX_FBM_CALLS = 8;
+const MAX_PAREN_DEPTH = 24;
 const PARAM_VALUE_LIMIT = 100000;
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
-const ALLOWED_IDENTIFIERS = new Set([
-  'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
-  'stripId', 'stripProgress', 'bass', 'mid', 'hi',
+const ALLOWED_HELPERS = [
   'hsv', 'rgb', 'wave', 'triangle', 'square', 'clamp', 'lerp', 'fract', 'abs', 'floor',
   'ceil', 'int', 'float', 'min', 'max', 'pow', 'sqrt', 'exp', 'log', 'tan', 'atan2',
   'round', 'map', 'step', 'smoothstep', 'mix', 'mod', 'vec2', 'length', 'distance',
   'sin', 'cos', 'noise', 'randomF', 'ping', 'easeIn', 'easeOut', 'easeInOut', 'norm',
   'polar', 'fbm', 'samplePalette',
+];
+const ALLOWED_IDENTIFIERS = new Set([
+  'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
+  'stripId', 'stripProgress', 'bass', 'mid', 'hi',
+  ...ALLOWED_HELPERS,
+  'PI', 'TAU', 'TWO_PI',
   'const', 'let', 'if', 'else', 'return', 'throw', 'true', 'false', 'null', 'undefined',
 ]);
 
@@ -107,7 +115,8 @@ function stripCodeComments(code = '') {
 function validateDraftCodeSafety(code = '') {
   const scanned = stripCodeComments(code);
   if (
-    BACKSLASH_RE.test(scanned)
+    scanned.length > MAX_CODE_LENGTH
+    || BACKSLASH_RE.test(scanned)
     || NON_ASCII_OR_CONTROL_RE.test(scanned)
     || STRING_LITERAL_RE.test(scanned)
     || BRACKET_RE.test(scanned)
@@ -119,6 +128,7 @@ function validateDraftCodeSafety(code = '') {
     || hasUnsafeMemberAccess(scanned)
     || hasUnsafeNumericLiteral(scanned)
     || hasUnsafeFbmCall(scanned)
+    || hasUnsafeComplexity(scanned)
     || hasUnsafeLocalCall(scanned)
     || hasUnsafeAssignment(scanned)
     || hasUnsafeIdentifier(scanned)
@@ -131,16 +141,32 @@ function validateDraftCodeSafety(code = '') {
 function hasUnsafeAssignment(code) {
   if (/\+\+|--/.test(code)) return true;
   if (/(?:\*\*=|<<=|>>=|>>>=|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|&&=|\|\|=|\?\?=)/.test(code)) return true;
+  const locals = collectLocalNames(code);
 
   for (let i = 0; i < code.length; i++) {
     if (code[i] !== '=') continue;
     const previous = code[i - 1] || '';
     const next = code[i + 1] || '';
     if (previous === '=' || previous === '!' || previous === '<' || previous === '>' || next === '=') continue;
-    if (/\b(?:const|let)\s+[A-Za-z_$][\w$]*\s*$/.test(code.slice(0, i))) continue;
+    const lhs = getAssignmentLhs(code, i);
+    if (isDeclarationInitializer(code, i, lhs)) continue;
+    if (locals.has(lhs) && !ALLOWED_IDENTIFIERS.has(lhs)) continue;
     return true;
   }
   return false;
+}
+
+function getAssignmentLhs(code, equalsIndex) {
+  return code.slice(0, equalsIndex).match(/[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?\s*$/)?.[0]?.replace(/\s+/g, '') || '';
+}
+
+function isDeclarationInitializer(code, equalsIndex, lhs) {
+  if (!lhs || lhs.includes('.')) return false;
+  const statementStart = Math.max(code.lastIndexOf(';', equalsIndex - 1), code.lastIndexOf('{', equalsIndex - 1)) + 1;
+  const segment = code.slice(statementStart, equalsIndex);
+  if (!/\b(?:const|let)\b/.test(segment)) return false;
+  const declarator = segment.slice(Math.max(segment.lastIndexOf(','), segment.lastIndexOf('const'), segment.lastIndexOf('let')) + 1).trim();
+  return declarator === lhs || declarator.endsWith(` ${lhs}`);
 }
 
 function hasUnsafeMemberAccess(code) {
@@ -159,6 +185,28 @@ function hasUnsafeNumericLiteral(code) {
     if (Math.abs(Number(match[0])) > PARAM_VALUE_LIMIT) return true;
   }
   return false;
+}
+
+function hasUnsafeComplexity(code) {
+  if (getMaxParenDepth(code) > MAX_PAREN_DEPTH) return true;
+  const helperCalls = ALLOWED_HELPERS.reduce((count, name) => count + extractCallArguments(code, name).length, 0);
+  if (helperCalls > MAX_HELPER_CALLS) return true;
+  if (extractCallArguments(code, 'fbm').length > MAX_FBM_CALLS) return true;
+  return false;
+}
+
+function getMaxParenDepth(code) {
+  let depth = 0;
+  let maxDepth = 0;
+  for (const char of code) {
+    if (char === '(') {
+      depth++;
+      maxDepth = Math.max(maxDepth, depth);
+    } else if (char === ')') {
+      depth = Math.max(0, depth - 1);
+    }
+  }
+  return maxDepth;
 }
 
 function hasUnsafeFbmCall(code) {
@@ -221,10 +269,13 @@ function splitTopLevelArgs(args) {
 
 function collectLocalNames(code) {
   const names = new Set();
-  const declarationRe = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)/g;
+  const declarationRe = /\b(?:const|let)\s+([^;]+)/g;
   let match;
   while ((match = declarationRe.exec(code)) !== null) {
-    names.add(match[1]);
+    for (const part of splitTopLevelArgs(match[1])) {
+      const name = part.trim().match(/^([A-Za-z_$][\w$]*)/)?.[1];
+      if (name) names.add(name);
+    }
   }
   return names;
 }

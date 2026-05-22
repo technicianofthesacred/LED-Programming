@@ -331,6 +331,42 @@ const bigintShiftUnsafeDraft = validateAiPatternDraft({
 assert.equal(bigintShiftUnsafeDraft.ok, false);
 assert.equal(bigintShiftUnsafeDraft.error.kind, 'unsafe-code');
 
+const tooManyHelperCallsDraft = validateAiPatternDraft({
+  name: 'Too Many Helpers',
+  description: 'Attempts too many helper calls.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: `const v = ${Array.from({ length: 81 }, () => 'sin(0)').join(' + ')}; return rgb(1,1,1);`,
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(tooManyHelperCallsDraft.ok, false);
+assert.equal(tooManyHelperCallsDraft.error.kind, 'unsafe-code');
+
+const tooManyFbmCallsDraft = validateAiPatternDraft({
+  name: 'Too Many Fbm Calls',
+  description: 'Attempts too many fbm calls.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: `const v = ${Array.from({ length: 9 }, () => 'fbm(x,y,4)').join(' + ')}; return rgb(1,1,1);`,
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(tooManyFbmCallsDraft.ok, false);
+assert.equal(tooManyFbmCallsDraft.error.kind, 'unsafe-code');
+
+const tooDeepNestingDraft = validateAiPatternDraft({
+  name: 'Too Deep Nesting',
+  description: 'Attempts excessive parenthesis nesting.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: `return rgb(${Array.from({ length: 25 }, () => 'sin(').join('')}0${')'.repeat(25)},0,0);`,
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(tooDeepNestingDraft.ok, false);
+assert.equal(tooDeepNestingDraft.error.kind, 'unsafe-code');
+
 assert.throws(
   () => buildAiPatternPreviewFrame({
     name: 'Unsafe Direct Preview',
@@ -534,6 +570,69 @@ const standaloneMapDraft = validateAiPatternDraft({
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
 assert.equal(standaloneMapDraft.ok, true);
+
+const localReassignmentDraft = validateAiPatternDraft({
+  name: 'Local Reassignment',
+  description: 'Allows safe local reassignment.',
+  changeSummary: ['Uses local assignment'],
+  palette: ['#000000', '#ffffff'],
+  code: 'let v = 0; if (x < 0.5) v = 1; return rgb(v,0,0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 1, y: 0 }] }],
+});
+assert.equal(localReassignmentDraft.ok, true);
+
+const multiConstDraft = validateAiPatternDraft({
+  name: 'Multiple Const',
+  description: 'Allows multiple const declarators.',
+  changeSummary: ['Uses multiple consts'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const cx = x - 0.5, cy = y - 0.5; return rgb(abs(cx), abs(cy), 0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(multiConstDraft.ok, true);
+
+const runtimeWriteUnsafeDraft = validateAiPatternDraft({
+  name: 'Runtime Write Unsafe',
+  description: 'Attempts runtime input assignment.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'x = 1; return rgb(1,1,1);',
+});
+assert.equal(runtimeWriteUnsafeDraft.ok, false);
+assert.equal(runtimeWriteUnsafeDraft.error.kind, 'unsafe-code');
+
+const paramsWriteUnsafeDraft = validateAiPatternDraft({
+  name: 'Params Write Unsafe',
+  description: 'Attempts params assignment.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'params.speed = 1; return rgb(1,1,1);',
+});
+assert.equal(paramsWriteUnsafeDraft.ok, false);
+assert.equal(paramsWriteUnsafeDraft.error.kind, 'unsafe-code');
+
+const helperWriteUnsafeDraft = validateAiPatternDraft({
+  name: 'Helper Write Unsafe',
+  description: 'Attempts helper assignment.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'rgb = 1; return rgb(1,1,1);',
+});
+assert.equal(helperWriteUnsafeDraft.ok, false);
+assert.equal(helperWriteUnsafeDraft.error.kind, 'unsafe-code');
+
+const runtimeConstantsDraft = validateAiPatternDraft({
+  name: 'Runtime Constants',
+  description: 'Uses runtime math constants.',
+  changeSummary: ['Uses constants'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(sin(PI), cos(TAU), sin(TWO_PI));',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(runtimeConstantsDraft.ok, true);
 
 const validFbmDraft = validateAiPatternDraft({
   name: 'Valid Fbm',
