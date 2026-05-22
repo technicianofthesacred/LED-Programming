@@ -301,6 +301,36 @@ const aliasFbmUnsafeDraft = validateAiPatternDraft({
 assert.equal(aliasFbmUnsafeDraft.ok, false);
 assert.equal(aliasFbmUnsafeDraft.error.kind, 'unsafe-code');
 
+const dollarAliasFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Dollar Alias Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves through a dollar alias.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const $ = fbm; return rgb($(x, y, 13) + 1, 0, 0);',
+});
+assert.equal(dollarAliasFbmUnsafeDraft.ok, false);
+assert.equal(dollarAliasFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const doubleDollarAliasFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Double Dollar Alias Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves through a double dollar alias.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const $$ = fbm; return rgb($$(x, y, 13) + 1, 0, 0);',
+});
+assert.equal(doubleDollarAliasFbmUnsafeDraft.ok, false);
+assert.equal(doubleDollarAliasFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const dollarIdentifierUnsafeDraft = validateAiPatternDraft({
+  name: 'Dollar Identifier Unsafe',
+  description: 'Attempts a dollar identifier declaration.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const $ = 1; return rgb(1,1,1);',
+});
+assert.equal(dollarIdentifierUnsafeDraft.ok, false);
+assert.equal(dollarIdentifierUnsafeDraft.error.kind, 'unsafe-code');
+
 const methodUnsafeDraft = validateAiPatternDraft({
   name: 'Method Unsafe',
   description: 'Attempts method-style map access.',
@@ -330,6 +360,16 @@ const bigintShiftUnsafeDraft = validateAiPatternDraft({
 });
 assert.equal(bigintShiftUnsafeDraft.ok, false);
 assert.equal(bigintShiftUnsafeDraft.error.kind, 'unsafe-code');
+
+const radixBigintExponentUnsafeDraft = validateAiPatternDraft({
+  name: 'Radix BigInt Exponent Unsafe',
+  description: 'Attempts radix BigInt exponentiation.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(0x2n ** 0x10n, 0, 0);',
+});
+assert.equal(radixBigintExponentUnsafeDraft.ok, false);
+assert.equal(radixBigintExponentUnsafeDraft.error.kind, 'unsafe-code');
 
 const hexLiteralUnsafeDraft = validateAiPatternDraft({
   name: 'Hex Literal Unsafe',

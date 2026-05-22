@@ -9,11 +9,13 @@ const IDENTIFIER_RE = /\b[A-Za-z_$][\w$]*\b/g;
 const NUMERIC_LITERAL_RE = /(?<![\w$])(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w$])/g;
 const NON_ASCII_OR_CONTROL_RE = /[^\x09\x0a\x0d\x20-\x7e]/;
 const BACKSLASH_RE = /\\/;
+const DOLLAR_RE = /\$/;
 const BRACKET_RE = /[\[\]]/;
 const ARROW_FUNCTION_RE = /=>/;
 const BIGINT_LITERAL_RE = /\b\d+n\b/;
-const RADIX_LITERAL_RE = /(?<![\w$])0[xob][0-9a-f_]+(?![\w$])/i;
+const RADIX_LITERAL_RE = /(?<![\w$])0[xob][0-9a-f_]+n?(?![\w$])/i;
 const NUMERIC_SEPARATOR_RE = /\d_\d/;
+const EXPONENTIATION_RE = /\*\*/;
 const SHIFT_OPERATOR_RE = />>>|<<|>>/;
 const STRING_LITERAL_RE = /["'`]/;
 const INDIRECT_CALL_RE = /\)\s*\(/;
@@ -122,6 +124,7 @@ function validateDraftCodeSafety(code = '') {
   if (
     rawCode.length > MAX_CODE_LENGTH
     || BACKSLASH_RE.test(scanned)
+    || DOLLAR_RE.test(scanned)
     || NON_ASCII_OR_CONTROL_RE.test(scanned)
     || STRING_LITERAL_RE.test(scanned)
     || BRACKET_RE.test(scanned)
@@ -129,6 +132,7 @@ function validateDraftCodeSafety(code = '') {
     || BIGINT_LITERAL_RE.test(scanned)
     || RADIX_LITERAL_RE.test(scanned)
     || NUMERIC_SEPARATOR_RE.test(scanned)
+    || EXPONENTIATION_RE.test(scanned)
     || SHIFT_OPERATOR_RE.test(scanned)
     || INDIRECT_CALL_RE.test(scanned)
     || OPTIONAL_CHAIN_RE.test(scanned)
