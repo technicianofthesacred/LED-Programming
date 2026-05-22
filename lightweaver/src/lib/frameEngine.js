@@ -1,6 +1,6 @@
 import { DEFAULT_PARAMS, PALETTE_DEFAULT } from '../data.js';
-import { PATTERNS } from './patterns-library.js';
 import { compile, evalPixel } from './patterns.js';
+import { getPatternById } from './patternRegistry.js';
 import { applySymmetry } from './symmetry.js';
 
 export function hexToNorm(hex) {
@@ -47,7 +47,7 @@ export function buildGammaLut(enabled, gammaValue = 2.2) {
 }
 
 export function compilePattern(patternId) {
-  const pat = PATTERNS.find(p => p.id === patternId);
+  const pat = getPatternById(patternId);
   if (!pat) return null;
   return compile(pat.code).fn;
 }

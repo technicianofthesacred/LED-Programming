@@ -9,10 +9,84 @@ import {
   formatMotionSpeed,
   smoothPixelFrame,
 } from '../src/lib/motionSmoothing.js';
+import {
+  CUSTOM_PATTERNS_EVENT,
+  CUSTOM_PATTERNS_KEY,
+  CUSTOM_PATTERN_REVISIONS_KEY,
+  buildCustomPatternEntry,
+  buildCustomPatternId,
+  deleteCustomPattern,
+  loadCustomPatterns,
+  saveCustomPattern,
+  updateCustomPattern,
+} from '../src/lib/customPatterns.js';
+import {
+  getPatternById,
+  getPatternCode,
+  isBuiltInPattern,
+  listPatterns,
+} from '../src/lib/patternRegistry.js';
+import { parseParamsFromCode } from '../src/lib/patternParams.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
 assert.deepEqual(duplicateIds, [], 'pattern ids must be unique');
+
+const memoryStorage = (() => {
+  const data = new Map();
+  return {
+    getItem(key) {
+      return data.has(key) ? data.get(key) : null;
+    },
+    setItem(key, value) {
+      data.set(key, String(value));
+    },
+    removeItem(key) {
+      data.delete(key);
+    },
+    clear() {
+      data.clear();
+    },
+  };
+})();
+
+const parsedParams = parseParamsFromCode('// @param speed float 0.25 0.05 1.0\nreturn rgb(params.speed,0,0);');
+assert.deepEqual(parsedParams, [{ name: 'speed', value: 0.25, min: 0.05, max: 1, step: 0.01 }]);
+
+assert.equal(buildCustomPatternId('Aurora Glass Drift'), 'custom_aurora_glass_drift');
+assert.match(buildCustomPatternId('###'), /^custom_[a-z0-9]+$/);
+
+const customEntry = buildCustomPatternEntry({
+  name: 'Aurora Glass Drift',
+  code: 'return hsv(time, 1, 1);',
+  palette: ['#102a2b', '#57e7c1'],
+});
+assert.equal(customEntry.id, 'custom_aurora_glass_drift');
+assert.equal(customEntry.custom, true);
+assert.equal(customEntry.preview, 'linear-gradient(135deg,#102a2b,#57e7c1)');
+
+saveCustomPattern(customEntry, { storage: memoryStorage, dispatch: false });
+assert.equal(loadCustomPatterns({ storage: memoryStorage }).length, 1);
+assert.equal(getPatternById('custom_aurora_glass_drift', { storage: memoryStorage }).name, 'Aurora Glass Drift');
+assert.equal(getPatternCode('custom_aurora_glass_drift', { storage: memoryStorage }), 'return hsv(time, 1, 1);');
+assert.equal(isBuiltInPattern('aurora'), true);
+assert.equal(isBuiltInPattern('custom_aurora_glass_drift', { storage: memoryStorage }), false);
+assert.ok(listPatterns({ storage: memoryStorage }).some(pattern => pattern.id === 'custom_aurora_glass_drift'));
+
+updateCustomPattern('custom_aurora_glass_drift', {
+  name: 'Aurora Glass Drift',
+  code: 'return hsv(0.6, 1, 1);',
+  palette: ['#000000', '#ffffff'],
+}, { storage: memoryStorage, dispatch: false });
+const revisions = JSON.parse(memoryStorage.getItem(CUSTOM_PATTERN_REVISIONS_KEY));
+assert.equal(revisions.custom_aurora_glass_drift.length, 1);
+assert.equal(revisions.custom_aurora_glass_drift[0].code, 'return hsv(time, 1, 1);');
+assert.equal(getPatternCode('custom_aurora_glass_drift', { storage: memoryStorage }), 'return hsv(0.6, 1, 1);');
+
+deleteCustomPattern('custom_aurora_glass_drift', { storage: memoryStorage, dispatch: false });
+assert.equal(loadCustomPatterns({ storage: memoryStorage }).length, 0);
+assert.equal(CUSTOM_PATTERNS_EVENT, 'lw:custom-updated');
+assert.equal(CUSTOM_PATTERNS_KEY, 'lw_custom_patterns');
 
 for (const pattern of PATTERNS) {
   const { fn, error } = compile(pattern.code || 'return [0,0,0];');

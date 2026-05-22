@@ -2,24 +2,18 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
+import { PATTERNS, DEFAULT_PARAMS, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
+import {
+  CUSTOM_PATTERNS_EVENT,
+  deleteCustomPattern,
+  loadCustomPatterns,
+  saveCustomPattern,
+} from '../lib/customPatterns.js';
+import { getPatternById, getPatternCode } from '../lib/patternRegistry.js';
+import { parseParamsFromCode } from '../lib/patternParams.js';
 import { useProject } from '../state/ProjectContext.jsx';
-
-// ── @param live parser ──────────────────────────────────────────────────────
-function parseParamsFromCode(code) {
-  const re = /\/\/ @param\s+(\w+)\s+\w+\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
-  const params = [];
-  let m;
-  while ((m = re.exec(code)) !== null) {
-    const def = parseFloat(m[2]), min = parseFloat(m[3]), max = parseFloat(m[4]);
-    const range = max - min;
-    const step = range <= 1 ? 0.01 : range <= 10 ? 0.1 : 0.5;
-    params.push({ name: m[1], value: def, min, max, step });
-  }
-  return params;
-}
 
 // ── Pattern category system ─────────────────────────────────────────────────
 const CATEGORY_RULES = {
@@ -42,26 +36,6 @@ function getCategory(patternId) {
     } else if (rule.includes(patternId)) return cat;
   }
   return null;
-}
-
-// ── Custom patterns (user-saved from CodeMode) ──────────────────────────────
-const LS_CUSTOM_KEY  = 'lw_custom_patterns';
-const LW_CUSTOM_EVT  = 'lw:custom-updated';
-
-function loadCustomPatterns() {
-  try { return JSON.parse(localStorage.getItem(LS_CUSTOM_KEY) || '[]'); } catch { return []; }
-}
-
-function saveCustomPattern(id, name, code) {
-  const prev = loadCustomPatterns().filter(p => p.id !== id);
-  const entry = { id, name, code, preview: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', custom: true };
-  try { localStorage.setItem(LS_CUSTOM_KEY, JSON.stringify([entry, ...prev])); } catch {}
-  window.dispatchEvent(new CustomEvent(LW_CUSTOM_EVT));
-}
-
-function deleteCustomPattern(id) {
-  try { localStorage.setItem(LS_CUSTOM_KEY, JSON.stringify(loadCustomPatterns().filter(p => p.id !== id))); } catch {}
-  window.dispatchEvent(new CustomEvent(LW_CUSTOM_EVT));
 }
 
 // ── CARDS mode ─────────────────────────────────────────────────────────────
@@ -98,8 +72,8 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
 
   useEffect(() => {
     const handler = () => setCustomPatterns(loadCustomPatterns());
-    window.addEventListener(LW_CUSTOM_EVT, handler);
-    return () => window.removeEventListener(LW_CUSTOM_EVT, handler);
+    window.addEventListener(CUSTOM_PATTERNS_EVENT, handler);
+    return () => window.removeEventListener(CUSTOM_PATTERNS_EVENT, handler);
   }, []);
 
   const savePreset = () => {
@@ -143,10 +117,10 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
     });
   };
 
-  const cur   = PATTERNS.find(p => p.id === patternId);
+  const cur   = getPatternById(patternId);
 
   // Merge static DEFAULT_PARAMS with @param annotations from library code
-  const activeLibPattern = LIB_PATTERNS.find(p => p.id === patternId);
+  const activeLibPattern = getPatternById(patternId);
   const libKnobs  = activeLibPattern?.code ? parseParamsFromCode(activeLibPattern.code) : [];
   const knobs     = (DEFAULT_PARAMS[patternId] || []).length > 0
                       ? DEFAULT_PARAMS[patternId] || []
@@ -452,7 +426,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
   const [liveKnobs, setLiveKnobs] = useState([]);
   const tryCompileRef = useRef(null);
 
-  const initialCode = PATTERN_CODE[patternId] || '// Select a pattern\nreturn hsv(x, 1, 1);';
+  const initialCode = getPatternCode(patternId) || '// Select a pattern\nreturn hsv(x, 1, 1);';
 
   const tryCompile = (code) => {
     const { fn, error } = compile(code);
@@ -495,7 +469,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    const newCode = PATTERN_CODE[patternId] || '// Select a pattern\nreturn hsv(x, 1, 1);';
+    const newCode = getPatternCode(patternId) || '// Select a pattern\nreturn hsv(x, 1, 1);';
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: newCode } });
     tryCompileRef.current?.(newCode);
   }, [patternId]);
@@ -554,8 +528,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
               const code = viewRef.current?.state.doc.toString() || '';
               const name = prompt('Pattern name:', '');
               if (!name?.trim()) return;
-              const slug = `custom_${name.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')}`;
-              saveCustomPattern(slug, name.trim(), code);
+              saveCustomPattern({ name: name.trim(), code });
             }}>
             Save as…
           </button>

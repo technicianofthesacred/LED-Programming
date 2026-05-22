@@ -1,23 +1,10 @@
 import { PATTERNS as LIB_PATTERNS } from './lib/patterns-library.js';
-
-// Parse @param annotations: // @param name type default min max
-function parseParams(code) {
-  const re = /\/\/ @param\s+(\w+)\s+\w+\s+([\d.]+)\s+([\d.-]+)\s+([\d.]+)/g;
-  const params = [];
-  let m;
-  while ((m = re.exec(code)) !== null) {
-    const def = parseFloat(m[2]), min = parseFloat(m[3]), max = parseFloat(m[4]);
-    const range = max - min;
-    const step = range <= 1 ? 0.01 : range <= 10 ? 0.1 : 0.5;
-    params.push({ name: m[1], value: def, min, max, step });
-  }
-  return params;
-}
+import { parseParamsFromCode } from './lib/patternParams.js';
 
 export const PATTERNS = LIB_PATTERNS;
 
 export const DEFAULT_PARAMS = Object.fromEntries(
-  LIB_PATTERNS.map(p => [p.id, parseParams(p.code)])
+  LIB_PATTERNS.map(pattern => [pattern.id, parseParamsFromCode(pattern.code)])
 );
 
 export const PATTERN_CODE = Object.fromEntries(
