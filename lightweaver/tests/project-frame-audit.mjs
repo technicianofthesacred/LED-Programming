@@ -350,6 +350,27 @@ const suggestedParamFrame = buildAiPatternPreviewFrame({
 });
 assert.ok(Math.abs(suggestedParamFrame.pixels[0].r - 204) < Math.abs(suggestedParamFrame.pixels[0].r - 26));
 
+const noBuiltInParamsDraft = {
+  name: 'No Built In Params',
+  description: 'Should not inherit built-in pattern params.',
+  changeSummary: ['Avoids default params'],
+  palette: ['#000000', '#ffffff'],
+  code: 'if (params.speed) throw new Error("boom"); return rgb(1, 1, 1);',
+  suggestedParams: {},
+};
+const noBuiltInParamsValidation = validateAiPatternDraft(noBuiltInParamsDraft, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(noBuiltInParamsValidation.ok, true);
+const noBuiltInParamsFrame = buildAiPatternPreviewFrame(noBuiltInParamsDraft, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.ok(
+  noBuiltInParamsFrame.pixels[0].r > 200
+    && noBuiltInParamsFrame.pixels[0].g > 200
+    && noBuiltInParamsFrame.pixels[0].b > 200,
+);
+
 const customParamEntry = saveCustomPattern({
   name: 'Param Glow',
   code: '// @param speed float 0.5 0 1\nreturn rgb(params.speed, 0, 0);',

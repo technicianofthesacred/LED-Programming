@@ -5,6 +5,7 @@ import { parseParamsFromCode } from './patternParams.js';
 const REQUIRED_STRING_FIELDS = ['name', 'description', 'code'];
 const UNSAFE_TOKEN_RE = /(?:\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|class|async|await)\b|\bnew\s+(?!Error\b))/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+const AI_DRAFT_PATTERN_ID = '__ai_draft__';
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
 
 export function normalizeDraftPayload(raw) {
@@ -136,6 +137,7 @@ function renderPreparedPreviewFrame(prepared) {
   return renderPixelFrame({
     t: prepared.t,
     strips: prepared.frameStrips,
+    patternId: AI_DRAFT_PATTERN_ID,
     activeFn: prepared.activeFn,
     params: prepared.params,
     paletteNorm: prepared.paletteNorm,
