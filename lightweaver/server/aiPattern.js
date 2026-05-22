@@ -3,20 +3,64 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 
+export const AI_PATTERN_TIMEOUT_MS = 30000;
+
 export const AiPatternDraftSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().min(1).max(220),
   changeSummary: z.array(z.string().min(1).max(140)).min(1).max(6),
   palette: z.array(z.string().regex(/^#[0-9a-fA-F]{6}$/)).min(2).max(8),
   code: z.string().min(1).max(6000),
-  suggestedParams: z.record(z.number()).optional().default({}),
+  suggestedParams: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(48).regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+        value: z.number(),
+      })
+    )
+    .max(32)
+    .optional()
+    .default([]),
   notes: z.string().max(600).optional().default(''),
 });
 
 const DEFAULT_MODEL = 'gpt-5.4-mini';
 
+const PatternPayloadSchema = z
+  .object({
+    id: z.string().max(120).optional().default(''),
+    name: z.string().max(120).optional().default(''),
+    description: z.string().max(600).optional(),
+    desc: z.string().max(600).optional(),
+    code: z.string().max(6000).optional().default(''),
+    palette: z.array(z.string().max(32)).max(16).optional().default([]),
+    params: z.record(z.string(), z.unknown()).optional().default({}),
+    isCustom: z.boolean().optional().default(false),
+  })
+  .passthrough();
+
+const AiPatternRequestSchema = z.object({
+  mode: z.enum(['generate', 'transform', 'refine']).optional().default('transform'),
+  instruction: z.string().trim().min(1).max(1000),
+  sourcePattern: PatternPayloadSchema.optional().default({}),
+  draftPattern: PatternPayloadSchema.nullable().optional().default(null),
+  projectContext: z
+    .object({
+      ledCount: z.coerce.number().int().min(0).max(100000).optional().default(0),
+      stripCount: z.coerce.number().int().min(0).max(1000).optional().default(0),
+      hasAudio: z.boolean().optional().default(false),
+      hasMappedXY: z.boolean().optional().default(true),
+    })
+    .optional()
+    .default({}),
+});
+
 export function getAiPatternModel(env = process.env) {
   return env.AI_PATTERN_MODEL || DEFAULT_MODEL;
+}
+
+export function validateAiPatternRequest(payload) {
+  return AiPatternRequestSchema.safeParse(payload || {});
 }
 
 export function buildAiPatternInput(payload) {
@@ -37,6 +81,7 @@ export function buildAiPatternInput(payload) {
         'Allowed helpers: hsv, rgb, wave, triangle, square, clamp, lerp, fract, abs, floor, ceil, int, float, min, max, pow, sqrt, exp, log, tan, atan2, round, map, step, smoothstep, mix, mod, vec2, length, distance, sin, cos, noise, randomF, ping, easeIn, easeOut, easeInOut, norm, polar, fbm, samplePalette.',
         'Do not use browser APIs, network APIs, imports, eval, Function, document, window, localStorage, timers, or asynchronous code.',
         'Prefer editable code with clear @param annotations for user-facing controls.',
+        'Return suggestedParams as an array of objects with name and value fields, for example [{ "name": "speed", "value": 0.25 }].',
         'Use palette-aware code when the prompt mentions colors.',
       ].join('\n'),
     },
@@ -66,6 +111,18 @@ export function buildAiPatternInput(payload) {
   ];
 }
 
+export function normalizeAiPatternDraft(draft) {
+  const suggestedParams = {};
+
+  for (const param of draft?.suggestedParams || []) {
+    if (param && typeof param.name === 'string' && typeof param.value === 'number') {
+      suggestedParams[param.name] = param.value;
+    }
+  }
+
+  return { ...draft, suggestedParams };
+}
+
 export function normalizeAiProviderError(error) {
   if (error?.name === 'AbortError') {
     return { status: 504, code: 'timeout', message: 'AI request timed out.' };
@@ -83,7 +140,11 @@ export function normalizeAiProviderError(error) {
   };
 }
 
-export function createAiPatternRouter({ env = process.env, client = null } = {}) {
+export function createAiPatternRouter({
+  env = process.env,
+  client = null,
+  createOpenAiClient = (options) => new OpenAI(options),
+} = {}) {
   const router = express.Router();
 
   router.post('/pattern', async (req, res) => {
@@ -96,16 +157,39 @@ export function createAiPatternRouter({ env = process.env, client = null } = {})
       });
     }
 
+    const parsedRequest = validateAiPatternRequest(req.body || {});
+    if (!parsedRequest.success) {
+      return res.status(400).json({
+        error: {
+          code: 'invalid_request',
+          message: 'AI pattern request is invalid.',
+          issues: parsedRequest.error.issues,
+        },
+      });
+    }
+
     try {
-      const openai = client || new OpenAI({ apiKey: env.OPENAI_API_KEY });
-      const response = await openai.responses.parse({
+      const openai = client || createOpenAiClient({ apiKey: env.OPENAI_API_KEY });
+      const payload = {
         model: getAiPatternModel(env),
-        input: buildAiPatternInput(req.body || {}),
+        input: buildAiPatternInput(parsedRequest.data),
         text: {
           format: zodTextFormat(AiPatternDraftSchema, 'lightweaver_pattern_draft'),
         },
-      });
-      return res.json({ draft: response.output_parsed });
+      };
+      const response = await openai.responses.parse(payload, { timeout: AI_PATTERN_TIMEOUT_MS });
+
+      if (!response?.output_parsed) {
+        return res.status(502).json({
+          error: {
+            status: 502,
+            code: 'empty_response',
+            message: 'AI provider returned an empty draft.',
+          },
+        });
+      }
+
+      return res.json({ draft: normalizeAiPatternDraft(response.output_parsed) });
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
       return res.status(normalized.status).json({ error: normalized });

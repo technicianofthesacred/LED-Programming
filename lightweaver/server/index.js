@@ -5,27 +5,45 @@ import { fileURLToPath } from 'url';
 import { createAiPatternRouter } from './aiPattern.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
-const distDir = join(rootDir, 'dist');
-const app = express();
-const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const defaultRootDir = join(__dirname, '..');
 
-app.use(express.json({ limit: '2mb' }));
-app.use('/api/ai', createAiPatternRouter());
+export function createLightweaverServer({
+  env = process.env,
+  client = null,
+  createOpenAiClient,
+  rootDir = defaultRootDir,
+} = {}) {
+  const distDir = join(rootDir, 'dist');
+  const app = express();
 
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, app: 'Lightweaver' });
-});
+  app.use(express.json({ limit: '2mb' }));
+  app.use('/api/ai', createAiPatternRouter({ env, client, createOpenAiClient }));
 
-if (existsSync(distDir)) {
-  app.use(express.static(distDir));
-  app.get(/.*/, (_req, res) => res.sendFile(join(distDir, 'index.html')));
-} else {
-  app.get(/.*/, (_req, res) => {
-    res.status(404).send('Lightweaver dist/ not found. Run npm run build first.');
+  app.get('/api/health', (_req, res) => {
+    res.json({ ok: true, app: 'Lightweaver' });
+  });
+
+  if (existsSync(distDir)) {
+    app.use(express.static(distDir));
+    app.get(/.*/, (_req, res) => res.sendFile('index.html', { root: distDir }));
+  } else {
+    app.get(/.*/, (_req, res) => {
+      res.status(404).send('Lightweaver dist/ not found. Run npm run build first.');
+    });
+  }
+
+  return app;
+}
+
+export function startLightweaverServer({ env = process.env } = {}) {
+  const app = createLightweaverServer({ env });
+  const port = Number.parseInt(env.PORT || '3000', 10);
+
+  return app.listen(port, () => {
+    console.log(`Lightweaver server listening on http://localhost:${port}`);
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Lightweaver server listening on http://localhost:${PORT}`);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  startLightweaverServer();
+}
