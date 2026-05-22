@@ -211,6 +211,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
     if (!accepted?.id) return null;
     setPatternId(accepted.id);
     setCompiledFn(null);
+    setPreviewResetKey(key => key + 1);
     if (accepted.palette?.length) setPalette(accepted.palette);
     const defaults = Object.fromEntries(parsedParams.map(param => [param.name, param.value]));
     setPatternParams(prev => ({

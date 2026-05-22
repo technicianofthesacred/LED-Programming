@@ -287,3 +287,5 @@ Later versions can add:
 The first implementation uses the OpenAI JavaScript SDK on the Lightweaver server, not in the browser. The server reads `OPENAI_API_KEY` and optional `AI_PATTERN_MODEL`, calls the Responses API with structured output, and returns a draft JSON object to the browser.
 
 The browser validates every draft with the local Lightweaver compiler and preview renderer before showing an Accept action. Built-in pattern transforms save as new custom patterns. Existing custom pattern transforms update in place and keep local revision history.
+
+If `AI_PATTERN_AUTH_TOKEN` is enabled on the server, the browser assistant sends a matching token from `window.LIGHTWEAVER_AI_TOKEN` or `localStorage.lw_ai_pattern_token`.

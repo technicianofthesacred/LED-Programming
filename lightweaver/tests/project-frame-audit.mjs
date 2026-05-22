@@ -31,6 +31,7 @@ import {
   buildAiPatternPreviewFrame,
   validateAiPatternDraft,
 } from '../src/lib/aiPatternDraft.js';
+import { requestAiPatternDraft } from '../src/lib/aiPatternClient.js';
 import { parseParamsFromCode } from '../src/lib/patternParams.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
@@ -147,6 +148,52 @@ const customFlagAccept = acceptAiDraftAsCustomPattern({
 assert.equal(customFlagAccept.id, duplicateBuiltInAccept.id);
 assert.equal(getPatternCode(duplicateBuiltInAccept.id, { storage: memoryStorage }), 'return hsv(0.9,1,1);');
 
+let aiClientHeaders = null;
+const aiClientDraft = await requestAiPatternDraft(
+  { instruction: 'make it smoother' },
+  {
+    token: 'shared-secret',
+    fetchImpl: async (_url, options) => {
+      aiClientHeaders = options.headers;
+      return new Response(JSON.stringify({ draft: { name: 'Authorized Draft' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  },
+);
+assert.equal(aiClientDraft.name, 'Authorized Draft');
+assert.equal(aiClientHeaders['x-lightweaver-ai-token'], 'shared-secret');
+
+const previousLocalStorage = globalThis.localStorage;
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: memoryStorage,
+});
+memoryStorage.setItem('lw_ai_pattern_token', 'stored-secret');
+let storedTokenHeaders = null;
+await requestAiPatternDraft(
+  { instruction: 'make it smoother' },
+  {
+    fetchImpl: async (_url, options) => {
+      storedTokenHeaders = options.headers;
+      return new Response(JSON.stringify({ draft: { name: 'Stored Token Draft' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  },
+);
+assert.equal(storedTokenHeaders['x-lightweaver-ai-token'], 'stored-secret');
+if (previousLocalStorage === undefined) {
+  delete globalThis.localStorage;
+} else {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: previousLocalStorage,
+  });
+}
+
 saveCustomPattern({
   id: 'aurora',
   name: 'Fake Aurora',
@@ -197,6 +244,17 @@ const normalizedSuggestedParamsDraft = validateAiPatternDraft({
 });
 assert.equal(normalizedSuggestedParamsDraft.ok, true);
 assert.deepEqual(normalizedSuggestedParamsDraft.draft.suggestedParams, { speed: 0.2 });
+
+const polarHelperDraft = validateAiPatternDraft({
+  name: 'Polar Helper',
+  description: 'Uses local polar result members.',
+  changeSummary: ['Used polar helper'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const p = polar(x, y);\nreturn hsv(p.a, 1, 1 - p.r);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(polarHelperDraft.ok, true);
 
 const unsafeDraft = validateAiPatternDraft({
   name: 'Unsafe',

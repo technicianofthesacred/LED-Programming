@@ -1,8 +1,26 @@
-export async function requestAiPatternDraft(payload, { fetchImpl = globalThis.fetch } = {}) {
+export const AI_PATTERN_TOKEN_STORAGE_KEY = 'lw_ai_pattern_token';
+
+function getStoredAiPatternToken() {
+  if (typeof globalThis.LIGHTWEAVER_AI_TOKEN === 'string') {
+    return globalThis.LIGHTWEAVER_AI_TOKEN.trim();
+  }
+  try {
+    return globalThis.localStorage?.getItem(AI_PATTERN_TOKEN_STORAGE_KEY)?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
+export async function requestAiPatternDraft(payload, {
+  fetchImpl = globalThis.fetch,
+  token = getStoredAiPatternToken(),
+} = {}) {
   if (!fetchImpl) throw new Error('fetch is not available');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['x-lightweaver-ai-token'] = token;
   const response = await fetchImpl('/api/ai/pattern', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const data = await response.json().catch(() => ({}));

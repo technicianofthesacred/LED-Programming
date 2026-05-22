@@ -59,6 +59,18 @@ function makeDraft(name = 'Soft Assistant Draft') {
   };
 }
 
+function makeColorDraft(name: string, code: string) {
+  return {
+    name,
+    description: `A generated ${name} test draft.`,
+    changeSummary: ['Changed solid color'],
+    palette: ['#000000', '#ffffff'],
+    code,
+    suggestedParams: {},
+    notes: '',
+  };
+}
+
 async function openPatternAssistant(page) {
   await page.addInitScript(project => {
     localStorage.clear();
@@ -69,6 +81,43 @@ async function openPatternAssistant(page) {
   await assistant.locator('.lw-ai-toggle').click();
   await expect(assistant.locator('.lw-ai-body')).toBeVisible();
   return assistant;
+}
+
+async function getCanvasColorStats(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement | null;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return { red: 0, green: 0, blue: 0, lit: 0 };
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    let lit = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      if (Math.max(r, g, b) < 20) continue;
+      red += r;
+      green += g;
+      blue += b;
+      lit += 1;
+    }
+    return { red, green, blue, lit };
+  });
+}
+
+async function waitForDominantCanvasColor(page, channel: 'red' | 'green') {
+  const other = channel === 'red' ? 'green' : 'red';
+  let stats = await getCanvasColorStats(page);
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    stats = await getCanvasColorStats(page);
+    if (stats.lit > 20 && stats[channel] > stats[other] * 1.6) return stats;
+    await page.waitForTimeout(200);
+  }
+  expect(stats.lit).toBeGreaterThan(20);
+  expect(stats[channel]).toBeGreaterThan(stats[other] * 1.6);
+  return stats;
 }
 
 test('sends visible strip counts in AI project context', async ({ page }) => {
@@ -174,4 +223,40 @@ test('shows setup message when server has no AI key', async ({ page }) => {
   await assistant.getByRole('button', { name: 'Generate' }).click();
 
   await expect(assistant.locator('.lw-ai-error span')).toHaveText('Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.');
+});
+
+test('accepting over the selected custom pattern updates the live preview code', async ({ page }) => {
+  const drafts = [
+    makeColorDraft('Solid Red Draft', 'return rgb(1, 0, 0);'),
+    makeColorDraft('Solid Green Draft', 'return rgb(0, 1, 0);'),
+  ];
+  let requestCount = 0;
+  await page.route('**/api/ai/pattern', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ draft: drafts[requestCount++] || drafts[drafts.length - 1] }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.locator('textarea').fill('make a solid red test');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+  await expect(assistant.locator('.lw-ai-draft-head .title')).toHaveText('Solid Red Draft');
+  await assistant.getByRole('button', { name: 'Accept' }).click();
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_custom_patterns') || '[]');
+    return saved[0]?.id || '';
+  })).toBe('custom_solid_red_draft');
+  await waitForDominantCanvasColor(page, 'red');
+
+  await assistant.locator('textarea').fill('make the selected custom pattern green');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+  await expect(assistant.locator('.lw-ai-draft-head .title')).toHaveText('Solid Green Draft');
+  await assistant.getByRole('button', { name: 'Accept' }).click();
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_custom_patterns') || '[]');
+    return saved[0]?.code || '';
+  })).toBe('return rgb(0, 1, 0);');
+  await waitForDominantCanvasColor(page, 'green');
 });

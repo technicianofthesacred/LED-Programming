@@ -29,6 +29,7 @@ const MAX_FBM_CALLS = 8;
 const MAX_PAREN_DEPTH = 24;
 const PARAM_VALUE_LIMIT = 100000;
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
+const SAFE_LOCAL_MEMBER_PROPERTIES = new Set(['r', 'g', 'b', 'a', 'x', 'y']);
 const ALLOWED_HELPERS = [
   'hsv', 'rgb', 'wave', 'triangle', 'square', 'clamp', 'lerp', 'fract', 'abs', 'floor',
   'ceil', 'int', 'float', 'min', 'max', 'pow', 'sqrt', 'exp', 'log', 'tan', 'atan2',
@@ -186,12 +187,15 @@ function isDeclarationInitializer(code, equalsIndex, lhs) {
 }
 
 function hasUnsafeMemberAccess(code) {
+  const locals = collectLocalNames(code);
   for (let i = 0; i < code.length; i++) {
     if (code[i] !== '.') continue;
     const previous = code.slice(0, i).match(/[A-Za-z_$][\w$]*\s*$/)?.[0]?.trim();
-    const next = code.slice(i + 1).match(/^\s*[A-Za-z_$][\w$]*/)?.[0];
+    const next = code.slice(i + 1).match(/^\s*[A-Za-z_$][\w$]*/)?.[0]?.trim();
     if (!next) continue;
-    if (previous !== 'params') return true;
+    if (previous === 'params') continue;
+    if (locals.has(previous) && SAFE_LOCAL_MEMBER_PROPERTIES.has(next)) continue;
+    return true;
   }
   return false;
 }
