@@ -118,6 +118,19 @@ assert.equal(validDraft.ok, true);
 assert.equal(validDraft.draft.name, 'Soft Reef');
 assert.equal(validDraft.params[0].name, 'speed');
 
+const normalizedSuggestedParamsDraft = validateAiPatternDraft({
+  name: 'Numeric Params Only',
+  description: 'Drops non-numeric suggested params.',
+  changeSummary: ['Normalized params'],
+  palette: ['#000000', '#ffffff'],
+  code: '// @param speed float 0.1 0 1\nreturn rgb(params.speed, 0, 0);',
+  suggestedParams: { speed: 0.2, state: { touched: false }, bad: 'x' },
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(normalizedSuggestedParamsDraft.ok, true);
+assert.deepEqual(normalizedSuggestedParamsDraft.draft.suggestedParams, { speed: 0.2 });
+
 const unsafeDraft = validateAiPatternDraft({
   name: 'Unsafe',
   description: 'Attempts browser access.',
@@ -245,6 +258,19 @@ assert.throws(
     strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
   }),
 );
+
+const nestedParamsRuntimeDraft = validateAiPatternDraft({
+  name: 'Nested Params Runtime Error',
+  description: 'Mutates nested params before throwing.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'if (params.state.touched) throw new Error("boom");\nparams.state.touched = true;\nreturn rgb(1, 1, 1);',
+  suggestedParams: { state: { touched: false } },
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(nestedParamsRuntimeDraft.ok, false);
+assert.equal(nestedParamsRuntimeDraft.error.kind, 'runtime-error');
 
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',

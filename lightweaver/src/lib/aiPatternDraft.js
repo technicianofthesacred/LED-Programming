@@ -33,10 +33,17 @@ export function normalizeDraftPayload(raw) {
       changeSummary,
       palette: raw.palette.map(color => color.toLowerCase()),
       code: raw.code.trim(),
-      suggestedParams: raw.suggestedParams && typeof raw.suggestedParams === 'object' ? raw.suggestedParams : {},
+      suggestedParams: normalizeSuggestedParams(raw.suggestedParams),
       notes: typeof raw.notes === 'string' ? raw.notes.trim() : '',
     },
   };
+}
+
+function normalizeSuggestedParams(suggestedParams) {
+  if (!suggestedParams || typeof suggestedParams !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(suggestedParams).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
+  );
 }
 
 export function stripPixelsToFrameStrips(strips = []) {
