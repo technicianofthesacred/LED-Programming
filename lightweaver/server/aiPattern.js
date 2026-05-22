@@ -26,6 +26,38 @@ export const AiPatternDraftSchema = z.object({
 
 const DEFAULT_MODEL = 'gpt-5.4-mini';
 
+function sanitizeParams(params) {
+  const sanitized = {};
+
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    return sanitized;
+  }
+
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      sanitized[key] = value;
+    } else if (typeof value === 'string' || typeof value === 'boolean' || value === null) {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+function sanitizePatternForProvider(pattern) {
+  if (!pattern) return null;
+
+  return {
+    id: pattern.id || '',
+    name: pattern.name || '',
+    description: pattern.description || pattern.desc || '',
+    code: pattern.code || '',
+    palette: Array.isArray(pattern.palette) ? pattern.palette : [],
+    params: sanitizeParams(pattern.params),
+    isCustom: !!pattern.isCustom,
+  };
+}
+
 const PatternPayloadSchema = z
   .object({
     id: z.string().max(120).optional().default(''),
@@ -90,16 +122,8 @@ export function buildAiPatternInput(payload) {
       content: JSON.stringify({
         mode,
         instruction,
-        sourcePattern: {
-          id: source.id || '',
-          name: source.name || '',
-          description: source.description || source.desc || '',
-          code: source.code || '',
-          palette: Array.isArray(source.palette) ? source.palette : [],
-          params: source.params || {},
-          isCustom: !!source.isCustom,
-        },
-        draftPattern: draft,
+        sourcePattern: sanitizePatternForProvider(source),
+        draftPattern: sanitizePatternForProvider(draft),
         projectContext: {
           ledCount: project.ledCount || 0,
           stripCount: project.stripCount || 0,
@@ -177,7 +201,10 @@ export function createAiPatternRouter({
           format: zodTextFormat(AiPatternDraftSchema, 'lightweaver_pattern_draft'),
         },
       };
-      const response = await openai.responses.parse(payload, { timeout: AI_PATTERN_TIMEOUT_MS });
+      const response = await openai.responses.parse(payload, {
+        timeout: AI_PATTERN_TIMEOUT_MS,
+        maxRetries: 0,
+      });
 
       if (!response?.output_parsed) {
         return res.status(502).json({

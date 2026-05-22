@@ -129,6 +129,69 @@ await withServer(successApp, async (baseUrl) => {
   assert.deepEqual(body.draft.suggestedParams, { speed: 0.08 });
   assert.equal(successCall.payload.model, 'gpt-5.5');
   assert.equal(successCall.options.timeout, AI_PATTERN_TIMEOUT_MS);
+  assert.equal(successCall.options.maxRetries, 0);
+});
+
+let draftSanitizationCall = null;
+const draftSanitizationApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key' },
+  client: {
+    responses: {
+      async parse(payload) {
+        draftSanitizationCall = payload;
+        return {
+          output_parsed: {
+            name: 'Refined Draft',
+            description: 'A refined pattern.',
+            changeSummary: ['Adjusted draft'],
+            palette: ['#00ffaa', '#6600aa'],
+            code: 'return hsv(time, 1, 1);',
+            suggestedParams: [],
+            notes: '',
+          },
+        };
+      },
+    },
+  },
+});
+await withServer(draftSanitizationApp, async (baseUrl) => {
+  const { response } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mode: 'refine',
+      instruction: 'clean up this draft',
+      secret: 'top-level-secret',
+      draftPattern: {
+        id: 'draft-1',
+        name: 'Draft One',
+        description: 'Allowed description',
+        code: 'return rgb(1,0,0);',
+        palette: ['#ff0000', '#000000'],
+        params: {
+          speed: 0.5,
+          enabled: true,
+          label: 'fast',
+          missing: null,
+          nested: { secret: 'nested-secret' },
+        },
+        isCustom: true,
+        secret: 'draft-secret',
+      },
+    }),
+  });
+  assert.equal(response.status, 200);
+  const providerUserInput = JSON.parse(draftSanitizationCall.input[1].content);
+  assert.equal(providerUserInput.secret, undefined);
+  assert.equal(providerUserInput.draftPattern.secret, undefined);
+  assert.equal(providerUserInput.draftPattern.id, 'draft-1');
+  assert.equal(providerUserInput.draftPattern.name, 'Draft One');
+  assert.equal(providerUserInput.draftPattern.description, 'Allowed description');
+  assert.equal(providerUserInput.draftPattern.params.speed, 0.5);
+  assert.equal(providerUserInput.draftPattern.params.enabled, true);
+  assert.equal(providerUserInput.draftPattern.params.label, 'fast');
+  assert.equal(providerUserInput.draftPattern.params.missing, null);
+  assert.equal(providerUserInput.draftPattern.params.nested, undefined);
 });
 
 const invalidRequestApp = createLightweaverServer({
@@ -196,6 +259,18 @@ await withServer(serverApp, async (baseUrl) => {
   const health = await fetchJson(`${baseUrl}/api/health`);
   assert.equal(health.response.status, 200);
   assert.deepEqual(health.body, { ok: true, app: 'Lightweaver' });
+
+  const apiNotFound = await fetchJson(`${baseUrl}/api/nope`);
+  assert.equal(apiNotFound.response.status, 404);
+  assert.equal(apiNotFound.body.error.code, 'not_found');
+
+  const invalidJson = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"instruction":',
+  });
+  assert.equal(invalidJson.response.status, 400);
+  assert.equal(invalidJson.body.error.code, 'invalid_json');
 
   const spaResponse = await fetch(`${baseUrl}/some/gallery/path`);
   const spaText = await spaResponse.text();
