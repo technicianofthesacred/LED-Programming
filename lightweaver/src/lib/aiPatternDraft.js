@@ -58,7 +58,7 @@ export function stripPixelsToFrameStrips(strips = []) {
 }
 
 function allowsBlackout(instruction = '') {
-  return /\b(blackout|turn off|all off|dark|darkness)\b/i.test(instruction);
+  return /\b(blackout|turn off|all off|off|dark|darkness)\b/i.test(instruction);
 }
 
 export function buildAiPatternPreviewFrame(draft, {

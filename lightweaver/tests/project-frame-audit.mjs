@@ -152,6 +152,18 @@ const blackoutDraft = validateAiPatternDraft({
 });
 assert.equal(blackoutDraft.ok, true);
 
+const lightsOffDraft = validateAiPatternDraft({
+  name: 'Lights Off',
+  description: 'Intentional lights-off scene.',
+  changeSummary: ['Turns all LEDs off'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  instruction: 'make the lights off',
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(lightsOffDraft.ok, true);
+
 const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
 });
