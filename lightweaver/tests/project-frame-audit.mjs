@@ -228,6 +228,24 @@ assert.throws(
   /boom/,
 );
 
+const mutatingParamsRuntimeDraft = {
+  name: 'Mutating Params Runtime Error',
+  description: 'Mutates params before throwing.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: '// @param touched float 0 0 1\nif (params.touched) throw new Error("boom");\nparams.touched = 1;\nreturn rgb(1, 1, 1);',
+};
+const mutatingParamsRuntimeErrorDraft = validateAiPatternDraft(mutatingParamsRuntimeDraft, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }],
+});
+assert.equal(mutatingParamsRuntimeErrorDraft.ok, false);
+assert.equal(mutatingParamsRuntimeErrorDraft.error.kind, 'runtime-error');
+assert.throws(
+  () => buildAiPatternPreviewFrame(mutatingParamsRuntimeDraft, {
+    strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+  }),
+);
+
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',
   description: 'Accidental blackout.',

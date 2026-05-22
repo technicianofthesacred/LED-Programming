@@ -73,7 +73,28 @@ function buildDraftParamValues(draft) {
 }
 
 function wrapDraftFunction(fn) {
-  return (...args) => fn.apply(SAFE_PATTERN_THIS, args);
+  return (...args) => {
+    const safeArgs = [...args];
+    safeArgs[9] = buildReadOnlyParams(safeArgs[9]);
+    return fn.apply(SAFE_PATTERN_THIS, safeArgs);
+  };
+}
+
+function buildReadOnlyParams(params = {}) {
+  return new Proxy(Object.freeze({ ...params }), {
+    set() {
+      throw new Error('Draft params are read-only.');
+    },
+    defineProperty() {
+      throw new Error('Draft params are read-only.');
+    },
+    deleteProperty() {
+      throw new Error('Draft params are read-only.');
+    },
+    setPrototypeOf() {
+      throw new Error('Draft params are read-only.');
+    },
+  });
 }
 
 function prepareAiPatternPreview(draft, {
