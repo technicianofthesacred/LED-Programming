@@ -13,6 +13,7 @@ import {
   CUSTOM_PATTERNS_EVENT,
   CUSTOM_PATTERNS_KEY,
   CUSTOM_PATTERN_REVISIONS_KEY,
+  acceptAiDraftAsCustomPattern,
   buildCustomPatternEntry,
   buildCustomPatternId,
   deleteCustomPattern,
@@ -91,6 +92,32 @@ deleteCustomPattern('custom_aurora_glass_drift', { storage: memoryStorage, dispa
 assert.equal(loadCustomPatterns({ storage: memoryStorage }).length, 0);
 assert.equal(CUSTOM_PATTERNS_EVENT, 'lw:custom-updated');
 assert.equal(CUSTOM_PATTERNS_KEY, 'lw_custom_patterns');
+
+const builtInAccept = acceptAiDraftAsCustomPattern({
+  sourcePattern: { id: 'aurora', name: 'Aurora', isCustom: false },
+  draft: {
+    name: 'Aurora Glass Drift',
+    description: 'Softer aurora',
+    code: 'return hsv(0.6,1,1);',
+    palette: ['#102a2b', '#57e7c1'],
+    suggestedParams: { speed: 0.1 },
+  },
+}, { storage: memoryStorage, dispatch: false });
+assert.equal(builtInAccept.id, 'custom_aurora_glass_drift');
+assert.equal(loadCustomPatterns({ storage: memoryStorage }).some(pattern => pattern.id === builtInAccept.id), true);
+
+const updatedAccept = acceptAiDraftAsCustomPattern({
+  sourcePattern: { id: builtInAccept.id, name: builtInAccept.name, isCustom: true },
+  draft: {
+    name: 'Aurora Glass Drift',
+    description: 'Even smoother',
+    code: 'return hsv(0.7,1,1);',
+    palette: ['#000000', '#ffffff'],
+    suggestedParams: { speed: 0.05 },
+  },
+}, { storage: memoryStorage, dispatch: false });
+assert.equal(updatedAccept.id, builtInAccept.id);
+assert.equal(getPatternCode(builtInAccept.id, { storage: memoryStorage }), 'return hsv(0.7,1,1);');
 
 saveCustomPattern({
   id: 'aurora',

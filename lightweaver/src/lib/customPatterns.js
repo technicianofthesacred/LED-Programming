@@ -96,6 +96,25 @@ export function updateCustomPattern(id, updates = {}, options = {}) {
   return updated;
 }
 
+export function acceptAiDraftAsCustomPattern({ sourcePattern, draft }, options = {}) {
+  const entry = {
+    id: sourcePattern?.isCustom ? sourcePattern.id : undefined,
+    name: draft.name,
+    description: draft.description,
+    code: draft.code,
+    palette: draft.palette || [],
+    params: draft.suggestedParams || {},
+  };
+  if (sourcePattern?.isCustom && sourcePattern.id) {
+    return updateCustomPattern(sourcePattern.id, entry, options);
+  }
+  const existing = loadCustomPatterns(options);
+  return saveCustomPattern({
+    ...entry,
+    id: buildCustomPatternId(draft.name, existing.map(pattern => pattern.id)),
+  }, options);
+}
+
 export function deleteCustomPattern(id, options = {}) {
   writeCustomPatterns(loadCustomPatterns(options).filter(pattern => pattern.id !== id), options);
 }

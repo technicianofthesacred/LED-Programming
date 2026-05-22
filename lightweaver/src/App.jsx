@@ -10,6 +10,7 @@ import { WledBar } from './components/WledBar.jsx';
 import { useAudio } from './hooks/useAudio.js';
 import { useMidi } from './hooks/useMidi.js';
 import { PATTERNS } from './data.js';
+import { acceptAiDraftAsCustomPattern } from './lib/customPatterns.js';
 
 const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 
@@ -205,10 +206,22 @@ function PatternScreen({ panelMode, setPanelMode }) {
     setCompiledFn(null);
   }, [setPatternId]);
 
-  const handleAcceptAiDraft = useCallback((acceptedDraft) => {
-    console.info('AI draft accepted', acceptedDraft.name);
-    return null;
-  }, []);
+  const handleAcceptAiDraft = useCallback((acceptedDraft, sourcePattern, parsedParams = []) => {
+    const accepted = acceptAiDraftAsCustomPattern({ sourcePattern, draft: acceptedDraft });
+    if (!accepted?.id) return null;
+    setPatternId(accepted.id);
+    setCompiledFn(null);
+    if (accepted.palette?.length) setPalette(accepted.palette);
+    const defaults = Object.fromEntries(parsedParams.map(param => [param.name, param.value]));
+    setPatternParams(prev => ({
+      ...prev,
+      [accepted.id]: {
+        ...defaults,
+        ...(accepted.params || {}),
+      },
+    }));
+    return accepted;
+  }, [setPalette, setPatternId, setPatternParams]);
 
   const cur = PATTERNS.find(p => p.id === patternId);
   const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
