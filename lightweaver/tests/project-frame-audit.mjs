@@ -118,6 +118,34 @@ const updatedAccept = acceptAiDraftAsCustomPattern({
 }, { storage: memoryStorage, dispatch: false });
 assert.equal(updatedAccept.id, builtInAccept.id);
 assert.equal(getPatternCode(builtInAccept.id, { storage: memoryStorage }), 'return hsv(0.7,1,1);');
+const acceptRevisions = JSON.parse(memoryStorage.getItem(CUSTOM_PATTERN_REVISIONS_KEY));
+assert.equal(acceptRevisions[builtInAccept.id][0].code, 'return hsv(0.6,1,1);');
+
+const duplicateBuiltInAccept = acceptAiDraftAsCustomPattern({
+  sourcePattern: { id: 'aurora', name: 'Aurora', isCustom: false },
+  draft: {
+    name: 'Aurora Glass Drift',
+    description: 'Softer aurora duplicate',
+    code: 'return hsv(0.8,1,1);',
+    palette: ['#102a2b', '#57e7c1'],
+    suggestedParams: { speed: 0.2 },
+  },
+}, { storage: memoryStorage, dispatch: false });
+assert.equal(duplicateBuiltInAccept.id, 'custom_aurora_glass_drift_2');
+assert.equal(loadCustomPatterns({ storage: memoryStorage }).filter(pattern => pattern.name === 'Aurora Glass Drift').length, 2);
+
+const customFlagAccept = acceptAiDraftAsCustomPattern({
+  sourcePattern: { id: duplicateBuiltInAccept.id, name: duplicateBuiltInAccept.name, custom: true },
+  draft: {
+    name: 'Aurora Glass Drift',
+    description: 'Updated from custom flag',
+    code: 'return hsv(0.9,1,1);',
+    palette: ['#000000', '#ffffff'],
+    suggestedParams: { speed: 0.3 },
+  },
+}, { storage: memoryStorage, dispatch: false });
+assert.equal(customFlagAccept.id, duplicateBuiltInAccept.id);
+assert.equal(getPatternCode(duplicateBuiltInAccept.id, { storage: memoryStorage }), 'return hsv(0.9,1,1);');
 
 saveCustomPattern({
   id: 'aurora',

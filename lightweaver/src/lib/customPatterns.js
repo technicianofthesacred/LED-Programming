@@ -34,14 +34,20 @@ function dispatchCustomPatternsEvent(options = {}) {
   } catch {}
 }
 
-export function buildCustomPatternId(name = '') {
+export function buildCustomPatternId(name = '', existingIds = []) {
   const slug = String(name)
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  if (slug) return `custom_${slug}`;
-  return `custom_${Math.random().toString(36).slice(2, 10)}`;
+  const seed = slug ? `custom_${slug}` : `custom_${Math.random().toString(36).slice(2, 10)}`;
+  let id = seed;
+  let index = 2;
+  while (existingIds.includes(id)) {
+    id = `${seed}_${index}`;
+    index += 1;
+  }
+  return id;
 }
 
 export function previewFromPalette(palette = []) {
@@ -97,15 +103,16 @@ export function updateCustomPattern(id, updates = {}, options = {}) {
 }
 
 export function acceptAiDraftAsCustomPattern({ sourcePattern, draft }, options = {}) {
+  const sourceIsCustom = sourcePattern?.isCustom || sourcePattern?.custom;
   const entry = {
-    id: sourcePattern?.isCustom ? sourcePattern.id : undefined,
+    id: sourceIsCustom ? sourcePattern.id : undefined,
     name: draft.name,
     description: draft.description,
     code: draft.code,
     palette: draft.palette || [],
     params: draft.suggestedParams || {},
   };
-  if (sourcePattern?.isCustom && sourcePattern.id) {
+  if (sourceIsCustom && sourcePattern.id) {
     return updateCustomPattern(sourcePattern.id, entry, options);
   }
   const existing = loadCustomPatterns(options);
