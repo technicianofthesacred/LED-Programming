@@ -6,7 +6,7 @@ export function listBuiltInPatterns() {
 }
 
 export function listPatterns(options = {}) {
-  return [...loadCustomPatterns(options), ...BUILT_IN_PATTERNS];
+  return [...BUILT_IN_PATTERNS, ...loadCustomPatterns(options)];
 }
 
 export function getPatternById(id, options = {}) {

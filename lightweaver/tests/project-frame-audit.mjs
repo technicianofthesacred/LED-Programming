@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { PATTERNS } from '../src/lib/patterns-library.js';
 import { compile, evalPixel } from '../src/lib/patterns.js';
 import { createDefaultProject, migrateProject, PROJECT_VERSION } from '../src/lib/projectModel.js';
-import { normalizePalette, renderPixelFrame } from '../src/lib/frameEngine.js';
+import { compilePattern, normalizePalette, renderPixelFrame } from '../src/lib/frameEngine.js';
 import { makeBlackoutFrame, makeWledFrameMessage, makeWledSegments } from '../src/lib/deviceController.js';
 import {
   easeCrossfade,
@@ -70,7 +70,7 @@ assert.equal(loadCustomPatterns({ storage: memoryStorage }).length, 1);
 assert.equal(getPatternById('custom_aurora_glass_drift', { storage: memoryStorage }).name, 'Aurora Glass Drift');
 assert.equal(getPatternCode('custom_aurora_glass_drift', { storage: memoryStorage }), 'return hsv(time, 1, 1);');
 assert.equal(isBuiltInPattern('aurora'), true);
-assert.equal(isBuiltInPattern('custom_aurora_glass_drift', { storage: memoryStorage }), false);
+assert.equal(isBuiltInPattern('custom_aurora_glass_drift'), false);
 assert.ok(listPatterns({ storage: memoryStorage }).some(pattern => pattern.id === 'custom_aurora_glass_drift'));
 
 updateCustomPattern('custom_aurora_glass_drift', {
@@ -87,6 +87,41 @@ deleteCustomPattern('custom_aurora_glass_drift', { storage: memoryStorage, dispa
 assert.equal(loadCustomPatterns({ storage: memoryStorage }).length, 0);
 assert.equal(CUSTOM_PATTERNS_EVENT, 'lw:custom-updated');
 assert.equal(CUSTOM_PATTERNS_KEY, 'lw_custom_patterns');
+
+saveCustomPattern({
+  id: 'aurora',
+  name: 'Fake Aurora',
+  code: 'return rgb(1, 0, 0);',
+}, { storage: memoryStorage, dispatch: false });
+assert.equal(getPatternById('aurora', { storage: memoryStorage }).custom, undefined);
+assert.notEqual(getPatternCode('aurora', { storage: memoryStorage }), 'return rgb(1, 0, 0);');
+deleteCustomPattern('aurora', { storage: memoryStorage, dispatch: false });
+
+const customParamEntry = saveCustomPattern({
+  name: 'Param Glow',
+  code: '// @param speed float 0.5 0 1\nreturn rgb(params.speed, 0, 0);',
+}, { storage: memoryStorage, dispatch: false });
+const originalLocalStorage = globalThis.localStorage;
+globalThis.localStorage = memoryStorage;
+try {
+  assert.ok(compilePattern(customParamEntry.id), 'custom pattern should compile through frame engine registry lookup');
+  const customParamFrame = renderPixelFrame({
+    t: 0,
+    strips: [{
+      id: 'custom-param-strip',
+      pts: [{ x: 0, y: 0, p: 0 }],
+    }],
+    patternId: customParamEntry.id,
+    paletteNorm: palette,
+  });
+  assert.deepEqual(customParamFrame.pixels[0], { r: 128, g: 0, b: 0 });
+} finally {
+  if (originalLocalStorage === undefined) {
+    delete globalThis.localStorage;
+  } else {
+    globalThis.localStorage = originalLocalStorage;
+  }
+}
 
 for (const pattern of PATTERNS) {
   const { fn, error } = compile(pattern.code || 'return [0,0,0];');

@@ -1,6 +1,7 @@
 import { DEFAULT_PARAMS, PALETTE_DEFAULT } from '../data.js';
 import { compile, evalPixel } from './patterns.js';
 import { getPatternById } from './patternRegistry.js';
+import { parseParamsFromCode } from './patternParams.js';
 import { applySymmetry } from './symmetry.js';
 
 export function hexToNorm(hex) {
@@ -57,7 +58,11 @@ export function normalizePalette(palette = PALETTE_DEFAULT) {
 }
 
 export function resolvePatternParams(patternId, params = {}) {
-  const defaults = Object.fromEntries((DEFAULT_PARAMS[patternId] || []).map(k => [k.name, k.value]));
+  const staticDefaults = DEFAULT_PARAMS[patternId] || [];
+  const patternDefaults = staticDefaults.length > 0
+    ? staticDefaults
+    : parseParamsFromCode(getPatternById(patternId)?.code || '');
+  const defaults = Object.fromEntries(patternDefaults.map(k => [k.name, k.value]));
   return { ...defaults, ...params };
 }
 
