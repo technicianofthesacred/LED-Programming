@@ -59,7 +59,10 @@ export function normalizeDraftPayload(raw) {
   if (changeSummary.length < 1 || changeSummary.length > 6) {
     return { ok: false, error: { kind: 'invalid-shape', message: 'Draft needs 1 to 6 change summary entries.' } };
   }
-  if (!Array.isArray(raw.palette) || raw.palette.length < 2 || raw.palette.length > 8 || raw.palette.some(color => !HEX_RE.test(color))) {
+  const palette = Array.isArray(raw.palette)
+    ? raw.palette.map(color => String(color).trim())
+    : [];
+  if (palette.length < 2 || palette.length > 8 || palette.some(color => !HEX_RE.test(color))) {
     return { ok: false, error: { kind: 'invalid-palette', message: 'Draft palette must contain 2 to 8 hex colors.' } };
   }
   return {
@@ -68,7 +71,7 @@ export function normalizeDraftPayload(raw) {
       name: raw.name.trim(),
       description: raw.description.trim(),
       changeSummary,
-      palette: raw.palette.map(color => color.toLowerCase()),
+      palette: palette.map(color => color.toLowerCase()),
       code: raw.code.trim(),
       suggestedParams: normalizeSuggestedParams(raw.suggestedParams, normalizeParamDefs(raw.code)),
       notes: typeof raw.notes === 'string' ? raw.notes.trim() : '',

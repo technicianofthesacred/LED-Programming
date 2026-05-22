@@ -118,6 +118,18 @@ assert.equal(validDraft.ok, true);
 assert.equal(validDraft.draft.name, 'Soft Reef');
 assert.equal(validDraft.params[0].name, 'speed');
 
+const trimmedPaletteDraft = validateAiPatternDraft({
+  name: 'Trimmed Palette',
+  description: 'Normalizes palette whitespace.',
+  changeSummary: ['Trimmed palette'],
+  palette: [' #ABCDEF ', '#001122'],
+  code: 'return rgb(1,1,1);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(trimmedPaletteDraft.ok, true);
+assert.deepEqual(trimmedPaletteDraft.draft.palette, ['#abcdef', '#001122']);
+
 const normalizedSuggestedParamsDraft = validateAiPatternDraft({
   name: 'Numeric Params Only',
   description: 'Drops non-numeric suggested params.',
