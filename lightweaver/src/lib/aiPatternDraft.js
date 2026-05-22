@@ -5,13 +5,29 @@ import { parseParamsFromCode } from './patternParams.js';
 const REQUIRED_STRING_FIELDS = ['name', 'description', 'code'];
 const UNSAFE_TOKEN_RE = /\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|function|class|new|async|await|while|for|do|Array|Object|Reflect|Proxy|Map|Set|WeakMap|WeakSet|Promise|setTimeout|setInterval)\b/;
 const UNSAFE_METHOD_RE = /\.(fill|map|filter|reduce|flatMap|from|of)\b/;
+const IDENTIFIER_RE = /\b[A-Za-z_$][\w$]*\b/g;
+const NUMERIC_LITERAL_RE = /(?<![\w$])(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w$])/g;
 const BACKSLASH_RE = /\\/;
 const BRACKET_RE = /[\[\]]/;
 const ARROW_FUNCTION_RE = /=>/;
+const BIGINT_LITERAL_RE = /\b\d+n\b/;
+const SHIFT_OPERATOR_RE = />>>|<<|>>/;
 const STRING_LITERAL_RE = /["'`]/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
+const PARAM_VALUE_LIMIT = 100000;
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
+const ALLOWED_IDENTIFIERS = new Set([
+  'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
+  'stripId', 'stripProgress', 'bass', 'mid', 'hi',
+  'hsv', 'rgb', 'wave', 'triangle', 'square', 'clamp', 'lerp', 'fract', 'abs', 'floor',
+  'ceil', 'int', 'float', 'min', 'max', 'pow', 'sqrt', 'exp', 'log', 'tan', 'atan2',
+  'round', 'map', 'step', 'smoothstep', 'mix', 'mod', 'vec2', 'length', 'distance',
+  'sin', 'cos', 'noise', 'randomF', 'ping', 'easeIn', 'easeOut', 'easeInOut', 'norm',
+  'polar', 'fbm', 'samplePalette',
+  'const', 'let', 'if', 'else', 'return', 'throw', 'true', 'false', 'null', 'undefined',
+  'get', 'r', 'g', 'b',
+]);
 
 export function normalizeDraftPayload(raw) {
   if (!raw || typeof raw !== 'object') {
@@ -39,17 +55,46 @@ export function normalizeDraftPayload(raw) {
       changeSummary,
       palette: raw.palette.map(color => color.toLowerCase()),
       code: raw.code.trim(),
-      suggestedParams: normalizeSuggestedParams(raw.suggestedParams),
+      suggestedParams: normalizeSuggestedParams(raw.suggestedParams, normalizeParamDefs(raw.code)),
       notes: typeof raw.notes === 'string' ? raw.notes.trim() : '',
     },
   };
 }
 
-function normalizeSuggestedParams(suggestedParams) {
+function normalizeParamDefs(code = '') {
+  return parseParamsFromCode(code).map(param => {
+    const min = clampGlobalNumber(param.min);
+    const max = clampGlobalNumber(param.max);
+    const low = Math.min(min, max);
+    const high = Math.max(min, max);
+    return {
+      ...param,
+      value: clampNumber(param.value, low, high),
+      min: low,
+      max: high,
+      step: clampGlobalNumber(param.step),
+    };
+  });
+}
+
+function normalizeSuggestedParams(suggestedParams, paramDefs = []) {
   if (!suggestedParams || typeof suggestedParams !== 'object') return {};
-  return Object.fromEntries(
-    Object.entries(suggestedParams).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
-  );
+  const bounds = new Map(paramDefs.map(param => [param.name, param]));
+  return Object.fromEntries(Object.entries(suggestedParams)
+    .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+    .map(([name, value]) => {
+      const param = bounds.get(name);
+      return [name, param ? clampNumber(value, param.min, param.max) : clampGlobalNumber(value)];
+    }));
+}
+
+function clampGlobalNumber(value) {
+  return clampNumber(value, -PARAM_VALUE_LIMIT, PARAM_VALUE_LIMIT);
+}
+
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, min), max);
 }
 
 function stripCodeComments(code = '') {
@@ -65,12 +110,64 @@ function validateDraftCodeSafety(code = '') {
     || STRING_LITERAL_RE.test(scanned)
     || BRACKET_RE.test(scanned)
     || ARROW_FUNCTION_RE.test(scanned)
+    || BIGINT_LITERAL_RE.test(scanned)
+    || SHIFT_OPERATOR_RE.test(scanned)
     || UNSAFE_TOKEN_RE.test(scanned)
     || UNSAFE_METHOD_RE.test(scanned)
+    || hasUnsafeMemberAccess(scanned)
+    || hasUnsafeNumericLiteral(scanned)
+    || hasUnsafeIdentifier(scanned)
   ) {
     return { ok: false, error: { kind: 'unsafe-code', message: 'Draft code used a blocked JavaScript construct.' } };
   }
   return { ok: true };
+}
+
+function hasUnsafeMemberAccess(code) {
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] !== '.') continue;
+    const previous = code.slice(0, i).match(/[A-Za-z_$][\w$]*\s*$/)?.[0]?.trim();
+    const next = code.slice(i + 1).match(/^\s*[A-Za-z_$][\w$]*/)?.[0];
+    if (!next) continue;
+    if (previous !== 'params') return true;
+  }
+  return false;
+}
+
+function hasUnsafeNumericLiteral(code) {
+  for (const match of code.matchAll(NUMERIC_LITERAL_RE)) {
+    if (Math.abs(Number(match[0])) > PARAM_VALUE_LIMIT) return true;
+  }
+  return false;
+}
+
+function collectLocalNames(code) {
+  const names = new Set();
+  const declarationRe = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)/g;
+  let match;
+  while ((match = declarationRe.exec(code)) !== null) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+function hasUnsafeIdentifier(code) {
+  const locals = collectLocalNames(code);
+  let match;
+  while ((match = IDENTIFIER_RE.exec(code)) !== null) {
+    const name = match[0];
+    const start = match.index;
+    const end = start + name.length;
+    const previousChar = code[start - 1] || '';
+    const nextChar = code[end] || '';
+    const nextNonSpace = code.slice(end).match(/^\s*(.)/)?.[1] || '';
+    if (previousChar === '.') continue;
+    if (nextNonSpace === ':' && ['r', 'g', 'b'].includes(name)) continue;
+    if (ALLOWED_IDENTIFIERS.has(name) || locals.has(name)) continue;
+    if ((name === 'r' || name === 'g' || name === 'b') && nextChar === '(') continue;
+    return true;
+  }
+  return false;
 }
 
 export function stripPixelsToFrameStrips(strips = []) {
@@ -101,7 +198,7 @@ function allowsBlackout(instruction = '') {
 
 function buildDraftParamValues(draft) {
   return {
-    ...Object.fromEntries(parseParamsFromCode(draft.code).map(param => [param.name, param.value])),
+    ...Object.fromEntries(normalizeParamDefs(draft.code).map(param => [param.name, param.value])),
     ...(draft.suggestedParams || {}),
   };
 }
@@ -170,7 +267,7 @@ function prepareValidatedAiPatternDraft(rawDraft, options = {}) {
   return {
     ...prepared,
     draft,
-    paramDefs: parseParamsFromCode(draft.code),
+    paramDefs: normalizeParamDefs(draft.code),
   };
 }
 

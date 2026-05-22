@@ -141,6 +141,26 @@ const unsafeDraft = validateAiPatternDraft({
 assert.equal(unsafeDraft.ok, false);
 assert.equal(unsafeDraft.error.kind, 'unsafe-code');
 
+const alertUnsafeDraft = validateAiPatternDraft({
+  name: 'Alert Unsafe',
+  description: 'Attempts unqualified browser global access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'alert(1); return rgb(1,1,1);',
+});
+assert.equal(alertUnsafeDraft.ok, false);
+assert.equal(alertUnsafeDraft.error.kind, 'unsafe-code');
+
+const historyUnsafeDraft = validateAiPatternDraft({
+  name: 'History Unsafe',
+  description: 'Attempts browser history access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'history.back(); return rgb(1,1,1);',
+});
+assert.equal(historyUnsafeDraft.ok, false);
+assert.equal(historyUnsafeDraft.error.kind, 'unsafe-code');
+
 const computedUnsafeDraft = validateAiPatternDraft({
   name: 'Computed Unsafe',
   description: 'Attempts computed global access.',
@@ -220,6 +240,36 @@ const allocationUnsafeDraft = validateAiPatternDraft({
 });
 assert.equal(allocationUnsafeDraft.ok, false);
 assert.equal(allocationUnsafeDraft.error.kind, 'unsafe-code');
+
+const methodUnsafeDraft = validateAiPatternDraft({
+  name: 'Method Unsafe',
+  description: 'Attempts method-style map access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'values.map(x); return rgb(1,1,1);',
+});
+assert.equal(methodUnsafeDraft.ok, false);
+assert.equal(methodUnsafeDraft.error.kind, 'unsafe-code');
+
+const expensiveHelperUnsafeDraft = validateAiPatternDraft({
+  name: 'Expensive Helper Unsafe',
+  description: 'Attempts excessive helper work.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(fbm(x, y, 1000000000), 0, 0);',
+});
+assert.equal(expensiveHelperUnsafeDraft.ok, false);
+assert.equal(expensiveHelperUnsafeDraft.error.kind, 'unsafe-code');
+
+const bigintShiftUnsafeDraft = validateAiPatternDraft({
+  name: 'BigInt Shift Unsafe',
+  description: 'Attempts BigInt shift abuse.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1n << 8n, 0, 0);',
+});
+assert.equal(bigintShiftUnsafeDraft.ok, false);
+assert.equal(bigintShiftUnsafeDraft.error.kind, 'unsafe-code');
 
 assert.throws(
   () => buildAiPatternPreviewFrame({
@@ -338,9 +388,9 @@ assert.throws(
   }),
 );
 
-const nonNumericParamsRuntimeDraft = validateAiPatternDraft({
-  name: 'Non Numeric Params Runtime Error',
-  description: 'Accesses normalized-away nested params.',
+const nestedParamsUnsafeDraft = validateAiPatternDraft({
+  name: 'Nested Params Unsafe',
+  description: 'Attempts nested params member access.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
   code: 'if (params.state.touched) throw 1;\nparams.state.touched = true;\nreturn rgb(1, 1, 1);',
@@ -348,8 +398,8 @@ const nonNumericParamsRuntimeDraft = validateAiPatternDraft({
 }, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
-assert.equal(nonNumericParamsRuntimeDraft.ok, false);
-assert.equal(nonNumericParamsRuntimeDraft.error.kind, 'runtime-error');
+assert.equal(nestedParamsUnsafeDraft.ok, false);
+assert.equal(nestedParamsUnsafeDraft.error.kind, 'unsafe-code');
 
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',
@@ -412,6 +462,17 @@ const turnOffDraft = validateAiPatternDraft({
 });
 assert.equal(turnOffDraft.ok, true);
 
+const standaloneMapDraft = validateAiPatternDraft({
+  name: 'Standalone Map',
+  description: 'Uses allowed map helper.',
+  changeSummary: ['Uses map helper'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const v = map(index, 0, pixelCount, 0, 1); return rgb(1,1,1);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(standaloneMapDraft.ok, true);
+
 const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
 });
@@ -428,6 +489,18 @@ const suggestedParamFrame = buildAiPatternPreviewFrame({
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
 assert.ok(Math.abs(suggestedParamFrame.pixels[0].r - 204) < Math.abs(suggestedParamFrame.pixels[0].r - 26));
+
+const clampedSuggestedParamFrame = buildAiPatternPreviewFrame({
+  name: 'Clamped Brightness',
+  description: 'Clamps huge suggested params.',
+  changeSummary: ['Clamps brightness'],
+  palette: ['#000000', '#ffffff'],
+  code: '// @param brightness float 0.1 0.0 1.0\nreturn rgb(params.brightness, 0, 0);',
+  suggestedParams: { brightness: 1000000000 },
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(clampedSuggestedParamFrame.pixels[0].r, 255);
 
 const noBuiltInParamsDraft = {
   name: 'No Built In Params',
