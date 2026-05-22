@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useTweaks } from './Tweaks.jsx';
 import { PALETTE_DEFAULT } from '../data.js';
+import { MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 
 function Section({ title, children }) {
   return (
@@ -35,6 +36,7 @@ export function SettingsScreen() {
     masterSpeed, setMasterSpeed,
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
+    motionSmoothing, setMotionSmoothing,
     gammaEnabled, setGammaEnabled,
     gammaValue, setGammaValue,
     masterHueShift, setMasterHueShift,
@@ -181,9 +183,20 @@ export function SettingsScreen() {
         <Section title="Rendering">
           <Row label="Master speed default">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="range" min="0" max="4" step="0.05" value={masterSpeed}
+              <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
                      onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
               <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{masterSpeed.toFixed(2)}×</span>
+            </div>
+          </Row>
+          <Row label="Motion smoothing">
+            <div className="lw-tweaks-seg">
+              {MOTION_SMOOTHING_MODES.map(mode => (
+                <button key={mode}
+                        className={motionSmoothing === mode ? 'active' : ''}
+                        onClick={() => setMotionSmoothing(mode)}>
+                  {mode}
+                </button>
+              ))}
             </div>
           </Row>
           <Row label="Master brightness">

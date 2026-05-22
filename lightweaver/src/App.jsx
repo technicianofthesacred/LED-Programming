@@ -137,6 +137,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
     masterHueShift,
+    motionSmoothing,
     gammaEnabled, setGammaEnabled,
     gammaValue, setGammaValue,
     patternParams, setPatternParams,
@@ -225,6 +226,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden} compiledFn={compiledFn}
                   bpm={bpm} params={params} symSettings={symSettings} audioBands={audioBands}
+                  motionSmoothing={motionSmoothing}
                   heat={heat}
                   onTick={setLiveT} onFrame={handleFrame}
                 />
@@ -244,6 +246,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                   masterSaturation={masterSaturation} masterHueShift={masterHueShift} gammaEnabled={gammaEnabled}
                   gammaValue={gammaValue} hidden={projectHidden}
                   bpm={bpm} params={{}} symSettings={symSettings} audioBands={audioBands}
+                  motionSmoothing={motionSmoothing}
                   heat={heat}
                 />
                 <div className="lw-viewport-overlay tl" style={{ fontSize: 'var(--fs-2xs)' }}>
@@ -277,6 +280,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 symSettings={symSettings}
                 audioBands={audioBands}
                 palette={palette}
+                motionSmoothing={motionSmoothing}
                 heat={heat}
                 onTick={setLiveT}
                 onFrame={handleFrame}

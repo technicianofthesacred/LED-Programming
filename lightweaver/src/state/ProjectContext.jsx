@@ -13,6 +13,7 @@ import {
   migrateProject,
   PROJECT_VERSION,
 } from '../lib/projectModel.js';
+import { easeCrossfade } from '../lib/motionSmoothing.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
 const LS_AUTOSAVE_LEGACY_KEY = 'lw_autosave_v1';
@@ -55,7 +56,10 @@ export function resolveTimelinePlayback(playhead, clips, transitions) {
   const active = track0Clips.find(c => playhead >= c.start && playhead <= c.end) || null;
   const trans  = transitions.find(t => playhead >= t.start && playhead <= t.end) || null;
 
-  const blend = trans ? Math.max(0, Math.min(1, (playhead - trans.start) / (trans.end - trans.start))) : 0;
+  const rawBlend = trans && trans.end > trans.start
+    ? Math.max(0, Math.min(1, (playhead - trans.start) / (trans.end - trans.start)))
+    : 0;
+  const blend = trans ? easeCrossfade(rawBlend, trans.curve || 'linear') : 0;
   const nextClip = trans ? clips.find(c => c.id === trans.clipB) : null;
 
   return {
@@ -94,6 +98,7 @@ export function ProjectProvider({ children }) {
   const [masterHueShift,   setMasterHueShift]   = useState(0); // -0.5 to 0.5, added to all hues
   const [patternParams,    setPatternParams]     = useState({});
   const [bpm,              setBpm]              = useState(120);
+  const [motionSmoothing,  setMotionSmoothing]  = useState(defaults.pattern.motionSmoothing);
   const [projectName,      setProjectName]      = useState('Untitled Project');
 
   // ── Timeline / show ──────────────────────────────────────────────────────
@@ -217,6 +222,7 @@ export function ProjectProvider({ children }) {
     setGammaValue(pattern.gammaValue ?? defaults.pattern.gammaValue);
     setPatternParams(pattern.patternParams || {});
     setBpm(pattern.bpm || defaults.pattern.bpm);
+    setMotionSmoothing(pattern.motionSmoothing || defaults.pattern.motionSmoothing);
     setShowClipsRaw(show.clips || defaults.show.clips);
     setShowTransitionsRaw(show.transitions || defaults.show.transitions);
     setShowCues(show.cues || defaults.show.cues);
@@ -263,7 +269,7 @@ export function ProjectProvider({ children }) {
     },
     pattern: {
       activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
-      masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+      masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, motionSmoothing, symSettings,
     },
     show: {
       clips: showClips,
@@ -284,7 +290,7 @@ export function ProjectProvider({ children }) {
     projectName, strips, viewBox, svgText, hidden,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
-    masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+    masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, motionSmoothing, symSettings,
     showClips, showTransitions, showCues, autoLanes, showDuration,
     liveRecording, liveQuantize, wledIp, wledSegmentMap,
   ]);
@@ -333,6 +339,7 @@ export function ProjectProvider({ children }) {
       masterHueShift,  setMasterHueShift,
       patternParams,   setPatternParams,
       bpm,             setBpm,
+      motionSmoothing, setMotionSmoothing,
       projectName,     setProjectName,
       // Timeline
       showClips,       setShowClips,
