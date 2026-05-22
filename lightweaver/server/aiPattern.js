@@ -147,6 +147,23 @@ export function normalizeAiPatternDraft(draft) {
   return { ...draft, suggestedParams };
 }
 
+function hasAiRefusal(value) {
+  if (!value || typeof value !== 'object') return false;
+
+  if (value.type === 'refusal') return true;
+  if (typeof value.refusal === 'string' && value.refusal.trim()) return true;
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasAiRefusal(item));
+  }
+
+  return hasAiRefusal(value.output) || hasAiRefusal(value.content);
+}
+
+function isAiResponseIncomplete(response) {
+  return response?.status === 'incomplete' || !!response?.incomplete_details;
+}
+
 export function normalizeAiProviderError(error) {
   if (error?.name === 'AbortError') {
     return { status: 504, code: 'timeout', message: 'AI request timed out.' };
@@ -205,6 +222,26 @@ export function createAiPatternRouter({
         timeout: AI_PATTERN_TIMEOUT_MS,
         maxRetries: 0,
       });
+
+      if (hasAiRefusal(response)) {
+        return res.status(422).json({
+          error: {
+            status: 422,
+            code: 'refused',
+            message: 'AI provider refused the pattern request.',
+          },
+        });
+      }
+
+      if (isAiResponseIncomplete(response)) {
+        return res.status(502).json({
+          error: {
+            status: 502,
+            code: 'incomplete',
+            message: 'AI provider returned an incomplete draft.',
+          },
+        });
+      }
 
       if (!response?.output_parsed) {
         return res.status(502).json({

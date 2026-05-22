@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { zodTextFormat } from 'openai/helpers/zod';
 import {
@@ -44,6 +45,16 @@ async function withServer(app, callback) {
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   return { response, body: await response.json() };
+}
+
+async function withTempRoot(callback) {
+  const rootDir = await mkdtemp(join(tmpdir(), 'lightweaver-server-test-'));
+
+  try {
+    return await callback(rootDir);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
 }
 
 assert.equal(getAiPatternModel({ AI_PATTERN_MODEL: 'gpt-5.5' }), 'gpt-5.5');
@@ -234,6 +245,62 @@ await withServer(rateLimitApp, async (baseUrl) => {
   assert.equal(body.error.code, 'rate_limited');
 });
 
+const refusalApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key' },
+  client: {
+    responses: {
+      async parse() {
+        return {
+          output: [
+            {
+              content: [
+                {
+                  type: 'refusal',
+                  refusal: 'I cannot help with that request.',
+                },
+              ],
+            },
+          ],
+          output_parsed: null,
+        };
+      },
+    },
+  },
+});
+await withServer(refusalApp, async (baseUrl) => {
+  const { response, body } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(response.status, 422);
+  assert.equal(body.error.code, 'refused');
+});
+
+const incompleteApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key' },
+  client: {
+    responses: {
+      async parse() {
+        return {
+          status: 'incomplete',
+          incomplete_details: { reason: 'max_output_tokens' },
+          output_parsed: null,
+        };
+      },
+    },
+  },
+});
+await withServer(incompleteApp, async (baseUrl) => {
+  const { response, body } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(response.status, 502);
+  assert.equal(body.error.code, 'incomplete');
+});
+
 const emptyResponseApp = createLightweaverServer({
   env: { OPENAI_API_KEY: 'test-key' },
   client: {
@@ -254,6 +321,48 @@ await withServer(emptyResponseApp, async (baseUrl) => {
   assert.equal(body.error.code, 'empty_response');
 });
 
+await withTempRoot(async (rootDir) => {
+  const distDir = join(rootDir, 'dist');
+  const indexHtml = '<!doctype html><title>Lightweaver test fixture</title>';
+  await mkdir(distDir);
+  await writeFile(join(distDir, 'index.html'), indexHtml);
+  const serverApp = createLightweaverServer({ rootDir, env: {} });
+
+  await withServer(serverApp, async (baseUrl) => {
+    const health = await fetchJson(`${baseUrl}/api/health`);
+    assert.equal(health.response.status, 200);
+    assert.deepEqual(health.body, { ok: true, app: 'Lightweaver' });
+
+    const apiNotFound = await fetchJson(`${baseUrl}/api/nope`);
+    assert.equal(apiNotFound.response.status, 404);
+    assert.equal(apiNotFound.body.error.code, 'not_found');
+
+    const invalidJson = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"instruction":',
+    });
+    assert.equal(invalidJson.response.status, 400);
+    assert.equal(invalidJson.body.error.code, 'invalid_json');
+
+    const spaResponse = await fetch(`${baseUrl}/some/gallery/path`);
+    const spaText = await spaResponse.text();
+    assert.equal(spaResponse.status, 200);
+    assert.equal(spaText, indexHtml);
+  });
+});
+
+await withTempRoot(async (rootDir) => {
+  const serverApp = createLightweaverServer({ rootDir, env: {} });
+
+  await withServer(serverApp, async (baseUrl) => {
+    const missingDistResponse = await fetch(`${baseUrl}/some/gallery/path`);
+    const missingDistText = await missingDistResponse.text();
+    assert.equal(missingDistResponse.status, 404);
+    assert.match(missingDistText, /Lightweaver dist\/ not found/);
+  });
+});
+
 const serverApp = createLightweaverServer({ env: {} });
 await withServer(serverApp, async (baseUrl) => {
   const health = await fetchJson(`${baseUrl}/api/health`);
@@ -271,10 +380,4 @@ await withServer(serverApp, async (baseUrl) => {
   });
   assert.equal(invalidJson.response.status, 400);
   assert.equal(invalidJson.body.error.code, 'invalid_json');
-
-  const spaResponse = await fetch(`${baseUrl}/some/gallery/path`);
-  const spaText = await spaResponse.text();
-  const expectedIndex = await readFile(join(import.meta.dirname, '..', 'dist', 'index.html'), 'utf8');
-  assert.equal(spaResponse.status, 200);
-  assert.equal(spaText, expectedIndex);
 });
