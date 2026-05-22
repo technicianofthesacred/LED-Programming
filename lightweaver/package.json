@@ -8,6 +8,7 @@
     "build": "vite build",
     "test:core": "node tests/project-frame-audit.mjs",
     "test:server": "node tests/ai-pattern-server.mjs",
+    "test:ai": "npm run test:server && npm run test:core && npx playwright test tests/ai-pattern-assistant.spec.ts",
     "preview": "vite preview",
     "serve:pi": "node server/index.js",
     "pi:build": "npm run build",

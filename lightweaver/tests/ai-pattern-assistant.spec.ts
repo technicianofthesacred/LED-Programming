@@ -111,3 +111,67 @@ test('clears the AI draft when the selected pattern changes', async ({ page }) =
   await expect(assistant.getByText('Pattern Switch Draft')).toHaveCount(0);
   await expect(assistant.getByText(/Describe a new direction/)).toBeVisible();
 });
+
+test('generates an AI draft and accepts it as a custom pattern', async ({ page }) => {
+  await page.route('**/api/ai/pattern', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        draft: {
+          name: 'Aurora Glass Drift',
+          description: 'A slower aurora with softened motion and gold center light.',
+          changeSummary: ['Reduced speed', 'Softened contrast', 'Added warm center glow'],
+          palette: ['#102a2b', '#57e7c1', '#9476ff', '#d6b56c'],
+          code: '// @param speed float 0.06 0.01 0.4\nconst drift = fbm(x * 1.8 + t * params.speed, y * 1.2, 4);\nconst gold = smoothstep(0.42, 0.0, distance(x, y, 0.5, 0.5));\nreturn samplePalette(drift + gold * 0.12);',
+          suggestedParams: { speed: 0.06 },
+        },
+      }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.locator('textarea').fill('slower and smoother with gold near the center');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(assistant.getByText('Aurora Glass Drift')).toBeVisible();
+  await expect(assistant.getByText('not applied')).toBeVisible();
+  const acceptedNotice = page.evaluate(() => new Promise(resolve => {
+    const text = 'Accepted Aurora Glass Drift.';
+    const observer = new MutationObserver(() => {
+      if (document.body.innerText.includes(text)) {
+        observer.disconnect();
+        resolve(true);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  }));
+  await assistant.getByRole('button', { name: 'Accept' }).click();
+  await expect(acceptedNotice).resolves.toBe(true);
+
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_custom_patterns') || '[]'));
+  expect(saved).toHaveLength(1);
+  expect(saved[0].id).toBe('custom_aurora_glass_drift');
+  expect(saved[0].palette).toEqual(['#102a2b', '#57e7c1', '#9476ff', '#d6b56c']);
+});
+
+test('shows setup message when server has no AI key', async ({ page }) => {
+  await page.route('**/api/ai/pattern', async route => {
+    await route.fulfill({
+      status: 501,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: {
+          code: 'missing_api_key',
+          message: 'Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.',
+        },
+      }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.locator('textarea').fill('make a calm reef pattern');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(assistant.locator('.lw-ai-error span')).toHaveText('Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.');
+});
