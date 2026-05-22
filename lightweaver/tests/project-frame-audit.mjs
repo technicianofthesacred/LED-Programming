@@ -128,6 +128,16 @@ const unsafeDraft = validateAiPatternDraft({
 assert.equal(unsafeDraft.ok, false);
 assert.equal(unsafeDraft.error.kind, 'unsafe-code');
 
+const computedUnsafeDraft = validateAiPatternDraft({
+  name: 'Computed Unsafe',
+  description: 'Attempts computed global access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'this["fet"+"ch"]("https://example.com"); return rgb(1,1,1);',
+});
+assert.equal(computedUnsafeDraft.ok, false);
+assert.equal(computedUnsafeDraft.error.kind, 'unsafe-code');
+
 const invalidShapeDraft = validateAiPatternDraft({
   description: 'Missing required name.',
   changeSummary: ['Invalid'],
@@ -136,6 +146,16 @@ const invalidShapeDraft = validateAiPatternDraft({
 });
 assert.equal(invalidShapeDraft.ok, false);
 assert.equal(invalidShapeDraft.error.kind, 'invalid-shape');
+
+const blankSummaryDraft = validateAiPatternDraft({
+  name: 'Blank Summary',
+  description: 'Has no meaningful summary.',
+  changeSummary: ['   '],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1,1,1);',
+});
+assert.equal(blankSummaryDraft.ok, false);
+assert.equal(blankSummaryDraft.error.kind, 'invalid-shape');
 
 const invalidPaletteDraft = validateAiPatternDraft({
   name: 'Bad Palette',
@@ -166,6 +186,26 @@ const runtimeErrorDraft = validateAiPatternDraft({
 });
 assert.equal(runtimeErrorDraft.ok, false);
 assert.equal(runtimeErrorDraft.error.kind, 'runtime-error');
+
+const getterRuntimeErrorDraft = validateAiPatternDraft({
+  name: 'Getter Runtime Error',
+  description: 'Throws while reading returned color.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return { get r() { throw new Error("boom") }, g: 0, b: 0 };',
+});
+assert.equal(getterRuntimeErrorDraft.ok, false);
+assert.equal(getterRuntimeErrorDraft.error.kind, 'runtime-error');
+assert.throws(
+  () => buildAiPatternPreviewFrame({
+    name: 'Getter Runtime Error',
+    description: 'Throws while reading returned color.',
+    changeSummary: ['Invalid'],
+    palette: ['#000000', '#ffffff'],
+    code: 'return { get r() { throw new Error("boom") }, g: 0, b: 0 };',
+  }),
+  /boom/,
+);
 
 const indexedRuntimeDraft = {
   name: 'Indexed Runtime Error',
@@ -200,6 +240,19 @@ const blankDraft = validateAiPatternDraft({
 assert.equal(blankDraft.ok, false);
 assert.equal(blankDraft.error.kind, 'blank-render');
 
+const darkRedBlankDraft = validateAiPatternDraft({
+  name: 'Dark Red',
+  description: 'Accidental blackout for a dark red request.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  instruction: 'make a dark red glow',
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(darkRedBlankDraft.ok, false);
+assert.equal(darkRedBlankDraft.error.kind, 'blank-render');
+
 const blackoutDraft = validateAiPatternDraft({
   name: 'Blackout',
   description: 'Intentional blackout scene.',
@@ -223,6 +276,18 @@ const lightsOffDraft = validateAiPatternDraft({
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
 });
 assert.equal(lightsOffDraft.ok, true);
+
+const turnOffDraft = validateAiPatternDraft({
+  name: 'Turn Off',
+  description: 'Intentional off scene.',
+  changeSummary: ['Turns all LEDs off'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  instruction: 'turn off the lights',
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(turnOffDraft.ok, true);
 
 const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
