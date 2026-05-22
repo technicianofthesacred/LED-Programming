@@ -26,6 +26,10 @@ import {
   isBuiltInPattern,
   listPatterns,
 } from '../src/lib/patternRegistry.js';
+import {
+  buildAiPatternPreviewFrame,
+  validateAiPatternDraft,
+} from '../src/lib/aiPatternDraft.js';
 import { parseParamsFromCode } from '../src/lib/patternParams.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
@@ -96,6 +100,62 @@ saveCustomPattern({
 assert.equal(getPatternById('aurora', { storage: memoryStorage }).custom, undefined);
 assert.notEqual(getPatternCode('aurora', { storage: memoryStorage }), 'return rgb(1, 0, 0);');
 deleteCustomPattern('aurora', { storage: memoryStorage, dispatch: false });
+
+const validDraft = validateAiPatternDraft({
+  name: 'Soft Reef',
+  description: 'Blue-green bioluminescent drift.',
+  changeSummary: ['Created slow ocean motion'],
+  palette: ['#001a2a', '#22e6c7', '#7aa7ff'],
+  code: '// @param speed float 0.2 0.05 1.0\nconst v = fbm(x * 2 + t * params.speed, y * 2, 4);\nreturn samplePalette(v);',
+  suggestedParams: { speed: 0.2 },
+}, {
+  strips: [{
+    id: 'draft-strip',
+    pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }],
+  }],
+});
+assert.equal(validDraft.ok, true);
+assert.equal(validDraft.draft.name, 'Soft Reef');
+assert.equal(validDraft.params[0].name, 'speed');
+
+const unsafeDraft = validateAiPatternDraft({
+  name: 'Unsafe',
+  description: 'Attempts browser access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'fetch("https://example.com"); return rgb(1,1,1);',
+});
+assert.equal(unsafeDraft.ok, false);
+assert.equal(unsafeDraft.error.kind, 'unsafe-code');
+
+const blankDraft = validateAiPatternDraft({
+  name: 'Blank',
+  description: 'Accidental blackout.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(blankDraft.ok, false);
+assert.equal(blankDraft.error.kind, 'blank-render');
+
+const blackoutDraft = validateAiPatternDraft({
+  name: 'Blackout',
+  description: 'Intentional blackout scene.',
+  changeSummary: ['Turns all LEDs off'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  instruction: 'make an intentional blackout',
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(blackoutDraft.ok, true);
+
+const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(previewFrame.pixels.length, 2);
 
 const customParamEntry = saveCustomPattern({
   name: 'Param Glow',
