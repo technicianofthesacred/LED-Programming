@@ -78,6 +78,10 @@ export function buildAiPatternPreviewFrame(draft, {
   if (compiled.error || !compiled.fn) {
     throw new Error(compiled.error || 'Draft did not compile.');
   }
+  const runtimeProbe = probeDraftRuntime(compiled.fn, draft, { strips, t, bpm, audioBands });
+  if (!runtimeProbe.ok) {
+    throw new Error(runtimeProbe.error.message);
+  }
   return renderPixelFrame({
     t,
     strips: stripPixelsToFrameStrips(strips),
@@ -100,30 +104,47 @@ function probeDraftRuntime(fn, draft, {
   audioBands = null,
 } = {}) {
   const frameStrips = stripPixelsToFrameStrips(strips);
-  const samples = frameStrips.flatMap(strip => (strip.pts || []).map(pt => ({ stripId: strip.id, pt })));
-  const selected = samples.length ? [
-    samples[0],
-    samples[Math.floor(samples.length / 2)],
-    samples[samples.length - 1],
-  ] : [{ stripId: 'draft-default', pt: { x: 0.5, y: 0.5, p: 0.5 } }];
+  const allPts = frameStrips.flatMap(strip => strip.pts || []);
+  const bounds = getDraftNormBounds(allPts);
   const paletteNorm = normalizePalette(draft.palette);
   const params = buildDraftParamValues(draft);
   const beat = (t * bpm / 60) % 1;
   const beatSin = Math.sin(beat * Math.PI);
   const time = (t / 65.536) % 1;
-  const pixelCount = Math.max(samples.length, selected.length);
+  const pixelCount = allPts.length || 1;
   const bass = audioBands?.bass ?? 0;
   const mid = audioBands?.mid ?? 0;
   const hi = audioBands?.hi ?? 0;
 
   try {
-    selected.forEach((sample, index) => {
-      fn(index, sample.pt.x, sample.pt.y, t, time, pixelCount, paletteNorm, beat, beatSin, params, sample.stripId, sample.pt.p, bass, mid, hi);
-    });
+    let globalIndex = 0;
+    for (const strip of frameStrips) {
+      for (const pt of strip.pts || []) {
+        const nx = (pt.x - bounds.minX) / bounds.range;
+        const ny = (pt.y - bounds.minY) / bounds.range;
+        fn(globalIndex, nx, ny, t, time, pixelCount, paletteNorm, beat, beatSin, params, strip.id, pt.p, bass, mid, hi);
+        globalIndex++;
+      }
+    }
     return { ok: true };
   } catch (error) {
     return { ok: false, error: { kind: 'runtime-error', message: error.message || 'Draft failed during preview.' } };
   }
+}
+
+function getDraftNormBounds(pts) {
+  if (!pts.length) return { minX: 0, minY: 0, range: 1 };
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const pt of pts) {
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  return { minX, minY, range: Math.max(maxX - minX, maxY - minY, 0.001) };
 }
 
 export function validateAiPatternDraft(rawDraft, options = {}) {

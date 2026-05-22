@@ -167,6 +167,27 @@ const runtimeErrorDraft = validateAiPatternDraft({
 assert.equal(runtimeErrorDraft.ok, false);
 assert.equal(runtimeErrorDraft.error.kind, 'runtime-error');
 
+const indexedRuntimeDraft = {
+  name: 'Indexed Runtime Error',
+  description: 'Throws on a later pixel.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'if (index === 3) throw new Error("boom"); return rgb(1,1,1);',
+};
+const indexedRuntimeOptions = {
+  strips: [{
+    id: 'draft-strip',
+    pixels: [{ x: 0, y: 0 }, { x: 0.33, y: 0 }, { x: 0.66, y: 0 }, { x: 1, y: 0 }],
+  }],
+};
+const indexedRuntimeErrorDraft = validateAiPatternDraft(indexedRuntimeDraft, indexedRuntimeOptions);
+assert.equal(indexedRuntimeErrorDraft.ok, false);
+assert.equal(indexedRuntimeErrorDraft.error.kind, 'runtime-error');
+assert.throws(
+  () => buildAiPatternPreviewFrame(indexedRuntimeDraft, indexedRuntimeOptions),
+  /boom/,
+);
+
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',
   description: 'Accidental blackout.',
