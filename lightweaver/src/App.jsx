@@ -40,6 +40,7 @@ function PatternPanel({
   palette, onPaletteChange,
   onCodeChange,
   strips,
+  hidden,
   audioBands,
   onAcceptAiDraft,
   masterSpeed, setMasterSpeed,
@@ -65,6 +66,7 @@ function PatternPanel({
           palette={palette}
           params={params}
           strips={strips}
+          hidden={hidden}
           audioBands={audioBands}
           onAcceptDraft={onAcceptAiDraft}
         />
@@ -344,6 +346,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
             palette={palette} onPaletteChange={setPalette}
             onCodeChange={handleCodeChange}
             strips={projectStrips}
+            hidden={projectHidden}
             audioBands={audioBands}
             onAcceptAiDraft={handleAcceptAiDraft}
             masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}

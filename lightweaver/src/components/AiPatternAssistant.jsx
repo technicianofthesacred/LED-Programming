@@ -1,10 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { requestAiPatternDraft } from '../lib/aiPatternClient.js';
 import { validateAiPatternDraft } from '../lib/aiPatternDraft.js';
 import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
 
-function buildProjectContext(strips = [], audioBands = null) {
-  const visible = (Array.isArray(strips) ? strips : []).filter(strip => !strip.hidden);
+function getVisibleStrips(strips = [], hidden = {}) {
+  return (Array.isArray(strips) ? strips : []).filter(strip => strip && !strip.hidden && !hidden[strip.id]);
+}
+
+function buildProjectContext(strips = [], hidden = {}, audioBands = null) {
+  const visible = getVisibleStrips(strips, hidden);
   return {
     ledCount: visible.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || 0), 0),
     stripCount: visible.length,
@@ -32,9 +36,11 @@ export function AiPatternAssistant({
   palette,
   params,
   strips,
+  hidden,
   audioBands,
   onAcceptDraft,
 }) {
+  const requestIdRef = useRef(0);
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -48,9 +54,22 @@ export function AiPatternAssistant({
     [patternId, palette, params],
   );
 
+  const visibleStrips = useMemo(() => getVisibleStrips(strips, hidden), [strips, hidden]);
+
+  useEffect(() => {
+    requestIdRef.current += 1;
+    setMessages([]);
+    setInput('');
+    setDraft(null);
+    setValidated(null);
+    setPending(false);
+    setError(null);
+  }, [sourcePattern?.id]);
+
   const sendInstruction = async (modeOverride = null) => {
     const instruction = input.trim();
     if (!instruction || !sourcePattern || pending) return;
+    const requestId = requestIdRef.current;
     setPending(true);
     setError(null);
     setMessages(prev => [...prev, { role: 'user', text: instruction }]);
@@ -60,9 +79,11 @@ export function AiPatternAssistant({
         instruction,
         sourcePattern,
         draftPattern: draft,
-        projectContext: buildProjectContext(strips, audioBands),
+        projectContext: buildProjectContext(strips, hidden, audioBands),
       });
-      const result = validateAiPatternDraft(rawDraft, { instruction, strips, audioBands });
+      if (requestIdRef.current !== requestId) return;
+      const result = validateAiPatternDraft(rawDraft, { instruction, strips: visibleStrips, audioBands });
+      if (requestIdRef.current !== requestId) return;
       if (!result.ok) {
         setError(result.error);
         setMessages(prev => [...prev, { role: 'assistant', text: result.error.message, error: true }]);
@@ -73,10 +94,11 @@ export function AiPatternAssistant({
       setMessages(prev => [...prev, { role: 'assistant', text: result.draft.changeSummary.join(' ') }]);
       setInput('');
     } catch (requestError) {
+      if (requestIdRef.current !== requestId) return;
       setError({ kind: requestError.code || 'request-failed', message: requestError.message });
       setMessages(prev => [...prev, { role: 'assistant', text: requestError.message, error: true }]);
     } finally {
-      setPending(false);
+      if (requestIdRef.current === requestId) setPending(false);
     }
   };
 
@@ -149,6 +171,7 @@ export function AiPatternAssistant({
             <textarea
               value={input}
               onChange={event => setInput(event.target.value)}
+              aria-label="AI pattern instruction"
               placeholder="Make this slower and smoother..."
               rows={3}
             />
