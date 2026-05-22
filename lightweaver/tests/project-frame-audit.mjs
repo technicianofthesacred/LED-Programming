@@ -4,6 +4,11 @@ import { compile, evalPixel } from '../src/lib/patterns.js';
 import { createDefaultProject, migrateProject, PROJECT_VERSION } from '../src/lib/projectModel.js';
 import { normalizePalette, renderPixelFrame } from '../src/lib/frameEngine.js';
 import { makeBlackoutFrame, makeWledFrameMessage, makeWledSegments } from '../src/lib/deviceController.js';
+import {
+  easeCrossfade,
+  formatMotionSpeed,
+  smoothPixelFrame,
+} from '../src/lib/motionSmoothing.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
@@ -26,22 +31,28 @@ for (const pattern of PATTERNS) {
 const defaultProject = createDefaultProject();
 assert.equal(defaultProject.version, PROJECT_VERSION);
 assert.deepEqual(defaultProject.devices, { wledIp: '', segmentMap: {} });
+assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
 const migratedV1 = migrateProject({
   version: 1,
   name: 'Legacy',
   strips: [{ id: 's1', name: 'Strip 1', pixelCount: 2, pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }],
   showClips: [{ id: 'c', track: 0, patternId: 'aurora', start: 0, end: 1 }],
+  motionSmoothing: 'off',
 });
 assert.equal(migratedV1.version, PROJECT_VERSION);
 assert.equal(migratedV1.layout.strips.length, 1);
 assert.equal(migratedV1.show.clips.length, 1);
+assert.equal(migratedV1.pattern.motionSmoothing, 'off');
 const migratedV3 = migrateProject({
   version: PROJECT_VERSION,
   name: 'Hardware',
+  pattern: { motionSmoothing: 'silk' },
   devices: { wledIp: '192.168.4.22', segmentMap: { s1: 2 } },
 });
 assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
 assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
+assert.equal(migratedV3.pattern.motionSmoothing, 'silk');
+assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'invalid' } }).pattern.motionSmoothing, 'soft');
 
 const frame = renderPixelFrame({
   t: 0.2,
@@ -57,6 +68,28 @@ assert.equal(frame.stripFrames.length, 1);
 frame.pixels.forEach(px => {
   assert.ok(Number.isFinite(px.r) && Number.isFinite(px.g) && Number.isFinite(px.b));
 });
+
+assert.deepEqual(
+  smoothPixelFrame([{ r: 100, g: 50, b: 0 }], [{ r: 0, g: 0, b: 0 }], { mode: 'off', dt: 1 / 60 }),
+  [{ r: 100, g: 50, b: 0 }],
+);
+const softFrame = smoothPixelFrame([{ r: 100, g: 0, b: 0 }], [{ r: 0, g: 0, b: 0 }], { mode: 'soft', dt: 1 / 60 });
+assert.ok(softFrame[0].r > 0 && softFrame[0].r < 100, 'soft smoothing moves toward target without overshoot');
+const silkFrame = smoothPixelFrame([{ r: 100, g: 0, b: 0 }], [{ r: 0, g: 0, b: 0 }], { mode: 'silk', dt: 1 / 60 });
+assert.ok(silkFrame[0].r > 0 && silkFrame[0].r < softFrame[0].r, 'silk smoothing is slower than soft');
+assert.deepEqual(
+  smoothPixelFrame([{ r: 10, g: 20, b: 30 }, { r: 40, g: 50, b: 60 }], [{ r: 0, g: 0, b: 0 }], { mode: 'silk', dt: 1 / 60 }),
+  [{ r: 10, g: 20, b: 30 }, { r: 40, g: 50, b: 60 }],
+);
+assert.equal(easeCrossfade(0, 'ease-in-out'), 0);
+assert.equal(easeCrossfade(1, 'ease-in-out'), 1);
+assert.equal(easeCrossfade(-1, 'ease-in-out'), 0);
+assert.equal(easeCrossfade(2, 'ease-in-out'), 1);
+assert.equal(easeCrossfade(0.5, 'linear'), 0.5);
+assert.ok(easeCrossfade(0.25, 'ease-in-out') < 0.25);
+assert.ok(easeCrossfade(0.75, 'ease-in-out') > 0.75);
+assert.equal(formatMotionSpeed(0.03), '0.03x');
+assert.equal(formatMotionSpeed(1), '1.0x');
 
 assert.deepEqual(makeBlackoutFrame(2), [{ r: 0, g: 0, b: 0 }, { r: 0, g: 0, b: 0 }]);
 assert.deepEqual(makeWledFrameMessage([{ r: 1.2, g: 2.8, b: 300 }]).seg[0].i, [1, 3, 255]);

@@ -3,6 +3,11 @@ import { useProject } from '../state/ProjectContext.jsx';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { LEDPreview } from './Preview.jsx';
 import { makeBlackoutFrame } from '../lib/deviceController.js';
+import {
+  easeCrossfade,
+  formatMotionSpeed,
+  MOTION_SMOOTHING_MODES,
+} from '../lib/motionSmoothing.js';
 
 const LIVE_CATS = ['all', 'audio', 'fire', 'water', 'space', 'chill', 'geo', 'glitch', 'bpm'];
 const LIVE_CATEGORY_RULES = {
@@ -15,6 +20,15 @@ const LIVE_CATEGORY_RULES = {
   glitch:['glitch','matrix','neon','strobe','lightning','morse','digitrain','thermal','digital-rain-v2','strobe-color','neon-sign'],
   bpm:   ['strobe-bpm','kick-flash','beat-grid','pulse-expand','confetti-bpm','heartbeat','strobe-color'],
 };
+
+function clampCrossfadeDuration(value) {
+  const n = Number.isFinite(+value) ? +value : 0;
+  return Math.max(0, Math.min(120, n));
+}
+
+function formatCrossfadeDuration(seconds) {
+  return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
+}
 
 // ── Color map for pattern cards ────────────────────────────────────────────
 const CARD_COLORS = {
@@ -131,6 +145,7 @@ export function LiveScreen() {
     masterBrightness, setMasterBrightness,
     masterSaturation, setMasterSaturation,
     masterHueShift, setMasterHueShift,
+    motionSmoothing, setMotionSmoothing,
     gammaEnabled, gammaValue,
     wledPush, symSettings,
   } = useProject();
@@ -181,20 +196,28 @@ export function LiveScreen() {
   }, [setBpm]);
 
   const startCrossfade = useCallback((fromId, toId) => {
+    if (crossfadeDur <= 0 || fromId === toId) {
+      setBlendFrom(null);
+      setBlendAmt(0);
+      blendStartRef.current = null;
+      setActivePatternId(toId);
+      return;
+    }
     setBlendFrom(fromId);
     setBlendAmt(1);
     blendStartRef.current = performance.now();
     setActivePatternId(toId);
-  }, [setActivePatternId]);
+  }, [crossfadeDur, setActivePatternId]);
 
   // Animate crossfade amount
   useEffect(() => {
     if (blendFrom === null || blendAmt <= 0) return;
     const rafId = requestAnimationFrame(() => {
       const elapsed = (performance.now() - (blendStartRef.current || performance.now())) / 1000;
-      const newAmt = Math.max(0, 1 - elapsed / crossfadeDur);
+      const progress = crossfadeDur <= 0 ? 0 : Math.max(0, 1 - elapsed / crossfadeDur);
+      const newAmt = easeCrossfade(progress, 'ease-in-out');
       setBlendAmt(newAmt);
-      if (newAmt <= 0) setBlendFrom(null);
+      if (progress <= 0) setBlendFrom(null);
     });
     return () => cancelAnimationFrame(rafId);
   }, [blendFrom, blendAmt, crossfadeDur]);
@@ -273,6 +296,7 @@ export function LiveScreen() {
             gammaValue={gammaValue}
             bpm={bpm}
             symSettings={symSettings}
+            motionSmoothing={motionSmoothing}
             blendPatternId={blendFrom}
             blendAmount={blendAmt}
             blendType="crossfade"
@@ -318,9 +342,25 @@ export function LiveScreen() {
 
           <div className="lw-live-ctrl-row">
             <span className="k">Crossfade</span>
-            <input type="range" min="0" max="10" step="0.5" value={crossfadeDur}
-                   onChange={e => setCrossfadeDur(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v">{crossfadeDur}s</span>
+            <input type="range" min="0" max="120" step="0.5" value={crossfadeDur}
+                   onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))} style={{ flex: 1 }}/>
+            <input type="number" min="0" max="120" step="0.5" value={crossfadeDur}
+                   onChange={e => setCrossfadeDur(clampCrossfadeDuration(e.target.value))}
+                   className="lw-live-bpm-input" style={{ width: 58 }}/>
+            <span className="v">{formatCrossfadeDuration(crossfadeDur)}</span>
+          </div>
+
+          <div className="lw-live-ctrl-row">
+            <span className="k">Motion</span>
+            <div className="lw-tweaks-seg" style={{ flex: 1 }}>
+              {MOTION_SMOOTHING_MODES.map(mode => (
+                <button key={mode}
+                        className={motionSmoothing === mode ? 'active' : ''}
+                        onClick={() => setMotionSmoothing(mode)}>
+                  {mode}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="lw-live-ctrl-row">
@@ -337,9 +377,9 @@ export function LiveScreen() {
           </div>
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Speed</span>
-            <input type="range" min="0" max="4" step="0.05" value={masterSpeed}
+            <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
                    onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 28 }}>{masterSpeed.toFixed(1)}×</span>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 28 }}>{formatMotionSpeed(masterSpeed)}</span>
           </div>
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Hue</span>

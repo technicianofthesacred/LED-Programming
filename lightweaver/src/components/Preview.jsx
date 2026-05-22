@@ -6,6 +6,7 @@ import {
   renderPixelFrame,
   resolvePatternParams,
 } from '../lib/frameEngine.js';
+import { smoothPixelFrame } from '../lib/motionSmoothing.js';
 import { DEMO_STRIPS, PALETTE_DEFAULT } from '../data.js';
 
 function hexToNorm(hex) {
@@ -78,7 +79,7 @@ function renderFrame(canvas, t, p) {
     activeFn, blendFn, glow, dotSize, bpm, resolvedParams, paletteNorm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, blendAmount, blendType,
-    perStripFns, vb, heat,
+    perStripFns, vb, heat, motionSmoothing, previousPixels, frameDt,
   } = p;
 
   // ViewBox → canvas pixel mapping (letterbox, maintain aspect ratio)
@@ -94,8 +95,20 @@ function renderFrame(canvas, t, p) {
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, normBounds, perStripFns,
   });
-  const framePixels = frame.pixels;
-  const stripData = frame.stripFrames.map(s => ({ ...s, spacing: s.spacing ?? medianSpacing }));
+  const framePixels = smoothPixelFrame(frame.pixels, previousPixels, {
+    mode: motionSmoothing,
+    dt: frameDt,
+  });
+  let pixelOffset = 0;
+  const stripData = frame.stripFrames.map(s => {
+    const sourceLeds = s.leds || [];
+    const leds = sourceLeds.map((led, i) => ({
+      ...led,
+      ...(framePixels[pixelOffset + i] || {}),
+    }));
+    pixelOffset += sourceLeds.length;
+    return { ...s, leds, spacing: s.spacing ?? medianSpacing };
+  });
 
   // ── Glow — offscreen dots + GPU blur ────────────────────────────────────
   // Draw all LEDs as solid dots onto one offscreen canvas, then composite
@@ -190,6 +203,7 @@ export function LEDPreview({
   blendPatternId = null, blendAmount = 0, blendCompiledFn = null, blendType = 'crossfade',
   symSettings = null, audioBands = null, onFps = null,
   palette: paletteProp = null,
+  motionSmoothing = 'soft',
   heat = false,
 }) {
   const canvasRef = useRef(null);
@@ -197,6 +211,7 @@ export function LEDPreview({
   const tRef      = useRef(0);
   const fpsRef    = useRef({ count: 0, last: 0 });
   const staticRenderRef = useRef(0);
+  const previousPixelsRef = useRef(null);
   const propsRef  = useRef({});
 
   const paletteNorm = useMemo(
@@ -310,7 +325,7 @@ export function LEDPreview({
     activeFn, blendFn, blendAmount, blendType,
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    gammaLUT, symSettings, audioBands, vb, heat,
+    gammaLUT, symSettings, audioBands, vb, heat, motionSmoothing,
     onFrame, onFps, onTick,
   };
 
@@ -359,7 +374,12 @@ export function LEDPreview({
       const canvas = canvasRef.current;
       const shouldRender = p.playing || now - staticRenderRef.current > 250;
       if (canvas?.width && canvas?.height && shouldRender) {
-        const pixels = renderFrame(canvas, tRef.current, p);
+        const pixels = renderFrame(canvas, tRef.current, {
+          ...p,
+          previousPixels: previousPixelsRef.current,
+          frameDt: dt,
+        });
+        previousPixelsRef.current = pixels;
         staticRenderRef.current = now;
         if (p.playing) p.onFrame?.(pixels);
       }

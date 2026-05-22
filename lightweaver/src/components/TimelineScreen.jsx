@@ -74,15 +74,6 @@ function lanePath(keys, width, height, duration) {
   }).join(' ');
 }
 
-function applyTransitionCurve(t, curve) {
-  switch (curve) {
-    case 'ease-in-out': return t * t * (3 - 2 * t);
-    case 'exp':         return 1 - Math.pow(1 - t, 3);
-    case 's-curve':     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-    default:            return t;
-  }
-}
-
 function Ruler({ width, pxPerSec, cues, duration, loopRegion, onMouseDown, onContextMenu }) {
   const ticks = [];
   const step = pxPerSec >= 2 ? 30 : pxPerSec >= 1 ? 60 : 120;
@@ -299,9 +290,9 @@ function AudioLane({ width }) {
   );
 }
 
-function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, wledPush, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue }) {
-  const { patternId, blendPatternId, blendAmount, transType, transCurve } = resolveTimelinePlayback(playhead, clips, transitions);
-  const curvedBlend = blendAmount > 0 ? applyTransitionCurve(blendAmount, transCurve) : 0;
+function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, wledPush, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue, motionSmoothing }) {
+  const { patternId, blendPatternId, blendAmount, transType } = resolveTimelinePlayback(playhead, clips, transitions);
+  const curvedBlend = blendAmount;
 
   const handleFrame = useCallback((pixels) => {
     if (wledPush) wledPush(pixels);
@@ -340,6 +331,7 @@ function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, v
             gammaEnabled={gammaEnabled}
             gammaValue={gammaValue}
             bpm={bpm}
+            motionSmoothing={motionSmoothing}
             onFrame={handleFrame}
           />
         ) : (
@@ -668,6 +660,7 @@ export function TimelineScreen({ onExport }) {
     bpm,
     strips, viewBox, svgText, hidden,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
+    motionSmoothing,
     gammaEnabled, gammaValue,
     setShowDuration,
     wledPush,
@@ -1016,6 +1009,7 @@ export function TimelineScreen({ onExport }) {
           masterBrightness={masterBrightness}
           masterSaturation={masterSaturation}
           masterHueShift={masterHueShift}
+          motionSmoothing={motionSmoothing}
           gammaEnabled={gammaEnabled}
           gammaValue={gammaValue}
         />

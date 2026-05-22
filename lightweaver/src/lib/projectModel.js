@@ -5,6 +5,7 @@ import {
   DEFAULT_CUES,
   DEFAULT_TRANSITIONS,
 } from '../state/ProjectDefaults.js';
+import { normalizeMotionSmoothing } from './motionSmoothing.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -45,6 +46,7 @@ export function createDefaultProject() {
       gammaValue: 2.2,
       patternParams: {},
       bpm: 120,
+      motionSmoothing: 'soft',
       symSettings: DEFAULT_SYM_SETTINGS,
     },
     show: {
@@ -70,11 +72,13 @@ export function migrateProject(data) {
   const base = createDefaultProject();
 
   if (data.version === PROJECT_VERSION) {
+    const pattern = { ...base.pattern, ...(data.pattern || {}) };
+    pattern.motionSmoothing = normalizeMotionSmoothing(pattern.motionSmoothing);
     return {
       ...base,
       ...data,
       layout: { ...base.layout, ...(data.layout || {}) },
-      pattern: { ...base.pattern, ...(data.pattern || {}) },
+      pattern,
       show: { ...base.show, ...(data.show || {}) },
       live: { ...base.live, ...(data.live || {}) },
       devices: { ...base.devices, ...(data.devices || {}) },
@@ -111,6 +115,7 @@ export function migrateProject(data) {
         gammaValue: data.gammaValue ?? base.pattern.gammaValue,
         patternParams: data.patternParams || {},
         bpm: data.bpm || base.pattern.bpm,
+        motionSmoothing: normalizeMotionSmoothing(data.motionSmoothing || base.pattern.motionSmoothing),
         symSettings: data.symSettings ? { ...base.pattern.symSettings, ...data.symSettings } : base.pattern.symSettings,
       },
       show: {
@@ -149,6 +154,7 @@ export function toLegacyProject(project) {
     gammaValue: p.pattern.gammaValue,
     patternParams: p.pattern.patternParams,
     bpm: p.pattern.bpm,
+    motionSmoothing: p.pattern.motionSmoothing,
     symSettings: p.pattern.symSettings,
     showClips: p.show.clips,
     showTransitions: p.show.transitions,
