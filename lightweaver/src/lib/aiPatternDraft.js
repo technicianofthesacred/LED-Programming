@@ -3,7 +3,8 @@ import { normalizePalette, renderPixelFrame } from './frameEngine.js';
 import { parseParamsFromCode } from './patternParams.js';
 
 const REQUIRED_STRING_FIELDS = ['name', 'description', 'code'];
-const UNSAFE_TOKEN_RE = /(?:\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|class|async|await)\b|\bnew\s+(?!Error\b))/;
+const UNSAFE_TOKEN_RE = /\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|function|class|new|async|await|while|for|do)\b/;
+const STRING_LITERAL_RE = /["'`]/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
@@ -45,6 +46,20 @@ function normalizeSuggestedParams(suggestedParams) {
   return Object.fromEntries(
     Object.entries(suggestedParams).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)),
   );
+}
+
+function stripCodeComments(code = '') {
+  return String(code)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+}
+
+function validateDraftCodeSafety(code = '') {
+  const scanned = stripCodeComments(code);
+  if (STRING_LITERAL_RE.test(scanned) || UNSAFE_TOKEN_RE.test(scanned)) {
+    return { ok: false, error: { kind: 'unsafe-code', message: 'Draft code used a blocked JavaScript construct.' } };
+  }
+  return { ok: true };
 }
 
 export function stripPixelsToFrameStrips(strips = []) {
@@ -133,6 +148,21 @@ function prepareAiPatternPreview(draft, {
   return { ok: true, activeFn, frameStrips, params, paletteNorm, t, bpm, audioBands };
 }
 
+function prepareValidatedAiPatternDraft(rawDraft, options = {}) {
+  const normalized = normalizeDraftPayload(rawDraft);
+  if (!normalized.ok) return normalized;
+  const { draft } = normalized;
+  const safety = validateDraftCodeSafety(draft.code);
+  if (!safety.ok) return safety;
+  const prepared = prepareAiPatternPreview(draft, options);
+  if (!prepared.ok) return prepared;
+  return {
+    ...prepared,
+    draft,
+    paramDefs: parseParamsFromCode(draft.code),
+  };
+}
+
 function renderPreparedPreviewFrame(prepared) {
   return renderPixelFrame({
     t: prepared.t,
@@ -147,11 +177,18 @@ function renderPreparedPreviewFrame(prepared) {
 }
 
 export function buildAiPatternPreviewFrame(draft, options = {}) {
-  const prepared = prepareAiPatternPreview(draft, options);
+  const prepared = prepareValidatedAiPatternDraft(draft, options);
   if (!prepared.ok) {
-    throw new Error(prepared.error.message);
+    throwAiPatternDraftError(prepared.error);
   }
   return renderPreparedPreviewFrame(prepared);
+}
+
+function throwAiPatternDraftError(error) {
+  const thrown = new Error(error.message);
+  thrown.kind = error.kind;
+  thrown.error = error;
+  throw thrown;
 }
 
 function frameHasLight(frame) {
@@ -228,21 +265,14 @@ function getDraftNormBounds(pts) {
 }
 
 export function validateAiPatternDraft(rawDraft, options = {}) {
-  const normalized = normalizeDraftPayload(rawDraft);
-  if (!normalized.ok) return normalized;
-  const { draft } = normalized;
-  if (UNSAFE_TOKEN_RE.test(draft.code)) {
-    return { ok: false, error: { kind: 'unsafe-code', message: 'Draft code used a blocked browser or network API.' } };
-  }
-  const params = parseParamsFromCode(draft.code);
-  const prepared = prepareAiPatternPreview(draft, options);
+  const prepared = prepareValidatedAiPatternDraft(rawDraft, options);
   if (!prepared.ok) return prepared;
   try {
     const frame = renderPreparedPreviewFrame(prepared);
     if (!frameHasLight(frame) && !allowsBlackout(options.instruction)) {
       return { ok: false, error: { kind: 'blank-render', message: 'Draft rendered as a blackout.' } };
     }
-    return { ok: true, draft, params, frame };
+    return { ok: true, draft: prepared.draft, params: prepared.paramDefs, frame };
   } catch (error) {
     return { ok: false, error: { kind: 'runtime-error', message: error.message || 'Draft failed during preview.' } };
   }

@@ -151,6 +151,47 @@ const computedUnsafeDraft = validateAiPatternDraft({
 assert.equal(computedUnsafeDraft.ok, false);
 assert.equal(computedUnsafeDraft.error.kind, 'unsafe-code');
 
+const reconstructedUnsafeDraft = validateAiPatternDraft({
+  name: 'Reconstructed Unsafe',
+  description: 'Attempts constructor reconstruction.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: '[]["filter"]["constr"+"uctor"]("return 1")(); return rgb(1,1,1);',
+});
+assert.equal(reconstructedUnsafeDraft.ok, false);
+assert.equal(reconstructedUnsafeDraft.error.kind, 'unsafe-code');
+
+const functionUnsafeDraft = validateAiPatternDraft({
+  name: 'Function Unsafe',
+  description: 'Attempts dynamic this access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'function leak(){ return this; } return rgb(1,1,1);',
+});
+assert.equal(functionUnsafeDraft.ok, false);
+assert.equal(functionUnsafeDraft.error.kind, 'unsafe-code');
+
+const whileUnsafeDraft = validateAiPatternDraft({
+  name: 'While Unsafe',
+  description: 'Attempts an unbounded loop.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'while (true) {} return rgb(1,1,1);',
+});
+assert.equal(whileUnsafeDraft.ok, false);
+assert.equal(whileUnsafeDraft.error.kind, 'unsafe-code');
+
+assert.throws(
+  () => buildAiPatternPreviewFrame({
+    name: 'Unsafe Direct Preview',
+    description: 'Attempts browser access without validation.',
+    changeSummary: ['Invalid'],
+    palette: ['#000000', '#ffffff'],
+    code: 'fetch("https://example.com"); return rgb(1,1,1);',
+  }),
+  error => error.kind === 'unsafe-code',
+);
+
 const invalidShapeDraft = validateAiPatternDraft({
   description: 'Missing required name.',
   changeSummary: ['Invalid'],
@@ -195,7 +236,7 @@ const runtimeErrorDraft = validateAiPatternDraft({
   description: 'Throws while rendering.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
-  code: 'throw new Error("boom");',
+  code: 'throw 1;',
 });
 assert.equal(runtimeErrorDraft.ok, false);
 assert.equal(runtimeErrorDraft.error.kind, 'runtime-error');
@@ -205,7 +246,7 @@ const getterRuntimeErrorDraft = validateAiPatternDraft({
   description: 'Throws while reading returned color.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
-  code: 'return { get r() { throw new Error("boom") }, g: 0, b: 0 };',
+  code: 'return { get r() { throw 1; }, g: 0, b: 0 };',
 });
 assert.equal(getterRuntimeErrorDraft.ok, false);
 assert.equal(getterRuntimeErrorDraft.error.kind, 'runtime-error');
@@ -215,9 +256,8 @@ assert.throws(
     description: 'Throws while reading returned color.',
     changeSummary: ['Invalid'],
     palette: ['#000000', '#ffffff'],
-    code: 'return { get r() { throw new Error("boom") }, g: 0, b: 0 };',
+    code: 'return { get r() { throw 1; }, g: 0, b: 0 };',
   }),
-  /boom/,
 );
 
 const indexedRuntimeDraft = {
@@ -225,7 +265,7 @@ const indexedRuntimeDraft = {
   description: 'Throws on a later pixel.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
-  code: 'if (index === 3) throw new Error("boom"); return rgb(1,1,1);',
+  code: 'if (index === 3) throw 1; return rgb(1,1,1);',
 };
 const indexedRuntimeOptions = {
   strips: [{
@@ -238,7 +278,6 @@ assert.equal(indexedRuntimeErrorDraft.ok, false);
 assert.equal(indexedRuntimeErrorDraft.error.kind, 'runtime-error');
 assert.throws(
   () => buildAiPatternPreviewFrame(indexedRuntimeDraft, indexedRuntimeOptions),
-  /boom/,
 );
 
 const mutatingParamsRuntimeDraft = {
@@ -246,7 +285,7 @@ const mutatingParamsRuntimeDraft = {
   description: 'Mutates params before throwing.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
-  code: '// @param touched float 0 0 1\nif (params.touched) throw new Error("boom");\nparams.touched = 1;\nreturn rgb(1, 1, 1);',
+  code: '// @param touched float 0 0 1\nif (params.touched) throw 1;\nparams.touched = 1;\nreturn rgb(1, 1, 1);',
 };
 const mutatingParamsRuntimeErrorDraft = validateAiPatternDraft(mutatingParamsRuntimeDraft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }],
@@ -264,7 +303,7 @@ const nestedParamsRuntimeDraft = validateAiPatternDraft({
   description: 'Mutates nested params before throwing.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
-  code: 'if (params.state.touched) throw new Error("boom");\nparams.state.touched = true;\nreturn rgb(1, 1, 1);',
+  code: 'if (params.state.touched) throw 1;\nparams.state.touched = true;\nreturn rgb(1, 1, 1);',
   suggestedParams: { state: { touched: false } },
 }, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
@@ -355,7 +394,7 @@ const noBuiltInParamsDraft = {
   description: 'Should not inherit built-in pattern params.',
   changeSummary: ['Avoids default params'],
   palette: ['#000000', '#ffffff'],
-  code: 'if (params.speed) throw new Error("boom"); return rgb(1, 1, 1);',
+  code: 'if (params.speed) throw 1; return rgb(1, 1, 1);',
   suggestedParams: {},
 };
 const noBuiltInParamsValidation = validateAiPatternDraft(noBuiltInParamsDraft, {
