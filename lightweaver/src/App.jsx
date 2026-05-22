@@ -24,6 +24,7 @@ const ExportScreen = lazy(() => import('./components/OtherScreens.jsx').then(m =
 const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.FlashScreen })));
 const DevicesPanel = lazy(() => import('./components/DevicesPanel.jsx').then(m => ({ default: m.DevicesPanel })));
 const SettingsScreen = lazy(() => import('./components/SettingsScreen.jsx').then(m => ({ default: m.SettingsScreen })));
+const AiPatternAssistant = lazy(() => import('./components/AiPatternAssistant.jsx').then(m => ({ default: m.AiPatternAssistant })));
 
 const ModeIcon = {
   cards: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25"><rect x="2" y="2" width="5" height="5" rx="0.5"/><rect x="9" y="2" width="5" height="5" rx="0.5"/><rect x="2" y="9" width="5" height="5" rx="0.5"/><rect x="9" y="9" width="5" height="5" rx="0.5"/></svg>,
@@ -38,6 +39,9 @@ function PatternPanel({
   params, setParams,
   palette, onPaletteChange,
   onCodeChange,
+  strips,
+  audioBands,
+  onAcceptAiDraft,
   masterSpeed, setMasterSpeed,
   masterBrightness, setMasterBrightness,
   masterSaturation, setMasterSaturation,
@@ -55,6 +59,16 @@ function PatternPanel({
           </button>
         ))}
       </div>
+      <Suspense fallback={null}>
+        <AiPatternAssistant
+          patternId={patternId}
+          palette={palette}
+          params={params}
+          strips={strips}
+          audioBands={audioBands}
+          onAcceptDraft={onAcceptAiDraft}
+        />
+      </Suspense>
       <div className="lw-panel-body">
         {panelMode === 'cards' && (
           <CardsMode patternId={patternId} onSelectPattern={onSelectPattern}
@@ -188,6 +202,11 @@ function PatternScreen({ panelMode, setPanelMode }) {
     setPatternId(id);
     setCompiledFn(null);
   }, [setPatternId]);
+
+  const handleAcceptAiDraft = useCallback((acceptedDraft) => {
+    console.info('AI draft accepted', acceptedDraft.name);
+    return null;
+  }, []);
 
   const cur = PATTERNS.find(p => p.id === patternId);
   const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
@@ -324,6 +343,9 @@ function PatternScreen({ panelMode, setPanelMode }) {
             params={params} setParams={setParams}
             palette={palette} onPaletteChange={setPalette}
             onCodeChange={handleCodeChange}
+            strips={projectStrips}
+            audioBands={audioBands}
+            onAcceptAiDraft={handleAcceptAiDraft}
             masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}
             masterBrightness={masterBrightness} setMasterBrightness={setMasterBrightness}
             masterSaturation={masterSaturation} setMasterSaturation={setMasterSaturation}

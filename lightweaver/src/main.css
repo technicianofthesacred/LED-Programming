@@ -503,6 +503,183 @@ input, select, textarea { font: inherit; color: inherit; }
 .lw-panel-body::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 .lw-panel-body::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
 
+.lw-ai-assistant {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--surface) 88%, var(--bg));
+}
+.lw-ai-toggle {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: 0 var(--s-5);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-align: left;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.lw-ai-toggle:hover,
+.lw-ai-assistant.open .lw-ai-toggle {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.lw-ai-toggle span {
+  font-weight: 600;
+}
+.lw-ai-toggle strong {
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--accent);
+}
+.lw-ai-body {
+  display: grid;
+  gap: var(--s-4);
+  padding: 0 var(--s-5) var(--s-5);
+}
+.lw-ai-context {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.lw-ai-context strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.lw-ai-empty {
+  color: var(--text-4);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.lw-ai-messages {
+  max-height: 150px;
+  display: grid;
+  gap: var(--s-3);
+  overflow-y: auto;
+}
+.lw-ai-message {
+  width: fit-content;
+  max-width: 92%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.lw-ai-message.user {
+  justify-self: end;
+  border-color: oklch(74% 0.13 210 / 0.34);
+  background: oklch(74% 0.13 210 / 0.12);
+  color: var(--text);
+}
+.lw-ai-message.assistant {
+  justify-self: start;
+}
+.lw-ai-message.error {
+  border-color: oklch(64% 0.20 25 / 0.42);
+  background: oklch(64% 0.20 25 / 0.12);
+  color: var(--text);
+}
+.lw-ai-draft {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.lw-ai-draft p {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.lw-ai-draft ul {
+  margin-left: var(--s-5);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.lw-ai-draft-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+.lw-ai-draft-head .eyebrow {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+}
+.lw-ai-draft-head .title {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.lw-ai-draft-head > span {
+  flex-shrink: 0;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+.lw-ai-swatches {
+  display: flex;
+  min-height: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.lw-ai-swatches span {
+  flex: 1;
+  min-width: 18px;
+}
+.lw-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+.lw-ai-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--s-3);
+  align-items: end;
+}
+.lw-ai-input-row textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+.lw-ai-input-row textarea::placeholder {
+  color: var(--text-4);
+}
+.lw-ai-error {
+  display: grid;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid oklch(64% 0.20 25 / 0.42);
+  border-radius: var(--r-md);
+  background: oklch(64% 0.20 25 / 0.12);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.lw-ai-error strong {
+  color: var(--danger);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+
 .lw-sec-header {
   display: flex; align-items: center; justify-content: space-between;
   margin: var(--s-5) 0 var(--s-3);
