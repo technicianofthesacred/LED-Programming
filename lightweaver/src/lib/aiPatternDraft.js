@@ -14,6 +14,8 @@ const ARROW_FUNCTION_RE = /=>/;
 const BIGINT_LITERAL_RE = /\b\d+n\b/;
 const SHIFT_OPERATOR_RE = />>>|<<|>>/;
 const STRING_LITERAL_RE = /["'`]/;
+const INDIRECT_CALL_RE = /\)\s*\(/;
+const OPTIONAL_CHAIN_RE = /\?\./;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
 const FBM_OCTAVE_LIMIT = 12;
@@ -113,9 +115,10 @@ function stripCodeComments(code = '') {
 }
 
 function validateDraftCodeSafety(code = '') {
-  const scanned = stripCodeComments(code);
+  const rawCode = String(code);
+  const scanned = stripCodeComments(rawCode);
   if (
-    scanned.length > MAX_CODE_LENGTH
+    rawCode.length > MAX_CODE_LENGTH
     || BACKSLASH_RE.test(scanned)
     || NON_ASCII_OR_CONTROL_RE.test(scanned)
     || STRING_LITERAL_RE.test(scanned)
@@ -123,6 +126,8 @@ function validateDraftCodeSafety(code = '') {
     || ARROW_FUNCTION_RE.test(scanned)
     || BIGINT_LITERAL_RE.test(scanned)
     || SHIFT_OPERATOR_RE.test(scanned)
+    || INDIRECT_CALL_RE.test(scanned)
+    || OPTIONAL_CHAIN_RE.test(scanned)
     || UNSAFE_TOKEN_RE.test(scanned)
     || UNSAFE_METHOD_RE.test(scanned)
     || hasUnsafeMemberAccess(scanned)
@@ -342,7 +347,7 @@ function wrapDraftFunction(fn) {
 }
 
 function buildReadOnlyParams(params = {}) {
-  return new Proxy(Object.freeze({ ...params }), {
+  return new Proxy(Object.freeze(Object.assign(Object.create(null), params)), {
     set() {
       throw new Error('Draft params are read-only.');
     },

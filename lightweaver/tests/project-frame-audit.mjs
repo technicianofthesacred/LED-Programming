@@ -367,6 +367,66 @@ const tooDeepNestingDraft = validateAiPatternDraft({
 assert.equal(tooDeepNestingDraft.ok, false);
 assert.equal(tooDeepNestingDraft.error.kind, 'unsafe-code');
 
+const parenthesizedFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Parenthesized Fbm Unsafe',
+  description: 'Attempts parenthesized fbm call.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1, (fbm)(x, y, 13), 0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(parenthesizedFbmUnsafeDraft.ok, false);
+assert.equal(parenthesizedFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const commaFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Comma Fbm Unsafe',
+  description: 'Attempts comma-expression fbm call.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1, (0, fbm)(x, y, 13), 0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(commaFbmUnsafeDraft.ok, false);
+assert.equal(commaFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const parenthesizedAliasFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Parenthesized Alias Fbm Unsafe',
+  description: 'Attempts parenthesized local helper alias call.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const f = fbm; return rgb(1, (f)(x, y, 13), 0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(parenthesizedAliasFbmUnsafeDraft.ok, false);
+assert.equal(parenthesizedAliasFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const parenthesizedHelperCapDraft = validateAiPatternDraft({
+  name: 'Parenthesized Helper Cap',
+  description: 'Attempts too many parenthesized helper calls.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: `const v = ${Array.from({ length: 81 }, () => '(sin)(0)').join(' + ')}; return rgb(1,1,1);`,
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(parenthesizedHelperCapDraft.ok, false);
+assert.equal(parenthesizedHelperCapDraft.error.kind, 'unsafe-code');
+
+const longCommentUnsafeDraft = validateAiPatternDraft({
+  name: 'Long Comment Unsafe',
+  description: 'Attempts excessive raw code length.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: `/* ${'x'.repeat(4100)} */ return rgb(1,1,1);`,
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(longCommentUnsafeDraft.ok, false);
+assert.equal(longCommentUnsafeDraft.error.kind, 'unsafe-code');
+
 assert.throws(
   () => buildAiPatternPreviewFrame({
     name: 'Unsafe Direct Preview',
@@ -592,6 +652,17 @@ const multiConstDraft = validateAiPatternDraft({
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
 assert.equal(multiConstDraft.ok, true);
+
+const groupedArithmeticDraft = validateAiPatternDraft({
+  name: 'Grouped Arithmetic',
+  description: 'Allows normal parenthesized arithmetic.',
+  changeSummary: ['Uses grouped arithmetic'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const v = ((x + y) * 0.5); return rgb(v,0,0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+});
+assert.equal(groupedArithmeticDraft.ok, true);
 
 const runtimeWriteUnsafeDraft = validateAiPatternDraft({
   name: 'Runtime Write Unsafe',
