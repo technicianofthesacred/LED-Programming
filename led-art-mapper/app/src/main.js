@@ -17,7 +17,7 @@ import { javascript }                                from '@codemirror/lang-java
 import { oneDark }                                   from '@codemirror/theme-one-dark';
 
 import { CanvasManager }                             from './canvas.js';
-import { samplePath, assignIndices, getAllPixels }   from './mapper.js';
+import { samplePath, assignIndices }                 from './mapper.js';
 import { compile, evalPixel, _evalErrorState }       from './patterns.js';
 import { PreviewRenderer }                           from './preview.js';
 import { toWLEDLedmap, toFastLED, toCSV, download } from './export.js';
@@ -183,6 +183,26 @@ function _pushHistory() {
   _updateUndoRedoUI();
 }
 
+function _stripWorldPixels(strip) {
+  const ox = strip.offsetX || 0;
+  const oy = strip.offsetY || 0;
+  return (strip.pixels || []).map(px => ({
+    ...px,
+    x: px.x + ox,
+    y: px.y + oy,
+  }));
+}
+
+function _allWorldPixels(strips = state.strips) {
+  return strips.flatMap(strip => _stripWorldPixels(strip));
+}
+
+function _sampleStripPixels(strip, pathEl) {
+  strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
+  if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
+  return strip.pixels;
+}
+
 function _restoreSnapshot(snap) {
   // If artwork changed (e.g. layer deleted), re-import SVG and restore layer list
   const artworkChanged = snap.svgSource !== state._svgSource ||
@@ -223,12 +243,7 @@ function _restoreSnapshot(snap) {
     canvasManager.addStrip(strip);
     const pathEl = canvasManager.getPathEl(strip.id);
     strip.svgLength = strip.svgLength ?? pathEl?.getTotalLength() ?? 0;
-    strip.pixels    = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
-    if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    if (strip.offsetX || strip.offsetY) {
-      const ox = strip.offsetX || 0, oy = strip.offsetY || 0;
-      strip.pixels.forEach(px => { px.x += ox; px.y += oy; });
-    }
+    _sampleStripPixels(strip, pathEl);
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   }
@@ -698,14 +713,13 @@ const canvasManager = new CanvasManager(svgEl, {
     _markDirty();
     const pathEl = canvasManager.getPathEl(strip.id);
     if (strip.svgLength == null && pathEl) strip.svgLength = pathEl.getTotalLength();
-    strip.pixels     = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
+    _sampleStripPixels(strip, pathEl);
     strip.visible    = strip.visible    ?? true;
     strip.speed      = strip.speed      ?? 1.0;
     strip.brightness = strip.brightness ?? 1.0;  // A1
     strip.hueShift   = strip.hueShift   ?? 0;    // A3
     strip.reversed   = strip.reversed   ?? false; // A4
     strip.patternId  = strip.patternId  ?? null;  // C1
-    if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     state.strips.push(strip);
     _reindex();
@@ -808,10 +822,12 @@ const canvasManager = new CanvasManager(svgEl, {
     if (!strip) return;
     strip.offsetX = (strip.offsetX || 0) + dx;
     strip.offsetY = (strip.offsetY || 0) + dy;
-    strip.pixels.forEach(px => { px.x += dx; px.y += dy; });
+    canvasManager.setStripOffset(id, strip.offsetX, strip.offsetY);
     _reindex();
     _rebuildNorm();
     canvasManager.setStripDots(id, strip.pixels);
+    canvasManager.renderConnections(state.connections);
+    _markDirty();
   },
 });
 
@@ -890,7 +906,7 @@ function _createQuickStrip(name, pathData, pixelCount, color) {
   canvasManager.addStrip(strip);
   const pathEl = canvasManager.getPathEl(strip.id);
   strip.svgLength = pathEl?.getTotalLength() ?? 0;
-  strip.pixels    = pathEl ? samplePath(pathEl, pixelCount) : [];
+  _sampleStripPixels(strip, pathEl);
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
@@ -1001,7 +1017,7 @@ function _rebuildNorm() {
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   for (const strip of visibleStrips) {
-    for (const p of strip.pixels) {
+    for (const p of _stripWorldPixels(strip)) {
       if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
     }
@@ -1013,7 +1029,7 @@ function _rebuildNorm() {
   state.normalisedPixels = [];
   for (const strip of visibleStrips) {
     const chainInfo = state.chainById.get(strip.id);
-    strip.pixels.forEach((px, localIdx) => {
+    _stripWorldPixels(strip).forEach((px, localIdx) => {
       const chainIndex  = chainInfo ? chainInfo.offset + localIdx : px.index;
       const chainTotal  = chainInfo ? chainInfo.total              : strip.pixelCount;
       const chainRootId = chainInfo ? chainInfo.chainId            : strip.id;
@@ -1243,10 +1259,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     if (!n || n < 1) return;
     strip.pixelCount = n;
     const pathEl = canvasManager.getPathEl(strip.id);
-    if (pathEl) {
-      strip.pixels = samplePath(pathEl, n);
-      if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    }
+    _sampleStripPixels(strip, pathEl);
     _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     renderStripsList(); syncExportInfo();
@@ -1300,10 +1313,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     strip.reversed = !strip.reversed;
     /** @type {HTMLButtonElement} */ (e.target).classList.toggle('active', strip.reversed);
     const pathEl = canvasManager.getPathEl(strip.id);
-    if (pathEl) {
-      strip.pixels = samplePath(pathEl, strip.pixelCount);
-      if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    }
+    _sampleStripPixels(strip, pathEl);
     _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.refreshStripArrow(strip.id);
@@ -1372,11 +1382,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     canvasManager.addStrip(newStrip);
     const pathEl = canvasManager.getPathEl(newStrip.id);
     newStrip.svgLength = pathEl?.getTotalLength() ?? strip.svgLength;
-    newStrip.pixels    = pathEl ? samplePath(pathEl, newStrip.pixelCount) : [];
-    if (newStrip.offsetX || newStrip.offsetY) {
-      const ox = newStrip.offsetX || 0, oy = newStrip.offsetY || 0;
-      newStrip.pixels.forEach(px => { px.x += ox; px.y += oy; });
-    }
+    _sampleStripPixels(newStrip, pathEl);
     state.strips.push(newStrip);
     state.stripTimes.set(newStrip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(newStrip.id, newStrip.pixels);
@@ -2106,10 +2112,7 @@ function recallScene(id, crossfade = true) {
     // so we resample fresh then apply the reversal flag, otherwise stale pixel arrays carry
     // a stale orientation and scene restore produces wrong pixel order.
     const pathEl2 = canvasManager.getPathEl(strip.id);
-    if (pathEl2) {
-      strip.pixels = samplePath(pathEl2, strip.pixelCount);
-      if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    }
+    _sampleStripPixels(strip, pathEl2);
   });
 
   // C3: restore group overrides
@@ -2622,7 +2625,7 @@ function syncExportInfo() {
 }
 
 function refreshExportPreview() {
-  const pixels = getAllPixels(state.strips);
+  const pixels = _allWorldPixels();
   const el     = document.getElementById('export-preview');
   if (!pixels.length) { el.textContent = '(no sections defined)'; return; }
   const full  = toWLEDLedmap(pixels, _exportOpts());
@@ -2667,7 +2670,7 @@ function _showStripPopup(strip) {
     const quadrantCount = [0, 0, 0, 0]; // TL, TR, BL, BR
     const midX = wRect.left + wRect.width  / 2;
     const midY = wRect.top  + wRect.height / 2;
-    for (const p of strip.pixels) {
+    for (const p of _stripWorldPixels(strip)) {
       const pt = svgEl.createSVGPoint();
       pt.x = p.x; pt.y = p.y;
       const sp = pt.matrixTransform(ctm);
@@ -2911,19 +2914,13 @@ async function loadProject(file) {
     canvasManager.addStrip(strip);
     const pathEl     = canvasManager.getPathEl(strip.id);
     strip.svgLength  = strip.svgLength  ?? pathEl?.getTotalLength() ?? 0;
-    strip.pixels     = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
     strip.visible    = strip.visible    ?? true;
     strip.speed      = strip.speed      ?? 1.0;
     strip.brightness = strip.brightness ?? 1.0;
     strip.hueShift   = strip.hueShift   ?? 0;
     strip.reversed   = strip.reversed   ?? false;
     strip.patternId  = strip.patternId  ?? null; // C1
-    if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    // Apply drag offset saved in project — pixels sampled at origin, need shift
-    if (strip.offsetX || strip.offsetY) {
-      const ox = strip.offsetX || 0, oy = strip.offsetY || 0;
-      strip.pixels.forEach(px => { px.x += ox; px.y += oy; });
-    }
+    _sampleStripPixels(strip, pathEl);
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   });
@@ -3060,18 +3057,13 @@ function _lsRestore() {
     canvasManager.addStrip(strip);
     const pathEl      = canvasManager.getPathEl(strip.id);
     strip.svgLength   = strip.svgLength   ?? pathEl?.getTotalLength() ?? 0;
-    strip.pixels      = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
     strip.visible     = strip.visible     ?? true;
     strip.speed       = strip.speed       ?? 1.0;
     strip.brightness  = strip.brightness  ?? 1.0;
     strip.hueShift    = strip.hueShift    ?? 0;
     strip.reversed    = strip.reversed    ?? false;
     strip.patternId   = strip.patternId   ?? null;
-    if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    if (strip.offsetX || strip.offsetY) {
-      const ox = strip.offsetX || 0, oy = strip.offsetY || 0;
-      strip.pixels.forEach(px => { px.x += ox; px.y += oy; });
-    }
+    _sampleStripPixels(strip, pathEl);
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   });
@@ -3920,7 +3912,7 @@ function _addGroupAsStrip(group) {
   };
   canvasManager.addStrip(strip);
   const pathEl = canvasManager.getPathEl(strip.id);
-  strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
+  _sampleStripPixels(strip, pathEl);
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
@@ -4081,10 +4073,7 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     strip.name       = name;
     strip.pixelCount = pixelCount;
     const pathEl = canvasManager.getPathEl(strip.id);
-    if (pathEl) {
-      strip.pixels = samplePath(pathEl, pixelCount);
-      if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-    }
+    _sampleStripPixels(strip, pathEl);
     _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.renderConnections(state.connections);
@@ -4108,7 +4097,7 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     };
     canvasManager.addStrip(strip);
     const pathEl = canvasManager.getPathEl(strip.id);
-    strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
+    _sampleStripPixels(strip, pathEl);
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(strip.id, strip.pixels);
@@ -4169,7 +4158,7 @@ document.getElementById('path-sel-add')?.addEventListener('click', () => {
   };
   canvasManager.addStrip(strip);
   const pathEl = canvasManager.getPathEl(strip.id);
-  strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
+  _sampleStripPixels(strip, pathEl);
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
@@ -4339,17 +4328,17 @@ document.getElementById('btn-play-toolbar').addEventListener('click', () => {
 
 // Export
 document.getElementById('btn-export-wled').addEventListener('click', () => {
-  const pixels = getAllPixels(state.strips);
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toWLEDLedmap(pixels, _exportOpts()), 'ledmap.json');
 });
 document.getElementById('btn-export-fastled').addEventListener('click', () => {
-  const pixels = getAllPixels(state.strips);
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toFastLED(pixels, _exportOpts()), 'ledmap.h', 'text/plain');
 });
 document.getElementById('btn-export-csv').addEventListener('click', () => {
-  const pixels = getAllPixels(state.strips);
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toCSV(pixels), 'ledmap.csv', 'text/csv');
 });
@@ -4722,10 +4711,7 @@ document.getElementById('popup-pixels-input').addEventListener('change', e => {
   inp.value = String(n);
   strip.pixelCount = n;
   const pathEl = canvasManager.getPathEl(stripId);
-  if (pathEl) {
-    strip.pixels = samplePath(pathEl, n);
-    if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
-  }
+  _sampleStripPixels(strip, pathEl);
   _reindex(); _rebuildNorm();
   canvasManager.setStripDots(stripId, strip.pixels);
   canvasManager.renderConnections(state.connections);

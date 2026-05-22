@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
+  <g id="wave-layer" data-name="Wave">
+    <path d="M 70 220 C 135 165 265 165 330 220" fill="none" stroke="#27ae60" stroke-width="4"/>
+  </g>
+</svg>

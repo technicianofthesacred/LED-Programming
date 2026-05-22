@@ -305,6 +305,44 @@ export class CanvasManager {
     });
   }
 
+  _translateAttr(x = 0, y = 0) {
+    return x || y ? `translate(${x},${y})` : '';
+  }
+
+  _connectorWorldPos(entry, connG) {
+    const pos = this._connectorPos(connG);
+    return {
+      x: pos.x + (entry?.data?.offsetX || 0),
+      y: pos.y + (entry?.data?.offsetY || 0),
+    };
+  }
+
+  setStripOffset(id, x = 0, y = 0) {
+    const entry = this._strips.get(id);
+    if (!entry) return;
+
+    const transform = this._translateAttr(x, y);
+    if (transform) entry.g.setAttribute('transform', transform);
+    else entry.g.removeAttribute('transform');
+
+    if (entry.data.layerId) this.setLayerOffset(entry.data.layerId, x, y);
+  }
+
+  setLayerOffset(layerId, x = 0, y = 0) {
+    const transform = this._translateAttr(x, y);
+    const artworkLayer = this._findArtworkLayer(layerId);
+    if (artworkLayer) {
+      if (transform) artworkLayer.setAttribute('transform', transform);
+      else artworkLayer.removeAttribute('transform');
+    }
+
+    this.svg.querySelectorAll('#layer-hits [data-layer-id]').forEach(hit => {
+      if (hit.dataset.layerId !== layerId) return;
+      if (transform) hit.setAttribute('transform', transform);
+      else hit.removeAttribute('transform');
+    });
+  }
+
   // ── Strip public API ──────────────────────────────────────────────────────
 
   addStrip(strip) {
@@ -366,9 +404,7 @@ export class CanvasManager {
     this._strips.set(strip.id, { g, pathEl, hitPath, dotsG, labelEl, headC, tailC, data: strip });
 
     // Apply stored drag offset (from saved project or prior move)
-    if (strip.offsetX || strip.offsetY) {
-      g.setAttribute('transform', `translate(${strip.offsetX || 0},${strip.offsetY || 0})`);
-    }
+    this.setStripOffset(strip.id, strip.offsetX || 0, strip.offsetY || 0);
 
     // Strip drag-to-move: mousedown on hit target
     hitPath.addEventListener('mousedown', e => {
@@ -449,7 +485,7 @@ export class CanvasManager {
     if (!entry) return;
     const ox = entry.data.offsetX || 0;
     const oy = entry.data.offsetY || 0;
-    entry.g.setAttribute('transform', `translate(${(ox + dx).toFixed(1)},${(oy + dy).toFixed(1)})`);
+    this.setStripOffset(this._dragState.id, Number((ox + dx).toFixed(1)), Number((oy + dy).toFixed(1)));
     // Keep cursor grabbing across the whole window
     document.body.style.cursor = 'grabbing';
   }
@@ -490,7 +526,7 @@ export class CanvasManager {
   _startConnectionDrag(fromId, e) {
     this._draggingFrom = fromId;
     const entry = this._strips.get(fromId);
-    const startPt = this._connectorPos(entry.tailC);
+    const startPt = this._connectorWorldPos(entry, entry.tailC);
 
     // Ghost wire
     const ns = 'http://www.w3.org/2000/svg';
@@ -543,8 +579,8 @@ export class CanvasManager {
       const fromEntry = this._strips.get(fromId);
       const toEntry   = this._strips.get(toId);
       if (!fromEntry || !toEntry) return;
-      const from = this._connectorPos(fromEntry.tailC);
-      const to   = this._connectorPos(toEntry.headC);
+      const from = this._connectorWorldPos(fromEntry, fromEntry.tailC);
+      const to   = this._connectorWorldPos(toEntry, toEntry.headC);
       if (!from.x && !from.y) return; // connectors not positioned yet
 
       const dx = to.x - from.x;
@@ -821,6 +857,7 @@ export class CanvasManager {
   deleteStrip(id) {
     const entry = this._strips.get(id);
     if (!entry) return;
+    if (entry.data.layerId) this.setLayerOffset(entry.data.layerId, 0, 0);
     entry.g.remove();
     this._strips.delete(id);
     if (this.selectedId === id) {
@@ -902,7 +939,9 @@ export class CanvasManager {
   _findArtworkLayer(layerId) {
     const importedLayer = this.svg.querySelector('#imported-svg');
     if (!importedLayer) return null;
-    return Array.from(importedLayer.children).find(el => el.id === layerId) ?? null;
+    return Array.from(importedLayer.children).find(el => el.id === layerId)
+      ?? importedLayer.querySelector(`#${CSS.escape(layerId)}`)
+      ?? null;
   }
 
   /** Show or hide an individual imported artwork layer on the canvas. */
@@ -1244,6 +1283,8 @@ export class CanvasManager {
         hit.setAttribute('fill',           'none');
         hit.setAttribute('stroke-linecap', 'round');
         hit.setAttribute('pointer-events', 'stroke');
+        hit.dataset.layerId = layer.layerId;
+        hit.dataset.pathId = target.pathId || layer.layerId;
         hit.style.cursor = 'pointer';
 
         hit.addEventListener('mouseenter', () => {
@@ -1404,7 +1445,10 @@ export class CanvasManager {
   }
 
   clearStripsOnly() {
-    this._strips.forEach(entry => entry.g.remove());
+    this._strips.forEach(entry => {
+      if (entry.data.layerId) this.setLayerOffset(entry.data.layerId, 0, 0);
+      entry.g.remove();
+    });
     this._strips.clear();
     this.selectedId = null;
     this._cancelDraw();

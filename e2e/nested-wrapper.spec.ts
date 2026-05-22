@@ -1,9 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const NESTED_SVG = path.join(__dirname, 'fixtures', 'nested-wrapper.svg');
+const NESTED_SVG = 'e2e/fixtures/nested-wrapper.svg';
 
 /**
  * Illustrator (and some Inkscape) exports wrap real layers inside one outer

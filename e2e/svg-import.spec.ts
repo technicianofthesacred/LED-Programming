@@ -1,9 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIMPLE_SVG = path.join(__dirname, 'fixtures', 'simple-layers.svg');
+const SIMPLE_SVG = 'e2e/fixtures/simple-layers.svg';
 
 /**
  * Verifies the led-art-mapper boots, an SVG can be imported via the file
