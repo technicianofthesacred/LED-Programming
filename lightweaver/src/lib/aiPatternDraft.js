@@ -119,6 +119,7 @@ function validateDraftCodeSafety(code = '') {
     || hasUnsafeMemberAccess(scanned)
     || hasUnsafeNumericLiteral(scanned)
     || hasUnsafeFbmCall(scanned)
+    || hasUnsafeLocalCall(scanned)
     || hasUnsafeAssignment(scanned)
     || hasUnsafeIdentifier(scanned)
   ) {
@@ -172,11 +173,11 @@ function hasUnsafeFbmCall(code) {
 
 function extractCallArguments(code, name) {
   const calls = [];
+  const callRe = new RegExp(`\\b${name}\\s*\\(`, 'g');
   let index = 0;
-  while (index < code.length) {
-    const found = code.indexOf(`${name}(`, index);
-    if (found === -1) break;
-    const start = found + name.length + 1;
+  let match;
+  while ((match = callRe.exec(code)) !== null) {
+    const start = callRe.lastIndex;
     let depth = 1;
     for (let i = start; i < code.length; i++) {
       if (code[i] === '(') depth++;
@@ -184,12 +185,22 @@ function extractCallArguments(code, name) {
       if (depth === 0) {
         calls.push(splitTopLevelArgs(code.slice(start, i)));
         index = i + 1;
+        callRe.lastIndex = index;
         break;
       }
     }
     if (depth !== 0) break;
   }
   return calls;
+}
+
+function hasUnsafeLocalCall(code) {
+  const locals = collectLocalNames(code);
+  for (const name of locals) {
+    const callRe = new RegExp(`\\b${name}\\s*\\(`);
+    if (callRe.test(code)) return true;
+  }
+  return false;
 }
 
 function splitTopLevelArgs(args) {
@@ -335,8 +346,17 @@ function prepareValidatedAiPatternDraft(rawDraft, options = {}) {
   return {
     ...prepared,
     draft,
-    paramDefs: normalizeParamDefs(draft.code),
+    paramDefs: applySuggestedParamValues(normalizeParamDefs(draft.code), draft.suggestedParams),
   };
+}
+
+function applySuggestedParamValues(paramDefs, suggestedParams = {}) {
+  return paramDefs.map(param => ({
+    ...param,
+    value: Object.prototype.hasOwnProperty.call(suggestedParams, param.name)
+      ? clampNumber(suggestedParams[param.name], param.min, param.max)
+      : param.value,
+  }));
 }
 
 function renderPreparedPreviewFrame(prepared) {

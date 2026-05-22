@@ -271,6 +271,36 @@ const expensiveFbmUnsafeDraft = validateAiPatternDraft({
 assert.equal(expensiveFbmUnsafeDraft.ok, false);
 assert.equal(expensiveFbmUnsafeDraft.error.kind, 'unsafe-code');
 
+const spacedFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Spaced Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves with spacing.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(fbm (x, y, 1000) + 0.1, 0, 0);',
+});
+assert.equal(spacedFbmUnsafeDraft.ok, false);
+assert.equal(spacedFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const newlineFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Newline Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves with newline.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(fbm\n(x, y, 1000) + 0.1, 0, 0);',
+});
+assert.equal(newlineFbmUnsafeDraft.ok, false);
+assert.equal(newlineFbmUnsafeDraft.error.kind, 'unsafe-code');
+
+const aliasFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Alias Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves through alias.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const f = fbm; return rgb(f(x, y, 1000) + 0.1, 0, 0);',
+});
+assert.equal(aliasFbmUnsafeDraft.ok, false);
+assert.equal(aliasFbmUnsafeDraft.error.kind, 'unsafe-code');
+
 const methodUnsafeDraft = validateAiPatternDraft({
   name: 'Method Unsafe',
   description: 'Attempts method-style map access.',
@@ -546,14 +576,20 @@ const intentionalBlankPreviewFrame = buildAiPatternPreviewFrame({
 });
 assert.equal(intentionalBlankPreviewFrame.pixels.length, 1);
 
-const suggestedParamFrame = buildAiPatternPreviewFrame({
+const suggestedParamDraft = {
   name: 'Param Brightness',
   description: 'Uses suggested params.',
   changeSummary: ['Sets brightness'],
   palette: ['#000000', '#ffffff'],
   code: '// @param brightness float 0.1 0.0 1.0\nreturn rgb(params.brightness, 0, 0);',
   suggestedParams: { brightness: 0.8 },
-}, {
+};
+const suggestedParamValidation = validateAiPatternDraft(suggestedParamDraft, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(suggestedParamValidation.ok, true);
+assert.equal(suggestedParamValidation.params[0].value, 0.8);
+const suggestedParamFrame = buildAiPatternPreviewFrame(suggestedParamDraft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
 assert.ok(Math.abs(suggestedParamFrame.pixels[0].r - 204) < Math.abs(suggestedParamFrame.pixels[0].r - 26));
