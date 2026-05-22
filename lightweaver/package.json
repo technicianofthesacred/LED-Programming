@@ -7,15 +7,22 @@
     "dev": "vite",
     "build": "vite build",
     "test:core": "node tests/project-frame-audit.mjs",
-    "preview": "vite preview"
+    "test:server": "node tests/ai-pattern-server.mjs",
+    "preview": "vite preview",
+    "serve:pi": "node server/index.js",
+    "pi:build": "npm run build",
+    "pi:start": "npm run build && npm run serve:pi"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",
     "@codemirror/theme-one-dark": "^6.1.3",
     "codemirror": "^6.0.2",
     "esptool-js": "^0.6.0",
+    "express": "^5.2.1",
+    "openai": "^6.39.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
