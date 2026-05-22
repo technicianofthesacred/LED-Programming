@@ -151,6 +151,26 @@ const alertUnsafeDraft = validateAiPatternDraft({
 assert.equal(alertUnsafeDraft.ok, false);
 assert.equal(alertUnsafeDraft.error.kind, 'unsafe-code');
 
+const globalWriteUnsafeDraft = validateAiPatternDraft({
+  name: 'Global Write Unsafe',
+  description: 'Attempts sloppy-mode global writes.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'r = 1; get = 2; return rgb(1,1,1);',
+});
+assert.equal(globalWriteUnsafeDraft.ok, false);
+assert.equal(globalWriteUnsafeDraft.error.kind, 'unsafe-code');
+
+const nonAsciiUnsafeDraft = validateAiPatternDraft({
+  name: 'Non ASCII Unsafe',
+  description: 'Attempts non-ASCII identifier write.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'α = 1; return rgb(1,1,1);',
+});
+assert.equal(nonAsciiUnsafeDraft.ok, false);
+assert.equal(nonAsciiUnsafeDraft.error.kind, 'unsafe-code');
+
 const historyUnsafeDraft = validateAiPatternDraft({
   name: 'History Unsafe',
   description: 'Attempts browser history access.',
@@ -240,6 +260,16 @@ const allocationUnsafeDraft = validateAiPatternDraft({
 });
 assert.equal(allocationUnsafeDraft.ok, false);
 assert.equal(allocationUnsafeDraft.error.kind, 'unsafe-code');
+
+const expensiveFbmUnsafeDraft = validateAiPatternDraft({
+  name: 'Expensive Fbm Unsafe',
+  description: 'Attempts excessive fbm octaves.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(fbm(x, y, 1000), 0, 0);',
+});
+assert.equal(expensiveFbmUnsafeDraft.ok, false);
+assert.equal(expensiveFbmUnsafeDraft.error.kind, 'unsafe-code');
 
 const methodUnsafeDraft = validateAiPatternDraft({
   name: 'Method Unsafe',
@@ -339,7 +369,7 @@ const getterRuntimeErrorDraft = validateAiPatternDraft({
   code: 'return { get r() { throw 1; }, g: 0, b: 0 };',
 });
 assert.equal(getterRuntimeErrorDraft.ok, false);
-assert.equal(getterRuntimeErrorDraft.error.kind, 'runtime-error');
+assert.equal(getterRuntimeErrorDraft.error.kind, 'unsafe-code');
 assert.throws(
   () => buildAiPatternPreviewFrame({
     name: 'Getter Runtime Error',
@@ -348,6 +378,7 @@ assert.throws(
     palette: ['#000000', '#ffffff'],
     code: 'return { get r() { throw 1; }, g: 0, b: 0 };',
   }),
+  error => error.kind === 'unsafe-code',
 );
 
 const indexedRuntimeDraft = {
@@ -370,22 +401,23 @@ assert.throws(
   () => buildAiPatternPreviewFrame(indexedRuntimeDraft, indexedRuntimeOptions),
 );
 
-const mutatingParamsRuntimeDraft = {
-  name: 'Mutating Params Runtime Error',
-  description: 'Mutates params before throwing.',
+const mutatingParamsUnsafeDraft = {
+  name: 'Mutating Params Unsafe',
+  description: 'Attempts params assignment.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
   code: '// @param touched float 0 0 1\nif (params.touched) throw 1;\nparams.touched = 1;\nreturn rgb(1, 1, 1);',
 };
-const mutatingParamsRuntimeErrorDraft = validateAiPatternDraft(mutatingParamsRuntimeDraft, {
+const mutatingParamsUnsafeResult = validateAiPatternDraft(mutatingParamsUnsafeDraft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }] }],
 });
-assert.equal(mutatingParamsRuntimeErrorDraft.ok, false);
-assert.equal(mutatingParamsRuntimeErrorDraft.error.kind, 'runtime-error');
+assert.equal(mutatingParamsUnsafeResult.ok, false);
+assert.equal(mutatingParamsUnsafeResult.error.kind, 'unsafe-code');
 assert.throws(
-  () => buildAiPatternPreviewFrame(mutatingParamsRuntimeDraft, {
+  () => buildAiPatternPreviewFrame(mutatingParamsUnsafeDraft, {
     strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
   }),
+  error => error.kind === 'unsafe-code',
 );
 
 const nestedParamsUnsafeDraft = validateAiPatternDraft({
@@ -473,10 +505,46 @@ const standaloneMapDraft = validateAiPatternDraft({
 });
 assert.equal(standaloneMapDraft.ok, true);
 
+const validFbmDraft = validateAiPatternDraft({
+  name: 'Valid Fbm',
+  description: 'Uses capped fbm octaves.',
+  changeSummary: ['Uses fbm'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const v = fbm(x, y, 4); return rgb(1,1,1);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(validFbmDraft.ok, true);
+
 const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
 });
 assert.equal(previewFrame.pixels.length, 2);
+
+assert.throws(
+  () => buildAiPatternPreviewFrame({
+    name: 'Accidental Blank Preview',
+    description: 'Should not preview accidental blackout.',
+    changeSummary: ['Invalid'],
+    palette: ['#000000', '#111111'],
+    code: 'return rgb(0,0,0);',
+  }, {
+    instruction: 'make a dim shimmer',
+    strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+  }),
+  error => error.kind === 'blank-render',
+);
+const intentionalBlankPreviewFrame = buildAiPatternPreviewFrame({
+  name: 'Intentional Blank Preview',
+  description: 'Allows intentional blackout preview.',
+  changeSummary: ['Turns LEDs off'],
+  palette: ['#000000', '#111111'],
+  code: 'return rgb(0,0,0);',
+}, {
+  instruction: 'blackout the lights',
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(intentionalBlankPreviewFrame.pixels.length, 1);
 
 const suggestedParamFrame = buildAiPatternPreviewFrame({
   name: 'Param Brightness',

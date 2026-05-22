@@ -7,6 +7,7 @@ const UNSAFE_TOKEN_RE = /\b(fetch|XMLHttpRequest|localStorage|sessionStorage|doc
 const UNSAFE_METHOD_RE = /\.(fill|map|filter|reduce|flatMap|from|of)\b/;
 const IDENTIFIER_RE = /\b[A-Za-z_$][\w$]*\b/g;
 const NUMERIC_LITERAL_RE = /(?<![\w$])(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?![\w$])/g;
+const NON_ASCII_OR_CONTROL_RE = /[^\x09\x0a\x0d\x20-\x7e]/;
 const BACKSLASH_RE = /\\/;
 const BRACKET_RE = /[\[\]]/;
 const ARROW_FUNCTION_RE = /=>/;
@@ -15,6 +16,7 @@ const SHIFT_OPERATOR_RE = />>>|<<|>>/;
 const STRING_LITERAL_RE = /["'`]/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
+const FBM_OCTAVE_LIMIT = 12;
 const PARAM_VALUE_LIMIT = 100000;
 const SAFE_PATTERN_THIS = Object.freeze(Object.create(null));
 const ALLOWED_IDENTIFIERS = new Set([
@@ -26,7 +28,6 @@ const ALLOWED_IDENTIFIERS = new Set([
   'sin', 'cos', 'noise', 'randomF', 'ping', 'easeIn', 'easeOut', 'easeInOut', 'norm',
   'polar', 'fbm', 'samplePalette',
   'const', 'let', 'if', 'else', 'return', 'throw', 'true', 'false', 'null', 'undefined',
-  'get', 'r', 'g', 'b',
 ]);
 
 export function normalizeDraftPayload(raw) {
@@ -107,6 +108,7 @@ function validateDraftCodeSafety(code = '') {
   const scanned = stripCodeComments(code);
   if (
     BACKSLASH_RE.test(scanned)
+    || NON_ASCII_OR_CONTROL_RE.test(scanned)
     || STRING_LITERAL_RE.test(scanned)
     || BRACKET_RE.test(scanned)
     || ARROW_FUNCTION_RE.test(scanned)
@@ -116,11 +118,28 @@ function validateDraftCodeSafety(code = '') {
     || UNSAFE_METHOD_RE.test(scanned)
     || hasUnsafeMemberAccess(scanned)
     || hasUnsafeNumericLiteral(scanned)
+    || hasUnsafeFbmCall(scanned)
+    || hasUnsafeAssignment(scanned)
     || hasUnsafeIdentifier(scanned)
   ) {
     return { ok: false, error: { kind: 'unsafe-code', message: 'Draft code used a blocked JavaScript construct.' } };
   }
   return { ok: true };
+}
+
+function hasUnsafeAssignment(code) {
+  if (/\+\+|--/.test(code)) return true;
+  if (/(?:\*\*=|<<=|>>=|>>>=|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|&&=|\|\|=|\?\?=)/.test(code)) return true;
+
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] !== '=') continue;
+    const previous = code[i - 1] || '';
+    const next = code[i + 1] || '';
+    if (previous === '=' || previous === '!' || previous === '<' || previous === '>' || next === '=') continue;
+    if (/\b(?:const|let)\s+[A-Za-z_$][\w$]*\s*$/.test(code.slice(0, i))) continue;
+    return true;
+  }
+  return false;
 }
 
 function hasUnsafeMemberAccess(code) {
@@ -141,6 +160,54 @@ function hasUnsafeNumericLiteral(code) {
   return false;
 }
 
+function hasUnsafeFbmCall(code) {
+  for (const args of extractCallArguments(code, 'fbm')) {
+    if (args.length < 3) continue;
+    const octaves = args[2].trim();
+    if (!/^(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(octaves)) return true;
+    if (Number(octaves) > FBM_OCTAVE_LIMIT) return true;
+  }
+  return false;
+}
+
+function extractCallArguments(code, name) {
+  const calls = [];
+  let index = 0;
+  while (index < code.length) {
+    const found = code.indexOf(`${name}(`, index);
+    if (found === -1) break;
+    const start = found + name.length + 1;
+    let depth = 1;
+    for (let i = start; i < code.length; i++) {
+      if (code[i] === '(') depth++;
+      if (code[i] === ')') depth--;
+      if (depth === 0) {
+        calls.push(splitTopLevelArgs(code.slice(start, i)));
+        index = i + 1;
+        break;
+      }
+    }
+    if (depth !== 0) break;
+  }
+  return calls;
+}
+
+function splitTopLevelArgs(args) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '(') depth++;
+    if (args[i] === ')') depth--;
+    if (args[i] === ',' && depth === 0) {
+      parts.push(args.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(args.slice(start));
+  return parts;
+}
+
 function collectLocalNames(code) {
   const names = new Set();
   const declarationRe = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)/g;
@@ -153,6 +220,7 @@ function collectLocalNames(code) {
 
 function hasUnsafeIdentifier(code) {
   const locals = collectLocalNames(code);
+  IDENTIFIER_RE.lastIndex = 0;
   let match;
   while ((match = IDENTIFIER_RE.exec(code)) !== null) {
     const name = match[0];
@@ -289,7 +357,11 @@ export function buildAiPatternPreviewFrame(draft, options = {}) {
   if (!prepared.ok) {
     throwAiPatternDraftError(prepared.error);
   }
-  return renderPreparedPreviewFrame(prepared);
+  const frame = renderPreparedPreviewFrame(prepared);
+  if (!frameHasLight(frame) && !allowsBlackout(options.instruction)) {
+    throwAiPatternDraftError({ kind: 'blank-render', message: 'Draft rendered as a blackout.' });
+  }
+  return frame;
 }
 
 function throwAiPatternDraftError(error) {
