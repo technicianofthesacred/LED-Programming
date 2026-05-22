@@ -151,6 +151,26 @@ const computedUnsafeDraft = validateAiPatternDraft({
 assert.equal(computedUnsafeDraft.ok, false);
 assert.equal(computedUnsafeDraft.error.kind, 'unsafe-code');
 
+const unicodeEscapeUnsafeDraft = validateAiPatternDraft({
+  name: 'Unicode Escape Unsafe',
+  description: 'Attempts escaped global access.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'glob\\u0061lThis.loc\\u0061lStorage?.clear(); return rgb(1,1,1);',
+});
+assert.equal(unicodeEscapeUnsafeDraft.ok, false);
+assert.equal(unicodeEscapeUnsafeDraft.error.kind, 'unsafe-code');
+assert.throws(
+  () => buildAiPatternPreviewFrame({
+    name: 'Unicode Escape Unsafe',
+    description: 'Attempts escaped global access.',
+    changeSummary: ['Invalid'],
+    palette: ['#000000', '#ffffff'],
+    code: 'glob\\u0061lThis.loc\\u0061lStorage?.clear(); return rgb(1,1,1);',
+  }),
+  error => error.kind === 'unsafe-code',
+);
+
 const reconstructedUnsafeDraft = validateAiPatternDraft({
   name: 'Reconstructed Unsafe',
   description: 'Attempts constructor reconstruction.',
@@ -171,6 +191,16 @@ const functionUnsafeDraft = validateAiPatternDraft({
 assert.equal(functionUnsafeDraft.ok, false);
 assert.equal(functionUnsafeDraft.error.kind, 'unsafe-code');
 
+const arrowUnsafeDraft = validateAiPatternDraft({
+  name: 'Arrow Unsafe',
+  description: 'Attempts function-like arrow code.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'const f = () => 1; return rgb(1,1,1);',
+});
+assert.equal(arrowUnsafeDraft.ok, false);
+assert.equal(arrowUnsafeDraft.error.kind, 'unsafe-code');
+
 const whileUnsafeDraft = validateAiPatternDraft({
   name: 'While Unsafe',
   description: 'Attempts an unbounded loop.',
@@ -180,6 +210,16 @@ const whileUnsafeDraft = validateAiPatternDraft({
 });
 assert.equal(whileUnsafeDraft.ok, false);
 assert.equal(whileUnsafeDraft.error.kind, 'unsafe-code');
+
+const allocationUnsafeDraft = validateAiPatternDraft({
+  name: 'Allocation Unsafe',
+  description: 'Attempts large allocation.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'Array(10000000).fill(0); return rgb(1,1,1);',
+});
+assert.equal(allocationUnsafeDraft.ok, false);
+assert.equal(allocationUnsafeDraft.error.kind, 'unsafe-code');
 
 assert.throws(
   () => buildAiPatternPreviewFrame({
@@ -298,9 +338,9 @@ assert.throws(
   }),
 );
 
-const nestedParamsRuntimeDraft = validateAiPatternDraft({
-  name: 'Nested Params Runtime Error',
-  description: 'Mutates nested params before throwing.',
+const nonNumericParamsRuntimeDraft = validateAiPatternDraft({
+  name: 'Non Numeric Params Runtime Error',
+  description: 'Accesses normalized-away nested params.',
   changeSummary: ['Invalid'],
   palette: ['#000000', '#ffffff'],
   code: 'if (params.state.touched) throw 1;\nparams.state.touched = true;\nreturn rgb(1, 1, 1);',
@@ -308,8 +348,8 @@ const nestedParamsRuntimeDraft = validateAiPatternDraft({
 }, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
-assert.equal(nestedParamsRuntimeDraft.ok, false);
-assert.equal(nestedParamsRuntimeDraft.error.kind, 'runtime-error');
+assert.equal(nonNumericParamsRuntimeDraft.ok, false);
+assert.equal(nonNumericParamsRuntimeDraft.error.kind, 'runtime-error');
 
 const blankDraft = validateAiPatternDraft({
   name: 'Blank',

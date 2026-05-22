@@ -3,7 +3,11 @@ import { normalizePalette, renderPixelFrame } from './frameEngine.js';
 import { parseParamsFromCode } from './patternParams.js';
 
 const REQUIRED_STRING_FIELDS = ['name', 'description', 'code'];
-const UNSAFE_TOKEN_RE = /\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|function|class|new|async|await|while|for|do)\b/;
+const UNSAFE_TOKEN_RE = /\b(fetch|XMLHttpRequest|localStorage|sessionStorage|document|window|Function|eval|import|require|WebSocket|Worker|this|globalThis|self|constructor|prototype|__proto__|function|class|new|async|await|while|for|do|Array|Object|Reflect|Proxy|Map|Set|WeakMap|WeakSet|Promise|setTimeout|setInterval)\b/;
+const UNSAFE_METHOD_RE = /\.(fill|map|filter|reduce|flatMap|from|of)\b/;
+const BACKSLASH_RE = /\\/;
+const BRACKET_RE = /[\[\]]/;
+const ARROW_FUNCTION_RE = /=>/;
 const STRING_LITERAL_RE = /["'`]/;
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const AI_DRAFT_PATTERN_ID = '__ai_draft__';
@@ -56,7 +60,14 @@ function stripCodeComments(code = '') {
 
 function validateDraftCodeSafety(code = '') {
   const scanned = stripCodeComments(code);
-  if (STRING_LITERAL_RE.test(scanned) || UNSAFE_TOKEN_RE.test(scanned)) {
+  if (
+    BACKSLASH_RE.test(scanned)
+    || STRING_LITERAL_RE.test(scanned)
+    || BRACKET_RE.test(scanned)
+    || ARROW_FUNCTION_RE.test(scanned)
+    || UNSAFE_TOKEN_RE.test(scanned)
+    || UNSAFE_METHOD_RE.test(scanned)
+  ) {
     return { ok: false, error: { kind: 'unsafe-code', message: 'Draft code used a blocked JavaScript construct.' } };
   }
   return { ok: true };
