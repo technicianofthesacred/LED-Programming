@@ -331,6 +331,47 @@ const bigintShiftUnsafeDraft = validateAiPatternDraft({
 assert.equal(bigintShiftUnsafeDraft.ok, false);
 assert.equal(bigintShiftUnsafeDraft.error.kind, 'unsafe-code');
 
+const hexLiteralUnsafeDraft = validateAiPatternDraft({
+  name: 'Hex Literal Unsafe',
+  description: 'Attempts a hex numeric literal.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(0x100000000,0,0);',
+});
+assert.equal(hexLiteralUnsafeDraft.ok, false);
+assert.equal(hexLiteralUnsafeDraft.error.kind, 'unsafe-code');
+
+const binaryLiteralUnsafeDraft = validateAiPatternDraft({
+  name: 'Binary Literal Unsafe',
+  description: 'Attempts a binary numeric literal.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(0b111111111111111111111111111111111111111111111111,0,0);',
+});
+assert.equal(binaryLiteralUnsafeDraft.ok, false);
+assert.equal(binaryLiteralUnsafeDraft.error.kind, 'unsafe-code');
+
+const numericSeparatorUnsafeDraft = validateAiPatternDraft({
+  name: 'Numeric Separator Unsafe',
+  description: 'Attempts numeric separators.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1_000_000_000_000,0,0);',
+});
+assert.equal(numericSeparatorUnsafeDraft.ok, false);
+assert.equal(numericSeparatorUnsafeDraft.error.kind, 'unsafe-code');
+
+const decimalExponentDraft = validateAiPatternDraft({
+  name: 'Decimal Exponent',
+  description: 'Uses a small exponent decimal.',
+  changeSummary: ['Uses exponent'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(0.5 + 1e-3, 0, 0);',
+}, {
+  strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(decimalExponentDraft.ok, true);
+
 const tooManyHelperCallsDraft = validateAiPatternDraft({
   name: 'Too Many Helpers',
   description: 'Attempts too many helper calls.',
@@ -486,6 +527,19 @@ const runtimeErrorDraft = validateAiPatternDraft({
 });
 assert.equal(runtimeErrorDraft.ok, false);
 assert.equal(runtimeErrorDraft.error.kind, 'runtime-error');
+
+const hiddenStripRuntimeErrorDraft = validateAiPatternDraft({
+  name: 'Hidden Strip Runtime Error',
+  description: 'Throws even when provided strips are hidden.',
+  changeSummary: ['Invalid'],
+  palette: ['#000000', '#ffffff'],
+  code: 'throw 1;',
+}, {
+  instruction: 'blackout the lights',
+  strips: [{ hidden: true, pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(hiddenStripRuntimeErrorDraft.ok, false);
+assert.equal(hiddenStripRuntimeErrorDraft.error.kind, 'runtime-error');
 
 const getterRuntimeErrorDraft = validateAiPatternDraft({
   name: 'Getter Runtime Error',
@@ -715,6 +769,18 @@ const validFbmDraft = validateAiPatternDraft({
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }] }],
 });
 assert.equal(validFbmDraft.ok, true);
+
+const emptyStripFallbackDraft = validateAiPatternDraft({
+  name: 'Empty Strip Fallback',
+  description: 'Falls back to default preview points.',
+  changeSummary: ['Renders light'],
+  palette: ['#000000', '#ffffff'],
+  code: 'return rgb(1,1,1);',
+}, {
+  strips: [{ id: 'empty-strip', pixels: [] }],
+});
+assert.equal(emptyStripFallbackDraft.ok, true);
+assert.ok(emptyStripFallbackDraft.frame.pixels.length > 0);
 
 const previewFrame = buildAiPatternPreviewFrame(validDraft.draft, {
   strips: [{ id: 'draft-strip', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],

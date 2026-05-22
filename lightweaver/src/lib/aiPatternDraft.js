@@ -12,6 +12,8 @@ const BACKSLASH_RE = /\\/;
 const BRACKET_RE = /[\[\]]/;
 const ARROW_FUNCTION_RE = /=>/;
 const BIGINT_LITERAL_RE = /\b\d+n\b/;
+const RADIX_LITERAL_RE = /(?<![\w$])0[xob][0-9a-f_]+(?![\w$])/i;
+const NUMERIC_SEPARATOR_RE = /\d_\d/;
 const SHIFT_OPERATOR_RE = />>>|<<|>>/;
 const STRING_LITERAL_RE = /["'`]/;
 const INDIRECT_CALL_RE = /\)\s*\(/;
@@ -125,6 +127,8 @@ function validateDraftCodeSafety(code = '') {
     || BRACKET_RE.test(scanned)
     || ARROW_FUNCTION_RE.test(scanned)
     || BIGINT_LITERAL_RE.test(scanned)
+    || RADIX_LITERAL_RE.test(scanned)
+    || NUMERIC_SEPARATOR_RE.test(scanned)
     || SHIFT_OPERATOR_RE.test(scanned)
     || INDIRECT_CALL_RE.test(scanned)
     || OPTIONAL_CHAIN_RE.test(scanned)
@@ -306,11 +310,20 @@ function hasUnsafeIdentifier(code) {
 }
 
 export function stripPixelsToFrameStrips(strips = []) {
-  const visible = Array.isArray(strips) && strips.length ? strips : [{
+  const visible = Array.isArray(strips) && strips.length ? strips : defaultDraftStrips();
+  const frameStrips = frameStripsFromDraftStrips(visible);
+  return frameStrips.length ? frameStrips : frameStripsFromDraftStrips(defaultDraftStrips());
+}
+
+function defaultDraftStrips() {
+  return [{
     id: 'draft-default',
     pixels: Array.from({ length: 12 }, (_, i) => ({ x: i / 11, y: 0.5 + Math.sin(i) * 0.2 })),
   }];
-  return visible
+}
+
+function frameStripsFromDraftStrips(strips) {
+  return strips
     .filter(strip => strip && !strip.hidden)
     .map(strip => {
       const pixels = strip.pixels || strip.pts || [];
