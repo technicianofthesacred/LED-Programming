@@ -5,6 +5,11 @@ import { zodTextFormat } from 'openai/helpers/zod';
 
 export const AI_PATTERN_TIMEOUT_MS = 30000;
 export const AI_PATTERN_CODE_MAX_LENGTH = 4000;
+export const AI_PATTERN_MAX_PARAMS = 32;
+export const AI_PATTERN_PARAM_KEY_MAX_LENGTH = 48;
+export const AI_PATTERN_PARAM_STRING_MAX_LENGTH = 120;
+export const AI_PATTERN_RATE_LIMIT = 20;
+export const AI_PATTERN_RATE_WINDOW_MS = 10 * 60 * 1000;
 
 export const AiPatternDraftSchema = z.object({
   name: z.string().min(1).max(80),
@@ -19,30 +24,78 @@ export const AiPatternDraftSchema = z.object({
         value: z.number(),
       })
     )
-    .max(32)
-    .optional()
-    .default([]),
-  notes: z.string().max(600).optional().default(''),
+    .max(32),
+  notes: z.string().max(600),
 });
 
 const DEFAULT_MODEL = 'gpt-5.4-mini';
 
 function sanitizeParams(params) {
   const sanitized = {};
+  let count = 0;
 
   if (!params || typeof params !== 'object' || Array.isArray(params)) {
     return sanitized;
   }
 
   for (const [key, value] of Object.entries(params)) {
+    if (count >= AI_PATTERN_MAX_PARAMS) break;
+    if (!key || key.length > AI_PATTERN_PARAM_KEY_MAX_LENGTH) continue;
+
     if (typeof value === 'number' && Number.isFinite(value)) {
       sanitized[key] = value;
+      count += 1;
     } else if (typeof value === 'string' || typeof value === 'boolean' || value === null) {
+      if (typeof value === 'string' && value.length > AI_PATTERN_PARAM_STRING_MAX_LENGTH) continue;
       sanitized[key] = value;
+      count += 1;
     }
   }
 
   return sanitized;
+}
+
+function getRateLimitConfig(env) {
+  const limit = Number.parseInt(env.AI_PATTERN_RATE_LIMIT || '', 10);
+  const windowMs = Number.parseInt(env.AI_PATTERN_RATE_WINDOW_MS || '', 10);
+
+  return {
+    limit: Number.isFinite(limit) && limit > 0 ? limit : AI_PATTERN_RATE_LIMIT,
+    windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : AI_PATTERN_RATE_WINDOW_MS,
+  };
+}
+
+function getClientIp(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function hasValidAuthToken(req, env) {
+  const expectedToken = env.AI_PATTERN_AUTH_TOKEN;
+  if (!expectedToken) return true;
+
+  const authorization = req.get('authorization') || '';
+  const bearerToken = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
+  const headerToken = req.get('x-lightweaver-ai-token') || '';
+
+  return bearerToken === expectedToken || headerToken === expectedToken;
+}
+
+function isRateLimited(req, rateLimitStore, env, now = Date.now()) {
+  const { limit, windowMs } = getRateLimitConfig(env);
+  const ip = getClientIp(req);
+  const entry = rateLimitStore.get(ip);
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitStore.set(ip, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+
+  if (entry.count >= limit) {
+    return true;
+  }
+
+  entry.count += 1;
+  return false;
 }
 
 function sanitizePatternForProvider(pattern) {
@@ -145,7 +198,7 @@ export function normalizeAiPatternDraft(draft) {
     }
   }
 
-  return { ...draft, suggestedParams };
+  return { ...draft, suggestedParams, notes: draft?.notes || '' };
 }
 
 function hasAiRefusal(value) {
@@ -186,6 +239,8 @@ export function createAiPatternRouter({
   env = process.env,
   client = null,
   createOpenAiClient = (options) => new OpenAI(options),
+  rateLimitStore = new Map(),
+  now = () => Date.now(),
 } = {}) {
   const router = express.Router();
 
@@ -197,6 +252,24 @@ export function createAiPatternRouter({
           code: 'invalid_request',
           message: 'AI pattern request is invalid.',
           issues: parsedRequest.error.issues,
+        },
+      });
+    }
+
+    if (!hasValidAuthToken(req, env)) {
+      return res.status(401).json({
+        error: {
+          code: 'unauthorized',
+          message: 'AI pattern access is not authorized.',
+        },
+      });
+    }
+
+    if (isRateLimited(req, rateLimitStore, env, now())) {
+      return res.status(429).json({
+        error: {
+          code: 'rate_limited',
+          message: 'AI pattern rate limit reached.',
         },
       });
     }

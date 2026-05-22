@@ -29,6 +29,16 @@ function findObjectAdditionalProperties(value) {
   return null;
 }
 
+function findDefaultAnnotation(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (Object.hasOwn(value, 'default')) return value.default;
+  for (const child of Object.values(value)) {
+    const match = findDefaultAnnotation(child);
+    if (match !== null) return match;
+  }
+  return null;
+}
+
 async function withServer(app, callback) {
   const server = app.listen(0);
   await once(server, 'listening');
@@ -82,6 +92,7 @@ assert.match(input[1].content, /"ledCount":128/);
 
 const textFormat = zodTextFormat(AiPatternDraftSchema, 'lightweaver_pattern_draft');
 assert.equal(findObjectAdditionalProperties(textFormat), null);
+assert.equal(findDefaultAnnotation(textFormat), null);
 
 const validDraft = {
   name: 'Length Check',
@@ -127,6 +138,102 @@ await withServer(missingKeyApp, async (baseUrl) => {
   assert.equal(body.error.code, 'missing_api_key');
 });
 
+let authMissingProviderCalls = 0;
+const authMissingApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  client: {
+    responses: {
+      async parse() {
+        authMissingProviderCalls += 1;
+        return { output_parsed: null };
+      },
+    },
+  },
+});
+await withServer(authMissingApp, async (baseUrl) => {
+  const { response, body } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(response.status, 401);
+  assert.equal(body.error.code, 'unauthorized');
+  assert.equal(authMissingProviderCalls, 0);
+
+  const wrongToken = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer wrong-secret', 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(wrongToken.response.status, 401);
+  assert.equal(wrongToken.body.error.code, 'unauthorized');
+  assert.equal(authMissingProviderCalls, 0);
+});
+
+let bearerAuthCalls = 0;
+const bearerAuthApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  client: {
+    responses: {
+      async parse() {
+        bearerAuthCalls += 1;
+        return {
+          output_parsed: {
+            name: 'Authorized Draft',
+            description: 'Generated with bearer auth.',
+            changeSummary: ['Authorized'],
+            palette: ['#00ffaa', '#6600aa'],
+            code: 'return hsv(time, 1, 1);',
+            suggestedParams: [],
+            notes: '',
+          },
+        };
+      },
+    },
+  },
+});
+await withServer(bearerAuthApp, async (baseUrl) => {
+  const { response } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer shared-secret', 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(bearerAuthCalls, 1);
+});
+
+let headerAuthCalls = 0;
+const headerAuthApp = createLightweaverServer({
+  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  client: {
+    responses: {
+      async parse() {
+        headerAuthCalls += 1;
+        return {
+          output_parsed: {
+            name: 'Header Authorized Draft',
+            description: 'Generated with header auth.',
+            changeSummary: ['Authorized'],
+            palette: ['#00ffaa', '#6600aa'],
+            code: 'return hsv(time, 1, 1);',
+            suggestedParams: [],
+            notes: '',
+          },
+        };
+      },
+    },
+  },
+});
+await withServer(headerAuthApp, async (baseUrl) => {
+  const { response } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'x-lightweaver-ai-token': 'shared-secret', 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower' }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(headerAuthCalls, 1);
+});
+
 let successCall = null;
 const successApp = createLightweaverServer({
   env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_MODEL: 'gpt-5.5' },
@@ -164,6 +271,18 @@ await withServer(successApp, async (baseUrl) => {
 });
 
 let draftSanitizationCall = null;
+const manyParams = {
+  speed: 0.5,
+  enabled: true,
+  label: 'fast',
+  missing: null,
+  nested: { secret: 'nested-secret' },
+  ['x'.repeat(49)]: 1,
+  longString: 'x'.repeat(121),
+};
+for (let index = 0; index < 35; index += 1) {
+  manyParams[`p${index}`] = index;
+}
 const draftSanitizationApp = createLightweaverServer({
   env: { OPENAI_API_KEY: 'test-key' },
   client: {
@@ -199,13 +318,7 @@ await withServer(draftSanitizationApp, async (baseUrl) => {
         description: 'Allowed description',
         code: 'return rgb(1,0,0);',
         palette: ['#ff0000', '#000000'],
-        params: {
-          speed: 0.5,
-          enabled: true,
-          label: 'fast',
-          missing: null,
-          nested: { secret: 'nested-secret' },
-        },
+        params: manyParams,
         isCustom: true,
         secret: 'draft-secret',
       },
@@ -223,6 +336,11 @@ await withServer(draftSanitizationApp, async (baseUrl) => {
   assert.equal(providerUserInput.draftPattern.params.label, 'fast');
   assert.equal(providerUserInput.draftPattern.params.missing, null);
   assert.equal(providerUserInput.draftPattern.params.nested, undefined);
+  assert.equal(providerUserInput.draftPattern.params['x'.repeat(49)], undefined);
+  assert.equal(providerUserInput.draftPattern.params.longString, undefined);
+  assert.equal(providerUserInput.draftPattern.params.p27, 27);
+  assert.equal(providerUserInput.draftPattern.params.p28, undefined);
+  assert.equal(Object.keys(providerUserInput.draftPattern.params).length, 32);
 });
 
 const invalidRequestApp = createLightweaverServer({
@@ -263,6 +381,52 @@ await withServer(rateLimitApp, async (baseUrl) => {
   });
   assert.equal(response.status, 429);
   assert.equal(body.error.code, 'rate_limited');
+});
+
+let endpointRateLimitCalls = 0;
+const endpointRateLimitApp = createLightweaverServer({
+  env: {
+    OPENAI_API_KEY: 'test-key',
+    AI_PATTERN_RATE_LIMIT: '2',
+    AI_PATTERN_RATE_WINDOW_MS: '600000',
+  },
+  client: {
+    responses: {
+      async parse() {
+        endpointRateLimitCalls += 1;
+        return {
+          output_parsed: {
+            name: 'Limited Draft',
+            description: 'Counts endpoint calls.',
+            changeSummary: ['Counted'],
+            palette: ['#00ffaa', '#6600aa'],
+            code: 'return hsv(time, 1, 1);',
+            suggestedParams: [],
+            notes: '',
+          },
+        };
+      },
+    },
+  },
+});
+await withServer(endpointRateLimitApp, async (baseUrl) => {
+  for (let index = 0; index < 2; index += 1) {
+    const { response } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instruction: `make it slower ${index}` }),
+    });
+    assert.equal(response.status, 200);
+  }
+
+  const { response, body } = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instruction: 'make it slower again' }),
+  });
+  assert.equal(response.status, 429);
+  assert.equal(body.error.code, 'rate_limited');
+  assert.equal(endpointRateLimitCalls, 2);
 });
 
 const refusalApp = createLightweaverServer({
