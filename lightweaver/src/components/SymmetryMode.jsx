@@ -319,7 +319,7 @@ export function SymmetryMode() {
       </div>
 
       <div className="lw-sym-note">
-        Ring routing is shared for now. The active transform applies to every visible LED before pattern code runs.
+        Ring routing is shared for now. The active transform remaps x/y, index, and strip progress before pattern code runs.
       </div>
     </div>
   );

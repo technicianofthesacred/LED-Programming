@@ -66,6 +66,25 @@ export function resolvePatternParams(patternId, params = {}) {
   return { ...defaults, ...params };
 }
 
+const TAU = Math.PI * 2;
+
+function clamp01(n) {
+  return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
+}
+
+function progressFromSymmetryCoords(x, y, fallback = 0) {
+  const dx = x - 0.5;
+  const dy = y - 0.5;
+  const radius = Math.sqrt(dx * dx + dy * dy);
+  if (radius < 0.0001) return clamp01(fallback);
+  return ((Math.atan2(dy, dx) + TAU) % TAU) / TAU;
+}
+
+function indexFromProgress(progress, pixelCount) {
+  if (pixelCount <= 1) return 0;
+  return Math.max(0, Math.min(pixelCount - 1, Math.round(clamp01(progress) * (pixelCount - 1))));
+}
+
 export function renderPixelFrame({
   t = 0,
   strips = [],
@@ -112,19 +131,23 @@ export function renderPixelFrame({
     for (const pt of s.pts || []) {
       let nx = (pt.x - bounds.minX) / bounds.range;
       let ny = (pt.y - bounds.minY) / bounds.range;
+      let sampleIndex = globalIdx;
+      let sampleProgress = pt.p;
 
       if (symSettings?.enabled) {
         const sym = applySymmetry(nx, ny, symSettings, t);
         nx = sym.x; ny = sym.y;
+        sampleProgress = progressFromSymmetryCoords(nx, ny, pt.p);
+        sampleIndex = indexFromProgress(sampleProgress, pixelCount);
       }
 
       let r = 0, g = 0, b = 0;
       if (stripFn) {
-        const colA = evalPixel(stripFn, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
+        const colA = evalPixel(stripFn, sampleIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, sampleProgress, bass, mid, hi);
         r = colA.r; g = colA.g; b = colA.b;
 
         if (fnB && blendAmount > 0) {
-          const colB = evalPixel(fnB, globalIdx, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, pt.p, bass, mid, hi);
+          const colB = evalPixel(fnB, sampleIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, resolvedParams, s.id, sampleProgress, bass, mid, hi);
           if (blendType === 'fade-black') {
             const a2 = blendAmount < 0.5 ? 1 - blendAmount * 2 : 0;
             const b2 = blendAmount > 0.5 ? (blendAmount - 0.5) * 2 : 0;

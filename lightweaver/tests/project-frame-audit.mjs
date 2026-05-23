@@ -1125,6 +1125,27 @@ frame.pixels.forEach(px => {
   assert.ok(Number.isFinite(px.r) && Number.isFinite(px.g) && Number.isFinite(px.b));
 });
 
+const { fn: indexPatternFn } = compile('return rgb(index / max(1, pixelCount - 1), stripProgress, 0);');
+const mirroredIndexFrame = renderPixelFrame({
+  t: 0.2,
+  strips: [{
+    id: 'quad',
+    pts: [
+      { x: 0.25, y: 0.25, p: 0 },
+      { x: 0.75, y: 0.25, p: 0.33 },
+      { x: 0.25, y: 0.75, p: 0.66 },
+      { x: 0.75, y: 0.75, p: 1 },
+    ],
+  }],
+  activeFn: indexPatternFn,
+  symSettings: { enabled: true, type: 'mirror-hv' },
+});
+assert.deepEqual(
+  mirroredIndexFrame.pixels.map(px => [px.r, px.g]),
+  [[170, 159], [170, 159], [170, 159], [170, 159]],
+  'mirror-hv should mirror index and stripProgress driven patterns, not only x/y driven patterns',
+);
+
 assert.deepEqual(
   smoothPixelFrame([{ r: 100, g: 50, b: 0 }], [{ r: 0, g: 0, b: 0 }], { mode: 'off', dt: 1 / 60 }),
   [{ r: 100, g: 50, b: 0 }],
