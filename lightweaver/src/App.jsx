@@ -97,44 +97,54 @@ function PatternPanel({
             patternId={patternId}
             onOpenCode={() => setPanelMode('code')}
             onOpenSymmetry={() => setPanelMode('sym')}
+            masterSpeed={masterSpeed}
+            setMasterSpeed={setMasterSpeed}
+            masterBrightness={masterBrightness}
+            setMasterBrightness={setMasterBrightness}
+            masterSaturation={masterSaturation}
+            setMasterSaturation={setMasterSaturation}
           />
         )}
         {panelMode === 'sym'   && <SymmetryMode/>}
-        <div className="lw-sec-header" style={{ marginTop: 24 }}>
-          <span>Master</span>
-          <span className="meta">applies globally</span>
-        </div>
-        <div className="lw-master">
-          <span className="lbl">Speed</span>
-          <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
-                 onChange={e => setMasterSpeed(+e.target.value)}/>
-          <span className="v">{masterSpeed.toFixed(2)}×</span>
+        {panelMode !== 'graph' && (
+          <>
+            <div className="lw-sec-header" style={{ marginTop: 24 }}>
+              <span>Master</span>
+              <span className="meta">applies globally</span>
+            </div>
+            <div className="lw-master">
+              <span className="lbl">Speed</span>
+              <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
+                     onChange={e => setMasterSpeed(+e.target.value)}/>
+              <span className="v">{masterSpeed.toFixed(2)}×</span>
 
-          <span className="lbl">Bright</span>
-          <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
-                 onChange={e => setMasterBrightness(+e.target.value)}/>
-          <span className="v">{Math.round(masterBrightness * 100)}%</span>
+              <span className="lbl">Bright</span>
+              <input type="range" min="0" max="1" step="0.01" value={masterBrightness}
+                     onChange={e => setMasterBrightness(+e.target.value)}/>
+              <span className="v">{Math.round(masterBrightness * 100)}%</span>
 
-          <span className="lbl">Sat</span>
-          <input type="range" min="0" max="1" step="0.01" value={masterSaturation}
-                 onChange={e => setMasterSaturation(+e.target.value)}/>
-          <span className="v">{Math.round(masterSaturation * 100)}%</span>
+              <span className="lbl">Sat</span>
+              <input type="range" min="0" max="1" step="0.01" value={masterSaturation}
+                     onChange={e => setMasterSaturation(+e.target.value)}/>
+              <span className="v">{Math.round(masterSaturation * 100)}%</span>
 
-          <span className="lbl">Color</span>
-          <div className="lw-master-palette" aria-label="Master palette">
-            {(palette || []).slice(0, 6).map((hex, index) => (
-              <label key={`${hex}-${index}`} className="lw-master-swatch" style={{ background: hex }}>
-                <input
-                  aria-label={`Master palette color ${index + 1}`}
-                  type="color"
-                  value={hex}
-                  onChange={event => updateMasterPaletteColor(index, event.target.value)}
-                />
-              </label>
-            ))}
-          </div>
-          <span className="v">{(palette || []).length}</span>
-        </div>
+              <span className="lbl">Color</span>
+              <div className="lw-master-palette" aria-label="Master palette">
+                {(palette || []).slice(0, 6).map((hex, index) => (
+                  <label key={`${hex}-${index}`} className="lw-master-swatch" style={{ background: hex }}>
+                    <input
+                      aria-label={`Master palette color ${index + 1}`}
+                      type="color"
+                      value={hex}
+                      onChange={event => updateMasterPaletteColor(index, event.target.value)}
+                    />
+                  </label>
+                ))}
+              </div>
+              <span className="v">{(palette || []).length}</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -299,26 +299,33 @@ test('keeps the pattern panel scrollable when symmetry controls overflow', async
   expect(metrics.bodyScroll).toBeGreaterThan(metrics.bodyClient);
 });
 
-test('presents graph mode as an understandable pattern flow', async ({ page }) => {
+test('presents graph mode as an actionable pattern builder', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 600 });
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Graph' }).click();
 
-  await expect(page.getByText('Pattern flow')).toBeVisible();
+  await expect(page.getByText('Pattern Builder')).toBeVisible();
   await expect(page.getByText('Pattern journey')).toBeVisible();
   await expect(page.getByText('Duration')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Input signal/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Shape/ })).toBeVisible();
-  await expect(page.getByText('What this stage changes')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open Code' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Color' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('Palette editor')).toBeVisible();
+  await expect(page.getByText('Color journey')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Input signal/ })).toHaveCount(0);
+  await expect(page.getByText('What this stage changes')).toHaveCount(0);
   await expect(page.getByText('Compiled from current pattern chain')).toHaveCount(0);
+
+  const controlPosition = await page.locator('.lw-palette-editor').evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return { top: rect.top, viewportHeight: window.innerHeight };
+  });
+  expect(controlPosition.top).toBeLessThan(controlPosition.viewportHeight - 160);
 });
 
-test('replaces master gamma with editable palette controls in graph color stage', async ({ page }) => {
+test('replaces graph stage cards with real color, motion, and output controls', async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Graph' }).click();
-  await page.getByRole('button', { name: /Color/ }).click();
 
   await expect(page.getByText('Palette editor')).toBeVisible();
   await expect(page.getByLabel('Selected palette color')).toBeVisible();
@@ -326,6 +333,16 @@ test('replaces master gamma with editable palette controls in graph color stage'
   await expect(page.getByText('Color journey')).toBeVisible();
   await expect(page.locator('.lw-master').getByText('Gamma')).toHaveCount(0);
 
+  await page.getByRole('tab', { name: 'Motion' }).click();
+  await expect(page.getByText('Live speed')).toBeVisible();
+  await expect(page.getByText('Motion journey')).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Output' }).click();
+  await expect(page.getByText('Brightness')).toBeVisible();
+  await expect(page.getByText('Saturation')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Symmetry' })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Color' }).click();
   const firstSwatch = page.locator('.lw-palette-editor .lw-color-swatch').first();
   await expect(firstSwatch).toHaveAttribute('aria-pressed', 'true');
   await page.getByLabel('Selected palette color').fill('#ffcc00');

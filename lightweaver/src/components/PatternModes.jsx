@@ -57,59 +57,6 @@ function savePresets(presets) {
 
 const CATS = ['all', 'recent', 'custom', 'audio', 'fire', 'water', 'space', 'geo', 'chill', 'glitch'];
 
-const GRAPH_STAGES = [
-  {
-    id: 'input',
-    index: '01',
-    title: 'Input signal',
-    summary: 'LED position, time, audio, and knobs enter the pattern.',
-    changes: 'This is what the pattern can react to before any color is chosen.',
-    example: 'x, y, index, time, bass, mid, hi, params.*',
-    code: ['x', 'y', 'index', 'time', 'stripProgress'],
-    action: 'code',
-  },
-  {
-    id: 'motion',
-    index: '02',
-    title: 'Motion',
-    summary: 'Speed, beat sync, drift, and direction move the signal.',
-    changes: 'This stage makes a static shape travel, pulse, or breathe over time.',
-    example: 'time * speed, beat, beatSin, phase offsets',
-    code: ['time', 'beat', 'speed', 'phase'],
-    action: 'code',
-  },
-  {
-    id: 'shape',
-    index: '03',
-    title: 'Shape',
-    summary: 'Waves, noise, masks, and distance fields create structure.',
-    changes: 'This decides where the LEDs are bright, soft, sharp, dotted, or dark.',
-    example: 'sin(), noise(), fbm(), smoothstep(), distance()',
-    code: ['noise', 'fbm', 'smoothstep', 'distance'],
-    action: 'code',
-  },
-  {
-    id: 'color',
-    index: '04',
-    title: 'Color',
-    summary: 'Hue, palette, saturation, and brightness turn shape into light.',
-    changes: 'This maps the shaped signal into the actual color seen in the preview.',
-    example: 'hsv(), rgb(), samplePalette(), master saturation',
-    code: ['hsv', 'rgb', 'samplePalette', 'brightness'],
-    action: 'code',
-  },
-  {
-    id: 'output',
-    index: '05',
-    title: 'Output',
-    summary: 'Symmetry, brightness, gamma, and WLED output finalize pixels.',
-    changes: 'This is where preview-wide transforms and hardware output settings apply.',
-    example: 'symmetry, master brightness, gamma, WLED segment map',
-    code: ['symmetry', 'brightness', 'gamma', 'WLED'],
-    action: 'symmetry',
-  },
-];
-
 const DEFAULT_PATTERN_JOURNEY = {
   enabled: false,
   duration: 24,
@@ -781,16 +728,23 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
 }
 
 // ── GRAPH mode ─────────────────────────────────────────────────────────────
-export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
-  const [sel, setSel] = useState('shape');
+export function GraphMode({
+  patternId,
+  onOpenCode,
+  onOpenSymmetry,
+  masterSpeed,
+  setMasterSpeed,
+  masterBrightness,
+  setMasterBrightness,
+  masterSaturation,
+  setMasterSaturation,
+}) {
+  const [sel, setSel] = useState('color');
   const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
   const { patternParams, setPatternParams, palette, setPalette } = useProject();
-  const activeStage = GRAPH_STAGES.find(stage => stage.id === sel) || GRAPH_STAGES[0];
   const pattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
   const currentParams = patternParams[patternId] || {};
   const journey = getPatternJourney(currentParams);
-  const actionLabel = activeStage.action === 'symmetry' ? 'Open Symmetry' : 'Open Code';
-  const runAction = activeStage.action === 'symmetry' ? onOpenSymmetry : onOpenCode;
   const updateJourney = (patch) => {
     setPatternParams(prev => {
       const existing = prev[patternId] || {};
@@ -815,17 +769,17 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
     colorStops[index] = normalizeHexColor(value, colorStops[index]);
     updateJourney({ colorStops });
   };
+  const tabs = [
+    { id: 'color', label: 'Color' },
+    { id: 'motion', label: 'Motion' },
+    { id: 'output', label: 'Output' },
+  ];
 
   return (
-    <div className="lw-graph-mode">
+    <div className="lw-graph-mode lw-builder-mode">
       <div className="lw-sec-header">
-        <span>Pattern flow</span>
+        <span>Pattern Builder</span>
         <span className="meta">{pattern?.name || patternId}</span>
-      </div>
-
-      <div className="lw-graph-summary">
-        <strong>One LED at a time</strong>
-        <span>Every frame repeats this path for each LED: inputs move, shapes form, colors map, output settings finish the pixel.</span>
       </div>
 
       <div className="lw-journey-panel">
@@ -837,7 +791,7 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
           />
           <span>
             <strong>Pattern journey</strong>
-            <small>Make this one pattern evolve before it becomes a Show scene.</small>
+            <small>Build the long phrase inside this pattern.</small>
           </span>
         </label>
         <BuilderSlider
@@ -866,67 +820,23 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
         </div>
       </div>
 
-      <div className="lw-graph-flow" aria-label="Pattern flow stages">
-        {GRAPH_STAGES.map(stage => (
+      <div className="lw-builder-tabs" role="tablist" aria-label="Pattern builder sections">
+        {tabs.map(tab => (
           <button
-            key={stage.id}
+            key={tab.id}
             type="button"
-            className={`lw-graph-step ${stage.id === activeStage.id ? 'active' : ''}`}
-            onClick={() => setSel(stage.id)}
+            role="tab"
+            aria-selected={sel === tab.id}
+            className={sel === tab.id ? 'active' : ''}
+            onClick={() => setSel(tab.id)}
           >
-            <span className="lw-graph-step-index">{stage.index}</span>
-            <span className="lw-graph-step-copy">
-              <strong>{stage.title}</strong>
-              <small>{stage.summary}</small>
-            </span>
+            {tab.label}
           </button>
         ))}
       </div>
 
-      <div className="lw-sec-header">
-        <span>{activeStage.title}</span>
-        <span className="meta">selected stage</span>
-      </div>
-
-      <div className="lw-graph-inspector">
-        <div className="lw-graph-inspector-row">
-          <span>What this stage changes</span>
-          <strong>{activeStage.changes}</strong>
-        </div>
-        <div className="lw-graph-inspector-row">
-          <span>Pattern code usually touches</span>
-          <strong>{activeStage.example}</strong>
-        </div>
-        <div className="lw-graph-chip-row" aria-label="Relevant code inputs">
-          {activeStage.code.map(item => <span key={item}>{item}</span>)}
-        </div>
-        {activeStage.id === 'motion' && (
-          <div className="lw-builder-block">
-            <div className="lw-builder-block-head">
-              <strong>Motion journey</strong>
-              <span>speed ramp</span>
-            </div>
-            <BuilderSlider
-              label="Start"
-              min={0}
-              max={4}
-              step={0.01}
-              value={journey.speedStart}
-              onChange={speedStart => updateJourney({ speedStart })}
-              readout={`${journey.speedStart.toFixed(2)}x`}
-            />
-            <BuilderSlider
-              label="End"
-              min={0}
-              max={4}
-              step={0.01}
-              value={journey.speedEnd}
-              onChange={speedEnd => updateJourney({ speedEnd })}
-              readout={`${journey.speedEnd.toFixed(2)}x`}
-            />
-          </div>
-        )}
-        {activeStage.id === 'color' && (
+      <div className="lw-builder-pane">
+        {sel === 'color' && (
           <>
             <PaletteEditor
               palette={palette}
@@ -937,7 +847,7 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
             <div className="lw-builder-block">
               <div className="lw-builder-block-head">
                 <strong>Color journey</strong>
-                <span>yellow to orange to white</span>
+                <span>start to middle to end</span>
               </div>
               <div className="lw-journey-color-grid">
                 {['Start', 'Middle', 'End'].map((label, index) => (
@@ -972,9 +882,97 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
             </div>
           </>
         )}
-        <button className="btn lw-graph-action" type="button" onClick={runAction}>
-          {actionLabel}
-        </button>
+
+        {sel === 'motion' && (
+          <div className="lw-builder-block">
+            <div className="lw-builder-block-head">
+              <strong>Live speed</strong>
+              <span>global</span>
+            </div>
+            <BuilderSlider
+              label="Speed"
+              min={0}
+              max={4}
+              step={0.01}
+              value={masterSpeed}
+              onChange={setMasterSpeed}
+              readout={`${masterSpeed.toFixed(2)}x`}
+            />
+            <div className="lw-builder-block-head">
+              <strong>Motion journey</strong>
+              <span>speed ramp</span>
+            </div>
+            <BuilderSlider
+              label="Start"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedStart}
+              onChange={speedStart => updateJourney({ speedStart })}
+              readout={`${journey.speedStart.toFixed(2)}x`}
+            />
+            <BuilderSlider
+              label="End"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedEnd}
+              onChange={speedEnd => updateJourney({ speedEnd })}
+              readout={`${journey.speedEnd.toFixed(2)}x`}
+            />
+            <div className="lw-builder-segment" aria-label="Journey easing">
+              {[
+                ['smooth', 'Smooth'],
+                ['linear', 'Linear'],
+                ['ease-out', 'Ease out'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={journey.easing === value ? 'active' : ''}
+                  onClick={() => updateJourney({ easing: value })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {sel === 'output' && (
+          <div className="lw-builder-block">
+            <div className="lw-builder-block-head">
+              <strong>Live output</strong>
+              <span>applies globally</span>
+            </div>
+            <BuilderSlider
+              label="Brightness"
+              min={0}
+              max={1}
+              step={0.01}
+              value={masterBrightness}
+              onChange={setMasterBrightness}
+              readout={`${Math.round(masterBrightness * 100)}%`}
+            />
+            <BuilderSlider
+              label="Saturation"
+              min={0}
+              max={1}
+              step={0.01}
+              value={masterSaturation}
+              onChange={setMasterSaturation}
+              readout={`${Math.round(masterSaturation * 100)}%`}
+            />
+            <div className="lw-builder-action-row">
+              <button className="btn" type="button" onClick={onOpenSymmetry}>
+                Open Symmetry
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={onOpenCode}>
+                Open Code
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
