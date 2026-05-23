@@ -274,6 +274,44 @@ test('explains symmetry as one active coordinate transform', async ({ page }) =>
   await expect(page.getByText('Wedges', { exact: true })).toBeVisible();
 });
 
+test('keeps the pattern panel scrollable when symmetry controls overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 600 });
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Symmetry' }).click();
+  await page.getByRole('button', { name: 'Mirror H+V' }).click();
+
+  const metrics = await page.evaluate(() => {
+    const panel = document.querySelector('.lw-panel')!;
+    const body = document.querySelector('.lw-panel-body')!;
+    const panelRect = panel.getBoundingClientRect();
+    return {
+      panelBottom: panelRect.bottom,
+      viewportHeight: window.innerHeight,
+      bodyClient: body.clientHeight,
+      bodyScroll: body.scrollHeight,
+      bodyOverflowY: getComputedStyle(body).overflowY,
+    };
+  });
+
+  expect(metrics.panelBottom).toBeLessThanOrEqual(metrics.viewportHeight);
+  expect(metrics.bodyOverflowY).toBe('auto');
+  expect(metrics.bodyScroll).toBeGreaterThan(metrics.bodyClient);
+});
+
+test('presents graph mode as an understandable pattern flow', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Graph' }).click();
+
+  await expect(page.getByText('Pattern flow')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Input signal/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Shape/ })).toBeVisible();
+  await expect(page.getByText('What this stage changes')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Code' })).toBeVisible();
+  await expect(page.getByText('Compiled from current pattern chain')).toHaveCount(0);
+});
+
 test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
 

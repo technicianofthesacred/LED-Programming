@@ -90,7 +90,7 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
 .cm-editor, .cm-content, .cm-line, [contenteditable="true"] { user-select: text; }
 
 /* ── App shell ───────────────────────────────────────────────────── */
-.lw-app { display: grid; grid-template-rows: 40px 1fr 24px; height: 100%; }
+.lw-app { display: grid; grid-template-rows: 40px minmax(0, 1fr) 24px; height: 100%; overflow: hidden; }
 
 .lw-topbar {
   display: grid;
@@ -154,7 +154,7 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
 .lw-version-link:hover { opacity: 1; }
 
 /* ── Left rail (mode nav) ───────────────────────────────────────── */
-.lw-main { display: grid; grid-template-columns: 52px 1fr; min-height: 0; }
+.lw-main { display: grid; grid-template-columns: 52px minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .lw-loading-pane {
   display: grid;
   place-items: center;
@@ -195,8 +195,12 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
 .lw-pattern-screen {
   display: grid;
   /* grid-template-columns set via inline style for resizable panel */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
+.lw-pattern-screen > * { min-height: 0; }
 
 /* ── Layout screen grid ──────────────────────────────────────────── */
 .lw-layout-screen {
@@ -249,7 +253,7 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
 .lw-panel-collapse-btn:hover { color: var(--text); background: var(--surface-2); }
 
 /* ── Canvas side ─────────────────────────────────────────────────── */
-.lw-canvas-col { display: flex; flex-direction: column; min-width: 0; }
+.lw-canvas-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
 .lw-canvas-toolbar {
   display: flex; align-items: center; gap: var(--s-3);
@@ -880,95 +884,123 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 .lw-code-footer .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); margin-right: 4px; display: inline-block; }
 .lw-code-footer.err .dot { background: var(--danger); }
 
-/* ── Node graph mode ─────────────────────────────────────────────── */
-.lw-graph-wrap {
-  background:
-    radial-gradient(circle at 1px 1px, oklch(28% 0.012 260) 1px, transparent 1px) 0 0 / 16px 16px,
-    var(--bg);
+/* ── Pattern flow mode ───────────────────────────────────────────── */
+.lw-graph-mode {
+  display: grid;
+  gap: var(--s-4);
+}
+.lw-graph-summary {
+  display: grid;
+  gap: 3px;
+  padding: var(--s-4);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  position: relative;
-  height: 460px;
-  overflow: hidden;
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
 }
-.lw-graph-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.lw-graph-node {
-  position: absolute;
-  width: 140px;
+.lw-graph-summary strong {
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.lw-graph-flow {
+  display: grid;
+  gap: var(--s-3);
+}
+.lw-graph-step {
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: center;
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  text-align: left;
+  transition: background var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast);
+}
+.lw-graph-step:hover {
+  border-color: var(--border-2);
   background: var(--surface-2);
+}
+.lw-graph-step:active {
+  transform: translateY(1px);
+}
+.lw-graph-step.active {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface));
+}
+.lw-graph-step-index {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-sm);
-  box-shadow: 0 4px 12px var(--shadow-color);
-  overflow: hidden;
-  font-size: var(--fs-sm);
-  transition: border-color var(--dur-fast);
-}
-.lw-graph-node:hover { border-color: var(--accent); }
-.lw-graph-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 4px 12px var(--shadow-color); }
-.lw-graph-node-header {
-  display: flex; align-items: center; gap: var(--s-2);
-  padding: 4px 8px;
-  background: var(--surface-3);
-  font-weight: 500;
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-2);
-  border-bottom: 1px solid var(--border);
-}
-.lw-graph-node-header .kind-dot { width: 6px; height: 6px; border-radius: 50%; }
-.lw-graph-node.kind-source .kind-dot  { background: var(--accent); }
-.lw-graph-node.kind-mod .kind-dot     { background: oklch(76% 0.14 340); }
-.lw-graph-node.kind-color .kind-dot   { background: var(--accent-2); }
-.lw-graph-node.kind-output .kind-dot  { background: var(--mint); }
-.lw-graph-node-body { padding: 6px 8px; font-family: var(--mono-font); font-size: var(--fs-xs); color: var(--text-2); }
-.lw-graph-node-body .row { display: flex; justify-content: space-between; padding: 2px 0; }
-.lw-graph-node-body .row .k { color: var(--text-3); }
-.lw-graph-port {
-  position: absolute;
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  background: var(--surface-3);
-  border: 1.5px solid var(--border-2);
-  top: 16px;
-  transition: all var(--dur-fast);
-}
-.lw-graph-port:hover { border-color: var(--accent); background: var(--accent); }
-.lw-graph-port.left  { left: -5px; }
-.lw-graph-port.right { right: -5px; }
-.lw-graph-port.active { background: var(--accent); border-color: var(--accent); }
-.lw-graph-toolbar {
-  position: absolute; top: 8px; left: 8px;
-  display: flex; gap: 2px;
-  background: oklch(20% 0.010 260 / 0.9);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 2px;
-}
-.lw-graph-toolbar button {
-  padding: 5px 8px;
-  font-size: var(--fs-xs);
-  color: var(--text-2);
-  border-radius: 2px;
-  display: inline-flex; align-items: center; gap: 4px;
-}
-.lw-graph-toolbar button:hover { background: var(--surface-2); color: var(--text); }
-.lw-graph-toolbar button svg { width: 11px; height: 11px; }
-.lw-graph-toolbar span {
-  padding: 5px 8px;
+  color: var(--accent);
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
-  color: var(--text-3);
+  font-weight: 600;
+  background: var(--bg);
 }
-.lw-graph-legend {
-  position: absolute; bottom: 8px; left: 8px;
-  display: flex; gap: var(--s-4);
-  font-family: var(--mono-font); font-size: var(--fs-xs);
-  color: var(--text-3);
+.lw-graph-step-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
-.lw-graph-legend .item { display: inline-flex; align-items: center; gap: 4px; }
-.lw-graph-legend .item .d { width: 6px; height: 6px; border-radius: 50%; }
+.lw-graph-step-copy strong {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.lw-graph-step-copy small {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+.lw-graph-inspector {
+  display: grid;
+  gap: var(--s-4);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.lw-graph-inspector-row {
+  display: grid;
+  gap: 4px;
+}
+.lw-graph-inspector-row span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+.lw-graph-inspector-row strong {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.45;
+}
+.lw-graph-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.lw-graph-chip-row span {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text-2);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+.lw-graph-action {
+  justify-self: start;
+}
 
 /* ── Generic controls ────────────────────────────────────────────── */
 .btn {

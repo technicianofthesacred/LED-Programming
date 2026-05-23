@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { PATTERNS, DEFAULT_PARAMS, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
+import { PATTERNS, DEFAULT_PARAMS } from '../data.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
 import {
@@ -56,6 +56,59 @@ function savePresets(presets) {
 }
 
 const CATS = ['all', 'recent', 'custom', 'audio', 'fire', 'water', 'space', 'geo', 'chill', 'glitch'];
+
+const GRAPH_STAGES = [
+  {
+    id: 'input',
+    index: '01',
+    title: 'Input signal',
+    summary: 'LED position, time, audio, and knobs enter the pattern.',
+    changes: 'This is what the pattern can react to before any color is chosen.',
+    example: 'x, y, index, time, bass, mid, hi, params.*',
+    code: ['x', 'y', 'index', 'time', 'stripProgress'],
+    action: 'code',
+  },
+  {
+    id: 'motion',
+    index: '02',
+    title: 'Motion',
+    summary: 'Speed, beat sync, drift, and direction move the signal.',
+    changes: 'This stage makes a static shape travel, pulse, or breathe over time.',
+    example: 'time * speed, beat, beatSin, phase offsets',
+    code: ['time', 'beat', 'speed', 'phase'],
+    action: 'code',
+  },
+  {
+    id: 'shape',
+    index: '03',
+    title: 'Shape',
+    summary: 'Waves, noise, masks, and distance fields create structure.',
+    changes: 'This decides where the LEDs are bright, soft, sharp, dotted, or dark.',
+    example: 'sin(), noise(), fbm(), smoothstep(), distance()',
+    code: ['noise', 'fbm', 'smoothstep', 'distance'],
+    action: 'code',
+  },
+  {
+    id: 'color',
+    index: '04',
+    title: 'Color',
+    summary: 'Hue, palette, saturation, and brightness turn shape into light.',
+    changes: 'This maps the shaped signal into the actual color seen in the preview.',
+    example: 'hsv(), rgb(), samplePalette(), master saturation',
+    code: ['hsv', 'rgb', 'samplePalette', 'brightness'],
+    action: 'code',
+  },
+  {
+    id: 'output',
+    index: '05',
+    title: 'Output',
+    summary: 'Symmetry, brightness, gamma, and WLED output finalize pixels.',
+    changes: 'This is where preview-wide transforms and hardware output settings apply.',
+    example: 'symmetry, master brightness, gamma, WLED segment map',
+    code: ['symmetry', 'brightness', 'gamma', 'WLED'],
+    action: 'symmetry',
+  },
+];
 
 export function CardsMode({ patternId, onSelectPattern, params, onParamChange, palette, onPaletteChange }) {
   const { timelinePlayhead, showDuration, setShowClips } = useProject();
@@ -626,77 +679,62 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
 }
 
 // ── GRAPH mode ─────────────────────────────────────────────────────────────
-export function GraphMode() {
-  const [sel, setSel] = useState('n6');
-  const nodes   = GRAPH_NODES;
-  const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const portOut  = n => ({ x: n.x + 140, y: n.y + 18 });
-  const portIn   = n => ({ x: n.x,       y: n.y + 18 });
+export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
+  const [sel, setSel] = useState('shape');
+  const activeStage = GRAPH_STAGES.find(stage => stage.id === sel) || GRAPH_STAGES[0];
+  const pattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
+  const actionLabel = activeStage.action === 'symmetry' ? 'Open Symmetry' : 'Open Code';
+  const runAction = activeStage.action === 'symmetry' ? onOpenSymmetry : onOpenCode;
 
   return (
-    <div>
+    <div className="lw-graph-mode">
       <div className="lw-sec-header">
-        <span>Node graph</span>
-        <span className="meta">read-only signal map</span>
+        <span>Pattern flow</span>
+        <span className="meta">{pattern?.name || patternId}</span>
       </div>
-      <div className="lw-graph-wrap">
-        <div className="lw-graph-toolbar" aria-label="Graph mode status">
-          <span>Compiled from current pattern chain</span>
-        </div>
-        <svg className="lw-graph-svg">
-          {GRAPH_EDGES.map(([a, b], i) => {
-            const na = nodeById[a], nb = nodeById[b];
-            if (!na || !nb) return null;
-            const s = portOut(na), e = portIn(nb);
-            const cx = (s.x + e.x) / 2;
-            return <path key={i} d={`M ${s.x} ${s.y} C ${cx} ${s.y}, ${cx} ${e.y}, ${e.x} ${e.y}`}
-                         stroke="oklch(46% 0.02 260)" strokeWidth="1.5" fill="none"/>;
-          })}
-          {GRAPH_EDGES.filter(([a,b]) => b === sel || a === sel).map(([a, b], i) => {
-            const na = nodeById[a], nb = nodeById[b];
-            const s = portOut(na), e = portIn(nb);
-            const cx = (s.x + e.x) / 2;
-            return <path key={i} d={`M ${s.x} ${s.y} C ${cx} ${s.y}, ${cx} ${e.y}, ${e.x} ${e.y}`}
-                         stroke="var(--accent)" strokeWidth="1.5" fill="none" strokeDasharray="4 4">
-              <animate attributeName="stroke-dashoffset" from="8" to="0" dur="0.8s" repeatCount="indefinite"/>
-            </path>;
-          })}
-        </svg>
-        {nodes.map(n => (
-          <div key={n.id}
-               className={`lw-graph-node kind-${n.kind} ${n.id === sel ? 'selected' : ''}`}
-               style={{ left: n.x, top: n.y }}
-               onClick={() => setSel(n.id)}>
-            <div className="lw-graph-node-header">
-              <span className="kind-dot"/><span>{n.title}</span>
-            </div>
-            <div className="lw-graph-node-body">
-              {n.rows.map((r, i) => (
-                <div className="row" key={i}><span className="k">{r[0]}</span><span>{r[1]}</span></div>
-              ))}
-            </div>
-            {n.kind !== 'source' && <div className="lw-graph-port left"/>}
-            {n.kind !== 'output' && <div className={`lw-graph-port right ${n.id === sel ? 'active' : ''}`}/>}
-          </div>
+
+      <div className="lw-graph-summary">
+        <strong>One LED at a time</strong>
+        <span>Every frame repeats this path for each LED: inputs move, shapes form, colors map, output settings finish the pixel.</span>
+      </div>
+
+      <div className="lw-graph-flow" aria-label="Pattern flow stages">
+        {GRAPH_STAGES.map(stage => (
+          <button
+            key={stage.id}
+            type="button"
+            className={`lw-graph-step ${stage.id === activeStage.id ? 'active' : ''}`}
+            onClick={() => setSel(stage.id)}
+          >
+            <span className="lw-graph-step-index">{stage.index}</span>
+            <span className="lw-graph-step-copy">
+              <strong>{stage.title}</strong>
+              <small>{stage.summary}</small>
+            </span>
+          </button>
         ))}
-        <div className="lw-graph-legend">
-          <span className="item"><span className="d" style={{background:'var(--accent)'}}/>Source</span>
-          <span className="item"><span className="d" style={{background:'oklch(76% 0.14 340)'}}/>Modifier</span>
-          <span className="item"><span className="d" style={{background:'var(--accent-2)'}}/>Color</span>
-          <span className="item"><span className="d" style={{background:'var(--mint)'}}/>Output</span>
-        </div>
       </div>
+
       <div className="lw-sec-header">
-        <span>{nodeById[sel]?.title} · inspector</span>
-        <span className="meta">{nodeById[sel]?.kind}</span>
+        <span>{activeStage.title}</span>
+        <span className="meta">selected stage</span>
       </div>
-      <div className="lw-knobs">
-        {(nodeById[sel]?.rows || []).map((r, i) => (
-          <div className="lw-knob lw-knob-readonly" key={i}>
-            <div className="lw-knob-name">{r[0]}</div>
-            <div className="lw-knob-val">{r[1]}</div>
-          </div>
-        ))}
+
+      <div className="lw-graph-inspector">
+        <div className="lw-graph-inspector-row">
+          <span>What this stage changes</span>
+          <strong>{activeStage.changes}</strong>
+        </div>
+        <div className="lw-graph-inspector-row">
+          <span>Pattern code usually touches</span>
+          <strong>{activeStage.example}</strong>
+        </div>
+        <div className="lw-graph-chip-row" aria-label="Relevant code inputs">
+          {activeStage.code.map(item => <span key={item}>{item}</span>)}
+        </div>
+        <button className="btn lw-graph-action" type="button" onClick={runAction}>
+          {actionLabel}
+        </button>
       </div>
     </div>
   );

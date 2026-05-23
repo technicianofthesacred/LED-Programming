@@ -86,7 +86,13 @@ function PatternPanel({
             onParamChange={(k, v) => setParams({ ...params, [k]: v })}
           />
         )}
-        {panelMode === 'graph' && <GraphMode/>}
+        {panelMode === 'graph' && (
+          <GraphMode
+            patternId={patternId}
+            onOpenCode={() => setPanelMode('code')}
+            onOpenSymmetry={() => setPanelMode('sym')}
+          />
+        )}
         {panelMode === 'sym'   && <SymmetryMode/>}
         <div className="lw-sec-header" style={{ marginTop: 24 }}>
           <span>Master</span>
