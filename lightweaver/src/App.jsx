@@ -61,7 +61,7 @@ function PatternPanel({
     <div className="lw-panel">
       <div className="lw-panel-mode-switch">
         <button className="lw-panel-collapse-btn" onClick={onCollapse} title="Collapse panel">‹</button>
-        {[['cards','Cards',ModeIcon.cards],['code','Code',ModeIcon.code],['graph','Graph',ModeIcon.graph],['sym','Symmetry',ModeIcon.sym]].map(([v,l,ic]) => (
+        {[['graph','Tune',ModeIcon.graph],['cards','Browse',ModeIcon.cards],['code','Code',ModeIcon.code],['sym','Symmetry',ModeIcon.sym]].map(([v,l,ic]) => (
           <button key={v} className={`lw-panel-mode-btn ${panelMode === v ? 'active' : ''}`} onClick={() => setPanelMode(v)}>
             {ic}<span>{l}</span>
           </button>
@@ -442,7 +442,7 @@ export default function App() {
     return params.get('screen') || 'layout';
   });
   const [panelMode, setPanelMode]   = useState(
-    () => localStorage.getItem('lw-panel-mode') || 'cards'
+    () => localStorage.getItem('lw-panel-mode') || 'graph'
   );
   const [exportOpen, setExportOpen] = useState(false);
   const [kbdOpen,    setKbdOpen]    = useState(false);

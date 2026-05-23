@@ -89,6 +89,24 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function lerpHueDegrees(a, b, t) {
+  const delta = ((b - a + 540) % 360) - 180;
+  return a + delta * t;
+}
+
+function applyJourneyColorInfluence(r, g, b, journey) {
+  const mixAmount = clamp01(journey?.colorMix ?? 0);
+  if (mixAmount <= 0) return { r, g, b };
+
+  const [baseH, baseS, baseL] = rgbToHsl(r, g, b);
+  const [journeyH, journeyS, journeyL] = rgbToHsl(journey.color.r, journey.color.g, journey.color.b);
+  const hue = lerpHueDegrees(baseH, journeyH, mixAmount * 0.62);
+  const sat = clamp01(lerp(baseS, journeyS, mixAmount * 0.5));
+  const light = clamp01(lerp(baseL, journeyL, mixAmount * 0.16));
+  const [nr, ng, nb] = hslToRgb(hue, sat, light);
+  return { r: nr, g: ng, b: nb };
+}
+
 function easeJourney(t, easing = 'smooth') {
   const n = clamp01(t);
   if (easing === 'linear') return n;
@@ -232,9 +250,8 @@ export function renderPixelFrame({
       r *= bright; g *= bright; b *= bright;
 
       if (journey?.colorMix > 0) {
-        r = lerp(r, journey.color.r, journey.colorMix);
-        g = lerp(g, journey.color.g, journey.colorMix);
-        b = lerp(b, journey.color.b, journey.colorMix);
+        const influenced = applyJourneyColorInfluence(r, g, b, journey);
+        r = influenced.r; g = influenced.g; b = influenced.b;
       }
 
       if (journey && journey.saturation < 0.999) {

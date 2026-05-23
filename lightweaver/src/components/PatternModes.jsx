@@ -179,6 +179,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
   const [showFavs, setShowFavs] = useState(false);
   const [cat, setCat]           = useState('all');
   const [sortMode, setSortMode] = useState('default'); // 'default' | 'alpha' | 'random'
+  const [showFullLibrary, setShowFullLibrary] = useState(false);
   const [favs, setFavsState]    = useState(loadFavs);
   const [presets, setPresetsState] = useState(loadPresets);
   const [customPatterns, setCustomPatterns] = useState(loadCustomPatterns);
@@ -296,11 +297,14 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
     return () => window.removeEventListener('keydown', handler);
   }, [filtered, handleSelectPattern]);
 
+  const starterMode = !showFullLibrary && !search.trim() && !showFavs && cat === 'all';
+  const visiblePatterns = starterMode ? filtered.slice(0, 12) : filtered;
+
   return (
     <div>
       <div className="lw-sec-header">
-        <span>Library</span>
-        <span className="meta">{PATTERNS.length + customPatterns.length} effects</span>
+        <span>{starterMode ? 'Recommended starting points' : 'Pattern library'}</span>
+        <span className="meta">{starterMode ? 'beginner sized' : `${PATTERNS.length + customPatterns.length} effects`}</span>
         <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 6px', marginLeft: 'auto' }}
                 title="Add current pattern as a clip at the timeline playhead"
                 onClick={() => {
@@ -316,6 +320,14 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
           → Timeline
         </button>
       </div>
+      {starterMode && (
+        <div className="lw-browse-guide">
+          <span>Start with one strong look, then tune color and motion.</span>
+          <button type="button" className="btn btn-ghost" onClick={() => setShowFullLibrary(true)}>
+            Show all patterns
+          </button>
+        </div>
+      )}
 
       <div style={{ padding: '0 0 6px', display: 'flex', gap: 6 }}>
         <div style={{ flex: 1, position: 'relative' }}>
@@ -404,7 +416,7 @@ export function CardsMode({ patternId, onSelectPattern, params, onParamChange, p
       )}
 
       <div className="lw-pattern-grid">
-        {filtered.map((p, cardIdx) => (
+        {visiblePatterns.map((p, cardIdx) => (
           <div key={p.id}
                className={`lw-pattern-card ${p.id === patternId ? 'selected' : ''}`}
                onClick={() => handleSelectPattern(p.id)}
@@ -755,16 +767,34 @@ export function GraphMode({
 }) {
   const [sel, setSel] = useState('color');
   const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
-  const { patternParams, setPatternParams, palette, setPalette } = useProject();
+  const [lastChange, setLastChange] = useState('Ready to tune color, motion, and output.');
+  const [journeyScrub, setJourneyScrub] = useState(0);
+  const undoJourneyRef = useRef(null);
+  const { patternParams, setPatternParams, palette, setPalette, symSettings } = useProject();
   const pattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
   const currentParams = patternParams[patternId] || {};
   const journey = getPatternJourney(currentParams);
-  const updateJourney = (patch) => {
+  const updateJourney = (patch, message = 'Updated the pattern journey.') => {
     setPatternParams(prev => {
       const existing = prev[patternId] || {};
+      undoJourneyRef.current = getPatternJourney(existing);
       const nextJourney = { ...getPatternJourney(existing), enabled: true, ...patch };
       return { ...prev, [patternId]: { ...existing, __journey: nextJourney } };
     });
+    setLastChange(message);
+  };
+  const undoTune = () => {
+    const previousJourney = undoJourneyRef.current;
+    if (!previousJourney) {
+      setLastChange('No earlier tuning step to restore yet.');
+      return;
+    }
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      return { ...prev, [patternId]: { ...existing, __journey: previousJourney } };
+    });
+    undoJourneyRef.current = null;
+    setLastChange('Restored the previous tuning step.');
   };
   const setJourneyEnabled = (enabled) => {
     setPatternParams(prev => {
@@ -781,7 +811,7 @@ export function GraphMode({
   const updateJourneyColor = (index, value) => {
     const colorStops = [...journey.colorStops];
     colorStops[index] = normalizeHexColor(value, colorStops[index]);
-    updateJourney({ colorStops });
+    updateJourney({ colorStops }, `Changed color stop ${index + 1}.`);
   };
   const addJourneyColor = () => {
     const fallback = journey.colorStops[journey.colorStops.length - 1] || '#ffffff';
@@ -791,7 +821,7 @@ export function GraphMode({
         ...journey.colorStops,
         normalizeHexColor(selectedPaletteColor, fallback),
       ],
-    });
+    }, 'Added another color stop to the loop.');
   };
   const moveJourneyColor = (fromIndex, toIndex) => {
     if (fromIndex === toIndex) return;
@@ -800,7 +830,7 @@ export function GraphMode({
     const colorStops = [...journey.colorStops];
     const [moved] = colorStops.splice(fromIndex, 1);
     colorStops.splice(toIndex, 0, moved);
-    updateJourney({ colorStops });
+    updateJourney({ colorStops }, `Moved color stop ${fromIndex + 1} to position ${toIndex + 1}.`);
   };
   const setJourneyColorFromDrop = (event, targetIndex) => {
     event.preventDefault();
@@ -822,12 +852,67 @@ export function GraphMode({
     { id: 'motion', label: 'Motion' },
     { id: 'output', label: 'Output' },
   ];
+  const resetColor = () => {
+    updateJourney({
+      colorStops: [...DEFAULT_PATTERN_JOURNEY.colorStops],
+      colorMix: DEFAULT_PATTERN_JOURNEY.colorMix,
+      saturationEnd: DEFAULT_PATTERN_JOURNEY.saturationEnd,
+    }, 'Reset color journey to the starter loop.');
+  };
+  const resetMotion = () => {
+    updateJourney({
+      speedStart: DEFAULT_PATTERN_JOURNEY.speedStart,
+      speedEnd: DEFAULT_PATTERN_JOURNEY.speedEnd,
+      easing: DEFAULT_PATTERN_JOURNEY.easing,
+    }, 'Reset motion ramp to the starter feel.');
+  };
+  const resetOutput = () => {
+    setMasterBrightness(1);
+    setMasterSaturation(1);
+    setLastChange('Reset live output to full brightness and saturation.');
+  };
+  const applyPaletteToJourney = () => {
+    const nextStops = (palette?.length ? palette : DEFAULT_PATTERN_JOURNEY.colorStops)
+      .slice(0, 6)
+      .map((hex, index) => normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index % DEFAULT_PATTERN_JOURNEY.colorStops.length]));
+    updateJourney({ colorStops: nextStops }, 'Applied the palette to the color journey.');
+  };
+  const reverseColorJourney = () => {
+    updateJourney({ colorStops: [...journey.colorStops].reverse() }, 'Reversed the color journey.');
+  };
+  const recipeParts = [
+    pattern?.name || patternId,
+    journey.enabled ? `${journey.colorStops.length} color journey` : 'static pattern',
+    `${journey.speedStart.toFixed(2)}x to ${journey.speedEnd.toFixed(2)}x motion`,
+    `${Math.round(masterBrightness * 100)}% brightness`,
+    symSettings?.enabled && symSettings.type !== 'none' ? `${symSettings.type} symmetry` : 'no symmetry',
+  ];
 
   return (
     <div className="lw-graph-mode lw-builder-mode">
       <div className="lw-sec-header">
-        <span>Pattern Builder</span>
+        <span>Tune Pattern</span>
         <span className="meta">{pattern?.name || patternId}</span>
+      </div>
+
+      <div className="lw-tune-recipe">
+        <div className="lw-tune-recipe-top">
+          <div>
+            <strong>Now editing</strong>
+            <span>{pattern?.name || patternId}</span>
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={undoTune}>
+            Undo tuning
+          </button>
+        </div>
+        <div className="lw-tune-recipe-line">
+          <strong>Pattern recipe</strong>
+          <span>{recipeParts.join(' + ')}</span>
+        </div>
+        <div className="lw-tune-recipe-line">
+          <strong>Last change</strong>
+          <span>{lastChange}</span>
+        </div>
       </div>
 
       <div className="lw-journey-panel">
@@ -848,7 +933,7 @@ export function GraphMode({
           max={120}
           step={1}
           value={journey.duration}
-          onChange={duration => updateJourney({ duration })}
+          onChange={duration => updateJourney({ duration }, `Set journey length to ${Math.round(duration)} seconds.`)}
           readout={`${Math.round(journey.duration)}s`}
         />
         <div className="lw-builder-segment" aria-label="Journey loop mode">
@@ -860,7 +945,7 @@ export function GraphMode({
               key={value}
               type="button"
               className={journey.loop === value ? 'active' : ''}
-              onClick={() => updateJourney({ loop: value })}
+              onClick={() => updateJourney({ loop: value }, value === 'repeat' ? 'Journey now loops back to the first color.' : 'Journey now runs forward then backward.')}
             >
               {label}
             </button>
@@ -897,6 +982,25 @@ export function GraphMode({
                 <strong>Color journey</strong>
                 <span>Loops back to first</span>
               </div>
+              <div className="lw-color-timeline" aria-label="Color journey timeline">
+                <div
+                  className="lw-color-timeline-track"
+                  style={{ background: `linear-gradient(90deg, ${journey.colorStops.join(', ')}, ${journey.colorStops[0]})` }}
+                />
+                <span className="lw-color-timeline-playhead" style={{ left: `${journeyScrub}%` }}/>
+              </div>
+              <BuilderSlider
+                label="Scrub"
+                min={0}
+                max={100}
+                step={1}
+                value={journeyScrub}
+                onChange={value => {
+                  setJourneyScrub(value);
+                  setLastChange(`Previewing ${Math.round(value)}% through the journey.`);
+                }}
+                readout={`${Math.round(journeyScrub)}%`}
+              />
               <div className="lw-journey-stop-list" aria-label="Color journey stops">
                 {journey.colorStops.map((hex, index) => (
                   <div
@@ -933,22 +1037,37 @@ export function GraphMode({
                   <strong>Add color stop</strong>
                 </button>
               </div>
+              <div className="lw-builder-action-row">
+                <button className="btn btn-ghost" type="button" onClick={applyPaletteToJourney}>
+                  Apply palette to journey
+                </button>
+                <button className="btn btn-ghost" type="button" onClick={reverseColorJourney}>
+                  Reverse color order
+                </button>
+                <button className="btn btn-ghost" type="button" onClick={resetColor}>
+                  Reset Color
+                </button>
+              </div>
               <BuilderSlider
-                label="Blend"
+                label="Color influence"
                 min={0}
                 max={1}
                 step={0.01}
                 value={journey.colorMix}
-                onChange={colorMix => updateJourney({ colorMix })}
+                onChange={colorMix => updateJourney({ colorMix }, `Color influence is now ${Math.round(colorMix * 100)}%.`)}
                 readout={`${Math.round(journey.colorMix * 100)}%`}
               />
+              <div className="lw-tune-explainer">
+                <strong>Pattern stays underneath</strong>
+                <span>Steers journey colors without replacing the pattern underneath.</span>
+              </div>
               <BuilderSlider
-                label="Sat end"
+                label="End intensity"
                 min={0}
                 max={1}
                 step={0.01}
                 value={journey.saturationEnd}
-                onChange={saturationEnd => updateJourney({ saturationEnd })}
+                onChange={saturationEnd => updateJourney({ saturationEnd }, `Ending color intensity is now ${Math.round(saturationEnd * 100)}%.`)}
                 readout={`${Math.round(journey.saturationEnd * 100)}%`}
               />
             </div>
@@ -961,13 +1080,20 @@ export function GraphMode({
               <strong>Live speed</strong>
               <span>global</span>
             </div>
+            <div className="lw-tune-explainer">
+              <strong>Speed story</strong>
+              <span>Set how the pattern starts, where it ends, and how smooth that change feels.</span>
+            </div>
             <BuilderSlider
               label="Speed"
               min={0}
               max={4}
               step={0.01}
               value={masterSpeed}
-              onChange={setMasterSpeed}
+              onChange={value => {
+                setMasterSpeed(value);
+                setLastChange(`Live speed is now ${value.toFixed(2)}x.`);
+              }}
               readout={`${masterSpeed.toFixed(2)}x`}
             />
             <div className="lw-builder-block-head">
@@ -980,7 +1106,7 @@ export function GraphMode({
               max={4}
               step={0.01}
               value={journey.speedStart}
-              onChange={speedStart => updateJourney({ speedStart })}
+              onChange={speedStart => updateJourney({ speedStart }, `Motion now starts at ${speedStart.toFixed(2)}x.`)}
               readout={`${journey.speedStart.toFixed(2)}x`}
             />
             <BuilderSlider
@@ -989,7 +1115,7 @@ export function GraphMode({
               max={4}
               step={0.01}
               value={journey.speedEnd}
-              onChange={speedEnd => updateJourney({ speedEnd })}
+              onChange={speedEnd => updateJourney({ speedEnd }, `Motion now ends at ${speedEnd.toFixed(2)}x.`)}
               readout={`${journey.speedEnd.toFixed(2)}x`}
             />
             <div className="lw-builder-segment" aria-label="Journey easing">
@@ -1002,11 +1128,16 @@ export function GraphMode({
                   key={value}
                   type="button"
                   className={journey.easing === value ? 'active' : ''}
-                  onClick={() => updateJourney({ easing: value })}
+                  onClick={() => updateJourney({ easing: value }, `Motion easing set to ${label}.`)}
                 >
                   {label}
                 </button>
               ))}
+            </div>
+            <div className="lw-builder-action-row">
+              <button className="btn btn-ghost" type="button" onClick={resetMotion}>
+                Reset Motion
+              </button>
             </div>
           </div>
         )}
@@ -1017,13 +1148,20 @@ export function GraphMode({
               <strong>Live output</strong>
               <span>applies globally</span>
             </div>
+            <div className="lw-tune-explainer">
+              <strong>What is live right now</strong>
+              <span>Brightness and saturation affect the preview immediately and carry into the hardware output.</span>
+            </div>
             <BuilderSlider
               label="Brightness"
               min={0}
               max={1}
               step={0.01}
               value={masterBrightness}
-              onChange={setMasterBrightness}
+              onChange={value => {
+                setMasterBrightness(value);
+                setLastChange(`Brightness is now ${Math.round(value * 100)}%.`);
+              }}
               readout={`${Math.round(masterBrightness * 100)}%`}
             />
             <BuilderSlider
@@ -1032,10 +1170,16 @@ export function GraphMode({
               max={1}
               step={0.01}
               value={masterSaturation}
-              onChange={setMasterSaturation}
+              onChange={value => {
+                setMasterSaturation(value);
+                setLastChange(`Saturation is now ${Math.round(value * 100)}%.`);
+              }}
               readout={`${Math.round(masterSaturation * 100)}%`}
             />
             <div className="lw-builder-action-row">
+              <button className="btn btn-ghost" type="button" onClick={resetOutput}>
+                Reset Output
+              </button>
               <button className="btn" type="button" onClick={onOpenSymmetry}>
                 Open Symmetry
               </button>

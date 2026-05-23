@@ -112,6 +112,12 @@ export function AiPatternAssistant({
       setError(null);
     }
   };
+  const addPromptText = (text) => {
+    setInput(current => {
+      const trimmed = current.trim();
+      return trimmed ? `${trimmed}. ${text}` : text;
+    });
+  };
 
   return (
     <section className={`lw-ai-assistant ${open ? 'open' : ''}`}>
@@ -137,6 +143,29 @@ export function AiPatternAssistant({
               <div key={index} className={`lw-ai-message ${message.role} ${message.error ? 'error' : ''}`}>
                 {message.text}
               </div>
+            ))}
+          </div>
+          <div className="lw-ai-prompt-chips" aria-label="Quick AI edits">
+            {[
+              ['Slower', 'Make this slower and smoother'],
+              ['Smoother', 'Make the motion smoother with softer transitions'],
+              ['Warmer', 'Make the colors warmer, with amber and soft white'],
+              ['Less busy', 'Make it less chaotic and easier on the eyes'],
+            ].map(([label, prompt]) => (
+              <button key={label} type="button" className="btn btn-ghost" onClick={() => addPromptText(prompt)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="lw-ai-target-row" aria-label="AI edit target">
+            {[
+              ['Only color', 'Change only color and palette. Do not change motion.'],
+              ['Only motion', 'Change only motion speed and smoothness. Do not change colors.'],
+              ['Only shape', 'Change only the pattern shape and spatial structure.'],
+            ].map(([label, prompt]) => (
+              <button key={label} type="button" className="btn btn-ghost" onClick={() => addPromptText(prompt)}>
+                {label}
+              </button>
             ))}
           </div>
           {draft && (

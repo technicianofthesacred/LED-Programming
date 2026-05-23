@@ -155,6 +155,7 @@ test('clears the AI draft when the selected pattern changes', async ({ page }) =
   await assistant.getByRole('button', { name: 'Generate' }).click();
   await expect(assistant.getByText('Pattern Switch Draft')).toBeVisible();
 
+  await page.getByRole('button', { name: 'Browse' }).click();
   await page.getByTitle('Next pattern').click();
 
   await expect(assistant.getByText('Pattern Switch Draft')).toHaveCount(0);
@@ -303,9 +304,9 @@ test('presents graph mode as an actionable pattern builder', async ({ page }) =>
   await page.setViewportSize({ width: 1000, height: 600 });
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('button', { name: 'Tune' }).click();
 
-  await expect(page.getByText('Pattern Builder')).toBeVisible();
+  await expect(page.getByText('Tune Pattern')).toBeVisible();
   await expect(page.getByText('Pattern journey')).toBeVisible();
   await expect(page.getByText('Duration')).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Color' })).toHaveAttribute('aria-selected', 'true');
@@ -325,12 +326,14 @@ test('presents graph mode as an actionable pattern builder', async ({ page }) =>
 test('replaces graph stage cards with real color, motion, and output controls', async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('button', { name: 'Tune' }).click();
 
   await expect(page.getByText('Palette editor')).toBeVisible();
   await expect(page.getByLabel('Selected palette color')).toBeVisible();
   await expect(page.getByLabel('Selected palette hex')).toBeVisible();
   await expect(page.getByText('Color journey')).toBeVisible();
+  await expect(page.getByText('Color influence')).toBeVisible();
+  await expect(page.getByText('Steers journey colors without replacing the pattern underneath.')).toBeVisible();
   await expect(page.locator('.lw-master').getByText('Gamma')).toHaveCount(0);
 
   await page.getByRole('tab', { name: 'Motion' }).click();
@@ -338,8 +341,8 @@ test('replaces graph stage cards with real color, motion, and output controls', 
   await expect(page.getByText('Motion journey')).toBeVisible();
 
   await page.getByRole('tab', { name: 'Output' }).click();
-  await expect(page.getByText('Brightness')).toBeVisible();
-  await expect(page.getByText('Saturation')).toBeVisible();
+  await expect(page.getByText('Brightness', { exact: true })).toBeVisible();
+  await expect(page.getByText('Saturation', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open Symmetry' })).toBeVisible();
 
   await page.getByRole('tab', { name: 'Color' }).click();
@@ -355,7 +358,7 @@ test('lets color journey loop, grow, reorder, and accept palette drops', async (
     localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
   }, makeProject());
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('button', { name: 'Tune' }).click();
 
   await expect(page.getByText('Loops back to first')).toBeVisible();
   const journeyStops = page.locator('.lw-journey-stop');
@@ -376,6 +379,64 @@ test('lets color journey loop, grow, reorder, and accept palette drops', async (
 
   await page.locator('.lw-palette-editor .lw-color-swatch').first().dragTo(journeyStops.first());
   await expect(stopInputs.first()).toHaveValue('#102a2b');
+});
+
+test('starts beginners in a guided tune workflow with plain-language feedback', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('button', { name: 'Tune' })).toHaveClass(/active/);
+  await expect(page.getByText('Tune Pattern')).toBeVisible();
+  await expect(page.getByText('Now editing')).toBeVisible();
+  await expect(page.getByText('Pattern recipe')).toBeVisible();
+  await expect(page.getByText(/color journey/i)).toBeVisible();
+  await expect(page.getByText('Undo tuning')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Reverse color order' }).click();
+  await expect(page.getByText('Last change')).toBeVisible();
+  await expect(page.getByText(/Reversed the color journey/)).toBeVisible();
+  const reversedStops = await page.locator('.lw-journey-stop input[type="color"]').evaluateAll(inputs =>
+    inputs.map(input => (input as HTMLInputElement).value),
+  );
+  await page.getByRole('button', { name: 'Undo tuning' }).click();
+  const restoredStops = await page.locator('.lw-journey-stop input[type="color"]').evaluateAll(inputs =>
+    inputs.map(input => (input as HTMLInputElement).value),
+  );
+  expect(restoredStops).toEqual([...reversedStops].reverse());
+
+  await page.getByRole('tab', { name: 'Motion' }).click();
+  await expect(page.getByText('Speed story')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reset Motion' })).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Output' }).click();
+  await expect(page.getByText('What is live right now')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reset Output' })).toBeVisible();
+});
+
+test('keeps browse mode beginner sized before showing the full library', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Browse' }).click();
+
+  await expect(page.getByText('Recommended starting points')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show all patterns' })).toBeVisible();
+  await expect(page.locator('.lw-pattern-card')).toHaveCount(12);
+
+  await page.getByRole('button', { name: 'Show all patterns' }).click();
+  await expect.poll(async () => page.locator('.lw-pattern-card').count()).toBeGreaterThan(30);
+});
+
+test('offers AI prompt chips and targeted pattern edits', async ({ page }) => {
+  const assistant = await openPatternAssistant(page);
+
+  await expect(assistant.getByRole('button', { name: 'Slower' })).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Warmer' })).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Only color' })).toBeVisible();
+
+  await assistant.getByRole('button', { name: 'Warmer' }).click();
+  await expect(assistant.locator('textarea')).toHaveValue(/warmer/);
+  await assistant.getByRole('button', { name: 'Only motion' }).click();
+  await expect(assistant.locator('textarea')).toHaveValue(/only motion/i);
 });
 
 test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {

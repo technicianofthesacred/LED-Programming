@@ -1164,10 +1164,47 @@ const journeyColorFrame = renderPixelFrame({
     },
   },
 });
-assert.deepEqual(
-  journeyColorFrame.pixels[0],
-  { r: 236, g: 196, b: 156 },
-  'pattern journey should tint color and desaturate over time',
+assert.ok(
+  journeyColorFrame.pixels[0].r > journeyColorFrame.pixels[0].b,
+  'pattern journey should steer dark pixels toward the current journey color',
+);
+assert.ok(
+  journeyColorFrame.pixels[0].r < 140,
+  'pattern journey mix should not replace dark source pixels with a full-bright wash',
+);
+
+const { fn: journeyDetailFn } = compile('return hsv(index / max(1, pixelCount), 1, 1);');
+const journeyDetailFrame = renderPixelFrame({
+  t: 2,
+  strips: [{
+    id: 'detail',
+    pts: [
+      { x: 0, y: 0, p: 0 },
+      { x: 0.2, y: 0, p: 0.2 },
+      { x: 0.4, y: 0, p: 0.4 },
+      { x: 0.6, y: 0, p: 0.6 },
+      { x: 0.8, y: 0, p: 0.8 },
+      { x: 1, y: 0, p: 1 },
+    ],
+  }],
+  activeFn: journeyDetailFn,
+  params: {
+    __journey: {
+      enabled: true,
+      duration: 10,
+      easing: 'linear',
+      colorMix: 1,
+      colorStops: ['#ffd000', '#ffd000'],
+      saturationStart: 1,
+      saturationEnd: 1,
+      speedStart: 1,
+      speedEnd: 1,
+    },
+  },
+});
+assert.ok(
+  new Set(journeyDetailFrame.pixels.map(px => `${px.r},${px.g},${px.b}`)).size >= 4,
+  'journey mix should keep multicolor pattern detail instead of collapsing every pixel to the journey color',
 );
 
 const { fn: journeyLoopFn } = compile('return rgb(0, 0, 0);');
