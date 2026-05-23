@@ -1166,8 +1166,32 @@ const journeyColorFrame = renderPixelFrame({
 });
 assert.deepEqual(
   journeyColorFrame.pixels[0],
-  { r: 216, g: 137, b: 57 },
+  { r: 236, g: 196, b: 156 },
   'pattern journey should tint color and desaturate over time',
+);
+
+const { fn: journeyLoopFn } = compile('return rgb(0, 0, 0);');
+const journeyLoopFrame = renderPixelFrame({
+  t: 9,
+  strips: [{ id: 's', pts: [{ x: 0, y: 0, p: 0 }] }],
+  activeFn: journeyLoopFn,
+  params: {
+    __journey: {
+      enabled: true,
+      duration: 10,
+      easing: 'linear',
+      colorMix: 1,
+      colorStops: ['#ff0000', '#0000ff'],
+      saturationStart: 1,
+      saturationEnd: 1,
+      speedStart: 1,
+      speedEnd: 1,
+    },
+  },
+});
+assert.ok(
+  journeyLoopFrame.pixels[0].r > journeyLoopFrame.pixels[0].b,
+  'repeat color journey should blend from the last stop back to the first stop before restarting',
 );
 
 const { fn: journeySpeedFn } = compile('return rgb(fract(t), 0, 0);');

@@ -349,6 +349,35 @@ test('replaces graph stage cards with real color, motion, and output controls', 
   await expect(page.getByLabel('Selected palette hex')).toHaveValue('#ffcc00');
 });
 
+test('lets color journey loop, grow, reorder, and accept palette drops', async ({ page }) => {
+  await page.addInitScript(project => {
+    localStorage.clear();
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+  }, makeProject());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Graph' }).click();
+
+  await expect(page.getByText('Loops back to first')).toBeVisible();
+  const journeyStops = page.locator('.lw-journey-stop');
+  await expect(journeyStops).toHaveCount(3);
+
+  await page.getByRole('button', { name: 'Add color stop' }).click();
+  await expect(journeyStops).toHaveCount(4);
+
+  const stopInputs = page.locator('.lw-journey-stop input[type="color"]');
+  const beforeReorder = await stopInputs.evaluateAll(inputs =>
+    inputs.map(input => (input as HTMLInputElement).value),
+  );
+  await journeyStops.nth(0).dragTo(journeyStops.nth(2));
+  const afterReorder = await stopInputs.evaluateAll(inputs =>
+    inputs.map(input => (input as HTMLInputElement).value),
+  );
+  expect(afterReorder[2]).toBe(beforeReorder[0]);
+
+  await page.locator('.lw-palette-editor .lw-color-swatch').first().dragTo(journeyStops.first());
+  await expect(stopInputs.first()).toHaveValue('#102a2b');
+});
+
 test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
 

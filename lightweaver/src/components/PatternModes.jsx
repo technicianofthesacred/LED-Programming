@@ -78,13 +78,20 @@ function normalizeHexColor(value, fallback = '#ffffff') {
 }
 
 function getPatternJourney(params = {}) {
+  const savedStops = Array.isArray(params.__journey?.colorStops) && params.__journey.colorStops.length
+    ? params.__journey.colorStops
+    : DEFAULT_PATTERN_JOURNEY.colorStops;
+  const colorStops = savedStops.map((hex, index) => (
+    normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index % DEFAULT_PATTERN_JOURNEY.colorStops.length])
+  ));
+  while (colorStops.length < 2) {
+    colorStops.push(DEFAULT_PATTERN_JOURNEY.colorStops[colorStops.length] || '#ffffff');
+  }
+
   return {
     ...DEFAULT_PATTERN_JOURNEY,
     ...(params.__journey || {}),
-    colorStops: [
-      ...(params.__journey?.colorStops || DEFAULT_PATTERN_JOURNEY.colorStops),
-      ...DEFAULT_PATTERN_JOURNEY.colorStops,
-    ].slice(0, 3).map((hex, index) => normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index])),
+    colorStops,
   };
 }
 
@@ -132,6 +139,13 @@ function PaletteEditor({ palette, selectedIndex, setSelectedIndex, onPaletteChan
             style={{ background: normalizeHexColor(hex) }}
             aria-label={`Palette color ${index + 1}`}
             aria-pressed={selectedIndex === index}
+            draggable
+            onDragStart={event => {
+              const color = normalizeHexColor(hex);
+              event.dataTransfer.effectAllowed = 'copy';
+              event.dataTransfer.setData('application/x-lightweaver-color', color);
+              event.dataTransfer.setData('text/plain', color);
+            }}
             onClick={() => setSelectedIndex(index)}
           />
         ))}
@@ -769,6 +783,40 @@ export function GraphMode({
     colorStops[index] = normalizeHexColor(value, colorStops[index]);
     updateJourney({ colorStops });
   };
+  const addJourneyColor = () => {
+    const fallback = journey.colorStops[journey.colorStops.length - 1] || '#ffffff';
+    const selectedPaletteColor = palette?.[selectedPaletteIndex];
+    updateJourney({
+      colorStops: [
+        ...journey.colorStops,
+        normalizeHexColor(selectedPaletteColor, fallback),
+      ],
+    });
+  };
+  const moveJourneyColor = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    if (fromIndex < 0 || fromIndex >= journey.colorStops.length) return;
+    if (toIndex < 0 || toIndex >= journey.colorStops.length) return;
+    const colorStops = [...journey.colorStops];
+    const [moved] = colorStops.splice(fromIndex, 1);
+    colorStops.splice(toIndex, 0, moved);
+    updateJourney({ colorStops });
+  };
+  const setJourneyColorFromDrop = (event, targetIndex) => {
+    event.preventDefault();
+    const sourceIndexText = event.dataTransfer.getData('application/x-lightweaver-journey-index');
+    const sourceIndex = Number(sourceIndexText);
+    if (sourceIndexText !== '' && Number.isInteger(sourceIndex)) {
+      moveJourneyColor(sourceIndex, targetIndex);
+      return;
+    }
+
+    const droppedColor = event.dataTransfer.getData('application/x-lightweaver-color')
+      || event.dataTransfer.getData('text/plain');
+    if (/^#?[0-9a-f]{6}$/i.test(droppedColor.trim())) {
+      updateJourneyColor(targetIndex, droppedColor);
+    }
+  };
   const tabs = [
     { id: 'color', label: 'Color' },
     { id: 'motion', label: 'Motion' },
@@ -847,19 +895,43 @@ export function GraphMode({
             <div className="lw-builder-block">
               <div className="lw-builder-block-head">
                 <strong>Color journey</strong>
-                <span>start to middle to end</span>
+                <span>Loops back to first</span>
               </div>
-              <div className="lw-journey-color-grid">
-                {['Start', 'Middle', 'End'].map((label, index) => (
-                  <label key={label}>
-                    <span>{label}</span>
-                    <input
-                      type="color"
-                      value={journey.colorStops[index]}
-                      onChange={event => updateJourneyColor(index, event.target.value)}
-                    />
-                  </label>
+              <div className="lw-journey-stop-list" aria-label="Color journey stops">
+                {journey.colorStops.map((hex, index) => (
+                  <div
+                    key={`${hex}-${index}`}
+                    className="lw-journey-stop"
+                    draggable
+                    aria-label={`Color stop ${index + 1}`}
+                    onDragStart={event => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('application/x-lightweaver-journey-index', String(index));
+                    }}
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={event => setJourneyColorFromDrop(event, index)}
+                  >
+                    <span className="lw-journey-stop-handle" aria-hidden="true">::</span>
+                    <label>
+                      <span>{index === 0 ? '1 Start' : `${index + 1}`}</span>
+                      <input
+                        aria-label={`Color stop ${index + 1}`}
+                        type="color"
+                        value={hex}
+                        onChange={event => updateJourneyColor(index, event.target.value)}
+                      />
+                    </label>
+                  </div>
                 ))}
+                <button
+                  className="lw-add-journey-stop"
+                  type="button"
+                  aria-label="Add color stop"
+                  onClick={addJourneyColor}
+                >
+                  <span aria-hidden="true">+</span>
+                  <strong>Add color stop</strong>
+                </button>
               </div>
               <BuilderSlider
                 label="Blend"

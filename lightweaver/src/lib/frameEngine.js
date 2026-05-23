@@ -116,11 +116,18 @@ function resolvePatternJourney(params = {}, t = 0) {
   const stops = Array.isArray(raw.colorStops) && raw.colorStops.length >= 2
     ? raw.colorStops
     : ['#ffd000', '#ff7a18', '#fff5d6'];
-  const pos = progress * (stops.length - 1);
-  const idx = Math.min(stops.length - 2, Math.max(0, Math.floor(pos)));
-  const f = pos - idx;
+  const colorPos = raw.loop === 'pingpong'
+    ? progress * (stops.length - 1)
+    : progress * stops.length;
+  const idx = raw.loop === 'pingpong'
+    ? Math.min(stops.length - 2, Math.max(0, Math.floor(colorPos)))
+    : Math.floor(colorPos) % stops.length;
+  const nextIdx = raw.loop === 'pingpong'
+    ? Math.min(stops.length - 1, idx + 1)
+    : (idx + 1) % stops.length;
+  const f = colorPos - Math.floor(colorPos);
   const a = hexToRgb255(stops[idx]);
-  const b = hexToRgb255(stops[idx + 1], a);
+  const b = hexToRgb255(stops[nextIdx], a);
   return {
     progress,
     speed: lerp(Number(raw.speedStart) || 1, Number(raw.speedEnd) || 1, progress),
