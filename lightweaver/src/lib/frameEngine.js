@@ -85,6 +85,59 @@ function indexFromProgress(progress, pixelCount) {
   return Math.max(0, Math.min(pixelCount - 1, Math.round(clamp01(progress) * (pixelCount - 1))));
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function easeJourney(t, easing = 'smooth') {
+  const n = clamp01(t);
+  if (easing === 'linear') return n;
+  if (easing === 'ease-in') return n * n;
+  if (easing === 'ease-out') return 1 - (1 - n) * (1 - n);
+  return n * n * (3 - 2 * n);
+}
+
+function hexToRgb255(hex, fallback = { r: 255, g: 255, b: 255 }) {
+  const raw = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return fallback;
+  const n = parseInt(raw, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function resolvePatternJourney(params = {}, t = 0) {
+  const raw = params.__journey;
+  if (!raw?.enabled) return null;
+  const duration = Math.max(1, Number(raw.duration) || 24);
+  const cycle = ((t / duration) % 1 + 1) % 1;
+  const folded = raw.loop === 'pingpong'
+    ? (cycle < 0.5 ? cycle * 2 : 2 - cycle * 2)
+    : cycle;
+  const progress = easeJourney(folded, raw.easing || 'smooth');
+  const stops = Array.isArray(raw.colorStops) && raw.colorStops.length >= 2
+    ? raw.colorStops
+    : ['#ffd000', '#ff7a18', '#fff5d6'];
+  const pos = progress * (stops.length - 1);
+  const idx = Math.min(stops.length - 2, Math.max(0, Math.floor(pos)));
+  const f = pos - idx;
+  const a = hexToRgb255(stops[idx]);
+  const b = hexToRgb255(stops[idx + 1], a);
+  return {
+    progress,
+    speed: lerp(Number(raw.speedStart) || 1, Number(raw.speedEnd) || 1, progress),
+    saturation: lerp(
+      raw.saturationStart == null ? 1 : Number(raw.saturationStart),
+      raw.saturationEnd == null ? 1 : Number(raw.saturationEnd),
+      progress,
+    ),
+    colorMix: clamp01(raw.colorMix == null ? 0 : Number(raw.colorMix)),
+    color: {
+      r: lerp(a.r, b.r, f),
+      g: lerp(a.g, b.g, f),
+      b: lerp(a.b, b.b, f),
+    },
+  };
+}
+
 export function renderPixelFrame({
   t = 0,
   strips = [],
@@ -114,6 +167,7 @@ export function renderPixelFrame({
   const fnA = activeFn || compilePattern(patternId);
   const fnB = blendFn || (blendPatternId ? compilePattern(blendPatternId) : null);
   const resolvedParams = resolvePatternParams(patternId, params);
+  const journey = resolvePatternJourney(resolvedParams, t);
   const beat = (t * bpm / 60) % 1;
   const beatSin = Math.sin(beat * Math.PI);
   const bass = audioBands?.bass ?? 0, mid = audioBands?.mid ?? 0, hi = audioBands?.hi ?? 0;
@@ -122,7 +176,7 @@ export function renderPixelFrame({
   let globalIdx = 0;
 
   for (const s of visibleStrips) {
-    const stripT = t * masterSpeed * (s.speed ?? 1);
+    const stripT = t * masterSpeed * (journey?.speed ?? 1) * (s.speed ?? 1);
     const stripTime = (stripT / 65.536) % 1;
     const stripFn = (s.patternId ? perStripFns.get(s.patternId) : null) ?? fnA;
     const leds = [];
@@ -169,6 +223,19 @@ export function renderPixelFrame({
 
       const bright = (s.brightness ?? 1) * masterBrightness;
       r *= bright; g *= bright; b *= bright;
+
+      if (journey?.colorMix > 0) {
+        r = lerp(r, journey.color.r, journey.colorMix);
+        g = lerp(g, journey.color.g, journey.colorMix);
+        b = lerp(b, journey.color.b, journey.colorMix);
+      }
+
+      if (journey && journey.saturation < 0.999) {
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = gray + (r - gray) * journey.saturation;
+        g = gray + (g - gray) * journey.saturation;
+        b = gray + (b - gray) * journey.saturation;
+      }
 
       if (masterSaturation < 0.999) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;

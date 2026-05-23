@@ -110,6 +110,108 @@ const GRAPH_STAGES = [
   },
 ];
 
+const DEFAULT_PATTERN_JOURNEY = {
+  enabled: false,
+  duration: 24,
+  loop: 'repeat',
+  easing: 'smooth',
+  colorMix: 0.65,
+  colorStops: ['#ffd000', '#ff7a18', '#fff5d6'],
+  saturationStart: 1,
+  saturationEnd: 0.35,
+  speedStart: 0.45,
+  speedEnd: 1.8,
+};
+
+function normalizeHexColor(value, fallback = '#ffffff') {
+  const raw = String(value || '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
+  if (/^[0-9a-f]{6}$/i.test(raw)) return `#${raw.toLowerCase()}`;
+  return fallback;
+}
+
+function getPatternJourney(params = {}) {
+  return {
+    ...DEFAULT_PATTERN_JOURNEY,
+    ...(params.__journey || {}),
+    colorStops: [
+      ...(params.__journey?.colorStops || DEFAULT_PATTERN_JOURNEY.colorStops),
+      ...DEFAULT_PATTERN_JOURNEY.colorStops,
+    ].slice(0, 3).map((hex, index) => normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index])),
+  };
+}
+
+function BuilderSlider({ label, value, min, max, step = 0.01, onChange, readout }) {
+  return (
+    <label className="lw-builder-slider">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={event => onChange(Number(event.target.value))}
+      />
+      <strong>{readout}</strong>
+    </label>
+  );
+}
+
+function PaletteEditor({ palette, selectedIndex, setSelectedIndex, onPaletteChange }) {
+  const safePalette = palette?.length ? palette : ['#ff6b6b', '#ffd166', '#06d6a0'];
+  const selectedHex = normalizeHexColor(safePalette[selectedIndex] || safePalette[0]);
+  const [hexDraft, setHexDraft] = useState(selectedHex);
+  useEffect(() => setHexDraft(selectedHex), [selectedHex]);
+  const updateSelected = (value) => {
+    const nextHex = normalizeHexColor(value, selectedHex);
+    const next = [...safePalette];
+    next[selectedIndex] = nextHex;
+    onPaletteChange(next);
+  };
+
+  return (
+    <div className="lw-builder-block lw-palette-editor">
+      <div className="lw-builder-block-head">
+        <strong>Palette editor</strong>
+        <span>live preview</span>
+      </div>
+      <div className="lw-color-swatch-row" aria-label="Palette colors">
+        {safePalette.map((hex, index) => (
+          <button
+            key={`${hex}-${index}`}
+            type="button"
+            className="lw-color-swatch"
+            style={{ background: normalizeHexColor(hex) }}
+            aria-label={`Palette color ${index + 1}`}
+            aria-pressed={selectedIndex === index}
+            onClick={() => setSelectedIndex(index)}
+          />
+        ))}
+      </div>
+      <div className="lw-color-picker-row">
+        <input
+          aria-label="Selected palette color"
+          type="color"
+          value={selectedHex}
+          onChange={event => updateSelected(event.target.value)}
+        />
+        <input
+          aria-label="Selected palette hex"
+          type="text"
+          value={hexDraft}
+          onChange={event => {
+            const next = event.target.value;
+            setHexDraft(next);
+            if (/^#[0-9a-f]{6}$/i.test(next)) updateSelected(next);
+          }}
+          onBlur={() => setHexDraft(selectedHex)}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function CardsMode({ patternId, onSelectPattern, params, onParamChange, palette, onPaletteChange }) {
   const { timelinePlayhead, showDuration, setShowClips } = useProject();
   const [search, setSearch]     = useState('');
@@ -681,10 +783,38 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
 // ── GRAPH mode ─────────────────────────────────────────────────────────────
 export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
   const [sel, setSel] = useState('shape');
+  const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
+  const { patternParams, setPatternParams, palette, setPalette } = useProject();
   const activeStage = GRAPH_STAGES.find(stage => stage.id === sel) || GRAPH_STAGES[0];
   const pattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
+  const currentParams = patternParams[patternId] || {};
+  const journey = getPatternJourney(currentParams);
   const actionLabel = activeStage.action === 'symmetry' ? 'Open Symmetry' : 'Open Code';
   const runAction = activeStage.action === 'symmetry' ? onOpenSymmetry : onOpenCode;
+  const updateJourney = (patch) => {
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      const nextJourney = { ...getPatternJourney(existing), enabled: true, ...patch };
+      return { ...prev, [patternId]: { ...existing, __journey: nextJourney } };
+    });
+  };
+  const setJourneyEnabled = (enabled) => {
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      return {
+        ...prev,
+        [patternId]: {
+          ...existing,
+          __journey: { ...getPatternJourney(existing), enabled },
+        },
+      };
+    });
+  };
+  const updateJourneyColor = (index, value) => {
+    const colorStops = [...journey.colorStops];
+    colorStops[index] = normalizeHexColor(value, colorStops[index]);
+    updateJourney({ colorStops });
+  };
 
   return (
     <div className="lw-graph-mode">
@@ -696,6 +826,44 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
       <div className="lw-graph-summary">
         <strong>One LED at a time</strong>
         <span>Every frame repeats this path for each LED: inputs move, shapes form, colors map, output settings finish the pixel.</span>
+      </div>
+
+      <div className="lw-journey-panel">
+        <label className="lw-journey-toggle">
+          <input
+            type="checkbox"
+            checked={!!journey.enabled}
+            onChange={event => setJourneyEnabled(event.target.checked)}
+          />
+          <span>
+            <strong>Pattern journey</strong>
+            <small>Make this one pattern evolve before it becomes a Show scene.</small>
+          </span>
+        </label>
+        <BuilderSlider
+          label="Duration"
+          min={5}
+          max={120}
+          step={1}
+          value={journey.duration}
+          onChange={duration => updateJourney({ duration })}
+          readout={`${Math.round(journey.duration)}s`}
+        />
+        <div className="lw-builder-segment" aria-label="Journey loop mode">
+          {[
+            ['repeat', 'Repeat'],
+            ['pingpong', 'Ping-pong'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={journey.loop === value ? 'active' : ''}
+              onClick={() => updateJourney({ loop: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="lw-graph-flow" aria-label="Pattern flow stages">
@@ -732,6 +900,78 @@ export function GraphMode({ patternId, onOpenCode, onOpenSymmetry }) {
         <div className="lw-graph-chip-row" aria-label="Relevant code inputs">
           {activeStage.code.map(item => <span key={item}>{item}</span>)}
         </div>
+        {activeStage.id === 'motion' && (
+          <div className="lw-builder-block">
+            <div className="lw-builder-block-head">
+              <strong>Motion journey</strong>
+              <span>speed ramp</span>
+            </div>
+            <BuilderSlider
+              label="Start"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedStart}
+              onChange={speedStart => updateJourney({ speedStart })}
+              readout={`${journey.speedStart.toFixed(2)}x`}
+            />
+            <BuilderSlider
+              label="End"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedEnd}
+              onChange={speedEnd => updateJourney({ speedEnd })}
+              readout={`${journey.speedEnd.toFixed(2)}x`}
+            />
+          </div>
+        )}
+        {activeStage.id === 'color' && (
+          <>
+            <PaletteEditor
+              palette={palette}
+              selectedIndex={selectedPaletteIndex}
+              setSelectedIndex={setSelectedPaletteIndex}
+              onPaletteChange={setPalette}
+            />
+            <div className="lw-builder-block">
+              <div className="lw-builder-block-head">
+                <strong>Color journey</strong>
+                <span>yellow to orange to white</span>
+              </div>
+              <div className="lw-journey-color-grid">
+                {['Start', 'Middle', 'End'].map((label, index) => (
+                  <label key={label}>
+                    <span>{label}</span>
+                    <input
+                      type="color"
+                      value={journey.colorStops[index]}
+                      onChange={event => updateJourneyColor(index, event.target.value)}
+                    />
+                  </label>
+                ))}
+              </div>
+              <BuilderSlider
+                label="Blend"
+                min={0}
+                max={1}
+                step={0.01}
+                value={journey.colorMix}
+                onChange={colorMix => updateJourney({ colorMix })}
+                readout={`${Math.round(journey.colorMix * 100)}%`}
+              />
+              <BuilderSlider
+                label="Sat end"
+                min={0}
+                max={1}
+                step={0.01}
+                value={journey.saturationEnd}
+                onChange={saturationEnd => updateJourney({ saturationEnd })}
+                readout={`${Math.round(journey.saturationEnd * 100)}%`}
+              />
+            </div>
+          </>
+        )}
         <button className="btn lw-graph-action" type="button" onClick={runAction}>
           {actionLabel}
         </button>

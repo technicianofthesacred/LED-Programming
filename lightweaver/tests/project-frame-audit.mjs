@@ -1146,6 +1146,52 @@ assert.deepEqual(
   'mirror-hv should mirror index and stripProgress driven patterns, not only x/y driven patterns',
 );
 
+const { fn: journeyColorFn } = compile('return rgb(0, 0, fract(t));');
+const journeyColorFrame = renderPixelFrame({
+  t: 5,
+  strips: [{ id: 's', pts: [{ x: 0, y: 0, p: 0 }] }],
+  activeFn: journeyColorFn,
+  params: {
+    __journey: {
+      enabled: true,
+      duration: 10,
+      colorMix: 1,
+      colorStops: ['#ffff00', '#ff8000', '#ffffff'],
+      saturationStart: 1,
+      saturationEnd: 0.25,
+      speedStart: 1,
+      speedEnd: 3,
+    },
+  },
+});
+assert.deepEqual(
+  journeyColorFrame.pixels[0],
+  { r: 216, g: 137, b: 57 },
+  'pattern journey should tint color and desaturate over time',
+);
+
+const { fn: journeySpeedFn } = compile('return rgb(fract(t), 0, 0);');
+const journeySpeedFrame = renderPixelFrame({
+  t: 0.25,
+  strips: [{ id: 's', pts: [{ x: 0, y: 0, p: 0 }] }],
+  activeFn: journeySpeedFn,
+  params: {
+    __journey: {
+      enabled: true,
+      duration: 1,
+      colorMix: 0,
+      easing: 'linear',
+      speedStart: 1,
+      speedEnd: 3,
+    },
+  },
+});
+assert.deepEqual(
+  journeySpeedFrame.pixels[0],
+  { r: 96, g: 0, b: 0 },
+  'pattern journey should ramp motion speed inside one running pattern',
+);
+
 assert.deepEqual(
   smoothPixelFrame([{ r: 100, g: 50, b: 0 }], [{ r: 0, g: 0, b: 0 }], { mode: 'off', dt: 1 / 60 }),
   [{ r: 100, g: 50, b: 0 }],

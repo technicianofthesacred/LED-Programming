@@ -51,6 +51,12 @@ function PatternPanel({
   gammaValue, setGammaValue,
   onCollapse,
 }) {
+  const updateMasterPaletteColor = (index, value) => {
+    const next = [...(palette || [])];
+    next[index] = value;
+    onPaletteChange(next);
+  };
+
   return (
     <div className="lw-panel">
       <div className="lw-panel-mode-switch">
@@ -114,11 +120,20 @@ function PatternPanel({
                  onChange={e => setMasterSaturation(+e.target.value)}/>
           <span className="v">{Math.round(masterSaturation * 100)}%</span>
 
-          <span className="lbl">Gamma</span>
-          <input type="checkbox" checked={gammaEnabled} onChange={e => setGammaEnabled(e.target.checked)}/>
-          <input type="range" min="1.0" max="3.0" step="0.1" value={gammaValue}
-                 onChange={e => setGammaValue(+e.target.value)} disabled={!gammaEnabled}/>
-          <span className="v">{gammaValue.toFixed(1)}</span>
+          <span className="lbl">Color</span>
+          <div className="lw-master-palette" aria-label="Master palette">
+            {(palette || []).slice(0, 6).map((hex, index) => (
+              <label key={`${hex}-${index}`} className="lw-master-swatch" style={{ background: hex }}>
+                <input
+                  aria-label={`Master palette color ${index + 1}`}
+                  type="color"
+                  value={hex}
+                  onChange={event => updateMasterPaletteColor(index, event.target.value)}
+                />
+              </label>
+            ))}
+          </div>
+          <span className="v">{(palette || []).length}</span>
         </div>
       </div>
     </div>

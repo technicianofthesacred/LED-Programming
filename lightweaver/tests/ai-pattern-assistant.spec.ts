@@ -305,11 +305,31 @@ test('presents graph mode as an understandable pattern flow', async ({ page }) =
   await page.getByRole('button', { name: 'Graph' }).click();
 
   await expect(page.getByText('Pattern flow')).toBeVisible();
+  await expect(page.getByText('Pattern journey')).toBeVisible();
+  await expect(page.getByText('Duration')).toBeVisible();
   await expect(page.getByRole('button', { name: /Input signal/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Shape/ })).toBeVisible();
   await expect(page.getByText('What this stage changes')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open Code' })).toBeVisible();
   await expect(page.getByText('Compiled from current pattern chain')).toHaveCount(0);
+});
+
+test('replaces master gamma with editable palette controls in graph color stage', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Graph' }).click();
+  await page.getByRole('button', { name: /Color/ }).click();
+
+  await expect(page.getByText('Palette editor')).toBeVisible();
+  await expect(page.getByLabel('Selected palette color')).toBeVisible();
+  await expect(page.getByLabel('Selected palette hex')).toBeVisible();
+  await expect(page.getByText('Color journey')).toBeVisible();
+  await expect(page.locator('.lw-master').getByText('Gamma')).toHaveCount(0);
+
+  const firstSwatch = page.locator('.lw-palette-editor .lw-color-swatch').first();
+  await expect(firstSwatch).toHaveAttribute('aria-pressed', 'true');
+  await page.getByLabel('Selected palette color').fill('#ffcc00');
+  await expect(page.getByLabel('Selected palette hex')).toHaveValue('#ffcc00');
 });
 
 test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {
