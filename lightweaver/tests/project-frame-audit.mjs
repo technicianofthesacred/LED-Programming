@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEMO_STRIPS } from '../src/data.js';
 import { PATTERNS } from '../src/lib/patterns-library.js';
 import { compile, evalPixel } from '../src/lib/patterns.js';
 import { createDefaultProject, migrateProject, PROJECT_VERSION } from '../src/lib/projectModel.js';
@@ -58,6 +59,21 @@ const memoryStorage = (() => {
 
 const parsedParams = parseParamsFromCode('// @param speed float 0.25 0.05 1.0\nreturn rgb(params.speed,0,0);');
 assert.deepEqual(parsedParams, [{ name: 'speed', value: 0.25, min: 0.05, max: 1, step: 0.01 }]);
+
+assert.deepEqual(
+  DEMO_STRIPS.map(strip => strip.name),
+  ['Inner Ring', 'Middle Ring', 'Outer Ring'],
+  'empty-project demo strips should be neutral concentric rings',
+);
+assert.deepEqual(
+  DEMO_STRIPS.map(strip => strip.leds),
+  [64, 96, 128],
+  'empty-project demo rings should provide increasing LED density',
+);
+assert.ok(
+  DEMO_STRIPS.every(strip => strip.path.includes('A ') && strip.path.includes('320 200')),
+  'empty-project demo rings should be centered in the default 640x400 viewBox',
+);
 
 assert.equal(buildCustomPatternId('Aurora Glass Drift'), 'custom_aurora_glass_drift');
 assert.match(buildCustomPatternId('###'), /^custom_[a-z0-9]+$/);

@@ -246,6 +246,18 @@ test('serves the AI pattern API from the Vite dev server', async ({ page }) => {
   expect(result.body?.error?.code).toBe('invalid_request');
 });
 
+test('labels the empty-project pattern fixture as concentric rings', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Symmetry' }).click();
+
+  await expect(page.getByText('Inner Ring')).toBeVisible();
+  await expect(page.getByText('Middle Ring')).toBeVisible();
+  await expect(page.getByText('Outer Ring')).toBeVisible();
+  await expect(page.getByText('Inner petals')).toHaveCount(0);
+  await expect(page.getByText('Base + dia.')).toHaveCount(0);
+});
+
 test('accepting over the selected custom pattern updates the live preview code', async ({ page }) => {
   const drafts = [
     makeColorDraft('Solid Red Draft', 'return rgb(1, 0, 0);'),

@@ -3,14 +3,14 @@ import { useProject } from '../state/ProjectContext.jsx';
 
 const SYM_NODES = [
   { id: 's1', kind: 'source',   title: 'Source',       x: 4,   y: 20,  rows: [['active', 'aurora'], ['leds', '1 master']] },
-  { id: 'g1', kind: 'group',    title: 'Inner petals', x: 4,   y: 130, rows: [['strips', 'L2, L3'], ['leds', '192']] },
-  { id: 'g2', kind: 'group',    title: 'Outer ring',   x: 4,   y: 240, rows: [['strips', 'L1'],     ['leds', '120']] },
-  { id: 'g3', kind: 'group',    title: 'Base + dia.',  x: 4,   y: 350, rows: [['strips', 'L4, L5'], ['leds', '208']] },
+  { id: 'g1', kind: 'group',    title: 'Inner Ring',   x: 4,   y: 130, rows: [['strip', 'ring-inner'],  ['leds', '64']] },
+  { id: 'g2', kind: 'group',    title: 'Middle Ring',  x: 4,   y: 240, rows: [['strip', 'ring-middle'], ['leds', '96']] },
+  { id: 'g3', kind: 'group',    title: 'Outer Ring',   x: 4,   y: 350, rows: [['strip', 'ring-outer'],  ['leds', '128']] },
   { id: 'm1', kind: 'mirror',   title: 'Mirror ×4',    x: 142, y: 60,  rows: [['axes', 'H+V+D'],   ['phase', '0°']] },
   { id: 'r1', kind: 'radial',   title: 'Radial 8',     x: 142, y: 170, rows: [['count', '8'],       ['twist', '+0.1']] },
   { id: 'k1', kind: 'kaleido',  title: 'Kaleido 6',    x: 142, y: 280, rows: [['slices', '6'],      ['flip', 'alt']] },
   { id: 'f1', kind: 'fractal',  title: 'Fractal',      x: 142, y: 390, rows: [['depth', '3'],       ['scale', '0.5×']] },
-  { id: 'o1', kind: 'output',   title: 'Out',          x: 280, y: 225, rows: [['leds', '520'],      ['sync', 'locked']] },
+  { id: 'o1', kind: 'output',   title: 'Out',          x: 280, y: 225, rows: [['leds', '288'],      ['sync', 'locked']] },
 ];
 
 const SYM_EDGES = [
