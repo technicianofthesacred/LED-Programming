@@ -1,308 +1,325 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 
-const SYM_NODES = [
-  { id: 's1', kind: 'source',   title: 'Source',       x: 4,   y: 20,  rows: [['active', 'aurora'], ['leds', '1 master']] },
-  { id: 'g1', kind: 'group',    title: 'Inner Ring',   x: 4,   y: 130, rows: [['strip', 'ring-inner'],  ['leds', '64']] },
-  { id: 'g2', kind: 'group',    title: 'Middle Ring',  x: 4,   y: 240, rows: [['strip', 'ring-middle'], ['leds', '96']] },
-  { id: 'g3', kind: 'group',    title: 'Outer Ring',   x: 4,   y: 350, rows: [['strip', 'ring-outer'],  ['leds', '128']] },
-  { id: 'm1', kind: 'mirror',   title: 'Mirror ×4',    x: 142, y: 60,  rows: [['axes', 'H+V+D'],   ['phase', '0°']] },
-  { id: 'r1', kind: 'radial',   title: 'Radial 8',     x: 142, y: 170, rows: [['count', '8'],       ['twist', '+0.1']] },
-  { id: 'k1', kind: 'kaleido',  title: 'Kaleido 6',    x: 142, y: 280, rows: [['slices', '6'],      ['flip', 'alt']] },
-  { id: 'f1', kind: 'fractal',  title: 'Fractal',      x: 142, y: 390, rows: [['depth', '3'],       ['scale', '0.5×']] },
-  { id: 'o1', kind: 'output',   title: 'Out',          x: 280, y: 225, rows: [['leds', '288'],      ['sync', 'locked']] },
+const RING_FIXTURE = [
+  { id: 'ring-inner', name: 'Inner Ring', leds: 64 },
+  { id: 'ring-middle', name: 'Middle Ring', leds: 96 },
+  { id: 'ring-outer', name: 'Outer Ring', leds: 128 },
 ];
 
-const SYM_EDGES = [
-  ['s1','m1'],['g1','m1'],['g2','r1'],['s1','r1'],
-  ['g3','k1'],['s1','k1'],['m1','o1'],['r1','o1'],['k1','o1'],
+const TRANSFORMS = [
+  {
+    id: 'none',
+    label: 'Off',
+    status: 'raw',
+    summary: 'Use the layout coordinates exactly as drawn.',
+    detail: 'Patterns read each LED position directly, with no symmetry remap.',
+    bestFor: 'Checking the natural direction of a pattern.',
+    settings: { enabled: false, type: 'none' },
+  },
+  {
+    id: 'mirror-h',
+    label: 'Mirror H',
+    status: 'mirror',
+    summary: 'Fold top and bottom into the same half.',
+    detail: 'Only y changes. Pixels above and below center sample matching pattern positions.',
+    bestFor: 'Making vertical motion reflect across the center line.',
+    settings: { enabled: true, type: 'mirror-h' },
+  },
+  {
+    id: 'mirror-v',
+    label: 'Mirror V',
+    status: 'mirror',
+    summary: 'Fold left and right into the same half.',
+    detail: 'Only x changes. Pixels left and right of center sample matching pattern positions.',
+    bestFor: 'Making horizontal motion reflect across the center line.',
+    settings: { enabled: true, type: 'mirror-v' },
+  },
+  {
+    id: 'mirror-hv',
+    label: 'Mirror H+V',
+    status: 'mirror',
+    summary: 'Fold all quadrants into one shared corner.',
+    detail: 'Both x and y are mirrored, so all four quadrants share the same sampled pattern.',
+    bestFor: 'Stable four-way symmetry on rings or rectangular layouts.',
+    settings: { enabled: true, type: 'mirror-hv' },
+  },
+  {
+    id: 'radial',
+    label: 'Radial',
+    status: 'radial',
+    summary: 'Fold angle into repeated wedges.',
+    detail: 'The pattern is sampled from one angular wedge, then repeated around the center.',
+    bestFor: 'Spokes, mandalas, radar sweeps, and repeated comet trails.',
+    settings: { enabled: true, type: 'radial', count: 8 },
+  },
+  {
+    id: 'kaleido',
+    label: 'Kaleidoscope',
+    status: 'kaleido',
+    summary: 'Mirror every other radial wedge.',
+    detail: 'Like radial symmetry, but alternate slices flip direction for a glass-cut effect.',
+    bestFor: 'Crystalline, stained-glass, and folded geometric looks.',
+    settings: { enabled: true, type: 'kaleido', slices: 6 },
+  },
 ];
 
-const KIND_META = {
-  source:  { label: 'SOURCE',  color: 'var(--accent)',          dot: 'var(--accent)' },
-  group:   { label: 'GROUP',   color: 'oklch(72% 0.08 220)',    dot: 'oklch(72% 0.08 220)' },
-  mirror:  { label: 'MIRROR',  color: 'oklch(78% 0.13 340)',    dot: 'oklch(78% 0.13 340)' },
-  radial:  { label: 'RADIAL',  color: 'oklch(80% 0.15 70)',     dot: 'oklch(80% 0.15 70)' },
-  kaleido: { label: 'KALEIDO', color: 'oklch(80% 0.14 155)',    dot: 'oklch(80% 0.14 155)' },
-  fractal: { label: 'FRACTAL', color: 'oklch(75% 0.13 290)',    dot: 'oklch(75% 0.13 290)' },
-  output:  { label: 'OUTPUT',  color: 'var(--text-2)',          dot: 'var(--text-3)' },
-};
+const TRANSFORM_BY_ID = Object.fromEntries(TRANSFORMS.map(transform => [transform.id, transform]));
 
-function OpPreview({ kind }) {
-  const c = 'var(--accent)';
-  if (kind === 'mirror') return (
-    <svg viewBox="0 0 40 40" width="40" height="40">
-      <line x1="20" y1="2" x2="20" y2="38" stroke="var(--border-2)" strokeDasharray="1.5 2"/>
-      <line x1="2" y1="20" x2="38" y2="20" stroke="var(--border-2)" strokeDasharray="1.5 2"/>
-      {[[12,12],[28,12],[12,28],[28,28]].map(([x,y],i) =>
-        <circle key={i} cx={x} cy={y} r="2.5" fill={c} opacity={i===0?1:0.55}/>)}
-    </svg>
-  );
-  if (kind === 'radial') return (
-    <svg viewBox="0 0 40 40" width="40" height="40">
-      <circle cx="20" cy="20" r="14" fill="none" stroke="var(--border-2)" strokeDasharray="1.5 2"/>
-      {Array.from({ length: 8 }, (_, i) => {
-        const a = (i * 360/8 - 90) * Math.PI/180;
-        return <circle key={i} cx={20+Math.cos(a)*12} cy={20+Math.sin(a)*12}
-                       r={i===0?2.5:1.8} fill={c} opacity={i===0?1:0.55}/>;
+function getActiveTransform(settings) {
+  if (!settings?.enabled || settings.type === 'none') return TRANSFORM_BY_ID.none;
+  return TRANSFORM_BY_ID[settings.type] || TRANSFORM_BY_ID.none;
+}
+
+function formatPhase(value = 0) {
+  return `${Math.round(value * 360)} deg`;
+}
+
+function MiniMap({ transform, settings }) {
+  const type = transform.id;
+  const radialCount = type === 'kaleido' ? (settings.slices || 6) : (settings.count || 8);
+  const spokes = type === 'radial' || type === 'kaleido'
+    ? Array.from({ length: Math.min(radialCount, 16) }, (_, index) => index)
+    : [];
+
+  return (
+    <svg className="lw-sym-minimap" viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="45" className="ring outer"/>
+      <circle cx="60" cy="60" r="29" className="ring middle"/>
+      <circle cx="60" cy="60" r="13" className="ring inner"/>
+      {(type === 'mirror-h' || type === 'mirror-hv') && <line x1="14" y1="60" x2="106" y2="60" className="axis active"/>}
+      {(type === 'mirror-v' || type === 'mirror-hv') && <line x1="60" y1="14" x2="60" y2="106" className="axis active"/>}
+      {spokes.map(index => {
+        const angle = (-90 + (360 / spokes.length) * index) * Math.PI / 180;
+        const x = 60 + Math.cos(angle) * 48;
+        const y = 60 + Math.sin(angle) * 48;
+        return <line key={index} x1="60" y1="60" x2={x} y2={y} className={type === 'kaleido' && index % 2 ? 'spoke alternate' : 'spoke'}/>;
       })}
+      {type === 'none' && <path d="M 33 82 C 46 35, 77 92, 91 39" className="free-path"/>}
+      <circle cx="60" cy="60" r="3" className="center"/>
     </svg>
   );
-  if (kind === 'kaleido') return (
-    <svg viewBox="0 0 40 40" width="40" height="40">
-      {Array.from({ length: 6 }, (_, i) => {
-        const a1 = (i*60-90)*Math.PI/180, a2 = ((i+1)*60-90)*Math.PI/180;
-        return <path key={i}
-                     d={`M 20 20 L ${20+Math.cos(a1)*16} ${20+Math.sin(a1)*16} A 16 16 0 0 1 ${20+Math.cos(a2)*16} ${20+Math.sin(a2)*16} Z`}
-                     fill={c} opacity={i%2===0?0.35:0.18} stroke="var(--border-2)" strokeWidth="0.5"/>;
-      })}
-    </svg>
+}
+
+function ValueRow({ label, value }) {
+  return (
+    <div className="lw-sym-value-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
-  if (kind === 'fractal') return (
-    <svg viewBox="0 0 40 40" width="40" height="40">
-      {[16,10,6,3.5].map((r,i) => <circle key={i} cx="20" cy="20" r={r} fill="none" stroke={c} opacity={0.85-i*0.15}/>)}
-      <circle cx="20" cy="20" r="1.5" fill={c}/>
-    </svg>
+}
+
+function SliderRow({ label, value, min = 0, max = 100, onChange, readout }) {
+  return (
+    <label className="lw-sym-slider-row">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step="1"
+        value={value}
+        onChange={event => onChange(Number(event.target.value))}
+      />
+      <strong>{readout}</strong>
+    </label>
   );
-  return null;
 }
 
 export function SymmetryMode() {
-  const [sel, setSel] = useState('m1');
   const { symSettings, setSymSettings } = useProject();
-
-  const byId   = Object.fromEntries(SYM_NODES.map(n => [n.id, n]));
-  const nodeW  = 130, nodeH = 72;
-  const portOut = n => ({ x: n.x + nodeW, y: n.y + nodeH/2 });
-  const portIn  = n => ({ x: n.x,         y: n.y + nodeH/2 });
-  const selNode = byId[sel];
-  const selMeta = selNode && KIND_META[selNode.kind];
+  const active = getActiveTransform(symSettings);
+  const ringLedTotal = useMemo(() => RING_FIXTURE.reduce((sum, ring) => sum + ring.leds, 0), []);
 
   const update = (patch) => setSymSettings(prev => ({ ...prev, ...patch }));
-
-  // Activate an operator type when clicking on it in the graph
-  const handleNodeClick = (n) => {
-    setSel(n.id);
-    if (n.kind === 'mirror')  update({ enabled: true, type: 'mirror-hv' });
-    if (n.kind === 'radial')  update({ enabled: true, type: 'radial' });
-    if (n.kind === 'kaleido') update({ enabled: true, type: 'kaleido' });
-    if (n.kind === 'fractal') update({ enabled: true, type: 'radial', count: 12 });
+  const activate = (transform) => {
+    const next = { ...transform.settings };
+    if (transform.id === 'radial') {
+      next.count = symSettings.count || transform.settings.count;
+      next.phase = symSettings.phase || 0;
+      next.twist = symSettings.twist || 0;
+    }
+    if (transform.id === 'kaleido') {
+      next.slices = symSettings.slices || transform.settings.slices;
+      next.phase = symSettings.phase || 0;
+    }
+    setSymSettings(prev => ({ ...prev, ...next }));
   };
 
   return (
-    <div>
+    <div className="lw-sym-workspace">
       <div className="lw-sec-header">
-        <span>Symmetry patch</span>
-        <span className="meta">source → groups → operators → out</span>
+        <span>Symmetry transform</span>
+        <span className="meta">coordinate remap</span>
       </div>
 
-      {/* Enable toggle */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0 10px', fontSize:'var(--fs-sm)' }}>
-        <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer' }}>
-          <input type="checkbox" checked={symSettings.enabled}
-                 onChange={e => update({ enabled: e.target.checked })}/>
-          <span>Enable symmetry transform</span>
+      <div className="lw-sym-status">
+        <label>
+          <input
+            type="checkbox"
+            checked={!!symSettings.enabled && symSettings.type !== 'none'}
+            onChange={event => update({ enabled: event.target.checked, type: event.target.checked ? active.id === 'none' ? 'mirror-hv' : active.id : 'none' })}
+          />
+          <span>Use symmetry</span>
         </label>
-        {symSettings.enabled && (
-          <span style={{ color:'var(--mint)', fontFamily:'var(--mono-font)', fontSize:'var(--fs-xs)' }}>
-            ● {symSettings.type}
-          </span>
+        <strong>{active.label}</strong>
+      </div>
+
+      <div className="lw-sec-header">
+        <span>Coordinate flow</span>
+        <span className="meta">One active transform</span>
+      </div>
+      <div className="lw-sym-flow">
+        <div>
+          <span>1</span>
+          <strong>LED x/y</strong>
+          <small>layout or ring fixture</small>
+        </div>
+        <div className="active">
+          <span>2</span>
+          <strong>{active.label}</strong>
+          <small>{active.status}</small>
+        </div>
+        <div>
+          <span>3</span>
+          <strong>Pattern sample</strong>
+          <small>color per LED</small>
+        </div>
+      </div>
+
+      <div className="lw-sec-header">
+        <span>Transform library</span>
+        <span className="meta">click to activate</span>
+      </div>
+      <div className="lw-sym-transform-grid">
+        {TRANSFORMS.map(transform => (
+          <button
+            key={transform.id}
+            type="button"
+            aria-label={transform.label}
+            className={`lw-sym-transform ${active.id === transform.id ? 'active' : ''}`}
+            onClick={() => activate(transform)}
+          >
+            <span className={`lw-sym-transform-icon ${transform.status}`}/>
+            <span>
+              <strong>{transform.label}</strong>
+              <small>{transform.summary}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="lw-sec-header">
+        <span>Inspector</span>
+        <span className="meta">{active.status}</span>
+      </div>
+      <div className="lw-sym-inspector">
+        <div className="lw-sym-inspector-head">
+          <MiniMap transform={active} settings={symSettings}/>
+          <div>
+            <h3>{active.label}</h3>
+            <p>{active.detail}</p>
+            <small>{active.bestFor}</small>
+          </div>
+        </div>
+
+        {active.status === 'mirror' && (
+          <div className="lw-sym-control-block">
+            <div className="lw-sym-segmented" aria-label="Mirror axis">
+              {[
+                ['mirror-h', 'H'],
+                ['mirror-v', 'V'],
+                ['mirror-hv', 'H+V'],
+              ].map(([type, label]) => (
+                <button
+                  key={type}
+                  type="button"
+                  className={symSettings.type === type ? 'active' : ''}
+                  onClick={() => update({ enabled: true, type })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <ValueRow label="Affects" value={symSettings.type === 'mirror-h' ? 'y only' : symSettings.type === 'mirror-v' ? 'x only' : 'x and y'}/>
+          </div>
+        )}
+
+        {active.id === 'radial' && (
+          <div className="lw-sym-control-block">
+            <div className="lw-sym-count-grid">
+              {[3, 4, 5, 6, 8, 12].map(count => (
+                <button
+                  key={count}
+                  type="button"
+                  className={(symSettings.count || 8) === count ? 'active' : ''}
+                  onClick={() => update({ enabled: true, type: 'radial', count })}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+            <ValueRow label="Wedges" value={symSettings.count || 8}/>
+            <SliderRow
+              label="Phase"
+              value={Math.round((symSettings.phase || 0) * 100)}
+              onChange={value => update({ enabled: true, type: 'radial', phase: value / 100 })}
+              readout={formatPhase(symSettings.phase || 0)}
+            />
+            <SliderRow
+              label="Twist"
+              min={-100}
+              max={100}
+              value={Math.round((symSettings.twist || 0) * 1000)}
+              onChange={value => update({ enabled: true, type: 'radial', twist: value / 1000 })}
+              readout={`${(symSettings.twist || 0).toFixed(3)} Hz`}
+            />
+          </div>
+        )}
+
+        {active.id === 'kaleido' && (
+          <div className="lw-sym-control-block">
+            <SliderRow
+              label="Slices"
+              min={2}
+              max={16}
+              value={symSettings.slices || 6}
+              onChange={value => update({ enabled: true, type: 'kaleido', slices: value })}
+              readout={symSettings.slices || 6}
+            />
+            <SliderRow
+              label="Phase"
+              value={Math.round((symSettings.phase || 0) * 100)}
+              onChange={value => update({ enabled: true, type: 'kaleido', phase: value / 100 })}
+              readout={formatPhase(symSettings.phase || 0)}
+            />
+          </div>
+        )}
+
+        {active.id === 'none' && (
+          <div className="lw-sym-control-block">
+            <ValueRow label="Transform" value="disabled"/>
+            <ValueRow label="Coordinates" value="raw x/y"/>
+          </div>
         )}
       </div>
 
-      <div className="lw-sym-canvas">
-        <div className="lw-sym-rail" style={{ left: 2 }}><span>SOURCE · GROUPS</span></div>
-        <div className="lw-sym-rail" style={{ left: 140 }}><span>OPERATORS</span></div>
-        <div className="lw-sym-rail" style={{ left: 278 }}><span>OUT</span></div>
-
-        <svg className="lw-sym-svg">
-          <defs>
-            <marker id="sym-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-              <path d="M0 0 L5 3 L0 6 Z" fill="var(--border-2)"/>
-            </marker>
-          </defs>
-          {SYM_EDGES.map(([a, b], i) => {
-            const na = byId[a], nb = byId[b];
-            if (!na || !nb) return null;
-            const s = portOut(na), e = portIn(nb);
-            const mx = (s.x + e.x) / 2;
-            const d = `M ${s.x} ${s.y} C ${mx} ${s.y}, ${mx} ${e.y}, ${e.x} ${e.y}`;
-            const isSel = a === sel || b === sel;
-            return (
-              <path key={i} d={d}
-                    stroke={isSel ? KIND_META[byId[a].kind].color : 'var(--border-2)'}
-                    strokeWidth={isSel ? 1.5 : 1} fill="none" opacity={isSel ? 0.9 : 0.55}
-                    markerEnd="url(#sym-arrow)"/>
-            );
-          })}
-          {SYM_EDGES.filter(([a,b]) => a===sel||b===sel).map(([a,b],i) => {
-            const na = byId[a], nb = byId[b];
-            const s = portOut(na), e = portIn(nb);
-            const mx = (s.x+e.x)/2;
-            return (
-              <circle key={'f'+i} r="2.2" fill={KIND_META[na.kind].color}>
-                <animateMotion dur="1.8s" repeatCount="indefinite"
-                  path={`M ${s.x} ${s.y} C ${mx} ${s.y}, ${mx} ${e.y}, ${e.x} ${e.y}`}/>
-              </circle>
-            );
-          })}
-        </svg>
-
-        {SYM_NODES.map(n => {
-          const meta  = KIND_META[n.kind];
-          const isSel = n.id === sel;
-          const isActive = (n.kind === 'mirror' && symSettings.type?.startsWith('mirror')) ||
-                           (n.kind === 'radial' && symSettings.type === 'radial') ||
-                           (n.kind === 'kaleido' && symSettings.type === 'kaleido');
-          return (
-            <div key={n.id}
-                 className={`lw-sym-node ${isSel ? 'selected' : ''} ${isActive && symSettings.enabled ? 'sym-active' : ''}`}
-                 style={{
-                   left: n.x, top: n.y, width: nodeW,
-                   borderColor: isSel ? meta.color : 'var(--border)',
-                   boxShadow: isSel ? `0 0 0 1px ${meta.color}, 0 6px 20px -8px ${meta.color}` : 'none',
-                 }}
-                 onClick={() => handleNodeClick(n)}>
-              <div className="lw-sym-node-header">
-                <span className="kind-dot" style={{ background: meta.dot }}/>
-                <span className="label" style={{ color: meta.color }}>{meta.label}</span>
-                <span className="title">{n.title}</span>
-              </div>
-              <div className="lw-sym-node-body">
-                {['mirror','radial','kaleido','fractal'].includes(n.kind) && (
-                  <div className="preview"><OpPreview kind={n.kind}/></div>
-                )}
-                <div className="rows">
-                  {n.rows.map((r, i) => (
-                    <div className="row" key={i}><span className="k">{r[0]}</span><span className="v">{r[1]}</span></div>
-                  ))}
-                </div>
-              </div>
-              {n.kind !== 'source' && n.kind !== 'group' && <div className="lw-sym-port left" style={{ background: meta.color }}/>}
-              {n.kind !== 'output' && <div className="lw-sym-port right" style={{ background: meta.color }}/>}
-            </div>
-          );
-        })}
+      <div className="lw-sec-header">
+        <span>Current fixture</span>
+        <span className="meta">{ringLedTotal} LEDs</span>
       </div>
-
-      {/* Inspector — wired to context */}
-      {selNode && (
-        <>
-          <div className="lw-sec-header" style={{ marginTop: 20 }}>
-            <span>Inspector · {selNode.title}</span>
-            <span className="meta" style={{ color: selMeta.color }}>{selMeta.label}</span>
-          </div>
-
-          {selNode.kind === 'mirror' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              <div className="lw-tweaks-seg" style={{ width:'100%' }}>
-                {[['mirror-h','H'],['mirror-v','V'],['mirror-hv','H+V']].map(([t,l]) => (
-                  <button key={t} className={symSettings.type===t?'active':''} onClick={() => update({ type: t, enabled: true })}>
-                    {l}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
-                <span style={{ width:60, color:'var(--text-3)' }}>Phase</span>
-                <input type="range" min="0" max="100" step="1"
-                       value={Math.round((symSettings.phase||0)*100)}
-                       onChange={e => update({ phase: +e.target.value/100 })} style={{ flex:1 }}/>
-                <span style={{ fontFamily:'var(--mono-font)', width:34, textAlign:'right' }}>
-                  {Math.round((symSettings.phase||0)*360)}°
-                </span>
-              </div>
-            </div>
-          )}
-
-          {selNode.kind === 'radial' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              <div style={{ display:'flex', gap:6 }}>
-                {[3,4,5,6,8,12].map(n => (
-                  <button key={n}
-                          className={`btn ${symSettings.count===n&&symSettings.enabled?'btn-primary':''}`}
-                          style={{ flex:1, fontSize:'var(--fs-sm)', fontFamily:'var(--mono-font)' }}
-                          onClick={() => update({ count: n, type: 'radial', enabled: true })}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
-                <span style={{ width:60, color:'var(--text-3)' }}>Twist</span>
-                <input type="range" min="-100" max="100" step="1"
-                       value={Math.round((symSettings.twist||0)*1000)}
-                       onChange={e => update({ twist: +e.target.value/1000 })} style={{ flex:1 }}/>
-                <span style={{ fontFamily:'var(--mono-font)', width:44, textAlign:'right' }}>
-                  {(symSettings.twist||0)>0?'+':''}{((symSettings.twist||0)).toFixed(3)} Hz
-                </span>
-              </div>
-            </div>
-          )}
-
-          {selNode.kind === 'kaleido' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
-                <span style={{ width:60, color:'var(--text-3)' }}>Slices</span>
-                <input type="range" min="2" max="16" step="1"
-                       value={symSettings.slices||6}
-                       onChange={e => update({ slices: +e.target.value, type:'kaleido', enabled:true })} style={{ flex:1 }}/>
-                <span style={{ fontFamily:'var(--mono-font)', width:34, textAlign:'right' }}>
-                  {symSettings.slices||6}
-                </span>
-              </div>
-              <div style={{ display:'flex', alignItems:'center', gap:8, fontSize:'var(--fs-xs)' }}>
-                <span style={{ width:60, color:'var(--text-3)' }}>Phase</span>
-                <input type="range" min="0" max="100" step="1"
-                       value={Math.round((symSettings.phase||0)*100)}
-                       onChange={e => update({ phase: +e.target.value/100 })} style={{ flex:1 }}/>
-                <span style={{ fontFamily:'var(--mono-font)', width:34, textAlign:'right' }}>
-                  {Math.round((symSettings.phase||0)*360)}°
-                </span>
-              </div>
-            </div>
-          )}
-
-          {selNode.kind === 'source' && (
-            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
-              Uses the pattern from <strong>Cards</strong> / <strong>Code</strong>. Enable symmetry above to route through operators.
-            </div>
-          )}
-          {selNode.kind === 'group' && (
-            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
-              Physical strips from Layout. Edit membership on the Layout screen.
-            </div>
-          )}
-          {selNode.kind === 'output' && (
-            <div style={{ fontSize:'var(--fs-sm)', color:'var(--text-2)', lineHeight:1.55 }}>
-              Combined per-LED buffer pushed to device.
-              {symSettings.enabled && <div style={{marginTop:6,color:'var(--mint)'}}>● Symmetry active: {symSettings.type}</div>}
-            </div>
-          )}
-        </>
-      )}
-
-      <div className="lw-sec-header" style={{ marginTop: 20 }}>
-        <span>Add operator</span>
-        <span className="meta">click to activate</span>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:6 }}>
-        {[
-          ['mirror',  'Mirror',       'H / V / ×4 / ×8',  () => update({ enabled:true, type:'mirror-hv' })],
-          ['radial',  'Radial',       'N-fold rotation',   () => update({ enabled:true, type:'radial', count:8 })],
-          ['kaleido', 'Kaleidoscope', 'wedge tile',        () => update({ enabled:true, type:'kaleido', slices:6 })],
-          ['fractal', 'Fractal',      'self-repeat',       () => update({ enabled:true, type:'radial', count:12 })],
-        ].map(([k, name, desc, activate]) => (
-          <div key={k}
-               style={{ padding:'10px', border:'1px solid var(--border)', borderRadius:'var(--r-sm)',
-                        background:'var(--surface)', display:'flex', gap:8, cursor:'pointer',
-                        alignItems:'center' }}
-               onClick={activate}>
-            <OpPreview kind={k}/>
-            <div>
-              <div style={{ fontSize:'var(--fs-sm)', fontWeight:600 }}>{name}</div>
-              <div style={{ fontSize:'var(--fs-2xs)', color:'var(--text-3)', fontFamily:'var(--mono-font)' }}>{desc}</div>
-            </div>
+      <div className="lw-sym-ring-list">
+        {RING_FIXTURE.map(ring => (
+          <div key={ring.id}>
+            <span>{ring.name}</span>
+            <strong>{ring.leds}</strong>
           </div>
         ))}
+      </div>
+
+      <div className="lw-sym-note">
+        Ring routing is shared for now. The active transform applies to every visible LED before pattern code runs.
       </div>
     </div>
   );

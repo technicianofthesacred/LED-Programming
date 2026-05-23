@@ -258,6 +258,36 @@ test('labels the empty-project pattern fixture as concentric rings', async ({ pa
   await expect(page.getByText('Base + dia.')).toHaveCount(0);
 });
 
+test('explains symmetry as one active coordinate transform', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Symmetry' }).click();
+
+  await expect(page.getByText('Coordinate flow')).toBeVisible();
+  await expect(page.getByText('One active transform')).toBeVisible();
+  await expect(page.getByText('Mirror H+V')).toBeVisible();
+  await expect(page.getByText('Kaleidoscope')).toBeVisible();
+  await expect(page.getByText('Fractal')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Radial' }).click();
+  await expect(page.getByText('Fold angle into repeated wedges.')).toBeVisible();
+  await expect(page.getByText('Wedges', { exact: true })).toBeVisible();
+});
+
+test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+
+  const styles = await page.evaluate(() => ({
+    bodySelect: getComputedStyle(document.body).userSelect,
+    buttonSelect: getComputedStyle(document.querySelector('button')!).userSelect,
+    inputSelect: getComputedStyle(document.querySelector('input')!).userSelect,
+  }));
+
+  expect(styles.bodySelect).toBe('none');
+  expect(styles.buttonSelect).toBe('none');
+  expect(styles.inputSelect).toBe('auto');
+});
+
 test('accepting over the selected custom pattern updates the live preview code', async ({ page }) => {
   const drafts = [
     makeColorDraft('Solid Red Draft', 'return rgb(1, 0, 0);'),
