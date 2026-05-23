@@ -225,6 +225,27 @@ test('shows setup message when server has no AI key', async ({ page }) => {
   await expect(assistant.locator('.lw-ai-error span')).toHaveText('Set OPENAI_API_KEY on the Lightweaver server to enable AI pattern creation.');
 });
 
+test('serves the AI pattern API from the Vite dev server', async ({ page }) => {
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+
+  const result = await page.evaluate(async () => {
+    const response = await fetch('/api/ai/pattern', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get('content-type') || '',
+      body: await response.json().catch(() => null),
+    };
+  });
+
+  expect(result.status).toBe(400);
+  expect(result.contentType).toContain('application/json');
+  expect(result.body?.error?.code).toBe('invalid_request');
+});
+
 test('accepting over the selected custom pattern updates the live preview code', async ({ page }) => {
   const drafts = [
     makeColorDraft('Solid Red Draft', 'return rgb(1, 0, 0);'),

@@ -7,23 +7,21 @@ import { createAiPatternRouter } from './aiPattern.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultRootDir = join(__dirname, '..');
 
-export function createLightweaverServer({
+export function createLightweaverApiMiddleware({
   env = process.env,
   client = null,
   createOpenAiClient,
-  rootDir = defaultRootDir,
 } = {}) {
-  const distDir = join(rootDir, 'dist');
-  const app = express();
+  const api = express();
 
-  app.use(express.json({ limit: '2mb' }));
-  app.use('/api/ai', createAiPatternRouter({ env, client, createOpenAiClient }));
+  api.use(express.json({ limit: '2mb' }));
+  api.use('/ai', createAiPatternRouter({ env, client, createOpenAiClient }));
 
-  app.get('/api/health', (_req, res) => {
+  api.get('/health', (_req, res) => {
     res.json({ ok: true, app: 'Lightweaver' });
   });
 
-  app.use('/api', (_req, res) => {
+  api.use((_req, res) => {
     res.status(404).json({
       error: {
         code: 'not_found',
@@ -32,7 +30,7 @@ export function createLightweaverServer({
     });
   });
 
-  app.use((error, _req, res, next) => {
+  api.use((error, _req, res, next) => {
     if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
       return res.status(400).json({
         error: {
@@ -44,6 +42,20 @@ export function createLightweaverServer({
 
     return next(error);
   });
+
+  return api;
+}
+
+export function createLightweaverServer({
+  env = process.env,
+  client = null,
+  createOpenAiClient,
+  rootDir = defaultRootDir,
+} = {}) {
+  const distDir = join(rootDir, 'dist');
+  const app = express();
+
+  app.use('/api', createLightweaverApiMiddleware({ env, client, createOpenAiClient }));
 
   if (existsSync(distDir)) {
     app.use(express.static(distDir));
