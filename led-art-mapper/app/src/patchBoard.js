@@ -352,7 +352,7 @@ export function validatePatchBoard(board, strips = []) {
       warnings.push({
         code: 'off-block',
         patchId: patch.id,
-        message: `${patch.name} reserves ${patch.source.ledCount} LED addresses and outputs black in Lightweaver live output.`,
+        message: `${patch.name} reserves ${patch.source.ledCount} LED addresses and outputs black in Lightweaver v2 live output.`,
       });
       continue;
     }
