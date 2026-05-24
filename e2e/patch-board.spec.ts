@@ -60,8 +60,8 @@ test('patch board range edits and reverse controls update row state', async ({ p
 
   await disableExportNormalization(page);
   const fullExport = JSON.parse(await page.locator('#export-preview').innerText());
-  const sourceAt2 = fullExport.map[2];
-  const sourceAt10 = fullExport.map[10];
+  const sourceSlice = fullExport.map.slice(2, 11);
+  const reversedSourceSlice = [...sourceSlice].reverse();
 
   await page.getByRole('button', { name: 'Patch Board' }).click();
 
@@ -78,8 +78,7 @@ test('patch board range edits and reverse controls update row state', async ({ p
   await page.getByRole('button', { name: 'Export' }).click();
   const rangedExport = JSON.parse(await page.locator('#export-preview').innerText());
   expect(rangedExport.n).toBe(fullExport.n - originalFirstPatchCount + 9);
-  expect(rangedExport.map[0]).toEqual(sourceAt2);
-  expect(rangedExport.map[8]).toEqual(sourceAt10);
+  expect(rangedExport.map.slice(0, 9)).toEqual(sourceSlice);
 
   await page.getByRole('button', { name: 'Patch Board' }).click();
   await firstRow.getByRole('button', { name: 'Reverse patch' }).click();
@@ -89,8 +88,7 @@ test('patch board range edits and reverse controls update row state', async ({ p
   await page.getByRole('button', { name: 'Export' }).click();
   const reversedExport = JSON.parse(await page.locator('#export-preview').innerText());
   expect(reversedExport.n).toBe(fullExport.n - originalFirstPatchCount + 9);
-  expect(reversedExport.map[0]).toEqual(sourceAt10);
-  expect(reversedExport.map[8]).toEqual(sourceAt2);
+  expect(reversedExport.map.slice(0, 9)).toEqual(reversedSourceSlice);
 });
 
 test('patch board off block reserves physical addresses in export', async ({ page }) => {
