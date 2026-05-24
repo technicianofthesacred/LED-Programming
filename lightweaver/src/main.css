@@ -685,6 +685,29 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
 }
+.lw-ai-workflow,
+.lw-ai-draft-note {
+  display: grid;
+  gap: 3px;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.lw-ai-workflow strong {
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.lw-ai-workflow span,
+.lw-ai-draft-note {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+.lw-ai-draft-note {
+  background: var(--bg);
+}
 .lw-ai-prompt-chips,
 .lw-ai-target-row {
   display: flex;
@@ -972,7 +995,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
   background: var(--surface);
 }
 .lw-builder-mode .lw-journey-panel {
-  order: 4;
+  order: 5;
 }
 .lw-journey-toggle {
   display: grid;
@@ -1118,6 +1141,67 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
+}
+.lw-effect-stack {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.lw-builder-mode .lw-effect-stack {
+  order: 4;
+}
+.lw-effect-stack-head,
+.lw-effect-stack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-3);
+}
+.lw-effect-stack-head strong {
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.lw-effect-stack-head span {
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+}
+.lw-effect-stack-row {
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.lw-effect-stack-pin {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.72;
+}
+.lw-effect-stack-row div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.lw-effect-stack-row strong {
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.lw-effect-stack-row span {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+.lw-effect-stack-row em {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  white-space: nowrap;
 }
 .lw-graph-flow {
   display: grid;

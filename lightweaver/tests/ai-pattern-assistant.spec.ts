@@ -185,7 +185,7 @@ test('generates an AI draft and accepts it as a custom pattern', async ({ page }
   await assistant.getByRole('button', { name: 'Generate' }).click();
 
   await expect(assistant.getByText('Aurora Glass Drift')).toBeVisible();
-  await expect(assistant.getByText('not applied')).toBeVisible();
+  await expect(assistant.getByText('Preview only', { exact: true })).toBeVisible();
   const acceptedNotice = page.evaluate(() => new Promise(resolve => {
     const text = 'Accepted Aurora Glass Drift.';
     const observer = new MutationObserver(() => {
@@ -196,7 +196,7 @@ test('generates an AI draft and accepts it as a custom pattern', async ({ page }
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }));
-  await assistant.getByRole('button', { name: 'Accept' }).click();
+  await assistant.getByRole('button', { name: 'Accept and use pattern' }).click();
   await expect(acceptedNotice).resolves.toBe(true);
 
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_custom_patterns') || '[]'));
@@ -389,6 +389,14 @@ test('starts beginners in a guided tune workflow with plain-language feedback', 
   await expect(page.getByText('Tune Pattern')).toBeVisible();
   await expect(page.getByText('Now editing')).toBeVisible();
   await expect(page.getByText('Pattern recipe')).toBeVisible();
+  await expect(page.getByText('Effect stack')).toBeVisible();
+  await expect(page.getByText('Base pattern')).toBeVisible();
+  await expect(page.getByText('keeps its own motion, flashes, and spatial structure')).toBeVisible();
+  await expect(page.getByText('Journey layer')).toBeVisible();
+  await expect(page.getByText('influences color and speed over time')).toBeVisible();
+  await expect(page.getByText('AI drafts')).toBeVisible();
+  await expect(page.getByText('not applied until accepted')).toBeVisible();
+  await expect(page.getByText('Live output')).toBeVisible();
   await expect(page.getByText(/color journey/i)).toBeVisible();
   await expect(page.getByText('Undo tuning')).toBeVisible();
 
@@ -429,6 +437,8 @@ test('keeps browse mode beginner sized before showing the full library', async (
 test('offers AI prompt chips and targeted pattern edits', async ({ page }) => {
   const assistant = await openPatternAssistant(page);
 
+  await expect(assistant.getByText('Draft first, accept later')).toBeVisible();
+  await expect(assistant.getByText('Generate creates a preview draft. Your live pattern changes only when you accept it.')).toBeVisible();
   await expect(assistant.getByRole('button', { name: 'Slower' })).toBeVisible();
   await expect(assistant.getByRole('button', { name: 'Warmer' })).toBeVisible();
   await expect(assistant.getByRole('button', { name: 'Only color' })).toBeVisible();
@@ -437,6 +447,28 @@ test('offers AI prompt chips and targeted pattern edits', async ({ page }) => {
   await expect(assistant.locator('textarea')).toHaveValue(/warmer/);
   await assistant.getByRole('button', { name: 'Only motion' }).click();
   await expect(assistant.locator('textarea')).toHaveValue(/only motion/i);
+});
+
+test('makes AI drafts clearly preview-only until accepted', async ({ page }) => {
+  await page.route('**/api/ai/pattern', async route => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ draft: makeDraft('Preview Only Draft') }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.locator('textarea').fill('make a slow warm version');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(assistant.locator('.lw-ai-draft-head .title')).toHaveText('Preview Only Draft');
+  await expect(assistant.getByText('Preview only', { exact: true })).toBeVisible();
+  await expect(assistant.getByText('Accept creates a custom pattern and switches the preview to it.')).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Accept and use pattern' })).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_custom_patterns') || '[]');
+    return saved.length;
+  })).toBe(0);
 });
 
 test('prevents accidental selection in UI chrome while keeping text inputs selectable', async ({ page }) => {

@@ -135,6 +135,10 @@ export function AiPatternAssistant({
           <div className="lw-ai-context">
             Transforming <strong>{sourcePattern?.name || patternId}</strong>
           </div>
+          <div className="lw-ai-workflow">
+            <strong>Draft first, accept later</strong>
+            <span>Generate creates a preview draft. Your live pattern changes only when you accept it.</span>
+          </div>
           <div className="lw-ai-messages" aria-live="polite">
             {messages.length === 0 && (
               <div className="lw-ai-empty">Describe a new direction, or say things like slower, smoother, warmer, or more sparkly.</div>
@@ -175,9 +179,12 @@ export function AiPatternAssistant({
                   <div className="eyebrow">Draft pattern</div>
                   <div className="title">{draft.name}</div>
                 </div>
-                <span>not applied</span>
+                <span>Preview only</span>
               </div>
               <p>{draft.description}</p>
+              <div className="lw-ai-draft-note">
+                Accept creates a custom pattern and switches the preview to it.
+              </div>
               <div className="lw-ai-swatches">
                 {draft.palette.map((color, index) => <span key={`${color}-${index}`} style={{ background: color }}/>)}
               </div>
@@ -185,7 +192,7 @@ export function AiPatternAssistant({
                 {draft.changeSummary.map(item => <li key={item}>{item}</li>)}
               </ul>
               <div className="lw-ai-actions">
-                <button className="btn" type="button" onClick={acceptDraft}>Accept</button>
+                <button className="btn" type="button" onClick={acceptDraft}>Accept and use pattern</button>
                 <button className="btn btn-ghost" type="button" onClick={() => setInput('make this draft simpler and safer')}>Simplify</button>
               </div>
             </div>

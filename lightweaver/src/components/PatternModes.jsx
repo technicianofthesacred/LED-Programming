@@ -887,6 +887,30 @@ export function GraphMode({
     `${Math.round(masterBrightness * 100)}% brightness`,
     symSettings?.enabled && symSettings.type !== 'none' ? `${symSettings.type} symmetry` : 'no symmetry',
   ];
+  const stackRows = [
+    {
+      label: 'Base pattern',
+      value: pattern?.name || patternId,
+      detail: 'keeps its own motion, flashes, and spatial structure',
+    },
+    {
+      label: 'Journey layer',
+      value: journey.enabled ? `${Math.round(journey.colorMix * 100)}% influence` : 'off',
+      detail: 'influences color and speed over time',
+    },
+    {
+      label: 'AI drafts',
+      value: 'preview only',
+      detail: 'not applied until accepted',
+    },
+    {
+      label: 'Live output',
+      value: `${Math.round(masterBrightness * 100)}% bright`,
+      detail: symSettings?.enabled && symSettings.type !== 'none'
+        ? `brightness, saturation, and ${symSettings.type} symmetry`
+        : 'brightness, saturation, and symmetry',
+    },
+  ];
 
   return (
     <div className="lw-graph-mode lw-builder-mode">
@@ -913,6 +937,23 @@ export function GraphMode({
           <strong>Last change</strong>
           <span>{lastChange}</span>
         </div>
+      </div>
+
+      <div className="lw-effect-stack" aria-label="Pattern effect stack">
+        <div className="lw-effect-stack-head">
+          <strong>Effect stack</strong>
+          <span>top controls influence lower layers</span>
+        </div>
+        {stackRows.map(row => (
+          <div className="lw-effect-stack-row" key={row.label}>
+            <span className="lw-effect-stack-pin" aria-hidden="true" />
+            <div>
+              <strong>{row.label}</strong>
+              <span>{row.detail}</span>
+            </div>
+            <em>{row.value}</em>
+          </div>
+        ))}
       </div>
 
       <div className="lw-journey-panel">
