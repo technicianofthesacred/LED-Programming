@@ -88,6 +88,59 @@ test('normalization preserves custom rows while appending newly added strips', (
   assert.equal(normalized.patches.find(patch => patch.id === 'patch-layer-2').source.endLed, 2);
 });
 
+test('normalization tracks generated full-strip ranges through strip resize', () => {
+  const board = createDefaultPatchBoard([makeStrip('layer-1', 3)]);
+
+  const grown = normalizePatchBoard(board, [makeStrip('layer-1', 5)]);
+  assert.equal(grown.patches[0].source.startLed, 0);
+  assert.equal(grown.patches[0].source.endLed, 4);
+
+  const shrunk = normalizePatchBoard(grown, [makeStrip('layer-1', 2)]);
+  assert.equal(shrunk.patches[0].source.startLed, 0);
+  assert.equal(shrunk.patches[0].source.endLed, 1);
+});
+
+test('custom range updates opt out of generated full-strip tracking', () => {
+  const board = createDefaultPatchBoard([makeStrip('layer-1', 5)]);
+
+  updatePatchRange(board, 'patch-layer-1', 1, 3);
+  const normalized = normalizePatchBoard(board, [makeStrip('layer-1', 8)]);
+
+  assert.equal(normalized.patches[0].source.autoRange, false);
+  assert.equal(normalized.patches[0].source.startLed, 1);
+  assert.equal(normalized.patches[0].source.endLed, 3);
+});
+
+test('normalization prunes deleted generated strip patches but keeps custom rows', () => {
+  const board = createDefaultPatchBoard([makeStrip('layer-1', 2), makeStrip('layer-2', 3)]);
+  const offPatch = addOffPatch(board, 2);
+  board.patches.push({
+    id: 'custom-missing-layer',
+    name: 'Custom missing layer',
+    groupId: null,
+    source: { type: 'strip', stripId: 'layer-1', startLed: 1, endLed: 0, autoRange: false },
+    output: { mode: 'normal' },
+    playback: {},
+  });
+  board.chains[0].rowIds = [
+    'patch-layer-1',
+    'custom-missing-layer',
+    'patch-layer-2',
+    offPatch.id,
+  ];
+
+  const normalized = normalizePatchBoard(board, [makeStrip('layer-2', 3)]);
+
+  assert.deepEqual(normalized.chains[0].rowIds, [
+    'custom-missing-layer',
+    'patch-layer-2',
+    offPatch.id,
+  ]);
+  assert.equal(normalized.patches.some(patch => patch.id === 'patch-layer-1'), false);
+  assert.equal(normalized.patches.some(patch => patch.id === 'custom-missing-layer'), true);
+  assert.equal(normalized.patches.some(patch => patch.id === offPatch.id), true);
+});
+
 test('forward patch 2 -> 10 emits inclusive ascending source LEDs', () => {
   const strips = [makeStrip('layer-7', 12)];
   const board = {

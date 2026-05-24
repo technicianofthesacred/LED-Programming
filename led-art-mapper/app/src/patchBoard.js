@@ -22,6 +22,8 @@ const ledIndexOrNull = value => {
 
 const patchIdForStrip = strip => `patch-${strip.id}`;
 
+const maxLedForStrip = strip => Math.max(0, (strip.pixelCount ?? strip.pixels?.length ?? 1) - 1);
+
 const patchForStrip = strip => ({
   id: patchIdForStrip(strip),
   name: strip.name || strip.id,
@@ -30,7 +32,8 @@ const patchForStrip = strip => ({
     type: 'strip',
     stripId: strip.id,
     startLed: 0,
-    endLed: Math.max(0, (strip.pixelCount ?? strip.pixels?.length ?? 1) - 1),
+    endLed: maxLedForStrip(strip),
+    autoRange: true,
   },
   output: { mode: strip.visible === false ? 'off' : 'normal' },
   playback: {
@@ -59,13 +62,36 @@ export function createDefaultPatchBoard(strips = []) {
 
 function ensureStripPatches(board, strips) {
   const chain = board.chains[0];
+  const liveStripIds = new Set(strips.map(strip => strip.id));
+  const removedPatchIds = new Set();
+
+  board.patches = board.patches.filter(patch => {
+    const shouldPrune = patch.source?.type === 'strip' &&
+      patch.source.autoRange === true &&
+      !liveStripIds.has(patch.source.stripId);
+    if (shouldPrune) removedPatchIds.add(patch.id);
+    return !shouldPrune;
+  });
+
+  board.chains.forEach(item => {
+    item.rowIds = item.rowIds.filter(rowId => !removedPatchIds.has(rowId));
+  });
+
   const stripIdsWithPatch = new Set(
     board.patches
       .filter(patch => patch.source?.type === 'strip')
       .map(patch => patch.source.stripId),
   );
+  const patchesById = byId(board.patches);
 
   for (const strip of strips) {
+    const defaultPatch = patchesById.get(patchIdForStrip(strip));
+    if (defaultPatch?.source?.type === 'strip' && defaultPatch.source.autoRange === true) {
+      defaultPatch.source.stripId = strip.id;
+      defaultPatch.source.startLed = 0;
+      defaultPatch.source.endLed = maxLedForStrip(strip);
+    }
+
     if (stripIdsWithPatch.has(strip.id)) continue;
     const patch = patchForStrip(strip);
     board.patches.push(patch);
@@ -90,7 +116,7 @@ export function normalizePatchBoard(board, strips = []) {
         rowIds: Array.isArray(chain.rowIds) ? chain.rowIds : [],
       }))
     : [{ id: DEFAULT_CHAIN_ID, name: 'Main physical strip', rowIds: copy.patches.map(p => p.id) }];
-  ensureStripPatches(copy, strips);
+  if (arguments.length > 1) ensureStripPatches(copy, strips);
 
   return copy;
 }
@@ -256,6 +282,7 @@ export function updatePatchRange(board, patchId, startLed, endLed) {
   }
   patch.source.startLed = start;
   patch.source.endLed = end;
+  patch.source.autoRange = false;
   return board;
 }
 
