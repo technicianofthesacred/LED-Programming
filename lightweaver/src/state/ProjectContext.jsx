@@ -10,6 +10,7 @@ import {
 import {
   createDefaultProject,
   DEFAULT_SYM_SETTINGS,
+  defaultStandaloneController,
   migrateProject,
   PROJECT_VERSION,
 } from '../lib/projectModel.js';
@@ -192,6 +193,7 @@ export function ProjectProvider({ children }) {
   const [wledSegmentMap, setWledSegmentMap] = useState(defaults.devices.segmentMap || {});
   const [controllerProfiles, setControllerProfiles] = useState(defaults.devices.controllerProfiles || []);
   const [activeControllerId, setActiveControllerId] = useState(defaults.devices.activeControllerId || '');
+  const [standaloneController, setStandaloneController] = useState(defaults.devices.standaloneController || defaultStandaloneController());
 
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
@@ -286,6 +288,7 @@ export function ProjectProvider({ children }) {
     setWledSegmentMap(devices.segmentMap || {});
     setControllerProfiles(devices.controllerProfiles || []);
     setActiveControllerId(devices.activeControllerId || '');
+    setStandaloneController(defaultStandaloneController(devices.standaloneController));
     setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);
@@ -342,6 +345,7 @@ export function ProjectProvider({ children }) {
       segmentMap: wledSegmentMap,
       controllerProfiles,
       activeControllerId,
+      standaloneController,
     },
   }), [
     projectName, strips, viewBox, svgText, hidden,
@@ -350,7 +354,7 @@ export function ProjectProvider({ children }) {
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     motionSmoothing,
     showClips, showTransitions, showCues, autoLanes, showDuration,
-    liveRecording, liveQuantize, wledIp, wledSegmentMap, controllerProfiles, activeControllerId,
+    liveRecording, liveQuantize, wledIp, wledSegmentMap, controllerProfiles, activeControllerId, standaloneController,
   ]);
 
   useEffect(() => {
@@ -427,6 +431,7 @@ export function ProjectProvider({ children }) {
       wledSegmentMap,  setWledSegmentMap,
       controllerProfiles, setControllerProfiles,
       activeControllerId, setActiveControllerId,
+      standaloneController, setStandaloneController,
       // Project persistence
       serializeProject,
       loadProject,

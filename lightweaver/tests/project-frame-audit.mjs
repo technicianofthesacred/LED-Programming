@@ -40,6 +40,15 @@ import {
   makePixelMarkerState,
   makeWledHostname,
 } from '../src/lib/controllerProfiles.js';
+import {
+  LWSEQ_HEADER_BYTES,
+  buildStandaloneProfile,
+  deriveStandaloneOutputsFromStrips,
+  estimateLwseqBytes,
+  makeStandalonePackage,
+  normalizeStandaloneOutputs,
+  toLwseqBytes,
+} from '../src/lib/standaloneController.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
@@ -61,7 +70,13 @@ for (const pattern of PATTERNS) {
 
 const defaultProject = createDefaultProject();
 assert.equal(defaultProject.version, PROJECT_VERSION);
-assert.deepEqual(defaultProject.devices, { wledIp: '', segmentMap: {}, controllerProfiles: [], activeControllerId: '' });
+assert.equal(defaultProject.devices.wledIp, '');
+assert.deepEqual(defaultProject.devices.segmentMap, {});
+assert.deepEqual(defaultProject.devices.controllerProfiles, []);
+assert.equal(defaultProject.devices.activeControllerId, '');
+assert.equal(defaultProject.devices.standaloneController.outputs.length, 4);
+assert.equal(defaultProject.devices.standaloneController.outputs[0].pin, 16);
+assert.equal(defaultProject.devices.standaloneController.controls.blackout, 9);
 assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
 const migratedV1 = migrateProject({
   version: 1,
@@ -80,10 +95,20 @@ const migratedV3 = migrateProject({
 assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
 assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
 assert.deepEqual(migratedV3.devices.controllerProfiles, []);
+assert.equal(migratedV3.devices.standaloneController.outputs.length, 4);
 assert.equal(migratedV3.pattern.symSettings.guide.mode, 'fold');
 assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'silk' } }).pattern.motionSmoothing, 'silk');
 assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'invalid' } }).pattern.motionSmoothing, 'soft');
 assert.equal(migrateProject({ version: 2, motionSmoothing: 'off' }).pattern.motionSmoothing, 'off');
+assert.equal(migrateProject({
+  version: PROJECT_VERSION,
+  devices: {
+    standaloneController: {
+      outputs: [{ id: 'outer', name: 'Outer', pin: 32, pixels: 144 }],
+      controls: { blackout: 12 },
+    },
+  },
+}).devices.standaloneController.controls.blackout, 12);
 
 const guideAxis = { x1: 0.5, y1: 0, x2: 0.5, y2: 1 };
 const guideFold = applySymmetry(0.25, 0.4, { enabled: true, type: 'guide-mirror', guide: { mode: 'fold', axis: guideAxis } });
@@ -368,6 +393,74 @@ assert.deepEqual(makeKnownGoodRecoveryState(), makeSafeWledTestState('amber'));
 assert.equal(makePixelMarkerState(5, 4).seg[0].i.length, 15);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Lightweaver Install Readiness/);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /aca704e2ece0/);
+
+const standaloneOutputs = normalizeStandaloneOutputs([
+  { id: 'outer', pin: 16, pixels: 260 },
+  { id: 'inner', pin: 17, pixels: 180 },
+  { id: '', pin: 18, pixels: -5 },
+  { id: 'unused', pin: null, pixels: 0 },
+  { id: 'ignored', pin: 21, pixels: 50 },
+]);
+assert.deepEqual(standaloneOutputs, [
+  { id: 'outer', name: 'Outer', pin: 16, pixels: 260 },
+  { id: 'inner', name: 'Inner', pin: 17, pixels: 180 },
+]);
+assert.deepEqual(deriveStandaloneOutputsFromStrips([
+  { id: 'outer-zone', name: 'Outer Zone', pixels: [{}, {}, {}] },
+  { id: 'inner-zone', name: 'Inner Zone', pixelCount: 2 },
+], [
+  { id: 'out1', pin: 16, pixels: 0 },
+  { id: 'out2', pin: 17, pixels: 0 },
+]), [
+  { id: 'outer-zone', name: 'Outer Zone', pin: 16, pixels: 3 },
+  { id: 'inner-zone', name: 'Inner Zone', pin: 17, pixels: 2 },
+]);
+assert.deepEqual(deriveStandaloneOutputsFromStrips([
+  { id: 's1', pixelCount: 10 },
+  { id: 's2', pixelCount: 10 },
+  { id: 's3', pixelCount: 10 },
+  { id: 's4', pixelCount: 10 },
+  { id: 's5', pixelCount: 10 },
+]), [
+  { id: 'out1', name: 'Output 1', pin: 16, pixels: 20 },
+  { id: 'out2', name: 'Output 2', pin: 17, pixels: 10 },
+  { id: 'out3', name: 'Output 3', pin: 18, pixels: 10 },
+  { id: 'out4', name: 'Output 4', pin: 21, pixels: 10 },
+]);
+assert.deepEqual(estimateLwseqBytes({ pixels: 440, fps: 24, duration: 10 }), {
+  headerBytes: LWSEQ_HEADER_BYTES,
+  payloadBytes: 316800,
+  totalBytes: 316800 + LWSEQ_HEADER_BYTES,
+});
+
+const standaloneProfile = buildStandaloneProfile({
+  projectName: 'Spiral 01',
+  outputs: standaloneOutputs,
+  looks: [{ id: 'ember', label: 'Ember', file: '/sequences/001-ember.lwseq', fps: 24 }],
+});
+assert.equal(standaloneProfile.piece.id, 'spiral-01');
+assert.equal(standaloneProfile.outputs.length, 2);
+assert.equal(standaloneProfile.controls.encoder.press, 6);
+assert.equal(standaloneProfile.startupLook, 'ember');
+
+const lwseq = toLwseqBytes([
+  [{ r: 1, g: 2, b: 3 }, { r: 4, g: 5, b: 6 }],
+  [{ r: 7, g: 8, b: 9 }, { r: 10, g: 11, b: 12 }],
+], { fps: 24, outputs: [{ id: 'main', pin: 16, pixels: 2 }] });
+assert.equal(lwseq.byteLength, LWSEQ_HEADER_BYTES + 12);
+assert.equal(String.fromCharCode(...lwseq.slice(0, 6)), 'LWSEQ1');
+assert.deepEqual([...lwseq.slice(LWSEQ_HEADER_BYTES)], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
+const standalonePackage = makeStandalonePackage({
+  projectName: 'Spiral 01',
+  outputs: [{ id: 'main', pin: 16, pixels: 1 }],
+  sequenceFilename: '001-ember.lwseq',
+  frames: [[{ r: 1, g: 2, b: 3 }]],
+  fps: 24,
+});
+assert.equal(standalonePackage.files['/lightweaver.json'].piece.name, 'Spiral 01');
+assert.equal(standalonePackage.files['/sequences/001-ember.lwseq'].encoding, 'base64');
+assert.equal(standalonePackage.files['/sequences/001-ember.lwseq'].bytes, LWSEQ_HEADER_BYTES + 3);
 
 function jsonResponse(status, data) {
   return {

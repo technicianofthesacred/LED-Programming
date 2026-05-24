@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react';
 import { resolveTimelinePlayback, resolveTimelineTargets, sampleLane, useProject } from '../state/ProjectContext.jsx';
 import { download, makeManifest, pixelsFromStrips, toCSV, toDmxCsv, toFastLED, toRawFrameDump, toWLEDLedmap } from '../lib/export.js';
 import { buildGammaLut, compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
+import {
+  deriveStandaloneOutputsFromStrips,
+  estimateLwseqBytes,
+  makeStandalonePackage,
+  makeStandaloneSequenceFilename,
+  toLwseqBytes,
+  totalStandalonePixels,
+} from '../lib/standaloneController.js';
 
 const TARGETS = [
   { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'Adapter bundle, not native .ssp',           tag: 'bundle', hw: 'S-Play Mini' },
@@ -9,11 +17,14 @@ const TARGETS = [
   { id: 'pharos',  name: 'Pharos LPC',          sub: 'Adapter bundle, not native Pharos project', tag: 'bundle', hw: 'LPC X' },
   { id: 'madrix',  name: 'Madrix / Art-Net',    sub: 'DMX/Art-Net interchange data',              tag: 'DMX',    hw: 'Madrix Art-Net' },
   { id: 'pi',      name: 'Raspberry Pi + WLED', sub: 'Pi-hosted Lightweaver project + ledmap',    tag: 'Pi JSON', hw: 'Pi 5' },
+  { id: 'standalone', name: 'Lightweaver Controller', sub: 'ESP32-S3 + microSD package',           tag: 'SD',      hw: 'ESP32-S3' },
   { id: 'raw',     name: 'Raw RGB frames',      sub: 'Universal .bin frame dump or DMX CSV',      tag: 'frames', hw: 'Any player' },
 ];
 
 const FORMATS = [
   { id: 'bundle', name: 'Lightweaver bundle', sub: 'Project JSON + ledmap + metadata for adapter scripts', ext: '.json' },
+  { id: 'lwpackage', name: 'microSD package JSON', sub: 'lightweaver.json + base64 .lwseq files', ext: '.json' },
+  { id: 'lwseq', name: 'Raw .lwseq sequence', sub: 'Standalone controller frame file', ext: '.lwseq' },
   { id: 'csv',    name: 'DMX CSV',            sub: 'Frame x channel matrix, editable and importable', ext: '.csv' },
   { id: 'bin',    name: 'Raw RGB frame dump', sub: 'RGB bytes in LED order, one frame after another', ext: '.bin' },
 ];
@@ -24,6 +35,7 @@ export function ExportDialog({ open, onClose }) {
     projectName, showDuration, showClips, showTransitions, autoLanes, strips,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+    standaloneController,
     serializeProject,
   } = project;
   const [target, setTarget] = useState('splay');
@@ -72,14 +84,37 @@ export function ExportDialog({ open, onClose }) {
   const sel = TARGETS.find(t => t.id === target);
   const selectedFormat = FORMATS.find(f => f.id === format);
   const totalLEDs = strips.reduce((s, st) => s + (st.pixels?.length || 0), 0);
+  const standaloneOutputs = deriveStandaloneOutputsFromStrips(strips, standaloneController?.outputs || []);
+  const standalonePixels = totalStandalonePixels(standaloneOutputs);
   const safeName = (projectName || 'untitled').replace(/\s+/g, '_').toLowerCase();
   const durationMins = Math.floor(showDuration / 60);
   const durationSecs = showDuration % 60;
   const durationStr = `${String(durationMins).padStart(2,'0')}:${String(durationSecs).padStart(2,'0')}`;
+  const exportFilename = target === 'standalone' && format === 'lwseq'
+    ? makeStandaloneSequenceFilename(safeName)
+    : target === 'standalone'
+      ? `${safeName}-lightweaver-controller.json`
+      : `${safeName}${selectedFormat?.ext || '.json'}`;
+  const modalSubtitle = target === 'standalone'
+    ? `${projectName || 'Untitled'} · ${durationStr} · ${standaloneOutputs.length || '—'} outputs · ${standalonePixels || totalLEDs || '—'} LEDs`
+    : `${projectName || 'Untitled'} · ${durationStr} · ${universes} universes · ${totalLEDs > 0 ? totalLEDs : '—'} LEDs`;
   const totalFrames = showDuration * fps;
   const frameSize = 512 * universes;
-  const totalBytes = totalFrames * frameSize;
+  const standaloneEstimate = estimateLwseqBytes({ pixels: standalonePixels || totalLEDs, fps, duration: showDuration });
+  const totalBytes = target === 'standalone' ? standaloneEstimate.totalBytes : totalFrames * frameSize;
   const mb = (totalBytes / 1024 / 1024).toFixed(1);
+  const availableFormats = FORMATS.filter(f => target === 'standalone'
+    ? ['lwpackage', 'lwseq'].includes(f.id)
+    : !['lwpackage', 'lwseq'].includes(f.id));
+
+  const selectTarget = (id) => {
+    setTarget(id);
+    if (id === 'standalone') {
+      if (!['lwpackage', 'lwseq'].includes(format)) setFormat('lwpackage');
+      if (![24, 30].includes(fps)) setFps(24);
+    }
+    if (id !== 'standalone' && ['lwpackage', 'lwseq'].includes(format)) setFormat('bundle');
+  };
 
   const buildFrames = () => {
     const baseRenderStrips = strips.map(strip => ({
@@ -159,6 +194,25 @@ export function ExportDialog({ open, onClose }) {
         filename = `${safeName}-frames.bin`;
         content = toRawFrameDump(frames);
         mime = 'application/octet-stream';
+      } else if (target === 'standalone' && format === 'lwseq') {
+        const frames = buildFrames();
+        filename = makeStandaloneSequenceFilename(safeName);
+        content = toLwseqBytes(frames, { fps, outputs: standaloneOutputs });
+        mime = 'application/octet-stream';
+      } else if (target === 'standalone') {
+        const frames = buildFrames();
+        const sequenceFilename = makeStandaloneSequenceFilename(safeName);
+        filename = `${safeName}-lightweaver-controller.json`;
+        content = JSON.stringify(makeStandalonePackage({
+          projectName,
+          outputs: standaloneOutputs,
+          controls: standaloneController?.controls,
+          led: standaloneController?.led,
+          sequenceFilename,
+          frames,
+          fps,
+          loop,
+        }), null, 2);
       } else if (target === 'pi') {
         filename = `${safeName}-lightweaver-pi.json`;
         content = JSON.stringify({
@@ -190,7 +244,7 @@ export function ExportDialog({ open, onClose }) {
         <div className="lw-modal-head">
           <div>
             <div className="title" id="lw-export-title">Export show</div>
-            <div className="sub">{projectName || 'Untitled'} · {durationStr} · {universes} universes · {totalLEDs > 0 ? totalLEDs : '—'} LEDs</div>
+            <div className="sub">{modalSubtitle}</div>
           </div>
           <button className="lw-modal-close" onClick={close} aria-label="Close export dialog">×</button>
         </div>
@@ -200,7 +254,7 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-sec">1 · Target hardware</div>
             <div className="lw-exp-targets">
               {TARGETS.map(t => (
-                <button key={t.id} className={`lw-exp-target ${target === t.id ? 'active' : ''}`} onClick={() => setTarget(t.id)}>
+                <button key={t.id} className={`lw-exp-target ${target === t.id ? 'active' : ''}`} onClick={() => selectTarget(t.id)}>
                   <div className="name">{t.name}</div>
                   <div className="sub">{t.sub}</div>
                   <div className="tag">{t.tag}</div>
@@ -210,7 +264,7 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-exp-sec">2 · Output format</div>
             <div className="lw-exp-formats">
-              {FORMATS.map(f => (
+              {availableFormats.map(f => (
                 <label key={f.id} className={`lw-exp-fmt ${format === f.id ? 'active' : ''}`}>
                   <input type="radio" checked={format === f.id} onChange={() => setFormat(f.id)}/>
                   <div><div className="name">{f.name}</div><div className="sub">{f.sub}</div></div>
@@ -223,19 +277,28 @@ export function ExportDialog({ open, onClose }) {
               <div className="lw-exp-row">
                 <span className="k">Frame rate</span>
                 <div className="lw-exp-seg">
-                  {[25, 30, 44, 60].map(v => (
+                  {[24, 25, 30, 44, 60].map(v => (
                     <button key={v} className={fps === v ? 'active' : ''} onClick={() => setFps(v)}>{v} fps</button>
                   ))}
                 </div>
               </div>
-              <div className="lw-exp-row">
-                <span className="k">Universes</span>
-                <div className="lw-exp-seg">
-                  {[1, 2, 4, 8, 16].map(v => (
-                    <button key={v} className={universes === v ? 'active' : ''} onClick={() => setUniverses(v)}>{v}</button>
-                  ))}
+              {target === 'standalone' ? (
+                <div className="lw-exp-row">
+                  <span className="k">Outputs</span>
+                  <div className="v mono">
+                    {standaloneOutputs.length || '—'} connectors · {standalonePixels || totalLEDs || '—'} pixels
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="lw-exp-row">
+                  <span className="k">Universes</span>
+                  <div className="lw-exp-seg">
+                    {[1, 2, 4, 8, 16].map(v => (
+                      <button key={v} className={universes === v ? 'active' : ''} onClick={() => setUniverses(v)}>{v}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="lw-exp-row">
                 <span className="k">Loop</span>
                 <label className="lw-exp-check">
@@ -254,12 +317,13 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-exp-sec">4 · Summary</div>
             <div className="lw-exp-summary">
-              <div><span className="k">Output</span><span className="v mono">{safeName}{selectedFormat?.ext || '.json'}</span></div>
+              <div><span className="k">Output</span><span className="v mono">{exportFilename}</span></div>
               <div><span className="k">Clips</span><span className="v mono">{showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} lanes</span></div>
               <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
               <div><span className="k">Size</span><span className="v mono">~{mb} MB</span></div>
+              {target === 'standalone' && <div><span className="k">Connectors</span><span className="v mono">{standaloneOutputs.length} outputs · {standalonePixels} px</span></div>}
               <div><span className="k">Target</span><span className="v">{sel.hw}</span></div>
-              <div><span className="k">Destination</span><span className="v mono">browser download · adapter/import pipeline</span></div>
+              <div><span className="k">Destination</span><span className="v mono">{target === 'standalone' ? 'browser download · microSD package' : 'browser download · adapter/import pipeline'}</span></div>
             </div>
 
             <div className="lw-modal-foot">
@@ -310,7 +374,11 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-log">
               <div className="entry ok">✓ validated timeline · {durationStr} · no gaps</div>
               <div className="entry ok">✓ resolved {showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} automation lanes</div>
-              <div className="entry ok">✓ mapped {totalLEDs || '—'} LEDs → {universes} universes ({universes * 512} channels)</div>
+              <div className="entry ok">
+                {target === 'standalone'
+                  ? `✓ mapped ${standalonePixels || totalLEDs || '—'} LEDs → ${standaloneOutputs.length || '—'} controller outputs`
+                  : `✓ mapped ${totalLEDs || '—'} LEDs → ${universes} universes (${universes * 512} channels)`}
+              </div>
               {stage === 'writing' && <div className="entry ok">✓ baked {totalFrames.toLocaleString()} frames · {mb} MB</div>}
               {stage === 'writing' && <div className="entry">→ preparing browser download</div>}
               {stage === 'writing' && <div className="entry">→ writing {safeName}{selectedFormat?.ext || '.json'}</div>}
@@ -328,7 +396,9 @@ export function ExportDialog({ open, onClose }) {
             </div>
             <div className="lw-exp-stage-title" style={{ color: 'var(--mint)' }}>Export complete</div>
             <div className="lw-exp-stage-sub">
-              Export generated and downloaded. Native controller project files are not generated here; this is a Lightweaver bundle or interchange file for {sel.hw}.
+              {target === 'standalone'
+                ? 'Standalone controller package generated and downloaded for microSD preparation.'
+                : `Export generated and downloaded. Native controller project files are not generated here; this is a Lightweaver bundle or interchange file for ${sel.hw}.`}
             </div>
             <div className="lw-exp-done-card">
               <div className="row"><span className="k">File</span><span className="v mono">{artifact?.filename || `${safeName}${selectedFormat?.ext || '.json'}`}</span></div>

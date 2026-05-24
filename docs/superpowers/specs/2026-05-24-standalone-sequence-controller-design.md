@@ -2,7 +2,7 @@
 
 Date: 2026-05-24
 Project: Lightweaver
-Status: Draft for user review
+Status: Approved; Phase 1 wiring in progress
 
 ## Summary
 

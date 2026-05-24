@@ -49,6 +49,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 ## Open — software follow-ups
 
 - [ ] **Refactor**: split 4,713-line `led-art-mapper/app/src/main.js` into modules (state, ui, render, export) — *deferred from this round; best done in a focused session because it touches everything*
+- [ ] Standalone controller export: generate `lightweaver.json` and `.lwseq` microSD packages for ESP32-S3 playback
 - [ ] Add Vitest unit suite for `led-art-mapper` pattern helpers + export functions
 - [ ] Tighten Playwright selectors flagged with `// TODO: tighten selector` in `e2e/*.spec.ts`
 - [ ] Wire visitor-ui brightness slider to debounce instead of commit-on-release (current behavior is intentional — confirm UX)

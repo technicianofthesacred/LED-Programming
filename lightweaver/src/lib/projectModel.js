@@ -6,6 +6,11 @@ import {
   DEFAULT_TRANSITIONS,
 } from '../state/ProjectDefaults.js';
 import { normalizeMotionSmoothing } from './motionSmoothing.js';
+import {
+  DEFAULT_STANDALONE_CONTROLS,
+  DEFAULT_STANDALONE_LED,
+  DEFAULT_STANDALONE_OUTPUTS,
+} from './standaloneController.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -22,6 +27,24 @@ export const DEFAULT_SYM_SETTINGS = {
     axis: { x1: 0.5, y1: 0.08, x2: 0.5, y2: 0.92 },
   },
 };
+
+export function defaultStandaloneController(overrides = {}) {
+  return {
+    outputs: overrides.outputs || DEFAULT_STANDALONE_OUTPUTS,
+    controls: {
+      ...DEFAULT_STANDALONE_CONTROLS,
+      ...(overrides.controls || {}),
+      encoder: {
+        ...DEFAULT_STANDALONE_CONTROLS.encoder,
+        ...(overrides.controls?.encoder || {}),
+      },
+    },
+    led: {
+      ...DEFAULT_STANDALONE_LED,
+      ...(overrides.led || {}),
+    },
+  };
+}
 
 export function createDefaultProject() {
   return {
@@ -69,6 +92,7 @@ export function createDefaultProject() {
       segmentMap: {},
       controllerProfiles: [],
       activeControllerId: '',
+      standaloneController: defaultStandaloneController(),
     },
   };
 }
@@ -87,7 +111,11 @@ export function migrateProject(data) {
       pattern: { ...pattern, symSettings: { ...base.pattern.symSettings, ...(pattern.symSettings || {}) } },
       show: { ...base.show, ...(data.show || {}) },
       live: { ...base.live, ...(data.live || {}) },
-      devices: { ...base.devices, ...(data.devices || {}) },
+      devices: {
+        ...base.devices,
+        ...(data.devices || {}),
+        standaloneController: defaultStandaloneController(data.devices?.standaloneController),
+      },
     };
   }
 
@@ -141,6 +169,7 @@ export function migrateProject(data) {
         ...base.devices,
         wledIp: data.wledIp || '',
         segmentMap: data.wledSegmentMap || {},
+        standaloneController: defaultStandaloneController(data.devices?.standaloneController),
       },
     };
   }
