@@ -2664,7 +2664,7 @@ function _exportOpts() {
 }
 
 function syncExportInfo() {
-  const total = state.strips.reduce((n, s) => n + s.pixelCount, 0);
+  const total = _exportPixels().length;
   document.getElementById('export-total').textContent = total;
   const vb = svgEl.viewBox.baseVal;
   document.getElementById('export-canvas-size').textContent =
