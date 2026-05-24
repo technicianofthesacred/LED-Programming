@@ -24,6 +24,14 @@ const patchIdForStrip = strip => `patch-${strip.id}`;
 
 const maxLedForStrip = strip => Math.max(0, (strip.pixelCount ?? strip.pixels?.length ?? 1) - 1);
 
+const isGeneratedStripPatch = patch =>
+  patch.source?.type === 'strip' &&
+  (patch.source.autoRange === true || (
+    patch.source.autoRange == null &&
+    patch.id === `patch-${patch.source.stripId}` &&
+    patch.source.startLed === 0
+  ));
+
 const patchForStrip = strip => ({
   id: patchIdForStrip(strip),
   name: strip.name || strip.id,
@@ -67,7 +75,7 @@ function ensureStripPatches(board, strips) {
 
   board.patches = board.patches.filter(patch => {
     const shouldPrune = patch.source?.type === 'strip' &&
-      patch.source.autoRange === true &&
+      isGeneratedStripPatch(patch) &&
       !liveStripIds.has(patch.source.stripId);
     if (shouldPrune) removedPatchIds.add(patch.id);
     return !shouldPrune;
@@ -86,10 +94,11 @@ function ensureStripPatches(board, strips) {
 
   for (const strip of strips) {
     const defaultPatch = patchesById.get(patchIdForStrip(strip));
-    if (defaultPatch?.source?.type === 'strip' && defaultPatch.source.autoRange === true) {
+    if (defaultPatch?.source?.type === 'strip' && isGeneratedStripPatch(defaultPatch)) {
       defaultPatch.source.stripId = strip.id;
       defaultPatch.source.startLed = 0;
       defaultPatch.source.endLed = maxLedForStrip(strip);
+      defaultPatch.source.autoRange = true;
     }
 
     if (stripIdsWithPatch.has(strip.id)) continue;

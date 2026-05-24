@@ -100,6 +100,38 @@ test('normalization tracks generated full-strip ranges through strip resize', ()
   assert.equal(shrunk.patches[0].source.endLed, 1);
 });
 
+test('normalization migrates legacy generated patches without autoRange metadata', () => {
+  const board = {
+    physicalLocked: false,
+    chains: [{ id: 'main', name: 'Main physical strip', rowIds: ['patch-layer-1', 'patch-layer-2'] }],
+    groups: [],
+    patches: [
+      {
+        id: 'patch-layer-1',
+        name: 'Layer 1',
+        groupId: null,
+        source: { type: 'strip', stripId: 'layer-1', startLed: 0, endLed: 2 },
+        output: { mode: 'normal' },
+        playback: {},
+      },
+      {
+        id: 'patch-layer-2',
+        name: 'Layer 2',
+        groupId: null,
+        source: { type: 'strip', stripId: 'layer-2', startLed: 0, endLed: 1 },
+        output: { mode: 'normal' },
+        playback: {},
+      },
+    ],
+  };
+
+  const normalized = normalizePatchBoard(board, [makeStrip('layer-1', 5)]);
+
+  assert.deepEqual(normalized.chains[0].rowIds, ['patch-layer-1']);
+  assert.equal(normalized.patches[0].source.autoRange, true);
+  assert.equal(normalized.patches[0].source.endLed, 4);
+});
+
 test('custom range updates opt out of generated full-strip tracking', () => {
   const board = createDefaultPatchBoard([makeStrip('layer-1', 5)]);
 
