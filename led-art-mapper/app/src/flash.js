@@ -221,8 +221,22 @@ async function _flash() {
   if (!file)    { _setStatus('No firmware file selected', 'error'); return; }
   if (!_loader) { _setStatus('Not connected', 'error'); return; }
 
-  const address = parseInt(addrInput.value, 16);
-  if (isNaN(address)) { _setStatus('Invalid flash address', 'error'); return; }
+  const addressText = addrInput.value.trim();
+  if (!/^(?:0x[0-9a-f]+|[0-9]+)$/i.test(addressText)) {
+    _setStatus('Invalid flash address', 'error');
+    return;
+  }
+  const address = Number.parseInt(addressText, addressText.toLowerCase().startsWith('0x') ? 16 : 10);
+
+  const eraseAll = /** @type {HTMLInputElement} */ (
+    document.getElementById('flash-erase-all')
+  ).checked;
+  if (eraseAll && address !== 0) {
+    const msg = 'Erase all is only valid with a true merged image at 0x0. Official WLED release app binaries use 0x10000 and require the bootloader/partition table to remain installed.';
+    _setStatus(`✕ ${msg}`, 'error');
+    _log(`Flash blocked: ${msg}`);
+    return;
+  }
 
   document.getElementById('btn-flash-write').disabled   = true; // locked during flash
   document.getElementById('btn-flash-connect').disabled = true;
@@ -238,10 +252,6 @@ async function _flash() {
     _resetButtons();
     return;
   }
-
-  const eraseAll = /** @type {HTMLInputElement} */ (
-    document.getElementById('flash-erase-all')
-  ).checked;
 
   _log(`Flashing ${_fmtSize(data.byteLength)} @ 0x${address.toString(16).toUpperCase()}${eraseAll ? '  [erase all]' : ''}…`);
   if (eraseAll) _log('Erasing flash — this takes ~15 s…');

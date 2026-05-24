@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
 import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromStrips } from '../lib/export.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
+import { DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
 import { DEMO_STRIPS } from '../data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 
@@ -639,7 +640,7 @@ export function FlashScreen() {
   const [statusKind, setStatusKind]   = useState('');
   const [log, setLog]                 = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
-  const [address, setAddress]         = useState('0x0');
+  const [address, setAddress]         = useState(DEFAULT_WLED_APP_FLASH_ADDRESS);
   const [eraseAll, setEraseAll]       = useState(false);
   const [release, setRelease]         = useState(null);
   const [fetchingRelease, setFetchingRelease] = useState(false);
@@ -726,8 +727,14 @@ export function FlashScreen() {
 
   const handleFlash = async () => {
     if (!selectedFile || !loaderRef.current) return;
-    const addr = parseInt(address, 16);
-    if (isNaN(addr)) { setStatusMsg('Invalid flash address', 'error'); return; }
+    let addr;
+    try {
+      ({ address: addr } = validateFlashPlan({ address, eraseAll }));
+    } catch (err) {
+      setStatusMsg(`✕ ${err.message ?? err}`, 'error');
+      appendLog(`Flash blocked: ${err.message ?? err}`);
+      return;
+    }
 
     setFlashing(true);
     setProgress(0);
@@ -834,6 +841,10 @@ export function FlashScreen() {
             onChange={e => setAddress(e.target.value)}
             style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', width: 90 }}
           />
+          <span></span>
+          <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
+            Official WLED release binaries are app images for {DEFAULT_WLED_APP_FLASH_ADDRESS}. Erase-all requires a true merged image at 0x0 or the four-part esptool flow.
+          </span>
           <span style={{ color: 'var(--text-3)' }}>Erase all</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
             <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>

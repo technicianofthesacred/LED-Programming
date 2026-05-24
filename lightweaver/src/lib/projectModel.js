@@ -67,6 +67,8 @@ export function createDefaultProject() {
     devices: {
       wledIp: '',
       segmentMap: {},
+      controllerProfiles: [],
+      activeControllerId: '',
     },
   };
 }
@@ -134,6 +136,11 @@ export function migrateProject(data) {
         ...base.live,
         quantize: data.liveQuantize || base.live.quantize,
         recording: data.liveRecording || false,
+      },
+      devices: {
+        ...base.devices,
+        wledIp: data.wledIp || '',
+        segmentMap: data.wledSegmentMap || {},
       },
     };
   }

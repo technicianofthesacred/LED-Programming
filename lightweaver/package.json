@@ -9,6 +9,7 @@
     "serve:pi": "node server/index.js",
     "pi:build": "npm run build",
     "pi:start": "npm run build && npm run serve:pi",
+    "doctor:wled": "node scripts/wled-doctor.mjs",
     "test:core": "node tests/project-frame-audit.mjs",
     "preview": "vite preview"
   },

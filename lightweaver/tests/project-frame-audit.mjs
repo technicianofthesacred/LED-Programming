@@ -19,6 +19,27 @@ import {
   makeWledWsUrl,
   requestWledJson,
 } from '../src/lib/deviceController.js';
+import {
+  DEFAULT_WLED_APP_FLASH_ADDRESS,
+  validateFlashPlan,
+} from '../src/lib/flashPlan.js';
+import {
+  makeSafeWledTestState,
+  pickBestWledDevice,
+  sortWledDevices,
+  summarizeWledInfo,
+} from '../src/lib/wledDiscovery.js';
+import {
+  buildControllerProfile,
+  controllerProfileReadiness,
+  estimatePowerBudget,
+  makeArtNetNotes,
+  makeDhcpReservationNote,
+  makeInstallReadinessReport,
+  makeKnownGoodRecoveryState,
+  makePixelMarkerState,
+  makeWledHostname,
+} from '../src/lib/controllerProfiles.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
@@ -40,7 +61,7 @@ for (const pattern of PATTERNS) {
 
 const defaultProject = createDefaultProject();
 assert.equal(defaultProject.version, PROJECT_VERSION);
-assert.deepEqual(defaultProject.devices, { wledIp: '', segmentMap: {} });
+assert.deepEqual(defaultProject.devices, { wledIp: '', segmentMap: {}, controllerProfiles: [], activeControllerId: '' });
 assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
 const migratedV1 = migrateProject({
   version: 1,
@@ -58,6 +79,7 @@ const migratedV3 = migrateProject({
 });
 assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
 assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
+assert.deepEqual(migratedV3.devices.controllerProfiles, []);
 assert.equal(migratedV3.pattern.symSettings.guide.mode, 'fold');
 assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'silk' } }).pattern.motionSmoothing, 'silk');
 assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'invalid' } }).pattern.motionSmoothing, 'soft');
@@ -258,6 +280,94 @@ assert.equal(
   makeWledWsUrl('192.168.1.50', { locationObj: { protocol: 'https:', host: 'lightweaver.local' } }),
   'wss://lightweaver.local/api/wled/ws?ip=192.168.1.50',
 );
+assert.equal(DEFAULT_WLED_APP_FLASH_ADDRESS, '0x10000');
+assert.deepEqual(validateFlashPlan({ address: '0x10000', eraseAll: false }), { address: 0x10000 });
+assert.throws(
+  () => validateFlashPlan({ address: '0x10000', eraseAll: true }),
+  /single WLED app binary cannot be flashed after erasing all flash/,
+);
+assert.deepEqual(
+  summarizeWledInfo({
+    name: 'WLED',
+    ver: '0.15.4',
+    release: 'ESP32-S3_16MB_opi',
+    arch: 'ESP32-S3',
+    ip: '192.168.18.66',
+    mac: 'aca704e2ece0',
+    freeheap: 230000,
+    psram: 8300000,
+    wifi: { signal: 86 },
+    leds: { count: 30, fps: 2 },
+  }, { ip: '192.168.18.66', source: 'probe' }),
+  {
+    name: 'WLED',
+    ip: '192.168.18.66',
+    source: 'probe',
+    ver: '0.15.4',
+    release: 'ESP32-S3_16MB_opi',
+    arch: 'ESP32-S3',
+    mac: 'aca704e2ece0',
+    leds: 30,
+    fps: 2,
+    signal: 86,
+    freeheap: 230000,
+    psram: 8300000,
+    uptime: null,
+    healthy: true,
+  },
+);
+assert.equal(
+  pickBestWledDevice([
+    { ip: '192.168.18.10', source: 'scan', healthy: true },
+    { ip: '192.168.18.66', source: 'default', healthy: true },
+  ], '192.168.18.66').ip,
+  '192.168.18.66',
+);
+assert.deepEqual(
+  sortWledDevices([
+    { ip: '192.168.18.10', source: 'scan', signal: 45, healthy: true },
+    { ip: '192.168.18.11', source: 'mdns', signal: 80, healthy: true },
+    { ip: '192.168.18.12', source: 'scan', healthy: false },
+  ]).map(d => d.ip),
+  ['192.168.18.11', '192.168.18.10', '192.168.18.12'],
+);
+assert.deepEqual(makeSafeWledTestState('blue'), {
+  on: true,
+  bri: 32,
+  transition: 0,
+  seg: [{ id: 0, fx: 0, col: [[0, 80, 255], [0, 0, 0], [0, 0, 0]] }],
+});
+const profile = buildControllerProfile({
+  name: 'WLED',
+  ver: '0.15.4',
+  release: 'ESP32-S3_16MB_opi',
+  arch: 'ESP32-S3',
+  ip: '192.168.18.66',
+  mac: 'aca704e2ece0',
+  flash: 16,
+  psram: 8300000,
+  leds: { count: 30 },
+}, {
+  led: { type: 'WS2815', length: 240, dataPin: 16, colorOrder: 'GRB', maxBrightness: 180 },
+  power: { voltage: 12, psuAmps: 10, milliampsPerPixel: 12 },
+  artnet: { startUniverse: 0, fps: 40 },
+});
+assert.equal(profile.id, 'aca704e2ece0');
+assert.equal(makeWledHostname(profile), 'lightweaver-e2ece0.local');
+assert.equal(makeDhcpReservationNote(profile), 'Reserve MAC ac:a7:04:e2:ec:e0 as 192.168.18.66.');
+assert.deepEqual(estimatePowerBudget(profile), {
+  maxAmps: 2.03,
+  safeAmps: 8,
+  headroomAmps: 5.97,
+  status: 'ok',
+});
+assert.match(makeArtNetNotes(profile), /Universe start: 0/);
+assert.match(makeArtNetNotes(profile), /Channels: 720/);
+assert.equal(controllerProfileReadiness(profile).ready, false);
+assert.deepEqual(makeKnownGoodRecoveryState(), makeSafeWledTestState('amber'));
+assert.equal(makePixelMarkerState(5, 4).seg[0].i.length, 15);
+assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Lightweaver Install Readiness/);
+assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /aca704e2ece0/);
 
 function jsonResponse(status, data) {
   return {

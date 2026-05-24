@@ -190,6 +190,8 @@ export function ProjectProvider({ children }) {
 
   // ── Device/project hardware config ───────────────────────────────────────
   const [wledSegmentMap, setWledSegmentMap] = useState(defaults.devices.segmentMap || {});
+  const [controllerProfiles, setControllerProfiles] = useState(defaults.devices.controllerProfiles || []);
+  const [activeControllerId, setActiveControllerId] = useState(defaults.devices.activeControllerId || '');
 
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
@@ -282,6 +284,8 @@ export function ProjectProvider({ children }) {
     setLiveQuantize(live.quantize || defaults.live.quantize);
     setSymSettings({ ...DEFAULT_SYM_SETTINGS, ...(pattern.symSettings || {}) });
     setWledSegmentMap(devices.segmentMap || {});
+    setControllerProfiles(devices.controllerProfiles || []);
+    setActiveControllerId(devices.activeControllerId || '');
     setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);
@@ -336,6 +340,8 @@ export function ProjectProvider({ children }) {
     devices: {
       wledIp,
       segmentMap: wledSegmentMap,
+      controllerProfiles,
+      activeControllerId,
     },
   }), [
     projectName, strips, viewBox, svgText, hidden,
@@ -344,7 +350,7 @@ export function ProjectProvider({ children }) {
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     motionSmoothing,
     showClips, showTransitions, showCues, autoLanes, showDuration,
-    liveRecording, liveQuantize, wledIp, wledSegmentMap,
+    liveRecording, liveQuantize, wledIp, wledSegmentMap, controllerProfiles, activeControllerId,
   ]);
 
   useEffect(() => {
@@ -419,6 +425,8 @@ export function ProjectProvider({ children }) {
       wledPush,        wledGetInfo,
       wledGetState,
       wledSegmentMap,  setWledSegmentMap,
+      controllerProfiles, setControllerProfiles,
+      activeControllerId, setActiveControllerId,
       // Project persistence
       serializeProject,
       loadProject,

@@ -498,14 +498,14 @@
 
         <div class="flash-addr-row">
           <label for="flash-address">Address</label>
-          <input type="text" id="flash-address" value="0x0" style="width:72px" />
-          <span class="flash-addr-hint">0x0 for full WLED binary</span>
+          <input type="text" id="flash-address" value="0x10000" style="width:72px" />
+          <span class="flash-addr-hint">0x10000 for official WLED release app binaries</span>
         </div>
 
-        <label class="flash-erase-row" title="Wipe entire flash before writing — use this to clear old WiFi credentials or config">
+        <label class="flash-erase-row" title="Only use with a true merged image at 0x0. A single WLED app binary needs the bootloader and partition table already installed.">
           <input type="checkbox" id="flash-erase-all" />
           Erase all flash first
-          <span class="flash-erase-hint">(slower — use to clear old config)</span>
+          <span class="flash-erase-hint">(merged-image installs only)</span>
         </label>
 
         <div class="flash-connect-row">

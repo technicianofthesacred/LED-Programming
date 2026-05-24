@@ -14,6 +14,13 @@ import { networkInterfaces } from 'os';
 import http from 'http';
 import { Bonjour } from 'bonjour-service';
 import { WebSocket, WebSocketServer } from 'ws';
+import { makeKnownGoodRecoveryState } from '../src/lib/controllerProfiles.js';
+import {
+  makeSafeWledTestState,
+  normalizeWledHost as normalizeHost,
+  sortWledDevices,
+  summarizeWledInfo,
+} from '../src/lib/wledDiscovery.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
@@ -28,10 +35,8 @@ const mdnsDevices = new Map();
 
 app.use(express.json({ limit: '2mb' }));
 
-function normalizeHost(raw) {
-  const value = String(raw || DEFAULT_WLED || '').trim();
-  if (!value) return '';
-  return value.replace(/^https?:\/\//, '').replace(/^ws:\/\//, '').replace(/\/.*$/, '');
+function normalizeRequestHost(raw) {
+  return normalizeHost(raw || DEFAULT_WLED);
 }
 
 function wledUrl(host, path) {
@@ -64,21 +69,29 @@ async function probeWled(host, timeoutMs = 1200) {
   try {
     const info = await fetchJson(wledUrl(target, '/json/info'), { timeoutMs });
     if (!info?.ver) return null;
-    return {
-      name: info.name || 'WLED',
-      ip: target,
-      port: 80,
-      ver: info.ver,
-      leds: info.leds?.count ?? null,
-      source: 'probe',
-    };
+    return summarizeWledInfo(info, { ip: target, source: 'probe' });
   } catch {
     return null;
   }
 }
 
 function mergeDevice(results, device) {
-  if (device && !results.some(item => item.ip === device.ip)) results.push(device);
+  if (!device?.ip) return;
+  const index = results.findIndex(item => item.ip === device.ip);
+  if (index === -1) {
+    results.push(device);
+    return;
+  }
+  const existing = results[index];
+  results[index] = {
+    ...existing,
+    ...device,
+    source: existing.source === 'default' || device.source === 'default'
+      ? 'default'
+      : existing.source === 'mdns' || device.source === 'mdns'
+        ? 'mdns'
+        : device.source || existing.source,
+  };
 }
 
 function initMdns() {
@@ -129,16 +142,24 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/wled/discover', async (req, res) => {
   const results = [...mdnsDevices.values()];
   const quickHosts = [
-    req.query.ip,
-    DEFAULT_WLED,
-    'wled.local',
-    'lightweaver-wled.local',
-    '192.168.4.1',
-    '4.3.2.1',
+    { host: req.query.ip, source: 'preferred' },
+    { host: DEFAULT_WLED, source: 'default' },
+    { host: 'wled.local', source: 'mdns' },
+    { host: 'lightweaver-wled.local', source: 'mdns' },
+    { host: '192.168.4.1', source: 'ap' },
+    { host: '4.3.2.1', source: 'ap' },
   ].filter(Boolean);
 
-  const probed = await Promise.all(quickHosts.map(host => probeWled(host)));
+  const probed = await Promise.all(quickHosts
+    .filter(item => item.host)
+    .map(item => probeWled(item.host).then(device => device ? { ...device, source: item.source } : null)));
   probed.forEach(device => mergeDevice(results, device));
+  const mdnsProbed = await Promise.all(results
+    .filter(device => device.source === 'mdns')
+    .map(device => probeWled(device.ip, 900).then(probedDevice => probedDevice
+      ? { ...probedDevice, source: 'mdns' }
+      : device)));
+  mdnsProbed.forEach(device => mergeDevice(results, device));
 
   if (req.query.scan === '1') {
     const tasks = [];
@@ -150,11 +171,12 @@ app.get('/api/wled/discover', async (req, res) => {
     await Promise.all(tasks);
   }
 
-  res.json({ devices: results });
+  const devices = sortWledDevices(results, req.query.ip || DEFAULT_WLED);
+  res.json({ devices, recommended: devices[0] || null });
 });
 
 app.get('/api/wled/info', async (req, res) => {
-  const host = normalizeHost(req.query.ip);
+  const host = normalizeRequestHost(req.query.ip);
   if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
   try {
     res.json(await fetchJson(wledUrl(host, '/json/info')));
@@ -164,7 +186,7 @@ app.get('/api/wled/info', async (req, res) => {
 });
 
 app.get('/api/wled/state', async (req, res) => {
-  const host = normalizeHost(req.query.ip);
+  const host = normalizeRequestHost(req.query.ip);
   if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
   try {
     res.json(await fetchJson(wledUrl(host, '/json/state')));
@@ -174,13 +196,52 @@ app.get('/api/wled/state', async (req, res) => {
 });
 
 app.post('/api/wled/state', async (req, res) => {
-  const host = normalizeHost(req.query.ip);
+  const host = normalizeRequestHost(req.query.ip);
   if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
   try {
     res.json(await fetchJson(wledUrl(host, '/json/state'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body || {}),
+    }));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
+app.post('/api/wled/test', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  try {
+    res.json(await fetchJson(wledUrl(host, '/json/state'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(makeSafeWledTestState(req.body?.color || 'blue')),
+    }));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
+app.get('/api/wled/snapshot', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  try {
+    const snapshot = await fetchJson(wledUrl(host, '/json'));
+    res.json({ success: true, ...snapshot });
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
+app.post('/api/wled/recover', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  try {
+    res.json(await fetchJson(wledUrl(host, '/json/state'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(makeKnownGoodRecoveryState()),
     }));
   } catch (error) {
     res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
@@ -198,7 +259,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (client, _req, url) => {
-  const host = normalizeHost(url.searchParams.get('ip'));
+  const host = normalizeRequestHost(url.searchParams.get('ip'));
   if (!host) {
     client.close(1008, 'Missing WLED IP');
     return;
