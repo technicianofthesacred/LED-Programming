@@ -1,4 +1,4 @@
-# Lightweaver Physical Map Mode Design
+# Lightweaver Wire Path Mode Design
 
 Date: 2026-05-24
 Project: Lightweaver
@@ -6,9 +6,9 @@ Status: Approved direction, ready for implementation planning
 
 ## Summary
 
-Physical mapping belongs inside Layout as a spatial editing mode, not as a separate spreadsheet-style section. The current Patch Board data model is useful and should remain the export contract, but the primary interaction should become point-and-click on the artwork.
+Physical mapping belongs inside Layout as a spatial, visual wire-path mode, not as a separate spreadsheet-style section. The current Patch Board data model is useful and should remain the export contract, but the artist-facing interaction should feel like drawing the real wire path across the artwork.
 
-The goal is to let the artist describe the real wiring path visually: start here, end there, jump here, resume there, reverse this run, skip these cut-off LEDs, then save that physical order into the project.
+The goal is to let the artist describe reality visually: the wire starts here, travels there, jumps here, resumes there, reverses this run, skips these cut-off LEDs, then saves that physical order into the project. Numbers are an advanced bonus, not the main surface.
 
 ## Problem
 
@@ -29,7 +29,7 @@ Those fields are correct for debugging, but they are not the right main interfac
 5. A run is backwards.
 6. Some physical LEDs are hidden, cut off, or intentionally black.
 
-Numbers should stay available for precision edits, but they should not be the first thing the artist sees.
+Numbers should stay available for precision edits, but they should not be the first thing the artist sees. The first read should be visual: colored runs, direction arrows, jump connectors, off spacers, and a compact order strip.
 
 ## Product Context
 
@@ -47,10 +47,10 @@ Anchor references:
 
 ## Primary User Action
 
-The user should be able to define a physical LED run by clicking two points on the artwork:
+The user should be able to define a physical LED run by clicking two points on the artwork while Lightweaver previews the path visually:
 
 ```text
-Click start dot -> click end dot -> Lightweaver creates a mapped run
+Click start dot -> preview wire path -> click end dot -> Lightweaver creates a visible run
 ```
 
 Then the user can click another start point to jump and resume the physical wiring order.
@@ -69,33 +69,39 @@ The new UX changes how the artist creates and edits that model.
 
 ## Layout Strategy
 
-Add a **Physical Map** mode inside Layout. It should sit beside existing modes like LEDs, Light, Heat, and Dots, or as a clearly related sub-mode when LEDs are active.
+Add a **Wire Path** mode inside Layout. It should sit beside existing modes like LEDs, Light, Heat, and Dots, or as a clearly related sub-mode when LEDs are active.
 
-When Physical Map mode is active:
+When Wire Path mode is active:
 
 - the canvas remains the main surface
-- sampled LED dots become selectable physical map points
-- current physical runs are drawn as highlighted directional paths
-- jumps are shown as quiet connector indicators, not as real LED geometry
-- a compact physical-order ribbon appears at the bottom or lower right
-- a small inspector shows details for the selected run
+- sampled LED dots become selectable path points
+- current runs are drawn directly on the artwork as highlighted directional paths
+- jumps are shown as dashed connectors between runs, not as real LED geometry
+- off or hidden LEDs appear as small black spacers in the order strip
+- a compact wire-order ribbon appears along the bottom edge of the canvas
+- a tiny floating inspector appears only when a run is selected
 
-The existing large Patch Board panel should be reduced to an advanced/debug inspector. It should not consume the whole right panel by default.
+The existing large Patch Board panel should disappear from the default workflow. Keep its fields only as an advanced/debug inspector for the selected run. It should not consume the whole right panel by default.
 
 ## Main Workflow
 
-### 1. Enter Physical Map Mode
+### 1. Enter Wire Path Mode
 
-The user clicks `Physical Map` from Layout. The app shows:
+The user clicks `Wire Path` from Layout. The app shows:
 
 - selectable LED dots
-- current physical run overlays
-- a compact order ribbon
+- current run overlays
+- a compact wire-order ribbon
 - map status: unlocked, unsaved changes, or locked
 
 ### 2. Create A Run
 
-The user clicks one LED dot as the start, then another dot as the end.
+The user clicks one LED dot as the start. The dot becomes the active start point. As the cursor moves over other dots on the same strip, Lightweaver previews the possible run with:
+
+- a lit path segment
+- a direction arrow
+- a small count badge
+- a muted warning if the hover target is invalid
 
 Lightweaver creates a patch from that sampled source range:
 
@@ -111,31 +117,31 @@ Run 01: Layer A, LED 10 -> LED 2
 
 ### 3. Jump And Resume
 
-After a run is created, the next click can start a new run anywhere on the artwork. This supports wiring that leaves one area and resumes somewhere else.
+After a run is created, the next click can start a new run anywhere on the artwork. This supports wiring that leaves one area and resumes somewhere else. The jump is visible as a dashed connector from the previous run end to the new run start, making the non-linear physical path understandable at a glance.
 
-The order ribbon makes the physical chain explicit:
+The wire-order ribbon makes the physical chain explicit without turning into a table:
 
 ```text
-01 Outer A 2 -> 10 | 02 Inner B 11 -> 20 | 03 Off x3 | 04 Outer C 30 -> 21
+01 Outer A -> | jump | 02 Inner B -> | 03 Off x3 | 04 Outer C <-
 ```
 
 ### 4. Edit A Run
 
 Selecting a run shows:
 
-- start handle
-- end handle
-- reverse action
-- output mode: on/off
-- rename
-- delete
-- advanced numeric range
+- start marker on the artwork
+- end marker on the artwork
+- reverse icon
+- off/on toggle
+- rename action
+- delete icon
+- Advanced drawer for numeric range
 
 Full target behavior: dragging a handle snaps to sampled LED dots. The first implementation can use click-to-replace start/end points before drag handles exist. Clicking reverse swaps start/end. The numeric range stays available in an advanced drawer for precision and debugging.
 
-### 5. Reorder Physical Output
+### 5. Reorder Wire Output
 
-The physical order ribbon uses compact chips. Full target behavior: dragging chips changes output order. The first implementation can use selected-chip move actions if that reduces risk.
+The wire-order ribbon uses compact chips. Full target behavior: dragging chips changes output order. The first implementation can use selected-chip move actions if that reduces risk.
 
 Each chip should show:
 
@@ -148,10 +154,10 @@ Each chip should show:
 Example:
 
 ```text
-01 Outer A 9 leds -> 02 Jump -> 03 Inner B 10 leds <- 04 Off 3
+01 Outer A ->    jump    02 Inner B <-    03 Off x3    04 Center ->
 ```
 
-The chip ribbon replaces the current tall row list as the default control.
+The chip ribbon replaces the current tall row list as the default control. Chips should be small, visual, and glanceable. LED counts can appear in tooltips or selected state rather than always taking space.
 
 ### 6. Add Off Or Cut-Off LEDs
 
@@ -179,7 +185,7 @@ Once the physical wiring is correct, the user locks the map. Locked mode:
 No physical map has been created yet. Show a quiet prompt in the canvas area:
 
 ```text
-Click the first physical LED, then the last LED in that run.
+Click the first LED in the real wire path.
 ```
 
 Do not show a large onboarding card. Keep the preview dominant.
@@ -189,17 +195,18 @@ Do not show a large onboarding card. Keep the preview dominant.
 After the first click:
 
 - highlight selected start dot
-- show a live preview from start dot to hovered dot when possible
-- show count and direction near the cursor or inspector
+- show a live wire preview from start dot to hovered dot when possible
+- show direction near the cursor or inspector
+- show LED count only as a small badge or tooltip
 - allow Escape to cancel
 
 ### Existing Map
 
-Show physical runs as subtle overlays:
+Show wire runs as subtle overlays:
 
 - selected run gets accent color
 - inactive/off runs are dim
-- jumps are visible but visually distinct from LED paths
+- jumps are dashed and visually distinct from LED paths
 - stacked or reused source LEDs show a small count marker
 
 ### Out Of Range After LED Count Changes
@@ -216,7 +223,7 @@ The map is viewable but not editable. Editing controls are disabled. The unlock 
 
 ### No Artwork Or No Strips
 
-Physical Map mode is disabled or shows a compact empty state:
+Wire Path mode is disabled or shows a compact empty state:
 
 ```text
 Create LED strips before mapping physical order.
@@ -230,7 +237,7 @@ LED dots should be easy to target. On hover, enlarge the hit area without changi
 
 ### Path Preview
 
-When start and hover points are on the same source strip, preview the inclusive range between them. If they are on different strips, treat the second click as an invalid end for the current run unless multi-source run support is explicitly added later.
+When start and hover points are on the same source strip, preview the inclusive range between them as a visible wire path. If they are on different strips, treat the second click as the start of a jump only after the current run has been completed. During a single run, a different-strip hover should show an invalid target hint unless multi-source run support is explicitly added later.
 
 First implementation should keep one run tied to one source strip. Jumps create new runs.
 
@@ -242,6 +249,23 @@ Direction is inferred:
 - start index greater than end index means reverse
 
 The UI should show direction visually with a small arrow on the run overlay and chip.
+
+### Visual Priority
+
+The canvas should answer the main questions without opening a panel:
+
+- Where does the wire start?
+- Which direction does it travel?
+- Where does it jump?
+- Which runs are active or off?
+- What is the current physical order?
+
+Numbers should answer secondary debugging questions:
+
+- What source LED index is this?
+- What exported address range is this?
+- How many LEDs are in this run?
+- What was skipped because the actual strip is shorter?
 
 ### Reused Coordinates
 
@@ -265,16 +289,16 @@ This drawer is for correction and debugging. It is not the default workflow.
 
 Use direct tool labels:
 
-- Physical Map
+- Wire Path
 - Start run
 - End run
 - Reverse
 - Insert off LEDs
-- Lock map
-- Unlock map
+- Lock path
+- Unlock path
 - Advanced
 
-Avoid abstract labels like Patch Board in the primary interface. `Patch Board` can remain an internal model name or advanced inspector title, but user-facing copy should prefer physical language: run, jump, off LEDs, order, map.
+Avoid abstract labels like Patch Board in the primary interface. `Patch Board` can remain an internal model name, but user-facing copy should prefer physical language: wire path, run, jump, off LEDs, order, lock path.
 
 ## Implementation Scope Recommendation
 
@@ -284,14 +308,15 @@ Do not implement this as a large all-at-once redesign. Split it into two impleme
 
 Deliver:
 
-- Physical Map mode in Layout
+- Wire Path mode in Layout
 - click start dot, click end dot to create a run
-- selected run overlay
-- compact physical-order chips
+- live path preview while choosing an end dot
+- selected run overlay with direction arrow
+- compact wire-order chips
 - run selection
 - reverse/delete actions
 - selected-chip move actions for physical order
-- advanced numeric drawer
+- advanced numeric drawer hidden by default
 - save/load/export still using existing `patchBoard`
 - e2e coverage for point-click creation and export order
 
@@ -309,7 +334,6 @@ Defer:
 Deliver:
 
 - draggable start/end handles
-- live hover preview
 - better jump visualization
 - chip drag reorder
 - off-block insertion between chips
@@ -324,6 +348,7 @@ Deliver:
 - Do not make a separate Patch screen.
 - Do not make the right panel larger or more table-like.
 - Do not turn physical mapping into a wizard. This should stay inside Layout.
+- Do not make LED index numbers constantly visible in the default view.
 
 ## Risks
 
@@ -344,7 +369,8 @@ Concrete acceptance criteria:
 - A user can insert off LEDs without leaving Layout.
 - Saved projects preserve the physical map.
 - LED map and frame exports use the visual physical order.
-- The default visible UI is compact enough to keep the preview dominant.
+- The default visible UI is mostly canvas, with numbers hidden until hover, selection, or Advanced.
+- The interaction feels like tracing the real wire path, not filling out rows.
 
 ## Recommended Implementation References
 
@@ -354,7 +380,7 @@ Concrete acceptance criteria:
 
 ## Open Questions For Implementation Planning
 
-- Should Physical Map be a top-level Layout mode beside `LEDs`, or a sub-mode under `LEDs`?
-- Should the physical-order ribbon live along the bottom of the canvas or inside the right panel?
+- Should Wire Path be a top-level Layout mode beside `LEDs`, or a sub-mode under `LEDs`?
+- Should the wire-order ribbon live along the bottom of the canvas or inside the right panel?
 - Should clicking the same strip after a completed run immediately start the next run, or require an explicit `Start run` state?
 - Should the first plan label selected-chip move actions as temporary, or are explicit move controls valuable enough to keep alongside drag reorder later?
