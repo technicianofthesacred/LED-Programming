@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   createDefaultPatchBoard,
   expandPatchBoard,
+  addOffPatch,
+  movePatch,
   resolvePatchPlayback,
   updatePatchRange,
   validatePatchBoard,
@@ -115,6 +117,14 @@ test('adjacent patches can be reordered independently', () => {
   assert.deepEqual(expanded.pixels.slice(-3).map(px => px.sourceLed), [8, 9, 10]);
 });
 
+test('movePatch mutates the board main chain row order', () => {
+  const board = createDefaultPatchBoard([makeStrip('a', 1), makeStrip('b', 1)]);
+
+  movePatch(board, 'patch-b', 'up');
+
+  assert.deepEqual(board.chains[0].rowIds, ['patch-b', 'patch-a']);
+});
+
 test('off patches consume addresses and mark pixels inactive', () => {
   const strips = [makeStrip('layer-1', 2)];
   const board = {
@@ -153,6 +163,18 @@ test('off patches consume addresses and mark pixels inactive', () => {
 
   assert.deepEqual(expanded.pixels.map(px => px.index), [0, 1, 2, 3, 4]);
   assert.deepEqual(expanded.pixels.map(px => px.inactive === true), [false, true, true, true, false]);
+});
+
+test('addOffPatch appends to board main chain and participates in expansion', () => {
+  const strips = [makeStrip('layer-1', 2)];
+  const board = createDefaultPatchBoard(strips);
+
+  const patch = addOffPatch(board, 3);
+  const expanded = expandPatchBoard(board, strips);
+
+  assert.equal(board.chains[0].rowIds.at(-1), patch.id);
+  assert.equal(expanded.pixels.length, 5);
+  assert.deepEqual(expanded.pixels.slice(-3).map(px => px.inactive === true), [true, true, true]);
 });
 
 test('patch playback inherits group playback and overrides explicit patch values', () => {

@@ -73,6 +73,28 @@ export function mainChain(board) {
   return normalizePatchBoard(board).chains[0];
 }
 
+function mutableMainChain(board) {
+  if (!Array.isArray(board.chains)) {
+    board.chains = [];
+  }
+
+  if (!board.chains.length) {
+    board.chains.push({
+      id: DEFAULT_CHAIN_ID,
+      name: 'Main physical strip',
+      rowIds: Array.isArray(board.patches) ? board.patches.map(patch => patch.id) : [],
+    });
+  }
+
+  const chain = board.chains[0];
+  chain.id = chain.id || DEFAULT_CHAIN_ID;
+  chain.name = chain.name || 'Main physical strip';
+  if (!Array.isArray(chain.rowIds)) {
+    chain.rowIds = [];
+  }
+  return chain;
+}
+
 export function resolvePatchPlayback(patch, board, globalPlayback = DEFAULT_PLAYBACK) {
   const groupsById = byId(board.groups);
   const group = patch.groupId ? groupsById.get(patch.groupId) : null;
@@ -187,7 +209,7 @@ export function movePatch(board, patchId, direction) {
   if (board.physicalLocked) {
     throw new Error('Unlock setup mode before changing physical patch order.');
   }
-  const chain = mainChain(board);
+  const chain = mutableMainChain(board);
   const index = chain.rowIds.indexOf(patchId);
   if (index < 0) return board;
   const next = direction === 'up' ? index - 1 : index + 1;
@@ -211,7 +233,7 @@ export function addOffPatch(board, ledCount = 1) {
     playback: {},
   };
   board.patches.push(patch);
-  mainChain(board).rowIds.push(id);
+  mutableMainChain(board).rowIds.push(id);
   return patch;
 }
 
