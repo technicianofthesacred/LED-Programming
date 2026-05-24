@@ -500,6 +500,183 @@ kbd {
   opacity: 0.55;
 }
 
+/* ── Patch Board ────────────────────────────────────────────────────────── */
+
+#patch-board-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.patch-board-header,
+.patch-board-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.patch-board-header h2 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.patch-board-header p {
+  margin: 2px 0 0;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.patch-board-actions button,
+#patch-lock-btn {
+  flex: 1;
+  min-height: 26px;
+  font-size: 10px;
+}
+
+#patch-lock-btn {
+  flex: 0 0 auto;
+  min-width: 70px;
+}
+
+#patch-lock-btn.locked {
+  color: var(--accent);
+  border-color: rgba(6, 214, 160, 0.45);
+}
+
+#patch-board-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pb-warning,
+.pb-ok {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.pb-warning {
+  color: var(--warn);
+  background: rgba(255, 107, 107, 0.07);
+}
+
+.pb-ok {
+  color: var(--accent);
+  background: rgba(6, 214, 160, 0.06);
+}
+
+.patch-board-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+
+.patch-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.patch-row.is-off {
+  opacity: 0.75;
+}
+
+.patch-row-index {
+  color: var(--dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.patch-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.patch-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.patch-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.patch-row-meta {
+  color: var(--dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.patch-row-controls,
+.patch-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.patch-row-actions {
+  justify-content: flex-end;
+}
+
+.patch-row button {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.patch-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.patch-start,
+.patch-end,
+.patch-speed {
+  width: 48px;
+  height: 24px;
+  padding: 0 5px;
+  font-size: 10px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.patch-speed {
+  width: 52px;
+}
+
+body[data-mode="patch"] .side-panel {
+  flex: 0 0 420px;
+  width: 420px;
+  max-width: none;
+}
+
 /* A1: brightness input */
 .strip-brightness-input {
   width: 44px;

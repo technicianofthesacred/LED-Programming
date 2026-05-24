@@ -147,6 +147,7 @@ const state = {
 // BUG 4: reusable Uint8Array buffer for WLED push — resized only when pixel count changes,
 // avoids per-frame allocations at 30 fps. First byte reserved for WLED native WS opcode (0x02).
 let _wledBuf = new Uint8Array(0);
+let _autoCreateStripsFromImport = false;
 
 // ── Undo / Redo ───────────────────────────────────────────────────────────────
 const _history = [];
@@ -224,6 +225,41 @@ function _resetPatchBoardFromStrips() {
   return state.patchBoard;
 }
 
+function _createStripsFromImportedLayers(layers) {
+  const drawableLayers = layers.filter(layer => layer.pathData && layer.pathData.trim().length > 0);
+  if (!drawableLayers.length) return;
+
+  for (const layer of drawableLayers) {
+    if (state.strips.some(strip => strip.layerId === layer.layerId)) continue;
+    const pixelCount = Math.max(1, Math.round((layer.svgLength || 0) / (_getPxPerMm() * _getPitch())));
+    const strip = {
+      id:         crypto.randomUUID(),
+      name:       layer.name,
+      pathData:   layer.pathData,
+      pixelCount,
+      svgLength:  layer.svgLength,
+      layerId:    layer.layerId,
+      color:      layer._color ?? canvasManager.nextColor(),
+      visible:    true,
+      speed:      1.0,
+      brightness: 1.0,
+      hueShift:   0,
+      reversed:   false,
+      patternId:  null,
+    };
+    canvasManager.addStrip(strip);
+    const pathEl = canvasManager.getPathEl(strip.id);
+    _sampleStripPixels(strip, pathEl);
+    state.strips.push(strip);
+    state.stripTimes.set(strip.id, { t: 0, time: 0 });
+    canvasManager.setStripDots(strip.id, strip.pixels);
+  }
+
+  _reindex();
+  _resetPatchBoardFromStrips();
+  _rebuildNorm();
+}
+
 function _expandedPatchPixels() {
   return expandPatchBoard(_ensurePatchBoard(), state.strips, {
     patternId: state.activePatternId,
@@ -240,11 +276,188 @@ function _exportPixels() {
 }
 
 function renderPatchBoard() {
-  try {
-    validatePatchBoard(_ensurePatchBoard(), state.strips);
-  } catch {
-    // Task 5 replaces this with the visible Patch Board UI.
+  const list = document.getElementById('patch-board-list');
+  const lockBtn = document.getElementById('patch-lock-btn');
+  if (!list) {
+    renderPatchBoardWarnings();
+    return;
   }
+
+  const board = _ensurePatchBoard();
+  const chain = board.chains[0];
+  const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
+  const stripsById = new Map(state.strips.map(strip => [strip.id, strip]));
+  const locked = board.physicalLocked === true;
+  const resetBtn = document.getElementById('patch-reset-btn');
+  const addOffBtn = document.getElementById('patch-add-off-btn');
+
+  if (lockBtn) {
+    lockBtn.textContent = locked ? 'Locked' : 'Lock';
+    lockBtn.classList.toggle('locked', locked);
+    lockBtn.setAttribute('aria-pressed', String(locked));
+  }
+  if (resetBtn) resetBtn.disabled = locked;
+  if (addOffBtn) addOffBtn.disabled = locked;
+
+  list.replaceChildren();
+  chain.rowIds.forEach((patchId, index) => {
+    const patch = patchesById.get(patchId);
+    if (!patch) return;
+
+    const row = document.createElement('li');
+    row.className = `patch-row ${patch.source?.type === 'off' ? 'is-off' : 'is-strip'}`;
+    row.dataset.patchId = patch.id;
+
+    const order = document.createElement('span');
+    order.className = 'patch-row-index';
+    order.textContent = String(index + 1).padStart(2, '0');
+
+    const main = document.createElement('div');
+    main.className = 'patch-row-main';
+
+    const title = document.createElement('div');
+    title.className = 'patch-row-title';
+    const name = document.createElement('span');
+    name.className = 'patch-row-name';
+    name.textContent = patch.name || patch.id;
+    const meta = document.createElement('span');
+    meta.className = 'patch-row-meta';
+
+    const controls = document.createElement('div');
+    controls.className = 'patch-row-controls';
+
+    if (patch.source?.type === 'off') {
+      meta.textContent = `${patch.source.ledCount || 0} reserved LEDs off`;
+    } else if (patch.source?.type === 'strip') {
+      const strip = stripsById.get(patch.source.stripId);
+      const maxLed = Math.max(0, (strip?.pixels?.length ?? strip?.pixelCount ?? 0) - 1);
+      meta.textContent = strip ? `${strip.name || strip.id} · 0-${maxLed}` : 'Missing strip';
+
+      const makeNumberControl = (labelText, className, value, step = '1') => {
+        const label = document.createElement('label');
+        label.textContent = labelText;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = className;
+        input.value = String(value ?? 0);
+        input.step = step;
+        input.disabled = locked;
+        label.appendChild(input);
+        return { label, input };
+      };
+
+      const start = makeNumberControl('Start', 'patch-start', patch.source.startLed ?? 0);
+      const end = makeNumberControl('End', 'patch-end', patch.source.endLed ?? maxLed);
+      const speed = makeNumberControl('Speed', 'patch-speed', patch.playback?.speed ?? strip?.speed ?? 1, '0.05');
+
+      const commitRange = () => {
+        const startLed = parseInt(start.input.value, 10);
+        const endLed = parseInt(end.input.value, 10);
+        if (!Number.isFinite(startLed) || !Number.isFinite(endLed)) return;
+        _pushHistory();
+        try {
+          updatePatchRange(_ensurePatchBoard(), patch.id, startLed, endLed);
+        } catch (err) {
+          showToast(err.message, 'warn');
+        }
+        renderPatchBoard();
+        syncExportInfo();
+        refreshExportPreview();
+        _markDirty();
+      };
+      start.input.addEventListener('change', commitRange);
+      end.input.addEventListener('change', commitRange);
+
+      speed.input.addEventListener('change', () => {
+        const nextSpeed = parseFloat(speed.input.value);
+        if (!Number.isFinite(nextSpeed)) return;
+        _pushHistory();
+        const currentPatch = _ensurePatchBoard().patches.find(item => item.id === patch.id);
+        if (currentPatch) {
+          currentPatch.playback = currentPatch.playback || {};
+          currentPatch.playback.speed = nextSpeed;
+        }
+        renderPatchBoard();
+        syncExportInfo();
+        refreshExportPreview();
+        _markDirty();
+      });
+
+      const reverse = document.createElement('button');
+      reverse.type = 'button';
+      reverse.textContent = '↔';
+      reverse.title = 'Reverse patch';
+      reverse.setAttribute('aria-label', 'Reverse patch');
+      reverse.disabled = locked;
+      reverse.addEventListener('click', () => {
+        _pushHistory();
+        try {
+          const currentBoard = _ensurePatchBoard();
+          const currentPatch = currentBoard.patches.find(item => item.id === patch.id);
+          if (currentPatch?.source?.type === 'strip') {
+            updatePatchRange(currentBoard, patch.id, currentPatch.source.endLed, currentPatch.source.startLed);
+          }
+        } catch (err) {
+          showToast(err.message, 'warn');
+        }
+        renderPatchBoard();
+        syncExportInfo();
+        refreshExportPreview();
+        _markDirty();
+      });
+
+      controls.append(start.label, end.label, speed.label, reverse);
+    }
+
+    title.append(name, meta);
+    main.append(title, controls);
+
+    const actions = document.createElement('div');
+    actions.className = 'patch-row-actions';
+    const moveUp = document.createElement('button');
+    moveUp.type = 'button';
+    moveUp.textContent = '↑';
+    moveUp.title = 'Move up';
+    moveUp.setAttribute('aria-label', 'Move up');
+    moveUp.disabled = locked || index === 0;
+    moveUp.addEventListener('click', () => {
+      _pushHistory();
+      try {
+        movePatch(_ensurePatchBoard(), patch.id, 'up');
+      } catch (err) {
+        showToast(err.message, 'warn');
+      }
+      renderPatchBoard();
+      syncExportInfo();
+      refreshExportPreview();
+      _markDirty();
+    });
+
+    const moveDown = document.createElement('button');
+    moveDown.type = 'button';
+    moveDown.textContent = '↓';
+    moveDown.title = 'Move down';
+    moveDown.setAttribute('aria-label', 'Move down');
+    moveDown.disabled = locked || index === chain.rowIds.length - 1;
+    moveDown.addEventListener('click', () => {
+      _pushHistory();
+      try {
+        movePatch(_ensurePatchBoard(), patch.id, 'down');
+      } catch (err) {
+        showToast(err.message, 'warn');
+      }
+      renderPatchBoard();
+      syncExportInfo();
+      refreshExportPreview();
+      _markDirty();
+    });
+    actions.append(moveUp, moveDown);
+
+    row.append(order, main, actions);
+    list.appendChild(row);
+  });
+
+  renderPatchBoardWarnings();
 }
 
 function _restoreSnapshot(snap) {
@@ -300,6 +513,7 @@ function _restoreSnapshot(snap) {
   state.strips.forEach(s => canvasManager.setStripDots(s.id, s.pixels));
   canvasManager.renderConnections(state.connections);
   renderStripsList();
+  renderPatchBoard();
   renderArtworkLayersList();
   syncExportInfo();
   _updateEmptyState();
@@ -822,10 +1036,17 @@ const canvasManager = new CanvasManager(svgEl, {
       if (l._hidden) canvasManager.setArtworkLayerVisible(l.layerId, false);
     });
     canvasManager.setLayerHitPaths(layers);
+    if (_autoCreateStripsFromImport) {
+      _createStripsFromImportedLayers(layers);
+    }
     renderArtworkLayersList();
+    renderStripsList();
+    renderPatchBoard();
+    syncExportInfo();
+    _updateEmptyState();
     _switchTab('strips');
     if (layers.length) {
-      showToast(`${layers.length} layer${layers.length !== 1 ? 's' : ''} imported — click a layer in the sidebar or canvas to configure`, 'ok');
+      showToast(`${layers.length} layer${layers.length !== 1 ? 's' : ''} imported as LED sections`, 'ok');
     } else {
       showToast('No layers found in this SVG — try exporting with layers from Illustrator.', 'warn');
     }
@@ -1042,7 +1263,12 @@ async function _handleFileImport(file) {
     return;
   }
   state._svgSource = text;
-  canvasManager.importSVG(text, true);
+  _autoCreateStripsFromImport = true;
+  try {
+    canvasManager.importSVG(text, true);
+  } finally {
+    _autoCreateStripsFromImport = false;
+  }
   // Sync preview renderer coordinate space with the SVG viewBox
   const vb = svgEl.viewBox.baseVal;
   if (vb && vb.width > 0 && vb.height > 0) {
@@ -1051,6 +1277,7 @@ async function _handleFileImport(file) {
     previewRenderer.setViewBox(0, 0, 0, 0);
   }
   _updateEmptyState();
+  _markDirty();
 }
 
 function _rebuildNorm() {
@@ -3426,11 +3653,12 @@ function _setTool(tool) {
 }
 
 function _switchTab(name) {
-  const tabToMode = { strips: 'layout', pattern: 'pattern', export: 'export', flash: 'flash' };
+  const tabToMode = { strips: 'layout', patch: 'patch', pattern: 'pattern', export: 'export', flash: 'flash' };
   const mode = tabToMode[name] || 'layout';
   document.body.dataset.mode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`));
+  if (name === 'patch') renderPatchBoard();
   if (name === 'pattern') {
     const details = document.getElementById('code-editor-details');
     if (details) details.open = true;
@@ -4348,10 +4576,44 @@ document.getElementById('btn-toggle-directed').addEventListener('click', e => {
 // Mode buttons (replaces old tab click handlers)
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const modeToTab = { layout: 'strips', pattern: 'pattern', export: 'export', flash: 'flash' };
+    const modeToTab = { layout: 'strips', patch: 'patch', pattern: 'pattern', export: 'export', flash: 'flash' };
     _switchTab(modeToTab[btn.dataset.mode]);
     if (btn.dataset.mode === 'export') refreshExportPreview();
   });
+});
+
+document.getElementById('patch-reset-btn')?.addEventListener('click', async () => {
+  if (!await showConfirm('Reset Patch Board from current layers?')) return;
+  _pushHistory();
+  _resetPatchBoardFromStrips();
+  renderPatchBoard();
+  syncExportInfo();
+  refreshExportPreview();
+  _markDirty();
+});
+
+document.getElementById('patch-add-off-btn')?.addEventListener('click', async () => {
+  const value = await showPrompt('Reserved off LED count:', '1');
+  if (!value) return;
+  const count = Math.max(1, Math.trunc(parseInt(value, 10) || 1));
+  _pushHistory();
+  try {
+    addOffPatch(_ensurePatchBoard(), count);
+  } catch (err) {
+    showToast(err.message, 'warn');
+  }
+  renderPatchBoard();
+  syncExportInfo();
+  refreshExportPreview();
+  _markDirty();
+});
+
+document.getElementById('patch-lock-btn')?.addEventListener('click', () => {
+  _pushHistory();
+  const board = _ensurePatchBoard();
+  board.physicalLocked = !board.physicalLocked;
+  renderPatchBoard();
+  _markDirty();
 });
 
 // Pattern controls
@@ -4854,6 +5116,7 @@ renderPatternSelect();
 renderPatternCards();
 renderParamSliders();
 _renderSceneSelect();
+renderPatchBoard();
 syncExportInfo();
 _updateEmptyState();
 _updateScaleOverlay(); // Feature 13: initial scale overlay
