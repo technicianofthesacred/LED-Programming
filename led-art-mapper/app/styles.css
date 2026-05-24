@@ -46,6 +46,14 @@ header h1 {
 }
 
 .header-actions { display: flex; gap: 5px; align-items: center; }
+.btn-v2-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 600; padding: 3px 9px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  color: var(--accent); text-decoration: none;
+  opacity: 0.8; transition: opacity 0.15s;
+}
+.btn-v2-link:hover { opacity: 1; }
 
 /* ── Main layout ─────────────────────────────────────────────────────────── */
 

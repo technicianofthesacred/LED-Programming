@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lightweaver v2</title>
+  <title>Light Weaver</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body data-mode="layout">
   <header>
-    <div class="header-brand">Lightweaver v2</div>
+    <div class="header-brand">Light Weaver</div>
     <nav class="mode-nav">
       <button class="mode-btn active" data-mode="layout">Layout</button>
       <button class="mode-btn" data-mode="patch">Patch Board</button>
@@ -17,6 +17,10 @@
       <button class="mode-btn" data-mode="flash">Flash</button>
     </nav>
     <div class="header-actions">
+      <a class="btn-v2-link" href="http://localhost:9998" title="Switch to v2 — Lightweaver">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" width="12" height="12"><path d="M2 6h8M6 2l4 4-4 4"/></svg>
+        v2 Lightweaver
+      </a>
       <button id="btn-load-svg" title="Import SVG — each Illustrator layer becomes one LED section">Import</button>
       <input type="file" id="file-input" accept=".svg" hidden />
       <div class="btn-group">
