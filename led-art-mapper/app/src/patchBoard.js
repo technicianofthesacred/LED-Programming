@@ -252,6 +252,13 @@ export function validatePatchBoard(board, strips = []) {
 
   for (const patch of normalized.patches) {
     if (patch.source?.type === 'off') {
+      if (!Number.isFinite(patch.source.ledCount) || patch.source.ledCount <= 0) {
+        warnings.push({
+          code: 'off-count-invalid',
+          patchId: patch.id,
+          message: `${patch.name} must reserve at least one LED address.`,
+        });
+      }
       warnings.push({
         code: 'off-block',
         patchId: patch.id,

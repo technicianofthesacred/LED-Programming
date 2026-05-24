@@ -177,6 +177,26 @@ test('addOffPatch appends to board main chain and participates in expansion', ()
   assert.deepEqual(expanded.pixels.slice(-3).map(px => px.inactive === true), [true, true, true]);
 });
 
+test('validation reports non-positive off patch lengths', () => {
+  const board = {
+    physicalLocked: false,
+    chains: [{ id: 'main', name: 'Main physical strip', rowIds: ['off'] }],
+    groups: [],
+    patches: [{
+      id: 'off',
+      name: 'Bad off block',
+      groupId: null,
+      source: { type: 'off', ledCount: 0 },
+      output: { mode: 'off' },
+      playback: {},
+    }],
+  };
+
+  const warnings = validatePatchBoard(board, []);
+
+  assert.ok(warnings.some(w => w.code === 'off-count-invalid'));
+});
+
 test('patch playback inherits group playback and overrides explicit patch values', () => {
   const board = {
     physicalLocked: false,
