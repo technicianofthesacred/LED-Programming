@@ -1,14 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { requestAiPatternDraft } from '../lib/aiPatternClient.js';
+import { requestAiPatternDraft, requestAiProviderSettings, saveAiProviderSettings } from '../lib/aiPatternClient.js';
 import { validateAiPatternDraft } from '../lib/aiPatternDraft.js';
 import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
 
 const AI_PROVIDER_STORAGE_KEY = 'lw_ai_pattern_provider';
 const AI_PROVIDER_OPTIONS = [
-  { id: 'openai', label: 'ChatGPT', detail: 'OpenAI' },
-  { id: 'anthropic', label: 'Claude', detail: 'Anthropic' },
-  { id: 'openrouter', label: 'OpenRouter', detail: 'model router' },
+  { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyLabel: 'ChatGPT key' },
+  { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyLabel: 'Claude key' },
+  { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyLabel: 'OpenRouter key' },
 ];
+
+function getProviderOption(provider) {
+  return AI_PROVIDER_OPTIONS.find(option => option.id === provider) || AI_PROVIDER_OPTIONS[0];
+}
+
+function createSettingsDraft(provider) {
+  return {
+    provider: getProviderOption(provider).id,
+    keys: { openai: '', anthropic: '', openrouter: '' },
+  };
+}
 
 function getVisibleStrips(strips = [], hidden = {}) {
   return (Array.isArray(strips) ? strips : []).filter(strip => strip && !strip.hidden && !hidden[strip.id]);
@@ -61,6 +72,12 @@ export function AiPatternAssistant({
       return 'openai';
     }
   });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [settingsDraft, setSettingsDraft] = useState(() => createSettingsDraft('openai'));
+  const [settingsPending, setSettingsPending] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [settingsSaved, setSettingsSaved] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
 
@@ -86,6 +103,62 @@ export function AiPatternAssistant({
       localStorage.setItem(AI_PROVIDER_STORAGE_KEY, provider);
     } catch {}
   }, [provider]);
+
+  const loadProviderSettings = async () => {
+    setSettingsPending(true);
+    setSettingsError(null);
+    try {
+      const data = await requestAiProviderSettings();
+      const nextProvider = getProviderOption(data?.provider).id;
+      setSettings(data);
+      setProvider(nextProvider);
+      setSettingsDraft(createSettingsDraft(nextProvider));
+      return data;
+    } catch (settingsLoadError) {
+      setSettingsError(settingsLoadError.message);
+      return null;
+    } finally {
+      setSettingsPending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && !settings) {
+      loadProviderSettings();
+    }
+  }, [open, settings]);
+
+  const openSettingsPanel = () => {
+    setSettingsOpen(value => !value);
+    setSettingsSaved('');
+    if (!settings) loadProviderSettings();
+  };
+
+  const updateSettingsKey = (id, value) => {
+    setSettingsDraft(current => ({
+      ...current,
+      keys: { ...current.keys, [id]: value },
+    }));
+  };
+
+  const saveSettings = async (event) => {
+    event.preventDefault();
+    setSettingsPending(true);
+    setSettingsError(null);
+    setSettingsSaved('');
+    try {
+      const saved = await saveAiProviderSettings(settingsDraft);
+      const nextProvider = getProviderOption(saved?.provider).id;
+      setSettings(saved);
+      setProvider(nextProvider);
+      setSettingsDraft(createSettingsDraft(nextProvider));
+      setSettingsSaved(`Saved. ${getProviderOption(nextProvider).label} is active.`);
+    } catch (settingsSaveError) {
+      setSettingsError(settingsSaveError.message);
+    } finally {
+      setSettingsPending(false);
+    }
+  };
 
   const sendInstruction = async (modeOverride = null) => {
     const instruction = input.trim();
@@ -140,6 +213,8 @@ export function AiPatternAssistant({
       return trimmed ? `${trimmed}. ${text}` : text;
     });
   };
+  const providerOption = getProviderOption(provider);
+  const providerStatus = settings?.providers?.find(item => item.id === provider);
 
   return (
     <section className={`lw-ai-assistant ${open ? 'open' : ''}`}>
@@ -157,22 +232,70 @@ export function AiPatternAssistant({
           <div className="lw-ai-context">
             Transforming <strong>{sourcePattern?.name || patternId}</strong>
           </div>
-          <label className="lw-ai-provider">
-            <span>AI provider</span>
-            <select
-              aria-label="AI provider"
-              value={provider}
-              onChange={event => setProvider(event.target.value)}
-              disabled={pending}
-            >
-              {AI_PROVIDER_OPTIONS.map(option => (
-                <option value={option.id} key={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <em>{AI_PROVIDER_OPTIONS.find(option => option.id === provider)?.detail}</em>
-          </label>
+          <div className="lw-ai-provider">
+            <div>
+              <span>AI provider</span>
+              <strong>{providerOption.label}</strong>
+              <em>{providerStatus?.configured ? 'key saved' : 'needs key'}</em>
+            </div>
+            <button className="btn btn-ghost" type="button" onClick={openSettingsPanel}>
+              AI setup
+            </button>
+          </div>
+          {settingsOpen && (
+            <form className="lw-ai-settings" onSubmit={saveSettings}>
+              <div className="lw-ai-settings-head">
+                <h3>AI provider setup</h3>
+                <button className="btn btn-ghost" type="button" onClick={() => setSettingsOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <label className="lw-ai-settings-provider">
+                <span>Default AI provider</span>
+                <select
+                  aria-label="Default AI provider"
+                  value={settingsDraft.provider}
+                  onChange={event => setSettingsDraft(current => ({ ...current, provider: event.target.value }))}
+                  disabled={settingsPending}
+                >
+                  {AI_PROVIDER_OPTIONS.map(option => (
+                    <option value={option.id} key={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="lw-ai-key-list">
+                {AI_PROVIDER_OPTIONS.map(option => {
+                  const status = settings?.providers?.find(item => item.id === option.id);
+                  return (
+                    <label className="lw-ai-key-row" key={option.id}>
+                      <span>
+                        <strong>{option.keyLabel}</strong>
+                        <em>{status?.configured ? 'Saved on this computer. Paste a new key to replace it.' : `Paste ${option.detail} API key`}</em>
+                      </span>
+                      <input
+                        aria-label={option.keyLabel}
+                        type="password"
+                        autoComplete="off"
+                        value={settingsDraft.keys[option.id] || ''}
+                        onChange={event => updateSettingsKey(option.id, event.target.value)}
+                        placeholder={status?.configured ? 'saved, leave blank to keep' : 'paste key'}
+                        disabled={settingsPending}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              {settingsError && <div className="lw-ai-settings-error">{settingsError}</div>}
+              {settingsSaved && <div className="lw-ai-settings-saved">{settingsSaved}</div>}
+              <div className="lw-ai-settings-actions">
+                <button className="btn" type="submit" disabled={settingsPending}>
+                  {settingsPending ? 'Saving' : 'Save AI settings'}
+                </button>
+              </div>
+            </form>
+          )}
           <div className="lw-ai-workflow">
             <strong>Draft first, accept later</strong>
             <span>Generate creates a preview draft. Your live pattern changes only when you accept it.</span>

@@ -188,6 +188,87 @@ await withServer(missingOpenRouterKeyApp, async (baseUrl) => {
   assert.match(body.error.message, /OPENROUTER_API_KEY/);
 });
 
+await withTempRoot(async (rootDir) => {
+  let providerFetchCall = null;
+  const settingsApp = createLightweaverServer({
+    rootDir,
+    env: {},
+    fetchImpl: async (url, options) => {
+      providerFetchCall = { url, options, body: JSON.parse(options.body) };
+      return new Response(JSON.stringify({
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            name: 'Saved Claude Draft',
+            description: 'Generated with saved server-side settings.',
+            changeSummary: ['Used saved Anthropic key'],
+            palette: ['#00ffaa', '#6600aa'],
+            code: 'return hsv(time, 1, 1);',
+            suggestedParams: [],
+            notes: '',
+          }),
+        }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  await withServer(settingsApp, async (baseUrl) => {
+    const before = await fetchJson(`${baseUrl}/api/ai/settings`);
+    assert.equal(before.response.status, 200);
+    assert.equal(before.body.provider, 'openai');
+    assert.equal(before.body.providers.find(provider => provider.id === 'anthropic').configured, false);
+
+    const saved = await fetchJson(`${baseUrl}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'anthropic',
+        keys: { anthropic: 'anthropic-secret-test-key' },
+      }),
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.provider, 'anthropic');
+    assert.equal(saved.body.providers.find(provider => provider.id === 'anthropic').configured, true);
+    assert.equal(JSON.stringify(saved.body).includes('anthropic-secret-test-key'), false);
+
+    const generated = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instruction: 'make it smoother' }),
+    });
+    assert.equal(generated.response.status, 200);
+    assert.equal(generated.body.draft.name, 'Saved Claude Draft');
+    assert.equal(providerFetchCall.url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(providerFetchCall.options.headers['x-api-key'], 'anthropic-secret-test-key');
+    assert.equal(providerFetchCall.body.model, 'claude-sonnet-4-20250514');
+  });
+});
+
+await withTempRoot(async (rootDir) => {
+  const settingsAuthApp = createLightweaverServer({
+    rootDir,
+    env: { AI_PATTERN_AUTH_TOKEN: 'settings-secret' },
+  });
+
+  await withServer(settingsAuthApp, async (baseUrl) => {
+    const unauthorized = await fetchJson(`${baseUrl}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'anthropic', keys: { anthropic: 'secret' } }),
+    });
+    assert.equal(unauthorized.response.status, 401);
+    assert.equal(unauthorized.body.error.code, 'unauthorized');
+
+    const authorized = await fetchJson(`${baseUrl}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-lightweaver-ai-token': 'settings-secret' },
+      body: JSON.stringify({ provider: 'openrouter', keys: { openrouter: 'router-secret' } }),
+    });
+    assert.equal(authorized.response.status, 200);
+    assert.equal(authorized.body.provider, 'openrouter');
+  });
+});
+
 let authMissingProviderCalls = 0;
 const authMissingApp = createLightweaverServer({
   env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },

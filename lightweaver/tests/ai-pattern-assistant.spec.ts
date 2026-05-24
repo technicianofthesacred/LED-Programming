@@ -142,8 +142,37 @@ test('sends visible strip counts in AI project context', async ({ page }) => {
   });
 });
 
-test('lets the user choose the AI provider for pattern generation', async ({ page }) => {
+test('lets the user save AI provider keys and choose the generation provider', async ({ page }) => {
   let payload: any = null;
+  let settingsPayload: any = null;
+  await page.route('**/api/ai/settings', async route => {
+    if (route.request().method() === 'PUT') {
+      settingsPayload = route.request().postDataJSON();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          provider: settingsPayload.provider,
+          providers: [
+            { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
+            { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: true },
+            { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'openai',
+        providers: [
+          { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
+          { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
+          { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
+        ],
+      }),
+    });
+  });
   await page.route('**/api/ai/pattern', async route => {
     payload = route.request().postDataJSON();
     await route.fulfill({
@@ -153,12 +182,19 @@ test('lets the user choose the AI provider for pattern generation', async ({ pag
   });
 
   const assistant = await openPatternAssistant(page);
-  await expect(assistant.getByLabel('AI provider')).toBeVisible();
-  await assistant.getByLabel('AI provider').selectOption('anthropic');
+  await expect(assistant.getByText('ChatGPT')).toBeVisible();
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+  await expect(assistant.getByRole('heading', { name: 'AI provider setup' })).toBeVisible();
+  await assistant.getByLabel('Default AI provider').selectOption('anthropic');
+  await assistant.getByLabel('Claude key').fill('anthropic-secret-test-key');
+  await assistant.getByRole('button', { name: 'Save AI settings' }).click();
+  await expect(assistant.getByText('Saved. Claude is active.')).toBeVisible();
   await assistant.locator('textarea').fill('make this slower and smoother');
   await assistant.getByRole('button', { name: 'Generate' }).click();
 
   await expect(assistant.getByText('Claude Routed Draft')).toBeVisible();
+  expect(settingsPayload.provider).toBe('anthropic');
+  expect(settingsPayload.keys.anthropic).toBe('anthropic-secret-test-key');
   expect(payload.provider).toBe('anthropic');
 });
 

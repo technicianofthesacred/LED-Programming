@@ -137,18 +137,21 @@ For `refine`, `draftPattern` contains the current unapplied draft and `sourcePat
 Add a local server route:
 
 ```text
+GET /api/ai/settings
+PUT /api/ai/settings
 POST /api/ai/pattern
 ```
 
-The route is implemented in the existing Lightweaver server. It is responsible for:
+The routes are implemented in the existing Lightweaver server. They are responsible for:
 
-- Reading AI provider credentials from server-side environment variables.
+- Reading AI provider credentials from server-side environment variables or the local `.lightweaver-ai.local` settings file.
+- Saving pasted provider keys server-side without returning secret values to the browser.
 - Building the provider prompt from the request.
 - Enforcing structured JSON output.
 - Returning the parsed draft JSON to the browser.
 - Returning provider and validation errors in a user-readable form.
 
-The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser chooses a provider, but it must never receive or store provider API keys.
+The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser can choose and save the default provider, but it must never receive or store provider API keys.
 
 Environment variables:
 
@@ -288,7 +291,7 @@ Later versions can add:
 
 ## Implementation Notes
 
-The AI provider calls run on the Lightweaver server, not in the browser. OpenAI uses the JavaScript SDK and structured Responses output. Anthropic and OpenRouter use server-side HTTP calls and are normalized back into the same Lightweaver draft JSON object.
+The AI provider calls run on the Lightweaver server, not in the browser. OpenAI uses the JavaScript SDK and structured Responses output. Anthropic and OpenRouter use server-side HTTP calls and are normalized back into the same Lightweaver draft JSON object. The AI setup panel sends new key values to the server but the settings status endpoint returns only provider names, model choices, and configured/not-configured flags.
 
 The browser validates every draft with the local Lightweaver compiler and preview renderer before showing an Accept action. Built-in pattern transforms save as new custom patterns. Existing custom pattern transforms update in place and keep local revision history.
 

@@ -1,5 +1,7 @@
 import express from 'express';
 import OpenAI from 'openai';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 
@@ -12,6 +14,11 @@ export const AI_PATTERN_RATE_LIMIT = 20;
 export const AI_PATTERN_RATE_WINDOW_MS = 10 * 60 * 1000;
 
 export const AI_PATTERN_PROVIDERS = ['openai', 'anthropic', 'openrouter'];
+export const AI_PATTERN_PROVIDER_DETAILS = [
+  { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY' },
+  { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY' },
+  { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY' },
+];
 
 export const AiPatternDraftSchema = z.object({
   name: z.string().min(1).max(80),
@@ -155,6 +162,19 @@ const AiPatternRequestSchema = z.object({
     .default({}),
 });
 
+const AiProviderSettingsSchema = z.object({
+  provider: z.enum(AI_PATTERN_PROVIDERS).optional(),
+  keys: z
+    .object({
+      openai: z.string().trim().max(400).optional(),
+      anthropic: z.string().trim().max(400).optional(),
+      openrouter: z.string().trim().max(400).optional(),
+    })
+    .optional()
+    .default({}),
+  clearKeys: z.array(z.enum(AI_PATTERN_PROVIDERS)).optional().default([]),
+});
+
 export function getAiPatternProvider(env = process.env, requestedProvider = null) {
   return normalizeProvider(requestedProvider || env.AI_PATTERN_PROVIDER || DEFAULT_PROVIDER);
 }
@@ -163,6 +183,109 @@ export function getAiPatternModel(env = process.env, provider = getAiPatternProv
   const normalizedProvider = normalizeProvider(provider);
   const providerKey = `AI_PATTERN_${normalizedProvider.toUpperCase()}_MODEL`;
   return env[providerKey] || env.AI_PATTERN_MODEL || DEFAULT_PROVIDER_MODELS[normalizedProvider] || DEFAULT_MODEL;
+}
+
+async function readAiSettings(settingsPath) {
+  if (!settingsPath) return {};
+  try {
+    const text = await readFile(settingsPath, 'utf8');
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw Object.assign(new Error('AI provider settings could not be read.'), {
+      status: 500,
+      code: 'ai_settings_unreadable',
+    });
+  }
+}
+
+function normalizeSavedSettings(settings = {}) {
+  const keys = settings.keys && typeof settings.keys === 'object' && !Array.isArray(settings.keys)
+    ? settings.keys
+    : {};
+  const provider = String(settings.provider || '').trim().toLowerCase();
+  return {
+    provider: AI_PATTERN_PROVIDERS.includes(provider) ? provider : '',
+    keys: Object.fromEntries(
+      AI_PATTERN_PROVIDERS
+        .map(provider => [provider, typeof keys[provider] === 'string' ? keys[provider].trim() : ''])
+        .filter(([, value]) => value)
+    ),
+    updatedAt: typeof settings.updatedAt === 'string' ? settings.updatedAt : '',
+  };
+}
+
+function buildEffectiveEnv(env, savedSettings) {
+  const normalized = normalizeSavedSettings(savedSettings);
+  const merged = { ...env };
+  if (normalized.provider) merged.AI_PATTERN_PROVIDER = normalized.provider;
+  if (normalized.keys.openai) merged.OPENAI_API_KEY = normalized.keys.openai;
+  if (normalized.keys.anthropic) merged.ANTHROPIC_API_KEY = normalized.keys.anthropic;
+  if (normalized.keys.openrouter) merged.OPENROUTER_API_KEY = normalized.keys.openrouter;
+  return merged;
+}
+
+async function getEffectiveAiEnv(env, settingsPath) {
+  const savedSettings = await readAiSettings(settingsPath);
+  return buildEffectiveEnv(env, savedSettings);
+}
+
+function getAiSettingsStatus(env, savedSettings = {}) {
+  const effectiveEnv = buildEffectiveEnv(env, savedSettings);
+  const provider = getAiPatternProvider(effectiveEnv);
+  return {
+    provider,
+    providers: AI_PATTERN_PROVIDER_DETAILS.map(detail => ({
+      ...detail,
+      configured: !!effectiveEnv[detail.keyEnv],
+      source: savedSettings.keys?.[detail.id] ? 'saved' : env[detail.keyEnv] ? 'environment' : 'missing',
+      model: getAiPatternModel(effectiveEnv, detail.id),
+    })),
+  };
+}
+
+async function writeAiSettings(settingsPath, settings) {
+  if (!settingsPath) {
+    throw Object.assign(new Error('AI provider settings path is not configured.'), {
+      status: 500,
+      code: 'ai_settings_unwritable',
+    });
+  }
+  await mkdir(dirname(settingsPath), { recursive: true });
+  await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function saveAiSettings(env, settingsPath, payload) {
+  const parsed = AiProviderSettingsSchema.safeParse(payload || {});
+  if (!parsed.success) {
+    throw Object.assign(new Error('AI provider settings are invalid.'), {
+      status: 400,
+      code: 'invalid_settings',
+      issues: parsed.error.issues,
+    });
+  }
+
+  const current = normalizeSavedSettings(await readAiSettings(settingsPath));
+  const next = {
+    provider: normalizeProvider(parsed.data.provider || current.provider || env.AI_PATTERN_PROVIDER),
+    keys: { ...current.keys },
+    updatedAt: new Date().toISOString(),
+  };
+
+  for (const provider of parsed.data.clearKeys) {
+    delete next.keys[provider];
+  }
+
+  for (const provider of AI_PATTERN_PROVIDERS) {
+    const value = parsed.data.keys?.[provider];
+    if (typeof value === 'string' && value.trim()) {
+      next.keys[provider] = value.trim();
+    }
+  }
+
+  await writeAiSettings(settingsPath, next);
+  return getAiSettingsStatus(env, next);
 }
 
 export function validateAiPatternRequest(payload) {
@@ -476,10 +599,49 @@ export function createAiPatternRouter({
   client = null,
   createOpenAiClient = (options) => new OpenAI(options),
   fetchImpl = globalThis.fetch,
+  settingsPath = null,
   rateLimitStore = new Map(),
   now = () => Date.now(),
 } = {}) {
   const router = express.Router();
+
+  router.get('/settings', async (req, res) => {
+    if (!hasValidAuthToken(req, env)) {
+      return res.status(401).json({
+        error: {
+          code: 'unauthorized',
+          message: 'AI pattern access is not authorized.',
+        },
+      });
+    }
+
+    try {
+      const savedSettings = await readAiSettings(settingsPath);
+      return res.json(getAiSettingsStatus(env, savedSettings));
+    } catch (error) {
+      const normalized = normalizeAiProviderError(error);
+      return res.status(normalized.status).json({ error: normalized });
+    }
+  });
+
+  router.put('/settings', async (req, res) => {
+    if (!hasValidAuthToken(req, env)) {
+      return res.status(401).json({
+        error: {
+          code: 'unauthorized',
+          message: 'AI pattern access is not authorized.',
+        },
+      });
+    }
+
+    try {
+      const status = await saveAiSettings(env, settingsPath, req.body || {});
+      return res.json(status);
+    } catch (error) {
+      const normalized = normalizeAiProviderError(error);
+      return res.status(normalized.status).json({ error: normalized });
+    }
+  });
 
   router.post('/pattern', async (req, res) => {
     const parsedRequest = validateAiPatternRequest(req.body || {});
@@ -511,8 +673,16 @@ export function createAiPatternRouter({
       });
     }
 
-    const provider = getAiPatternProvider(env, parsedRequest.data.provider);
-    const apiKey = getProviderApiKey(env, provider);
+    let effectiveEnv = env;
+    try {
+      effectiveEnv = await getEffectiveAiEnv(env, settingsPath);
+    } catch (error) {
+      const normalized = normalizeAiProviderError(error);
+      return res.status(normalized.status).json({ error: normalized });
+    }
+
+    const provider = getAiPatternProvider(effectiveEnv, parsedRequest.data.provider);
+    const apiKey = getProviderApiKey(effectiveEnv, provider);
     if (!apiKey && !(provider === 'openai' && client)) {
       const error = missingApiKeyError(provider);
       return res.status(error.status).json({ error });
@@ -520,10 +690,10 @@ export function createAiPatternRouter({
 
     try {
       const draft = provider === 'anthropic'
-        ? await requestAnthropicDraft({ env, fetchImpl, requestData: parsedRequest.data })
+        ? await requestAnthropicDraft({ env: effectiveEnv, fetchImpl, requestData: parsedRequest.data })
         : provider === 'openrouter'
-          ? await requestOpenRouterDraft({ env, fetchImpl, requestData: parsedRequest.data })
-          : await requestOpenAiDraft({ env, client, createOpenAiClient, requestData: parsedRequest.data });
+          ? await requestOpenRouterDraft({ env: effectiveEnv, fetchImpl, requestData: parsedRequest.data })
+          : await requestOpenAiDraft({ env: effectiveEnv, client, createOpenAiClient, requestData: parsedRequest.data });
       return res.json({ draft });
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
