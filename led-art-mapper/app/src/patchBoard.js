@@ -128,9 +128,31 @@ function sourceLedRange(startLed, endLed) {
   return values;
 }
 
+function stripLedBounds(strip) {
+  return { minLed: 0, maxLed: (strip.pixels?.length ?? strip.pixelCount ?? 0) - 1 };
+}
+
+function validStripRange(source, strip) {
+  const startLed = ledIndexOrNull(source?.startLed);
+  const endLed = ledIndexOrNull(source?.endLed);
+  if (startLed === null || endLed === null) {
+    return { valid: false, reason: 'malformed', startLed, endLed };
+  }
+
+  const { minLed, maxLed } = stripLedBounds(strip);
+  if (startLed < minLed || endLed < minLed || startLed > maxLed || endLed > maxLed) {
+    return { valid: false, reason: 'out-of-range', startLed, endLed, maxLed };
+  }
+
+  return { valid: true, startLed, endLed, maxLed };
+}
+
 function expandStripPatch(patch, strip, startIndex, resolvedPlayback) {
+  const rangeInfo = validStripRange(patch.source, strip);
+  if (!rangeInfo.valid) return [];
+
   const pixels = [];
-  const range = sourceLedRange(patch.source.startLed, patch.source.endLed);
+  const range = sourceLedRange(rangeInfo.startLed, rangeInfo.endLed);
   for (const sourceLed of range) {
     const sourcePixel = strip.pixels?.[sourceLed];
     if (!sourcePixel) continue;
@@ -290,10 +312,8 @@ export function validatePatchBoard(board, strips = []) {
       continue;
     }
 
-    const maxLed = (strip.pixels?.length ?? strip.pixelCount ?? 0) - 1;
-    const startLed = ledIndexOrNull(patch.source.startLed);
-    const endLed = ledIndexOrNull(patch.source.endLed);
-    if (startLed === null || endLed === null) {
+    const rangeInfo = validStripRange(patch.source, strip);
+    if (rangeInfo.reason === 'malformed') {
       warnings.push({
         code: 'range-invalid',
         patchId: patch.id,
@@ -302,16 +322,16 @@ export function validatePatchBoard(board, strips = []) {
       continue;
     }
 
-    if (startLed < 0 || endLed < 0 || startLed > maxLed || endLed > maxLed) {
+    if (rangeInfo.reason === 'out-of-range') {
       warnings.push({
         code: 'endpoint-out-of-range',
         patchId: patch.id,
-        message: `${patch.name} uses LEDs ${patch.source.startLed}-${patch.source.endLed}, but ${strip.name || strip.id} has LEDs 0-${maxLed}.`,
+        message: `${patch.name} uses LEDs ${patch.source.startLed}-${patch.source.endLed}, but ${strip.name || strip.id} has LEDs 0-${rangeInfo.maxLed}.`,
       });
       continue;
     }
 
-    for (const led of sourceLedRange(startLed, endLed)) {
+    for (const led of sourceLedRange(rangeInfo.startLed, rangeInfo.endLed)) {
       const key = `${patch.source.stripId}:${led}`;
       if (seenSourceLeds.has(key)) {
         warnings.push({

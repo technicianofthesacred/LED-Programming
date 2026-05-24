@@ -276,6 +276,28 @@ test('validation reports malformed ranges without expanding them', () => {
   assert.equal(expanded.pixels.length, 0);
 });
 
+test('expansion skips finite out-of-range endpoints instead of partially expanding them', () => {
+  const strips = [makeStrip('layer-1', 5)];
+  const board = {
+    physicalLocked: false,
+    chains: [{ id: 'main', name: 'Main physical strip', rowIds: ['bad'] }],
+    groups: [],
+    patches: [{
+      id: 'bad',
+      name: 'Huge bad range',
+      groupId: null,
+      source: { type: 'strip', stripId: 'layer-1', startLed: 0, endLed: 50000 },
+      output: { mode: 'normal' },
+      playback: {},
+    }],
+  };
+
+  const expanded = expandPatchBoard(board, strips);
+
+  assert.ok(expanded.warnings.some(w => w.code === 'endpoint-out-of-range'));
+  assert.equal(expanded.pixels.length, 0);
+});
+
 test('validation reports stacked ranges and out-of-range endpoints', () => {
   const strips = [makeStrip('layer-1', 5)];
   const board = {
