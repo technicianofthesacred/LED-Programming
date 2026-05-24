@@ -184,14 +184,6 @@ textarea,
 
 .lw-topbar-actions { display: flex; gap: var(--s-2); align-items: center; }
 .lw-topbar-actions .btn-ghost { padding: 5px 10px; }
-.lw-version-link {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: var(--fs-sm); font-weight: 600; padding: 5px 10px;
-  border: 1px solid var(--accent); border-radius: var(--radius);
-  color: var(--accent); text-decoration: none;
-  opacity: 0.75; transition: opacity 0.15s;
-}
-.lw-version-link:hover { opacity: 1; }
 
 /* ── Left rail (mode nav) ───────────────────────────────────────── */
 .lw-main {
@@ -2266,7 +2258,6 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   }
 
   .lw-projbreadcrumbs,
-  .lw-version-link,
   .lw-topbar-actions .btn:not(:first-child):not(:last-child) {
     display: none;
   }
