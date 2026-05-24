@@ -8,6 +8,7 @@ import {
   movePatch,
   normalizePatchBoard,
   resolvePatchPlayback,
+  sliceStripIntoPatches,
   updatePatchRange,
   validatePatchBoard,
 } from './patchBoard.js';
@@ -141,6 +142,42 @@ test('custom range updates opt out of generated full-strip tracking', () => {
   assert.equal(normalized.patches[0].source.autoRange, false);
   assert.equal(normalized.patches[0].source.startLed, 1);
   assert.equal(normalized.patches[0].source.endLed, 3);
+});
+
+test('sliceStripIntoPatches turns visual cut marks into ordered strip patches', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+
+  sliceStripIntoPatches(board, strip, [2, 5]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-2',
+    'patch-outer-3-5',
+    'patch-outer-6-7',
+  ]);
+  assert.deepEqual(board.patches.map(p => p.source), [
+    { type: 'strip', stripId: 'outer', startLed: 0, endLed: 2, autoRange: false },
+    { type: 'strip', stripId: 'outer', startLed: 3, endLed: 5, autoRange: false },
+    { type: 'strip', stripId: 'outer', startLed: 6, endLed: 7, autoRange: false },
+  ]);
+});
+
+test('sliceStripIntoPatches preserves off blocks and other strip patches', () => {
+  const outer = makeStrip('outer', 6);
+  const inner = makeStrip('inner', 4);
+  const board = createDefaultPatchBoard([outer, inner]);
+  const offPatch = addOffPatch(board, 2);
+
+  sliceStripIntoPatches(board, outer, [2, 2, 0, 9]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-2',
+    'patch-outer-3-5',
+    'patch-inner',
+    offPatch.id,
+  ]);
+  assert.equal(board.patches.some(patch => patch.id === 'patch-inner'), true);
+  assert.equal(board.patches.some(patch => patch.id === offPatch.id), true);
 });
 
 test('normalization prunes deleted generated strip patches but keeps custom rows', () => {

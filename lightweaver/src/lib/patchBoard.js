@@ -330,6 +330,77 @@ export function movePatch(board, patchId, direction) {
   return board;
 }
 
+function patchForStripSegment(strip, startLed, endLed, segmentIndex, segmentCount) {
+  const isFullStrip = startLed === 0 && endLed === maxLedForStrip(strip) && segmentCount === 1;
+  return {
+    id: isFullStrip ? patchIdForStrip(strip) : `patch-${strip.id}-${startLed}-${endLed}`,
+    name: isFullStrip
+      ? (strip.name || strip.id)
+      : `${strip.name || strip.id} ${segmentIndex + 1}`,
+    groupId: null,
+    source: {
+      type: 'strip',
+      stripId: strip.id,
+      startLed,
+      endLed,
+      autoRange: isFullStrip,
+    },
+    output: { mode: strip.visible === false ? 'off' : 'normal' },
+    playback: {
+      patternId: null,
+      speed: strip.speed ?? null,
+      brightness: strip.brightness ?? null,
+      hueShift: strip.hueShift ?? null,
+      enabled: strip.visible === false ? false : null,
+    },
+  };
+}
+
+export function sliceStripIntoPatches(board, strip, cutIndexes = []) {
+  if (board.physicalLocked) {
+    throw new Error('Unlock setup mode before changing physical patch ranges.');
+  }
+  const maxLed = maxLedForStrip(strip);
+  if (maxLed < 0) return board;
+
+  const cuts = [...new Set((cutIndexes || [])
+    .map(value => ledIndexOrNull(value))
+    .filter(value => value !== null && value > 0 && value < maxLed))]
+    .sort((a, b) => a - b);
+
+  const ranges = [];
+  let startLed = 0;
+  for (const cut of cuts) {
+    ranges.push([startLed, cut]);
+    startLed = cut + 1;
+  }
+  ranges.push([startLed, maxLed]);
+
+  const nextPatches = ranges.map(([start, end], index) =>
+    patchForStripSegment(strip, start, end, index, ranges.length));
+  const selectedPatchIds = new Set(
+    board.patches
+      .filter(patch => patch.source?.type === 'strip' && patch.source.stripId === strip.id)
+      .map(patch => patch.id),
+  );
+  const firstPatchIndex = board.patches.findIndex(
+    patch => patch.source?.type === 'strip' && patch.source.stripId === strip.id,
+  );
+  const retainedPatches = board.patches.filter(
+    patch => !(patch.source?.type === 'strip' && patch.source.stripId === strip.id),
+  );
+  const insertPatchIndex = firstPatchIndex >= 0 ? firstPatchIndex : retainedPatches.length;
+  retainedPatches.splice(insertPatchIndex, 0, ...nextPatches);
+  board.patches = retainedPatches;
+
+  const chain = mutableMainChain(board);
+  const firstRowIndex = chain.rowIds.findIndex(rowId => selectedPatchIds.has(rowId));
+  chain.rowIds = chain.rowIds.filter(rowId => !selectedPatchIds.has(rowId));
+  const insertRowIndex = firstRowIndex >= 0 ? firstRowIndex : chain.rowIds.length;
+  chain.rowIds.splice(insertRowIndex, 0, ...nextPatches.map(patch => patch.id));
+  return board;
+}
+
 export function addOffPatch(board, ledCount = 1) {
   if (board.physicalLocked) {
     throw new Error('Unlock setup mode before changing physical patch order.');

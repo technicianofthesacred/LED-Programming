@@ -11,6 +11,7 @@ import {
 } from '../lib/frameEngine.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { PatchBoardScreen } from './PatchBoardScreen.jsx';
+import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -1768,6 +1769,53 @@ export function LayoutScreen() {
     return Object.fromEntries(strips.map(s => [s.id, offsetArrow(calcArrow(s.pathData, s.reversed ?? false), s.x || 0, s.y || 0)]));
   }, [strips, isEditingGesture]);
 
+  const wirePathCanvasSegments = useMemo(() => {
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
+    const stripsById = new Map(strips.map(strip => [strip.id, strip]));
+    const byStrip = new Map();
+    mainChain(board).rowIds.forEach((patchId, order) => {
+      const patch = patchesById.get(patchId);
+      if (patch?.source?.type !== 'strip') return;
+      const list = byStrip.get(patch.source.stripId) || [];
+      list.push({ patch, order });
+      byStrip.set(patch.source.stripId, list);
+    });
+
+    const segments = [];
+    byStrip.forEach((items, stripId) => {
+      if (hidden[stripId]) return;
+      const strip = stripsById.get(stripId);
+      if (!strip?.pixels?.length) return;
+      const hasPartialRange = items.some(({ patch }) => {
+        const start = Number(patch.source.startLed);
+        const end = Number(patch.source.endLed);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+        return Math.min(start, end) > 0 || Math.max(start, end) < strip.pixels.length - 1;
+      });
+      if (items.length < 2 && !hasPartialRange) return;
+      items.forEach(({ patch, order }) => {
+        const start = Number(patch.source.startLed);
+        const end = Number(patch.source.endLed);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+        const min = Math.min(start, end);
+        const max = Math.max(start, end);
+        const points = strip.pixels
+          .filter((point, index) => index >= min && index <= max)
+          .map(point => ({ x: point.x, y: point.y }));
+        if (points.length < 2) return;
+        segments.push({
+          id: patch.id,
+          color: strip.color || 'var(--accent)',
+          order,
+          points,
+          mid: points[Math.floor(points.length / 2)],
+        });
+      });
+    });
+    return segments;
+  }, [project.patchBoard, strips, hidden]);
+
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
   const selectedStrips = useMemo(() => {
     const selected = new Set(selectedStripIds);
@@ -2334,6 +2382,35 @@ export function LayoutScreen() {
                 </g>
               );
             })}
+
+            {!isEditingGesture && wirePathCanvasSegments.length > 0 && (
+              <g className="lw-wire-canvas-segments" style={{ pointerEvents: 'none' }}>
+                {wirePathCanvasSegments.map(segment => (
+                  <g key={segment.id}>
+                    <polyline
+                      points={segment.points.map(point => `${point.x},${point.y}`).join(' ')}
+                      className="lw-wire-canvas-segment"
+                      style={{ '--wire-color': segment.color }}
+                    />
+                    <circle
+                      cx={segment.mid.x}
+                      cy={segment.mid.y}
+                      r={vbScale * 7}
+                      className="lw-wire-canvas-segment-badge"
+                      style={{ '--wire-color': segment.color }}
+                    />
+                    <text
+                      x={segment.mid.x}
+                      y={segment.mid.y + vbScale * 3.2}
+                      className="lw-wire-canvas-segment-label"
+                      fontSize={vbScale * 8}
+                    >
+                      {segment.order + 1}
+                    </text>
+                  </g>
+                ))}
+              </g>
+            )}
 
             {/* ── LED dots — white so they read clearly against any strip color ── */}
             {showLeds && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
@@ -3077,7 +3154,7 @@ export function LayoutScreen() {
 	                </div>
 	              </div>
 	            )}
-	            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+	            <div ref={stripListRef} style={{ flex: '0 0 auto', overflow: 'auto', minHeight: 0, maxHeight: 220 }}>
 	              {strips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
@@ -3269,10 +3346,10 @@ export function LayoutScreen() {
         )}
 
         {strips.length > 0 && (
-          <details className="lw-patch-details">
+          <details className="lw-patch-details" open>
             <summary>
-              <span>Physical mapping</span>
-              <span>{strips.length} sections · export order</span>
+              <span>Wire Path</span>
+              <span>{strips.length} paths · visual order</span>
             </summary>
             <PatchBoardScreen embedded />
           </details>
