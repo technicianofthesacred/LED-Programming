@@ -234,6 +234,11 @@ function _expandedPatchPixels() {
   });
 }
 
+function _exportPixels() {
+  const expanded = _expandedPatchPixels();
+  return expanded.pixels.length > 0 ? expanded.pixels : _allWorldPixels();
+}
+
 function renderPatchBoard() {
   try {
     validatePatchBoard(_ensurePatchBoard(), state.strips);
@@ -2669,12 +2674,26 @@ function syncExportInfo() {
 }
 
 function refreshExportPreview() {
-  const pixels = _allWorldPixels();
+  const pixels = _exportPixels();
   const el     = document.getElementById('export-preview');
-  if (!pixels.length) { el.textContent = '(no sections defined)'; return; }
+  if (!pixels.length) {
+    el.textContent = '(no sections defined)';
+    renderPatchBoardWarnings();
+    return;
+  }
   const full  = toWLEDLedmap(pixels, _exportOpts());
   // Feature 10: show full export preview without truncation
   el.textContent = full;
+  renderPatchBoardWarnings();
+}
+
+function renderPatchBoardWarnings() {
+  const el = document.getElementById('patch-board-warnings');
+  if (!el) return;
+  const warnings = validatePatchBoard(_ensurePatchBoard(), state.strips);
+  el.innerHTML = warnings.length
+    ? warnings.map(w => `<div class="pb-warning">${w.message}</div>`).join('')
+    : '<div class="pb-ok">Patch Board ready</div>';
 }
 
 // ── Feature 13: Physical scale overlay ───────────────────────────────────
@@ -4380,17 +4399,17 @@ document.getElementById('btn-play-toolbar').addEventListener('click', () => {
 
 // Export
 document.getElementById('btn-export-wled').addEventListener('click', () => {
-  const pixels = _allWorldPixels();
+  const pixels = _exportPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toWLEDLedmap(pixels, _exportOpts()), 'ledmap.json');
 });
 document.getElementById('btn-export-fastled').addEventListener('click', () => {
-  const pixels = _allWorldPixels();
+  const pixels = _exportPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toFastLED(pixels, _exportOpts()), 'ledmap.h', 'text/plain');
 });
 document.getElementById('btn-export-csv').addEventListener('click', () => {
-  const pixels = _allWorldPixels();
+  const pixels = _exportPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toCSV(pixels), 'ledmap.csv', 'text/csv');
 });
