@@ -1,5 +1,6 @@
 import express from 'express';
 import OpenAI from 'openai';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
@@ -175,6 +176,10 @@ const AiProviderSettingsSchema = z.object({
   clearKeys: z.array(z.enum(AI_PATTERN_PROVIDERS)).optional().default([]),
 });
 
+const OpenRouterOAuthStartSchema = z.object({
+  returnTo: z.string().trim().max(1000).optional(),
+});
+
 export function getAiPatternProvider(env = process.env, requestedProvider = null) {
   return normalizeProvider(requestedProvider || env.AI_PATTERN_PROVIDER || DEFAULT_PROVIDER);
 }
@@ -286,6 +291,47 @@ async function saveAiSettings(env, settingsPath, payload) {
 
   await writeAiSettings(settingsPath, next);
   return getAiSettingsStatus(env, next);
+}
+
+function createCodeVerifier() {
+  return randomBytes(32).toString('base64url');
+}
+
+function createCodeChallenge(verifier) {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+function getRequestOrigin(req) {
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+function getConnectedReturnTo(req, returnTo) {
+  const origin = getRequestOrigin(req);
+  let url;
+  try {
+    url = returnTo ? new URL(returnTo, origin) : new URL('/#screen=pattern', origin);
+  } catch {
+    url = new URL('/#screen=pattern', origin);
+  }
+  if (url.origin !== origin) {
+    url = new URL('/#screen=pattern', origin);
+  }
+  const hashParams = new URLSearchParams((url.hash || '#screen=pattern').slice(1));
+  if (!hashParams.get('screen')) hashParams.set('screen', 'pattern');
+  hashParams.set('aiSetup', 'connected');
+  url.hash = hashParams.toString();
+  return url.toString();
+}
+
+function createOpenRouterAuthorizationUrl(req, { state, codeChallenge }) {
+  const callbackUrl = new URL('/api/ai/openrouter/oauth/callback', getRequestOrigin(req));
+  callbackUrl.searchParams.set('state', state);
+
+  const authorizationUrl = new URL('https://openrouter.ai/auth');
+  authorizationUrl.searchParams.set('callback_url', callbackUrl.toString());
+  authorizationUrl.searchParams.set('code_challenge', codeChallenge);
+  authorizationUrl.searchParams.set('code_challenge_method', 'S256');
+  return authorizationUrl.toString();
 }
 
 export function validateAiPatternRequest(payload) {
@@ -600,6 +646,7 @@ export function createAiPatternRouter({
   createOpenAiClient = (options) => new OpenAI(options),
   fetchImpl = globalThis.fetch,
   settingsPath = null,
+  oauthStateStore = new Map(),
   rateLimitStore = new Map(),
   now = () => Date.now(),
 } = {}) {
@@ -640,6 +687,78 @@ export function createAiPatternRouter({
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
       return res.status(normalized.status).json({ error: normalized });
+    }
+  });
+
+  router.post('/openrouter/oauth/start', async (req, res) => {
+    if (!hasValidAuthToken(req, env)) {
+      return res.status(401).json({
+        error: {
+          code: 'unauthorized',
+          message: 'AI pattern access is not authorized.',
+        },
+      });
+    }
+
+    const parsed = OpenRouterOAuthStartSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: {
+          code: 'invalid_oauth_start',
+          message: 'OpenRouter account connection request is invalid.',
+          issues: parsed.error.issues,
+        },
+      });
+    }
+
+    const state = randomBytes(18).toString('base64url');
+    const codeVerifier = createCodeVerifier();
+    const codeChallenge = createCodeChallenge(codeVerifier);
+    oauthStateStore.set(state, {
+      codeVerifier,
+      returnTo: getConnectedReturnTo(req, parsed.data.returnTo),
+      createdAt: Date.now(),
+    });
+
+    return res.json({
+      authorizationUrl: createOpenRouterAuthorizationUrl(req, { state, codeChallenge }),
+    });
+  });
+
+  router.get('/openrouter/oauth/callback', async (req, res) => {
+    const state = String(req.query.state || '');
+    const code = String(req.query.code || '');
+    const oauthState = oauthStateStore.get(state);
+    oauthStateStore.delete(state);
+
+    if (!state || !code || !oauthState) {
+      return res.status(400).send('OpenRouter account connection could not be verified.');
+    }
+
+    try {
+      const data = await postProviderJson('https://openrouter.ai/api/v1/auth/keys', {
+        fetchImpl,
+        headers: { 'content-type': 'application/json' },
+        body: {
+          code,
+          code_verifier: oauthState.codeVerifier,
+          code_challenge_method: 'S256',
+        },
+      });
+      if (!data?.key || typeof data.key !== 'string') {
+        throw Object.assign(new Error('OpenRouter did not return a usable account credential.'), {
+          status: 502,
+          code: 'invalid_openrouter_oauth_response',
+        });
+      }
+      await saveAiSettings(env, settingsPath, {
+        provider: 'openrouter',
+        keys: { openrouter: data.key },
+      });
+      return res.redirect(oauthState.returnTo);
+    } catch (error) {
+      const normalized = normalizeAiProviderError(error);
+      return res.status(normalized.status).send(normalized.message);
     }
   });
 

@@ -67,3 +67,16 @@ export async function saveAiProviderSettings(payload, {
   });
   return readAiJsonResponse(response, `AI settings save failed with HTTP ${response.status}`);
 }
+
+export async function startOpenRouterAccountConnection(payload = {}, {
+  fetchImpl = globalThis.fetch,
+  token = getStoredAiPatternToken(),
+} = {}) {
+  if (!fetchImpl) throw new Error('fetch is not available');
+  const response = await fetchImpl('/api/ai/openrouter/oauth/start', {
+    method: 'POST',
+    headers: buildAiHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  return readAiJsonResponse(response, `OpenRouter account connection failed with HTTP ${response.status}`);
+}

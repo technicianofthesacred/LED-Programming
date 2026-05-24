@@ -198,6 +198,42 @@ test('lets the user save AI provider keys and choose the generation provider', a
   expect(payload.provider).toBe('anthropic');
 });
 
+test('offers OpenRouter account OAuth as the primary AI setup path', async ({ page }) => {
+  let oauthRequested = false;
+  await page.route('**/api/ai/settings', async route => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        provider: 'openai',
+        providers: [
+          { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
+          { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
+          { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
+        ],
+      }),
+    });
+  });
+  await page.route('**/api/ai/openrouter/oauth/start', async route => {
+    oauthRequested = true;
+    const payload = route.request().postDataJSON();
+    expect(payload.returnTo).toContain('/#screen=pattern');
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ authorizationUrl: 'https://openrouter.ai/auth?callback_url=http%3A%2F%2Flocalhost%3A9997%2Fapi%2Fai%2Fopenrouter%2Foauth%2Fcallback' }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+
+  await expect(assistant.getByRole('button', { name: 'Connect OpenRouter account' })).toBeVisible();
+  await expect(assistant.getByText('ChatGPT and Claude account login are not available directly here.')).toBeVisible();
+  await assistant.getByRole('button', { name: 'Connect OpenRouter account' }).click();
+
+  await expect.poll(() => oauthRequested).toBe(true);
+  await expect(page).toHaveURL(/openrouter\.ai/);
+});
+
 test('clears the AI draft when the selected pattern changes', async ({ page }) => {
   await page.route('**/api/ai/pattern', async route => {
     await route.fulfill({

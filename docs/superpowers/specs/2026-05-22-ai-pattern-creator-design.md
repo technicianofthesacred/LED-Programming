@@ -139,6 +139,8 @@ Add a local server route:
 ```text
 GET /api/ai/settings
 PUT /api/ai/settings
+POST /api/ai/openrouter/oauth/start
+GET /api/ai/openrouter/oauth/callback
 POST /api/ai/pattern
 ```
 
@@ -146,12 +148,13 @@ The routes are implemented in the existing Lightweaver server. They are responsi
 
 - Reading AI provider credentials from server-side environment variables or the local `.lightweaver-ai.local` settings file.
 - Saving pasted provider keys server-side without returning secret values to the browser.
+- Connecting an OpenRouter account through OAuth PKCE and saving the exchanged OpenRouter credential server-side.
 - Building the provider prompt from the request.
 - Enforcing structured JSON output.
 - Returning the parsed draft JSON to the browser.
 - Returning provider and validation errors in a user-readable form.
 
-The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser can choose and save the default provider, but it must never receive or store provider API keys.
+The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser can choose and save the default provider, but it must never receive or store provider API keys. OpenRouter account connection is the primary no-key setup path. Direct ChatGPT and Claude consumer account OAuth is not available for model API calls, so those remain manual-key or OpenRouter-routed options.
 
 Environment variables:
 
@@ -292,6 +295,8 @@ Later versions can add:
 ## Implementation Notes
 
 The AI provider calls run on the Lightweaver server, not in the browser. OpenAI uses the JavaScript SDK and structured Responses output. Anthropic and OpenRouter use server-side HTTP calls and are normalized back into the same Lightweaver draft JSON object. The AI setup panel sends new key values to the server but the settings status endpoint returns only provider names, model choices, and configured/not-configured flags.
+
+OpenRouter OAuth uses PKCE. Lightweaver creates a code verifier/challenge, sends the browser to OpenRouter, exchanges the returned code for a user-controlled OpenRouter credential on the server, then saves it into `.lightweaver-ai.local` and switches the active provider to OpenRouter.
 
 The browser validates every draft with the local Lightweaver compiler and preview renderer before showing an Accept action. Built-in pattern transforms save as new custom patterns. Existing custom pattern transforms update in place and keep local revision history.
 

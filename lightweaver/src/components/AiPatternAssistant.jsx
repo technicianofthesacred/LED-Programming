@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { requestAiPatternDraft, requestAiProviderSettings, saveAiProviderSettings } from '../lib/aiPatternClient.js';
+import {
+  requestAiPatternDraft,
+  requestAiProviderSettings,
+  saveAiProviderSettings,
+  startOpenRouterAccountConnection,
+} from '../lib/aiPatternClient.js';
 import { validateAiPatternDraft } from '../lib/aiPatternDraft.js';
 import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
 
@@ -19,6 +24,14 @@ function createSettingsDraft(provider) {
     provider: getProviderOption(provider).id,
     keys: { openai: '', anthropic: '', openrouter: '' },
   };
+}
+
+function hasCompletedAiSetupConnection() {
+  try {
+    return new URLSearchParams(window.location.hash.slice(1)).get('aiSetup') === 'connected';
+  } catch {
+    return false;
+  }
 }
 
 function getVisibleStrips(strips = [], hidden = {}) {
@@ -59,7 +72,8 @@ export function AiPatternAssistant({
   onAcceptDraft,
 }) {
   const requestIdRef = useRef(0);
-  const [open, setOpen] = useState(false);
+  const connectedOnLoad = hasCompletedAiSetupConnection();
+  const [open, setOpen] = useState(connectedOnLoad);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [draft, setDraft] = useState(null);
@@ -72,12 +86,12 @@ export function AiPatternAssistant({
       return 'openai';
     }
   });
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(connectedOnLoad);
   const [settings, setSettings] = useState(null);
   const [settingsDraft, setSettingsDraft] = useState(() => createSettingsDraft('openai'));
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
-  const [settingsSaved, setSettingsSaved] = useState('');
+  const [settingsSaved, setSettingsSaved] = useState(connectedOnLoad ? 'Connected OpenRouter account.' : '');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
 
@@ -156,6 +170,24 @@ export function AiPatternAssistant({
     } catch (settingsSaveError) {
       setSettingsError(settingsSaveError.message);
     } finally {
+      setSettingsPending(false);
+    }
+  };
+
+  const connectOpenRouterAccount = async () => {
+    setSettingsPending(true);
+    setSettingsError(null);
+    setSettingsSaved('');
+    try {
+      const returnTo = `${window.location.origin}${window.location.pathname}#screen=pattern`;
+      const data = await startOpenRouterAccountConnection({ returnTo });
+      if (data?.authorizationUrl) {
+        window.location.assign(data.authorizationUrl);
+        return;
+      }
+      throw new Error('OpenRouter did not return a sign-in URL.');
+    } catch (connectionError) {
+      setSettingsError(connectionError.message);
       setSettingsPending(false);
     }
   };
@@ -248,6 +280,21 @@ export function AiPatternAssistant({
                 <h3>AI provider setup</h3>
                 <button className="btn btn-ghost" type="button" onClick={() => setSettingsOpen(false)}>
                   Close
+                </button>
+              </div>
+              <div className="lw-ai-account-connect">
+                <div>
+                  <strong>Use your account</strong>
+                  <span>Connect OpenRouter, then choose OpenAI, Claude, or other models through that account.</span>
+                  <em>ChatGPT and Claude account login are not available directly here.</em>
+                </div>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={connectOpenRouterAccount}
+                  disabled={settingsPending}
+                >
+                  Connect OpenRouter account
                 </button>
               </div>
               <label className="lw-ai-settings-provider">

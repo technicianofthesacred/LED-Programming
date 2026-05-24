@@ -733,6 +733,37 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
   font-size: var(--fs-sm);
   font-weight: 600;
 }
+.lw-ai-account-connect {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+.lw-ai-account-connect > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.lw-ai-account-connect strong {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.lw-ai-account-connect span {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+.lw-ai-account-connect em {
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  line-height: 1.3;
+}
 .lw-ai-settings-provider,
 .lw-ai-key-row {
   display: grid;
@@ -2673,7 +2704,8 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   }
 
   .lw-ai-settings-provider,
-  .lw-ai-key-row {
+  .lw-ai-key-row,
+  .lw-ai-account-connect {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
   }

@@ -269,6 +269,52 @@ await withTempRoot(async (rootDir) => {
   });
 });
 
+await withTempRoot(async (rootDir) => {
+  let exchangeCall = null;
+  const oauthApp = createLightweaverServer({
+    rootDir,
+    env: {},
+    fetchImpl: async (url, options) => {
+      exchangeCall = { url, options, body: JSON.parse(options.body) };
+      return new Response(JSON.stringify({ key: 'sk-or-oauth-test-key' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+
+  await withServer(oauthApp, async (baseUrl) => {
+    const started = await fetchJson(`${baseUrl}/api/ai/openrouter/oauth/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ returnTo: `${baseUrl}/#screen=pattern` }),
+    });
+    assert.equal(started.response.status, 200);
+    const authUrl = new URL(started.body.authorizationUrl);
+    assert.equal(`${authUrl.origin}${authUrl.pathname}`, 'https://openrouter.ai/auth');
+    assert.equal(authUrl.searchParams.get('code_challenge_method'), 'S256');
+    assert.ok(authUrl.searchParams.get('code_challenge'));
+    const callbackUrl = new URL(authUrl.searchParams.get('callback_url'));
+    const state = callbackUrl.searchParams.get('state');
+    assert.ok(state);
+
+    const callbackResponse = await fetch(`${baseUrl}/api/ai/openrouter/oauth/callback?code=oauth-code&state=${state}`, {
+      redirect: 'manual',
+    });
+    assert.equal(callbackResponse.status, 302);
+    assert.equal(callbackResponse.headers.get('location'), `${baseUrl}/#screen=pattern&aiSetup=connected`);
+    assert.equal(exchangeCall.url, 'https://openrouter.ai/api/v1/auth/keys');
+    assert.equal(exchangeCall.body.code, 'oauth-code');
+    assert.equal(exchangeCall.body.code_challenge_method, 'S256');
+    assert.ok(exchangeCall.body.code_verifier);
+
+    const settings = await fetchJson(`${baseUrl}/api/ai/settings`);
+    assert.equal(settings.body.provider, 'openrouter');
+    assert.equal(settings.body.providers.find(provider => provider.id === 'openrouter').configured, true);
+    assert.equal(JSON.stringify(settings.body).includes('sk-or-oauth-test-key'), false);
+  });
+});
+
 let authMissingProviderCalls = 0;
 const authMissingApp = createLightweaverServer({
   env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
