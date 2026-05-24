@@ -9,7 +9,9 @@ import { normalizeMotionSmoothing } from './motionSmoothing.js';
 import {
   DEFAULT_STANDALONE_CONTROLS,
   DEFAULT_STANDALONE_LED,
+  DEFAULT_STANDALONE_RUNTIME_MODE,
   DEFAULT_STANDALONE_OUTPUTS,
+  STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
 
 export const PROJECT_VERSION = 3;
@@ -29,7 +31,11 @@ export const DEFAULT_SYM_SETTINGS = {
 };
 
 export function defaultStandaloneController(overrides = {}) {
+  const runtimeMode = STANDALONE_RUNTIME_MODES.includes(overrides.runtimeMode)
+    ? overrides.runtimeMode
+    : DEFAULT_STANDALONE_RUNTIME_MODE;
   return {
+    runtimeMode,
     outputs: overrides.outputs || DEFAULT_STANDALONE_OUTPUTS,
     controls: {
       ...DEFAULT_STANDALONE_CONTROLS,

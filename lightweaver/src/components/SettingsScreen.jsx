@@ -3,6 +3,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 import { useTweaks } from './Tweaks.jsx';
 import { PALETTE_DEFAULT } from '../data.js';
 import { MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
+import { DEFAULT_STANDALONE_OUTPUTS, STANDALONE_RUNTIME_MODES } from '../lib/standaloneController.js';
 
 function Section({ title, children }) {
   return (
@@ -41,6 +42,7 @@ export function SettingsScreen() {
     gammaValue, setGammaValue,
     masterHueShift, setMasterHueShift,
     showDuration, setShowDuration,
+    standaloneController, setStandaloneController,
     serializeProject, loadProject, newProject, lastSaved,
   } = useProject();
 
@@ -74,6 +76,32 @@ export function SettingsScreen() {
 
   const durationMins = Math.floor(showDuration / 60);
   const durationSecs = showDuration % 60;
+  const standalone = standaloneController || {};
+  const standaloneOutputs = DEFAULT_STANDALONE_OUTPUTS.map((output, i) => ({
+    ...output,
+    ...((standalone.outputs || [])[i] || {}),
+  }));
+
+  const updateStandalone = (patch) => {
+    setStandaloneController(prev => ({
+      ...(prev || {}),
+      ...patch,
+      controls: { ...((prev || {}).controls || {}), ...(patch.controls || {}) },
+      led: { ...((prev || {}).led || {}), ...(patch.led || {}) },
+    }));
+  };
+
+  const updateStandaloneOutput = (index, patch) => {
+    setStandaloneController(prev => {
+      const current = prev || {};
+      const outputs = DEFAULT_STANDALONE_OUTPUTS.map((output, i) => ({
+        ...output,
+        ...((current.outputs || [])[i] || {}),
+      }));
+      outputs[index] = { ...(outputs[index] || DEFAULT_STANDALONE_OUTPUTS[index]), ...patch };
+      return { ...current, outputs };
+    });
+  };
 
   return (
     <div className="lw-settings-screen">
@@ -277,6 +305,68 @@ export function SettingsScreen() {
                   {fps}
                 </button>
               ))}
+            </div>
+          </Row>
+        </Section>
+
+        <Section title="Standalone controller">
+          <Row label="Runtime mode" hint="Choose what the sold ESP32-S3 controller runs from microSD">
+            <div className="lw-tweaks-seg">
+              {STANDALONE_RUNTIME_MODES.map(mode => (
+                <button key={mode}
+                        className={(standalone.runtimeMode || 'sequence') === mode ? 'active' : ''}
+                        onClick={() => updateStandalone({ runtimeMode: mode })}>
+                  {mode}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row label="LED output" hint="Firmware uses fixed connector pins by default">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+              {standaloneOutputs.map((output, i) => (
+                <div key={output.id || i} style={{ display: 'grid', gap: 6, padding: 8, border: '1px solid var(--border)', borderRadius: 6 }}>
+                  <input className="lw-search-input"
+                         value={output.name || `Output ${i + 1}`}
+                         onChange={e => updateStandaloneOutput(i, { name: e.target.value })}
+                         aria-label={`Output ${i + 1} name`}/>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                    <input className="lw-search-input" type="number" min="0" max="48"
+                           value={output.pin ?? DEFAULT_STANDALONE_OUTPUTS[i]?.pin ?? 0}
+                           onChange={e => updateStandaloneOutput(i, { pin: +e.target.value })}
+                           aria-label={`Output ${i + 1} pin`}/>
+                    <input className="lw-search-input" type="number" min="0" max="1024"
+                           value={output.pixels || 0}
+                           onChange={e => updateStandaloneOutput(i, { pixels: +e.target.value })}
+                           aria-label={`Output ${i + 1} pixels`}/>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-2xs)', color: 'var(--text-4)' }}>
+                    <span>GPIO</span>
+                    <span>pixels</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Row>
+          <Row label="Color order" hint="WS2815 commonly uses GRB">
+            <div className="lw-tweaks-seg">
+              {['GRB', 'RGB', 'BRG'].map(order => (
+                <button key={order}
+                        className={(standalone.led?.colorOrder || 'GRB') === order ? 'active' : ''}
+                        onClick={() => updateStandalone({ led: { colorOrder: order } })}>
+                  {order}
+                </button>
+              ))}
+            </div>
+          </Row>
+          <Row label="Brightness limit" hint="Maximum firmware output brightness for sellable pieces">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="range" min="0.05" max="1" step="0.01"
+                     value={standalone.led?.brightnessLimit ?? 0.45}
+                     onChange={e => updateStandalone({ led: { brightnessLimit: +e.target.value } })}
+                     style={{ flex: 1 }}/>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 44 }}>
+                {Math.round((standalone.led?.brightnessLimit ?? 0.45) * 100)}%
+              </span>
             </div>
           </Row>
         </Section>

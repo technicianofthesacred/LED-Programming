@@ -22,6 +22,10 @@ export const DEFAULT_STANDALONE_LED = {
   brightnessLimit: 0.45,
 };
 
+export const STANDALONE_RUNTIME_MODES = ['sequence', 'procedural', 'preset'];
+
+export const DEFAULT_STANDALONE_RUNTIME_MODE = 'sequence';
+
 export function normalizeStandaloneOutputs(outputs = DEFAULT_STANDALONE_OUTPUTS) {
   return outputs
     .slice(0, 4)
@@ -41,18 +45,21 @@ export function normalizeStandaloneOutputs(outputs = DEFAULT_STANDALONE_OUTPUTS)
 
 export function buildStandaloneProfile({
   projectName = 'Untitled Project',
+  runtimeMode = DEFAULT_STANDALONE_RUNTIME_MODE,
   outputs = DEFAULT_STANDALONE_OUTPUTS,
   controls = DEFAULT_STANDALONE_CONTROLS,
   looks = [],
   led = {},
 } = {}) {
+  const mode = normalizeRuntimeMode(runtimeMode);
   const normalizedOutputs = normalizeStandaloneOutputs(outputs);
   const normalizedLooks = looks.length
     ? looks.map((look, index) => normalizeLook(look, index))
-    : [normalizeLook({ id: 'timeline-render', label: 'Timeline Render', file: '/sequences/001-timeline-render.lwseq' }, 0)];
+    : [defaultLookForMode(mode)];
 
   return {
     version: 1,
+    runtimeMode: mode,
     piece: {
       id: sanitizeId(projectName),
       name: projectName || 'Untitled Project',
@@ -113,6 +120,7 @@ export function toLwseqBytes(frames = [], { fps = 24, outputs = DEFAULT_STANDALO
 
 export function makeStandalonePackage({
   projectName = 'Untitled Project',
+  runtimeMode = DEFAULT_STANDALONE_RUNTIME_MODE,
   outputs = DEFAULT_STANDALONE_OUTPUTS,
   controls = DEFAULT_STANDALONE_CONTROLS,
   sequenceFilename = '001-timeline-render.lwseq',
@@ -120,36 +128,46 @@ export function makeStandalonePackage({
   fps = 24,
   loop = true,
   led = {},
+  proceduralPreset = 'aurora',
+  preset = 'warm-white',
 } = {}) {
+  const mode = normalizeRuntimeMode(runtimeMode);
   const cleanFilename = sequenceFilename.replace(/^\/+/, '');
   const filePath = `/sequences/${cleanFilename}`;
+  const looks = mode === 'sequence'
+    ? [{
+        id: cleanFilename.replace(/\.[^.]+$/, ''),
+        label: projectName,
+        mode: 'sequence',
+        file: filePath,
+        fps,
+        loop,
+      }]
+    : mode === 'procedural'
+      ? [{ id: proceduralPreset, label: titleFromId(proceduralPreset), mode: 'procedural', preset: proceduralPreset, loop }]
+      : [{ id: preset, label: titleFromId(preset), mode: 'preset', preset, loop }];
   const profile = buildStandaloneProfile({
     projectName,
+    runtimeMode: mode,
     outputs,
     controls,
     led,
-    looks: [{
-      id: cleanFilename.replace(/\.[^.]+$/, ''),
-      label: projectName,
-      mode: 'sequence',
-      file: filePath,
-      fps,
-      loop,
-    }],
+    looks,
   });
-  const sequence = toLwseqBytes(frames, { fps, outputs });
+  const files = { '/lightweaver.json': profile };
+  if (mode === 'sequence') {
+    const sequence = toLwseqBytes(frames, { fps, outputs });
+    files[filePath] = {
+      encoding: 'base64',
+      bytes: sequence.byteLength,
+      data: uint8ToBase64(sequence),
+    };
+  }
   return {
     app: 'Lightweaver',
     format: 'standalone-controller-package',
     version: 1,
-    files: {
-      '/lightweaver.json': profile,
-      [filePath]: {
-        encoding: 'base64',
-        bytes: sequence.byteLength,
-        data: uint8ToBase64(sequence),
-      },
-    },
+    files,
   };
 }
 
@@ -217,10 +235,11 @@ function normalizeControls(controls = {}) {
 
 function normalizeLook(look = {}, index = 0) {
   const id = sanitizeId(look.id || look.label || `look-${index + 1}`);
-  return {
+  const mode = normalizeRuntimeMode(look.mode || DEFAULT_STANDALONE_RUNTIME_MODE);
+  const normalized = {
     id,
     label: look.label || titleFromId(id),
-    mode: look.mode || 'sequence',
+    mode,
     file: look.file || `/sequences/${String(index + 1).padStart(3, '0')}-${id}.lwseq`,
     fps: Math.round(Number(look.fps || 24)),
     loop: look.loop ?? true,
@@ -228,6 +247,25 @@ function normalizeLook(look = {}, index = 0) {
     fadeInMs: Math.max(0, Math.round(Number(look.fadeInMs ?? 1200))),
     brightness: clamp01(look.brightness ?? 0.35),
   };
+  if (mode !== 'sequence') {
+    delete normalized.file;
+    normalized.preset = look.preset || id;
+  }
+  return normalized;
+}
+
+function defaultLookForMode(mode) {
+  if (mode === 'procedural') {
+    return normalizeLook({ id: 'aurora', label: 'Aurora', mode: 'procedural', preset: 'aurora' }, 0);
+  }
+  if (mode === 'preset') {
+    return normalizeLook({ id: 'warm-white', label: 'Warm White', mode: 'preset', preset: 'warm-white' }, 0);
+  }
+  return normalizeLook({ id: 'timeline-render', label: 'Timeline Render', mode: 'sequence', file: '/sequences/001-timeline-render.lwseq' }, 0);
+}
+
+function normalizeRuntimeMode(mode) {
+  return STANDALONE_RUNTIME_MODES.includes(mode) ? mode : DEFAULT_STANDALONE_RUNTIME_MODE;
 }
 
 function sanitizeId(value) {

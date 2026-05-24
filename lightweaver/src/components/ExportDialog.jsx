@@ -79,11 +79,19 @@ export function ExportDialog({ open, onClose }) {
     return () => window.removeEventListener('keydown', handler);
   }, [open]);
 
+  useEffect(() => {
+    if (target === 'standalone' && standaloneController?.runtimeMode && standaloneController.runtimeMode !== 'sequence' && format === 'lwseq') {
+      setFormat('lwpackage');
+    }
+  }, [format, standaloneController?.runtimeMode, target]);
+
   if (!open) return null;
 
   const sel = TARGETS.find(t => t.id === target);
   const selectedFormat = FORMATS.find(f => f.id === format);
   const totalLEDs = strips.reduce((s, st) => s + (st.pixels?.length || 0), 0);
+  const standaloneMode = standaloneController?.runtimeMode || 'sequence';
+  const standaloneUsesFrames = target === 'standalone' && standaloneMode === 'sequence';
   const standaloneOutputs = deriveStandaloneOutputsFromStrips(strips, standaloneController?.outputs || []);
   const standalonePixels = totalStandalonePixels(standaloneOutputs);
   const safeName = (projectName || 'untitled').replace(/\s+/g, '_').toLowerCase();
@@ -101,16 +109,27 @@ export function ExportDialog({ open, onClose }) {
   const totalFrames = showDuration * fps;
   const frameSize = 512 * universes;
   const standaloneEstimate = estimateLwseqBytes({ pixels: standalonePixels || totalLEDs, fps, duration: showDuration });
-  const totalBytes = target === 'standalone' ? standaloneEstimate.totalBytes : totalFrames * frameSize;
+  const totalBytes = target === 'standalone'
+    ? standaloneUsesFrames ? standaloneEstimate.totalBytes : 4096
+    : totalFrames * frameSize;
   const mb = (totalBytes / 1024 / 1024).toFixed(1);
-  const availableFormats = FORMATS.filter(f => target === 'standalone'
-    ? ['lwpackage', 'lwseq'].includes(f.id)
-    : !['lwpackage', 'lwseq'].includes(f.id));
+  const availableFormats = FORMATS
+    .filter(f => target === 'standalone'
+      ? standaloneMode === 'sequence' ? ['lwpackage', 'lwseq'].includes(f.id) : f.id === 'lwpackage'
+      : !['lwpackage', 'lwseq'].includes(f.id))
+    .map(f => f.id === 'lwpackage' && target === 'standalone' && standaloneMode !== 'sequence'
+      ? {
+          ...f,
+          sub: standaloneMode === 'procedural'
+            ? 'lightweaver.json only; firmware renders patterns'
+            : 'lightweaver.json only; firmware renders fixed cues',
+        }
+      : f);
 
   const selectTarget = (id) => {
     setTarget(id);
     if (id === 'standalone') {
-      if (!['lwpackage', 'lwseq'].includes(format)) setFormat('lwpackage');
+      if (!['lwpackage', 'lwseq'].includes(format) || standaloneMode !== 'sequence') setFormat('lwpackage');
       if (![24, 30].includes(fps)) setFps(24);
     }
     if (id !== 'standalone' && ['lwpackage', 'lwseq'].includes(format)) setFormat('bundle');
@@ -200,11 +219,12 @@ export function ExportDialog({ open, onClose }) {
         content = toLwseqBytes(frames, { fps, outputs: standaloneOutputs });
         mime = 'application/octet-stream';
       } else if (target === 'standalone') {
-        const frames = buildFrames();
+        const frames = standaloneMode === 'sequence' ? buildFrames() : [];
         const sequenceFilename = makeStandaloneSequenceFilename(safeName);
         filename = `${safeName}-lightweaver-controller.json`;
         content = JSON.stringify(makeStandalonePackage({
           projectName,
+          runtimeMode: standaloneMode,
           outputs: standaloneOutputs,
           controls: standaloneController?.controls,
           led: standaloneController?.led,
@@ -274,14 +294,21 @@ export function ExportDialog({ open, onClose }) {
 
             <div className="lw-exp-sec">3 · Render settings</div>
             <div className="lw-exp-settings">
-              <div className="lw-exp-row">
-                <span className="k">Frame rate</span>
-                <div className="lw-exp-seg">
-                  {[24, 25, 30, 44, 60].map(v => (
-                    <button key={v} className={fps === v ? 'active' : ''} onClick={() => setFps(v)}>{v} fps</button>
-                  ))}
+              {target !== 'standalone' || standaloneMode === 'sequence' ? (
+                <div className="lw-exp-row">
+                  <span className="k">Frame rate</span>
+                  <div className="lw-exp-seg">
+                    {[24, 25, 30, 44, 60].map(v => (
+                      <button key={v} className={fps === v ? 'active' : ''} onClick={() => setFps(v)}>{v} fps</button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="lw-exp-row">
+                  <span className="k">Runtime mode</span>
+                  <div className="v mono">{standaloneMode}</div>
+                </div>
+              )}
               {target === 'standalone' ? (
                 <div className="lw-exp-row">
                   <span className="k">Outputs</span>
@@ -306,20 +333,24 @@ export function ExportDialog({ open, onClose }) {
                   Loop forever when played standalone
                 </label>
               </div>
-              <div className="lw-exp-row">
-                <span className="k">Automation</span>
-                <label className="lw-exp-check">
-                  <input type="checkbox" checked={bakeAuto} onChange={e => setBakeAuto(e.target.checked)}/>
-                  Bake automation curves into frames
-                </label>
-              </div>
+              {(target !== 'standalone' || standaloneMode === 'sequence') && (
+                <div className="lw-exp-row">
+                  <span className="k">Automation</span>
+                  <label className="lw-exp-check">
+                    <input type="checkbox" checked={bakeAuto} onChange={e => setBakeAuto(e.target.checked)}/>
+                    Bake automation curves into frames
+                  </label>
+                </div>
+              )}
             </div>
 
             <div className="lw-exp-sec">4 · Summary</div>
             <div className="lw-exp-summary">
               <div><span className="k">Output</span><span className="v mono">{exportFilename}</span></div>
               <div><span className="k">Clips</span><span className="v mono">{showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} lanes</span></div>
-              <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
+              {target !== 'standalone' || standaloneMode === 'sequence'
+                ? <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
+                : <div><span className="k">Runtime</span><span className="v mono">{standaloneMode}</span></div>}
               <div><span className="k">Size</span><span className="v mono">~{mb} MB</span></div>
               {target === 'standalone' && <div><span className="k">Connectors</span><span className="v mono">{standaloneOutputs.length} outputs · {standalonePixels} px</span></div>}
               <div><span className="k">Target</span><span className="v">{sel.hw}</span></div>

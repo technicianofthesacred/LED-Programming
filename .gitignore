@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.pio/
+firmware/**/.pio/
 .DS_Store
 *.local
 .superpowers/

@@ -77,6 +77,7 @@ assert.equal(defaultProject.devices.activeControllerId, '');
 assert.equal(defaultProject.devices.standaloneController.outputs.length, 4);
 assert.equal(defaultProject.devices.standaloneController.outputs[0].pin, 16);
 assert.equal(defaultProject.devices.standaloneController.controls.blackout, 9);
+assert.equal(defaultProject.devices.standaloneController.runtimeMode, 'sequence');
 assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
 const migratedV1 = migrateProject({
   version: 1,
@@ -435,13 +436,16 @@ assert.deepEqual(estimateLwseqBytes({ pixels: 440, fps: 24, duration: 10 }), {
 
 const standaloneProfile = buildStandaloneProfile({
   projectName: 'Spiral 01',
+  runtimeMode: 'procedural',
   outputs: standaloneOutputs,
-  looks: [{ id: 'ember', label: 'Ember', file: '/sequences/001-ember.lwseq', fps: 24 }],
+  looks: [{ id: 'ember', label: 'Ember', mode: 'procedural', preset: 'ember', fps: 24 }],
 });
 assert.equal(standaloneProfile.piece.id, 'spiral-01');
+assert.equal(standaloneProfile.runtimeMode, 'procedural');
 assert.equal(standaloneProfile.outputs.length, 2);
 assert.equal(standaloneProfile.controls.encoder.press, 6);
 assert.equal(standaloneProfile.startupLook, 'ember');
+assert.equal(standaloneProfile.looks[0].preset, 'ember');
 
 const lwseq = toLwseqBytes([
   [{ r: 1, g: 2, b: 3 }, { r: 4, g: 5, b: 6 }],
@@ -461,6 +465,29 @@ const standalonePackage = makeStandalonePackage({
 assert.equal(standalonePackage.files['/lightweaver.json'].piece.name, 'Spiral 01');
 assert.equal(standalonePackage.files['/sequences/001-ember.lwseq'].encoding, 'base64');
 assert.equal(standalonePackage.files['/sequences/001-ember.lwseq'].bytes, LWSEQ_HEADER_BYTES + 3);
+
+const proceduralPackage = makeStandalonePackage({
+  projectName: 'Spiral 01',
+  runtimeMode: 'procedural',
+  outputs: [{ id: 'main', pin: 16, pixels: 12 }],
+  proceduralPreset: 'aurora',
+  frames: [[{ r: 255, g: 0, b: 0 }]],
+});
+assert.equal(proceduralPackage.files['/lightweaver.json'].runtimeMode, 'procedural');
+assert.equal(proceduralPackage.files['/lightweaver.json'].looks[0].mode, 'procedural');
+assert.equal(proceduralPackage.files['/lightweaver.json'].looks[0].preset, 'aurora');
+assert.equal(Object.keys(proceduralPackage.files).length, 1);
+
+const presetPackage = makeStandalonePackage({
+  projectName: 'Spiral 01',
+  runtimeMode: 'preset',
+  outputs: [{ id: 'main', pin: 16, pixels: 12 }],
+  preset: 'warm-white',
+});
+assert.equal(presetPackage.files['/lightweaver.json'].runtimeMode, 'preset');
+assert.equal(presetPackage.files['/lightweaver.json'].looks[0].mode, 'preset');
+assert.equal(presetPackage.files['/lightweaver.json'].looks[0].preset, 'warm-white');
+assert.equal(Object.keys(presetPackage.files).length, 1);
 
 function jsonResponse(status, data) {
   return {
