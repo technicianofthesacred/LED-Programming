@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pkill -f 'vite' 2>/dev/null; sleep 0.3 && vite --port 9999",
     "build": "vite build",
+    "test:unit": "node --test src/*.test.js",
     "preview": "vite preview"
   },
   "devDependencies": {
