@@ -16,6 +16,12 @@ const byId = items => new Map((items || []).map(item => [item.id, item]));
 
 const numberOr = (value, fallback) => Number.isFinite(value) ? value : fallback;
 
+const ledIndexOrNull = value => {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : null;
+};
+
 export function createDefaultPatchBoard(strips = []) {
   const patches = strips.map(strip => ({
     id: patchIdForStrip(strip),
@@ -111,8 +117,9 @@ export function resolvePatchPlayback(patch, board, globalPlayback = DEFAULT_PLAY
 }
 
 function sourceLedRange(startLed, endLed) {
-  const start = Math.trunc(startLed);
-  const end = Math.trunc(endLed);
+  const start = ledIndexOrNull(startLed);
+  const end = ledIndexOrNull(endLed);
+  if (start === null || end === null) return [];
   const step = start <= end ? 1 : -1;
   const values = [];
   for (let led = start; step > 0 ? led <= end : led >= end; led += step) {
@@ -200,8 +207,13 @@ export function updatePatchRange(board, patchId, startLed, endLed) {
   }
   const patch = board.patches.find(p => p.id === patchId);
   if (!patch || patch.source?.type !== 'strip') return board;
-  patch.source.startLed = Math.trunc(startLed);
-  patch.source.endLed = Math.trunc(endLed);
+  const start = ledIndexOrNull(startLed);
+  const end = ledIndexOrNull(endLed);
+  if (start === null || end === null) {
+    throw new Error('Patch ranges must use finite LED indexes.');
+  }
+  patch.source.startLed = start;
+  patch.source.endLed = end;
   return board;
 }
 
@@ -279,7 +291,18 @@ export function validatePatchBoard(board, strips = []) {
     }
 
     const maxLed = (strip.pixels?.length ?? strip.pixelCount ?? 0) - 1;
-    if (patch.source.startLed < 0 || patch.source.endLed < 0 || patch.source.startLed > maxLed || patch.source.endLed > maxLed) {
+    const startLed = ledIndexOrNull(patch.source.startLed);
+    const endLed = ledIndexOrNull(patch.source.endLed);
+    if (startLed === null || endLed === null) {
+      warnings.push({
+        code: 'range-invalid',
+        patchId: patch.id,
+        message: `${patch.name} has malformed LED range endpoints.`,
+      });
+      continue;
+    }
+
+    if (startLed < 0 || endLed < 0 || startLed > maxLed || endLed > maxLed) {
       warnings.push({
         code: 'endpoint-out-of-range',
         patchId: patch.id,
@@ -288,7 +311,7 @@ export function validatePatchBoard(board, strips = []) {
       continue;
     }
 
-    for (const led of sourceLedRange(patch.source.startLed, patch.source.endLed)) {
+    for (const led of sourceLedRange(startLed, endLed)) {
       const key = `${patch.source.stripId}:${led}`;
       if (seenSourceLeds.has(key)) {
         warnings.push({

@@ -244,6 +244,38 @@ test('locked boards reject physical range edits', () => {
   );
 });
 
+test('range updates reject non-finite LED indexes', () => {
+  const board = createDefaultPatchBoard([makeStrip('layer-1', 5)]);
+
+  assert.throws(
+    () => updatePatchRange(board, 'patch-layer-1', Number.NaN, 3),
+    /finite LED indexes/i,
+  );
+});
+
+test('validation reports malformed ranges without expanding them', () => {
+  const strips = [makeStrip('layer-1', 5)];
+  const board = {
+    physicalLocked: false,
+    chains: [{ id: 'main', name: 'Main physical strip', rowIds: ['bad'] }],
+    groups: [],
+    patches: [{
+      id: 'bad',
+      name: 'Bad range',
+      groupId: null,
+      source: { type: 'strip', stripId: 'layer-1', startLed: Infinity, endLed: 3 },
+      output: { mode: 'normal' },
+      playback: {},
+    }],
+  };
+
+  const warnings = validatePatchBoard(board, strips);
+  const expanded = expandPatchBoard(board, strips);
+
+  assert.ok(warnings.some(w => w.code === 'range-invalid'));
+  assert.equal(expanded.pixels.length, 0);
+});
+
 test('validation reports stacked ranges and out-of-range endpoints', () => {
   const strips = [makeStrip('layer-1', 5)];
   const board = {
