@@ -236,7 +236,7 @@ function _expandedPatchPixels() {
 
 function _exportPixels() {
   const expanded = _expandedPatchPixels();
-  return expanded.pixels.length > 0 ? expanded.pixels : _allWorldPixels();
+  return expanded.pixels;
 }
 
 function renderPatchBoard() {
