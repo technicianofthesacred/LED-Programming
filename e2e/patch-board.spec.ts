@@ -16,6 +16,11 @@ test('patch board reorder changes WLED export order', async ({ page }) => {
   await expect(rows).toHaveCount(3);
 
   const firstBefore = await rows.nth(0).getAttribute('data-patch-id');
+  await page.getByRole('button', { name: 'Export' }).click();
+  const previewBefore = await page.locator('#export-preview').innerText();
+  const exportedBefore = JSON.parse(previewBefore);
+
+  await page.getByRole('button', { name: 'Patch Board' }).click();
   await rows.nth(1).getByRole('button', { name: 'Move up' }).click();
   const firstAfter = await rows.nth(0).getAttribute('data-patch-id');
   expect(firstAfter).not.toBe(firstBefore);
@@ -26,4 +31,5 @@ test('patch board reorder changes WLED export order', async ({ page }) => {
 
   expect(exported.n).toBeGreaterThan(0);
   expect(Array.isArray(exported.map[0])).toBe(true);
+  expect(exported.map[0]).not.toEqual(exportedBefore.map[0]);
 });

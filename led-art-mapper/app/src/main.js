@@ -2691,9 +2691,21 @@ function renderPatchBoardWarnings() {
   const el = document.getElementById('patch-board-warnings');
   if (!el) return;
   const warnings = validatePatchBoard(_ensurePatchBoard(), state.strips);
-  el.innerHTML = warnings.length
-    ? warnings.map(w => `<div class="pb-warning">${w.message}</div>`).join('')
-    : '<div class="pb-ok">Patch Board ready</div>';
+  el.replaceChildren();
+  if (!warnings.length) {
+    const ok = document.createElement('div');
+    ok.className = 'pb-ok';
+    ok.textContent = 'Patch Board ready';
+    el.appendChild(ok);
+    return;
+  }
+
+  warnings.forEach(warning => {
+    const row = document.createElement('div');
+    row.className = 'pb-warning';
+    row.textContent = warning.message;
+    el.appendChild(row);
+  });
 }
 
 // ── Feature 13: Physical scale overlay ───────────────────────────────────
