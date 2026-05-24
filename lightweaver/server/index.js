@@ -11,11 +11,12 @@ export function createLightweaverApiMiddleware({
   env = process.env,
   client = null,
   createOpenAiClient,
+  fetchImpl,
 } = {}) {
   const api = express();
 
   api.use(express.json({ limit: '2mb' }));
-  api.use('/ai', createAiPatternRouter({ env, client, createOpenAiClient }));
+  api.use('/ai', createAiPatternRouter({ env, client, createOpenAiClient, fetchImpl }));
 
   api.get('/health', (_req, res) => {
     res.json({ ok: true, app: 'Lightweaver' });
@@ -50,12 +51,13 @@ export function createLightweaverServer({
   env = process.env,
   client = null,
   createOpenAiClient,
+  fetchImpl,
   rootDir = defaultRootDir,
 } = {}) {
   const distDir = join(rootDir, 'dist');
   const app = express();
 
-  app.use('/api', createLightweaverApiMiddleware({ env, client, createOpenAiClient }));
+  app.use('/api', createLightweaverApiMiddleware({ env, client, createOpenAiClient, fetchImpl }));
 
   if (existsSync(distDir)) {
     app.use(express.static(distDir));

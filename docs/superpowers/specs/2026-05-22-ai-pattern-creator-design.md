@@ -148,12 +148,16 @@ The route is implemented in the existing Lightweaver server. It is responsible f
 - Returning the parsed draft JSON to the browser.
 - Returning provider and validation errors in a user-readable form.
 
-The first implementation should use a single provider configured by environment variable. The browser must never receive or store the API key.
+The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser chooses a provider, but it must never receive or store provider API keys.
 
 Environment variables:
 
-- `OPENAI_API_KEY`: server-side provider key. Required when the AI assistant is enabled.
-- `AI_PATTERN_MODEL`: optional model override. If absent, the server uses its configured default model.
+- `AI_PATTERN_PROVIDER`: optional server default, one of `openai`, `anthropic`, or `openrouter`.
+- `OPENAI_API_KEY`: required when using ChatGPT/OpenAI generation.
+- `ANTHROPIC_API_KEY`: required when using Claude/Anthropic generation.
+- `OPENROUTER_API_KEY`: required when using OpenRouter generation.
+- `AI_PATTERN_MODEL`: optional shared model override.
+- `AI_PATTERN_OPENAI_MODEL`, `AI_PATTERN_ANTHROPIC_MODEL`, `AI_PATTERN_OPENROUTER_MODEL`: optional provider-specific model overrides.
 
 If no API key is configured, the assistant drawer should show a setup message and keep the rest of Lightweaver usable.
 
@@ -284,7 +288,7 @@ Later versions can add:
 
 ## Implementation Notes
 
-The first implementation uses the OpenAI JavaScript SDK on the Lightweaver server, not in the browser. The server reads `OPENAI_API_KEY` and optional `AI_PATTERN_MODEL`, calls the Responses API with structured output, and returns a draft JSON object to the browser.
+The AI provider calls run on the Lightweaver server, not in the browser. OpenAI uses the JavaScript SDK and structured Responses output. Anthropic and OpenRouter use server-side HTTP calls and are normalized back into the same Lightweaver draft JSON object.
 
 The browser validates every draft with the local Lightweaver compiler and preview renderer before showing an Accept action. Built-in pattern transforms save as new custom patterns. Existing custom pattern transforms update in place and keep local revision history.
 

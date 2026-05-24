@@ -142,6 +142,26 @@ test('sends visible strip counts in AI project context', async ({ page }) => {
   });
 });
 
+test('lets the user choose the AI provider for pattern generation', async ({ page }) => {
+  let payload: any = null;
+  await page.route('**/api/ai/pattern', async route => {
+    payload = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ draft: makeDraft('Claude Routed Draft') }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await expect(assistant.getByLabel('AI provider')).toBeVisible();
+  await assistant.getByLabel('AI provider').selectOption('anthropic');
+  await assistant.locator('textarea').fill('make this slower and smoother');
+  await assistant.getByRole('button', { name: 'Generate' }).click();
+
+  await expect(assistant.getByText('Claude Routed Draft')).toBeVisible();
+  expect(payload.provider).toBe('anthropic');
+});
+
 test('clears the AI draft when the selected pattern changes', async ({ page }) => {
   await page.route('**/api/ai/pattern', async route => {
     await route.fulfill({

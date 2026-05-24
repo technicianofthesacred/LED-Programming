@@ -3,6 +3,13 @@ import { requestAiPatternDraft } from '../lib/aiPatternClient.js';
 import { validateAiPatternDraft } from '../lib/aiPatternDraft.js';
 import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
 
+const AI_PROVIDER_STORAGE_KEY = 'lw_ai_pattern_provider';
+const AI_PROVIDER_OPTIONS = [
+  { id: 'openai', label: 'ChatGPT', detail: 'OpenAI' },
+  { id: 'anthropic', label: 'Claude', detail: 'Anthropic' },
+  { id: 'openrouter', label: 'OpenRouter', detail: 'model router' },
+];
+
 function getVisibleStrips(strips = [], hidden = {}) {
   return (Array.isArray(strips) ? strips : []).filter(strip => strip && !strip.hidden && !hidden[strip.id]);
 }
@@ -46,6 +53,14 @@ export function AiPatternAssistant({
   const [input, setInput] = useState('');
   const [draft, setDraft] = useState(null);
   const [validated, setValidated] = useState(null);
+  const [provider, setProvider] = useState(() => {
+    try {
+      const saved = localStorage.getItem(AI_PROVIDER_STORAGE_KEY);
+      return AI_PROVIDER_OPTIONS.some(option => option.id === saved) ? saved : 'openai';
+    } catch {
+      return 'openai';
+    }
+  });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
 
@@ -66,6 +81,12 @@ export function AiPatternAssistant({
     setError(null);
   }, [sourcePattern?.id]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(AI_PROVIDER_STORAGE_KEY, provider);
+    } catch {}
+  }, [provider]);
+
   const sendInstruction = async (modeOverride = null) => {
     const instruction = input.trim();
     if (!instruction || !sourcePattern || pending) return;
@@ -75,6 +96,7 @@ export function AiPatternAssistant({
     setMessages(prev => [...prev, { role: 'user', text: instruction }]);
     try {
       const rawDraft = await requestAiPatternDraft({
+        provider,
         mode: modeOverride || (draft ? 'refine' : 'transform'),
         instruction,
         sourcePattern,
@@ -135,6 +157,22 @@ export function AiPatternAssistant({
           <div className="lw-ai-context">
             Transforming <strong>{sourcePattern?.name || patternId}</strong>
           </div>
+          <label className="lw-ai-provider">
+            <span>AI provider</span>
+            <select
+              aria-label="AI provider"
+              value={provider}
+              onChange={event => setProvider(event.target.value)}
+              disabled={pending}
+            >
+              {AI_PROVIDER_OPTIONS.map(option => (
+                <option value={option.id} key={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <em>{AI_PROVIDER_OPTIONS.find(option => option.id === provider)?.detail}</em>
+          </label>
           <div className="lw-ai-workflow">
             <strong>Draft first, accept later</strong>
             <span>Generate creates a preview draft. Your live pattern changes only when you accept it.</span>

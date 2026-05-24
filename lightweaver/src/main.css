@@ -685,6 +685,32 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
 }
+.lw-ai-provider {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-3);
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.lw-ai-provider select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.lw-ai-provider em {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+}
 .lw-ai-workflow,
 .lw-ai-draft-note {
   display: grid;
