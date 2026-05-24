@@ -6,6 +6,7 @@ import {
   expandPatchBoard,
   addOffPatch,
   movePatch,
+  normalizePatchBoard,
   resolvePatchPlayback,
   updatePatchRange,
   validatePatchBoard,
@@ -37,6 +38,15 @@ test('default board mirrors current strip order', () => {
     'layer-3',
     'layer-3',
   ]);
+});
+
+test('normalization creates a default board for missing saved patch board data', () => {
+  const strips = [makeStrip('layer-1', 3)];
+
+  const board = normalizePatchBoard(null, strips);
+
+  assert.deepEqual(board.chains[0].rowIds, ['patch-layer-1']);
+  assert.equal(board.patches[0].source.stripId, 'layer-1');
 });
 
 test('forward patch 2 -> 10 emits inclusive ascending source LEDs', () => {

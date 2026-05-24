@@ -23,6 +23,15 @@ import { PreviewRenderer }                           from './preview.js';
 import { toWLEDLedmap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
+import {
+  addOffPatch,
+  createDefaultPatchBoard,
+  expandPatchBoard,
+  movePatch,
+  normalizePatchBoard,
+  updatePatchRange,
+  validatePatchBoard,
+} from './patchBoard.js';
 
 const _LIBRARY_IDS = new Set(PATTERNS.map(p => p.id));
 
@@ -41,6 +50,7 @@ const LED_TYPES = [
 
 const state = {
   strips: [],
+  patchBoard: null,
 
   artworkLayers:     [],  // [{ layerId, name, pathData, svgLength, subPaths }] — set on SVG import
   artworkLayerState: [],  // persisted { layerId, _hidden, _color } — restored on project load
@@ -201,6 +211,34 @@ function _sampleStripPixels(strip, pathEl) {
   strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
   if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
   return strip.pixels;
+}
+
+function _ensurePatchBoard() {
+  state.patchBoard = normalizePatchBoard(state.patchBoard, state.strips);
+  return state.patchBoard;
+}
+
+function _resetPatchBoardFromStrips() {
+  state.patchBoard = createDefaultPatchBoard(state.strips);
+  return state.patchBoard;
+}
+
+function _expandedPatchPixels() {
+  return expandPatchBoard(_ensurePatchBoard(), state.strips, {
+    patternId: state.activePatternId,
+    speed: state.masterSpeed,
+    brightness: state.masterBrightness,
+    hueShift: 0,
+    enabled: true,
+  }).pixels;
+}
+
+function renderPatchBoard() {
+  try {
+    validatePatchBoard(_ensurePatchBoard(), state.strips);
+  } catch {
+    // Task 5 replaces this with the visible Patch Board UI.
+  }
 }
 
 function _restoreSnapshot(snap) {
@@ -723,8 +761,10 @@ const canvasManager = new CanvasManager(svgEl, {
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     state.strips.push(strip);
     _reindex();
+    _resetPatchBoardFromStrips();
     _rebuildNorm();
     renderStripsList();
+    renderPatchBoard();
     syncExportInfo();
     _updateEmptyState();
     canvasManager.setStripDots(strip.id, strip.pixels);
@@ -752,8 +792,10 @@ const canvasManager = new CanvasManager(svgEl, {
     // C3: remove from any group (handles canvas-tool deletes too)
     for (const g of state.groups) g.stripIds = g.stripIds.filter(sid => sid !== id);
     _reindex();
+    _resetPatchBoardFromStrips();
     _rebuildNorm();
     renderStripsList();
+    renderPatchBoard();
     syncExportInfo();
     _updateEmptyState();
   },
@@ -910,8 +952,8 @@ function _createQuickStrip(name, pathData, pixelCount, color) {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _rebuildNorm();
-  renderStripsList(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
+  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
   return strip;
 }
 
@@ -1260,9 +1302,9 @@ function _buildStripLi(strip, from, to, extraClass) {
     strip.pixelCount = n;
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _rebuildNorm();
+    _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
-    renderStripsList(); syncExportInfo();
+    renderStripsList(); renderPatchBoard(); syncExportInfo();
   });
 
   // Brightness input (A1)
@@ -1314,7 +1356,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     /** @type {HTMLButtonElement} */ (e.target).classList.toggle('active', strip.reversed);
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _rebuildNorm();
+    _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.refreshStripArrow(strip.id);
   });
@@ -1386,8 +1428,8 @@ function _buildStripLi(strip, from, to, extraClass) {
     state.strips.push(newStrip);
     state.stripTimes.set(newStrip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(newStrip.id, newStrip.pixels);
-    _reindex(); _rebuildNorm();
-    renderStripsList(); syncExportInfo(); _updateEmptyState();
+    _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
+    renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
     _markDirty();
   });
 
@@ -2884,6 +2926,7 @@ function saveProject() {
   const data = {
     version: 3,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
+    patchBoard:        _ensurePatchBoard(),
     patterns:          state.patterns,
     activePatternId:   state.activePatternId,
     palette:           state.palette,
@@ -2926,6 +2969,7 @@ async function loadProject(file) {
   });
 
   assignIndices(state.strips);
+  state.patchBoard = normalizePatchBoard(data.patchBoard, state.strips);
   if (data.patterns?.length) state.patterns = data.patterns;
   state.activePatternId = data.activePatternId || state.patterns[0]?.id;
 
@@ -2987,6 +3031,7 @@ async function loadProject(file) {
     _buildChainMap();
     canvasManager.renderConnections(state.connections);
   }
+  renderPatchBoard();
   // Restore layer visibility state — applied in onImportRequest when SVG is next loaded
   if (Array.isArray(data.artworkLayerState)) {
     state.artworkLayerState = data.artworkLayerState;
@@ -3012,6 +3057,7 @@ function _lsSave() {
     version:           3,
     svgSource:         state._svgSource,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
+    patchBoard:        _ensurePatchBoard(),
     customPatterns:    customs,
     activePatternId:   state.activePatternId,
     palette:           state.palette,
@@ -3068,6 +3114,7 @@ function _lsRestore() {
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   });
   assignIndices(state.strips);
+  state.patchBoard = normalizePatchBoard(data.patchBoard, state.strips);
 
   // Merge custom patterns on top of library
   if (data.customPatterns?.length) {
@@ -3145,6 +3192,7 @@ function _lsRestore() {
     _buildChainMap();
     canvasManager.renderConnections(state.connections);
   }
+  renderPatchBoard();
 }
 
 // ── SVG Import Modal ──────────────────────────────────────────────────────
@@ -3916,8 +3964,8 @@ function _addGroupAsStrip(group) {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _rebuildNorm();
-  renderStripsList(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
+  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
   showToast(`Added "${group.name}" · ${pixelCount} LEDs`, 'ok');
 }
 
@@ -4074,10 +4122,10 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     strip.pixelCount = pixelCount;
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _rebuildNorm();
+    _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.renderConnections(state.connections);
-    renderStripsList(); syncExportInfo(); renderArtworkLayersList();
+    renderStripsList(); renderPatchBoard(); syncExportInfo(); renderArtworkLayersList();
     showToast(`Updated "${name}"`, 'ok');
   } else {
     const strip = {
@@ -4101,8 +4149,8 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(strip.id, strip.pixels);
-    _reindex(); _rebuildNorm();
-    renderStripsList(); syncExportInfo(); _updateEmptyState(); renderArtworkLayersList();
+    _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
+    renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState(); renderArtworkLayersList();
     document.getElementById('inspector-add-btn').textContent = '↺ Update Strip';
     document.getElementById('inspector-remove-btn').style.display = '';
     showToast(`Added "${name}" · ${pixelCount} LEDs`, 'ok');
@@ -4162,8 +4210,8 @@ document.getElementById('path-sel-add')?.addEventListener('click', () => {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _rebuildNorm();
-  renderStripsList(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
+  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
   canvasManager.clearPathSelection();
   if (nameIn) nameIn.value = '';
   showToast(`Added "${name}" · ${strip.pixelCount} LEDs from ${sel.length} path${sel.length !== 1 ? 's' : ''}`, 'ok');
@@ -4205,8 +4253,10 @@ document.getElementById('btn-clear-canvas').addEventListener('click', async () =
   state.stripTimes.clear();
   previewRenderer._frozenColorFn = null;
   previewRenderer.setViewBox(0, 0, 0, 0);
+  _resetPatchBoardFromStrips();
   _rebuildNorm();
   renderStripsList();
+  renderPatchBoard();
   renderArtworkLayersList();
   syncExportInfo();
   _updateEmptyState();
@@ -4712,10 +4762,10 @@ document.getElementById('popup-pixels-input').addEventListener('change', e => {
   strip.pixelCount = n;
   const pathEl = canvasManager.getPathEl(stripId);
   _sampleStripPixels(strip, pathEl);
-  _reindex(); _rebuildNorm();
+  _reindex(); _resetPatchBoardFromStrips(); _rebuildNorm();
   canvasManager.setStripDots(stripId, strip.pixels);
   canvasManager.renderConnections(state.connections);
-  renderStripsList(); syncExportInfo();
+  renderStripsList(); renderPatchBoard(); syncExportInfo();
   _showStripPopup(strip); // reposition after pixel count change
 });
 
