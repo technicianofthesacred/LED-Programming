@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  applyPatchRouteOrder,
   createDefaultPatchBoard,
+  cutsForStrip,
+  deleteStripCut,
   expandPatchBoard,
   addOffPatch,
   movePatch,
+  nudgeStripCut,
   normalizePatchBoard,
   resolvePatchPlayback,
   sliceStripIntoPatches,
@@ -178,6 +182,163 @@ test('sliceStripIntoPatches preserves off blocks and other strip patches', () =>
   ]);
   assert.equal(board.patches.some(patch => patch.id === 'patch-inner'), true);
   assert.equal(board.patches.some(patch => patch.id === offPatch.id), true);
+});
+
+test('cutsForStrip returns sorted cut indexes from existing strip segments', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+
+  sliceStripIntoPatches(board, strip, [5, 2]);
+
+  assert.deepEqual(cutsForStrip(board, 'outer'), [2, 5]);
+});
+
+test('nudgeStripCut moves one cut while preserving adjacent segments', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+
+  nudgeStripCut(board, strip, 2, 1);
+
+  assert.deepEqual(cutsForStrip(board, 'outer'), [3, 5]);
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-3',
+    'patch-outer-4-5',
+    'patch-outer-6-7',
+  ]);
+});
+
+test('nudgeStripCut preserves custom route membership', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  applyPatchRouteOrder(board, ['patch-outer-6-7', 'patch-outer-0-2']);
+
+  nudgeStripCut(board, strip, 2, 1);
+
+  assert.deepEqual(board.chains[0].rowIds, ['patch-outer-6-7', 'patch-outer-0-3']);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [6, 7, 0, 1, 2, 3]);
+});
+
+test('nudgeStripCut maps routed segments to the largest overlapping segment', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  applyPatchRouteOrder(board, ['patch-outer-3-5']);
+
+  nudgeStripCut(board, strip, 2, 1);
+
+  assert.deepEqual(board.chains[0].rowIds, ['patch-outer-4-5']);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [4, 5]);
+});
+
+test('nudgeStripCut preserves interleaved non-strip route rows', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const offPatch = addOffPatch(board, 2);
+  board.chains[0].rowIds = [
+    'patch-outer-0-2',
+    offPatch.id,
+    'patch-outer-3-5',
+    'patch-outer-6-7',
+  ];
+
+  nudgeStripCut(board, strip, 2, 1);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-3',
+    offPatch.id,
+    'patch-outer-4-5',
+    'patch-outer-6-7',
+  ]);
+});
+
+test('nudgeStripCut ignores zero delta without rebuilding patch metadata', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  board.patches.find(patch => patch.id === 'patch-outer-3-5').note = 'keep me';
+  const before = JSON.stringify(board);
+
+  const result = nudgeStripCut(board, strip, 2, 0);
+
+  assert.equal(result, board);
+  assert.equal(JSON.stringify(board), before);
+});
+
+test('nudgeStripCut does not cross neighboring cuts or endpoints', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [1, 2]);
+
+  nudgeStripCut(board, strip, 1, -1);
+  nudgeStripCut(board, strip, 2, -1);
+
+  assert.deepEqual(cutsForStrip(board, 'outer'), [1, 2]);
+});
+
+test('deleteStripCut merges adjacent visual segments', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+
+  deleteStripCut(board, strip, 2);
+
+  assert.deepEqual(cutsForStrip(board, 'outer'), [5]);
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-5',
+    'patch-outer-6-7',
+  ]);
+});
+
+test('deleteStripCut preserves interleaved non-strip route rows', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const offPatch = addOffPatch(board, 2);
+  board.chains[0].rowIds = [
+    'patch-outer-0-2',
+    offPatch.id,
+    'patch-outer-3-5',
+    'patch-outer-6-7',
+  ];
+
+  deleteStripCut(board, strip, 2);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-5',
+    offPatch.id,
+    'patch-outer-6-7',
+  ]);
+  assert.deepEqual(cutsForStrip(board, 'outer'), [5]);
+});
+
+test('deleteStripCut ignores missing cut without rebuilding route order', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  applyPatchRouteOrder(board, ['patch-outer-6-7', 'patch-outer-0-2']);
+
+  const before = JSON.stringify(board);
+  const result = deleteStripCut(board, strip, 4);
+
+  assert.equal(result, board);
+  assert.equal(JSON.stringify(board), before);
+});
+
+test('applyPatchRouteOrder makes clicked segments the exported physical route', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+
+  applyPatchRouteOrder(board, ['patch-outer-6-7', 'patch-outer-0-2']);
+
+  assert.deepEqual(board.chains[0].rowIds, ['patch-outer-6-7', 'patch-outer-0-2']);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [6, 7, 0, 1, 2]);
 });
 
 test('normalization prunes deleted generated strip patches but keeps custom rows', () => {

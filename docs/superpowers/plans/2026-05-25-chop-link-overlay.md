@@ -40,7 +40,7 @@ Commit-on-exit draft buffers and drag handles are deferred until the first overl
 - Modify: `lightweaver/src/lib/patchBoard.js`
 - Modify: `lightweaver/src/lib/patchBoard.test.js`
 
-- [ ] **Step 1: Write failing helper tests**
+- [x] **Step 1: Write failing helper tests**
 
 Add these imports to `lightweaver/src/lib/patchBoard.test.js`:
 
@@ -120,7 +120,7 @@ test('applyPatchRouteOrder makes clicked segments the exported physical route', 
 });
 ```
 
-- [ ] **Step 2: Run helper tests to verify RED**
+- [x] **Step 2: Run helper tests to verify RED**
 
 Run:
 
@@ -130,7 +130,7 @@ npm run test:unit
 
 Expected: FAIL because `cutsForStrip`, `nudgeStripCut`, `deleteStripCut`, and `applyPatchRouteOrder` are not exported.
 
-- [ ] **Step 3: Implement helper functions**
+- [x] **Step 3: Implement helper functions**
 
 Add these exports after `sliceStripIntoPatches` in `lightweaver/src/lib/patchBoard.js`:
 
@@ -197,7 +197,7 @@ export function applyPatchRouteOrder(board, patchIds = []) {
 }
 ```
 
-- [ ] **Step 4: Run helper tests to verify GREEN**
+- [x] **Step 4: Run helper tests to verify GREEN**
 
 Run:
 
@@ -208,6 +208,8 @@ npm run test:unit
 Expected: PASS, including the new helper tests.
 
 ### Task 2: Canvas Overlay Mode State And Rendering
+
+Task 1 completion note: the final helper implementation includes additional regression coverage beyond the initial task text for preserving explicit route membership while nudging/deleting cuts, interleaved off-row preservation, largest-overlap remapping, missing-cut no-op, and zero-delta no-op behavior.
 
 **Files:**
 - Modify: `lightweaver/src/components/LayoutScreen.jsx`
