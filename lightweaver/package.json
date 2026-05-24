@@ -11,6 +11,7 @@
     "pi:start": "npm run build && npm run serve:pi",
     "doctor:wled": "node scripts/wled-doctor.mjs",
     "test:core": "node tests/project-frame-audit.mjs",
+    "test:unit": "node --test src/lib/*.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

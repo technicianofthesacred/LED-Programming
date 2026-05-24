@@ -410,7 +410,7 @@ test('validation reports malformed ranges without expanding them', () => {
   assert.equal(expanded.pixels.length, 0);
 });
 
-test('expansion skips finite out-of-range endpoints instead of partially expanding them', () => {
+test('expansion skips missing LEDs when a saved range is longer than the actual strip', () => {
   const strips = [makeStrip('layer-1', 5)];
   const board = {
     physicalLocked: false,
@@ -429,7 +429,7 @@ test('expansion skips finite out-of-range endpoints instead of partially expandi
   const expanded = expandPatchBoard(board, strips);
 
   assert.ok(expanded.warnings.some(w => w.code === 'endpoint-out-of-range'));
-  assert.equal(expanded.pixels.length, 0);
+  assert.deepEqual(expanded.pixels.map(px => px.sourceLed), [0, 1, 2, 3, 4]);
 });
 
 test('validation reports stacked ranges and out-of-range endpoints', () => {

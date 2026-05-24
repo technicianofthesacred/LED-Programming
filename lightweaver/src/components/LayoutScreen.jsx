@@ -10,6 +10,7 @@ import {
   renderPixelFrame,
 } from '../lib/frameEngine.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
+import { PatchBoardScreen } from './PatchBoardScreen.jsx';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -3037,7 +3038,7 @@ export function LayoutScreen() {
         )}
 
         {/* ── Strips list ── */}
-	        {strips.length > 0 && (
+        {strips.length > 0 && (
 	          <>
 	            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
 	              <span>LED strips</span>
@@ -3076,7 +3077,7 @@ export function LayoutScreen() {
 	                </div>
 	              </div>
 	            )}
-	            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto' }}>
+	            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
 	              {strips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
@@ -3265,6 +3266,16 @@ export function LayoutScreen() {
               })}
             </div>
           </>
+        )}
+
+        {strips.length > 0 && (
+          <details className="lw-patch-details">
+            <summary>
+              <span>Physical mapping</span>
+              <span>{strips.length} sections · export order</span>
+            </summary>
+            <PatchBoardScreen embedded />
+          </details>
         )}
 
         {/* ── Empty state ── */}

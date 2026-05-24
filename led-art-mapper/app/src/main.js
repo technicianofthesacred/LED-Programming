@@ -23,15 +23,6 @@ import { PreviewRenderer }                           from './preview.js';
 import { toWLEDLedmap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
-import {
-  addOffPatch,
-  createDefaultPatchBoard,
-  expandPatchBoard,
-  movePatch,
-  normalizePatchBoard,
-  updatePatchRange,
-  validatePatchBoard,
-} from './patchBoard.js';
 
 const _LIBRARY_IDS = new Set(PATTERNS.map(p => p.id));
 
@@ -50,7 +41,6 @@ const LED_TYPES = [
 
 const state = {
   strips: [],
-  patchBoard: null,
 
   artworkLayers:     [],  // [{ layerId, name, pathData, svgLength, subPaths }] — set on SVG import
   artworkLayerState: [],  // persisted { layerId, _hidden, _color } — restored on project load
@@ -147,7 +137,6 @@ const state = {
 // BUG 4: reusable Uint8Array buffer for WLED push — resized only when pixel count changes,
 // avoids per-frame allocations at 30 fps. First byte reserved for WLED native WS opcode (0x02).
 let _wledBuf = new Uint8Array(0);
-let _autoCreateStripsFromImport = false;
 
 // ── Undo / Redo ───────────────────────────────────────────────────────────────
 const _history = [];
@@ -177,7 +166,6 @@ function _snapshot() {
   });
   return {
     strips:            state.strips.map(({ pixels: _px, ...s }) => JSON.parse(JSON.stringify(s))),
-    patchBoard:        JSON.parse(JSON.stringify(_ensurePatchBoard())),
     connections:       JSON.parse(JSON.stringify(state.connections)),
     groups:            JSON.parse(JSON.stringify(state.groups)),
     svgSource:         state._svgSource ?? null,
@@ -213,251 +201,6 @@ function _sampleStripPixels(strip, pathEl) {
   strip.pixels = pathEl ? samplePath(pathEl, strip.pixelCount) : [];
   if (strip.reversed) strip.pixels = strip.pixels.slice().reverse();
   return strip.pixels;
-}
-
-function _ensurePatchBoard() {
-  state.patchBoard = normalizePatchBoard(state.patchBoard, state.strips);
-  return state.patchBoard;
-}
-
-function _resetPatchBoardFromStrips() {
-  state.patchBoard = createDefaultPatchBoard(state.strips);
-  return state.patchBoard;
-}
-
-function _createStripsFromImportedLayers(layers) {
-  const drawableLayers = layers.filter(layer => layer.pathData && layer.pathData.trim().length > 0);
-  if (!drawableLayers.length) return;
-
-  for (const layer of drawableLayers) {
-    if (state.strips.some(strip => strip.layerId === layer.layerId)) continue;
-    const pixelCount = Math.max(1, Math.round((layer.svgLength || 0) / (_getPxPerMm() * _getPitch())));
-    const strip = {
-      id:         crypto.randomUUID(),
-      name:       layer.name,
-      pathData:   layer.pathData,
-      pixelCount,
-      svgLength:  layer.svgLength,
-      layerId:    layer.layerId,
-      color:      layer._color ?? canvasManager.nextColor(),
-      visible:    true,
-      speed:      1.0,
-      brightness: 1.0,
-      hueShift:   0,
-      reversed:   false,
-      patternId:  null,
-    };
-    canvasManager.addStrip(strip);
-    const pathEl = canvasManager.getPathEl(strip.id);
-    _sampleStripPixels(strip, pathEl);
-    state.strips.push(strip);
-    state.stripTimes.set(strip.id, { t: 0, time: 0 });
-    canvasManager.setStripDots(strip.id, strip.pixels);
-  }
-
-  _reindex();
-  _ensurePatchBoard();
-  _rebuildNorm();
-}
-
-function _expandedPatchPixels() {
-  return expandPatchBoard(_ensurePatchBoard(), state.strips, {
-    patternId: state.activePatternId,
-    speed: state.masterSpeed,
-    brightness: state.masterBrightness,
-    hueShift: 0,
-    enabled: true,
-  });
-}
-
-function _exportPixels() {
-  const expanded = _expandedPatchPixels();
-  return expanded.pixels;
-}
-
-function renderPatchBoard() {
-  const list = document.getElementById('patch-board-list');
-  const lockBtn = document.getElementById('patch-lock-btn');
-  if (!list) {
-    renderPatchBoardWarnings();
-    return;
-  }
-
-  const board = _ensurePatchBoard();
-  const chain = board.chains[0];
-  const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
-  const stripsById = new Map(state.strips.map(strip => [strip.id, strip]));
-  const locked = board.physicalLocked === true;
-  const resetBtn = document.getElementById('patch-reset-btn');
-  const addOffBtn = document.getElementById('patch-add-off-btn');
-
-  if (lockBtn) {
-    lockBtn.textContent = locked ? 'Locked' : 'Lock';
-    lockBtn.classList.toggle('locked', locked);
-    lockBtn.setAttribute('aria-pressed', String(locked));
-  }
-  if (resetBtn) resetBtn.disabled = locked;
-  if (addOffBtn) addOffBtn.disabled = locked;
-
-  list.replaceChildren();
-  chain.rowIds.forEach((patchId, index) => {
-    const patch = patchesById.get(patchId);
-    if (!patch) return;
-
-    const row = document.createElement('li');
-    row.className = `patch-row ${patch.source?.type === 'off' ? 'is-off' : 'is-strip'}`;
-    row.dataset.patchId = patch.id;
-
-    const order = document.createElement('span');
-    order.className = 'patch-row-index';
-    order.textContent = String(index + 1).padStart(2, '0');
-
-    const main = document.createElement('div');
-    main.className = 'patch-row-main';
-
-    const title = document.createElement('div');
-    title.className = 'patch-row-title';
-    const name = document.createElement('span');
-    name.className = 'patch-row-name';
-    name.textContent = patch.name || patch.id;
-    const meta = document.createElement('span');
-    meta.className = 'patch-row-meta';
-
-    const controls = document.createElement('div');
-    controls.className = 'patch-row-controls';
-
-    if (patch.source?.type === 'off') {
-      meta.textContent = `${patch.source.ledCount || 0} reserved LEDs off`;
-    } else if (patch.source?.type === 'strip') {
-      const strip = stripsById.get(patch.source.stripId);
-      const maxLed = Math.max(0, (strip?.pixels?.length ?? strip?.pixelCount ?? 0) - 1);
-      meta.textContent = strip ? `${strip.name || strip.id} · 0-${maxLed}` : 'Missing strip';
-
-      const makeNumberControl = (labelText, className, value, step = '1') => {
-        const label = document.createElement('label');
-        label.textContent = labelText;
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = className;
-        input.value = String(value ?? 0);
-        input.step = step;
-        input.disabled = locked;
-        label.appendChild(input);
-        return { label, input };
-      };
-
-      const start = makeNumberControl('Start', 'patch-start', patch.source.startLed ?? 0);
-      const end = makeNumberControl('End', 'patch-end', patch.source.endLed ?? maxLed);
-      const speed = makeNumberControl('Speed', 'patch-speed', patch.playback?.speed ?? strip?.speed ?? 1, '0.05');
-
-      const commitRange = () => {
-        const startLed = parseInt(start.input.value, 10);
-        const endLed = parseInt(end.input.value, 10);
-        if (!Number.isFinite(startLed) || !Number.isFinite(endLed)) return;
-        _pushHistory();
-        try {
-          updatePatchRange(_ensurePatchBoard(), patch.id, startLed, endLed);
-        } catch (err) {
-          showToast(err.message, 'warn');
-        }
-        renderPatchBoard();
-        syncExportInfo();
-        refreshExportPreview();
-        _markDirty();
-      };
-      start.input.addEventListener('change', commitRange);
-      end.input.addEventListener('change', commitRange);
-
-      speed.input.addEventListener('change', () => {
-        const nextSpeed = parseFloat(speed.input.value);
-        if (!Number.isFinite(nextSpeed)) return;
-        _pushHistory();
-        const currentPatch = _ensurePatchBoard().patches.find(item => item.id === patch.id);
-        if (currentPatch) {
-          currentPatch.playback = currentPatch.playback || {};
-          currentPatch.playback.speed = nextSpeed;
-        }
-        renderPatchBoard();
-        syncExportInfo();
-        refreshExportPreview();
-        _markDirty();
-      });
-
-      const reverse = document.createElement('button');
-      reverse.type = 'button';
-      reverse.textContent = '↔';
-      reverse.title = 'Reverse patch';
-      reverse.setAttribute('aria-label', 'Reverse patch');
-      reverse.disabled = locked;
-      reverse.addEventListener('click', () => {
-        _pushHistory();
-        try {
-          const currentBoard = _ensurePatchBoard();
-          const currentPatch = currentBoard.patches.find(item => item.id === patch.id);
-          if (currentPatch?.source?.type === 'strip') {
-            updatePatchRange(currentBoard, patch.id, currentPatch.source.endLed, currentPatch.source.startLed);
-          }
-        } catch (err) {
-          showToast(err.message, 'warn');
-        }
-        renderPatchBoard();
-        syncExportInfo();
-        refreshExportPreview();
-        _markDirty();
-      });
-
-      controls.append(start.label, end.label, speed.label, reverse);
-    }
-
-    title.append(name, meta);
-    main.append(title, controls);
-
-    const actions = document.createElement('div');
-    actions.className = 'patch-row-actions';
-    const moveUp = document.createElement('button');
-    moveUp.type = 'button';
-    moveUp.textContent = '↑';
-    moveUp.title = 'Move up';
-    moveUp.setAttribute('aria-label', 'Move up');
-    moveUp.disabled = locked || index === 0;
-    moveUp.addEventListener('click', () => {
-      _pushHistory();
-      try {
-        movePatch(_ensurePatchBoard(), patch.id, 'up');
-      } catch (err) {
-        showToast(err.message, 'warn');
-      }
-      renderPatchBoard();
-      syncExportInfo();
-      refreshExportPreview();
-      _markDirty();
-    });
-
-    const moveDown = document.createElement('button');
-    moveDown.type = 'button';
-    moveDown.textContent = '↓';
-    moveDown.title = 'Move down';
-    moveDown.setAttribute('aria-label', 'Move down');
-    moveDown.disabled = locked || index === chain.rowIds.length - 1;
-    moveDown.addEventListener('click', () => {
-      _pushHistory();
-      try {
-        movePatch(_ensurePatchBoard(), patch.id, 'down');
-      } catch (err) {
-        showToast(err.message, 'warn');
-      }
-      renderPatchBoard();
-      syncExportInfo();
-      refreshExportPreview();
-      _markDirty();
-    });
-    actions.append(moveUp, moveDown);
-
-    row.append(order, main, actions);
-    list.appendChild(row);
-  });
-
-  renderPatchBoardWarnings();
 }
 
 function _restoreSnapshot(snap) {
@@ -507,13 +250,11 @@ function _restoreSnapshot(snap) {
 
   state.connections = snap.connections;
   state.groups      = snap.groups;
-  state.patchBoard  = normalizePatchBoard(snap.patchBoard, state.strips);
   _reindex();
   _rebuildNorm();
   state.strips.forEach(s => canvasManager.setStripDots(s.id, s.pixels));
   canvasManager.renderConnections(state.connections);
   renderStripsList();
-  renderPatchBoard();
   renderArtworkLayersList();
   syncExportInfo();
   _updateEmptyState();
@@ -982,10 +723,8 @@ const canvasManager = new CanvasManager(svgEl, {
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     state.strips.push(strip);
     _reindex();
-    _ensurePatchBoard();
     _rebuildNorm();
     renderStripsList();
-    renderPatchBoard();
     syncExportInfo();
     _updateEmptyState();
     canvasManager.setStripDots(strip.id, strip.pixels);
@@ -1013,10 +752,8 @@ const canvasManager = new CanvasManager(svgEl, {
     // C3: remove from any group (handles canvas-tool deletes too)
     for (const g of state.groups) g.stripIds = g.stripIds.filter(sid => sid !== id);
     _reindex();
-    _ensurePatchBoard();
     _rebuildNorm();
     renderStripsList();
-    renderPatchBoard();
     syncExportInfo();
     _updateEmptyState();
   },
@@ -1036,17 +773,10 @@ const canvasManager = new CanvasManager(svgEl, {
       if (l._hidden) canvasManager.setArtworkLayerVisible(l.layerId, false);
     });
     canvasManager.setLayerHitPaths(layers);
-    if (_autoCreateStripsFromImport) {
-      _createStripsFromImportedLayers(layers);
-    }
     renderArtworkLayersList();
-    renderStripsList();
-    renderPatchBoard();
-    syncExportInfo();
-    _updateEmptyState();
     _switchTab('strips');
     if (layers.length) {
-      showToast(`${layers.length} layer${layers.length !== 1 ? 's' : ''} imported as LED sections`, 'ok');
+      showToast(`${layers.length} layer${layers.length !== 1 ? 's' : ''} imported — click a layer in the sidebar or canvas to configure`, 'ok');
     } else {
       showToast('No layers found in this SVG — try exporting with layers from Illustrator.', 'warn');
     }
@@ -1180,8 +910,8 @@ function _createQuickStrip(name, pathData, pixelCount, color) {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _ensurePatchBoard(); _rebuildNorm();
-  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _rebuildNorm();
+  renderStripsList(); syncExportInfo(); _updateEmptyState();
   return strip;
 }
 
@@ -1263,12 +993,7 @@ async function _handleFileImport(file) {
     return;
   }
   state._svgSource = text;
-  _autoCreateStripsFromImport = true;
-  try {
-    canvasManager.importSVG(text, true);
-  } finally {
-    _autoCreateStripsFromImport = false;
-  }
+  canvasManager.importSVG(text, true);
   // Sync preview renderer coordinate space with the SVG viewBox
   const vb = svgEl.viewBox.baseVal;
   if (vb && vb.width > 0 && vb.height > 0) {
@@ -1277,7 +1002,6 @@ async function _handleFileImport(file) {
     previewRenderer.setViewBox(0, 0, 0, 0);
   }
   _updateEmptyState();
-  _markDirty();
 }
 
 function _rebuildNorm() {
@@ -1536,9 +1260,9 @@ function _buildStripLi(strip, from, to, extraClass) {
     strip.pixelCount = n;
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _ensurePatchBoard(); _rebuildNorm();
+    _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
-    renderStripsList(); renderPatchBoard(); syncExportInfo();
+    renderStripsList(); syncExportInfo();
   });
 
   // Brightness input (A1)
@@ -1590,7 +1314,7 @@ function _buildStripLi(strip, from, to, extraClass) {
     /** @type {HTMLButtonElement} */ (e.target).classList.toggle('active', strip.reversed);
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _ensurePatchBoard(); _rebuildNorm();
+    _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.refreshStripArrow(strip.id);
   });
@@ -1662,8 +1386,8 @@ function _buildStripLi(strip, from, to, extraClass) {
     state.strips.push(newStrip);
     state.stripTimes.set(newStrip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(newStrip.id, newStrip.pixels);
-    _reindex(); _ensurePatchBoard(); _rebuildNorm();
-    renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
+    _reindex(); _rebuildNorm();
+    renderStripsList(); syncExportInfo(); _updateEmptyState();
     _markDirty();
   });
 
@@ -2891,7 +2615,7 @@ function _exportOpts() {
 }
 
 function syncExportInfo() {
-  const total = _exportPixels().length;
+  const total = state.strips.reduce((n, s) => n + s.pixelCount, 0);
   document.getElementById('export-total').textContent = total;
   const vb = svgEl.viewBox.baseVal;
   document.getElementById('export-canvas-size').textContent =
@@ -2901,38 +2625,12 @@ function syncExportInfo() {
 }
 
 function refreshExportPreview() {
-  const pixels = _exportPixels();
+  const pixels = _allWorldPixels();
   const el     = document.getElementById('export-preview');
-  if (!pixels.length) {
-    el.textContent = '(no sections defined)';
-    renderPatchBoardWarnings();
-    return;
-  }
+  if (!pixels.length) { el.textContent = '(no sections defined)'; return; }
   const full  = toWLEDLedmap(pixels, _exportOpts());
   // Feature 10: show full export preview without truncation
   el.textContent = full;
-  renderPatchBoardWarnings();
-}
-
-function renderPatchBoardWarnings() {
-  const el = document.getElementById('patch-board-warnings');
-  if (!el) return;
-  const warnings = validatePatchBoard(_ensurePatchBoard(), state.strips);
-  el.replaceChildren();
-  if (!warnings.length) {
-    const ok = document.createElement('div');
-    ok.className = 'pb-ok';
-    ok.textContent = 'Patch Board ready';
-    el.appendChild(ok);
-    return;
-  }
-
-  warnings.forEach(warning => {
-    const row = document.createElement('div');
-    row.className = 'pb-warning';
-    row.textContent = warning.message;
-    el.appendChild(row);
-  });
 }
 
 // ── Feature 13: Physical scale overlay ───────────────────────────────────
@@ -3186,7 +2884,6 @@ function saveProject() {
   const data = {
     version: 3,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
-    patchBoard:        _ensurePatchBoard(),
     patterns:          state.patterns,
     activePatternId:   state.activePatternId,
     palette:           state.palette,
@@ -3229,7 +2926,6 @@ async function loadProject(file) {
   });
 
   assignIndices(state.strips);
-  state.patchBoard = normalizePatchBoard(data.patchBoard, state.strips);
   if (data.patterns?.length) state.patterns = data.patterns;
   state.activePatternId = data.activePatternId || state.patterns[0]?.id;
 
@@ -3291,7 +2987,6 @@ async function loadProject(file) {
     _buildChainMap();
     canvasManager.renderConnections(state.connections);
   }
-  renderPatchBoard();
   // Restore layer visibility state — applied in onImportRequest when SVG is next loaded
   if (Array.isArray(data.artworkLayerState)) {
     state.artworkLayerState = data.artworkLayerState;
@@ -3317,7 +3012,6 @@ function _lsSave() {
     version:           3,
     svgSource:         state._svgSource,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
-    patchBoard:        _ensurePatchBoard(),
     customPatterns:    customs,
     activePatternId:   state.activePatternId,
     palette:           state.palette,
@@ -3374,7 +3068,6 @@ function _lsRestore() {
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
   });
   assignIndices(state.strips);
-  state.patchBoard = normalizePatchBoard(data.patchBoard, state.strips);
 
   // Merge custom patterns on top of library
   if (data.customPatterns?.length) {
@@ -3452,7 +3145,6 @@ function _lsRestore() {
     _buildChainMap();
     canvasManager.renderConnections(state.connections);
   }
-  renderPatchBoard();
 }
 
 // ── SVG Import Modal ──────────────────────────────────────────────────────
@@ -3653,12 +3345,11 @@ function _setTool(tool) {
 }
 
 function _switchTab(name) {
-  const tabToMode = { strips: 'layout', patch: 'patch', pattern: 'pattern', export: 'export', flash: 'flash' };
+  const tabToMode = { strips: 'layout', pattern: 'pattern', export: 'export', flash: 'flash' };
   const mode = tabToMode[name] || 'layout';
   document.body.dataset.mode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${name}`));
-  if (name === 'patch') renderPatchBoard();
   if (name === 'pattern') {
     const details = document.getElementById('code-editor-details');
     if (details) details.open = true;
@@ -4225,8 +3916,8 @@ function _addGroupAsStrip(group) {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _ensurePatchBoard(); _rebuildNorm();
-  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _rebuildNorm();
+  renderStripsList(); syncExportInfo(); _updateEmptyState();
   showToast(`Added "${group.name}" · ${pixelCount} LEDs`, 'ok');
 }
 
@@ -4383,10 +4074,10 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     strip.pixelCount = pixelCount;
     const pathEl = canvasManager.getPathEl(strip.id);
     _sampleStripPixels(strip, pathEl);
-    _reindex(); _ensurePatchBoard(); _rebuildNorm();
+    _reindex(); _rebuildNorm();
     canvasManager.setStripDots(strip.id, strip.pixels);
     canvasManager.renderConnections(state.connections);
-    renderStripsList(); renderPatchBoard(); syncExportInfo(); renderArtworkLayersList();
+    renderStripsList(); syncExportInfo(); renderArtworkLayersList();
     showToast(`Updated "${name}"`, 'ok');
   } else {
     const strip = {
@@ -4410,8 +4101,8 @@ document.getElementById('inspector-add-btn')?.addEventListener('click', () => {
     state.strips.push(strip);
     state.stripTimes.set(strip.id, { t: 0, time: 0 });
     canvasManager.setStripDots(strip.id, strip.pixels);
-    _reindex(); _ensurePatchBoard(); _rebuildNorm();
-    renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState(); renderArtworkLayersList();
+    _reindex(); _rebuildNorm();
+    renderStripsList(); syncExportInfo(); _updateEmptyState(); renderArtworkLayersList();
     document.getElementById('inspector-add-btn').textContent = '↺ Update Strip';
     document.getElementById('inspector-remove-btn').style.display = '';
     showToast(`Added "${name}" · ${pixelCount} LEDs`, 'ok');
@@ -4471,8 +4162,8 @@ document.getElementById('path-sel-add')?.addEventListener('click', () => {
   state.strips.push(strip);
   state.stripTimes.set(strip.id, { t: 0, time: 0 });
   canvasManager.setStripDots(strip.id, strip.pixels);
-  _reindex(); _ensurePatchBoard(); _rebuildNorm();
-  renderStripsList(); renderPatchBoard(); syncExportInfo(); _updateEmptyState();
+  _reindex(); _rebuildNorm();
+  renderStripsList(); syncExportInfo(); _updateEmptyState();
   canvasManager.clearPathSelection();
   if (nameIn) nameIn.value = '';
   showToast(`Added "${name}" · ${strip.pixelCount} LEDs from ${sel.length} path${sel.length !== 1 ? 's' : ''}`, 'ok');
@@ -4514,10 +4205,8 @@ document.getElementById('btn-clear-canvas').addEventListener('click', async () =
   state.stripTimes.clear();
   previewRenderer._frozenColorFn = null;
   previewRenderer.setViewBox(0, 0, 0, 0);
-  _resetPatchBoardFromStrips();
   _rebuildNorm();
   renderStripsList();
-  renderPatchBoard();
   renderArtworkLayersList();
   syncExportInfo();
   _updateEmptyState();
@@ -4576,44 +4265,10 @@ document.getElementById('btn-toggle-directed').addEventListener('click', e => {
 // Mode buttons (replaces old tab click handlers)
 document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const modeToTab = { layout: 'strips', patch: 'patch', pattern: 'pattern', export: 'export', flash: 'flash' };
+    const modeToTab = { layout: 'strips', pattern: 'pattern', export: 'export', flash: 'flash' };
     _switchTab(modeToTab[btn.dataset.mode]);
     if (btn.dataset.mode === 'export') refreshExportPreview();
   });
-});
-
-document.getElementById('patch-reset-btn')?.addEventListener('click', async () => {
-  if (!await showConfirm('Reset Patch Board from current layers?')) return;
-  _pushHistory();
-  _resetPatchBoardFromStrips();
-  renderPatchBoard();
-  syncExportInfo();
-  refreshExportPreview();
-  _markDirty();
-});
-
-document.getElementById('patch-add-off-btn')?.addEventListener('click', async () => {
-  const value = await showPrompt('Reserved off LED count:', '1');
-  if (!value) return;
-  const count = Math.max(1, Math.trunc(parseInt(value, 10) || 1));
-  _pushHistory();
-  try {
-    addOffPatch(_ensurePatchBoard(), count);
-  } catch (err) {
-    showToast(err.message, 'warn');
-  }
-  renderPatchBoard();
-  syncExportInfo();
-  refreshExportPreview();
-  _markDirty();
-});
-
-document.getElementById('patch-lock-btn')?.addEventListener('click', () => {
-  _pushHistory();
-  const board = _ensurePatchBoard();
-  board.physicalLocked = !board.physicalLocked;
-  renderPatchBoard();
-  _markDirty();
 });
 
 // Pattern controls
@@ -4673,17 +4328,17 @@ document.getElementById('btn-play-toolbar').addEventListener('click', () => {
 
 // Export
 document.getElementById('btn-export-wled').addEventListener('click', () => {
-  const pixels = _exportPixels();
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toWLEDLedmap(pixels, _exportOpts()), 'ledmap.json');
 });
 document.getElementById('btn-export-fastled').addEventListener('click', () => {
-  const pixels = _exportPixels();
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toFastLED(pixels, _exportOpts()), 'ledmap.h', 'text/plain');
 });
 document.getElementById('btn-export-csv').addEventListener('click', () => {
-  const pixels = _exportPixels();
+  const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
   download(toCSV(pixels), 'ledmap.csv', 'text/csv');
 });
@@ -5057,10 +4712,10 @@ document.getElementById('popup-pixels-input').addEventListener('change', e => {
   strip.pixelCount = n;
   const pathEl = canvasManager.getPathEl(stripId);
   _sampleStripPixels(strip, pathEl);
-  _reindex(); _ensurePatchBoard(); _rebuildNorm();
+  _reindex(); _rebuildNorm();
   canvasManager.setStripDots(stripId, strip.pixels);
   canvasManager.renderConnections(state.connections);
-  renderStripsList(); renderPatchBoard(); syncExportInfo();
+  renderStripsList(); syncExportInfo();
   _showStripPopup(strip); // reposition after pixel count change
 });
 
@@ -5116,7 +4771,6 @@ renderPatternSelect();
 renderPatternCards();
 renderParamSliders();
 _renderSceneSelect();
-renderPatchBoard();
 syncExportInfo();
 _updateEmptyState();
 _updateScaleOverlay(); // Feature 13: initial scale overlay

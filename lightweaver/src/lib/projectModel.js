@@ -38,6 +38,7 @@ export function createDefaultProject() {
       editCounts: {},
       layerGroups: [],
       layerOrder: [],
+      patchBoard: null,
     },
     pattern: {
       activePatternId: 'aurora',
@@ -108,6 +109,7 @@ export function migrateProject(data) {
         editCounts: data.editCounts || {},
         layerGroups: data.layerGroups || [],
         layerOrder: data.layerOrder || (data.layers || []).map(l => ({ type: 'layer', id: l.layerId })),
+        patchBoard: data.patchBoard || null,
       },
       pattern: {
         ...base.pattern,

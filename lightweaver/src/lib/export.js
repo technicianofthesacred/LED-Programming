@@ -8,6 +8,8 @@
  * Coordinates are in draw order (strip 0 pixel 0, strip 0 pixel 1, ... strip 1 pixel 0, ...)
  */
 
+import { expandPatchBoard } from './patchBoard.js';
+
 /**
  * @typedef {{ x: number, y: number, index: number }} Pixel
  * @typedef {{ normalize?: boolean, scaleX?: number, scaleY?: number, offsetX?: number, offsetY?: number }} ExportOpts
@@ -97,6 +99,27 @@ export function pixelsFromStrips(strips = []) {
   return out;
 }
 
+export function pixelsFromPatchBoard(patchBoard, strips = []) {
+  return expandPatchBoard(patchBoard, strips).pixels;
+}
+
+export function remapFrameToPatchBoard(framePixels = [], patchPixels = [], strips = []) {
+  if (!patchPixels.length) return framePixels;
+  const offsets = new Map();
+  let offset = 0;
+  for (const strip of strips) {
+    offsets.set(strip.id, offset);
+    offset += strip.pixels?.length || strip.pixelCount || 0;
+  }
+  const black = { r: 0, g: 0, b: 0 };
+  return patchPixels.map(pixel => {
+    if (pixel.inactive || !pixel.stripId || !Number.isFinite(pixel.sourceLed)) return black;
+    const sourceOffset = offsets.get(pixel.stripId);
+    if (!Number.isFinite(sourceOffset)) return black;
+    return framePixels[sourceOffset + pixel.sourceLed] || black;
+  });
+}
+
 export function toDmxCsv(frames = []) {
   const rows = ['frame,channel,value'];
   frames.forEach((frame, frameIndex) => {
@@ -119,7 +142,8 @@ export function toRawFrameDump(frames = []) {
 }
 
 export function makeManifest(project, opts = {}) {
-  const totalLeds = project.layout?.strips?.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0) || 0;
+  const strips = project.layout?.strips || [];
+  const totalLeds = pixelsFromPatchBoard(project.layout?.patchBoard, strips).length;
   return JSON.stringify({
     app: 'Lightweaver',
     version: project.version,
@@ -130,7 +154,7 @@ export function makeManifest(project, opts = {}) {
     fps: opts.fps,
     duration: project.show?.duration,
     totalLeds,
-    strips: project.layout?.strips?.map(s => ({ id: s.id, name: s.name, pixelCount: s.pixels?.length || s.pixelCount || 0 })) || [],
+    strips: strips.map(s => ({ id: s.id, name: s.name, pixelCount: s.pixels?.length || s.pixelCount || 0 })) || [],
   }, null, 2);
 }
 

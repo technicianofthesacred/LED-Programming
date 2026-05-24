@@ -183,6 +183,22 @@ function sourceLedRange(startLed, endLed) {
   return values;
 }
 
+function sourceLedRangeWithinBounds(startLed, endLed, minLed, maxLed) {
+  const start = ledIndexOrNull(startLed);
+  const end = ledIndexOrNull(endLed);
+  if (start === null || end === null || maxLed < minLed) return [];
+  const step = start <= end ? 1 : -1;
+  const boundedStart = step > 0 ? Math.max(start, minLed) : Math.min(start, maxLed);
+  const boundedEnd = step > 0 ? Math.min(end, maxLed) : Math.max(end, minLed);
+  if (step > 0 ? boundedStart > boundedEnd : boundedStart < boundedEnd) return [];
+
+  const values = [];
+  for (let led = boundedStart; step > 0 ? led <= boundedEnd : led >= boundedEnd; led += step) {
+    values.push(led);
+  }
+  return values;
+}
+
 function stripLedBounds(strip) {
   return { minLed: 0, maxLed: (strip.pixels?.length ?? strip.pixelCount ?? 0) - 1 };
 }
@@ -204,10 +220,15 @@ function validStripRange(source, strip) {
 
 function expandStripPatch(patch, strip, startIndex, resolvedPlayback) {
   const rangeInfo = validStripRange(patch.source, strip);
-  if (!rangeInfo.valid) return [];
+  if (rangeInfo.reason === 'malformed') return [];
 
   const pixels = [];
-  const range = sourceLedRange(rangeInfo.startLed, rangeInfo.endLed);
+  const range = sourceLedRangeWithinBounds(
+    rangeInfo.startLed,
+    rangeInfo.endLed,
+    0,
+    rangeInfo.maxLed,
+  );
   for (const sourceLed of range) {
     const sourcePixel = strip.pixels?.[sourceLed];
     if (!sourcePixel) continue;
@@ -384,10 +405,9 @@ export function validatePatchBoard(board, strips = []) {
         patchId: patch.id,
         message: `${patch.name} uses LEDs ${patch.source.startLed}-${patch.source.endLed}, but ${strip.name || strip.id} has LEDs 0-${rangeInfo.maxLed}.`,
       });
-      continue;
     }
 
-    for (const led of sourceLedRange(rangeInfo.startLed, rangeInfo.endLed)) {
+    for (const led of sourceLedRangeWithinBounds(rangeInfo.startLed, rangeInfo.endLed, 0, rangeInfo.maxLed)) {
       const key = `${patch.source.stripId}:${led}`;
       if (seenSourceLeds.has(key)) {
         warnings.push({
