@@ -49,6 +49,45 @@ test('normalization creates a default board for missing saved patch board data',
   assert.equal(board.patches[0].source.stripId, 'layer-1');
 });
 
+test('normalization preserves custom rows while appending newly added strips', () => {
+  const board = {
+    physicalLocked: false,
+    chains: [{ id: 'main', name: 'Main physical strip', rowIds: ['off', 'patch-layer-1'] }],
+    groups: [],
+    patches: [
+      {
+        id: 'off',
+        name: 'Hidden LEDs',
+        groupId: null,
+        source: { type: 'off', ledCount: 2 },
+        output: { mode: 'off' },
+        playback: {},
+      },
+      {
+        id: 'patch-layer-1',
+        name: 'Layer 1',
+        groupId: null,
+        source: { type: 'strip', stripId: 'layer-1', startLed: 1, endLed: 0 },
+        output: { mode: 'normal' },
+        playback: { speed: 0.5 },
+      },
+    ],
+  };
+
+  const normalized = normalizePatchBoard(board, [
+    makeStrip('layer-1', 2),
+    makeStrip('layer-2', 3),
+  ]);
+
+  assert.deepEqual(normalized.chains[0].rowIds, ['off', 'patch-layer-1', 'patch-layer-2']);
+  assert.deepEqual(
+    normalized.patches.find(patch => patch.id === 'patch-layer-1').source,
+    { type: 'strip', stripId: 'layer-1', startLed: 1, endLed: 0 },
+  );
+  assert.equal(normalized.patches.find(patch => patch.id === 'off').source.ledCount, 2);
+  assert.equal(normalized.patches.find(patch => patch.id === 'patch-layer-2').source.endLed, 2);
+});
+
 test('forward patch 2 -> 10 emits inclusive ascending source LEDs', () => {
   const strips = [makeStrip('layer-7', 12)];
   const board = {

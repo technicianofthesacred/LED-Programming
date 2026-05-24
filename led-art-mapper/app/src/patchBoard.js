@@ -8,8 +8,6 @@ export const DEFAULT_PLAYBACK = Object.freeze({
   enabled: true,
 });
 
-const patchIdForStrip = strip => `patch-${strip.id}`;
-
 const clone = value => JSON.parse(JSON.stringify(value));
 
 const byId = items => new Map((items || []).map(item => [item.id, item]));
@@ -22,26 +20,30 @@ const ledIndexOrNull = value => {
   return Number.isFinite(number) ? Math.trunc(number) : null;
 };
 
+const patchIdForStrip = strip => `patch-${strip.id}`;
+
+const patchForStrip = strip => ({
+  id: patchIdForStrip(strip),
+  name: strip.name || strip.id,
+  groupId: null,
+  source: {
+    type: 'strip',
+    stripId: strip.id,
+    startLed: 0,
+    endLed: Math.max(0, (strip.pixelCount ?? strip.pixels?.length ?? 1) - 1),
+  },
+  output: { mode: strip.visible === false ? 'off' : 'normal' },
+  playback: {
+    patternId: null,
+    speed: strip.speed ?? null,
+    brightness: strip.brightness ?? null,
+    hueShift: strip.hueShift ?? null,
+    enabled: strip.visible === false ? false : null,
+  },
+});
+
 export function createDefaultPatchBoard(strips = []) {
-  const patches = strips.map(strip => ({
-    id: patchIdForStrip(strip),
-    name: strip.name || strip.id,
-    groupId: null,
-    source: {
-      type: 'strip',
-      stripId: strip.id,
-      startLed: 0,
-      endLed: Math.max(0, (strip.pixelCount ?? strip.pixels?.length ?? 1) - 1),
-    },
-    output: { mode: strip.visible === false ? 'off' : 'normal' },
-    playback: {
-      patternId: null,
-      speed: strip.speed ?? null,
-      brightness: strip.brightness ?? null,
-      hueShift: strip.hueShift ?? null,
-      enabled: strip.visible === false ? false : null,
-    },
-  }));
+  const patches = strips.map(strip => patchForStrip(strip));
 
   return {
     physicalLocked: false,
@@ -53,6 +55,23 @@ export function createDefaultPatchBoard(strips = []) {
     groups: [],
     patches,
   };
+}
+
+function ensureStripPatches(board, strips) {
+  const chain = board.chains[0];
+  const stripIdsWithPatch = new Set(
+    board.patches
+      .filter(patch => patch.source?.type === 'strip')
+      .map(patch => patch.source.stripId),
+  );
+
+  for (const strip of strips) {
+    if (stripIdsWithPatch.has(strip.id)) continue;
+    const patch = patchForStrip(strip);
+    board.patches.push(patch);
+    chain.rowIds.push(patch.id);
+    stripIdsWithPatch.add(strip.id);
+  }
 }
 
 export function normalizePatchBoard(board, strips = []) {
@@ -71,6 +90,7 @@ export function normalizePatchBoard(board, strips = []) {
         rowIds: Array.isArray(chain.rowIds) ? chain.rowIds : [],
       }))
     : [{ id: DEFAULT_CHAIN_ID, name: 'Main physical strip', rowIds: copy.patches.map(p => p.id) }];
+  ensureStripPatches(copy, strips);
 
   return copy;
 }
