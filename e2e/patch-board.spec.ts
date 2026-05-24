@@ -2,6 +2,14 @@ import { test, expect } from '@playwright/test';
 
 const SIMPLE_SVG = 'e2e/fixtures/simple-layers.svg';
 
+async function disableExportNormalization(page) {
+  await page.getByRole('button', { name: 'Export' }).click();
+  const normalize = page.locator('#export-normalize');
+  if (await normalize.isChecked()) {
+    await normalize.uncheck();
+  }
+}
+
 test('patch board reorder changes WLED export order', async ({ page }) => {
   await page.goto('/');
   await page.evaluate(() => localStorage.clear());
@@ -46,6 +54,16 @@ test('patch board range edits and reverse controls update row state', async ({ p
   await page.getByRole('button', { name: 'Patch Board' }).click();
   const firstRow = page.locator('.patch-row').first();
   await expect(firstRow).toBeVisible();
+  const originalStart = parseInt(await firstRow.locator('.patch-start').inputValue(), 10);
+  const originalEnd = parseInt(await firstRow.locator('.patch-end').inputValue(), 10);
+  const originalFirstPatchCount = Math.abs(originalEnd - originalStart) + 1;
+
+  await disableExportNormalization(page);
+  const fullExport = JSON.parse(await page.locator('#export-preview').innerText());
+  const sourceAt2 = fullExport.map[2];
+  const sourceAt10 = fullExport.map[10];
+
+  await page.getByRole('button', { name: 'Patch Board' }).click();
 
   const start = firstRow.locator('.patch-start');
   const end = firstRow.locator('.patch-end');
@@ -57,9 +75,22 @@ test('patch board range edits and reverse controls update row state', async ({ p
   await expect(start).toHaveValue('2');
   await expect(end).toHaveValue('10');
 
+  await page.getByRole('button', { name: 'Export' }).click();
+  const rangedExport = JSON.parse(await page.locator('#export-preview').innerText());
+  expect(rangedExport.n).toBe(fullExport.n - originalFirstPatchCount + 9);
+  expect(rangedExport.map[0]).toEqual(sourceAt2);
+  expect(rangedExport.map[8]).toEqual(sourceAt10);
+
+  await page.getByRole('button', { name: 'Patch Board' }).click();
   await firstRow.getByRole('button', { name: 'Reverse patch' }).click();
   await expect(firstRow.locator('.patch-start')).toHaveValue('10');
   await expect(firstRow.locator('.patch-end')).toHaveValue('2');
+
+  await page.getByRole('button', { name: 'Export' }).click();
+  const reversedExport = JSON.parse(await page.locator('#export-preview').innerText());
+  expect(reversedExport.n).toBe(fullExport.n - originalFirstPatchCount + 9);
+  expect(reversedExport.map[0]).toEqual(sourceAt10);
+  expect(reversedExport.map[8]).toEqual(sourceAt2);
 });
 
 test('patch board off block reserves physical addresses in export', async ({ page }) => {
@@ -74,10 +105,14 @@ test('patch board off block reserves physical addresses in export', async ({ pag
   await page.getByRole('button', { name: 'Patch Board' }).click();
   const rows = page.locator('.patch-row');
   const rowCountBefore = await rows.count();
+  const firstPatchStart = parseInt(await rows.first().locator('.patch-start').inputValue(), 10);
+  const firstPatchEnd = parseInt(await rows.first().locator('.patch-end').inputValue(), 10);
+  const firstPatchCount = Math.abs(firstPatchEnd - firstPatchStart) + 1;
 
-  await page.getByRole('button', { name: 'Export' }).click();
+  await disableExportNormalization(page);
   const previewBefore = await page.locator('#export-preview').innerText();
   const exportedBefore = JSON.parse(previewBefore);
+  const originalSecondPatchFirstPoint = exportedBefore.map[firstPatchCount];
 
   await page.getByRole('button', { name: 'Patch Board' }).click();
   await page.getByRole('button', { name: 'Add off block' }).click();
@@ -86,11 +121,19 @@ test('patch board off block reserves physical addresses in export', async ({ pag
   await page.locator('#prompt-ok').click();
 
   await expect(rows).toHaveCount(rowCountBefore + 1);
+  const offPatchId = await rows.nth(rowCountBefore).getAttribute('data-patch-id');
+  const offRow = page.locator(`.patch-row[data-patch-id="${offPatchId}"]`);
+  for (let index = rowCountBefore; index > 1; index -= 1) {
+    await offRow.getByRole('button', { name: 'Move up' }).click();
+  }
 
   await page.getByRole('button', { name: 'Export' }).click();
   const previewAfter = await page.locator('#export-preview').innerText();
   const exportedAfter = JSON.parse(previewAfter);
 
-  expect(exportedAfter.n).toBeGreaterThan(3);
-  expect(exportedAfter.n).toBeGreaterThanOrEqual(exportedBefore.n + 3);
+  expect(exportedAfter.n).toBe(exportedBefore.n + 3);
+  expect(exportedAfter.map[firstPatchCount]).toEqual([0, 0]);
+  expect(exportedAfter.map[firstPatchCount + 1]).toEqual([0, 0]);
+  expect(exportedAfter.map[firstPatchCount + 2]).toEqual([0, 0]);
+  expect(exportedAfter.map[firstPatchCount + 3]).toEqual(originalSecondPatchFirstPoint);
 });
