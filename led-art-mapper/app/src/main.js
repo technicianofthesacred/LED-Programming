@@ -256,7 +256,7 @@ function _createStripsFromImportedLayers(layers) {
   }
 
   _reindex();
-  _resetPatchBoardFromStrips();
+  _ensurePatchBoard();
   _rebuildNorm();
 }
 
