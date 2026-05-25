@@ -107,6 +107,8 @@ function ensureStripPatches(board, strips) {
     chain.rowIds.push(patch.id);
     stripIdsWithPatch.add(strip.id);
   }
+
+  normalizeSegmentedStripRanges(board, strips);
 }
 
 export function normalizePatchBoard(board, strips = []) {
@@ -313,6 +315,7 @@ export function updatePatchRange(board, patchId, startLed, endLed) {
   patch.source.startLed = start;
   patch.source.endLed = end;
   patch.source.autoRange = false;
+  delete patch.source.stripPixelCount;
   return board;
 }
 
@@ -332,19 +335,24 @@ export function movePatch(board, patchId, direction) {
 
 function patchForStripSegment(strip, startLed, endLed, segmentIndex, segmentCount) {
   const isFullStrip = startLed === 0 && endLed === maxLedForStrip(strip) && segmentCount === 1;
+  const source = {
+    type: 'strip',
+    stripId: strip.id,
+    startLed,
+    endLed,
+    autoRange: isFullStrip,
+  };
+  if (!isFullStrip) {
+    source.stripPixelCount = maxLedForStrip(strip) + 1;
+  }
+
   return {
     id: isFullStrip ? patchIdForStrip(strip) : `patch-${strip.id}-${startLed}-${endLed}`,
     name: isFullStrip
       ? (strip.name || strip.id)
       : `${strip.name || strip.id} ${segmentIndex + 1}`,
     groupId: null,
-    source: {
-      type: 'strip',
-      stripId: strip.id,
-      startLed,
-      endLed,
-      autoRange: isFullStrip,
-    },
+    source,
     output: { mode: strip.visible === false ? 'off' : 'normal' },
     playback: {
       patternId: null,
@@ -356,16 +364,13 @@ function patchForStripSegment(strip, startLed, endLed, segmentIndex, segmentCoun
   };
 }
 
-export function sliceStripIntoPatches(board, strip, cutIndexes = []) {
-  if (board.physicalLocked) {
-    throw new Error('Unlock setup mode before changing physical patch ranges.');
-  }
+function sliceStripIntoPatchesInternal(board, strip, cutIndexes = []) {
   const maxLed = maxLedForStrip(strip);
   if (maxLed < 0) return board;
 
   const cuts = [...new Set((cutIndexes || [])
     .map(value => ledIndexOrNull(value))
-    .filter(value => value !== null && value > 0 && value < maxLed))]
+    .filter(value => value !== null && value >= 0 && value < maxLed))]
     .sort((a, b) => a - b);
 
   const ranges = [];
@@ -376,12 +381,21 @@ export function sliceStripIntoPatches(board, strip, cutIndexes = []) {
   }
   ranges.push([startLed, maxLed]);
 
+  const oldStripPatches = board.patches
+    .filter(patch => patch.source?.type === 'strip' && patch.source.stripId === strip.id);
+  const oldPatchesById = byId(oldStripPatches);
   const nextPatches = ranges.map(([start, end], index) =>
     patchForStripSegment(strip, start, end, index, ranges.length));
+  nextPatches.forEach(patch => {
+    const oldPatchId = matchingPatchIdForSpan(oldStripPatches, patchSpan(patch));
+    const oldPatch = oldPatchesById.get(oldPatchId);
+    if (!oldPatch) return;
+    patch.groupId = oldPatch.groupId ?? null;
+    patch.output = oldPatch.output ? clone(oldPatch.output) : patch.output;
+    patch.playback = oldPatch.playback ? clone(oldPatch.playback) : patch.playback;
+  });
   const selectedPatchIds = new Set(
-    board.patches
-      .filter(patch => patch.source?.type === 'strip' && patch.source.stripId === strip.id)
-      .map(patch => patch.id),
+    oldStripPatches.map(patch => patch.id),
   );
   const firstPatchIndex = board.patches.findIndex(
     patch => patch.source?.type === 'strip' && patch.source.stripId === strip.id,
@@ -399,6 +413,13 @@ export function sliceStripIntoPatches(board, strip, cutIndexes = []) {
   const insertRowIndex = firstRowIndex >= 0 ? firstRowIndex : chain.rowIds.length;
   chain.rowIds.splice(insertRowIndex, 0, ...nextPatches.map(patch => patch.id));
   return board;
+}
+
+export function sliceStripIntoPatches(board, strip, cutIndexes = []) {
+  if (board.physicalLocked) {
+    throw new Error('Unlock setup mode before changing physical patch ranges.');
+  }
+  return sliceStripIntoPatchesInternal(board, strip, cutIndexes);
 }
 
 function patchSpan(patch) {
@@ -473,7 +494,10 @@ function hasContiguousNaturalStripRows(rowIds, stripIds) {
     rowIds.filter(rowId => stripIdSet.has(rowId)).length === stripIds.length;
 }
 
-export function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
+export function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes, options = {}) {
+  if (options.respectLock !== false && board.physicalLocked) {
+    throw new Error('Unlock setup mode before changing physical patch ranges.');
+  }
   const oldStripPatches = stripPatchesInVisualOrder(board, strip.id);
   const oldStripIds = oldStripPatches.map(patch => patch.id);
   const oldStripIdSet = new Set(oldStripIds);
@@ -482,7 +506,7 @@ export function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
   const hasNaturalRoute = hasContiguousNaturalStripRows(oldRowIds, oldStripIds) &&
     oldStripPatches.every(patch => !sourceRunsReverse(patch));
 
-  sliceStripIntoPatches(board, strip, cutIndexes);
+  sliceStripIntoPatchesInternal(board, strip, cutIndexes);
   if (hasNaturalRoute) return board;
 
   const nextStripPatches = stripPatchesInVisualOrder(board, strip.id);
@@ -507,6 +531,40 @@ export function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
   return board;
 }
 
+function normalizeSegmentedStripRanges(board, strips) {
+  for (const strip of strips) {
+    const patches = stripPatchesInVisualOrder(board, strip.id);
+    if (patches.length <= 1) continue;
+    let expectedStart = 0;
+    let hasResizableCoverage = true;
+    let savedMaxLed = -1;
+    for (const patch of patches) {
+      const span = patchSpan(patch);
+      if (!span || span.min !== expectedStart) {
+        hasResizableCoverage = false;
+        break;
+      }
+      const savedPixelCount = ledIndexOrNull(patch.source?.stripPixelCount);
+      if (savedPixelCount !== null && savedPixelCount > 0) {
+        savedMaxLed = Math.max(savedMaxLed, savedPixelCount - 1);
+      }
+      expectedStart = span.max + 1;
+    }
+    if (!hasResizableCoverage) continue;
+    const maxLed = maxLedForStrip(strip);
+    const coverageEnd = expectedStart - 1;
+    const coversSavedStrip = savedMaxLed >= 0 && coverageEnd === savedMaxLed;
+    const coversCurrentStrip = coverageEnd === maxLed;
+    const needsBoundsShrink = coverageEnd > maxLed;
+    if (!coversSavedStrip && !coversCurrentStrip && !needsBoundsShrink) continue;
+    const cuts = patches
+      .slice(0, -1)
+      .map(patch => patchSpan(patch)?.max)
+      .filter(value => Number.isFinite(value) && value < maxLed);
+    sliceStripIntoPatchesPreservingRoute(board, strip, cuts, { respectLock: false });
+  }
+}
+
 export function cutsForStrip(board, stripId) {
   const normalized = normalizePatchBoard(board);
   const patches = stripPatchesInVisualOrder(normalized, stripId);
@@ -528,7 +586,7 @@ export function nudgeStripCut(board, strip, cutLed, delta) {
   if (index < 0) return board;
 
   const maxLed = maxLedForStrip(strip);
-  const previousLimit = index === 0 ? 1 : cuts[index - 1] + 1;
+  const previousLimit = index === 0 ? 0 : cuts[index - 1] + 1;
   const nextLimit = index === cuts.length - 1 ? maxLed - 1 : cuts[index + 1] - 1;
   const nextCut = cuts[index] + step;
   if (nextCut < previousLimit || nextCut > nextLimit) return board;
@@ -553,13 +611,27 @@ export function applyPatchRouteOrder(board, patchIds = []) {
   if (board.physicalLocked) {
     throw new Error('Unlock setup mode before changing physical patch order.');
   }
+  const patchesById = byId(board.patches);
   const patchIdSet = new Set(board.patches.map(patch => patch.id));
   const uniqueIds = [];
   for (const patchId of patchIds) {
     if (!patchIdSet.has(patchId) || uniqueIds.includes(patchId)) continue;
     uniqueIds.push(patchId);
   }
-  mutableMainChain(board).rowIds = uniqueIds;
+  const chain = mutableMainChain(board);
+  const remainingStripIds = [...uniqueIds];
+  const nextRowIds = [];
+  for (const rowId of chain.rowIds) {
+    const patch = patchesById.get(rowId);
+    if (!patch) continue;
+    if (patch.source?.type === 'strip') {
+      if (remainingStripIds.length) nextRowIds.push(remainingStripIds.shift());
+      continue;
+    }
+    if (!nextRowIds.includes(rowId)) nextRowIds.push(rowId);
+  }
+  nextRowIds.push(...remainingStripIds);
+  chain.rowIds = nextRowIds;
   return board;
 }
 

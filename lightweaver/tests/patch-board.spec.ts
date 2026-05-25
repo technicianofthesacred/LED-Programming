@@ -184,6 +184,7 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await clickAt(0.66);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(3);
   await page.getByRole('button', { name: 'Chop' }).click();
+  await page.getByRole('button', { name: 'Insert off LEDs' }).click();
 
   await page.getByRole('button', { name: 'Link' }).click();
   const segments = page.locator('.lw-wire-canvas-segment-hit');
@@ -199,8 +200,52 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await saved.saveAs(projectPath);
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
   const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
+  const offRowId = rowIds.find((id: string) => id.startsWith('off-'));
+  expect(offRowId).toBeTruthy();
   expect(rowIds).toEqual([
     'patch-line-layer-7-9',
+    offRowId,
     'patch-line-layer-0-3',
   ]);
+});
+
+test('canvas link mode ignores segment clicks while physical map is locked', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-link-locked-'));
+  const fixture = writeFixture(tmp);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
+
+  await page.getByRole('button', { name: 'Chop' }).click();
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const target = await stripPath.evaluate((path: SVGPathElement) => {
+    const point = path.getPointAtLength(path.getTotalLength() * 0.45);
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    return {
+      x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+      y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+    };
+  });
+  expect(target).not.toBeNull();
+  await page.mouse.click(target!.x, target!.y);
+  await page.getByRole('button', { name: 'Chop' }).click();
+  await page.getByRole('button', { name: 'Unlocked' }).click();
+
+  await page.getByRole('button', { name: 'Link' }).click();
+  const segments = page.locator('.lw-wire-canvas-segment-hit');
+  await expect(segments).toHaveCount(2);
+  await segments.nth(1).click();
+
+  const saveDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project JSON').click();
+  const saved = await saveDownload;
+  const projectPath = path.join(tmp, await saved.suggestedFilename());
+  await saved.saveAs(projectPath);
+  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
+  expect(rowIds).toHaveLength(2);
 });

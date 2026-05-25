@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
   addOffPatch,
+  cutsForStrip,
   expandPatchBoard,
   mainChain,
   movePatch,
   normalizePatchBoard,
-  sliceStripIntoPatches,
+  sliceStripIntoPatchesPreservingRoute,
   updatePatchRange,
 } from '../lib/patchBoard.js';
 
@@ -79,17 +80,6 @@ function patchSpan(patch) {
   return { min: Math.min(start, end), max: Math.max(start, end) };
 }
 
-function sourceCutsForStrip(board, stripId) {
-  const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
-  const patches = mainChain(board).rowIds
-    .map(id => patchesById.get(id))
-    .filter(patch => patch?.source?.type === 'strip' && patch.source.stripId === stripId)
-    .sort((a, b) => (patchSpan(a)?.min ?? 0) - (patchSpan(b)?.min ?? 0));
-  return patches.slice(0, -1)
-    .map(patch => patchSpan(patch)?.max)
-    .filter(value => Number.isFinite(value));
-}
-
 function nearestPreviewIndex(points, x, y) {
   if (!points.length) return 0;
   let best = points[0];
@@ -151,7 +141,7 @@ export function PatchBoardScreen({
   );
   const selectedPatch = patchesById.get(selectedPatchId) || activeStripPatches[0] || orderedPatches[0] || null;
   const points = useMemo(() => previewPoints(activeStrip), [activeStrip]);
-  const sourceCuts = activeStrip ? sourceCutsForStrip(board, activeStrip.id) : [];
+  const sourceCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
 
   const updateBoard = (mutate) => {
     setPatchBoard(prev => {
@@ -164,7 +154,7 @@ export function PatchBoardScreen({
   const cutActivePath = (cutLed) => {
     if (!activeStrip || board.physicalLocked) return;
     const cuts = [...new Set([...sourceCuts, cutLed])];
-    updateBoard(next => sliceStripIntoPatches(next, activeStrip, cuts));
+    updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, cuts));
   };
 
   const handleMapClick = (event) => {
@@ -195,7 +185,7 @@ export function PatchBoardScreen({
 
   const resetActivePath = () => {
     if (!activeStrip || board.physicalLocked) return;
-    updateBoard(next => sliceStripIntoPatches(next, activeStrip, []));
+    updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, []));
     setSelectedPatchId(null);
     if (selectedWireCut?.stripId === activeStrip.id) onClearSelectedCut?.();
   };

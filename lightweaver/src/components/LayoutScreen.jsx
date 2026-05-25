@@ -1460,8 +1460,8 @@ export function LayoutScreen() {
       }
     });
     const maxCut = strip.pixels.length - 2;
-    if (maxCut < 1) return null;
-    return Math.max(1, Math.min(maxCut, nearestIndex));
+    if (maxCut < 0) return null;
+    return Math.max(0, Math.min(maxCut, nearestIndex));
   }, []);
 
   const chopStripAtEvent = useCallback((event, strip) => {
@@ -1478,7 +1478,7 @@ export function LayoutScreen() {
   }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard]);
 
   const toggleRoutePatch = useCallback((patchId) => {
-    if (wireOverlayMode !== 'link') return;
+    if (wireOverlayMode !== 'link' || project.patchBoard?.physicalLocked) return;
     setLinkRouteIds(prev => {
       const baseRoute = linkRouteStartedRef.current ? prev : [];
       const nextRoute = baseRoute.includes(patchId)
@@ -1490,7 +1490,7 @@ export function LayoutScreen() {
       setSelectedWireCut(null);
       return nextRoute;
     });
-  }, [updatePatchBoard, wireOverlayMode]);
+  }, [project.patchBoard, updatePatchBoard, wireOverlayMode]);
 
   const nudgeSelectedWireCut = useCallback((delta) => {
     if (!selectedWireCut) return;
@@ -1503,7 +1503,7 @@ export function LayoutScreen() {
     const index = currentCuts.indexOf(selectedWireCut.cutLed);
     if (index < 0) return;
     const maxLed = Math.max(0, strip.pixels?.length ?? strip.pixelCount ?? 1) - 1;
-    const previousLimit = index === 0 ? 1 : currentCuts[index - 1] + 1;
+    const previousLimit = index === 0 ? 0 : currentCuts[index - 1] + 1;
     const nextLimit = index === currentCuts.length - 1 ? maxLed - 1 : currentCuts[index + 1] - 1;
     const nextCutLed = selectedWireCut.cutLed + step;
     if (nextCutLed < previousLimit || nextCutLed > nextLimit) return;

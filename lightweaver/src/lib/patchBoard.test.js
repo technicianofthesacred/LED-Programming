@@ -161,10 +161,24 @@ test('sliceStripIntoPatches turns visual cut marks into ordered strip patches', 
     'patch-outer-6-7',
   ]);
   assert.deepEqual(board.patches.map(p => p.source), [
-    { type: 'strip', stripId: 'outer', startLed: 0, endLed: 2, autoRange: false },
-    { type: 'strip', stripId: 'outer', startLed: 3, endLed: 5, autoRange: false },
-    { type: 'strip', stripId: 'outer', startLed: 6, endLed: 7, autoRange: false },
+    { type: 'strip', stripId: 'outer', startLed: 0, endLed: 2, autoRange: false, stripPixelCount: 8 },
+    { type: 'strip', stripId: 'outer', startLed: 3, endLed: 5, autoRange: false, stripPixelCount: 8 },
+    { type: 'strip', stripId: 'outer', startLed: 6, endLed: 7, autoRange: false, stripPixelCount: 8 },
   ]);
+});
+
+test('sliceStripIntoPatches can create a one-led first segment', () => {
+  const strip = makeStrip('outer', 2);
+  const board = createDefaultPatchBoard([strip]);
+
+  sliceStripIntoPatches(board, strip, [0]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-0',
+    'patch-outer-1-1',
+  ]);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [0, 1]);
 });
 
 test('sliceStripIntoPatches preserves off blocks and other strip patches', () => {
@@ -173,7 +187,7 @@ test('sliceStripIntoPatches preserves off blocks and other strip patches', () =>
   const board = createDefaultPatchBoard([outer, inner]);
   const offPatch = addOffPatch(board, 2);
 
-  sliceStripIntoPatches(board, outer, [2, 2, 0, 9]);
+  sliceStripIntoPatches(board, outer, [2, 2, -1, 9]);
 
   assert.deepEqual(board.chains[0].rowIds, [
     'patch-outer-0-2',
@@ -183,6 +197,85 @@ test('sliceStripIntoPatches preserves off blocks and other strip patches', () =>
   ]);
   assert.equal(board.patches.some(patch => patch.id === 'patch-inner'), true);
   assert.equal(board.patches.some(patch => patch.id === offPatch.id), true);
+});
+
+test('normalization reslices segmented strip patches when a strip grows', () => {
+  const strip = makeStrip('outer', 10);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [3, 6]);
+
+  const normalized = normalizePatchBoard(board, [makeStrip('outer', 12)]);
+
+  assert.deepEqual(
+    normalized.patches
+      .filter(patch => patch.source?.type === 'strip')
+      .map(patch => patch.source),
+    [
+      { type: 'strip', stripId: 'outer', startLed: 0, endLed: 3, autoRange: false, stripPixelCount: 12 },
+      { type: 'strip', stripId: 'outer', startLed: 4, endLed: 6, autoRange: false, stripPixelCount: 12 },
+      { type: 'strip', stripId: 'outer', startLed: 7, endLed: 11, autoRange: false, stripPixelCount: 12 },
+    ],
+  );
+  const expanded = expandPatchBoard(normalized, [makeStrip('outer', 12)]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+});
+
+test('normalization reslices segmented strip patches when a strip shrinks', () => {
+  const strip = makeStrip('outer', 10);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [3, 6]);
+
+  const normalized = normalizePatchBoard(board, [makeStrip('outer', 6)]);
+
+  assert.deepEqual(normalized.chains[0].rowIds, [
+    'patch-outer-0-3',
+    'patch-outer-4-5',
+  ]);
+  const expanded = expandPatchBoard(normalized, [makeStrip('outer', 6)]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [0, 1, 2, 3, 4, 5]);
+});
+
+test('normalization preserves segmented patch output and playback while adapting length', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const tailPatch = board.patches.find(patch => patch.id === 'patch-outer-6-7');
+  tailPatch.output = { mode: 'off' };
+  tailPatch.playback = { patternId: 'spark', speed: 0.25 };
+
+  const normalized = normalizePatchBoard(board, [makeStrip('outer', 10)]);
+  const adaptedTail = normalized.patches.find(patch =>
+    patch.source?.type === 'strip' &&
+    patch.source.stripId === 'outer' &&
+    patch.source.startLed === 6);
+
+  assert.deepEqual(adaptedTail.source, {
+    type: 'strip',
+    stripId: 'outer',
+    startLed: 6,
+    endLed: 9,
+    autoRange: false,
+    stripPixelCount: 10,
+  });
+  assert.deepEqual(adaptedTail.output, { mode: 'off' });
+  assert.deepEqual(adaptedTail.playback, { patternId: 'spark', speed: 0.25 });
+});
+
+test('normalization does not restore a deleted trailing segmented patch', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  board.patches = board.patches.filter(patch => patch.id !== 'patch-outer-6-7');
+  board.chains[0].rowIds = board.chains[0].rowIds.filter(rowId => rowId !== 'patch-outer-6-7');
+
+  const normalized = normalizePatchBoard(board, [strip]);
+
+  assert.deepEqual(normalized.chains[0].rowIds, [
+    'patch-outer-0-2',
+    'patch-outer-3-5',
+  ]);
+  const expanded = expandPatchBoard(normalized, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [0, 1, 2, 3, 4, 5]);
 });
 
 test('sliceStripIntoPatchesPreservingRoute keeps custom route rows while adding a cut', () => {
@@ -243,7 +336,7 @@ test('sliceStripIntoPatchesPreservingRoute preserves a reversed routed segment w
   ]);
   assert.deepEqual(
     board.patches.find(patch => patch.id === 'patch-outer-3-4').source,
-    { type: 'strip', stripId: 'outer', startLed: 4, endLed: 3, autoRange: false },
+    { type: 'strip', stripId: 'outer', startLed: 4, endLed: 3, autoRange: false, stripPixelCount: 8 },
   );
   const expanded = expandPatchBoard(board, [strip]);
   assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [5, 4, 3]);
@@ -288,6 +381,20 @@ test('nudgeStripCut moves one cut while preserving adjacent segments', () => {
     'patch-outer-0-3',
     'patch-outer-4-5',
     'patch-outer-6-7',
+  ]);
+});
+
+test('nudgeStripCut can move the first cut to LED zero', () => {
+  const strip = makeStrip('outer', 4);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [1]);
+
+  nudgeStripCut(board, strip, 1, -1);
+
+  assert.deepEqual(cutsForStrip(board, 'outer'), [0]);
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-0',
+    'patch-outer-1-3',
   ]);
 });
 
@@ -352,7 +459,7 @@ test('nudgeStripCut ignores zero delta without rebuilding patch metadata', () =>
   assert.equal(JSON.stringify(board), before);
 });
 
-test('nudgeStripCut does not cross neighboring cuts or endpoints', () => {
+test('nudgeStripCut does not cross neighboring cuts', () => {
   const strip = makeStrip('outer', 8);
   const board = createDefaultPatchBoard([strip]);
   sliceStripIntoPatches(board, strip, [1, 2]);
@@ -360,7 +467,7 @@ test('nudgeStripCut does not cross neighboring cuts or endpoints', () => {
   nudgeStripCut(board, strip, 1, -1);
   nudgeStripCut(board, strip, 2, -1);
 
-  assert.deepEqual(cutsForStrip(board, 'outer'), [1, 2]);
+  assert.deepEqual(cutsForStrip(board, 'outer'), [0, 1]);
 });
 
 test('deleteStripCut merges adjacent visual segments', () => {
@@ -422,6 +529,29 @@ test('applyPatchRouteOrder makes clicked segments the exported physical route', 
   assert.deepEqual(board.chains[0].rowIds, ['patch-outer-6-7', 'patch-outer-0-2']);
   const expanded = expandPatchBoard(board, [strip]);
   assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [6, 7, 0, 1, 2]);
+});
+
+test('applyPatchRouteOrder preserves existing off rows while replacing strip route rows', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const offPatch = addOffPatch(board, 2);
+  board.chains[0].rowIds = [
+    'patch-outer-0-2',
+    offPatch.id,
+    'patch-outer-3-5',
+    'patch-outer-6-7',
+  ];
+
+  applyPatchRouteOrder(board, ['patch-outer-6-7', 'patch-outer-0-2']);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-6-7',
+    offPatch.id,
+    'patch-outer-0-2',
+  ]);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [6, 7, null, null, 0, 1, 2]);
 });
 
 test('normalization prunes deleted generated strip patches but keeps custom rows', () => {
