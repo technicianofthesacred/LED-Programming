@@ -817,7 +817,7 @@ Task 4 completion note: Details now shows the selected canvas cut with Move earl
 **Files:**
 - Modify as needed only if verification reveals issues.
 
-- [ ] **Step 1: Run unit tests**
+- [x] **Step 1: Run unit tests**
 
 Run:
 
@@ -827,7 +827,7 @@ npm run test:unit
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run core audit**
+- [x] **Step 2: Run core audit**
 
 Run:
 
@@ -837,7 +837,7 @@ npm run test:core
 
 Expected: `project-frame-audit passed`.
 
-- [ ] **Step 3: Run production build**
+- [x] **Step 3: Run production build**
 
 Run:
 
@@ -847,7 +847,7 @@ npm run build
 
 Expected: Vite build exits 0.
 
-- [ ] **Step 4: Run browser regression suite**
+- [x] **Step 4: Run browser regression suite**
 
 Run:
 
@@ -857,7 +857,7 @@ npx playwright test tests/patch-board.spec.ts tests/screen-smoke.spec.ts tests/w
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Verify localhost preview**
+- [x] **Step 5: Verify localhost preview**
 
 Open or refresh:
 
@@ -873,7 +873,7 @@ Expected:
 - Right-side Details shows `Selected cut` with `-`, `+`, and Delete.
 - Clicking `Link` makes chopped segments clickable and numbered.
 
-- [ ] **Step 6: Commit implementation**
+- [x] **Step 6: Commit implementation**
 
 Run:
 
@@ -889,3 +889,5 @@ Run:
 ```bash
 git push origin codex/patch-board-foundation
 ```
+
+Task 5 verification note: `npm run test:unit`, `npm run test:core`, `npm run build`, and the combined Playwright regression suite passed. The in-app browser preview at `http://localhost:9999/#screen=patch` shows Lightweaver v2 with `Chop` and `Link`; both toolbar modes activate their mode chip.
