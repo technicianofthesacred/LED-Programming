@@ -10,10 +10,11 @@ import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
 
 const AI_PROVIDER_STORAGE_KEY = 'lw_ai_pattern_provider';
 const AI_PROVIDER_OPTIONS = [
+  { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyLabel: 'OpenRouter key' },
   { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyLabel: 'ChatGPT key' },
   { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyLabel: 'Claude key' },
-  { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyLabel: 'OpenRouter key' },
 ];
+const PRIMARY_AI_PROVIDER = 'openrouter';
 
 function getProviderOption(provider) {
   return AI_PROVIDER_OPTIONS.find(option => option.id === provider) || AI_PROVIDER_OPTIONS[0];
@@ -81,14 +82,14 @@ export function AiPatternAssistant({
   const [provider, setProvider] = useState(() => {
     try {
       const saved = localStorage.getItem(AI_PROVIDER_STORAGE_KEY);
-      return AI_PROVIDER_OPTIONS.some(option => option.id === saved) ? saved : 'openai';
+      return saved === PRIMARY_AI_PROVIDER ? saved : PRIMARY_AI_PROVIDER;
     } catch {
-      return 'openai';
+      return PRIMARY_AI_PROVIDER;
     }
   });
   const [settingsOpen, setSettingsOpen] = useState(connectedOnLoad);
   const [settings, setSettings] = useState(null);
-  const [settingsDraft, setSettingsDraft] = useState(() => createSettingsDraft('openai'));
+  const [settingsDraft, setSettingsDraft] = useState(() => createSettingsDraft(PRIMARY_AI_PROVIDER));
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
   const [settingsSaved, setSettingsSaved] = useState(connectedOnLoad ? 'Connected OpenRouter account.' : '');
@@ -123,7 +124,7 @@ export function AiPatternAssistant({
     setSettingsError(null);
     try {
       const data = await requestAiProviderSettings();
-      const nextProvider = getProviderOption(data?.provider).id;
+      const nextProvider = PRIMARY_AI_PROVIDER;
       setSettings(data);
       setProvider(nextProvider);
       setSettingsDraft(createSettingsDraft(nextProvider));
@@ -161,7 +162,7 @@ export function AiPatternAssistant({
     setSettingsError(null);
     setSettingsSaved('');
     try {
-      const saved = await saveAiProviderSettings(settingsDraft);
+      const saved = await saveAiProviderSettings({ ...settingsDraft, provider: PRIMARY_AI_PROVIDER });
       const nextProvider = getProviderOption(saved?.provider).id;
       setSettings(saved);
       setProvider(nextProvider);
@@ -201,7 +202,7 @@ export function AiPatternAssistant({
     setMessages(prev => [...prev, { role: 'user', text: instruction }]);
     try {
       const rawDraft = await requestAiPatternDraft({
-        provider,
+        provider: PRIMARY_AI_PROVIDER,
         mode: modeOverride || (draft ? 'refine' : 'transform'),
         instruction,
         sourcePattern,
@@ -284,8 +285,8 @@ export function AiPatternAssistant({
               </div>
               <div className="lw-ai-account-connect">
                 <div>
-                  <strong>Use your account</strong>
-                  <span>Connect OpenRouter, then choose OpenAI, Claude, or other models through that account.</span>
+                  <strong>Use OpenRouter</strong>
+                  <span>Connect your OpenRouter account. Lightweaver will use OpenRouter for AI pattern generation.</span>
                   <em>ChatGPT and Claude account login are not available directly here.</em>
                 </div>
                 <button
@@ -297,50 +298,38 @@ export function AiPatternAssistant({
                   Connect OpenRouter account
                 </button>
               </div>
-              <label className="lw-ai-settings-provider">
-                <span>Default AI provider</span>
-                <select
-                  aria-label="Default AI provider"
-                  value={settingsDraft.provider}
-                  onChange={event => setSettingsDraft(current => ({ ...current, provider: event.target.value }))}
-                  disabled={settingsPending}
-                >
-                  {AI_PROVIDER_OPTIONS.map(option => (
-                    <option value={option.id} key={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="lw-ai-key-list">
-                {AI_PROVIDER_OPTIONS.map(option => {
-                  const status = settings?.providers?.find(item => item.id === option.id);
-                  return (
-                    <label className="lw-ai-key-row" key={option.id}>
-                      <span>
-                        <strong>{option.keyLabel}</strong>
-                        <em>{status?.configured ? 'Saved on this computer. Paste a new key to replace it.' : `Paste ${option.detail} API key`}</em>
-                      </span>
-                      <input
-                        aria-label={option.keyLabel}
-                        type="password"
-                        autoComplete="off"
-                        value={settingsDraft.keys[option.id] || ''}
-                        onChange={event => updateSettingsKey(option.id, event.target.value)}
-                        placeholder={status?.configured ? 'saved, leave blank to keep' : 'paste key'}
-                        disabled={settingsPending}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
+              <details className="lw-ai-manual-settings">
+                <summary>Advanced: paste OpenRouter key</summary>
+                <div className="lw-ai-key-list">
+                  {AI_PROVIDER_OPTIONS.filter(option => option.id === PRIMARY_AI_PROVIDER).map(option => {
+                    const status = settings?.providers?.find(item => item.id === option.id);
+                    return (
+                      <label className="lw-ai-key-row" key={option.id}>
+                        <span>
+                          <strong>{option.keyLabel}</strong>
+                          <em>{status?.configured ? 'Saved on this computer. Paste a new key to replace it.' : 'Optional fallback if account connection is unavailable.'}</em>
+                        </span>
+                        <input
+                          aria-label={option.keyLabel}
+                          type="password"
+                          autoComplete="off"
+                          value={settingsDraft.keys[option.id] || ''}
+                          onChange={event => updateSettingsKey(option.id, event.target.value)}
+                          placeholder={status?.configured ? 'saved, leave blank to keep' : 'paste OpenRouter key'}
+                          disabled={settingsPending}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="lw-ai-settings-actions">
+                  <button className="btn" type="submit" disabled={settingsPending}>
+                    {settingsPending ? 'Saving' : 'Save AI settings'}
+                  </button>
+                </div>
+              </details>
               {settingsError && <div className="lw-ai-settings-error">{settingsError}</div>}
               {settingsSaved && <div className="lw-ai-settings-saved">{settingsSaved}</div>}
-              <div className="lw-ai-settings-actions">
-                <button className="btn" type="submit" disabled={settingsPending}>
-                  {settingsPending ? 'Saving' : 'Save AI settings'}
-                </button>
-              </div>
             </form>
           )}
           <div className="lw-ai-workflow">

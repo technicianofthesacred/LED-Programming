@@ -154,11 +154,11 @@ The routes are implemented in the existing Lightweaver server. They are responsi
 - Returning the parsed draft JSON to the browser.
 - Returning provider and validation errors in a user-readable form.
 
-The implementation can route each request through OpenAI, Anthropic, or OpenRouter. The browser can choose and save the default provider, but it must never receive or store provider API keys. OpenRouter account connection is the primary no-key setup path. Direct ChatGPT and Claude consumer account OAuth is not available for model API calls, so those remain manual-key or OpenRouter-routed options.
+OpenRouter is the default and normal route for AI pattern generation. The UI should present OpenRouter account connection first and avoid making ChatGPT or Claude look like equal setup choices. Direct ChatGPT and Claude consumer account OAuth is not available for model API calls, so those remain backend/advanced options only.
 
 Environment variables:
 
-- `AI_PATTERN_PROVIDER`: optional server default, one of `openai`, `anthropic`, or `openrouter`.
+- `AI_PATTERN_PROVIDER`: optional server default, one of `openai`, `anthropic`, or `openrouter`. If unset, Lightweaver defaults to `openrouter`.
 - `OPENAI_API_KEY`: required when using ChatGPT/OpenAI generation.
 - `ANTHROPIC_API_KEY`: required when using Claude/Anthropic generation.
 - `OPENROUTER_API_KEY`: required when using OpenRouter generation.
@@ -294,7 +294,7 @@ Later versions can add:
 
 ## Implementation Notes
 
-The AI provider calls run on the Lightweaver server, not in the browser. OpenAI uses the JavaScript SDK and structured Responses output. Anthropic and OpenRouter use server-side HTTP calls and are normalized back into the same Lightweaver draft JSON object. The AI setup panel sends new key values to the server but the settings status endpoint returns only provider names, model choices, and configured/not-configured flags.
+The AI provider calls run on the Lightweaver server, not in the browser. OpenRouter is the primary route. OpenAI and Anthropic integrations can remain available behind server configuration, but they should not be presented as the ordinary account-login path. The AI setup panel sends new key values to the server but the settings status endpoint returns only provider names, model choices, and configured/not-configured flags.
 
 OpenRouter OAuth uses PKCE. Lightweaver creates a code verifier/challenge, sends the browser to OpenRouter, exchanges the returned code for a user-controlled OpenRouter credential on the server, then saves it into `.lightweaver-ai.local` and switches the active provider to OpenRouter.
 

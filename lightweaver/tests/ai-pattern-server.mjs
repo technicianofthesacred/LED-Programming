@@ -71,10 +71,10 @@ async function withTempRoot(callback) {
 }
 
 assert.equal(getAiPatternModel({ AI_PATTERN_MODEL: 'gpt-5.5' }), 'gpt-5.5');
-assert.equal(getAiPatternModel({}), 'gpt-5.4-mini');
+assert.equal(getAiPatternModel({}), 'openai/gpt-5.1');
 assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'anthropic' }), 'anthropic');
 assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'openrouter' }), 'openrouter');
-assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'bad-provider' }), 'openai');
+assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'bad-provider' }), 'openrouter');
 assert.equal(getAiPatternModel({ AI_PATTERN_ANTHROPIC_MODEL: 'claude-test' }, 'anthropic'), 'claude-test');
 assert.equal(getAiPatternModel({ AI_PATTERN_OPENROUTER_MODEL: 'openrouter/test' }, 'openrouter'), 'openrouter/test');
 
@@ -152,6 +152,7 @@ await withServer(missingKeyApp, async (baseUrl) => {
   });
   assert.equal(response.status, 501);
   assert.equal(body.error.code, 'missing_api_key');
+  assert.match(body.error.message, /OPENROUTER_API_KEY/);
 });
 
 const missingAnthropicKeyApp = createLightweaverServer({
@@ -215,7 +216,7 @@ await withTempRoot(async (rootDir) => {
   await withServer(settingsApp, async (baseUrl) => {
     const before = await fetchJson(`${baseUrl}/api/ai/settings`);
     assert.equal(before.response.status, 200);
-    assert.equal(before.body.provider, 'openai');
+    assert.equal(before.body.provider, 'openrouter');
     assert.equal(before.body.providers.find(provider => provider.id === 'anthropic').configured, false);
 
     const saved = await fetchJson(`${baseUrl}/api/ai/settings`, {
@@ -317,7 +318,7 @@ await withTempRoot(async (rootDir) => {
 
 let authMissingProviderCalls = 0;
 const authMissingApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
   client: {
     responses: {
       async parse() {
@@ -349,7 +350,7 @@ await withServer(authMissingApp, async (baseUrl) => {
 
 let bearerAuthCalls = 0;
 const bearerAuthApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
   client: {
     responses: {
       async parse() {
@@ -381,7 +382,7 @@ await withServer(bearerAuthApp, async (baseUrl) => {
 
 let headerAuthCalls = 0;
 const headerAuthApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key', AI_PATTERN_AUTH_TOKEN: 'shared-secret' },
   client: {
     responses: {
       async parse() {
@@ -413,7 +414,7 @@ await withServer(headerAuthApp, async (baseUrl) => {
 
 let successCall = null;
 const successApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key', AI_PATTERN_MODEL: 'gpt-5.5' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key', AI_PATTERN_MODEL: 'gpt-5.5' },
   client: {
     responses: {
       async parse(payload, options) {
@@ -543,7 +544,7 @@ for (let index = 0; index < 35; index += 1) {
   manyParams[`p${index}`] = index;
 }
 const draftSanitizationApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse(payload) {
@@ -603,7 +604,7 @@ await withServer(draftSanitizationApp, async (baseUrl) => {
 });
 
 const invalidRequestApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse() {
@@ -623,7 +624,7 @@ await withServer(invalidRequestApp, async (baseUrl) => {
 });
 
 const rateLimitApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse() {
@@ -645,6 +646,7 @@ await withServer(rateLimitApp, async (baseUrl) => {
 let endpointRateLimitCalls = 0;
 const endpointRateLimitApp = createLightweaverServer({
   env: {
+    AI_PATTERN_PROVIDER: 'openai',
     OPENAI_API_KEY: 'test-key',
     AI_PATTERN_RATE_LIMIT: '2',
     AI_PATTERN_RATE_WINDOW_MS: '600000',
@@ -689,7 +691,7 @@ await withServer(endpointRateLimitApp, async (baseUrl) => {
 });
 
 const refusalApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse() {
@@ -721,7 +723,7 @@ await withServer(refusalApp, async (baseUrl) => {
 });
 
 const incompleteApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse() {
@@ -745,7 +747,7 @@ await withServer(incompleteApp, async (baseUrl) => {
 });
 
 const emptyResponseApp = createLightweaverServer({
-  env: { OPENAI_API_KEY: 'test-key' },
+  env: { AI_PATTERN_PROVIDER: 'openai', OPENAI_API_KEY: 'test-key' },
   client: {
     responses: {
       async parse() {

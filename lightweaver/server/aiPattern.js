@@ -39,7 +39,7 @@ export const AiPatternDraftSchema = z.object({
 });
 
 const DEFAULT_MODEL = 'gpt-5.4-mini';
-const DEFAULT_PROVIDER = 'openai';
+const DEFAULT_PROVIDER = 'openrouter';
 const DEFAULT_PROVIDER_MODELS = {
   openai: DEFAULT_MODEL,
   anthropic: 'claude-sonnet-4-20250514',

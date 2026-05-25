@@ -764,6 +764,20 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
   font-style: normal;
   line-height: 1.3;
 }
+.lw-ai-manual-settings {
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-2);
+}
+.lw-ai-manual-settings summary {
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  list-style-position: inside;
+}
+.lw-ai-manual-settings[open] {
+  display: grid;
+  gap: var(--s-3);
+}
 .lw-ai-settings-provider,
 .lw-ai-key-row {
   display: grid;

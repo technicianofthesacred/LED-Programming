@@ -142,7 +142,7 @@ test('sends visible strip counts in AI project context', async ({ page }) => {
   });
 });
 
-test('lets the user save AI provider keys and choose the generation provider', async ({ page }) => {
+test('uses OpenRouter as the normal provider setup and generation route', async ({ page }) => {
   let payload: any = null;
   let settingsPayload: any = null;
   await page.route('**/api/ai/settings', async route => {
@@ -154,8 +154,8 @@ test('lets the user save AI provider keys and choose the generation provider', a
           provider: settingsPayload.provider,
           providers: [
             { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
-            { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: true },
-            { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
+            { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
+            { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: true },
           ],
         }),
       });
@@ -164,7 +164,7 @@ test('lets the user save AI provider keys and choose the generation provider', a
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        provider: 'openai',
+        provider: 'openrouter',
         providers: [
           { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
           { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
@@ -182,20 +182,23 @@ test('lets the user save AI provider keys and choose the generation provider', a
   });
 
   const assistant = await openPatternAssistant(page);
-  await expect(assistant.getByText('ChatGPT')).toBeVisible();
+  await expect(assistant.getByText('OpenRouter')).toBeVisible();
   await assistant.getByRole('button', { name: 'AI setup' }).click();
   await expect(assistant.getByRole('heading', { name: 'AI provider setup' })).toBeVisible();
-  await assistant.getByLabel('Default AI provider').selectOption('anthropic');
-  await assistant.getByLabel('Claude key').fill('anthropic-secret-test-key');
+  await expect(assistant.getByLabel('Default AI provider')).toHaveCount(0);
+  await expect(assistant.getByLabel('Claude key')).toHaveCount(0);
+  await expect(assistant.getByLabel('OpenRouter key')).toBeHidden();
+  await assistant.getByText('Advanced: paste OpenRouter key').click();
+  await assistant.getByLabel('OpenRouter key').fill('openrouter-secret-test-key');
   await assistant.getByRole('button', { name: 'Save AI settings' }).click();
-  await expect(assistant.getByText('Saved. Claude is active.')).toBeVisible();
+  await expect(assistant.getByText('Saved. OpenRouter is active.')).toBeVisible();
   await assistant.locator('textarea').fill('make this slower and smoother');
   await assistant.getByRole('button', { name: 'Generate' }).click();
 
   await expect(assistant.getByText('Claude Routed Draft')).toBeVisible();
-  expect(settingsPayload.provider).toBe('anthropic');
-  expect(settingsPayload.keys.anthropic).toBe('anthropic-secret-test-key');
-  expect(payload.provider).toBe('anthropic');
+  expect(settingsPayload.provider).toBe('openrouter');
+  expect(settingsPayload.keys.openrouter).toBe('openrouter-secret-test-key');
+  expect(payload.provider).toBe('openrouter');
 });
 
 test('offers OpenRouter account OAuth as the primary AI setup path', async ({ page }) => {
@@ -204,7 +207,7 @@ test('offers OpenRouter account OAuth as the primary AI setup path', async ({ pa
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        provider: 'openai',
+        provider: 'openrouter',
         providers: [
           { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
           { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
