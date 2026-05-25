@@ -59,3 +59,84 @@ test('wire path chops a visible source path into saved physical segments', async
   expect(ledmapData.n).toBeGreaterThan(2);
   expect(ledmapData.map).toHaveLength(ledmapData.n);
 });
+
+test('canvas chop mode creates a cut marker on the artwork path', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-chop-'));
+  const fixture = writeFixture(tmp);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
+  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Chop' }).click();
+  await expect(page.locator('.lw-route-mode-chip')).toContainText('Chop');
+
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const target = await stripPath.evaluate((path: SVGPathElement) => {
+    const point = path.getPointAtLength(path.getTotalLength() * 0.45);
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    return {
+      x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+      y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+    };
+  });
+  expect(target).not.toBeNull();
+  await page.mouse.click(target!.x, target!.y);
+
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
+
+  const saveDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project JSON').click();
+  const saved = await saveDownload;
+  const projectPath = path.join(tmp, await saved.suggestedFilename());
+  await saved.saveAs(projectPath);
+  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  const stripPatches = projectData.layout.patchBoard.patches
+    .filter((patch: any) => patch.source?.type === 'strip')
+    .sort((a: any, b: any) => a.source.startLed - b.source.startLed);
+  expect(stripPatches).toHaveLength(2);
+  const [first, second] = stripPatches;
+  const maxLed = projectData.layout.strips[0].pixelCount - 1;
+  expect(first.source.startLed).toBe(0);
+  expect(second.source.startLed).toBe(first.source.endLed + 1);
+  expect(first.source.endLed).toBeGreaterThan(1);
+  expect(first.source.endLed).toBeLessThan(maxLed);
+});
+
+test('canvas chop overlay includes one-led physical segments', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-one-led-'));
+  const fixture = writeFixture(tmp);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
+
+  await page.getByRole('button', { name: 'Chop' }).click();
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const clickAt = async (ratio: number) => {
+    const target = await stripPath.evaluate((path: SVGPathElement, ratioArg) => {
+      const point = path.getPointAtLength(path.getTotalLength() * ratioArg);
+      const ctm = path.getScreenCTM();
+      if (!ctm) return null;
+      return {
+        x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+        y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+      };
+    }, ratio);
+    expect(target).not.toBeNull();
+    await page.mouse.click(target!.x, target!.y);
+  };
+
+  await clickAt(2 / 9);
+  await clickAt(3 / 9);
+
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(2);
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(3);
+});

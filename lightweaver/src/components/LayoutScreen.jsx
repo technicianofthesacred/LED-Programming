@@ -11,7 +11,12 @@ import {
 } from '../lib/frameEngine.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { PatchBoardScreen } from './PatchBoardScreen.jsx';
-import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
+import {
+  cutsForStrip,
+  mainChain,
+  normalizePatchBoard,
+  sliceStripIntoPatchesPreservingRoute,
+} from '../lib/patchBoard.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -480,6 +485,10 @@ export function LayoutScreen() {
   const [pendingDrawName, setPendingDrawName] = useState('');
   const [pendingDrawCount, setPendingDrawCount] = useState(0);
   const pendingDrawNameRef = useRef(null);
+  const [wireOverlayMode, setWireOverlayMode] = useState('idle');
+  const [selectedWireCut, setSelectedWireCut] = useState(null);
+  const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
+  const [linkRouteIds, setLinkRouteIds] = useState([]);
 
   // Rubber-band lasso select — coords stored in CLIENT (viewport px), not SVG
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -556,6 +565,7 @@ export function LayoutScreen() {
     layoutLayerOrder,
     setLayoutLayerOrder,
     projectRevision,
+    setPatchBoard,
     setStrips: setProjectStrips,
     setViewBox: setProjectViewBox,
     setSvgText: setProjectSvgText,
@@ -1407,6 +1417,44 @@ export function LayoutScreen() {
     });
   }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
 
+  const updatePatchBoard = useCallback((mutate) => {
+    setPatchBoard(prev => {
+      const next = normalizePatchBoard(prev, strips);
+      mutate(next);
+      return normalizePatchBoard(next, strips);
+    });
+  }, [setPatchBoard, strips]);
+
+  const nearestLedIndex = useCallback((event, strip) => {
+    if (!svgRef.current || !strip?.pixels?.length) return null;
+    const point = svgPt(svgRef.current, event.clientX, event.clientY);
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    strip.pixels.forEach((pixel, index) => {
+      const distance = Math.hypot(point.x - pixel.x, point.y - pixel.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    const maxCut = strip.pixels.length - 2;
+    if (maxCut < 1) return null;
+    return Math.max(1, Math.min(maxCut, nearestIndex));
+  }, []);
+
+  const chopStripAtEvent = useCallback((event, strip) => {
+    if (!strip || project.patchBoard?.physicalLocked) return;
+    const cutLed = nearestLedIndex(event, strip);
+    if (cutLed === null) return;
+    const currentCuts = cutsForStrip(normalizePatchBoard(project.patchBoard, strips), strip.id);
+    const nextCuts = [...new Set([...currentCuts, cutLed])].sort((a, b) => a - b);
+    updatePatchBoard(next => sliceStripIntoPatchesPreservingRoute(next, strip, nextCuts));
+    setSelStripId(strip.id);
+    setSelectedStripIds([strip.id]);
+    setSelectedWireCut({ stripId: strip.id, cutLed });
+    setSelectedWirePatchId(null);
+  }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard]);
+
   const resampleStrip = useCallback((id, newCount) => {
     setStrips(prev => {
       const next = prev.map(s => {
@@ -1803,18 +1851,40 @@ export function LayoutScreen() {
         const points = strip.pixels
           .filter((point, index) => index >= min && index <= max)
           .map(point => ({ x: point.x, y: point.y }));
-        if (points.length < 2) return;
+        if (!points.length) return;
+        const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
         segments.push({
           id: patch.id,
           color: strip.color || 'var(--accent)',
           order,
-          points,
+          points: renderPoints,
           mid: points[Math.floor(points.length / 2)],
         });
       });
     });
     return segments;
   }, [project.patchBoard, strips, hidden]);
+
+  const wireCutMarkers = useMemo(() => {
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    return strips
+      .filter(strip => !hidden[strip.id] && strip.pixels?.length)
+      .flatMap(strip => cutsForStrip(board, strip.id)
+        .map(cutLed => {
+          const point = strip.pixels[cutLed];
+          if (!point) return null;
+          return {
+            id: `${strip.id}-${cutLed}`,
+            stripId: strip.id,
+            cutLed,
+            x: point.x,
+            y: point.y,
+            color: strip.color || 'var(--accent)',
+            selected: selectedWireCut?.stripId === strip.id && selectedWireCut?.cutLed === cutLed,
+          };
+        })
+        .filter(Boolean));
+  }, [project.patchBoard, strips, hidden, selectedWireCut]);
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
   const selectedStrips = useMemo(() => {
@@ -2044,12 +2114,42 @@ export function LayoutScreen() {
           <button
             className={`btn ${drawMode ? 'btn-primary' : 'btn-ghost'}`}
             title={drawMode ? 'Cancel draw (Esc / right-click)' : 'Draw strip (D) — click waypoints, double-click to finish, backspace to undo point'}
-            onClick={() => { setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); }}>
+            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
               <path d="M2 10 L8 2 M8 2 L10 4 M5 8 L10 4" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             {drawMode ? 'Drawing…' : 'Draw'}
           </button>
+
+          <button
+            className={`btn ${wireOverlayMode === 'chop' ? 'btn-primary' : 'btn-ghost'}`}
+            title="Chop wire path segments on the artwork"
+            onClick={() => {
+              setDrawMode(false);
+              setWaypoints([]);
+              setGhostPt(null);
+              setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
+            }}>
+            Chop
+          </button>
+          <button
+            className={`btn ${wireOverlayMode === 'link' ? 'btn-primary' : 'btn-ghost'}`}
+            title="Link chopped segments into physical order"
+            onClick={() => {
+              setDrawMode(false);
+              setWaypoints([]);
+              setGhostPt(null);
+              setWireOverlayMode(mode => mode === 'link' ? 'idle' : 'link');
+              setSelectedWirePatchId(null);
+              setLinkRouteIds([]);
+            }}>
+            Link
+          </button>
+          {wireOverlayMode !== 'idle' && (
+            <span className="lw-route-mode-chip">
+              {wireOverlayMode === 'chop' ? 'Chop' : 'Link'}
+            </span>
+          )}
 
           <span className="tbar-divider"/>
 
@@ -2360,10 +2460,21 @@ export function LayoutScreen() {
                         strokeLinecap="round"
                         pointerEvents="visibleStroke"
                         style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
-                        onMouseDown={e => startStripMove(e, s)}
+                        onMouseDown={e => {
+                          if (wireOverlayMode === 'chop') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            return;
+                          }
+                          startStripMove(e, s);
+                        }}
                         onClick={e => {
                           e.stopPropagation();
                           if (stripDragSuppressClickRef.current) return;
+                          if (wireOverlayMode === 'chop') {
+                            chopStripAtEvent(e, s);
+                            return;
+                          }
                           if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSelection(s.id);
                           else selectStrip(s.id);
                         }}/>
@@ -2407,6 +2518,22 @@ export function LayoutScreen() {
                     >
                       {segment.order + 1}
                     </text>
+                  </g>
+                ))}
+              </g>
+            )}
+
+            {!isEditingGesture && wireCutMarkers.length > 0 && (
+              <g className="lw-wire-cut-markers" style={{ pointerEvents: 'none' }}>
+                {wireCutMarkers.map(marker => (
+                  <g key={marker.id} className="lw-wire-cut-marker">
+                    <circle
+                      cx={marker.x}
+                      cy={marker.y}
+                      r={vbScale * (marker.selected ? 6.2 : 5)}
+                      className={marker.selected ? 'selected' : ''}
+                      style={{ '--wire-color': marker.color }}
+                    />
                   </g>
                 ))}
               </g>

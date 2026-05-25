@@ -352,6 +352,19 @@ textarea,
 .tbar-slider input[type=range] { width: 72px; }
 .tbar-slider .v { color: var(--text); font-family: var(--mono-font); font-size: var(--fs-xs); min-width: 32px; text-align: right; }
 
+.lw-route-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--accent) 42%, var(--border));
+  border-radius: var(--r-sm);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+
 /* Canvas viewport */
 .lw-viewport {
   flex: 1; position: relative; min-height: 0;
@@ -2075,6 +2088,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   stroke: var(--surface);
   stroke-width: 2.5px;
   stroke-linejoin: round;
+}
+
+.lw-wire-cut-marker circle {
+  fill: var(--surface);
+  stroke: var(--wire-color, var(--accent));
+  stroke-width: 2;
+  filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
+}
+
+.lw-wire-cut-marker circle.selected {
+  fill: var(--accent);
+  stroke: var(--surface);
 }
 
 /* ── Geometry mode ───────────────────────────────────────────────── */

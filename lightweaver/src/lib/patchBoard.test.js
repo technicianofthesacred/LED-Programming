@@ -13,6 +13,7 @@ import {
   normalizePatchBoard,
   resolvePatchPlayback,
   sliceStripIntoPatches,
+  sliceStripIntoPatchesPreservingRoute,
   updatePatchRange,
   validatePatchBoard,
 } from './patchBoard.js';
@@ -182,6 +183,88 @@ test('sliceStripIntoPatches preserves off blocks and other strip patches', () =>
   ]);
   assert.equal(board.patches.some(patch => patch.id === 'patch-inner'), true);
   assert.equal(board.patches.some(patch => patch.id === offPatch.id), true);
+});
+
+test('sliceStripIntoPatchesPreservingRoute keeps custom route rows while adding a cut', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const offPatch = addOffPatch(board, 2);
+  board.chains[0].rowIds = [
+    'patch-outer-6-7',
+    offPatch.id,
+    'patch-outer-0-2',
+  ];
+
+  sliceStripIntoPatchesPreservingRoute(board, strip, [2, 4, 5]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-6-7',
+    offPatch.id,
+    'patch-outer-0-2',
+  ]);
+  assert.deepEqual(cutsForStrip(board, 'outer'), [2, 4, 5]);
+});
+
+test('sliceStripIntoPatchesPreservingRoute expands a routed segment when a new cut splits it', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  applyPatchRouteOrder(board, [
+    'patch-outer-6-7',
+    'patch-outer-3-5',
+    'patch-outer-0-2',
+  ]);
+
+  sliceStripIntoPatchesPreservingRoute(board, strip, [2, 4, 5]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-6-7',
+    'patch-outer-3-4',
+    'patch-outer-5-5',
+    'patch-outer-0-2',
+  ]);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [6, 7, 3, 4, 5, 0, 1, 2]);
+});
+
+test('sliceStripIntoPatchesPreservingRoute preserves a reversed routed segment when a new cut splits it', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  updatePatchRange(board, 'patch-outer-3-5', 5, 3);
+  applyPatchRouteOrder(board, ['patch-outer-3-5']);
+
+  sliceStripIntoPatchesPreservingRoute(board, strip, [2, 4, 5]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-5-5',
+    'patch-outer-3-4',
+  ]);
+  assert.deepEqual(
+    board.patches.find(patch => patch.id === 'patch-outer-3-4').source,
+    { type: 'strip', stripId: 'outer', startLed: 4, endLed: 3, autoRange: false },
+  );
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [5, 4, 3]);
+});
+
+test('sliceStripIntoPatchesPreservingRoute preserves reversed ranges in natural row order', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  updatePatchRange(board, 'patch-outer-3-5', 5, 3);
+
+  sliceStripIntoPatchesPreservingRoute(board, strip, [2, 4, 5]);
+
+  assert.deepEqual(board.chains[0].rowIds, [
+    'patch-outer-0-2',
+    'patch-outer-5-5',
+    'patch-outer-3-4',
+    'patch-outer-6-7',
+  ]);
+  const expanded = expandPatchBoard(board, [strip]);
+  assert.deepEqual(expanded.pixels.map(pixel => pixel.sourceLed), [0, 1, 2, 5, 4, 3, 6, 7]);
 });
 
 test('cutsForStrip returns sorted cut indexes from existing strip segments', () => {

@@ -215,7 +215,7 @@ Task 1 completion note: the final helper implementation includes additional regr
 - Modify: `lightweaver/src/components/LayoutScreen.jsx`
 - Modify: `lightweaver/src/main.css`
 
-- [ ] **Step 1: Write failing Playwright test for canvas Chop UI**
+- [x] **Step 1: Write failing Playwright test for canvas Chop UI**
 
 Add this test to `lightweaver/tests/patch-board.spec.ts` after the existing test:
 
@@ -252,7 +252,7 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
 });
 ```
 
-- [ ] **Step 2: Run Playwright test to verify RED**
+- [x] **Step 2: Run Playwright test to verify RED**
 
 Run:
 
@@ -262,7 +262,7 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 
 Expected: FAIL because the `Chop` toolbar button and canvas cut marker do not exist.
 
-- [ ] **Step 3: Add imports and mode state**
+- [x] **Step 3: Add imports and mode state**
 
 In `lightweaver/src/components/LayoutScreen.jsx`, extend the `patchBoard.js` import:
 
@@ -287,7 +287,7 @@ const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
 const [linkRouteIds, setLinkRouteIds] = useState([]);
 ```
 
-- [ ] **Step 4: Add patch-board mutation helpers in Layout**
+- [x] **Step 4: Add patch-board mutation helpers in Layout**
 
 Inside `LayoutScreen`, add:
 
@@ -331,7 +331,7 @@ const chopStripAtEvent = useCallback((event, strip) => {
 }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard, wireOverlayMode]);
 ```
 
-- [ ] **Step 5: Add toolbar buttons**
+- [x] **Step 5: Add toolbar buttons**
 
 In the Layout toolbar after `Draw`, add:
 
@@ -361,7 +361,7 @@ In the Layout toolbar after `Draw`, add:
 )}
 ```
 
-- [ ] **Step 6: Route strip clicks through Chop mode**
+- [x] **Step 6: Route strip clicks through Chop mode**
 
 In the `path[data-strip-path]` `onClick`, call chop first:
 
@@ -378,7 +378,7 @@ onClick={e => {
 }}
 ```
 
-- [ ] **Step 7: Render cut markers**
+- [x] **Step 7: Render cut markers**
 
 Add a memo:
 
@@ -414,7 +414,7 @@ Render it after strip paths and before LED dots:
 })}
 ```
 
-- [ ] **Step 8: Add CSS**
+- [x] **Step 8: Add CSS**
 
 Add to `lightweaver/src/main.css`:
 
@@ -445,7 +445,7 @@ Add to `lightweaver/src/main.css`:
 }
 ```
 
-- [ ] **Step 9: Run Playwright test to verify GREEN**
+- [x] **Step 9: Run Playwright test to verify GREEN**
 
 Run:
 
@@ -454,6 +454,8 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 ```
 
 Expected: PASS for the new chop test and existing patch-board flow.
+
+Task 2 completion note: canvas Chop mode now creates saved cuts directly from artwork-path clicks, renders cut markers and patch segments on the canvas, preserves existing route rows while adding cuts, preserves reversed routed ranges when a split is introduced, and keeps one-LED patch ranges visible in the overlay.
 
 ### Task 3: Link Mode Route Recording
 

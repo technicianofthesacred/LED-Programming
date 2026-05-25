@@ -433,6 +433,35 @@ function matchingPatchIdForSpan(patches, span) {
   return bestPatchId;
 }
 
+function matchingPatchesForSpan(patches, span) {
+  if (!span) return { patches: [], preserveDirection: false };
+  const containedPatches = patches.filter(patch => {
+    const nextSpan = patchSpan(patch);
+    return spanOverlapLength(nextSpan, span) > 0 &&
+      nextSpan.min >= span.min &&
+      nextSpan.max <= span.max;
+  });
+
+  if (containedPatches.length) return { patches: containedPatches, preserveDirection: true };
+  const patchId = matchingPatchIdForSpan(patches, span);
+  const patch = patches.find(item => item.id === patchId);
+  return { patches: patch ? [patch] : [], preserveDirection: false };
+}
+
+function sourceRunsReverse(patch) {
+  const start = ledIndexOrNull(patch?.source?.startLed);
+  const end = ledIndexOrNull(patch?.source?.endLed);
+  return start !== null && end !== null && start > end;
+}
+
+function orientPatchSource(patch, reverse) {
+  const span = patchSpan(patch);
+  if (!span) return;
+  patch.source.startLed = reverse ? span.max : span.min;
+  patch.source.endLed = reverse ? span.min : span.max;
+  patch.source.autoRange = false;
+}
+
 function hasContiguousNaturalStripRows(rowIds, stripIds) {
   if (!stripIds.length) return false;
   const stripIdSet = new Set(stripIds);
@@ -444,13 +473,14 @@ function hasContiguousNaturalStripRows(rowIds, stripIds) {
     rowIds.filter(rowId => stripIdSet.has(rowId)).length === stripIds.length;
 }
 
-function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
+export function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
   const oldStripPatches = stripPatchesInVisualOrder(board, strip.id);
   const oldStripIds = oldStripPatches.map(patch => patch.id);
   const oldStripIdSet = new Set(oldStripIds);
   const oldChain = mutableMainChain(board);
   const oldRowIds = [...oldChain.rowIds];
-  const hasNaturalRoute = hasContiguousNaturalStripRows(oldRowIds, oldStripIds);
+  const hasNaturalRoute = hasContiguousNaturalStripRows(oldRowIds, oldStripIds) &&
+    oldStripPatches.every(patch => !sourceRunsReverse(patch));
 
   sliceStripIntoPatches(board, strip, cutIndexes);
   if (hasNaturalRoute) return board;
@@ -465,8 +495,13 @@ function sliceStripIntoPatchesPreservingRoute(board, strip, cutIndexes) {
       continue;
     }
 
-    const nextPatchId = matchingPatchIdForSpan(nextStripPatches, patchSpan(oldPatchesById.get(rowId)));
-    if (nextPatchId && !nextRowIds.includes(nextPatchId)) nextRowIds.push(nextPatchId);
+    const oldPatch = oldPatchesById.get(rowId);
+    const match = matchingPatchesForSpan(nextStripPatches, patchSpan(oldPatch));
+    const matchedPatches = sourceRunsReverse(oldPatch) ? [...match.patches].reverse() : match.patches;
+    for (const nextPatch of matchedPatches) {
+      if (match.preserveDirection) orientPatchSource(nextPatch, sourceRunsReverse(oldPatch));
+      if (!nextRowIds.includes(nextPatch.id)) nextRowIds.push(nextPatch.id);
+    }
   }
   mutableMainChain(board).rowIds = nextRowIds;
   return board;
