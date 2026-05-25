@@ -12,6 +12,7 @@ import {
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { PatchBoardScreen } from './PatchBoardScreen.jsx';
 import {
+  applyPatchRouteOrder,
   cutsForStrip,
   mainChain,
   normalizePatchBoard,
@@ -90,6 +91,24 @@ function offsetArrow(arrow, dx = 0, dy = 0) {
   if (!arrow || (!dx && !dy)) return arrow;
   const move = pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy });
   return { tip: move(arrow.tip), left: move(arrow.left), right: move(arrow.right), start: move(arrow.start), end: move(arrow.end) };
+}
+
+function pointsAttr(points = []) {
+  return points.map(point => `${point.x},${point.y}`).join(' ');
+}
+
+function actionablePolylinePoints(points = []) {
+  if (points.length < 2) return points;
+  const xs = points.map(point => point.x);
+  const ys = points.map(point => point.y);
+  const hasWidth = Math.max(...xs) - Math.min(...xs) > 0.01;
+  const hasHeight = Math.max(...ys) - Math.min(...ys) > 0.01;
+  if (hasWidth && hasHeight) return points;
+  const next = points.map(point => ({ ...point }));
+  const last = next[next.length - 1];
+  if (!hasWidth) last.x += 0.05;
+  if (!hasHeight) last.y += 0.05;
+  return next;
 }
 
 function translateStripFromStart(strip, dx, dy) {
@@ -489,6 +508,7 @@ export function LayoutScreen() {
   const [selectedWireCut, setSelectedWireCut] = useState(null);
   const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
   const [linkRouteIds, setLinkRouteIds] = useState([]);
+  const linkRouteStartedRef = useRef(false);
 
   // Rubber-band lasso select — coords stored in CLIENT (viewport px), not SVG
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -1455,6 +1475,21 @@ export function LayoutScreen() {
     setSelectedWirePatchId(null);
   }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard]);
 
+  const toggleRoutePatch = useCallback((patchId) => {
+    if (wireOverlayMode !== 'link') return;
+    setLinkRouteIds(prev => {
+      const baseRoute = linkRouteStartedRef.current ? prev : [];
+      const nextRoute = baseRoute.includes(patchId)
+        ? baseRoute.filter(id => id !== patchId)
+        : [...baseRoute, patchId];
+      linkRouteStartedRef.current = true;
+      updatePatchBoard(next => applyPatchRouteOrder(next, nextRoute));
+      setSelectedWirePatchId(patchId);
+      setSelectedWireCut(null);
+      return nextRoute;
+    });
+  }, [updatePatchBoard, wireOverlayMode]);
+
   const resampleStrip = useCallback((id, newCount) => {
     setStrips(prev => {
       const next = prev.map(s => {
@@ -1819,51 +1854,59 @@ export function LayoutScreen() {
 
   const wirePathCanvasSegments = useMemo(() => {
     const board = normalizePatchBoard(project.patchBoard, strips);
-    const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
     const stripsById = new Map(strips.map(strip => [strip.id, strip]));
-    const byStrip = new Map();
-    mainChain(board).rowIds.forEach((patchId, order) => {
-      const patch = patchesById.get(patchId);
-      if (patch?.source?.type !== 'strip') return;
-      const list = byStrip.get(patch.source.stripId) || [];
-      list.push({ patch, order });
-      byStrip.set(patch.source.stripId, list);
-    });
+    const rowOrder = new Map(mainChain(board).rowIds.map((patchId, order) => [patchId, order]));
+    const segmentPatches = board.patches
+      .filter(patch => patch.source?.type === 'strip')
+      .map(patch => ({
+        patch,
+        order: rowOrder.get(patch.id),
+        linked: rowOrder.has(patch.id),
+      }));
 
     const segments = [];
-    byStrip.forEach((items, stripId) => {
+    segmentPatches.forEach(({ patch, order, linked }) => {
+      const stripId = patch.source.stripId;
       if (hidden[stripId]) return;
       const strip = stripsById.get(stripId);
       if (!strip?.pixels?.length) return;
-      const hasPartialRange = items.some(({ patch }) => {
-        const start = Number(patch.source.startLed);
-        const end = Number(patch.source.endLed);
-        if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
-        return Math.min(start, end) > 0 || Math.max(start, end) < strip.pixels.length - 1;
-      });
-      if (items.length < 2 && !hasPartialRange) return;
-      items.forEach(({ patch, order }) => {
-        const start = Number(patch.source.startLed);
-        const end = Number(patch.source.endLed);
-        if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-        const min = Math.min(start, end);
-        const max = Math.max(start, end);
-        const points = strip.pixels
-          .filter((point, index) => index >= min && index <= max)
-          .map(point => ({ x: point.x, y: point.y }));
-        if (!points.length) return;
-        const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
-        segments.push({
-          id: patch.id,
-          color: strip.color || 'var(--accent)',
-          order,
-          points: renderPoints,
-          mid: points[Math.floor(points.length / 2)],
-        });
+      const start = Number(patch.source.startLed);
+      const end = Number(patch.source.endLed);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      const min = Math.min(start, end);
+      const max = Math.max(start, end);
+      const sampledPoints = strip.pixels
+        .filter((point, index) => index >= min && index <= max)
+        .map(point => ({ x: point.x, y: point.y }));
+      if (!sampledPoints.length) return;
+      const points = start > end ? [...sampledPoints].reverse() : sampledPoints;
+      const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
+      segments.push({
+        id: patch.id,
+        patchId: patch.id,
+        stripId,
+        color: strip.color || 'var(--accent)',
+        order,
+        linked,
+        points: renderPoints,
+        mid: points[Math.floor(points.length / 2)],
+        startPoint: renderPoints[0],
+        endPoint: renderPoints[renderPoints.length - 1],
       });
     });
     return segments;
   }, [project.patchBoard, strips, hidden]);
+
+  const wireRouteJumps = useMemo(() => {
+    const linked = wirePathCanvasSegments
+      .filter(segment => segment.linked && Number.isFinite(segment.order))
+      .sort((a, b) => a.order - b.order);
+    return linked.slice(0, -1).map((segment, index) => ({
+      id: `${segment.patchId}-${linked[index + 1].patchId}`,
+      from: segment.endPoint,
+      to: linked[index + 1].startPoint,
+    }));
+  }, [wirePathCanvasSegments]);
 
   const wireCutMarkers = useMemo(() => {
     const board = normalizePatchBoard(project.patchBoard, strips);
@@ -2139,9 +2182,19 @@ export function LayoutScreen() {
               setDrawMode(false);
               setWaypoints([]);
               setGhostPt(null);
-              setWireOverlayMode(mode => mode === 'link' ? 'idle' : 'link');
               setSelectedWirePatchId(null);
-              setLinkRouteIds([]);
+              setWireOverlayMode(mode => {
+                const nextMode = mode === 'link' ? 'idle' : 'link';
+                if (nextMode === 'link') {
+                  const currentRows = mainChain(normalizePatchBoard(project.patchBoard, strips)).rowIds;
+                  setLinkRouteIds(currentRows);
+                  linkRouteStartedRef.current = false;
+                } else {
+                  setLinkRouteIds([]);
+                  linkRouteStartedRef.current = false;
+                }
+                return nextMode;
+              });
             }}>
             Link
           </button>
@@ -2495,30 +2548,51 @@ export function LayoutScreen() {
             })}
 
             {!isEditingGesture && wirePathCanvasSegments.length > 0 && (
-              <g className="lw-wire-canvas-segments" style={{ pointerEvents: 'none' }}>
+              <g
+                className="lw-wire-canvas-segments"
+                style={{ pointerEvents: wireOverlayMode === 'link' ? 'auto' : 'none' }}
+              >
                 {wirePathCanvasSegments.map(segment => (
                   <g key={segment.id}>
+                    {wireOverlayMode === 'link' && (
+                      <polyline
+                        points={pointsAttr(actionablePolylinePoints(segment.points))}
+                        className="lw-wire-canvas-segment-hit"
+                        onClick={event => {
+                          event.stopPropagation();
+                          toggleRoutePatch(segment.patchId);
+                        }}
+                      />
+                    )}
                     <polyline
-                      points={segment.points.map(point => `${point.x},${point.y}`).join(' ')}
+                      points={pointsAttr(segment.points)}
                       className="lw-wire-canvas-segment"
                       style={{ '--wire-color': segment.color }}
                     />
-                    <circle
-                      cx={segment.mid.x}
-                      cy={segment.mid.y}
-                      r={vbScale * 7}
-                      className="lw-wire-canvas-segment-badge"
-                      style={{ '--wire-color': segment.color }}
-                    />
-                    <text
-                      x={segment.mid.x}
-                      y={segment.mid.y + vbScale * 3.2}
-                      className="lw-wire-canvas-segment-label"
-                      fontSize={vbScale * 8}
-                    >
-                      {segment.order + 1}
-                    </text>
+                    {segment.linked && Number.isFinite(segment.order) && (
+                      <g className="lw-route-badge">
+                        <circle cx={segment.mid.x} cy={segment.mid.y} r={vbScale * 9}/>
+                        <text x={segment.mid.x} y={segment.mid.y + vbScale * 3.5} fontSize={vbScale * 8}>
+                          {segment.order + 1}
+                        </text>
+                      </g>
+                    )}
                   </g>
+                ))}
+              </g>
+            )}
+
+            {!isEditingGesture && wireRouteJumps.length > 0 && (
+              <g className="lw-wire-route-jumps" style={{ pointerEvents: 'none' }}>
+                {wireRouteJumps.map(jump => (
+                  <line
+                    key={jump.id}
+                    className="lw-wire-route-jump"
+                    x1={jump.from.x}
+                    y1={jump.from.y}
+                    x2={jump.to.x}
+                    y2={jump.to.y}
+                  />
                 ))}
               </g>
             )}

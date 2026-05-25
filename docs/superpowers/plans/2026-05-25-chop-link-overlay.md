@@ -464,7 +464,7 @@ Task 2 completion note: canvas Chop mode now creates saved cuts directly from ar
 - Modify: `lightweaver/src/main.css`
 - Modify: `lightweaver/tests/patch-board.spec.ts`
 
-- [ ] **Step 1: Write failing Playwright test for Link mode**
+- [x] **Step 1: Write failing Playwright test for Link mode**
 
 Add this test to `lightweaver/tests/patch-board.spec.ts`:
 
@@ -518,7 +518,7 @@ test('canvas link mode records clicked chopped segments as physical route order'
 });
 ```
 
-- [ ] **Step 2: Run Playwright to verify RED**
+- [x] **Step 2: Run Playwright to verify RED**
 
 Run:
 
@@ -528,7 +528,7 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 
 Expected: FAIL because segment hit targets and route badges are not implemented.
 
-- [ ] **Step 3: Include unlinked segment overlays**
+- [x] **Step 3: Include unlinked segment overlays**
 
 Change `wirePathCanvasSegments` so it is built from all strip patches, not only linked row IDs. Use `chain.rowIds` only to determine `order` and `linked`.
 
@@ -558,7 +558,7 @@ Each segment object should contain:
 }
 ```
 
-- [ ] **Step 4: Add segment hit target click behavior**
+- [x] **Step 4: Add segment hit target click behavior**
 
 Add a function in `LayoutScreen`:
 
@@ -583,7 +583,7 @@ const currentRows = mainChain(normalizePatchBoard(project.patchBoard, strips)).r
 setLinkRouteIds(currentRows);
 ```
 
-- [ ] **Step 5: Render hit targets and badges**
+- [x] **Step 5: Render hit targets and badges**
 
 In the segment overlay render, add a hit polyline before the visible polyline:
 
@@ -613,7 +613,7 @@ Add route badge:
 )}
 ```
 
-- [ ] **Step 6: Render dashed jump connectors**
+- [x] **Step 6: Render dashed jump connectors**
 
 Create memo:
 
@@ -645,7 +645,7 @@ Render before LED dots:
 ))}
 ```
 
-- [ ] **Step 7: Add CSS**
+- [x] **Step 7: Add CSS**
 
 ```css
 .lw-wire-canvas-segment-hit {
@@ -681,7 +681,7 @@ Render before LED dots:
 }
 ```
 
-- [ ] **Step 8: Run Playwright to verify GREEN**
+- [x] **Step 8: Run Playwright to verify GREEN**
 
 Run:
 
@@ -690,6 +690,8 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 ```
 
 Expected: PASS.
+
+Task 3 completion note: Link mode now exposes clickable canvas segment hit targets, starts a fresh route from clicked segment order, saves the selected physical route into `chains[0].rowIds`, and renders linked order badges plus dashed route jumps.
 
 ### Task 4: Details Tuning For Selected Cuts
 

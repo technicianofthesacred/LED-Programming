@@ -140,3 +140,53 @@ test('canvas chop overlay includes one-led physical segments', async ({ page }) 
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(2);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(3);
 });
+
+test('canvas link mode records clicked chopped segments as physical route order', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-link-'));
+  const fixture = writeFixture(tmp);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
+
+  await page.getByRole('button', { name: 'Chop' }).click();
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const clickAt = async (ratio: number) => {
+    const target = await stripPath.evaluate((path: SVGPathElement, ratioArg) => {
+      const point = path.getPointAtLength(path.getTotalLength() * ratioArg);
+      const ctm = path.getScreenCTM();
+      if (!ctm) return null;
+      return {
+        x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+        y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+      };
+    }, ratio);
+    expect(target).not.toBeNull();
+    await page.mouse.click(target!.x, target!.y);
+  };
+  await clickAt(0.33);
+  await clickAt(0.66);
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Chop' }).click();
+
+  await page.getByRole('button', { name: 'Link' }).click();
+  const segments = page.locator('.lw-wire-canvas-segment-hit');
+  await expect(segments).toHaveCount(3);
+  await segments.nth(2).click();
+  await segments.nth(0).click();
+  await expect(page.locator('.lw-route-badge')).toHaveCount(2);
+
+  const saveDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project JSON').click();
+  const saved = await saveDownload;
+  const projectPath = path.join(tmp, await saved.suggestedFilename());
+  await saved.saveAs(projectPath);
+  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
+  expect(rowIds).toEqual([
+    'patch-line-layer-7-9',
+    'patch-line-layer-0-3',
+  ]);
+});

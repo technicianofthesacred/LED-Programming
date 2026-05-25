@@ -2070,6 +2070,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   stroke-linejoin: round;
   opacity: 0.42;
   filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
+  pointer-events: none;
+}
+
+.lw-wire-canvas-segment-hit {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.001;
+  stroke-width: 18;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  cursor: pointer;
+  pointer-events: visibleStroke;
 }
 
 .lw-wire-canvas-segment-badge {
@@ -2088,6 +2100,32 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   stroke: var(--surface);
   stroke-width: 2.5px;
   stroke-linejoin: round;
+}
+
+.lw-route-badge {
+  pointer-events: none;
+}
+
+.lw-route-badge circle {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 1.5;
+}
+
+.lw-route-badge text {
+  fill: var(--surface);
+  font-family: var(--mono-font);
+  font-weight: 800;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.lw-wire-route-jump {
+  stroke: var(--accent-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .lw-wire-cut-marker circle {
