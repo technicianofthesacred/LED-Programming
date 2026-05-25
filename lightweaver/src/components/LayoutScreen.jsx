@@ -14,7 +14,9 @@ import { PatchBoardScreen } from './PatchBoardScreen.jsx';
 import {
   applyPatchRouteOrder,
   cutsForStrip,
+  deleteStripCut,
   mainChain,
+  nudgeStripCut,
   normalizePatchBoard,
   sliceStripIntoPatchesPreservingRoute,
 } from '../lib/patchBoard.js';
@@ -1490,6 +1492,33 @@ export function LayoutScreen() {
     });
   }, [updatePatchBoard, wireOverlayMode]);
 
+  const nudgeSelectedWireCut = useCallback((delta) => {
+    if (!selectedWireCut) return;
+    const strip = strips.find(item => item.id === selectedWireCut.stripId);
+    if (!strip) return;
+    const step = Math.sign(Number(delta) || 0);
+    if (!step) return;
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    const currentCuts = cutsForStrip(board, strip.id);
+    const index = currentCuts.indexOf(selectedWireCut.cutLed);
+    if (index < 0) return;
+    const maxLed = Math.max(0, strip.pixels?.length ?? strip.pixelCount ?? 1) - 1;
+    const previousLimit = index === 0 ? 1 : currentCuts[index - 1] + 1;
+    const nextLimit = index === currentCuts.length - 1 ? maxLed - 1 : currentCuts[index + 1] - 1;
+    const nextCutLed = selectedWireCut.cutLed + step;
+    if (nextCutLed < previousLimit || nextCutLed > nextLimit) return;
+    updatePatchBoard(next => nudgeStripCut(next, strip, selectedWireCut.cutLed, step));
+    setSelectedWireCut({ stripId: strip.id, cutLed: nextCutLed });
+  }, [project.patchBoard, selectedWireCut, strips, updatePatchBoard]);
+
+  const deleteSelectedWireCut = useCallback(() => {
+    if (!selectedWireCut) return;
+    const strip = strips.find(item => item.id === selectedWireCut.stripId);
+    if (!strip) return;
+    updatePatchBoard(next => deleteStripCut(next, strip, selectedWireCut.cutLed));
+    setSelectedWireCut(null);
+  }, [selectedWireCut, strips, updatePatchBoard]);
+
   const resampleStrip = useCallback((id, newCount) => {
     setStrips(prev => {
       const next = prev.map(s => {
@@ -1863,6 +1892,11 @@ export function LayoutScreen() {
         order: rowOrder.get(patch.id),
         linked: rowOrder.has(patch.id),
       }));
+    const patchCountsByStrip = segmentPatches.reduce((counts, { patch }) => {
+      const stripId = patch.source.stripId;
+      counts.set(stripId, (counts.get(stripId) || 0) + 1);
+      return counts;
+    }, new Map());
 
     const segments = [];
     segmentPatches.forEach(({ patch, order, linked }) => {
@@ -1881,6 +1915,7 @@ export function LayoutScreen() {
       if (!sampledPoints.length) return;
       const points = start > end ? [...sampledPoints].reverse() : sampledPoints;
       const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
+      const isFullStrip = min === 0 && max === strip.pixels.length - 1;
       segments.push({
         id: patch.id,
         patchId: patch.id,
@@ -1888,6 +1923,7 @@ export function LayoutScreen() {
         color: strip.color || 'var(--accent)',
         order,
         linked,
+        showWhenIdle: (patchCountsByStrip.get(stripId) || 0) > 1 || !isFullStrip,
         points: renderPoints,
         mid: points[Math.floor(points.length / 2)],
         startPoint: renderPoints[0],
@@ -1896,6 +1932,13 @@ export function LayoutScreen() {
     });
     return segments;
   }, [project.patchBoard, strips, hidden]);
+
+  const visibleWirePathCanvasSegments = useMemo(
+    () => wireOverlayMode === 'link'
+      ? wirePathCanvasSegments
+      : wirePathCanvasSegments.filter(segment => segment.showWhenIdle),
+    [wireOverlayMode, wirePathCanvasSegments],
+  );
 
   const wireRouteJumps = useMemo(() => {
     const linked = wirePathCanvasSegments
@@ -2547,12 +2590,12 @@ export function LayoutScreen() {
               );
             })}
 
-            {!isEditingGesture && wirePathCanvasSegments.length > 0 && (
+            {!isEditingGesture && visibleWirePathCanvasSegments.length > 0 && (
               <g
                 className="lw-wire-canvas-segments"
                 style={{ pointerEvents: wireOverlayMode === 'link' ? 'auto' : 'none' }}
               >
-                {wirePathCanvasSegments.map(segment => (
+                {visibleWirePathCanvasSegments.map(segment => (
                   <g key={segment.id}>
                     {wireOverlayMode === 'link' && (
                       <polyline
@@ -3552,7 +3595,14 @@ export function LayoutScreen() {
               <span>Wire Path</span>
               <span>{strips.length} paths · visual order</span>
             </summary>
-            <PatchBoardScreen embedded />
+            <PatchBoardScreen
+              embedded
+              wireOverlayMode={wireOverlayMode}
+              selectedWireCut={selectedWireCut}
+              onNudgeSelectedCut={nudgeSelectedWireCut}
+              onDeleteSelectedCut={deleteSelectedWireCut}
+              onClearSelectedCut={() => setSelectedWireCut(null)}
+            />
           </details>
         )}
 

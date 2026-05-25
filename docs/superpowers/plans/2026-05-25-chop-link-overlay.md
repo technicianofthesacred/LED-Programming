@@ -700,7 +700,7 @@ Task 3 completion note: Link mode now exposes clickable canvas segment hit targe
 - Modify: `lightweaver/src/components/PatchBoardScreen.jsx`
 - Modify: `lightweaver/src/main.css`
 
-- [ ] **Step 1: Write failing Playwright assertions**
+- [x] **Step 1: Write failing Playwright assertions**
 
 In `canvas chop mode creates a cut marker on the artwork path`, after asserting the cut marker exists, add:
 
@@ -713,7 +713,7 @@ await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(0);
 await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(0);
 ```
 
-- [ ] **Step 2: Run Playwright to verify RED**
+- [x] **Step 2: Run Playwright to verify RED**
 
 Run:
 
@@ -723,7 +723,7 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 
 Expected: FAIL because selected cut Details controls do not exist.
 
-- [ ] **Step 3: Pass selected cut props into PatchBoardScreen**
+- [x] **Step 3: Pass selected cut props into PatchBoardScreen**
 
 Change the embedded render in `LayoutScreen.jsx`:
 
@@ -750,7 +750,7 @@ Change the embedded render in `LayoutScreen.jsx`:
 />
 ```
 
-- [ ] **Step 4: Render selected cut details**
+- [x] **Step 4: Render selected cut details**
 
 Update `PatchBoardScreen` signature:
 
@@ -788,7 +788,7 @@ Render this section before the existing Source Paths section:
 )}
 ```
 
-- [ ] **Step 5: Add CSS**
+- [x] **Step 5: Add CSS**
 
 ```css
 .lw-wire-selected-detail {
@@ -800,7 +800,7 @@ Render this section before the existing Source Paths section:
 }
 ```
 
-- [ ] **Step 6: Run Playwright to verify GREEN**
+- [x] **Step 6: Run Playwright to verify GREEN**
 
 Run:
 
@@ -809,6 +809,8 @@ npx playwright test tests/patch-board.spec.ts --project=chromium
 ```
 
 Expected: PASS.
+
+Task 4 completion note: Details now shows the selected canvas cut with Move earlier, Move later, and Delete controls, keeps selection synced after nudges/deletes/clear-cuts, and hides idle full-strip overlays after deleting the only cut while preserving full-strip linking in Link mode.
 
 ### Task 5: Polish, Browser Verification, Commit, Push
 

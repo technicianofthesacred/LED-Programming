@@ -1796,6 +1796,14 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   padding: var(--s-3);
 }
 
+.lw-wire-selected-detail {
+  min-width: 0;
+  padding: var(--s-3);
+  background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+  border: 1px solid color-mix(in oklab, var(--accent) 38%, var(--border));
+  border-radius: var(--r-md);
+}
+
 .lw-wire-section-title {
   display: flex;
   align-items: center;

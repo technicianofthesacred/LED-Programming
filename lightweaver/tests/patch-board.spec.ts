@@ -89,6 +89,20 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
 
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
+  await expect(page.getByText('Selected cut')).toBeVisible();
+  await page.getByRole('button', { name: 'Move cut later' }).click();
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Clear cuts' }).click();
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(0);
+  await expect(page.getByText('Selected cut')).toHaveCount(0);
+  await page.mouse.click(target!.x, target!.y);
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Delete cut' }).click();
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(0);
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(0);
+  await page.mouse.click(target!.x, target!.y);
+  await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
 
   const saveDownload = page.waitForEvent('download');
   await page.getByTitle('Save project JSON').click();

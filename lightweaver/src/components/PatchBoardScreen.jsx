@@ -116,7 +116,14 @@ function pointsAttribute(points) {
   return points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
 }
 
-export function PatchBoardScreen({ embedded = false }) {
+export function PatchBoardScreen({
+  embedded = false,
+  wireOverlayMode = 'idle',
+  selectedWireCut = null,
+  onNudgeSelectedCut,
+  onDeleteSelectedCut,
+  onClearSelectedCut,
+}) {
   const { strips, patchBoard, setPatchBoard } = useProject();
   const [activeStripId, setActiveStripId] = useState(() => strips[0]?.id || null);
   const [selectedPatchId, setSelectedPatchId] = useState(null);
@@ -190,6 +197,7 @@ export function PatchBoardScreen({ embedded = false }) {
     if (!activeStrip || board.physicalLocked) return;
     updateBoard(next => sliceStripIntoPatches(next, activeStrip, []));
     setSelectedPatchId(null);
+    if (selectedWireCut?.stripId === activeStrip.id) onClearSelectedCut?.();
   };
 
   const addOffBlock = () => updateBoard(next => {
@@ -216,6 +224,41 @@ export function PatchBoardScreen({ embedded = false }) {
           </button>
         </div>
       </div>
+
+      {selectedWireCut && (
+        <section className="lw-wire-selected-detail">
+          <div className="lw-wire-section-title">
+            <span>Selected cut</span>
+            <strong>LED {selectedWireCut.cutLed}</strong>
+          </div>
+          <div className="lw-wire-tool-row">
+            <button
+              className="btn btn-ghost"
+              aria-label="Move cut earlier"
+              disabled={board.physicalLocked}
+              onClick={() => onNudgeSelectedCut?.(-1)}
+            >
+              -
+            </button>
+            <button
+              className="btn btn-ghost"
+              aria-label="Move cut later"
+              disabled={board.physicalLocked}
+              onClick={() => onNudgeSelectedCut?.(1)}
+            >
+              +
+            </button>
+            <button
+              className="btn btn-ghost lw-btn-danger"
+              aria-label="Delete cut"
+              disabled={board.physicalLocked}
+              onClick={() => onDeleteSelectedCut?.()}
+            >
+              Delete
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="lw-wire-source">
         <div className="lw-wire-section-title">
