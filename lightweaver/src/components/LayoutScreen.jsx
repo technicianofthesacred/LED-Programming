@@ -9,6 +9,11 @@ import {
   normalizePalette,
   renderPixelFrame,
 } from '../lib/frameEngine.js';
+import {
+  activeLedCoreAlpha,
+  ledCssColor,
+  restingLedAlpha,
+} from '../lib/previewVisuals.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { PatchBoardScreen } from './PatchBoardScreen.jsx';
 import {
@@ -97,6 +102,33 @@ function offsetArrow(arrow, dx = 0, dy = 0) {
 
 function pointsAttr(points = []) {
   return points.map(point => `${point.x},${point.y}`).join(' ');
+}
+
+function escapeAttr(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function layerArtworkMarkup(layer) {
+  const children = (layer.subPaths?.length ? layer.subPaths : [{
+    pathId: layer.layerId,
+    name: layer.name,
+    pathData: layer.pathData,
+  }])
+    .filter(item => item.pathData)
+    .map(item => (
+      `<path id="${escapeAttr(item.pathId)}"` +
+      ` data-artwork-path-id="${escapeAttr(item.pathId)}"` +
+      ` d="${escapeAttr(item.pathData)}"` +
+      ` fill="none" stroke="${escapeAttr(layer._color || 'currentColor')}"` +
+      ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    ))
+    .join('');
+
+  return `<g id="${escapeAttr(layer.layerId)}" data-name="${escapeAttr(layer.name || layer.layerId)}">${children}</g>`;
 }
 
 function actionablePolylinePoints(points = []) {
@@ -786,19 +818,9 @@ export function LayoutScreen() {
   // ── Inline SVG artwork ─────────────────────────────────────────────────────
 
   const artworkHTML = useMemo(() => {
-    if (!svgText) return null;
-    const doc2 = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-    const srcSvg2 = doc2.querySelector('svg');
-    if (!srcSvg2) return null;
-    let groups = Array.from(srcSvg2.children).filter(el => el.tagName === 'g' && el.hasAttribute('data-name'));
-    if (!groups.length) groups = Array.from(srcSvg2.children).filter(el => el.tagName === 'g');
-    if (groups.length === 1) {
-      const inner = Array.from(groups[0].children).filter(el => el.tagName === 'g');
-      if (inner.length > 1) groups = inner;
-    }
-    groups.forEach((g, i) => { if (!g.id) g.setAttribute('id', `layer-${i}`); });
-    return srcSvg2.innerHTML;
-  }, [svgText]);
+    if (!svgText || !layers.length) return null;
+    return layers.map(layerArtworkMarkup).join('');
+  }, [svgText, layers]);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
@@ -1257,15 +1279,108 @@ export function LayoutScreen() {
   // ── Delete layer ───────────────────────────────────────────────────────────
 
   const deleteLayer = useCallback((layerId) => {
+    const layer = layers.find(item => item.layerId === layerId);
+    const relatedPathIds = new Set([
+      layerId,
+      ...(layer?.subPaths || []).map(path => path.pathId),
+    ]);
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
-    setLayers(prev => prev.filter(l => l.layerId !== layerId));
+    const nextLayers = layers.filter(l => l.layerId !== layerId);
+    const nextStrips = strips.filter(s => !relatedPathIds.has(s.id));
+    const nextEditCounts = { ...editCounts };
+    const nextHidden = { ...hidden };
+    relatedPathIds.forEach(id => {
+      delete nextEditCounts[id];
+      delete nextHidden[id];
+    });
+    setLayers(nextLayers);
     setLayerOrder(prev => prev.filter(x => x.id !== layerId));
     setLayerGroups(prev => prev.map(g => ({ ...g, members: g.members.filter(m => m.layerId !== layerId) }))
                                .filter(g => g.members.length > 0));
-    setStrips(prev => { const next = prev.filter(s => s.id !== layerId); lsSave(next, layers.filter(l=>l.layerId!==layerId), editCounts, hidden, svgText, viewBox, density); return next; });
+    setStrips(nextStrips);
+    setEditCounts(nextEditCounts);
+    setHidden(nextHidden);
+    setSelectedStripIds(prev => prev.filter(id => !relatedPathIds.has(id)));
     if (selLayerId === layerId) setSelLayerId(null);
-    if (selStripId === layerId) setSelStripId(null);
+    if (selStripId && relatedPathIds.has(selStripId)) setSelStripId(null);
+    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
   }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushHistory, lsSave]);
+
+  const deleteSelectedVectorPaths = useCallback(() => {
+    if (!pathSel.length) return;
+
+    const selectedPathIds = new Set(pathSel.map(path => path.pathId));
+    const selectedLayerIds = new Set(pathSel.map(path => path.layerId));
+    const selectedPathData = new Set(pathSel.map(path => path.pathData));
+    const deletedLayerIds = new Set();
+
+    const nextLayers = [];
+    for (const layer of layers) {
+      if (!selectedLayerIds.has(layer.layerId) && !selectedPathIds.has(layer.layerId)) {
+        nextLayers.push(layer);
+        continue;
+      }
+
+      const wholeLayerSelected = selectedPathIds.has(layer.layerId) || !(layer.subPaths?.length);
+      if (wholeLayerSelected) {
+        deletedLayerIds.add(layer.layerId);
+        continue;
+      }
+
+      const nextSubPaths = layer.subPaths.filter(path => !selectedPathIds.has(path.pathId));
+      if (!nextSubPaths.length) {
+        deletedLayerIds.add(layer.layerId);
+        continue;
+      }
+
+      nextLayers.push({
+        ...layer,
+        subPaths: nextSubPaths,
+        pathData: nextSubPaths.map(path => path.pathData).join(' '),
+        svgLength: nextSubPaths.reduce((sum, path) => sum + (path.svgLength || 0), 0),
+      });
+    }
+
+    const removedIds = new Set([...selectedPathIds, ...deletedLayerIds]);
+    const nextStrips = strips.filter(strip =>
+      !removedIds.has(strip.id) &&
+      !selectedPathData.has(strip.pathData));
+    const nextEditCounts = { ...editCounts };
+    const nextHidden = { ...hidden };
+    removedIds.forEach(id => {
+      delete nextEditCounts[id];
+      delete nextHidden[id];
+    });
+
+    const nextLayerGroups = layerGroups
+      .map(group => ({
+        ...group,
+        members: group.members.filter(member =>
+          !removedIds.has(member.stripId || member.pathId) &&
+          !deletedLayerIds.has(member.layerId)),
+      }))
+      .filter(group => group.members.length > 0);
+    const liveGroupIds = new Set(nextLayerGroups.map(group => group.groupId));
+    const liveLayerIds = new Set(nextLayers.map(layer => layer.layerId));
+    const nextLayerOrder = layerOrder.filter(item =>
+      item.type === 'group'
+        ? liveGroupIds.has(item.id)
+        : liveLayerIds.has(item.id));
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayers(nextLayers);
+    setStrips(nextStrips);
+    setEditCounts(nextEditCounts);
+    setHidden(nextHidden);
+    setLayerGroups(nextLayerGroups);
+    setLayerOrder(nextLayerOrder);
+    setPathSel([]);
+    setPathSelName('');
+    setSelectedStripIds(prev => prev.filter(id => nextStrips.some(strip => strip.id === id)));
+    if (selLayerId && deletedLayerIds.has(selLayerId)) setSelLayerId(null);
+    if (selStripId && !nextStrips.some(strip => strip.id === selStripId)) setSelStripId(null);
+    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
+  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, selLayerId, selStripId, pushHistory, lsSave]);
 
   // ── Duplicate strip ────────────────────────────────────────────────────────
 
@@ -1762,10 +1877,21 @@ export function LayoutScreen() {
       switch (e.key) {
         case 's': setDrawMode(false); setWaypoints([]); setGhostPt(null); break;
         case 'd': setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); break;
-        case 'x':
+        case 'Backspace':
         case 'Delete':
+          e.preventDefault();
+          if (pathSel.length > 0) deleteSelectedVectorPaths();
+          else if (selectedStripIds.length > 1) removeSelectedStrips();
+          else if (selStripId && layers.some(layer => layer.layerId === selStripId)) deleteLayer(selStripId);
+          else if (selStripId) removeStrip(selStripId);
+          else if (selLayerId) deleteLayer(selLayerId);
+          break;
+        case 'x':
+          e.preventDefault();
           if (selectedStripIds.length > 1) removeSelectedStrips();
           else if (selStripId) removeStrip(selStripId);
+          else if (pathSel.length > 0) deleteSelectedVectorPaths();
+          else if (selLayerId) deleteLayer(selLayerId);
           break;
         case 'g':
           if (selectedStripIds.length > 1) groupSelectedStrips();
@@ -1800,7 +1926,7 @@ export function LayoutScreen() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
+  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
 
   // ── Memoised visualisation data ────────────────────────────────────────────
 
@@ -2452,8 +2578,10 @@ export function LayoutScreen() {
                 };
                 return (
                   <path key={t.pathId} d={t.pathData}
-                        fill="rgba(0,0,0,0)" stroke="#fff" strokeOpacity="0"
-                        strokeWidth="16" strokeLinecap="round" pointerEvents="all"
+                        data-vector-layer-id={l.layerId}
+                        data-vector-path-id={t.pathId}
+                        fill="none" stroke="#fff" strokeOpacity="0.001"
+                        strokeWidth="16" strokeLinecap="round" pointerEvents="stroke"
                         style={{ cursor: 'pointer' }}
                         onMouseDown={e => e.stopPropagation()}
                         onMouseEnter={() => { setHoveredLayerId(l.layerId); setHoveredSubPathId(t.pathId); }}
@@ -2666,20 +2794,26 @@ export function LayoutScreen() {
               </g>
             )}
 
-            {/* ── LED dots — white so they read clearly against any strip color ── */}
+            {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
             {showLeds && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
 	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
-                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
+                    const selected = s.id === selStripId;
+                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    const shellOpacity = restingLedAlpha(ledFrame, { selected });
+                    const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
                     <g key={i}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
-                              fill={ledColor} opacity={s.id === selStripId ? 0.2 : 0.13}/>
-                      <circle cx={px.x} cy={px.y}
-                              r={s.id === selStripId ? vbScale * 2.9 : vbScale * 2.25}
-                              fill={ledColor} opacity={s.id === selStripId ? 0.95 : 0.78}/>
+                              fill={ledColor} opacity={shellOpacity}/>
+                      {coreOpacity > 0 && (
+                        <circle cx={px.x} cy={px.y}
+                                r={selected ? vbScale * 2.9 : vbScale * 2.25}
+                                fill={ledColor} opacity={coreOpacity}/>
+                      )}
                     </g>
                     );
                   })}
@@ -2687,14 +2821,16 @@ export function LayoutScreen() {
               ) : (
 	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
-                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
+                    const selected = s.id === selStripId;
+                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
+                    const restOpacity = restingLedAlpha(ledFrame, { selected }) * 0.45;
                     return (
                     <circle key={i} cx={px.x} cy={px.y}
                             r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                             fill={ledColor}
-                            opacity={effectiveGlowMode === 'outward'
-                              ? (s.id === selStripId ? 0.4 : 0.3)
-                              : (s.id === selStripId ? 0.55 : 0.4)}/>
+                            opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
                     );
                   })}
                 </g>

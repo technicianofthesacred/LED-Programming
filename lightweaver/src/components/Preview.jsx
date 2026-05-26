@@ -7,6 +7,11 @@ import {
   resolvePatternParams,
 } from '../lib/frameEngine.js';
 import { smoothPixelFrame } from '../lib/motionSmoothing.js';
+import {
+  activeLedCoreAlpha,
+  activeLedCoronaAlpha,
+  restingLedColor,
+} from '../lib/previewVisuals.js';
 import { DEMO_STRIPS, PALETTE_DEFAULT } from '../data.js';
 
 function hexToNorm(hex) {
@@ -128,7 +133,7 @@ function renderFrame(canvas, t, p) {
     };
   });
 
-  // ── Physical strip paths — keep the mapper line visible in Pattern preview ─
+  // ── Physical strip paths — visible structure, dim enough for patterns to read ─
   if (stripData.length) {
     const lineWidth = clamp(medianSpacing * scale * 0.17, 1.0, 3.4);
     ctx.save();
@@ -138,10 +143,10 @@ function renderFrame(canvas, t, p) {
       const leds = sd.leds || [];
       if (leds.length < 2) continue;
       const strokeRail = () => {
-        ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+        ctx.strokeStyle = 'rgba(50, 82, 104, 0.18)';
         ctx.lineWidth = lineWidth + 1.2;
         ctx.stroke();
-        ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+        ctx.strokeStyle = 'rgba(116, 145, 170, 0.24)';
         ctx.lineWidth = lineWidth;
         ctx.stroke();
       };
@@ -154,10 +159,10 @@ function renderFrame(canvas, t, p) {
           ctx.setTransform(scale, 0, 0, scale, offX + sd.x * scale, offY + sd.y * scale);
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
-          ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+          ctx.strokeStyle = 'rgba(50, 82, 104, 0.18)';
           ctx.lineWidth = (lineWidth + 1.2) / scale;
           ctx.stroke(path);
-          ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+          ctx.strokeStyle = 'rgba(116, 145, 170, 0.24)';
           ctx.lineWidth = lineWidth / scale;
           ctx.stroke(path);
           ctx.restore();
@@ -248,7 +253,7 @@ function renderFrame(canvas, t, p) {
   ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
-      ctx.fillStyle = 'rgba(238, 246, 255, 0.58)';
+      ctx.fillStyle = restingLedColor(l);
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), beadR, 0, TAU);
       ctx.fill();
@@ -258,7 +263,7 @@ function renderFrame(canvas, t, p) {
   for (const sd of stripData) {
     for (const l of sd.leds) {
       if ((l.r | l.g | l.b) === 0) continue;
-      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},0.14)`;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},${activeLedCoronaAlpha(l).toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), coronaR, 0, TAU);
       ctx.fill();
@@ -267,13 +272,14 @@ function renderFrame(canvas, t, p) {
   ctx.globalCompositeOperation = 'lighter';
   for (const sd of stripData) {
     for (const l of sd.leds) {
-      if ((l.r | l.g | l.b) === 0) continue;
+      const coreAlpha = activeLedCoreAlpha(l);
+      if (!coreAlpha) continue;
       const brightness = Math.max(l.r, l.g, l.b) / 255;
-      ctx.fillStyle = `rgb(${l.r},${l.g},${l.b})`;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},${coreAlpha.toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), coreR, 0, TAU);
       ctx.fill();
-      ctx.fillStyle = `rgba(245, 250, 255, ${clamp(0.20 + brightness * 0.50, 0.24, 0.72)})`;
+      ctx.fillStyle = `rgba(245, 250, 255, ${clamp(0.12 + brightness * 0.34, 0.14, 0.52)})`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), centerR, 0, TAU);
       ctx.fill();
