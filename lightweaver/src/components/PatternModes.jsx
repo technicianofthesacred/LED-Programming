@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
+import { curvedRangeValueToSlider, sliderValueToCurvedRange } from '../lib/controlScale.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
 import { makePatternStudioSummary } from '../lib/patternStudio.js';
+import { stripOverrideIdsToClearForGlobalSelection } from '../lib/patternTargeting.js';
 
 // ── @param live parser ──────────────────────────────────────────────────────
 function parseParamsFromCode(code) {
@@ -127,6 +129,7 @@ const PARAM_META = {
 };
 
 const PARAM_GROUP_ORDER = ['Motion', 'Shape', 'Color', 'Intensity', 'Audio', 'Advanced'];
+const PARAM_SLIDER_STEPS = 1000;
 
 function titleizeParam(name) {
   return String(name)
@@ -146,9 +149,32 @@ function getParamMeta(param) {
 function formatParamValue(value, param, meta) {
   if (meta.unit === 'hue') return `${Math.round(value * 360)}°`;
   if (meta.unit === 'turn') return `${Math.round(value * 360)}°`;
-  if (meta.unit === 'x') return `${value.toFixed(param.step < 0.05 ? 2 : 1)}×`;
+  if (meta.unit === 'x') {
+    if (value < 0.1) return `${value.toFixed(3).replace(/0$/, '')}×`;
+    if (value < 1) return `${value.toFixed(2)}×`;
+    return `${value.toFixed(param.step < 0.05 ? 2 : 1)}×`;
+  }
   if (param.max <= 1 && param.min >= 0) return `${Math.round(value * 100)}%`;
   return value.toFixed(param.step < 0.05 ? 3 : param.step < 0.5 ? 2 : 1);
+}
+
+function usesCurvedParamScale(param, meta) {
+  return meta.unit === 'x' && Number(param.max) > Number(param.min);
+}
+
+function paramToSliderValue(value, param, meta) {
+  if (!usesCurvedParamScale(param, meta)) return value;
+  return curvedRangeValueToSlider(value, { min: param.min, max: param.max, steps: PARAM_SLIDER_STEPS });
+}
+
+function sliderToParamValue(value, param, meta) {
+  if (!usesCurvedParamScale(param, meta)) return +value;
+  return sliderValueToCurvedRange(value, {
+    min: param.min,
+    max: param.max,
+    steps: PARAM_SLIDER_STEPS,
+    precision: param.step < 0.05 ? 3 : 2,
+  });
 }
 
 function patternUsesPalette(patternId) {
@@ -234,6 +260,9 @@ export function CardsMode({
   const handleSelectPattern = (id) => {
     if (effectTarget === 'global') {
       onSelectPattern(id);
+      stripOverrideIdsToClearForGlobalSelection(strips).forEach(stripId => {
+        onAssignStripPattern?.(stripId, null);
+      });
     } else {
       onAssignStripPattern?.(effectTarget, id);
     }
@@ -249,6 +278,9 @@ export function CardsMode({
   };
 
   const selectedTargetStrip = strips.find(s => s.id === effectTarget);
+  const singleStripGlobalMask = effectTarget === 'global'
+    ? strips.find(strip => stripOverrideIdsToClearForGlobalSelection(strips).includes(strip.id))
+    : null;
   const activeTargetPatternId = effectTarget === 'global'
     ? patternId
     : selectedTargetStrip?.patternId || patternId;
@@ -373,6 +405,11 @@ export function CardsMode({
       {effectTarget !== 'global' && (
         <div className="lw-effect-target-note">
           Clicking an effect applies it to <strong>{selectedTargetStrip?.name || 'selected layer'}</strong>. Clear the override to inherit Global.
+        </div>
+      )}
+      {singleStripGlobalMask && (
+        <div className="lw-effect-target-note">
+          This single-strip piece has a layer override. Choosing a Global effect will put <strong>{singleStripGlobalMask.name || 'the strip'}</strong> back on Global.
         </div>
       )}
 
@@ -601,9 +638,11 @@ export function CardsMode({
                         </div>
                         <input type="range"
                                aria-label={meta.label}
-                               min={k.min} max={k.max} step={k.step}
-                               value={value}
-                               onChange={e => handleParamChange(k.name, +e.target.value)}/>
+                               min={usesCurvedParamScale(k, meta) ? 0 : k.min}
+                               max={usesCurvedParamScale(k, meta) ? PARAM_SLIDER_STEPS : k.max}
+                               step={usesCurvedParamScale(k, meta) ? 1 : k.step}
+                               value={paramToSliderValue(value, k, meta)}
+                               onChange={e => handleParamChange(k.name, sliderToParamValue(e.target.value, k, meta))}/>
                         <div className="lw-knob-val">
                           {formatParamValue(value, k, meta)}
                         </div>
@@ -832,19 +871,25 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
             <span className="meta">live · from @param</span>
           </div>
           <div className="lw-knobs">
-            {liveKnobs.map((k) => (
-              <div className="lw-knob" key={k.name}>
-                <div className="lw-knob-name">{k.name}</div>
-                <input type="range"
-                       aria-label={`Code parameter ${k.name}`}
-                       min={k.min} max={k.max} step={k.step}
-                       value={params?.[k.name] ?? k.value}
-                       onChange={e => onParamChange?.(k.name, +e.target.value)}/>
-                <div className="lw-knob-val">
-                  {(params?.[k.name] ?? k.value).toFixed(k.step < 0.05 ? 3 : 2)}
+            {liveKnobs.map((k) => {
+              const meta = getParamMeta(k);
+              const value = params?.[k.name] ?? k.value;
+              return (
+                <div className="lw-knob" key={k.name}>
+                  <div className="lw-knob-name">{k.name}</div>
+                  <input type="range"
+                         aria-label={`Code parameter ${k.name}`}
+                         min={usesCurvedParamScale(k, meta) ? 0 : k.min}
+                         max={usesCurvedParamScale(k, meta) ? PARAM_SLIDER_STEPS : k.max}
+                         step={usesCurvedParamScale(k, meta) ? 1 : k.step}
+                         value={paramToSliderValue(value, k, meta)}
+                         onChange={e => onParamChange?.(k.name, sliderToParamValue(e.target.value, k, meta))}/>
+                  <div className="lw-knob-val">
+                    {formatParamValue(value, k, meta)}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

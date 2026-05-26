@@ -4,6 +4,13 @@ import { useTweaks } from './Tweaks.jsx';
 import { PALETTE_DEFAULT } from '../data.js';
 import { MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 import { DEFAULT_STANDALONE_OUTPUTS, STANDALONE_RUNTIME_MODES } from '../lib/standaloneController.js';
+import {
+  SPEED_SLIDER_MAX,
+  SPEED_SLIDER_MIN,
+  formatControlSpeed,
+  sliderValueToSpeed,
+  speedToSliderValue,
+} from '../lib/controlScale.js';
 
 function Section({ title, children }) {
   return (
@@ -211,9 +218,9 @@ export function SettingsScreen() {
         <Section title="Rendering">
           <Row label="Master speed default">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
-                     onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 40 }}>{masterSpeed.toFixed(2)}×</span>
+              <input type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1" value={speedToSliderValue(masterSpeed)}
+                     onChange={e => setMasterSpeed(sliderValueToSpeed(e.target.value))} style={{ flex: 1 }}/>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', minWidth: 48 }}>{formatControlSpeed(masterSpeed)}</span>
             </div>
           </Row>
           <Row label="Motion smoothing">

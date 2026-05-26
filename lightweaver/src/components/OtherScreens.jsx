@@ -494,6 +494,8 @@ export function ExportScreen() {
     palette,
     masterBrightness,
     showDuration,
+    controllerProfiles,
+    activeControllerId,
   } = useProject();
 
   const [normalize, setNormalize] = useState(true);
@@ -523,6 +525,7 @@ export function ExportScreen() {
   const previewJson = ledmapJson.slice(0, 400) + '\n  …';
 
   const totalLeds = sourceStrips.reduce((a, s) => a + (s.leds || s.pixelCount || s.pixels?.length || 0), 0);
+  const activeControllerProfile = controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null;
   const wledBasicPackageJson = useMemo(() => JSON.stringify(buildWledBasicPackage({
     projectName,
     activePatternId,
@@ -532,7 +535,8 @@ export function ExportScreen() {
     duration: showDuration,
     brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
     loop: true,
-  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness]);
+    physicalControls: activeControllerProfile?.physicalControls,
+  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness, activeControllerProfile?.physicalControls]);
 
   const artifacts = [
     {

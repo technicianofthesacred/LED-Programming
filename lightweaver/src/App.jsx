@@ -11,6 +11,20 @@ import { useAudio } from './hooks/useAudio.js';
 import { useMidi } from './hooks/useMidi.js';
 import { usePersistentPanelSize } from './hooks/usePersistentPanelSize.js';
 import { PATTERNS } from './data.js';
+import { shouldRunBackgroundPatternOutput } from './lib/backgroundOutput.js';
+import {
+  buildGammaLut,
+  compilePattern,
+  normalizePalette,
+  renderPixelFrame,
+} from './lib/frameEngine.js';
+import {
+  SPEED_SLIDER_MAX,
+  SPEED_SLIDER_MIN,
+  formatControlSpeed,
+  sliderValueToSpeed,
+  speedToSliderValue,
+} from './lib/controlScale.js';
 
 const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 
@@ -313,9 +327,9 @@ function PatternPanel({
           </div>
           <div className="lw-master">
             <span className="lbl">Speed</span>
-            <input aria-label="Master speed" type="range" min="0" max="4" step="0.01" value={masterSpeed}
-                   onChange={e => setMasterSpeed(+e.target.value)}/>
-            <span className="v">{masterSpeed.toFixed(2)}×</span>
+            <input aria-label="Master speed" type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1" value={speedToSliderValue(masterSpeed)}
+                   onChange={e => setMasterSpeed(sliderValueToSpeed(e.target.value))}/>
+            <span className="v">{formatControlSpeed(masterSpeed)}</span>
 
             <span className="lbl">Bright</span>
             <input aria-label="Master brightness" type="range" min="0" max="1" step="0.01" value={masterBrightness}
@@ -363,7 +377,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
     patternParams, setPatternParams,
     bpm, setBpm,
     motionSmoothing,
-    wledPush,
+    pushOutputFrame,
     symSettings, setSymSettings,
     audioBands,
   } = useProject();
@@ -402,7 +416,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
     setPatternParams(prev => ({ ...prev, [patternId]: newParams }));
   }, [patternId, setPatternParams]);
 
-  const handleFrame = useCallback((pixels) => { wledPush(pixels); }, [wledPush]);
+  const handleFrame = useCallback((pixels) => { pushOutputFrame(pixels); }, [pushOutputFrame]);
 
   const handleCodeChange = useCallback(({ fn, error, parsedParams }) => {
     setCompiledFn(error ? null : () => fn);
@@ -776,6 +790,117 @@ function MidiBridge() {
   return <MidiBridgeInner/>;
 }
 
+function BackgroundPatternOutput({ screen }) {
+  const {
+    strips,
+    hidden,
+    activePatternId,
+    palette,
+    masterSpeed,
+    masterBrightness,
+    masterSaturation,
+    masterHueShift,
+    gammaEnabled,
+    gammaValue,
+    patternParams,
+    bpm,
+    symSettings,
+    audioBands,
+    pushOutputFrame,
+  } = useProject();
+  const rafRef = useRef(0);
+  const tRef = useRef(0);
+  const lastPushRef = useRef(0);
+  const shouldRun = shouldRunBackgroundPatternOutput(screen);
+
+  const outputStrips = useMemo(() => {
+    return (strips || [])
+      .filter(strip => strip && !hidden?.[strip.id] && Array.isArray(strip.pixels) && strip.pixels.length > 0)
+      .map(strip => ({
+        id: strip.id,
+        patternId: strip.patternId || null,
+        speed: strip.speed,
+        brightness: strip.brightness,
+        hueShift: strip.hueShift,
+        pts: strip.pixels.map((pixel, index) => ({
+          x: pixel.x,
+          y: pixel.y,
+          p: strip.pixels.length > 1 ? index / (strip.pixels.length - 1) : 0.5,
+          i: index,
+        })),
+      }));
+  }, [hidden, strips]);
+
+  const perStripFns = useMemo(() => {
+    const next = new Map();
+    for (const strip of outputStrips) {
+      if (strip.patternId && !next.has(strip.patternId)) {
+        const fn = compilePattern(strip.patternId);
+        if (fn) next.set(strip.patternId, fn);
+      }
+    }
+    return next;
+  }, [outputStrips]);
+
+  const paletteNorm = useMemo(() => normalizePalette(palette), [palette]);
+  const gammaLUT = useMemo(() => buildGammaLut(gammaEnabled, gammaValue), [gammaEnabled, gammaValue]);
+
+  useEffect(() => {
+    if (!shouldRun || !outputStrips.length) return undefined;
+    let last = performance.now();
+    const tick = (now) => {
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      tRef.current += dt;
+
+      if (now - lastPushRef.current >= 33) {
+        const frame = renderPixelFrame({
+          t: tRef.current,
+          strips: outputStrips,
+          patternId: activePatternId,
+          activeFn: compilePattern(activePatternId),
+          params: patternParams?.[activePatternId] || {},
+          patternParamsById: patternParams,
+          paletteNorm,
+          bpm,
+          masterSpeed,
+          masterBrightness,
+          masterSaturation,
+          masterHueShift,
+          gammaLUT,
+          symSettings,
+          audioBands,
+          perStripFns,
+        });
+        pushOutputFrame(frame.pixels);
+        lastPushRef.current = now;
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [
+    activePatternId,
+    audioBands,
+    bpm,
+    gammaLUT,
+    masterBrightness,
+    masterHueShift,
+    masterSaturation,
+    masterSpeed,
+    outputStrips,
+    paletteNorm,
+    patternParams,
+    perStripFns,
+    pushOutputFrame,
+    shouldRun,
+    symSettings,
+  ]);
+
+  return null;
+}
+
 export default function App() {
   const [screen, setScreen]         = useState(() => {
     const hash = window.location.hash.slice(1);
@@ -834,6 +959,7 @@ export default function App() {
     <ProjectProvider>
       <AudioBridge audio={audio}/>
       <MidiBridge/>
+      <BackgroundPatternOutput screen={screen}/>
       <div className="lw-app">
         <TopBar theme={tweaks.theme} onKbdHelp={() => setKbdOpen(true)}
                 audio={audio} midi={midi}/>

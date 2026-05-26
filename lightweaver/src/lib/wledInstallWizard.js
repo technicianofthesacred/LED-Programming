@@ -48,6 +48,7 @@ function findInstallBlockers(findings) {
 }
 
 function summarizePackage(wledPackage) {
+  const encoder = wledPackage?.controlContract?.encoder || {};
   return {
     presets: Array.isArray(wledPackage?.presets) ? wledPackage.presets.length : 0,
     customEffectPorts: Array.isArray(wledPackage?.customEffectPorts) ? wledPackage.customEffectPorts.length : 0,
@@ -55,6 +56,12 @@ function summarizePackage(wledPackage) {
     playlistPresetId: wledPackage?.playlistPresetId || null,
     presetStart: wledPackage?.presetStart || null,
     ledCount: wledPackage?.project?.ledCount || 0,
+    physicalControls: {
+      encoder: Boolean(encoder.enabled),
+      helperPresetId: encoder.press?.helperPresetId || null,
+      rotateReady: encoder.rotate?.ready ?? false,
+      pressReady: encoder.press?.ready ?? false,
+    },
   };
 }
 
@@ -102,6 +109,7 @@ function makeSteps({ blockers, warnings, backupSaved, packageSummary, hasRunnabl
         ? `${packageSummary.presets} preset(s), playlist ${packageSummary.playlistPresetId || 'pending'}, ${packageSummary.customEffectPorts} custom port(s), ${packageSummary.unsupportedPatterns} gated pattern(s).`
         : 'The package has no immediately runnable WLED presets.',
     },
+    makePhysicalControlsStep(packageSummary),
     {
       id: 'warnings',
       label: 'Operator polish',
@@ -111,6 +119,27 @@ function makeSteps({ blockers, warnings, backupSaved, packageSummary, hasRunnabl
         : 'Identity, clock, and runtime warnings are clear.',
     },
   ];
+}
+
+function makePhysicalControlsStep(packageSummary) {
+  const controls = packageSummary.physicalControls || {};
+  if (!controls.encoder) {
+    return {
+      id: 'physical-controls',
+      label: 'Physical controls',
+      state: 'open',
+      detail: 'Encoder contract is not enabled for this package.',
+    };
+  }
+  const ready = controls.rotateReady && controls.pressReady;
+  return {
+    id: 'physical-controls',
+    label: 'Physical controls',
+    state: ready ? 'ready' : 'open',
+    detail: ready
+      ? `Encoder rotate dims on-device; press preset ${controls.helperPresetId} advances the Lightweaver looks.`
+      : 'Encoder is enabled, but firmware support or runnable preset cycle is still missing.',
+  };
 }
 
 function makeNextAction({ status, blockers, backupSaved, hasRunnablePackage }) {

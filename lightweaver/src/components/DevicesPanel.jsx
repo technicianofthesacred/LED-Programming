@@ -1,11 +1,19 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useMidi } from '../hooks/useMidi.js';
-import { makeWledSegments, postWledState } from '../lib/deviceController.js';
+import { makeWledSegments, postWledState, requestWledJson } from '../lib/deviceController.js';
 import { auditWledControllerCompatibility } from '../lib/controllerCompatibility.js';
 import { makeSafeWledTestState, pickBestWledDevice, sortWledDevices } from '../lib/wledDiscovery.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { buildWledInstallWizardPlan } from '../lib/wledInstallWizard.js';
+import {
+  WLED_ENCODER_FIRMWARE_MODES,
+  makeWledEncoderBrightnessState,
+  makeWledEncoderPressButtonConfig,
+  makeWledEncoderPressTestState,
+  normalizeWledPhysicalControls,
+  summarizeWledControlContract,
+} from '../lib/wledControlContract.js';
 import {
   buildControllerProfile,
   controllerProfileReadiness,
@@ -94,6 +102,10 @@ export function DevicesPanel({ onClose }) {
     () => controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null,
     [activeControllerId, controllerProfiles],
   );
+  const activePhysicalControls = useMemo(
+    () => normalizeWledPhysicalControls(activeProfile?.physicalControls),
+    [activeProfile?.physicalControls],
+  );
   const activePixelCount = Math.max(1, Number(activeProfile?.led?.length || wledInfo?.leds?.count || 40));
   const readiness = useMemo(() => activeProfile ? controllerProfileReadiness(activeProfile) : null, [activeProfile]);
   const powerBudget = useMemo(() => activeProfile ? estimatePowerBudget(activeProfile) : null, [activeProfile]);
@@ -108,12 +120,14 @@ export function DevicesPanel({ onClose }) {
     strips,
     palette,
     maxSegments: wledInfo?.leds?.maxseg || 16,
-  }), [projectName, activePatternId, showClips, strips, palette, wledInfo]);
+    physicalControls: activePhysicalControls,
+  }), [projectName, activePatternId, showClips, strips, palette, wledInfo, activePhysicalControls]);
   const installWizardPlan = useMemo(() => buildWledInstallWizardPlan({
     controllerAudit: installAudit,
     wledPackage: wledBasicPackage,
     backupSaved: Boolean(activeProfile?.backup?.lastSnapshotAt),
   }), [installAudit, wledBasicPackage, activeProfile]);
+  const controlContract = wledBasicPackage.controlContract;
 
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose(); };
@@ -278,6 +292,17 @@ export function DevicesPanel({ onClose }) {
     }));
   };
 
+  const updatePhysicalControls = (updater) => {
+    updateActiveProfile(profile => {
+      const current = normalizeWledPhysicalControls(profile.physicalControls);
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      return {
+        ...profile,
+        physicalControls: normalizeWledPhysicalControls(next),
+      };
+    });
+  };
+
   const sendState = async (state, label) => {
     if (!wledIp) return;
     try {
@@ -293,6 +318,23 @@ export function DevicesPanel({ onClose }) {
       setProfileStatus(`${label} failed: ${error.message}`);
     }
     setTimeout(() => setProfileStatus(''), 3000);
+  };
+
+  const testKnobPress = async () => {
+    const state = makeWledEncoderPressTestState(controlContract);
+    if (!state.ps) {
+      setProfileStatus('No Lightweaver look cycle is ready yet');
+      setTimeout(() => setProfileStatus(''), 3000);
+      return;
+    }
+    await sendState(state, 'Knob press test: next Lightweaver look');
+  };
+
+  const testKnobBrightness = async (direction) => {
+    await sendState(
+      makeWledEncoderBrightnessState(controlContract, direction),
+      direction === 'up' ? 'Knob dim test: brighter' : 'Knob dim test: dimmer',
+    );
   };
 
   const updatePixelCount = async (pixelCount, { sendEndpoint = false } = {}) => {
@@ -398,6 +440,46 @@ export function DevicesPanel({ onClose }) {
       return;
     }
     await sendState(activeProfile.backup.snapshot.state, 'Snapshot state restored');
+  };
+
+  const setupKnob = async () => {
+    if (!activeProfile) {
+      setProfileStatus('Save the WLED profile first');
+      setTimeout(() => setProfileStatus(''), 3500);
+      return;
+    }
+    if (!wledIp) {
+      setProfileStatus('Connect to WLED first');
+      setTimeout(() => setProfileStatus(''), 3500);
+      return;
+    }
+    if (!controlContract?.encoder?.enabled) {
+      updatePhysicalControls(controls => ({
+        ...controls,
+        encoder: { ...controls.encoder, enabled: true },
+      }));
+      setProfileStatus('Knob enabled in this profile');
+      setTimeout(() => setProfileStatus(''), 3500);
+      return;
+    }
+
+    setProfileStatus('Setting up knob...');
+    try {
+      const cfg = await requestWledJson(wledIp, 'cfg');
+      const binding = makeWledEncoderPressButtonConfig({ contract: controlContract, cfg });
+      if (!binding) throw new Error('No press pin or preset cycle is ready');
+      await requestWledJson(wledIp, 'cfg', { method: 'POST', body: binding.patch });
+
+      const presets = await fetchWledResource(wledIp, '/presets.json', null);
+      const helperSlotKnown = presets == null || Boolean(presets[String(binding.presetId)]);
+      await postWledState(wledIp, makeWledEncoderPressTestState(controlContract));
+      setProfileStatus(helperSlotKnown
+        ? `Knob ready: press GPIO ${binding.pin}, rotate dims in firmware`
+        : `Press is bound to preset ${binding.presetId}; install WLED Basic presets if the hardware press does not advance`);
+    } catch (error) {
+      setProfileStatus(`Knob setup failed: ${error.message}`);
+    }
+    setTimeout(() => setProfileStatus(''), 5000);
   };
 
   const handlePrimaryConnect = async () => {
@@ -585,6 +667,7 @@ export function DevicesPanel({ onClose }) {
                 ['Find controller', !!activeProfile.ip],
                 ['Verify firmware', !!activeProfile.version],
                 ['Set LED basics', !!(activeProfile.led?.length && activeProfile.led?.dataPin >= 0 && activeProfile.led?.colorOrder)],
+                ['Set physical controls', !!wledBasicPackage.controlContract?.encoder?.enabled],
                 ['Confirm color order', !!activeProfile.calibration?.colorOrderConfirmed],
                 ['Confirm pixel count/direction', !!activeProfile.calibration?.pixelCountConfirmed],
                 ['Save WLED snapshot', !!activeProfile.backup?.lastSnapshotAt],
@@ -594,6 +677,96 @@ export function DevicesPanel({ onClose }) {
                   <span style={{ fontSize: 'var(--fs-sm)', color: ok ? 'var(--text-2)' : 'var(--text-4)' }}>{ok ? 'done' : 'open'}</span>
                 </Row>
               ))}
+            </Section>
+          )}
+
+          {activeProfile && (
+            <Section title="Knob">
+              <Row label="Setup">
+                <button className="btn btn-primary" onClick={setupKnob} disabled={!wledIp}>
+                  Set up knob
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }} onClick={testKnobPress} disabled={!wledIp || !controlContract?.encoder?.press?.ready}>
+                  Test press
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }} onClick={() => testKnobBrightness('down')} disabled={!wledIp}>
+                  Dim -
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }} onClick={() => testKnobBrightness('up')} disabled={!wledIp}>
+                  Dim +
+                </button>
+              </Row>
+              <Row label="Behavior">
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>turn = brightness</span>
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>press = next look</span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', marginLeft: 'auto' }}>
+                  preset {controlContract?.encoder?.press?.helperPresetId || '—'}
+                </span>
+              </Row>
+              <Row label="Encoder">
+                <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>
+                  <input
+                    type="checkbox"
+                    checked={!!controlContract?.encoder?.enabled}
+                    onChange={e => updatePhysicalControls(controls => ({
+                      ...controls,
+                      encoder: { ...controls.encoder, enabled: e.target.checked },
+                    }))}
+                  />
+                  enabled
+                </label>
+                <select
+                  className="lw-search-input"
+                  style={{ width: 150 }}
+                  value={activePhysicalControls.encoder.firmware}
+                  onChange={e => updatePhysicalControls(controls => ({
+                    ...controls,
+                    encoder: { ...controls.encoder, firmware: e.target.value },
+                  }))}
+                >
+                  <option value={WLED_ENCODER_FIRMWARE_MODES.ROTARY_USERMOD}>rotary usermod</option>
+                  <option value={WLED_ENCODER_FIRMWARE_MODES.LIGHTWEAVER_WLED}>Lightweaver WLED</option>
+                  <option value={WLED_ENCODER_FIRMWARE_MODES.STOCK_WLED}>stock WLED press only</option>
+                </select>
+              </Row>
+              <Row label="GPIO">
+                {[
+                  ['A', 'a'],
+                  ['B', 'b'],
+                  ['Press', 'press'],
+                ].map(([label, key]) => (
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
+                    {label}
+                    <input
+                      type="number"
+                      min="0"
+                      max="48"
+                      className="lw-search-input"
+                      style={{ width: 52 }}
+                      value={activePhysicalControls.encoder.pins?.[key] ?? ''}
+                      onChange={e => updatePhysicalControls(controls => ({
+                        ...controls,
+                        encoder: {
+                          ...controls.encoder,
+                          pins: { ...controls.encoder.pins, [key]: e.target.value },
+                        },
+                      }))}
+                    />
+                  </label>
+                ))}
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>read by WLED firmware</span>
+              </Row>
+              <Row label="WLED bind">
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>
+                  Set up knob binds the press pin to preset {controlContract?.encoder?.press?.helperPresetId || '—'}.
+                </span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
+                  {controlContract?.encoder?.press?.httpCommand || 'export WLED Basic package first'}
+                </span>
+              </Row>
+              <div style={{ padding: '4px 0 0', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', lineHeight: 1.5 }}>
+                {summarizeWledControlContract(controlContract)}
+              </div>
             </Section>
           )}
 

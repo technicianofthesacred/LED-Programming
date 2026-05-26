@@ -4,8 +4,15 @@ import { PATTERNS } from '../lib/patterns-library.js';
 import { LEDPreview } from './Preview.jsx';
 import { makeBlackoutFrame } from '../lib/deviceController.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
-import { easeCrossfade, formatMotionSpeed, MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
+import { easeCrossfade, MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 import { getPatternCompatibilityGate } from '../lib/patternCompatibility.js';
+import {
+  SPEED_SLIDER_MAX,
+  SPEED_SLIDER_MIN,
+  formatControlSpeed,
+  sliderValueToSpeed,
+  speedToSliderValue,
+} from '../lib/controlScale.js';
 
 const LIVE_CATS = ['all', 'audio', 'fire', 'water', 'space', 'chill', 'geo', 'glitch', 'bpm'];
 const LIVE_CATEGORY_RULES = {
@@ -161,7 +168,7 @@ export function LiveScreen({ onOpenShow }) {
     masterHueShift, setMasterHueShift,
     gammaEnabled, gammaValue,
     motionSmoothing, setMotionSmoothing,
-    wledPush, symSettings,
+    pushOutputFrame, symSettings,
   } = useProject();
 
   const [search, setSearch]             = useState('');
@@ -335,8 +342,8 @@ export function LiveScreen({ onOpenShow }) {
   }, [nextUp, bpm, liveQuantize, liveT, activePatternId, startCrossfade, liveRecording, recordLivePattern, crossfadeDur]);
 
   const handleFrame = useCallback((pixels) => {
-    if (wledPush) wledPush(pixels);
-  }, [wledPush]);
+    if (pushOutputFrame) pushOutputFrame(pixels);
+  }, [pushOutputFrame]);
 
   return (
     <div
@@ -493,9 +500,9 @@ export function LiveScreen({ onOpenShow }) {
           </div>
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Speed</span>
-            <input type="range" min="0" max="4" step="0.01" value={masterSpeed}
-                   onChange={e => setMasterSpeed(+e.target.value)} style={{ flex: 1 }}/>
-            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 38 }}>{formatMotionSpeed(masterSpeed)}</span>
+            <input type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1" value={speedToSliderValue(masterSpeed)}
+                   onChange={e => setMasterSpeed(sliderValueToSpeed(e.target.value))} style={{ flex: 1 }}/>
+            <span className="v" style={{ fontSize: 'var(--fs-2xs)', minWidth: 44 }}>{formatControlSpeed(masterSpeed)}</span>
           </div>
           <div className="lw-live-ctrl-row">
             <span className="k" style={{ fontSize: 'var(--fs-2xs)' }}>Hue</span>
@@ -536,7 +543,7 @@ export function LiveScreen({ onOpenShow }) {
                        letterSpacing: '0.06em' }}
               title="Blackout — send all-black frame (B)"
               onClick={() => {
-                if (wledPush) wledPush(makeBlackoutFrame(strips.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0)));
+                if (pushOutputFrame) pushOutputFrame(makeBlackoutFrame(strips.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0)));
                 setActivePatternId(null);
               }}>
               BLACKOUT

@@ -38,7 +38,7 @@ export function ExportDialog({ open, onClose }) {
     projectName, showDuration, showClips, showTransitions, autoLanes, strips,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
-    standaloneController,
+    standaloneController, controllerProfiles, activeControllerId,
     serializeProject,
   } = project;
   const [target, setTarget] = useState('wled-basic');
@@ -96,6 +96,7 @@ export function ExportDialog({ open, onClose }) {
   const standaloneMode = standaloneController?.runtimeMode || 'sequence';
   const standaloneUsesFrames = target === 'standalone' && standaloneMode === 'sequence';
   const standaloneOutputs = deriveStandaloneOutputsFromStrips(strips, standaloneController?.outputs || []);
+  const activeControllerProfile = controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null;
   const standalonePixels = totalStandalonePixels(standaloneOutputs);
   const safeName = (projectName || 'untitled').replace(/\s+/g, '_').toLowerCase();
   const durationMins = Math.floor(showDuration / 60);
@@ -259,6 +260,7 @@ export function ExportDialog({ open, onClose }) {
           duration: showDuration,
           brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
           loop,
+          physicalControls: activeControllerProfile?.physicalControls,
         }), null, 2);
       } else if (target === 'pi') {
         filename = `${safeName}-lightweaver-pi.json`;

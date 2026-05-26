@@ -14,6 +14,7 @@ import { networkInterfaces } from 'os';
 import http from 'http';
 import { Bonjour } from 'bonjour-service';
 import { WebSocket, WebSocketServer } from 'ws';
+import { LwUsbController } from './lwUsbController.js';
 import { makeKnownGoodRecoveryState } from '../src/lib/controllerProfiles.js';
 import {
   makeSafeWledTestState,
@@ -31,6 +32,11 @@ const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const DEFAULT_WLED = process.env.WLED_HOST || '';
 const HTTP_TIMEOUT_MS = Number.parseInt(process.env.WLED_TIMEOUT_MS || '3000', 10);
 const WS_UPSTREAM_TIMEOUT_MS = Number.parseInt(process.env.WLED_WS_TIMEOUT_MS || '5000', 10);
+const usbLed = new LwUsbController({
+  portPath: process.env.LWUSB_PORT || '',
+  baudRate: Number.parseInt(process.env.LWUSB_BAUD || '115200', 10),
+  maxPixels: Number.parseInt(process.env.LWUSB_MAX_PIXELS || '300', 10),
+});
 
 const mdnsDevices = new Map();
 
@@ -137,7 +143,57 @@ function localSubnets() {
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, app: 'Lightweaver', wledDefault: DEFAULT_WLED || null });
+  res.json({ ok: true, app: 'Lightweaver', wledDefault: DEFAULT_WLED || null, usbLed: usbLed.status() });
+});
+
+app.get('/api/usb-led/status', (_req, res) => {
+  res.json(usbLed.status());
+});
+
+app.get('/api/usb-led/ports', async (_req, res) => {
+  try {
+    res.json({ ports: await usbLed.ports() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/usb-led/connect', async (req, res) => {
+  try {
+    const status = await usbLed.connect(req.body || {});
+    res.json(status);
+  } catch (error) {
+    res.status(502).json({ error: error.message, status: usbLed.status() });
+  }
+});
+
+app.post('/api/usb-led/disconnect', async (_req, res) => {
+  try {
+    await usbLed.disconnect();
+    res.json(usbLed.status());
+  } catch (error) {
+    res.status(500).json({ error: error.message, status: usbLed.status() });
+  }
+});
+
+app.post('/api/usb-led/command', async (req, res) => {
+  const command = String(req.body?.command || '').trim();
+  const allowed = /^(ID\?|HELP|CLEAR|WARM|TEST|ORDER\s+(RGB|GRB|BRG|BGR|RBG|GBR)|BRI\s+\d{1,3}|COUNT\s+\d{1,4}|SOLID\s+\d{1,3}\s+\d{1,3}\s+\d{1,3}|CHASE\s+\d{1,3}\s+\d{1,3}\s+\d{1,3})$/i;
+  if (!allowed.test(command)) return res.status(400).json({ error: 'Unsupported USB LED command' });
+  try {
+    const result = await usbLed.sendCommand(command.toUpperCase());
+    res.json({ ok: true, result, status: usbLed.status() });
+  } catch (error) {
+    res.status(502).json({ error: error.message, status: usbLed.status() });
+  }
+});
+
+app.post('/api/usb-led/frame', (req, res) => {
+  try {
+    res.json({ ...usbLed.sendFrame(req.body || {}), status: usbLed.status() });
+  } catch (error) {
+    res.status(502).json({ error: error.message, status: usbLed.status() });
+  }
 });
 
 app.get('/api/wled/discover', async (req, res) => {
@@ -191,6 +247,30 @@ app.get('/api/wled/state', async (req, res) => {
   if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
   try {
     res.json(await fetchJson(wledUrl(host, '/json/state')));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
+app.get('/api/wled/cfg', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  try {
+    res.json(await fetchJson(wledUrl(host, '/json/cfg')));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
+app.post('/api/wled/cfg', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  try {
+    res.json(await fetchJson(wledUrl(host, '/json/cfg'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {}),
+    }));
   } catch (error) {
     res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
   }

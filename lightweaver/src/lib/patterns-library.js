@@ -229,7 +229,8 @@ return hsv(0.33, head ? 0 : 1, head ? 1 : v * 0.8);`,
 `// @param hue float 0.0 0.0 1.0
 const p1 = exp(-pow(fract(beat) * 8, 2) * 5);
 const p2 = exp(-pow(max(0, fract(beat) - 0.15) * 8, 2) * 8) * 0.6;
-return hsv(params.hue, 1, max(p1, p2));`,
+const rest = 0.045;
+return hsv(params.hue, 1, max(rest, p1, p2));`,
   },
   {
     id: 'stained', name: 'Stained Glass',

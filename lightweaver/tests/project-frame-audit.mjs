@@ -69,6 +69,10 @@ import {
   makeWledBasicPresetsJson,
 } from '../src/lib/wledBasicExport.js';
 import {
+  WLED_ENCODER_FIRMWARE_MODES,
+  summarizeWledControlContract,
+} from '../src/lib/wledControlContract.js';
+import {
   buildWledInstallWizardPlan,
 } from '../src/lib/wledInstallWizard.js';
 import {
@@ -80,6 +84,12 @@ import {
 import {
   makePatternStudioSummary,
 } from '../src/lib/patternStudio.js';
+import {
+  shouldRunBackgroundPatternOutput,
+} from '../src/lib/backgroundOutput.js';
+import {
+  shouldRebuildStripPixels,
+} from '../src/lib/stripPixels.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
@@ -152,6 +162,23 @@ const heartbeatTargets = inferPatternTargets(PATTERNS.find(pattern => pattern.id
 assert.ok(heartbeatTargets.includes(PATTERN_TARGETS.ARTNET_STREAM));
 assert.ok(heartbeatTargets.includes(PATTERN_TARGETS.STANDALONE_SEQUENCE));
 assert.equal(describePatternCompatibility(PATTERNS.find(pattern => pattern.id === 'heartbeat')).bestTier.id, ADVANCED_ARTNET_TIER_ID);
+
+const heartbeatPattern = PATTERNS.find(pattern => pattern.id === 'heartbeat');
+const heartbeatCompiled = compile(heartbeatPattern.code);
+const heartbeatPeak = evalPixel(heartbeatCompiled.fn, 0, 0, 0, 0, 0, 43, palette, 0, 0, { hue: 0 }, 'strip-1', 0);
+const heartbeatRest = evalPixel(heartbeatCompiled.fn, 0, 0, 0, 0.4, 0.4, 43, palette, 0.4, 0, { hue: 0 }, 'strip-1', 0);
+assert.ok(heartbeatPeak.r >= 240 && heartbeatPeak.g <= 3 && heartbeatPeak.b <= 3, 'heartbeat peak should be bright red');
+assert.ok(heartbeatRest.r >= 10 && heartbeatRest.g <= 3 && heartbeatRest.b <= 3, 'heartbeat rest should stay dim red instead of disappearing');
+
+assert.equal(shouldRunBackgroundPatternOutput('layout'), true);
+assert.equal(shouldRunBackgroundPatternOutput('settings'), true);
+assert.equal(shouldRunBackgroundPatternOutput('pattern'), false);
+assert.equal(shouldRunBackgroundPatternOutput('live'), false);
+assert.equal(shouldRunBackgroundPatternOutput('timeline'), false);
+
+assert.equal(shouldRebuildStripPixels({ pathData: 'M 0 0 L 10 0', pixelCount: 43, pixels: Array.from({ length: 41 }) }), true);
+assert.equal(shouldRebuildStripPixels({ pathData: 'M 0 0 L 10 0', pixelCount: 43, pixels: Array.from({ length: 43 }) }), false);
+assert.equal(shouldRebuildStripPixels({ pathData: 'M 0 0 L 10 0', pixelCount: 43, pixels: [] }), true);
 
 const compatibilityAudit = auditPatternCompatibility(PATTERNS);
 assert.equal(compatibilityAudit.length, PATTERNS.length);
@@ -580,6 +607,9 @@ const profile = buildControllerProfile({
   artnet: { startUniverse: 0, fps: 40 },
 });
 assert.equal(profile.id, 'aca704e2ece0');
+assert.equal(profile.physicalControls.encoder.enabled, true);
+assert.equal(profile.physicalControls.encoder.firmware, WLED_ENCODER_FIRMWARE_MODES.ROTARY_USERMOD);
+assert.deepEqual(profile.physicalControls.encoder.pins, { a: 4, b: 5, press: 6 });
 assert.equal(makeWledHostname(profile), 'lightweaver-e2ece0.local');
 assert.equal(makeDhcpReservationNote(profile), 'Reserve MAC ac:a7:04:e2:ec:e0 as 192.168.18.66.');
 assert.deepEqual(estimatePowerBudget(profile), {
@@ -610,6 +640,8 @@ assert.deepEqual(makePixelCountProbeState(40.4, 38.6), {
 });
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Lightweaver Install Readiness/);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /aca704e2ece0/);
+assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Physical Controls/);
+assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Rotate: brightness/);
 
 const controllerAudit = auditWledControllerCompatibility({
   info: {
@@ -702,6 +734,30 @@ assert.equal(readyWizardPlan.canInstall, true);
 assert.equal(readyWizardPlan.steps.find(step => step.id === 'package').state, 'ready');
 assert.equal(readyWizardPlan.packageSummary.presets, wledBasicPackage.presets.length);
 assert.equal(readyWizardPlan.packageSummary.customEffectPorts, wledBasicPackage.customEffectPorts.length);
+
+const controlledBasicPackage = buildWledBasicPackage({
+  projectName: 'Controlled Bench',
+  activePatternId: 'candle',
+  strips: [{ id: 'main', pixels: [{ x: 0, y: 0 }] }],
+  physicalControls: profile.physicalControls,
+});
+assert.equal(controlledBasicPackage.controlContract.encoder.enabled, true);
+assert.equal(controlledBasicPackage.controlContract.encoder.press.helperPresetId, controlledBasicPackage.playlistPresetId + 1);
+assert.equal(
+  controlledBasicPackage.presetsJson[String(controlledBasicPackage.controlContract.encoder.press.helperPresetId)].ps,
+  '1~ 8~',
+);
+assert.match(summarizeWledControlContract(controlledBasicPackage.controlContract), /WLED firmware/);
+
+const controlledWizardPlan = buildWledInstallWizardPlan({
+  controllerAudit: readyControllerAudit,
+  wledPackage: controlledBasicPackage,
+  backupSaved: true,
+});
+assert.equal(controlledWizardPlan.packageSummary.physicalControls.encoder, true);
+assert.equal(controlledWizardPlan.packageSummary.physicalControls.helperPresetId, controlledBasicPackage.controlContract.encoder.press.helperPresetId);
+assert.equal(controlledWizardPlan.steps.find(step => step.id === 'physical-controls').state, 'ready');
+assert.match(controlledWizardPlan.steps.find(step => step.id === 'physical-controls').detail, /press preset/);
 
 const standaloneOutputs = normalizeStandaloneOutputs([
   { id: 'outer', pin: 16, pixels: 260 },

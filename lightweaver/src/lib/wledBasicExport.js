@@ -11,6 +11,10 @@ import {
   inferPatternTargets,
 } from './runtimeTargets.js';
 import { WLED_BASIC_EFFECT_ID_SOURCE, WLED_STOCK_LOOKS } from './wledStockLooks.js';
+import {
+  buildWledControlContract,
+  normalizeWledPhysicalControls,
+} from './wledControlContract.js';
 
 export const WLED_BASIC_PACKAGE_VERSION = 1;
 export const WLED_BASIC_DEFAULT_PRESET_START = 1;
@@ -77,6 +81,7 @@ export function buildWledBasicPackage({
   brightness = 128,
   loop = true,
   maxSegments = 16,
+  physicalControls = null,
 } = {}) {
   const requestedIds = uniqueIds([
     activePatternId,
@@ -140,6 +145,13 @@ export function buildWledBasicPackage({
     });
 
   const resolvedPlaylistPresetId = playlistPresetId || presetStart + presets.length;
+  const controlContract = buildWledControlContract({
+    physicalControls: normalizeWledPhysicalControls(physicalControls || { encoder: { enabled: false } }),
+    wledPackage: {
+      presets,
+      playlistPresetId: resolvedPlaylistPresetId,
+    },
+  });
   const presetsJson = makeWledBasicPresetsJson({
     presets,
     playlistName,
@@ -147,6 +159,7 @@ export function buildWledBasicPackage({
     presetDurationSeconds,
     transitionMs,
     repeat: loop ? 0 : 1,
+    extraEntries: controlContract.presetEntries,
   });
 
   return {
@@ -166,9 +179,13 @@ export function buildWledBasicPackage({
       applyViaJsonApi: 'POST /json/state with each preset state, then POST /json/state with {"psave":presetId,"n":"Preset name","ib":true,"sb":true} if applying interactively.',
       restorePresetsJson: 'Back up the current WLED presets first, then upload the generated presetsJson object as /presets.json from the WLED /edit page.',
       playlist: `Load preset ${resolvedPlaylistPresetId} to cycle the Basic WLED bank.`,
+      physicalControls: controlContract.encoder?.enabled
+        ? `Encoder rotation is handled by WLED firmware. Assign encoder press/button action to preset ${controlContract.encoder.press.helperPresetId} to step through Lightweaver looks.`
+        : 'No physical encoder contract is enabled for this package.',
       cautions: [
         'Effect IDs are exported with names so an installer can re-resolve them if a different WLED build changes the effect order.',
         'Custom-effect ports require a Lightweaver WLED firmware build before those looks can run from flash.',
+        'Encoder rotation requires a WLED rotary encoder usermod or Lightweaver WLED firmware; stock button settings only cover press actions.',
       ],
     },
     presetStart,
@@ -177,6 +194,7 @@ export function buildWledBasicPackage({
     transitionMs,
     presets,
     presetsJson,
+    controlContract,
     customEffectPorts,
     unsupportedPatterns,
     compatibilityAudit,
@@ -193,6 +211,7 @@ export function makeWledBasicPresetsJson({
   presetDurationSeconds = WLED_BASIC_DEFAULT_PLAYLIST_SECONDS,
   transitionMs = WLED_BASIC_DEFAULT_TRANSITION_MS,
   repeat = 0,
+  extraEntries = {},
 } = {}) {
   const output = {};
   presets.forEach((preset) => {
@@ -216,6 +235,10 @@ export function makeWledBasicPresetsJson({
       },
     };
   }
+
+  Object.entries(extraEntries || {}).forEach(([id, entry]) => {
+    output[String(id)] = entry;
+  });
 
   return output;
 }

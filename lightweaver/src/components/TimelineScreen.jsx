@@ -4,6 +4,13 @@ import { LEDPreview } from './Preview.jsx';
 import { PATTERNS } from '../data.js';
 import { clampClipMove, clampClipResize, placeClipInTrackGap } from '../lib/timelineLayout.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
+import {
+  SPEED_SLIDER_MAX,
+  SPEED_SLIDER_MIN,
+  formatControlSpeed,
+  sliderValueToSpeed,
+  speedToSliderValue,
+} from '../lib/controlScale.js';
 
 function fmt(t) {
   const m = Math.floor(t / 60), s = Math.floor(t % 60), ms = Math.floor((t % 1) * 100);
@@ -313,7 +320,7 @@ function AudioLane({ width }) {
   );
 }
 
-function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, wledPush, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue, palette, patternParams, motionSmoothing }) {
+function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, viewBox, svgText, hidden, bpm, pushOutputFrame, masterSpeed, masterBrightness, masterSaturation, masterHueShift, gammaEnabled, gammaValue, palette, patternParams, motionSmoothing }) {
   const targetState = resolveTimelineTargets(playhead, clips, strips || []);
   const targetStrips = (strips || []).map(strip => ({
     ...strip,
@@ -324,8 +331,8 @@ function LiveTimelinePreview({ playhead, clips, transitions, duration, strips, v
   const curvedBlend = blendAmount;
 
   const handleFrame = useCallback((pixels) => {
-    if (wledPush) wledPush(pixels);
-  }, [wledPush]);
+    if (pushOutputFrame) pushOutputFrame(pixels);
+  }, [pushOutputFrame]);
 
   return (
     <div className="lw-tl-preview">
@@ -518,12 +525,12 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, strip
             </div>
             <div className="lw-insp-row"><span className="k">Speed</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-                <input type="range" min="0.1" max="4" step="0.05"
-                       value={selectedClip.speed ?? 1}
+                <input type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1"
+                       value={speedToSliderValue(selectedClip.speed ?? 1)}
                        style={{ flex: 1 }}
-                       onChange={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, speed: +e.target.value } : c))}/>
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', minWidth: 34 }}>
-                  {(selectedClip.speed ?? 1).toFixed(2)}×
+                       onChange={e => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, speed: sliderValueToSpeed(e.target.value) } : c))}/>
+                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', minWidth: 44 }}>
+                  {formatControlSpeed(selectedClip.speed ?? 1)}
                 </span>
                 {(selectedClip.speed ?? 1) !== 1 && (
                   <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-2xs)', padding: '1px 5px' }}
@@ -712,7 +719,7 @@ export function TimelineScreen({ onExport }) {
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaEnabled, gammaValue,
     setShowDuration,
-    wledPush,
+    pushOutputFrame,
     setActivePatternId,
     palette,
     patternParams,
@@ -1095,7 +1102,7 @@ export function TimelineScreen({ onExport }) {
           svgText={svgText}
           hidden={hidden}
           bpm={bpm}
-          wledPush={wledPush}
+          pushOutputFrame={pushOutputFrame}
           masterSpeed={masterSpeed}
           masterBrightness={masterBrightness}
           masterSaturation={masterSaturation}

@@ -15,7 +15,7 @@ const Icon = {
 };
 
 function BlackoutButton() {
-  const { setActivePatternId, wledPush, strips } = useProject();
+  const { setActivePatternId, pushOutputFrame, strips } = useProject();
   const [active, setActive] = useState(false);
   return (
     <button
@@ -26,9 +26,9 @@ function BlackoutButton() {
       onClick={() => {
         setActive(a => !a);
         setActivePatternId(null);
-        if (wledPush) {
+        if (pushOutputFrame) {
           const total = strips.reduce((n, s) => n + (s.pixels?.length || s.pixelCount || 0), 0);
-          wledPush(makeBlackoutFrame(total));
+          pushOutputFrame(makeBlackoutFrame(total));
         }
       }}>
       BLKOUT

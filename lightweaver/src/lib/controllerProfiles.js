@@ -1,5 +1,10 @@
 import { makeSafeWledTestState } from './wledDiscovery.js';
 import { rgbArrayToWledHex } from './wledPixels.js';
+import {
+  buildWledControlContract,
+  normalizeWledPhysicalControls,
+  summarizeWledControlContract,
+} from './wledControlContract.js';
 
 export const DEFAULT_CONTROLLER_LED = {
   type: 'WS2815',
@@ -63,6 +68,7 @@ export function buildControllerProfile(info = {}, overrides = {}) {
       snapshot: null,
       ...(overrides.backup || {}),
     },
+    physicalControls: normalizeWledPhysicalControls(overrides.physicalControls),
   };
   return { ...profile, hostname: profile.hostname || makeWledHostname(profile) };
 }
@@ -77,6 +83,18 @@ export function mergeControllerProfile(existing = {}, info = {}, overrides = {})
     wiring: { ...(existing.wiring || {}), ...(overrides.wiring || {}) },
     calibration: { ...(existing.calibration || {}), ...(overrides.calibration || {}) },
     backup: { ...(existing.backup || {}), ...(overrides.backup || {}) },
+    physicalControls: {
+      ...(existing.physicalControls || {}),
+      ...(overrides.physicalControls || {}),
+      encoder: {
+        ...(existing.physicalControls?.encoder || {}),
+        ...(overrides.physicalControls?.encoder || {}),
+        pins: {
+          ...(existing.physicalControls?.encoder?.pins || {}),
+          ...(overrides.physicalControls?.encoder?.pins || {}),
+        },
+      },
+    },
   });
 }
 
@@ -192,6 +210,7 @@ export function makeInstallReadinessReport(profile = {}, { snapshotSaved = false
     },
   });
   const power = readiness.power;
+  const controls = buildWledControlContract({ physicalControls: profile.physicalControls });
   return [
     '# Lightweaver Install Readiness',
     '',
@@ -212,6 +231,12 @@ export function makeInstallReadinessReport(profile = {}, { snapshotSaved = false
     '',
     '## Art-Net / Madrix',
     makeArtNetNotes(profile),
+    '',
+    '## Physical Controls',
+    summarizeWledControlContract(controls),
+    `Rotate: ${controls.encoder?.rotate?.action || 'none'}`,
+    `Press: ${controls.encoder?.press?.action || 'none'}`,
+    controls.encoder?.press?.httpCommand ? `Preset cycle command: ${controls.encoder.press.httpCommand}` : 'Preset cycle command: pending WLED Basic export',
   ].join('\n');
 }
 

@@ -27,8 +27,17 @@ WARM
 CLEAR
 BRI 32
 COUNT 120
+ORDER RGB
+ORDER GRB
 CHASE 255 160 0
+FRAME ff000000ff000000ff
 TEST
 ```
+
+`ORDER` changes the runtime strip byte order without reflashing. Use `RGB` if
+`SOLID 255 0 0` should be red but appears green on a strip configured as `GRB`.
+
+`FRAME` accepts packed RGB hex, six hex characters per pixel (`rrggbb`). For
+example, the line above sends one red, one green, and one blue pixel.
 
 The firmware replies with `LWUSB ...` lines so scripts and the app can detect it.

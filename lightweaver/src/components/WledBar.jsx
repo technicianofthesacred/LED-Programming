@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
+import { COLOR_ORDERS } from '../lib/usbLedColorOrder.js';
 
 /**
  * WledBar — compact WLED connection bar.
@@ -17,8 +18,20 @@ export function WledBar() {
     wledConnect: connect,
     wledDisconnect: disconnect,
     strips,
+    usbLedConnected,
+    usbLedConnecting,
+    usbLedStatus,
+    usbLedLastError,
+    usbLedColorOrder,
+    usbLedConnect,
+    usbLedDisconnect,
+    usbLedCommand,
+    usbLedApplyColorOrder,
   } = useProject();
-  const totalLEDs = useMemo(() => strips.reduce((s, st) => s + (st.pixels?.length || 0), 0), [strips]);
+  const totalLEDs = useMemo(() => strips.reduce((sum, strip) => (
+    sum + (strip.pixels?.length || strip.pixelCount || 0)
+  ), 0), [strips]);
+  const usbPixelCount = Math.max(1, Math.min(300, totalLEDs || 30));
 
   // Track whether a connection attempt is in flight (between connect() call and
   // the WebSocket open/error event).
@@ -60,9 +73,92 @@ export function WledBar() {
       : 'oklch(64% 0.20 25)'; // red (danger)
 
   const dotLabel = connected ? 'connected' : connecting ? 'connecting' : 'disconnected';
+  const usbDotColor = usbLedConnected
+    ? 'oklch(72% 0.18 155)'
+    : usbLedConnecting
+      ? 'oklch(80% 0.18 70)'
+      : 'oklch(64% 0.20 25)';
+
+  async function handleUsbConnect() {
+    try {
+      if (usbLedConnected) {
+        await usbLedDisconnect?.();
+      } else {
+        await usbLedConnect?.({ pixelCount: usbPixelCount, brightness: 64, colorOrder: usbLedColorOrder });
+      }
+    } catch {
+      // The hook keeps the latest error for the status tooltip.
+    }
+  }
 
   return (
     <div style={styles.bar}>
+      <span
+        title={usbLedConnected ? 'USB direct connected' : usbLedConnecting ? 'USB direct connecting' : usbLedLastError || 'USB direct disconnected'}
+        style={{
+          ...styles.dot,
+          background: usbDotColor,
+          boxShadow: `0 0 6px ${usbDotColor}`,
+        }}
+      />
+      <span style={styles.label}>USB</span>
+      <button
+        aria-label={usbLedConnected ? 'Disconnect USB LED controller' : 'Connect USB LED controller'}
+        onClick={handleUsbConnect}
+        disabled={usbLedConnecting}
+        style={{
+          ...styles.btn,
+          ...(usbLedConnected ? styles.btnDisconnect : styles.btnConnect),
+          opacity: usbLedConnecting ? 0.6 : 1,
+        }}
+      >
+        {usbLedConnected ? 'Disconnect' : usbLedConnecting ? 'Connecting...' : 'Connect'}
+      </button>
+      <button
+        aria-label="Send warm USB LED test"
+        onClick={() => usbLedCommand?.('WARM').catch(() => {})}
+        disabled={!usbLedConnected}
+        style={{ ...styles.btn, ...styles.btnGhost, opacity: usbLedConnected ? 1 : 0.45 }}
+      >
+        Warm
+      </button>
+      <select
+        aria-label="USB LED color order"
+        value={usbLedColorOrder || usbLedStatus?.colorOrder || 'RGB'}
+        disabled={!usbLedConnected}
+        onChange={event => usbLedApplyColorOrder?.(event.target.value).catch(() => {})}
+        style={{ ...styles.select, opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Change color order if red appears green or blue"
+      >
+        {COLOR_ORDERS.map(order => <option key={order} value={order}>{order}</option>)}
+      </select>
+      <button
+        aria-label="Send red USB LED test"
+        onClick={() => usbLedCommand?.('SOLID 255 0 0').catch(() => {})}
+        disabled={!usbLedConnected}
+        style={{ ...styles.swatchBtn, background: '#e83a4a', opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Red test"
+      />
+      <button
+        aria-label="Send green USB LED test"
+        onClick={() => usbLedCommand?.('SOLID 0 255 0').catch(() => {})}
+        disabled={!usbLedConnected}
+        style={{ ...styles.swatchBtn, background: '#35c76f', opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Green test"
+      />
+      <button
+        aria-label="Send blue USB LED test"
+        onClick={() => usbLedCommand?.('SOLID 0 0 255').catch(() => {})}
+        disabled={!usbLedConnected}
+        style={{ ...styles.swatchBtn, background: '#3b82f6', opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Blue test"
+      />
+      {usbLedConnected && (
+        <span style={styles.hint}>direct · {usbLedStatus?.colorOrder || usbLedColorOrder || 'RGB'} · {usbLedStatus?.lastFramePixels || usbPixelCount} px</span>
+      )}
+
+      <span style={styles.sep}/>
+
       {/* Status dot */}
       <span
         title={dotLabel}
@@ -188,5 +284,37 @@ const styles = {
     fontSize: '10px',
     color: 'var(--text-4)',
     letterSpacing: '0.02em',
+  },
+  sep: {
+    width: '1px',
+    height: '18px',
+    background: 'var(--border)',
+    margin: '0 4px',
+    flexShrink: 0,
+  },
+  btnGhost: {
+    background: 'transparent',
+    borderColor: 'var(--border)',
+    color: 'var(--text-3)',
+  },
+  select: {
+    fontFamily: 'var(--mono-font)',
+    fontSize: '10px',
+    color: 'var(--text)',
+    background: 'var(--bg)',
+    border: '1px solid var(--border)',
+    borderRadius: '3px',
+    padding: '2px 5px',
+    minHeight: '24px',
+    outline: 'none',
+    flexShrink: 0,
+  },
+  swatchBtn: {
+    width: '22px',
+    height: '22px',
+    borderRadius: '3px',
+    border: '1px solid var(--border)',
+    cursor: 'pointer',
+    flexShrink: 0,
   },
 };

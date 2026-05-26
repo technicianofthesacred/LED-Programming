@@ -8,6 +8,7 @@ The downloaded `wled-basic.json` package contains:
 
 - `presetsJson`: WLED preset entries for stock-WLED-compatible Lightweaver looks.
 - A playlist preset that cycles the generated preset bank.
+- `controlContract`: the on-device physical-control contract for WLED, including encoder rotation/press behavior and the helper preset used for advancing Lightweaver looks.
 - `customEffectPorts`: looks that can live on WLED only after being ported into a Lightweaver custom WLED build.
 - `unsupportedPatterns`: looks from the current show that need Advanced Art-Net, live frame streaming, or standalone sequence export.
 - `compatibilityAudit`: the full pattern-gate audit for the current Lightweaver library.
@@ -42,6 +43,7 @@ These are intentionally practical approximations. Exact Lightweaver browser-rend
    - Upload the generated `presetsJson` as WLED `/presets.json` from the WLED `/edit` page.
    - Or apply each preset state through `POST /json/state`, then save each preset with `psave`.
 6. Load the generated playlist preset to cycle the Basic bank.
+7. If the controller has a rotary encoder, bind the encoder press / WLED button action to the generated `LW Next Look` helper preset. Encoder rotation is handled on the ESP32 by a rotary encoder usermod or Lightweaver WLED firmware; the browser app does not need to be running for the knob to dim the piece.
 
 The next installer step should automate backup and apply from inside Lightweaver once the user confirms the target WLED controller.
 

@@ -12,7 +12,7 @@
     "pi:build": "npm run build",
     "pi:start": "npm run build && npm run serve:pi",
     "doctor:wled": "node scripts/wled-doctor.mjs",
-    "test:core": "node tests/project-frame-audit.mjs",
+    "test:core": "node tests/project-frame-audit.mjs && node tests/wled-control-contract.mjs && node tests/control-scale.mjs && node tests/pattern-targeting.mjs && node tests/usb-led-frame.mjs && node tests/usb-led-color-order.mjs && node tests/usb-led-controller.mjs",
     "test:standalone": "node tests/standalone-package-unpack.mjs",
     "standalone:unpack": "node scripts/unpack-standalone-package.mjs",
     "preview": "vite preview"
@@ -26,6 +26,7 @@
     "express": "^4.22.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "serialport": "^13.0.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {

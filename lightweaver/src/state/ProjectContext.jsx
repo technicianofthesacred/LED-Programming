@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useWled } from '../hooks/useWled.js';
+import { useUsbLed } from '../hooks/useUsbLed.js';
 import { samplePath } from '../lib/mapper.js';
+import { normalizeStripPixelCount, shouldRebuildStripPixels } from '../lib/stripPixels.js';
 import {
   DEFAULT_AUTO_LANES,
   DEFAULT_CLIPS,
@@ -26,12 +28,15 @@ const ProjectContext = createContext(null);
 function restoreStripPixels(strips = []) {
   if (typeof document === 'undefined') return strips;
   return strips.map(strip => {
-    if (strip.pixels?.length || !strip.pathData) return strip;
+    if (!shouldRebuildStripPixels(strip)) return strip;
     const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathEl.setAttribute('d', strip.pathData);
-    let pixels = samplePath(pathEl, strip.pixelCount || 1);
+    let pixels = samplePath(pathEl, normalizeStripPixelCount(strip));
     if (strip.reversed) pixels = pixels.slice().reverse();
-    return { ...strip, pixels };
+    const dx = strip.x || 0;
+    const dy = strip.y || 0;
+    if (dx || dy) pixels = pixels.map(pixel => ({ ...pixel, x: pixel.x + dx, y: pixel.y + dy }));
+    return { ...strip, pixelCount: normalizeStripPixelCount(strip), pixels };
   });
 }
 
@@ -210,6 +215,46 @@ export function ProjectProvider({ children }) {
     getInfo: wledGetInfo,
     getState: wledGetState,
   } = useWled();
+
+  // ── Direct USB LED controller ────────────────────────────────────────────
+  const {
+    connected: usbLedConnected,
+    connecting: usbLedConnecting,
+    status: usbLedStatus,
+    lastError: usbLedLastError,
+    colorOrder: usbLedColorOrder,
+    connect: usbLedConnect,
+    disconnect: usbLedDisconnect,
+    command: usbLedCommand,
+    applyColorOrder: usbLedApplyColorOrder,
+    applyPixelCount: usbLedApplyPixelCount,
+    push: usbLedPush,
+    refreshStatus: usbLedRefreshStatus,
+  } = useUsbLed();
+
+  const pushOutputFrame = useCallback((pixels) => {
+    wledPush(pixels);
+    usbLedPush(pixels);
+  }, [usbLedPush, wledPush]);
+
+  const lastUsbLedPixelCountRef = useRef(0);
+  useEffect(() => {
+    if (!usbLedConnected) return undefined;
+    const totalPixels = strips.reduce((sum, strip) => (
+      sum + (strip.pixels?.length || strip.pixelCount || 0)
+    ), 0);
+    if (totalPixels < 1) return undefined;
+    const maxPixels = usbLedStatus?.maxPixels || 300;
+    const controllerPixels = Math.max(1, Math.min(maxPixels, totalPixels));
+    if (lastUsbLedPixelCountRef.current === controllerPixels) return undefined;
+
+    const timer = setTimeout(() => {
+      usbLedApplyPixelCount(controllerPixels)
+        .then(() => { lastUsbLedPixelCountRef.current = controllerPixels; })
+        .catch(() => {});
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [strips, usbLedApplyPixelCount, usbLedConnected, usbLedStatus?.maxPixels]);
 
   // ── Live clip stamping ────────────────────────────────────────────────────
   const stampClip = useCallback((patternId, durationSecs = 10) => {
@@ -428,6 +473,14 @@ export function ProjectProvider({ children }) {
       wledConnect,     wledDisconnect,
       wledPush,        wledGetInfo,
       wledGetState,
+      usbLedConnected, usbLedConnecting,
+      usbLedStatus,    usbLedLastError,
+      usbLedColorOrder,
+      usbLedConnect,   usbLedDisconnect,
+      usbLedCommand,   usbLedApplyColorOrder,
+      usbLedApplyPixelCount,
+      usbLedRefreshStatus,
+      pushOutputFrame,
       wledSegmentMap,  setWledSegmentMap,
       controllerProfiles, setControllerProfiles,
       activeControllerId, setActiveControllerId,

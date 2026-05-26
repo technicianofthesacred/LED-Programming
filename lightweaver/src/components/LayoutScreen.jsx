@@ -10,6 +10,19 @@ import {
   renderPixelFrame,
 } from '../lib/frameEngine.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
+import { shouldRebuildStripPixels } from '../lib/stripPixels.js';
+import {
+  LED_COUNT_MAX,
+  LED_COUNT_SLIDER_MAX,
+  LED_COUNT_SLIDER_MIN,
+  SPEED_SLIDER_MAX,
+  SPEED_SLIDER_MIN,
+  formatControlSpeed,
+  ledCountToSliderValue,
+  sliderValueToLedCount,
+  sliderValueToSpeed,
+  speedToSliderValue,
+} from '../lib/controlScale.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -111,6 +124,12 @@ function rgbCss(rgb, fallback = 'white') {
   const b = Math.round(rgb.b ?? rgb.avgB ?? 0);
   if (r + g + b <= 3) return fallback;
   return `rgb(${r} ${g} ${b})`;
+}
+
+function clampLedCount(value, max = LED_COUNT_MAX) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(max, parsed));
 }
 
 function startedFromDragHandle(e) {
@@ -306,6 +325,7 @@ const STRIP_COLORS = [
 ];
 
 const DENSITY_OPTIONS = [30, 60, 96, 144];
+const LED_COUNT_PRESETS = [30, 43, 60, 100, 150, 300, 600, 1000, 1500, 3000];
 const MAX_HISTORY = 50;
 const LS_KEY = 'lw-layout-autosave';
 const GLOW_MODES = ['dots', 'center', 'outward', 'inward'];
@@ -573,7 +593,11 @@ export function LayoutScreen() {
     bpm, setBpm,
     symSettings,
     audioBands,
+    usbLedConnected,
+    usbLedStatus,
   } = project;
+
+  const usbLedMaxPixels = usbLedStatus?.maxPixels || 300;
 
   useEffect(() => { setProjectStrips(strips); },    [strips, setProjectStrips]);
   useEffect(() => { stripsRef.current = strips; },   [strips]);
@@ -671,7 +695,7 @@ export function LayoutScreen() {
     setEditCounts(layoutEditCounts || {});
     setLayerGroups(layoutLayerGroups || []);
     setLayerOrder(layoutLayerOrder || (layoutLayers || []).map(l => ({ type: 'layer', id: l.layerId })));
-    setStrips((projectStrips || []).map(s => s.pixels ? s : rebuildStrip(s)));
+    setStrips((projectStrips || []).map(s => shouldRebuildStripPixels(s) ? rebuildStrip(s) : s));
     setSelLayerId(null);
     setSelStripId(null);
     resetView();
@@ -2544,9 +2568,17 @@ export function LayoutScreen() {
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                 <span style={{ color: 'var(--text-3)', width: 72, flexShrink: 0 }}>LED count</span>
-                <input type="number" min="1" max="2000"
+                <input type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
+                       value={ledCountToSliderValue(pendingDrawCount)}
+                       aria-label="New strip LED count slider"
+                       onChange={e => setPendingDrawCount(sliderValueToLedCount(e.target.value))}
+                       style={{ flex: 1, minWidth: 0 }}/>
+                <input type="number" min="1" max={LED_COUNT_MAX}
                        value={pendingDrawCount}
-                       onChange={e => setPendingDrawCount(Math.max(1, +e.target.value))}
+                       aria-label="New strip LED count"
+                       inputMode="numeric"
+                       onFocus={e => e.target.select()}
+                       onChange={e => setPendingDrawCount(clampLedCount(e.target.value))}
                        style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', textAlign: 'right',
                                 background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4,
                                 padding: '3px 8px', color: 'var(--text)' }}/>
@@ -2924,7 +2956,7 @@ export function LayoutScreen() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
                 <span style={{ color: 'var(--text-3)' }}>LED count</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', justifyContent: 'flex-end', minWidth: 0, marginLeft: 12 }}>
                   {editCounts[selLayer.layerId] != null && (
                     <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }}
                             title="Reset to calculated"
@@ -2932,11 +2964,24 @@ export function LayoutScreen() {
                       ↺
                     </button>
                   )}
-                  <input type="number" min="1" max="1500"
-                         value={editCounts[selLayer.layerId] ?? getLedCount(selLayer)}
+                  <input type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
+                         value={ledCountToSliderValue(editCounts[selLayer.layerId] ?? getLedCount(selLayer))}
+                         aria-label="Layer LED count slider"
                          onChange={e => {
-                           const val = Math.max(1, +e.target.value);
+                           const val = sliderValueToLedCount(e.target.value);
                            setEditCounts(c => ({ ...c, [selLayer.layerId]: val }));
+                           if (existingStrip) resampleStrip(existingStrip.id, val);
+                         }}
+                         style={{ flex: '1 1 auto', minWidth: 80, maxWidth: 180 }}/>
+                  <input type="number" min="1" max={LED_COUNT_MAX}
+                         value={editCounts[selLayer.layerId] ?? getLedCount(selLayer)}
+                         aria-label="Layer LED count"
+                         inputMode="numeric"
+                         onFocus={e => e.target.select()}
+                         onChange={e => {
+                           const val = clampLedCount(e.target.value);
+                           setEditCounts(c => ({ ...c, [selLayer.layerId]: val }));
+                           if (existingStrip) resampleStrip(existingStrip.id, val);
                          }}
                          onBlur={() => {
                            if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer));
@@ -3147,12 +3192,12 @@ export function LayoutScreen() {
                         {/* Speed */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Speed</span>
-                          <input type="range" min="0.1" max="4" step="0.05" value={s.speed ?? 1}
+                          <input type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1" value={speedToSliderValue(s.speed ?? 1)}
                                  style={{ flex: 1 }}
-                                 onChange={e => updateStrip(s.id, { speed: +e.target.value })}
-                                 onPointerUp={e => updateStripWithHistory(s.id, { speed: +e.target.value })}
+                                 onChange={e => updateStrip(s.id, { speed: sliderValueToSpeed(e.target.value) })}
+                                 onPointerUp={e => updateStripWithHistory(s.id, { speed: sliderValueToSpeed(e.target.value) })}
                                  onDoubleClick={() => updateStrip(s.id, { speed: 1 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{(s.speed ?? 1).toFixed(2)}×</span>
+                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 42, textAlign: 'right' }}>{formatControlSpeed(s.speed ?? 1)}</span>
                         </div>
                         {/* Brightness */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
@@ -3235,18 +3280,42 @@ export function LayoutScreen() {
 	                            <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 36, textAlign: 'right' }}>{Math.round(s.angle || 0)}°</span>
 	                          </div>
 	                        )}
-	                        {/* LED count */}
-	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
+                        {/* LED count */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>LEDs</span>
-                          <input type="number" min="1" max="1500"
+                          <input type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
+                                 value={ledCountToSliderValue(s.pixelCount)}
+                                 aria-label="Strip LED count slider"
+                                 style={{ flex: 1, minWidth: 0 }}
+                                 onChange={e => resampleStrip(s.id, sliderValueToLedCount(e.target.value))}
+                                 onClick={e => e.stopPropagation()}/>
+                          <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                                  value={s.pixelCount}
+                                 aria-label="Strip LED count"
+                                 inputMode="numeric"
                                  style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
                                           background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', color: 'var(--text)' }}
-                                 onChange={e => updateStrip(s.id, { pixelCount: Math.max(1, +e.target.value) })}
-                                 onBlur={e => resampleStrip(s.id, Math.max(1, +e.target.value))}
-                                 onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, Math.max(1, +e.target.value)); }}
+                                 onFocus={e => e.target.select()}
+                                 onChange={e => resampleStrip(s.id, clampLedCount(e.target.value))}
+                                 onBlur={e => resampleStrip(s.id, clampLedCount(e.target.value))}
+                                 onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, clampLedCount(e.target.value)); }}
                                  onClick={e => e.stopPropagation()}/>
                         </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: 6, marginLeft: 60 }}>
+                          {LED_COUNT_PRESETS.map(count => (
+                            <button key={count} type="button"
+                                    className={`btn ${s.pixelCount === count ? 'btn-primary' : 'btn-ghost'}`}
+                                    style={{ fontSize: 'var(--fs-xs)', padding: '3px 6px' }}
+                                    onClick={e => { e.stopPropagation(); resampleStrip(s.id, count); }}>
+                              {count}
+                            </button>
+                          ))}
+                        </div>
+                        {usbLedConnected && (
+                          <div style={{ marginLeft: 60, marginTop: -2, fontSize: 'var(--fs-xs)', color: s.pixelCount > usbLedMaxPixels ? 'var(--accent-2)' : 'var(--text-4)' }}>
+                            USB direct cap {usbLedMaxPixels} LEDs; WLED/export can keep the project count above that.
+                          </div>
+                        )}
                         {/* Strip actions */}
                         <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
                           <button className="btn btn-ghost" style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
