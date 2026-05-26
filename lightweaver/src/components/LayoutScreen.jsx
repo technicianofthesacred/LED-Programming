@@ -1959,12 +1959,16 @@ export function LayoutScreen() {
         .map(cutLed => {
           const point = strip.pixels[cutLed];
           if (!point) return null;
+          const before = strip.pixels[Math.max(0, cutLed - 1)] || point;
+          const after = strip.pixels[Math.min(strip.pixels.length - 1, cutLed + 1)] || point;
+          const angle = Math.atan2(after.y - before.y, after.x - before.x) * 180 / Math.PI;
           return {
             id: `${strip.id}-${cutLed}`,
             stripId: strip.id,
             cutLed,
             x: point.x,
             y: point.y,
+            angle: Number.isFinite(angle) ? angle : 0,
             color: strip.color || 'var(--accent)',
             selected: selectedWireCut?.stripId === strip.id && selectedWireCut?.cutLed === cutLed,
           };
@@ -2642,17 +2646,23 @@ export function LayoutScreen() {
 
             {!isEditingGesture && wireCutMarkers.length > 0 && (
               <g className="lw-wire-cut-markers" style={{ pointerEvents: 'none' }}>
-                {wireCutMarkers.map(marker => (
-                  <g key={marker.id} className="lw-wire-cut-marker">
-                    <circle
-                      cx={marker.x}
-                      cy={marker.y}
-                      r={vbScale * (marker.selected ? 6.2 : 5)}
-                      className={marker.selected ? 'selected' : ''}
+                {wireCutMarkers.map(marker => {
+                  const notchSize = vbScale * (marker.selected ? 10 : 8);
+                  const wing = notchSize * 0.48;
+                  return (
+                    <g
+                      key={marker.id}
+                      className={`lw-wire-cut-marker ${marker.selected ? 'selected' : ''}`}
+                      transform={`translate(${marker.x} ${marker.y}) rotate(${marker.angle})`}
                       style={{ '--wire-color': marker.color }}
-                    />
-                  </g>
-                ))}
+                    >
+                      <path
+                        className="lw-wire-cut-marker-notch"
+                        d={`M 0 ${-notchSize} L 0 ${notchSize} M ${-wing} ${-notchSize * 0.62} L 0 0 L ${-wing} ${notchSize * 0.62}`}
+                      />
+                    </g>
+                  );
+                })}
               </g>
             )}
 

@@ -1778,7 +1778,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-wire-source,
-.lw-wire-map-panel,
+.lw-wire-cut-summary,
 .lw-wire-order,
 .lw-wire-tools,
 .lw-wire-advanced {
@@ -1789,7 +1789,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-wire-source,
-.lw-wire-map-panel,
+.lw-wire-cut-summary,
 .lw-wire-order,
 .lw-wire-tools,
 .lw-wire-advanced {
@@ -1879,89 +1879,20 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   box-shadow: 0 0 7px currentColor;
 }
 
-.lw-wire-map-top {
+.lw-wire-cut-summary-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-3);
-  margin-bottom: var(--s-2);
 }
 
-.lw-wire-map-top strong {
-  display: block;
-  max-width: 220px;
+.lw-wire-cut-summary-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-2);
   font-size: var(--fs-sm);
-}
-
-.lw-wire-map {
-  display: block;
-  width: 100%;
-  height: 116px;
-  cursor: crosshair;
-  overflow: visible;
-}
-
-.lw-wire-map-bg {
-  fill: var(--surface);
-  stroke: var(--border);
-}
-
-.lw-wire-map-base {
-  fill: none;
-  stroke: var(--border-2);
-  stroke-width: 7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: 0.7;
-}
-
-.lw-wire-map-segment {
-  fill: none;
-  stroke: var(--seg-color, var(--accent));
-  stroke-width: 4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  opacity: 0.72;
-}
-
-.lw-wire-map-segment.active {
-  stroke-width: 6;
-  opacity: 1;
-  filter: drop-shadow(0 0 5px var(--seg-color, var(--accent)));
-}
-
-.lw-wire-map-segment-dot {
-  fill: var(--surface);
-  stroke: var(--accent);
-  stroke-width: 2;
-}
-
-.lw-wire-map-label {
-  fill: var(--text-2);
-  font-family: var(--mono-font);
-  font-size: 9px;
-  paint-order: stroke;
-  stroke: var(--surface);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.lw-wire-cut {
-  stroke: var(--accent-2);
-  stroke-width: 1;
-  stroke-dasharray: 4 4;
-  opacity: 0.75;
-  pointer-events: none;
-}
-
-.lw-wire-hint {
-  margin-top: var(--s-2);
-  color: var(--text-4);
-  font-size: var(--fs-xs);
 }
 
 .lw-wire-chip-row {
@@ -2136,16 +2067,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   pointer-events: none;
 }
 
-.lw-wire-cut-marker circle {
-  fill: var(--surface);
+.lw-wire-cut-marker-notch {
+  fill: none;
   stroke: var(--wire-color, var(--accent));
-  stroke-width: 2;
-  filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px var(--wire-color, var(--accent)));
 }
 
-.lw-wire-cut-marker circle.selected {
-  fill: var(--accent);
-  stroke: var(--surface);
+.lw-wire-cut-marker.selected .lw-wire-cut-marker-notch {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
 }
 
 /* ── Geometry mode ───────────────────────────────────────────────── */

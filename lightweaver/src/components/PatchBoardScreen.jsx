@@ -11,10 +11,6 @@ import {
   updatePatchRange,
 } from '../lib/patchBoard.js';
 
-const PREVIEW_W = 320;
-const PREVIEW_H = 108;
-const PREVIEW_PAD = 14;
-
 function patchLength(patch) {
   if (patch.source?.type === 'off') return Math.max(0, Math.trunc(patch.source.ledCount || 0));
   const start = Number(patch.source?.startLed);
@@ -31,79 +27,13 @@ function friendlyName(value) {
     .trim();
 }
 
+function pluralize(value, singular, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
 function patchDirection(patch) {
   if (patch.source?.type === 'off') return '';
   return Number(patch.source.startLed) <= Number(patch.source.endLed) ? '->' : '<-';
-}
-
-function pathBounds(points) {
-  if (!points.length) return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
-  return points.reduce((acc, point) => ({
-    minX: Math.min(acc.minX, point.x),
-    minY: Math.min(acc.minY, point.y),
-    maxX: Math.max(acc.maxX, point.x),
-    maxY: Math.max(acc.maxY, point.y),
-  }), {
-    minX: points[0].x,
-    minY: points[0].y,
-    maxX: points[0].x,
-    maxY: points[0].y,
-  });
-}
-
-function previewPoints(strip) {
-  const pixels = strip?.pixels || [];
-  if (!pixels.length) return [];
-  const bounds = pathBounds(pixels);
-  const width = Math.max(1, bounds.maxX - bounds.minX);
-  const height = Math.max(1, bounds.maxY - bounds.minY);
-  const scale = Math.min(
-    (PREVIEW_W - PREVIEW_PAD * 2) / width,
-    (PREVIEW_H - PREVIEW_PAD * 2) / height,
-  );
-  const renderedW = width * scale;
-  const renderedH = height * scale;
-  const offsetX = (PREVIEW_W - renderedW) / 2;
-  const offsetY = (PREVIEW_H - renderedH) / 2;
-  return pixels.map((pixel, index) => ({
-    index,
-    x: offsetX + (pixel.x - bounds.minX) * scale,
-    y: offsetY + (pixel.y - bounds.minY) * scale,
-  }));
-}
-
-function patchSpan(patch) {
-  if (patch.source?.type !== 'strip') return null;
-  const start = Number(patch.source.startLed);
-  const end = Number(patch.source.endLed);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  return { min: Math.min(start, end), max: Math.max(start, end) };
-}
-
-function nearestPreviewIndex(points, x, y) {
-  if (!points.length) return 0;
-  let best = points[0];
-  let bestDistance = Infinity;
-  for (const point of points) {
-    const dx = point.x - x;
-    const dy = point.y - y;
-    const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {
-      best = point;
-      bestDistance = distance;
-    }
-  }
-  return best.index;
-}
-
-function segmentPoints(points, patch) {
-  const span = patchSpan(patch);
-  if (!span) return [];
-  return points.filter(point => point.index >= span.min && point.index <= span.max);
-}
-
-function pointsAttribute(points) {
-  return points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
 }
 
 export function PatchBoardScreen({
@@ -140,8 +70,7 @@ export function PatchBoardScreen({
     patch => patch.source?.type === 'strip' && patch.source.stripId === activeStrip?.id,
   );
   const selectedPatch = patchesById.get(selectedPatchId) || activeStripPatches[0] || orderedPatches[0] || null;
-  const points = useMemo(() => previewPoints(activeStrip), [activeStrip]);
-  const sourceCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
+  const activeCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
 
   const updateBoard = (mutate) => {
     setPatchBoard(prev => {
@@ -149,21 +78,6 @@ export function PatchBoardScreen({
       mutate(next);
       return normalizePatchBoard(next, strips);
     });
-  };
-
-  const cutActivePath = (cutLed) => {
-    if (!activeStrip || board.physicalLocked) return;
-    const cuts = [...new Set([...sourceCuts, cutLed])];
-    updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, cuts));
-  };
-
-  const handleMapClick = (event) => {
-    if (!activeStrip || !points.length || board.physicalLocked) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width) * PREVIEW_W;
-    const y = ((event.clientY - rect.top) / rect.height) * PREVIEW_H;
-    const cut = nearestPreviewIndex(points, x, y);
-    cutActivePath(cut);
   };
 
   const reversePatch = (patch) => {
@@ -203,7 +117,7 @@ export function PatchBoardScreen({
       <div className="lw-wire-head">
         <div>
           <h1>Wire Path</h1>
-          <p>Pick a source path, click where the real wire changes, then arrange the resulting runs.</p>
+          <p>Physical route setup for the selected artwork layers.</p>
         </div>
         <div className="lw-wire-head-actions">
           <button
@@ -271,52 +185,16 @@ export function PatchBoardScreen({
         </div>
       </section>
 
-      <section className="lw-wire-map-panel">
-        <div className="lw-wire-map-top">
-          <div>
-            <span className="lw-wire-kicker">Chop path</span>
-            <strong>{friendlyName(activeStrip?.name)}</strong>
-          </div>
-          <button className="btn btn-ghost" disabled={!activeStrip || board.physicalLocked} onClick={resetActivePath}>
+      <section className="lw-wire-cut-summary">
+        <div className="lw-wire-section-title">
+          <span>Canvas cuts</span>
+          <strong>{pluralize(activeCuts.length, 'cut')}</strong>
+        </div>
+        <div className="lw-wire-cut-summary-row">
+          <span className="lw-wire-cut-summary-name">{friendlyName(activeStrip?.name)}</span>
+          <button className="btn btn-ghost" disabled={!activeStrip || board.physicalLocked || activeCuts.length === 0} onClick={resetActivePath}>
             Clear cuts
           </button>
-        </div>
-        <svg
-          className="lw-wire-map"
-          viewBox={`0 0 ${PREVIEW_W} ${PREVIEW_H}`}
-          role="img"
-          aria-label="Click the visible source path to add a cut"
-          onClick={handleMapClick}
-        >
-          <rect x="0" y="0" width={PREVIEW_W} height={PREVIEW_H} rx="8" className="lw-wire-map-bg"/>
-          {points.length > 1 && (
-            <polyline points={pointsAttribute(points)} className="lw-wire-map-base"/>
-          )}
-          {activeStripPatches.map((patch, index) => {
-            const segment = segmentPoints(points, patch);
-            if (segment.length < 2) return null;
-            const mid = segment[Math.floor(segment.length / 2)];
-            const isSelected = patch.id === selectedPatch?.id;
-            return (
-              <g key={patch.id}>
-                <polyline
-                  points={pointsAttribute(segment)}
-                  className={`lw-wire-map-segment ${isSelected ? 'active' : ''}`}
-                  style={{ '--seg-color': activeStrip?.color || 'var(--accent)' }}
-                />
-                <circle cx={mid.x} cy={mid.y} r={isSelected ? 6 : 4} className="lw-wire-map-segment-dot"/>
-                <text x={mid.x} y={mid.y - 10} className="lw-wire-map-label">{index + 1} {patchDirection(patch)}</text>
-              </g>
-            );
-          })}
-          {sourceCuts.map(cut => {
-            const point = points[cut];
-            if (!point) return null;
-            return <line key={cut} x1={point.x} y1="12" x2={point.x} y2={PREVIEW_H - 12} className="lw-wire-cut"/>;
-          })}
-        </svg>
-        <div className="lw-wire-hint">
-          Click the path preview to add a cut. Counts stay in Advanced unless you need them.
         </div>
       </section>
 

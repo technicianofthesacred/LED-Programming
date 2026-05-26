@@ -32,9 +32,22 @@ test('wire path chops a visible source path into saved physical segments', async
   await expect(page.locator('.lw-wire-path.is-embedded')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Wire Path' })).toBeVisible();
   await expect(page.getByText('Source Paths')).toBeVisible();
+  await expect(page.locator('.lw-wire-map')).toHaveCount(0);
   await expect(page.locator('.lw-wire-segment-chip')).toHaveCount(1);
 
-  await page.locator('.lw-wire-map').click({ position: { x: 190, y: 52 } });
+  await page.getByRole('button', { name: 'Chop' }).click();
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const target = await stripPath.evaluate((path: SVGPathElement) => {
+    const point = path.getPointAtLength(path.getTotalLength() * 0.45);
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    return {
+      x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+      y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+    };
+  });
+  expect(target).not.toBeNull();
+  await page.mouse.click(target!.x, target!.y);
   await expect(page.locator('.lw-wire-segment-chip')).toHaveCount(2);
   await page.getByRole('button', { name: 'Insert off LEDs' }).click();
   await expect(page.locator('.lw-wire-off-chip')).toBeVisible();
@@ -88,6 +101,8 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
   await page.mouse.click(target!.x, target!.y);
 
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
+  await expect(page.locator('.lw-wire-cut-marker-notch')).toHaveCount(1);
+  await expect(page.locator('.lw-wire-cut-marker circle')).toHaveCount(0);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
   await expect(page.getByText('Selected cut')).toBeVisible();
   await page.getByRole('button', { name: 'Move cut later' }).click();
