@@ -59,6 +59,41 @@ function makeDraft(name = 'Soft Assistant Draft') {
   };
 }
 
+function makeAiSettings(overrides: Record<string, any> = {}) {
+  const modelPreset = overrides.modelPreset || 'balanced';
+  const qualityPreset = overrides.qualityPreset || 'balanced';
+  const openRouterConfigured = overrides.openRouterConfigured ?? false;
+  return {
+    provider: 'openrouter',
+    modelPreset,
+    qualityPreset,
+    providers: [
+      { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
+      { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
+      { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: openRouterConfigured },
+    ],
+    modelPresets: [
+      { id: 'balanced', label: 'Balanced', detail: 'Reliable default', model: 'openai/gpt-5.4-mini' },
+      { id: 'creative', label: 'Creative', detail: 'Claude Sonnet', model: 'anthropic/claude-sonnet-4.6' },
+      { id: 'budget', label: 'Budget', detail: 'Lower cost', model: 'openai/gpt-5-mini' },
+    ],
+    qualityPresets: [
+      { id: 'simple', label: 'Simple', detail: 'Short editable code' },
+      { id: 'balanced', label: 'Balanced', detail: 'Smooth and editable' },
+      { id: 'showpiece', label: 'Showpiece', detail: 'Layered and gallery-ready' },
+    ],
+    oauth: {
+      callbackUrl: 'http://127.0.0.1:5174/api/ai/openrouter/oauth/callback',
+      isLocal: true,
+      deploymentMessage: 'Local callback. Connect from this computer; phone/public use needs a reachable server URL.',
+    },
+    cost: {
+      note: 'Uses your OpenRouter account credits.',
+    },
+    ...overrides,
+  };
+}
+
 function makeColorDraft(name: string, code: string) {
   return {
     name,
@@ -151,26 +186,19 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
-          provider: settingsPayload.provider,
-          providers: [
-            { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
-            { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
-            { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: true },
-          ],
+          ...makeAiSettings({
+            provider: settingsPayload.provider,
+            modelPreset: settingsPayload.modelPreset || 'balanced',
+            qualityPreset: settingsPayload.qualityPreset || 'balanced',
+            openRouterConfigured: true,
+          }),
         }),
       });
       return;
     }
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        provider: 'openrouter',
-        providers: [
-          { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
-          { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
-          { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
-        ],
-      }),
+      body: JSON.stringify(makeAiSettings()),
     });
   });
   await page.route('**/api/ai/pattern', async route => {
@@ -187,6 +215,7 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
   await expect(assistant.getByRole('heading', { name: 'AI provider setup' })).toBeVisible();
   await expect(assistant.getByLabel('Default AI provider')).toHaveCount(0);
   await expect(assistant.getByLabel('Claude key')).toHaveCount(0);
+  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
   await expect(assistant.getByLabel('OpenRouter key')).toBeHidden();
   await assistant.getByText('Advanced: paste OpenRouter key').click();
   await assistant.getByLabel('OpenRouter key').fill('openrouter-secret-test-key');
@@ -201,19 +230,79 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
   expect(payload.provider).toBe('openrouter');
 });
 
+test('shows OpenRouter model presets, callback status, cost note, and connection testing', async ({ page }) => {
+  let settingsPayload: any = null;
+  let connectionTestRequested = false;
+
+  await page.route('**/api/ai/settings', async route => {
+    if (route.request().method() === 'PUT') {
+      settingsPayload = route.request().postDataJSON();
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(makeAiSettings({
+          modelPreset: settingsPayload.modelPreset,
+          qualityPreset: settingsPayload.qualityPreset,
+          openRouterConfigured: true,
+        })),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(makeAiSettings({ openRouterConfigured: true })),
+    });
+  });
+
+  await page.route('**/api/ai/openrouter/test', async route => {
+    connectionTestRequested = true;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        provider: 'openrouter',
+        model: 'anthropic/claude-sonnet-4.6',
+        message: 'OpenRouter connection works.',
+        account: {
+          label: 'sk-or-v1-test...789',
+          usage: 1.25,
+          limit: 10,
+          limitRemaining: 8.75,
+          limitReset: 'monthly',
+        },
+      }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+
+  await expect(assistant.getByLabel('AI model preset')).toHaveValue('balanced');
+  await expect(assistant.getByLabel('Pattern quality')).toHaveValue('balanced');
+  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
+  await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeVisible();
+  await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeVisible();
+
+  await assistant.getByLabel('AI model preset').selectOption('creative');
+  await assistant.getByLabel('Pattern quality').selectOption('showpiece');
+  await assistant.getByRole('button', { name: 'Save setup' }).click();
+
+  expect(settingsPayload.modelPreset).toBe('creative');
+  expect(settingsPayload.qualityPreset).toBe('showpiece');
+  await expect(assistant.getByText('Saved. OpenRouter is active.')).toBeVisible();
+
+  await assistant.getByRole('button', { name: 'Test connection' }).click();
+  await expect.poll(() => connectionTestRequested).toBe(true);
+  await expect(assistant.getByText('OpenRouter connection works.')).toBeVisible();
+  await expect(assistant.getByText('Remaining 8.75 of 10 monthly')).toBeVisible();
+});
+
 test('offers OpenRouter account OAuth as the primary AI setup path', async ({ page }) => {
   let oauthRequested = false;
   await page.route('**/api/ai/settings', async route => {
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({
-        provider: 'openrouter',
-        providers: [
-          { id: 'openai', label: 'ChatGPT', detail: 'OpenAI', keyEnv: 'OPENAI_API_KEY', configured: false },
-          { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', configured: false },
-          { id: 'openrouter', label: 'OpenRouter', detail: 'model router', keyEnv: 'OPENROUTER_API_KEY', configured: false },
-        ],
-      }),
+      body: JSON.stringify(makeAiSettings()),
     });
   });
   await page.route('**/api/ai/openrouter/oauth/start', async route => {

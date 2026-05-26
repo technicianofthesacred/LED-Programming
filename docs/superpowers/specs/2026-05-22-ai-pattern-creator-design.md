@@ -141,6 +141,7 @@ GET /api/ai/settings
 PUT /api/ai/settings
 POST /api/ai/openrouter/oauth/start
 GET /api/ai/openrouter/oauth/callback
+POST /api/ai/openrouter/test
 POST /api/ai/pattern
 ```
 
@@ -149,12 +150,14 @@ The routes are implemented in the existing Lightweaver server. They are responsi
 - Reading AI provider credentials from server-side environment variables or the local `.lightweaver-ai.local` settings file.
 - Saving pasted provider keys server-side without returning secret values to the browser.
 - Connecting an OpenRouter account through OAuth PKCE and saving the exchanged OpenRouter credential server-side.
+- Testing the saved OpenRouter credential through OpenRouter's key-inspection endpoint without sending a generation request.
+- Returning model presets, pattern quality presets, callback reachability, and OpenRouter credit/usage guidance without returning secrets.
 - Building the provider prompt from the request.
 - Enforcing structured JSON output.
 - Returning the parsed draft JSON to the browser.
 - Returning provider and validation errors in a user-readable form.
 
-OpenRouter is the default and normal route for AI pattern generation. The UI should present OpenRouter account connection first and avoid making ChatGPT or Claude look like equal setup choices. Direct ChatGPT and Claude consumer account OAuth is not available for model API calls, so those remain backend/advanced options only.
+OpenRouter is the default and normal route for AI pattern generation. The UI should present OpenRouter account connection first, then simple saved choices for model preset and pattern quality. Direct ChatGPT and Claude consumer account OAuth is not available for model API calls, so those remain backend/advanced options only.
 
 Environment variables:
 
@@ -164,6 +167,8 @@ Environment variables:
 - `OPENROUTER_API_KEY`: required when using OpenRouter generation.
 - `AI_PATTERN_MODEL`: optional shared model override.
 - `AI_PATTERN_OPENAI_MODEL`, `AI_PATTERN_ANTHROPIC_MODEL`, `AI_PATTERN_OPENROUTER_MODEL`: optional provider-specific model overrides.
+- `AI_PATTERN_MODEL_PRESET`, `AI_PATTERN_OPENROUTER_MODEL_PRESET`: optional preset override for the OpenRouter model selection.
+- `AI_PATTERN_QUALITY_PRESET`: optional generation-quality override, one of `simple`, `balanced`, or `showpiece`.
 
 If no API key is configured, the assistant drawer should show a setup message and keep the rest of Lightweaver usable.
 
@@ -294,9 +299,11 @@ Later versions can add:
 
 ## Implementation Notes
 
-The AI provider calls run on the Lightweaver server, not in the browser. OpenRouter is the primary route. OpenAI and Anthropic integrations can remain available behind server configuration, but they should not be presented as the ordinary account-login path. The AI setup panel sends new key values to the server but the settings status endpoint returns only provider names, model choices, and configured/not-configured flags.
+The AI provider calls run on the Lightweaver server, not in the browser. OpenRouter is the primary route. OpenAI and Anthropic integrations can remain available behind server configuration, but they should not be presented as the ordinary account-login path. The AI setup panel sends new key values and saved preset choices to the server, but the settings status endpoint returns only provider names, model choices, callback status, usage guidance, and configured/not-configured flags.
 
 OpenRouter OAuth uses PKCE. Lightweaver creates a code verifier/challenge, sends the browser to OpenRouter, exchanges the returned code for a user-controlled OpenRouter credential on the server, then saves it into `.lightweaver-ai.local` and switches the active provider to OpenRouter.
+
+The setup panel exposes a Test connection action. It calls `GET https://openrouter.ai/api/v1/key` through the server using the saved credential, then displays a sanitized success state and remaining account limit when OpenRouter returns it.
 
 The browser validates every draft with the local Lightweaver compiler and preview renderer before showing an Accept action. Built-in pattern transforms save as new custom patterns. Existing custom pattern transforms update in place and keep local revision history.
 

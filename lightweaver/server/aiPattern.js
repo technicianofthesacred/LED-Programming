@@ -40,15 +40,88 @@ export const AiPatternDraftSchema = z.object({
 
 const DEFAULT_MODEL = 'gpt-5.4-mini';
 const DEFAULT_PROVIDER = 'openrouter';
+const DEFAULT_MODEL_PRESET = 'balanced';
+const DEFAULT_QUALITY_PRESET = 'balanced';
 const DEFAULT_PROVIDER_MODELS = {
   openai: DEFAULT_MODEL,
   anthropic: 'claude-sonnet-4-20250514',
-  openrouter: 'openai/gpt-5.1',
+  openrouter: 'openai/gpt-5.4-mini',
 };
+const OPENROUTER_MODEL_PRESETS = [
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    detail: 'Reliable default for editable pattern code',
+    model: 'openai/gpt-5.4-mini',
+  },
+  {
+    id: 'best',
+    label: 'Best',
+    detail: 'Higher quality when the pattern needs more reasoning',
+    model: 'openai/gpt-5.5',
+  },
+  {
+    id: 'creative',
+    label: 'Creative',
+    detail: 'Claude Sonnet for richer pattern transformations',
+    model: 'anthropic/claude-sonnet-4.6',
+  },
+  {
+    id: 'fast',
+    label: 'Fast',
+    detail: 'Quick drafts and small edits',
+    model: 'google/gemini-3.5-flash',
+  },
+  {
+    id: 'budget',
+    label: 'Budget',
+    detail: 'Lower-cost OpenAI model for quick iterations',
+    model: 'openai/gpt-5-mini',
+  },
+];
+const AI_PATTERN_QUALITY_PRESETS = [
+  {
+    id: 'simple',
+    label: 'Simple',
+    detail: 'Short, direct, beginner-editable code',
+    prompt: 'Keep the code short and direct. Prefer 2 to 4 intuitive params. Avoid dense layering or clever math unless the user asks.',
+  },
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    detail: 'Smooth, editable, and visually distinct',
+    prompt: 'Create smooth, editable pattern code with 3 to 6 named params. Preserve visible pattern structure while improving color, motion, and depth.',
+  },
+  {
+    id: 'showpiece',
+    label: 'Showpiece',
+    detail: 'Layered gallery-ready motion with more depth',
+    prompt: 'Build a layered showpiece pattern with dimensional motion, color journeys, and spatial variation. Keep it smooth, parameterized, and safe for live LEDs.',
+  },
+];
 
 function normalizeProvider(provider) {
   const value = String(provider || '').trim().toLowerCase();
   return AI_PATTERN_PROVIDERS.includes(value) ? value : DEFAULT_PROVIDER;
+}
+
+function normalizeModelPreset(preset) {
+  const value = String(preset || '').trim().toLowerCase();
+  return OPENROUTER_MODEL_PRESETS.some(item => item.id === value) ? value : DEFAULT_MODEL_PRESET;
+}
+
+function normalizeQualityPreset(preset) {
+  const value = String(preset || '').trim().toLowerCase();
+  return AI_PATTERN_QUALITY_PRESETS.some(item => item.id === value) ? value : DEFAULT_QUALITY_PRESET;
+}
+
+function getOpenRouterModelPreset(preset) {
+  return OPENROUTER_MODEL_PRESETS.find(item => item.id === normalizeModelPreset(preset))
+    || OPENROUTER_MODEL_PRESETS[0];
+}
+
+function getAiPatternQualityPreset(env = process.env) {
+  return normalizeQualityPreset(env.AI_PATTERN_QUALITY_PRESET);
 }
 
 function sanitizeParams(params) {
@@ -149,6 +222,7 @@ const PatternPayloadSchema = z
 const AiPatternRequestSchema = z.object({
   provider: z.enum(AI_PATTERN_PROVIDERS).optional(),
   mode: z.enum(['generate', 'transform', 'refine']).optional().default('transform'),
+  qualityPreset: z.enum(AI_PATTERN_QUALITY_PRESETS.map(preset => preset.id)).optional(),
   instruction: z.string().trim().min(1).max(1000),
   sourcePattern: PatternPayloadSchema.optional().default({}),
   draftPattern: PatternPayloadSchema.nullable().optional().default(null),
@@ -165,6 +239,8 @@ const AiPatternRequestSchema = z.object({
 
 const AiProviderSettingsSchema = z.object({
   provider: z.enum(AI_PATTERN_PROVIDERS).optional(),
+  modelPreset: z.enum(OPENROUTER_MODEL_PRESETS.map(preset => preset.id)).optional(),
+  qualityPreset: z.enum(AI_PATTERN_QUALITY_PRESETS.map(preset => preset.id)).optional(),
   keys: z
     .object({
       openai: z.string().trim().max(400).optional(),
@@ -187,6 +263,10 @@ export function getAiPatternProvider(env = process.env, requestedProvider = null
 export function getAiPatternModel(env = process.env, provider = getAiPatternProvider(env)) {
   const normalizedProvider = normalizeProvider(provider);
   const providerKey = `AI_PATTERN_${normalizedProvider.toUpperCase()}_MODEL`;
+  if (normalizedProvider === 'openrouter') {
+    const presetModel = getOpenRouterModelPreset(env.AI_PATTERN_OPENROUTER_MODEL_PRESET || env.AI_PATTERN_MODEL_PRESET).model;
+    return env[providerKey] || env.AI_PATTERN_MODEL || presetModel || DEFAULT_PROVIDER_MODELS[normalizedProvider] || DEFAULT_MODEL;
+  }
   return env[providerKey] || env.AI_PATTERN_MODEL || DEFAULT_PROVIDER_MODELS[normalizedProvider] || DEFAULT_MODEL;
 }
 
@@ -217,6 +297,12 @@ function normalizeSavedSettings(settings = {}) {
         .map(provider => [provider, typeof keys[provider] === 'string' ? keys[provider].trim() : ''])
         .filter(([, value]) => value)
     ),
+    modelPreset: typeof settings.modelPreset === 'string' && settings.modelPreset.trim()
+      ? normalizeModelPreset(settings.modelPreset)
+      : '',
+    qualityPreset: typeof settings.qualityPreset === 'string' && settings.qualityPreset.trim()
+      ? normalizeQualityPreset(settings.qualityPreset)
+      : '',
     updatedAt: typeof settings.updatedAt === 'string' ? settings.updatedAt : '',
   };
 }
@@ -225,6 +311,12 @@ function buildEffectiveEnv(env, savedSettings) {
   const normalized = normalizeSavedSettings(savedSettings);
   const merged = { ...env };
   if (normalized.provider) merged.AI_PATTERN_PROVIDER = normalized.provider;
+  if (normalized.modelPreset) {
+    merged.AI_PATTERN_MODEL_PRESET = normalized.modelPreset;
+    merged.AI_PATTERN_OPENROUTER_MODEL_PRESET = normalized.modelPreset;
+    merged.AI_PATTERN_OPENROUTER_MODEL = getOpenRouterModelPreset(normalized.modelPreset).model;
+  }
+  if (normalized.qualityPreset) merged.AI_PATTERN_QUALITY_PRESET = normalized.qualityPreset;
   if (normalized.keys.openai) merged.OPENAI_API_KEY = normalized.keys.openai;
   if (normalized.keys.anthropic) merged.ANTHROPIC_API_KEY = normalized.keys.anthropic;
   if (normalized.keys.openrouter) merged.OPENROUTER_API_KEY = normalized.keys.openrouter;
@@ -236,15 +328,57 @@ async function getEffectiveAiEnv(env, settingsPath) {
   return buildEffectiveEnv(env, savedSettings);
 }
 
-function getAiSettingsStatus(env, savedSettings = {}) {
+function isLocalHostname(hostname) {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname === '[::1]'
+    || hostname.startsWith('127.');
+}
+
+function getOpenRouterOAuthStatus(req) {
+  if (!req) {
+    return {
+      callbackUrl: '',
+      isLocal: true,
+      deploymentMessage: 'OpenRouter callback URL depends on the current server URL.',
+    };
+  }
+
+  const origin = getRequestOrigin(req);
+  const callbackUrl = new URL('/api/ai/openrouter/oauth/callback', origin).toString();
+  const parsed = new URL(origin);
+  const isLocal = isLocalHostname(parsed.hostname);
+  const isHttps = parsed.protocol === 'https:';
+  const deploymentMessage = isLocal
+    ? 'Local callback. Connect from this computer; phone/public use needs a reachable server URL.'
+    : isHttps
+      ? 'Callback URL looks public and HTTPS-ready for OpenRouter account connection.'
+      : 'Callback URL is not HTTPS. Local use is fine, but public deployments should use HTTPS.';
+
+  return { callbackUrl, isLocal, deploymentMessage };
+}
+
+function getAiSettingsStatus(env, savedSettings = {}, req = null) {
+  const normalized = normalizeSavedSettings(savedSettings);
   const effectiveEnv = buildEffectiveEnv(env, savedSettings);
   const provider = getAiPatternProvider(effectiveEnv);
+  const modelPreset = normalizeModelPreset(normalized.modelPreset || env.AI_PATTERN_OPENROUTER_MODEL_PRESET || env.AI_PATTERN_MODEL_PRESET);
+  const qualityPreset = normalizeQualityPreset(normalized.qualityPreset || env.AI_PATTERN_QUALITY_PRESET);
   return {
     provider,
+    modelPreset,
+    qualityPreset,
+    modelPresets: OPENROUTER_MODEL_PRESETS,
+    qualityPresets: AI_PATTERN_QUALITY_PRESETS.map(({ id, label, detail }) => ({ id, label, detail })),
+    oauth: getOpenRouterOAuthStatus(req),
+    cost: {
+      note: 'Uses your OpenRouter account credits.',
+    },
     providers: AI_PATTERN_PROVIDER_DETAILS.map(detail => ({
       ...detail,
       configured: !!effectiveEnv[detail.keyEnv],
-      source: savedSettings.keys?.[detail.id] ? 'saved' : env[detail.keyEnv] ? 'environment' : 'missing',
+      source: normalized.keys?.[detail.id] ? 'saved' : env[detail.keyEnv] ? 'environment' : 'missing',
       model: getAiPatternModel(effectiveEnv, detail.id),
     })),
   };
@@ -261,7 +395,7 @@ async function writeAiSettings(settingsPath, settings) {
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
-async function saveAiSettings(env, settingsPath, payload) {
+async function saveAiSettings(env, settingsPath, payload, req = null) {
   const parsed = AiProviderSettingsSchema.safeParse(payload || {});
   if (!parsed.success) {
     throw Object.assign(new Error('AI provider settings are invalid.'), {
@@ -275,6 +409,8 @@ async function saveAiSettings(env, settingsPath, payload) {
   const next = {
     provider: normalizeProvider(parsed.data.provider || current.provider || env.AI_PATTERN_PROVIDER),
     keys: { ...current.keys },
+    modelPreset: normalizeModelPreset(parsed.data.modelPreset || current.modelPreset || env.AI_PATTERN_OPENROUTER_MODEL_PRESET || env.AI_PATTERN_MODEL_PRESET),
+    qualityPreset: normalizeQualityPreset(parsed.data.qualityPreset || current.qualityPreset || env.AI_PATTERN_QUALITY_PRESET),
     updatedAt: new Date().toISOString(),
   };
 
@@ -290,7 +426,7 @@ async function saveAiSettings(env, settingsPath, payload) {
   }
 
   await writeAiSettings(settingsPath, next);
-  return getAiSettingsStatus(env, next);
+  return getAiSettingsStatus(env, next, req);
 }
 
 function createCodeVerifier() {
@@ -344,6 +480,8 @@ export function buildAiPatternInput(payload) {
   const project = payload?.projectContext || {};
   const mode = payload?.mode || 'transform';
   const instruction = String(payload?.instruction || '').trim();
+  const qualityPreset = AI_PATTERN_QUALITY_PRESETS.find(item => item.id === normalizeQualityPreset(payload?.qualityPreset))
+    || AI_PATTERN_QUALITY_PRESETS[1];
 
   return [
     {
@@ -358,6 +496,9 @@ export function buildAiPatternInput(payload) {
         'Prefer editable code with clear @param annotations for user-facing controls.',
         'Return suggestedParams as an array of objects with name and value fields, for example [{ "name": "speed", "value": 0.25 }].',
         'Use palette-aware code when the prompt mentions colors.',
+        `Pattern quality preset: ${qualityPreset.label}. ${qualityPreset.prompt}`,
+        'Default to smooth transitions, stable brightness, and readable motion. Avoid harsh flashing, strobing, or chaotic random changes unless explicitly requested.',
+        'When transforming an existing pattern, preserve the recognizable underlying motion unless the user asks for a replacement.',
       ].join('\n'),
     },
     {
@@ -466,19 +607,38 @@ function isAiResponseIncomplete(response) {
 }
 
 export function normalizeAiProviderError(error) {
+  const status = error?.status || 502;
+  const rawMessage = String(error?.message || '');
+  const providerData = error?.data || error?.responseData || {};
+  const providerMessage = String(providerData?.error?.message || providerData?.message || rawMessage);
+
   if (error?.name === 'AbortError') {
-    return { status: 504, code: 'timeout', message: 'AI request timed out.' };
+    return { status: 504, code: 'timeout', message: 'AI request timed out. Try again, or choose a faster model preset.' };
   }
-  if (error?.status === 429) {
-    return { status: 429, code: 'rate_limited', message: 'AI provider rate limit reached.' };
+  if (error?.code && ['refused', 'incomplete', 'empty_response', 'invalid_provider_json', 'invalid_provider_response'].includes(error.code)) {
+    return {
+      status,
+      code: error.code,
+      message: rawMessage || 'AI provider request failed.',
+      issues: error?.issues,
+    };
   }
-  if (error?.status === 401) {
-    return { status: 401, code: 'unauthorized', message: 'AI provider rejected the API key.' };
+  if (status === 429) {
+    return { status: 429, code: 'rate_limited', message: 'OpenRouter is rate limiting this account or model. Wait a moment, then try again.' };
+  }
+  if (status === 401 || status === 403) {
+    return { status, code: 'unauthorized', message: 'OpenRouter rejected the saved connection. Reconnect OpenRouter or paste a fresh OpenRouter key.' };
+  }
+  if (status === 402 || /credit|payment|balance|quota/i.test(providerMessage)) {
+    return { status, code: 'insufficient_credits', message: 'OpenRouter credits are unavailable. Add credits in OpenRouter, then test the connection again.' };
+  }
+  if ((status === 404 || status === 400 || status === 422) && /model|endpoint|no endpoints/i.test(providerMessage)) {
+    return { status, code: 'model_unavailable', message: 'The selected OpenRouter model is unavailable. Choose another model preset and test again.' };
   }
   return {
-    status: error?.status || 502,
+    status,
     code: error?.code || 'provider_error',
-    message: error?.message || 'AI provider request failed.',
+    message: rawMessage || 'AI provider request failed.',
     issues: error?.issues,
   };
 }
@@ -490,11 +650,17 @@ function getProviderApiKey(env, provider) {
 }
 
 function missingApiKeyError(provider) {
+  if (provider === 'openrouter') {
+    return {
+      status: 501,
+      code: 'missing_api_key',
+      message: 'Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.',
+    };
+  }
+
   const envName = provider === 'anthropic'
     ? 'ANTHROPIC_API_KEY'
-    : provider === 'openrouter'
-      ? 'OPENROUTER_API_KEY'
-      : 'OPENAI_API_KEY';
+    : 'OPENAI_API_KEY';
   return {
     status: 501,
     code: 'missing_api_key',
@@ -511,25 +677,36 @@ async function readProviderJson(response) {
   }
 }
 
-async function postProviderJson(url, { headers, body, fetchImpl, timeoutMs = AI_PATTERN_TIMEOUT_MS }) {
+async function fetchProviderJson(url, { method = 'POST', headers, body, fetchImpl, timeoutMs = AI_PATTERN_TIMEOUT_MS }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
-      method: 'POST',
+    const request = {
+      method,
       headers,
-      body: JSON.stringify(body),
       signal: controller.signal,
+    };
+    if (body !== undefined) request.body = JSON.stringify(body);
+    const response = await fetchImpl(url, {
+      ...request,
     });
     const data = await readProviderJson(response);
     if (!response.ok) {
       const message = data?.error?.message || data?.message || `AI provider request failed with HTTP ${response.status}.`;
-      throw Object.assign(new Error(message), { status: response.status });
+      throw Object.assign(new Error(message), { status: response.status, data });
     }
     return data;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postProviderJson(url, options) {
+  return fetchProviderJson(url, { ...options, method: 'POST' });
+}
+
+async function getProviderJson(url, options) {
+  return fetchProviderJson(url, { ...options, method: 'GET' });
 }
 
 async function requestOpenAiDraft({ env, client, createOpenAiClient, requestData }) {
@@ -640,6 +817,36 @@ async function requestOpenRouterDraft({ env, fetchImpl, requestData }) {
   return parseAiPatternDraftText(text);
 }
 
+async function testOpenRouterConnection({ env, fetchImpl }) {
+  const apiKey = getProviderApiKey(env, 'openrouter');
+  if (!apiKey) {
+    throw Object.assign(new Error(missingApiKeyError('openrouter').message), missingApiKeyError('openrouter'));
+  }
+
+  const data = await getProviderJson('https://openrouter.ai/api/v1/key', {
+    fetchImpl,
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+    },
+  });
+  const account = data?.data && typeof data.data === 'object' ? data.data : {};
+
+  return {
+    ok: true,
+    provider: 'openrouter',
+    model: getAiPatternModel(env, 'openrouter'),
+    message: 'OpenRouter connection works.',
+    account: {
+      label: typeof account.label === 'string' ? account.label : '',
+      usage: typeof account.usage === 'number' ? account.usage : null,
+      limit: typeof account.limit === 'number' ? account.limit : null,
+      limitRemaining: typeof account.limit_remaining === 'number' ? account.limit_remaining : null,
+      limitReset: typeof account.limit_reset === 'string' ? account.limit_reset : '',
+      isFreeTier: typeof account.is_free_tier === 'boolean' ? account.is_free_tier : null,
+    },
+  };
+}
+
 export function createAiPatternRouter({
   env = process.env,
   client = null,
@@ -664,7 +871,7 @@ export function createAiPatternRouter({
 
     try {
       const savedSettings = await readAiSettings(settingsPath);
-      return res.json(getAiSettingsStatus(env, savedSettings));
+      return res.json(getAiSettingsStatus(env, savedSettings, req));
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
       return res.status(normalized.status).json({ error: normalized });
@@ -682,7 +889,7 @@ export function createAiPatternRouter({
     }
 
     try {
-      const status = await saveAiSettings(env, settingsPath, req.body || {});
+      const status = await saveAiSettings(env, settingsPath, req.body || {}, req);
       return res.json(status);
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
@@ -754,11 +961,31 @@ export function createAiPatternRouter({
       await saveAiSettings(env, settingsPath, {
         provider: 'openrouter',
         keys: { openrouter: data.key },
-      });
+      }, req);
       return res.redirect(oauthState.returnTo);
     } catch (error) {
       const normalized = normalizeAiProviderError(error);
       return res.status(normalized.status).send(normalized.message);
+    }
+  });
+
+  router.post('/openrouter/test', async (req, res) => {
+    if (!hasValidAuthToken(req, env)) {
+      return res.status(401).json({
+        error: {
+          code: 'unauthorized',
+          message: 'AI pattern access is not authorized.',
+        },
+      });
+    }
+
+    try {
+      const effectiveEnv = await getEffectiveAiEnv(env, settingsPath);
+      const result = await testOpenRouterConnection({ env: effectiveEnv, fetchImpl });
+      return res.json(result);
+    } catch (error) {
+      const normalized = normalizeAiProviderError(error);
+      return res.status(normalized.status).json({ error: normalized });
     }
   });
 
@@ -808,11 +1035,15 @@ export function createAiPatternRouter({
     }
 
     try {
+      const requestData = {
+        ...parsedRequest.data,
+        qualityPreset: parsedRequest.data.qualityPreset || getAiPatternQualityPreset(effectiveEnv),
+      };
       const draft = provider === 'anthropic'
-        ? await requestAnthropicDraft({ env: effectiveEnv, fetchImpl, requestData: parsedRequest.data })
+        ? await requestAnthropicDraft({ env: effectiveEnv, fetchImpl, requestData })
         : provider === 'openrouter'
-          ? await requestOpenRouterDraft({ env: effectiveEnv, fetchImpl, requestData: parsedRequest.data })
-          : await requestOpenAiDraft({ env: effectiveEnv, client, createOpenAiClient, requestData: parsedRequest.data });
+          ? await requestOpenRouterDraft({ env: effectiveEnv, fetchImpl, requestData })
+          : await requestOpenAiDraft({ env: effectiveEnv, client, createOpenAiClient, requestData });
       return res.json({ draft });
     } catch (error) {
       const normalized = normalizeAiProviderError(error);

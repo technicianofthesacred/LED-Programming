@@ -71,7 +71,7 @@ async function withTempRoot(callback) {
 }
 
 assert.equal(getAiPatternModel({ AI_PATTERN_MODEL: 'gpt-5.5' }), 'gpt-5.5');
-assert.equal(getAiPatternModel({}), 'openai/gpt-5.1');
+assert.equal(getAiPatternModel({}), 'openai/gpt-5.4-mini');
 assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'anthropic' }), 'anthropic');
 assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'openrouter' }), 'openrouter');
 assert.equal(getAiPatternProvider({ AI_PATTERN_PROVIDER: 'bad-provider' }), 'openrouter');
@@ -125,6 +125,16 @@ assert.deepEqual(
 const providerError = normalizeAiProviderError(Object.assign(new Error('Rate limit'), { status: 429 }));
 assert.equal(providerError.status, 429);
 assert.equal(providerError.code, 'rate_limited');
+
+const creditError = normalizeAiProviderError(Object.assign(new Error('Insufficient credits'), { status: 402 }));
+assert.equal(creditError.status, 402);
+assert.equal(creditError.code, 'insufficient_credits');
+assert.match(creditError.message, /OpenRouter credits/i);
+
+const modelError = normalizeAiProviderError(Object.assign(new Error('No endpoints found for model'), { status: 404 }));
+assert.equal(modelError.status, 404);
+assert.equal(modelError.code, 'model_unavailable');
+assert.match(modelError.message, /model/i);
 
 const timeoutError = normalizeAiProviderError(Object.assign(new Error('Timeout'), { name: 'AbortError' }));
 assert.equal(timeoutError.status, 504);
@@ -217,6 +227,14 @@ await withTempRoot(async (rootDir) => {
     const before = await fetchJson(`${baseUrl}/api/ai/settings`);
     assert.equal(before.response.status, 200);
     assert.equal(before.body.provider, 'openrouter');
+    assert.equal(before.body.modelPreset, 'balanced');
+    assert.equal(before.body.qualityPreset, 'balanced');
+    assert.ok(before.body.modelPresets.some(preset => preset.id === 'creative' && preset.model === 'anthropic/claude-sonnet-4.6'));
+    assert.ok(before.body.qualityPresets.some(preset => preset.id === 'showpiece'));
+    assert.match(before.body.oauth.callbackUrl, /\/api\/ai\/openrouter\/oauth\/callback$/);
+    assert.equal(before.body.oauth.isLocal, true);
+    assert.match(before.body.oauth.deploymentMessage, /local/i);
+    assert.match(before.body.cost.note, /OpenRouter account credits/i);
     assert.equal(before.body.providers.find(provider => provider.id === 'anthropic').configured, false);
 
     const saved = await fetchJson(`${baseUrl}/api/ai/settings`, {
@@ -242,6 +260,108 @@ await withTempRoot(async (rootDir) => {
     assert.equal(providerFetchCall.url, 'https://api.anthropic.com/v1/messages');
     assert.equal(providerFetchCall.options.headers['x-api-key'], 'anthropic-secret-test-key');
     assert.equal(providerFetchCall.body.model, 'claude-sonnet-4-20250514');
+  });
+});
+
+await withTempRoot(async (rootDir) => {
+  let openRouterGenerationCall = null;
+  const modelSettingsApp = createLightweaverServer({
+    rootDir,
+    env: {},
+    fetchImpl: async (url, options) => {
+      openRouterGenerationCall = { url, options, body: JSON.parse(options.body) };
+      return new Response(JSON.stringify({
+        choices: [{
+          finish_reason: 'stop',
+          message: {
+            content: JSON.stringify({
+              name: 'Creative Preset Draft',
+              description: 'Generated with saved model and quality presets.',
+              changeSummary: ['Used creative preset'],
+              palette: ['#00ffaa', '#6600aa'],
+              code: 'return hsv(time, 1, 1);',
+              suggestedParams: [],
+              notes: '',
+            }),
+          },
+        }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  await withServer(modelSettingsApp, async (baseUrl) => {
+    const saved = await fetchJson(`${baseUrl}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openrouter',
+        keys: { openrouter: 'openrouter-saved-model-key' },
+        modelPreset: 'creative',
+        qualityPreset: 'showpiece',
+      }),
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.modelPreset, 'creative');
+    assert.equal(saved.body.qualityPreset, 'showpiece');
+    assert.equal(JSON.stringify(saved.body).includes('openrouter-saved-model-key'), false);
+
+    const generated = await fetchJson(`${baseUrl}/api/ai/pattern`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instruction: 'make a more dimensional color journey' }),
+    });
+    assert.equal(generated.response.status, 200);
+    assert.equal(generated.body.draft.name, 'Creative Preset Draft');
+    assert.equal(openRouterGenerationCall.body.model, 'anthropic/claude-sonnet-4.6');
+    assert.match(openRouterGenerationCall.body.messages[0].content, /showpiece/i);
+    assert.match(openRouterGenerationCall.body.messages[0].content, /layered/i);
+  });
+});
+
+await withTempRoot(async (rootDir) => {
+  let connectionTestCall = null;
+  const connectionTestApp = createLightweaverServer({
+    rootDir,
+    env: {},
+    fetchImpl: async (url, options) => {
+      connectionTestCall = { url, options };
+      return new Response(JSON.stringify({
+        data: {
+          label: 'sk-or-v1-test...789',
+          usage: 1.25,
+          limit: 10,
+          limit_remaining: 8.75,
+          limit_reset: 'monthly',
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  await withServer(connectionTestApp, async (baseUrl) => {
+    await fetchJson(`${baseUrl}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'openrouter',
+        keys: { openrouter: 'openrouter-connection-key' },
+        modelPreset: 'budget',
+      }),
+    });
+
+    const tested = await fetchJson(`${baseUrl}/api/ai/openrouter/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(tested.response.status, 200);
+    assert.equal(tested.body.ok, true);
+    assert.equal(tested.body.provider, 'openrouter');
+    assert.equal(tested.body.model, 'openai/gpt-5-mini');
+    assert.equal(tested.body.account.limitRemaining, 8.75);
+    assert.equal(connectionTestCall.url, 'https://openrouter.ai/api/v1/key');
+    assert.equal(connectionTestCall.options.method, 'GET');
+    assert.equal(connectionTestCall.options.headers.authorization, 'Bearer openrouter-connection-key');
+    assert.equal(JSON.stringify(tested.body).includes('openrouter-connection-key'), false);
   });
 });
 

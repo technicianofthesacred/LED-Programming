@@ -764,6 +764,84 @@ input, select, textarea { font: inherit; color: inherit; user-select: auto; }
   font-style: normal;
   line-height: 1.3;
 }
+.lw-ai-setup-status {
+  display: grid;
+  gap: var(--s-2);
+}
+.lw-ai-setup-status > div,
+.lw-ai-connection-result {
+  display: grid;
+  gap: 3px;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  min-width: 0;
+}
+.lw-ai-setup-status strong,
+.lw-ai-connection-result strong {
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.lw-ai-setup-status span,
+.lw-ai-connection-result span {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+.lw-ai-setup-status code,
+.lw-ai-connection-result em,
+.lw-ai-select-row code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lw-ai-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-3);
+}
+.lw-ai-select-row {
+  display: grid;
+  gap: var(--s-2);
+  min-width: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+.lw-ai-select-row > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.lw-ai-select-row strong {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.lw-ai-select-row em {
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  line-height: 1.3;
+}
+.lw-ai-select-row select {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
 .lw-ai-manual-settings {
   border-top: 1px solid var(--border);
   padding-top: var(--s-2);
@@ -2719,7 +2797,8 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
   .lw-ai-settings-provider,
   .lw-ai-key-row,
-  .lw-ai-account-connect {
+  .lw-ai-account-connect,
+  .lw-ai-setup-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
   }

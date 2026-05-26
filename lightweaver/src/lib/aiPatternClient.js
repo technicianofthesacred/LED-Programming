@@ -80,3 +80,16 @@ export async function startOpenRouterAccountConnection(payload = {}, {
   });
   return readAiJsonResponse(response, `OpenRouter account connection failed with HTTP ${response.status}`);
 }
+
+export async function testOpenRouterConnection({
+  fetchImpl = globalThis.fetch,
+  token = getStoredAiPatternToken(),
+} = {}) {
+  if (!fetchImpl) throw new Error('fetch is not available');
+  const response = await fetchImpl('/api/ai/openrouter/test', {
+    method: 'POST',
+    headers: buildAiHeaders(token),
+    body: JSON.stringify({}),
+  });
+  return readAiJsonResponse(response, `OpenRouter connection test failed with HTTP ${response.status}`);
+}

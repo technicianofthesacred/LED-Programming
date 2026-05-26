@@ -4,6 +4,7 @@ import {
   requestAiProviderSettings,
   saveAiProviderSettings,
   startOpenRouterAccountConnection,
+  testOpenRouterConnection,
 } from '../lib/aiPatternClient.js';
 import { validateAiPatternDraft } from '../lib/aiPatternDraft.js';
 import { getPatternById, isBuiltInPattern } from '../lib/patternRegistry.js';
@@ -15,16 +16,46 @@ const AI_PROVIDER_OPTIONS = [
   { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyLabel: 'Claude key' },
 ];
 const PRIMARY_AI_PROVIDER = 'openrouter';
+const AI_MODEL_PRESET_FALLBACKS = [
+  { id: 'balanced', label: 'Balanced', detail: 'Reliable default', model: 'openai/gpt-5.4-mini' },
+  { id: 'best', label: 'Best', detail: 'Higher quality', model: 'openai/gpt-5.5' },
+  { id: 'creative', label: 'Creative', detail: 'Claude Sonnet', model: 'anthropic/claude-sonnet-4.6' },
+  { id: 'fast', label: 'Fast', detail: 'Quick drafts', model: 'google/gemini-3.5-flash' },
+  { id: 'budget', label: 'Budget', detail: 'Lower-cost iterations', model: 'openai/gpt-5-mini' },
+];
+const AI_QUALITY_PRESET_FALLBACKS = [
+  { id: 'simple', label: 'Simple', detail: 'Short editable code' },
+  { id: 'balanced', label: 'Balanced', detail: 'Smooth and editable' },
+  { id: 'showpiece', label: 'Showpiece', detail: 'Layered gallery-ready motion' },
+];
 
 function getProviderOption(provider) {
   return AI_PROVIDER_OPTIONS.find(option => option.id === provider) || AI_PROVIDER_OPTIONS[0];
 }
 
-function createSettingsDraft(provider) {
+function createSettingsDraft(provider, settings = {}) {
   return {
     provider: getProviderOption(provider).id,
+    modelPreset: settings.modelPreset || 'balanced',
+    qualityPreset: settings.qualityPreset || 'balanced',
     keys: { openai: '', anthropic: '', openrouter: '' },
   };
+}
+
+function formatUsageNumber(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function formatOpenRouterUsage(account = {}) {
+  const remaining = formatUsageNumber(account.limitRemaining);
+  const limit = formatUsageNumber(account.limit);
+  const reset = account.limitReset ? ` ${account.limitReset}` : '';
+  if (remaining && limit) return `Remaining ${remaining} of ${limit}${reset}`;
+
+  const usage = formatUsageNumber(account.usage);
+  if (usage) return `Used ${usage}${reset}`;
+  return '';
 }
 
 function hasCompletedAiSetupConnection() {
@@ -93,6 +124,8 @@ export function AiPatternAssistant({
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
   const [settingsSaved, setSettingsSaved] = useState(connectedOnLoad ? 'Connected OpenRouter account.' : '');
+  const [connectionPending, setConnectionPending] = useState(false);
+  const [connectionResult, setConnectionResult] = useState(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(null);
 
@@ -127,7 +160,7 @@ export function AiPatternAssistant({
       const nextProvider = PRIMARY_AI_PROVIDER;
       setSettings(data);
       setProvider(nextProvider);
-      setSettingsDraft(createSettingsDraft(nextProvider));
+      setSettingsDraft(createSettingsDraft(nextProvider, data));
       return data;
     } catch (settingsLoadError) {
       setSettingsError(settingsLoadError.message);
@@ -156,6 +189,13 @@ export function AiPatternAssistant({
     }));
   };
 
+  const updateSettingsChoice = (key, value) => {
+    setSettingsDraft(current => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
   const saveSettings = async (event) => {
     event.preventDefault();
     setSettingsPending(true);
@@ -166,8 +206,9 @@ export function AiPatternAssistant({
       const nextProvider = getProviderOption(saved?.provider).id;
       setSettings(saved);
       setProvider(nextProvider);
-      setSettingsDraft(createSettingsDraft(nextProvider));
+      setSettingsDraft(createSettingsDraft(nextProvider, saved));
       setSettingsSaved(`Saved. ${getProviderOption(nextProvider).label} is active.`);
+      setConnectionResult(null);
     } catch (settingsSaveError) {
       setSettingsError(settingsSaveError.message);
     } finally {
@@ -179,6 +220,7 @@ export function AiPatternAssistant({
     setSettingsPending(true);
     setSettingsError(null);
     setSettingsSaved('');
+    setConnectionResult(null);
     try {
       const returnTo = `${window.location.origin}${window.location.pathname}#screen=pattern`;
       const data = await startOpenRouterAccountConnection({ returnTo });
@@ -193,6 +235,21 @@ export function AiPatternAssistant({
     }
   };
 
+  const testConnection = async () => {
+    setConnectionPending(true);
+    setSettingsError(null);
+    setSettingsSaved('');
+    setConnectionResult(null);
+    try {
+      const result = await testOpenRouterConnection();
+      setConnectionResult(result);
+    } catch (connectionError) {
+      setSettingsError(connectionError.message);
+    } finally {
+      setConnectionPending(false);
+    }
+  };
+
   const sendInstruction = async (modeOverride = null) => {
     const instruction = input.trim();
     if (!instruction || !sourcePattern || pending) return;
@@ -203,6 +260,7 @@ export function AiPatternAssistant({
     try {
       const rawDraft = await requestAiPatternDraft({
         provider: PRIMARY_AI_PROVIDER,
+        qualityPreset: settingsDraft.qualityPreset || settings?.qualityPreset || 'balanced',
         mode: modeOverride || (draft ? 'refine' : 'transform'),
         instruction,
         sourcePattern,
@@ -248,6 +306,11 @@ export function AiPatternAssistant({
   };
   const providerOption = getProviderOption(provider);
   const providerStatus = settings?.providers?.find(item => item.id === provider);
+  const modelPresets = settings?.modelPresets?.length ? settings.modelPresets : AI_MODEL_PRESET_FALLBACKS;
+  const qualityPresets = settings?.qualityPresets?.length ? settings.qualityPresets : AI_QUALITY_PRESET_FALLBACKS;
+  const selectedModelPreset = modelPresets.find(preset => preset.id === settingsDraft.modelPreset) || modelPresets[0];
+  const selectedQualityPreset = qualityPresets.find(preset => preset.id === settingsDraft.qualityPreset) || qualityPresets[1] || qualityPresets[0];
+  const connectionUsage = formatOpenRouterUsage(connectionResult?.account);
 
   return (
     <section className={`lw-ai-assistant ${open ? 'open' : ''}`}>
@@ -298,6 +361,76 @@ export function AiPatternAssistant({
                   Connect OpenRouter account
                 </button>
               </div>
+              <div className="lw-ai-setup-status">
+                <div>
+                  <strong>{providerStatus?.configured ? 'Connected key saved' : 'Not connected yet'}</strong>
+                  <span>{settings?.cost?.note || 'Uses your OpenRouter account credits.'}</span>
+                </div>
+                <div>
+                  <strong>OAuth callback</strong>
+                  <code>{settings?.oauth?.callbackUrl || 'Loading callback URL'}</code>
+                  <span>{settings?.oauth?.deploymentMessage || 'Checking callback status.'}</span>
+                </div>
+              </div>
+              <div className="lw-ai-setup-grid">
+                <label className="lw-ai-select-row">
+                  <span>
+                    <strong>Model</strong>
+                    <em>{selectedModelPreset?.detail}</em>
+                  </span>
+                  <select
+                    aria-label="AI model preset"
+                    value={settingsDraft.modelPreset}
+                    onChange={event => updateSettingsChoice('modelPreset', event.target.value)}
+                    disabled={settingsPending}
+                  >
+                    {modelPresets.map(preset => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                  <code>{selectedModelPreset?.model}</code>
+                </label>
+                <label className="lw-ai-select-row">
+                  <span>
+                    <strong>Pattern quality</strong>
+                    <em>{selectedQualityPreset?.detail}</em>
+                  </span>
+                  <select
+                    aria-label="Pattern quality"
+                    value={settingsDraft.qualityPreset}
+                    onChange={event => updateSettingsChoice('qualityPreset', event.target.value)}
+                    disabled={settingsPending}
+                  >
+                    {qualityPresets.map(preset => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="lw-ai-settings-actions">
+                <button className="btn" type="submit" disabled={settingsPending}>
+                  {settingsPending ? 'Saving' : 'Save setup'}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={testConnection}
+                  disabled={connectionPending}
+                >
+                  {connectionPending ? 'Testing' : 'Test connection'}
+                </button>
+              </div>
+              {connectionResult && (
+                <div className="lw-ai-connection-result">
+                  <strong>{connectionResult.message || 'OpenRouter connection works.'}</strong>
+                  {connectionUsage && <span>{connectionUsage}</span>}
+                  {connectionResult.account?.label && <em>{connectionResult.account.label}</em>}
+                </div>
+              )}
               <details className="lw-ai-manual-settings">
                 <summary>Advanced: paste OpenRouter key</summary>
                 <div className="lw-ai-key-list">
