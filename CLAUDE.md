@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
 deploy: web interface (phone/browser, hosted on Raspberry Pi or publicly)
 family: installation
-last_reviewed: 2026-05-24
+last_reviewed: 2026-05-26
 ---
 
 # Lightweaver — branded LED installation controller
@@ -25,6 +25,13 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 
 ## Project name
 **Lightweaver** — use this name in UI copy, WiFi SSIDs, and any public-facing branding.
+
+## Public web / GitHub
+- **Parent site**: `mandalacodes.com` is Adrian Rasmussen's site.
+- **Canonical public Lightweaver UI URL**: `led.mandalacodes.com`.
+- **LED repo GitHub**: `git@github-tech:technicianofthesacred/LED-Programming.git`.
+- **Mandala Codes repo GitHub**: `git@github-tech:technicianofthesacred/mandalacodes.git`.
+- **Deployment split**: the Lightweaver browser UI lives at `led.mandalacodes.com`. Keep the actual WLED command path local, WLED-served, Pi-proxied, or locally bridged unless a local bridge is present, because public HTTPS pages cannot reliably command local HTTP WLED controllers from every phone/browser.
 
 ## Architectural decisions
 - `led-art-mapper/` is the **canonical design tool** (vanilla JS Vite app): pattern editor, LED layout over artwork SVGs, `ledmap.json` export. All zone definitions originate here.

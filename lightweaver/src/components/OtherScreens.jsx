@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
 import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromStrips } from '../lib/export.js';
+import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
 import { DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
 import { DEMO_STRIPS } from '../data.js';
@@ -484,7 +485,16 @@ export function LayoutScreen() {
 
 // ── Export screen ─────────────────────────────────────────────────────
 export function ExportScreen() {
-  const { strips: projectStrips, viewBox } = useProject();
+  const {
+    projectName,
+    strips: projectStrips,
+    viewBox,
+    activePatternId,
+    showClips,
+    palette,
+    masterBrightness,
+    showDuration,
+  } = useProject();
 
   const [normalize, setNormalize] = useState(true);
   const [scaleX, setScaleX]       = useState(1.0);
@@ -513,8 +523,23 @@ export function ExportScreen() {
   const previewJson = ledmapJson.slice(0, 400) + '\n  …';
 
   const totalLeds = sourceStrips.reduce((a, s) => a + (s.leds || s.pixelCount || s.pixels?.length || 0), 0);
+  const wledBasicPackageJson = useMemo(() => JSON.stringify(buildWledBasicPackage({
+    projectName,
+    activePatternId,
+    showClips,
+    strips: sourceStrips,
+    palette,
+    duration: showDuration,
+    brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
+    loop: true,
+  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness]);
 
   const artifacts = [
+    {
+      file: 'wled-basic.json', desc: 'WLED presets, playlist, port list',
+      size: `${(wledBasicPackageJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(wledBasicPackageJson, 'wled-basic.json', 'application/json'),
+    },
     {
       file: 'ledmap.json', desc: 'WLED 2D layout',
       size: `${(ledmapJson.length / 1024).toFixed(1)} KB`,

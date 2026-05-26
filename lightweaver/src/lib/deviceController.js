@@ -1,3 +1,5 @@
+import { pixelsToWledHexArray } from './wledPixels.js';
+
 export const DEFAULT_WLED_PUSH_FPS = 25;
 export const DEFAULT_WLED_HTTP_TIMEOUT_MS = 3000;
 export const MAX_WLED_FRAME_PIXELS = 4096;
@@ -6,13 +8,7 @@ export function makeWledFrameMessage(pixels = [], { maxPixels = MAX_WLED_FRAME_P
   if (pixels.length > maxPixels) {
     throw new RangeError(`WLED frame has ${pixels.length} pixels, max ${maxPixels}`);
   }
-  const flat = new Array(pixels.length * 3);
-  for (let i = 0; i < pixels.length; i++) {
-    flat[i * 3] = clampByte(pixels[i].r);
-    flat[i * 3 + 1] = clampByte(pixels[i].g);
-    flat[i * 3 + 2] = clampByte(pixels[i].b);
-  }
-  return { v: true, seg: [{ i: flat }] };
+  return { v: true, seg: [{ i: pixelsToWledHexArray(pixels) }] };
 }
 
 export function makeBlackoutFrame(pixelCount) {
@@ -130,9 +126,4 @@ export async function postWledStateDirect(ip, state, timeoutMs = DEFAULT_WLED_HT
   });
   if (!r.ok) throw new Error(`WLED returned HTTP ${r.status}`);
   return r;
-}
-
-function clampByte(v) {
-  if (!Number.isFinite(v)) return 0;
-  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
 }

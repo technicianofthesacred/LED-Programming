@@ -2,7 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useMidi } from '../hooks/useMidi.js';
 import { makeWledSegments, postWledState } from '../lib/deviceController.js';
+import { auditWledControllerCompatibility } from '../lib/controllerCompatibility.js';
 import { makeSafeWledTestState, pickBestWledDevice, sortWledDevices } from '../lib/wledDiscovery.js';
+import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
+import { buildWledInstallWizardPlan } from '../lib/wledInstallWizard.js';
 import {
   buildControllerProfile,
   controllerProfileReadiness,
@@ -41,6 +44,31 @@ function Dot({ color }) {
   return <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }}/>;
 }
 
+function totalStripPixels(strips = []) {
+  return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || 0), 0);
+}
+
+async function fetchWledResource(ip, path, fallback = null) {
+  if (!ip) return fallback;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const r = await fetch(`http://${ip}${path}`, { signal: controller.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } catch {
+    try {
+      const proxy = await fetch(`/api/wled/raw?ip=${encodeURIComponent(ip)}&path=${encodeURIComponent(path)}`);
+      if (!proxy.ok) return fallback;
+      return await proxy.json();
+    } catch {
+      return fallback;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function DevicesPanel({ onClose }) {
   const {
     wledIp, setWledIp, wledConnected, wledTransport, wledConnect, wledDisconnect,
@@ -48,6 +76,7 @@ export function DevicesPanel({ onClose }) {
     wledSegmentMap, setWledSegmentMap,
     controllerProfiles, setControllerProfiles,
     activeControllerId, setActiveControllerId,
+    projectName, activePatternId, showClips, palette,
   } = useProject();
   const [scanResults, setScanResults] = useState([]);
   const [scanning,    setScanning]    = useState(false);
@@ -57,6 +86,8 @@ export function DevicesPanel({ onClose }) {
   const [profileStatus, setProfileStatus] = useState('');
 
   const [wledInfo, setWledInfo] = useState(null);
+  const [installAudit, setInstallAudit] = useState(null);
+  const [installAuditStatus, setInstallAuditStatus] = useState('');
   const activeProfile = useMemo(
     () => controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null,
     [activeControllerId, controllerProfiles],
@@ -67,6 +98,19 @@ export function DevicesPanel({ onClose }) {
     () => activeProfile ? makeInstallReadinessReport(activeProfile, { snapshotSaved: !!activeProfile.backup?.lastSnapshotAt }) : '',
     [activeProfile],
   );
+  const wledBasicPackage = useMemo(() => buildWledBasicPackage({
+    projectName,
+    activePatternId,
+    showClips,
+    strips,
+    palette,
+    maxSegments: wledInfo?.leds?.maxseg || 16,
+  }), [projectName, activePatternId, showClips, strips, palette, wledInfo]);
+  const installWizardPlan = useMemo(() => buildWledInstallWizardPlan({
+    controllerAudit: installAudit,
+    wledPackage: wledBasicPackage,
+    backupSaved: Boolean(activeProfile?.backup?.lastSnapshotAt),
+  }), [installAudit, wledBasicPackage, activeProfile]);
 
   useEffect(() => {
     const handler = (e) => { if (e.key === 'Escape') onClose(); };
@@ -260,6 +304,46 @@ export function DevicesPanel({ onClose }) {
       setProfileStatus(`Snapshot failed: ${error.message}`);
     }
     setTimeout(() => setProfileStatus(''), 4000);
+  };
+
+  const runInstallAudit = async () => {
+    if (!wledIp) {
+      setInstallAuditStatus('Set a WLED IP first');
+      setTimeout(() => setInstallAuditStatus(''), 3500);
+      return;
+    }
+    setInstallAuditStatus('Auditing controller...');
+    try {
+      const [directInfo, state, cfg, presets, ledMap] = await Promise.all([
+        fetchWledResource(wledIp, '/json/info', null),
+        fetchWledResource(wledIp, '/json/state', {}),
+        fetchWledResource(wledIp, '/cfg.json', {}),
+        fetchWledResource(wledIp, '/presets.json', {}),
+        fetchWledResource(wledIp, '/ledmap.json', null),
+      ]);
+      const info = directInfo || wledInfo || await wledGetInfo();
+      const expectedPixels = totalStripPixels(strips) || activeProfile?.led?.length || info?.leds?.count || 0;
+      const audit = auditWledControllerCompatibility({
+        info,
+        state,
+        cfg,
+        presets,
+        ledMap,
+        expected: {
+          pixelCount: expectedPixels,
+          segmentCount: Math.max(1, strips.filter(strip => (strip.pixels?.length || strip.pixelCount || 0) > 0).length || 1),
+          requiresLedMap: false,
+          requiresArtNet: false,
+          usesAudioPatterns: false,
+        },
+      });
+      setWledInfo(info);
+      setInstallAudit(audit);
+      setInstallAuditStatus(`Audit ${audit.summary.status}`);
+    } catch (error) {
+      setInstallAuditStatus(`Audit failed: ${error.message}`);
+    }
+    setTimeout(() => setInstallAuditStatus(''), 4500);
   };
 
   const recoverKnownGood = async () => {
@@ -603,6 +687,49 @@ export function DevicesPanel({ onClose }) {
               </Row>
             </Section>
           )}
+
+          <Section title="WLED Basic Installer">
+            <div className="lw-install-wizard">
+              <div className="lw-install-wizard-head">
+                <div>
+                  <div className="eyebrow">Package</div>
+                  <div className="title">{installWizardPlan.packageSummary.presets} presets · playlist {installWizardPlan.packageSummary.playlistPresetId || 'open'}</div>
+                </div>
+                <span className={`lw-install-status is-${installWizardPlan.status}`}>
+                  {installWizardPlan.status}
+                </span>
+              </div>
+              <div className="lw-install-grid">
+                <span>{installWizardPlan.packageSummary.customEffectPorts} ports</span>
+                <span>{installWizardPlan.packageSummary.unsupportedPatterns} gated</span>
+                <span>{installWizardPlan.packageSummary.ledCount || activeProfile?.led?.length || 0} px</span>
+              </div>
+              <div className="lw-install-steps">
+                {installWizardPlan.steps.map(step => (
+                  <div key={step.id} className={`lw-install-step is-${step.state}`}>
+                    <Dot color={step.state === 'ready' ? 'oklch(72% 0.18 155)' : step.state === 'blocked' ? 'oklch(64% 0.20 25)' : 'oklch(78% 0.11 80)'}/>
+                    <div>
+                      <span>{step.label}</span>
+                      <small>{step.detail}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <Row label="Next">
+                <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>{wledIp ? installWizardPlan.nextAction.label : 'Set WLED IP'}</span>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>{wledIp ? installWizardPlan.nextAction.detail : 'Enter or discover the controller before audit.'}</span>
+              </Row>
+              <Row label="Actions">
+                <button className="btn btn-primary" onClick={runInstallAudit} disabled={!wledIp}>
+                  Run audit
+                </button>
+                <button className="btn btn-ghost" disabled={!installWizardPlan.canInstall} title="Direct install stays disabled until backup and geometry checks pass">
+                  Apply package
+                </button>
+                {installAuditStatus && <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--accent)' }}>{installAuditStatus}</span>}
+              </Row>
+            </div>
+          </Section>
 
           {activeProfile && (
             <Section title="Madrix / Art-Net">

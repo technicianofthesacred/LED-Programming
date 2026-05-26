@@ -1,4 +1,5 @@
 import { makeSafeWledTestState } from './wledDiscovery.js';
+import { rgbArrayToWledHex } from './wledPixels.js';
 
 export const DEFAULT_CONTROLLER_LED = {
   type: 'WS2815',
@@ -131,21 +132,22 @@ export function makeKnownGoodRecoveryState() {
 export function makePixelMarkerState(pixelCount = 30, index = 0, color = [255, 64, 0]) {
   const count = Math.max(1, Math.min(4096, Number(pixelCount) || 1));
   const selected = Math.max(0, Math.min(count - 1, Number(index) || 0));
-  const flat = [];
+  const pixels = [];
+  const selectedHex = rgbArrayToWledHex(color);
   for (let i = 0; i < count; i++) {
-    flat.push(...(i === selected ? color : [0, 0, 0]));
+    pixels.push(i === selected ? selectedHex : '000000');
   }
-  return { on: true, bri: 32, transition: 0, v: true, seg: [{ id: 0, i: flat }] };
+  return { on: true, bri: 32, transition: 0, v: true, seg: [{ id: 0, i: pixels }] };
 }
 
 export function makeEveryNthMarkerState(pixelCount = 30, every = 10) {
   const count = Math.max(1, Math.min(4096, Number(pixelCount) || 1));
   const step = Math.max(1, Number(every) || 10);
-  const flat = [];
+  const pixels = [];
   for (let i = 0; i < count; i++) {
-    flat.push(...(i % step === 0 ? [0, 80, 255] : [0, 0, 0]));
+    pixels.push(i % step === 0 ? '0050FF' : '000000');
   }
-  return { on: true, bri: 32, transition: 0, v: true, seg: [{ id: 0, i: flat }] };
+  return { on: true, bri: 32, transition: 0, v: true, seg: [{ id: 0, i: pixels }] };
 }
 
 export function makeColorOrderHint(expected, observed) {

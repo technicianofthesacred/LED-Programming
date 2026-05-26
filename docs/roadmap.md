@@ -2,7 +2,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-05-06 (commit `839eee5`)
+Last updated: 2026-05-26
 
 ## Done
 
@@ -28,18 +28,31 @@ Last updated: 2026-05-06 (commit `839eee5`)
 - [x] **C3** section groups/zones — collapsible group panels, member assignment popover, render override
 - [x] Pattern-eval error log panel — 5-entry ring, dedup consecutive, dismissable
 
+### Runtime strategy
+- [x] Define the two Lightweaver product versions: **Basic WLED** for entry-level stored looks and **Advanced Art-Net / Custom** for Madrix, live Art-Net, and exact standalone sequence playback — see `docs/superpowers/specs/2026-05-25-two-version-runtime-strategy-design.md`
+- [x] Add shared runtime-tier and pattern-target helpers in `lightweaver/src/lib/runtimeTargets.js`
+- [x] Add WLED / ADV compatibility chips to the Live pattern grid
+- [x] Build WLED Basic export package generation: WLED preset bank, playlist preset, unsupported-pattern warnings, and custom-effect port list
+- [x] Audit all 130 Lightweaver patterns and gate them by runtime: WLED stock, WLED custom port, audio source, beat/timeline source, or computer/Pi render — see `docs/pattern-compatibility-audit.md`
+- [x] Add controller compatibility audit for the connected WLED unit: firmware, LED count, segments, presets, LED map, Art-Net/E1.31, clock, identity, and audio-source gates — see `docs/controller-compatibility-audit.md`
+- [x] Verify bench ESP32-S3 is reachable at `192.168.18.66` running WLED `0.15.4`
+- [x] Back up and flash the non-lit USB ESP32-S3 with temporary Lightweaver USB LED test firmware; verify `LWUSB` serial commands on `/dev/cu.usbmodem5B5E0414831` — see `docs/usb-controller-audit.md`
+
 ## Open — user/hardware actions
 
 These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 
-- [ ] Flash WLED 0.15.4 onto the ESP32-S3 N16R8 (binary in repo root)
-- [ ] Verify WLED first boot (4.3.2.1, version, free heap, WS2815 config, test pattern)
+- [ ] Set final WLED LED count, data GPIO, LED type, color order, and brightness limit for the actual artwork
+- [ ] Rename the controller and reserve MAC `ac:a7:04:e2:ec:e0` as `192.168.18.66` or the chosen install IP
+- [ ] Back up current `/presets.json` before installing Lightweaver presets
 - [ ] Configure & test Madrix Art-Net output → WLED (universes, 510 ch/universe, 30–44 Hz, WiFi sleep disabled)
 - [ ] Define WLED segments matching laser-cut zones — fill in zone IDs in `docs/segments.md`
 - [ ] Capture per-device record: MAC, post-STA IP, segment JSON dump
 
 ## Open — deployment
 
+- [ ] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
+- [ ] Keep actual WLED control local, WLED-served, or Pi-proxied unless a local bridge is present
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
 - [ ] AP mode SSID convention: "Lightweaver — Adrian Rasmussen — Piece 01"
 - [ ] Captive portal end-to-end test from a phone on the AP
@@ -48,7 +61,11 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 
 ## Open — software follow-ups
 
+- [ ] Add direct USB controller mode: Web Serial/local bridge transport in the app, using the verified `LWUSB` bench protocol as the first hardware handshake
 - [ ] **Refactor**: split 4,713-line `led-art-mapper/app/src/main.js` into modules (state, ui, render, export) — *deferred from this round; best done in a focused session because it touches everything*
+- [ ] Extend runtime target badges to Pattern, Timeline, and Export screens
+- [ ] WLED Basic installer: run controller compatibility audit, back up existing presets, then apply the generated package directly to a connected WLED controller
+- [ ] Lightweaver custom WLED effect build: first branded ambient set for Candle Drift, Ember Slow, Warm Pulse, Amber Aurora, and Gallery Idle
 - [ ] Standalone controller export: generate `lightweaver.json` and `.lwseq` microSD packages for ESP32-S3 playback
 - [ ] Add Vitest unit suite for `led-art-mapper` pattern helpers + export functions
 - [ ] Tighten Playwright selectors flagged with `// TODO: tighten selector` in `e2e/*.spec.ts`

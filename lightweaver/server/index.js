@@ -195,6 +195,19 @@ app.get('/api/wled/state', async (req, res) => {
   }
 });
 
+app.get('/api/wled/raw', async (req, res) => {
+  const host = normalizeRequestHost(req.query.ip);
+  if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+  const path = String(req.query.path || '');
+  const allowed = new Set(['/json/info', '/json/state', '/cfg.json', '/presets.json', '/ledmap.json']);
+  if (!allowed.has(path)) return res.status(400).json({ error: 'Unsupported WLED resource path.' });
+  try {
+    res.json(await fetchJson(wledUrl(host, path)));
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message, detail: error.data || null });
+  }
+});
+
 app.post('/api/wled/state', async (req, res) => {
   const host = normalizeRequestHost(req.query.ip);
   if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });

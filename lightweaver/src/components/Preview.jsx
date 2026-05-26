@@ -65,6 +65,15 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
+function whiteHighlightAlpha(r, g, b, brightness) {
+  const max = Math.max(r, g, b);
+  if (max <= 0) return 0;
+  const min = Math.min(r, g, b);
+  const saturationProxy = (max - min) / max;
+  const nearWhite = clamp((0.42 - saturationProxy) / 0.42, 0, 1);
+  return clamp(nearWhite * brightness * 0.18, 0, 0.18);
+}
+
 // Pure canvas draw — no React, no DOM elements per LED, GPU shadowBlur for glow
 function renderFrame(canvas, t, p) {
   const ctx = canvas.getContext('2d');
@@ -138,10 +147,10 @@ function renderFrame(canvas, t, p) {
       const leds = sd.leds || [];
       if (leds.length < 2) continue;
       const strokeRail = () => {
-        ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+        ctx.strokeStyle = 'rgba(70, 132, 164, 0.13)';
         ctx.lineWidth = lineWidth + 1.2;
         ctx.stroke();
-        ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+        ctx.strokeStyle = 'rgba(156, 196, 220, 0.18)';
         ctx.lineWidth = lineWidth;
         ctx.stroke();
       };
@@ -154,10 +163,10 @@ function renderFrame(canvas, t, p) {
           ctx.setTransform(scale, 0, 0, scale, offX + sd.x * scale, offY + sd.y * scale);
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
-          ctx.strokeStyle = 'rgba(82, 145, 180, 0.28)';
+          ctx.strokeStyle = 'rgba(70, 132, 164, 0.13)';
           ctx.lineWidth = (lineWidth + 1.2) / scale;
           ctx.stroke(path);
-          ctx.strokeStyle = 'rgba(205, 224, 242, 0.52)';
+          ctx.strokeStyle = 'rgba(156, 196, 220, 0.18)';
           ctx.lineWidth = lineWidth / scale;
           ctx.stroke(path);
           ctx.restore();
@@ -182,8 +191,8 @@ function renderFrame(canvas, t, p) {
     const sp    = clamp(medianSpacing * scale, 2, 18);
     const TAU   = Math.PI * 2;
     const dotPx = clamp(sp * dotSize * 0.40, 1.8, 6.8);
-    const wBlur = clamp(sp * glow * 0.78, 2.2, 15).toFixed(1);
-    const tBlur = clamp(sp * glow * 0.22, 0.9, 4.8).toFixed(1);
+    const wBlur = clamp(sp * glow * 1.08, 3.0, 22).toFixed(1);
+    const tBlur = clamp(sp * glow * 0.36, 1.2, 7.2).toFixed(1);
 
     // Reuse offscreen canvas across frames
     if (!canvas._glow || canvas._glow.width !== W || canvas._glow.height !== H) {
@@ -209,12 +218,12 @@ function renderFrame(canvas, t, p) {
     ctx.globalCompositeOperation = 'lighter';
 
     // Wide ambient halo
-    ctx.globalAlpha = clamp(glow * 0.20, 0.06, 0.28);
+    ctx.globalAlpha = clamp(glow * 0.14, 0.04, 0.20);
     ctx.filter = `blur(${wBlur}px)`;
     ctx.drawImage(off, 0, 0);
 
     // Tight corona
-    ctx.globalAlpha = clamp(0.42 + glow * 0.18, 0.46, 0.72);
+    ctx.globalAlpha = clamp(0.24 + glow * 0.14, 0.26, 0.44);
     ctx.filter = `blur(${tBlur}px)`;
     ctx.drawImage(off, 0, 0);
 
@@ -242,13 +251,13 @@ function renderFrame(canvas, t, p) {
   const beadR = clamp(sp * dotSize * 0.28, 1.2, 4.3);
   const coronaR = clamp(sp * dotSize * 0.42, 2.2, 7.5);
   const coreR = clamp(sp * dotSize * 0.34, 1.25, 6.5);
-  const centerR = clamp(coreR * 0.42, 0.65, 2.4);
+  const centerR = clamp(coreR * 0.38, 0.55, 2.1);
   const TAU = Math.PI * 2;
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
-      ctx.fillStyle = 'rgba(238, 246, 255, 0.58)';
+      ctx.fillStyle = 'rgba(122, 160, 184, 0.16)';
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), beadR, 0, TAU);
       ctx.fill();
@@ -258,25 +267,28 @@ function renderFrame(canvas, t, p) {
   for (const sd of stripData) {
     for (const l of sd.leds) {
       if ((l.r | l.g | l.b) === 0) continue;
-      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},0.14)`;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},0.20)`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), coronaR, 0, TAU);
       ctx.fill();
     }
   }
-  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
       if ((l.r | l.g | l.b) === 0) continue;
       const brightness = Math.max(l.r, l.g, l.b) / 255;
-      ctx.fillStyle = `rgb(${l.r},${l.g},${l.b})`;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},${clamp(0.78 + brightness * 0.18, 0.78, 0.96)})`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), coreR, 0, TAU);
       ctx.fill();
-      ctx.fillStyle = `rgba(245, 250, 255, ${clamp(0.20 + brightness * 0.50, 0.24, 0.72)})`;
-      ctx.beginPath();
-      ctx.arc(toX(l.x), toY(l.y), centerR, 0, TAU);
-      ctx.fill();
+      const whiteAlpha = whiteHighlightAlpha(l.r, l.g, l.b, brightness);
+      if (whiteAlpha > 0.01) {
+        ctx.fillStyle = `rgba(245, 250, 255, ${whiteAlpha})`;
+        ctx.beginPath();
+        ctx.arc(toX(l.x), toY(l.y), centerR, 0, TAU);
+        ctx.fill();
+      }
     }
   }
   ctx.restore();

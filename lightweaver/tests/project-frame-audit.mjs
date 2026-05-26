@@ -41,6 +41,10 @@ import {
   makeWledHostname,
 } from '../src/lib/controllerProfiles.js';
 import {
+  CONTROLLER_COMPATIBILITY_LEVELS,
+  auditWledControllerCompatibility,
+} from '../src/lib/controllerCompatibility.js';
+import {
   LWSEQ_HEADER_BYTES,
   buildStandaloneProfile,
   deriveStandaloneOutputsFromStrips,
@@ -49,6 +53,32 @@ import {
   normalizeStandaloneOutputs,
   toLwseqBytes,
 } from '../src/lib/standaloneController.js';
+import {
+  ADVANCED_ARTNET_TIER_ID,
+  PATTERN_TARGETS,
+  WLED_BASIC_TIER_ID,
+  describePatternCompatibility,
+  getRuntimeTier,
+  inferPatternTargets,
+  recommendRuntimeTier,
+} from '../src/lib/runtimeTargets.js';
+import {
+  buildWledBasicPackage,
+  collectWledBasicPatternIds,
+  makeWledBasicPresetsJson,
+} from '../src/lib/wledBasicExport.js';
+import {
+  buildWledInstallWizardPlan,
+} from '../src/lib/wledInstallWizard.js';
+import {
+  PATTERN_COMPATIBILITY_GATES,
+  auditPatternCompatibility,
+  getPatternCompatibilityGate,
+  summarizePatternCompatibility,
+} from '../src/lib/patternCompatibility.js';
+import {
+  makePatternStudioSummary,
+} from '../src/lib/patternStudio.js';
 
 const palette = normalizePalette(['#123456', '#abcdef', '#ffcc00']);
 const duplicateIds = PATTERNS.map(p => p.id).filter((id, i, arr) => arr.indexOf(id) !== i);
@@ -79,6 +109,176 @@ assert.equal(defaultProject.devices.standaloneController.outputs[0].pin, 16);
 assert.equal(defaultProject.devices.standaloneController.controls.blackout, 9);
 assert.equal(defaultProject.devices.standaloneController.runtimeMode, 'sequence');
 assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
+
+const wledBasicTier = getRuntimeTier(WLED_BASIC_TIER_ID);
+assert.equal(wledBasicTier.id, 'wled-basic');
+assert.equal(wledBasicTier.requiresPiAtRuntime, false);
+assert.ok(wledBasicTier.lookStorage.includes('WLED presets'));
+assert.ok(wledBasicTier.capabilities.includes(PATTERN_TARGETS.WLED_CUSTOM_EFFECT));
+assert.ok(wledBasicTier.capabilities.includes(PATTERN_TARGETS.WLED_PRESET));
+
+const advancedTier = getRuntimeTier(ADVANCED_ARTNET_TIER_ID);
+assert.equal(advancedTier.id, 'advanced-artnet');
+assert.equal(advancedTier.requiresPiAtRuntime, 'optional');
+assert.ok(advancedTier.capabilities.includes(PATTERN_TARGETS.ARTNET_STREAM));
+assert.ok(advancedTier.capabilities.includes(PATTERN_TARGETS.STANDALONE_SEQUENCE));
+
+assert.equal(
+  recommendRuntimeTier({ wantsStoredLooks: true, needsExactTimeline: false, needsLiveArtNet: false }).id,
+  WLED_BASIC_TIER_ID,
+);
+assert.equal(
+  recommendRuntimeTier({ wantsStoredLooks: true, needsExactTimeline: true, needsLiveArtNet: false }).id,
+  ADVANCED_ARTNET_TIER_ID,
+);
+assert.equal(
+  recommendRuntimeTier({ wantsStoredLooks: false, needsExactTimeline: false, needsLiveArtNet: true }).id,
+  ADVANCED_ARTNET_TIER_ID,
+);
+
+const candleTargets = inferPatternTargets(PATTERNS.find(pattern => pattern.id === 'candle'));
+assert.ok(candleTargets.includes(PATTERN_TARGETS.WLED_CUSTOM_EFFECT));
+assert.ok(candleTargets.includes(PATTERN_TARGETS.STANDALONE_PROCEDURAL));
+assert.equal(
+  recommendRuntimeTier({ wantsStoredLooks: true, patternTargets: candleTargets }).id,
+  WLED_BASIC_TIER_ID,
+);
+const candleCompatibility = describePatternCompatibility(PATTERNS.find(pattern => pattern.id === 'candle'));
+assert.equal(candleCompatibility.bestTier.id, WLED_BASIC_TIER_ID);
+assert.match(candleCompatibility.summary, /stored on WLED/i);
+
+const heartbeatTargets = inferPatternTargets(PATTERNS.find(pattern => pattern.id === 'heartbeat'));
+assert.ok(heartbeatTargets.includes(PATTERN_TARGETS.ARTNET_STREAM));
+assert.ok(heartbeatTargets.includes(PATTERN_TARGETS.STANDALONE_SEQUENCE));
+assert.equal(describePatternCompatibility(PATTERNS.find(pattern => pattern.id === 'heartbeat')).bestTier.id, ADVANCED_ARTNET_TIER_ID);
+
+const compatibilityAudit = auditPatternCompatibility(PATTERNS);
+assert.equal(compatibilityAudit.length, PATTERNS.length);
+assert.equal(compatibilityAudit.every(item => item.patternId && item.gate && item.allowedRuntimes.length > 0), true);
+assert.equal(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'candle')).gate, PATTERN_COMPATIBILITY_GATES.WLED_STOCK);
+assert.equal(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'ember')).gate, PATTERN_COMPATIBILITY_GATES.WLED_CUSTOM_PORT);
+assert.equal(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'bass-pulse')).gate, PATTERN_COMPATIBILITY_GATES.AUDIO_SOURCE);
+assert.equal(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'strobe-bpm')).gate, PATTERN_COMPATIBILITY_GATES.BEAT_SOURCE);
+assert.equal(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'mandelbrot')).gate, PATTERN_COMPATIBILITY_GATES.COMPUTER_RENDER);
+assert.ok(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'bass-pulse')).allowedRuntimes.includes('computer-live'));
+assert.ok(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'bass-pulse')).allowedRuntimes.includes('artnet'));
+assert.ok(getPatternCompatibilityGate(PATTERNS.find(pattern => pattern.id === 'ember')).allowedRuntimes.includes('wled-custom'));
+const compatibilitySummary = summarizePatternCompatibility(compatibilityAudit);
+assert.equal(Object.values(compatibilitySummary.gates).reduce((sum, count) => sum + count, 0), PATTERNS.length);
+assert.ok(compatibilitySummary.gates[PATTERN_COMPATIBILITY_GATES.WLED_STOCK] >= 12);
+assert.ok(compatibilitySummary.gates[PATTERN_COMPATIBILITY_GATES.AUDIO_SOURCE] >= 10);
+assert.ok(compatibilitySummary.gates[PATTERN_COMPATIBILITY_GATES.COMPUTER_RENDER] >= 1);
+
+const basicPatternIds = collectWledBasicPatternIds({
+  activePatternId: 'candle',
+  showClips: [{ patternId: 'heartbeat' }, { patternId: 'aurora' }],
+  strips: [{ patternId: 'twinkle' }],
+  minBankSize: 4,
+});
+assert.deepEqual(basicPatternIds.slice(0, 4), ['candle', 'aurora', 'twinkle', 'breathe']);
+assert.equal(basicPatternIds.includes('heartbeat'), false);
+assert.deepEqual(collectWledBasicPatternIds({ patternIds: ['plasma', 'mandelbrot'] }), ['plasma']);
+
+const wledBasicPackage = buildWledBasicPackage({
+  projectName: 'Bench Piece',
+  activePatternId: 'candle',
+  showClips: [{ patternId: 'aurora' }, { patternId: 'heartbeat' }],
+  strips: [
+    { id: 'outer', name: 'Outer', pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }] },
+    { id: 'inner', name: 'Inner', patternId: 'twinkle', pixels: [{ x: 0.5, y: 0.5 }] },
+  ],
+  palette: ['#ffb15c', '#271006', '#ffd7a0'],
+  duration: 120,
+  loop: true,
+});
+assert.equal(wledBasicPackage.format, 'wled-basic-package');
+assert.equal(wledBasicPackage.runtimeTier, WLED_BASIC_TIER_ID);
+assert.equal(wledBasicPackage.presets[0].patternId, 'candle');
+assert.equal(wledBasicPackage.presets[0].effectName, 'Candle');
+assert.equal(wledBasicPackage.presets[0].segments.length, 2);
+assert.equal(wledBasicPackage.presets[0].segments[0].n, 'Outer');
+assert.equal(wledBasicPackage.presets[0].segments[1].start, 2);
+assert.equal(wledBasicPackage.playlistPresetId, wledBasicPackage.presets.length + 1);
+assert.deepEqual(wledBasicPackage.presetsJson[String(wledBasicPackage.playlistPresetId)].playlist.ps, wledBasicPackage.presets.map(preset => preset.presetId));
+assert.equal(wledBasicPackage.customEffectPorts.some(pattern => pattern.patternId === 'twinkle'), false);
+assert.equal(buildWledBasicPackage({
+  projectName: 'Port Piece',
+  activePatternId: 'ember',
+  strips: [{ id: 'main', pixels: [{ x: 0, y: 0 }] }],
+}).customEffectPorts.some(pattern => pattern.patternId === 'ember'), true);
+const browserFirstPackage = buildWledBasicPackage({
+  projectName: 'Browser First Piece',
+  activePatternId: 'ember',
+  showClips: [
+    { patternId: 'calm' },
+    { patternId: 'bloom' },
+    { patternId: 'wave' },
+    { patternId: 'smoke' },
+    { patternId: 'galaxy' },
+    { patternId: 'zen' },
+    { patternId: 'comet' },
+  ],
+  strips: [{ id: 'main', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.ok(browserFirstPackage.presets.length >= 8, 'browser-first WLED package needs at least 8 runnable stock presets');
+assert.ok(browserFirstPackage.customEffectPorts.some(pattern => pattern.patternId === 'ember'));
+assert.equal(browserFirstPackage.presets.every(preset => preset.compatibility === 'stock-wled-preset'), true);
+assert.equal(wledBasicPackage.unsupportedPatterns.some(pattern => pattern.patternId === 'heartbeat'), true);
+assert.equal(wledBasicPackage.unsupportedPatterns.find(pattern => pattern.patternId === 'heartbeat').gate, PATTERN_COMPATIBILITY_GATES.BEAT_SOURCE);
+assert.equal(wledBasicPackage.compatibilityAudit.length >= wledBasicPackage.presets.length, true);
+assert.equal(wledBasicPackage.gateSummary.gates[PATTERN_COMPATIBILITY_GATES.WLED_STOCK] >= wledBasicPackage.presets.length, true);
+assert.ok(wledBasicPackage.install.applyViaJsonApi.includes('POST /json/state'));
+assert.ok(wledBasicPackage.install.restorePresetsJson.includes('/edit'));
+
+const candleStudio = makePatternStudioSummary(PATTERNS.find(pattern => pattern.id === 'candle'), {
+  params: { flicker: 0.42 },
+  palette: ['#ffb15c', '#271006', '#ffd7a0'],
+  targetRuntime: 'wled-basic',
+});
+assert.equal(candleStudio.compatibility.gate, PATTERN_COMPATIBILITY_GATES.WLED_STOCK);
+assert.equal(candleStudio.installability, 'ready');
+assert.ok(candleStudio.qualityScore >= 80);
+assert.equal(candleStudio.controls.paramCount > 0, true);
+assert.equal(candleStudio.nextActions[0].id, 'save-wled-preset');
+
+const emberStudio = makePatternStudioSummary(PATTERNS.find(pattern => pattern.id === 'ember'), {
+  targetRuntime: 'wled-basic',
+});
+assert.equal(emberStudio.compatibility.gate, PATTERN_COMPATIBILITY_GATES.WLED_CUSTOM_PORT);
+assert.equal(emberStudio.installability, 'port-required');
+assert.ok(emberStudio.nextActions.some(action => action.id === 'port-custom-effect'));
+
+const bassStudio = makePatternStudioSummary(PATTERNS.find(pattern => pattern.id === 'bass-pulse'), {
+  targetRuntime: 'wled-basic',
+});
+assert.equal(bassStudio.installability, 'runtime-only');
+assert.ok(bassStudio.nextActions.some(action => action.id === 'gate-advanced'));
+
+const customOnlyPattern = {
+  id: 'gallery-idle-custom',
+  name: 'Gallery Idle Custom',
+  runtimeTargets: [PATTERN_TARGETS.WLED_CUSTOM_EFFECT],
+};
+const customPackage = buildWledBasicPackage({
+  projectName: 'Custom Basic',
+  patterns: [customOnlyPattern],
+  patternIds: ['gallery-idle-custom'],
+  strips: [{ id: 'main', pixels: [{ x: 0, y: 0 }] }],
+});
+assert.equal(customPackage.presets.length, 0);
+assert.deepEqual(customPackage.customEffectPorts.map(item => item.patternId), ['gallery-idle-custom']);
+
+const presetJson = makeWledBasicPresetsJson({
+  presets: wledBasicPackage.presets.slice(0, 2),
+  playlistName: 'Bench Cycle',
+  playlistPresetId: 10,
+  presetDurationSeconds: 12,
+  transitionMs: 900,
+  repeat: 0,
+});
+assert.equal(presetJson['10'].n, 'Bench Cycle');
+assert.deepEqual(presetJson['10'].playlist.dur, [120, 120]);
+assert.deepEqual(presetJson['10'].playlist.transition, [9, 9]);
 const migratedV1 = migrateProject({
   version: 1,
   name: 'Legacy',
@@ -284,8 +484,8 @@ assert.equal(formatMotionSpeed(1), '1.0x');
 
 assert.deepEqual(makeBlackoutFrame(2), [{ r: 0, g: 0, b: 0 }, { r: 0, g: 0, b: 0 }]);
 assert.deepEqual(makeBlackoutFrame(-1), []);
-assert.deepEqual(makeWledFrameMessage([{ r: 1.2, g: 2.8, b: 300 }]).seg[0].i, [1, 3, 255]);
-assert.deepEqual(makeWledFrameMessage([{ r: -5, g: Number.NaN, b: 12.4 }]).seg[0].i, [0, 0, 12]);
+assert.deepEqual(makeWledFrameMessage([{ r: 1.2, g: 2.8, b: 300 }]).seg[0].i, ['0103FF']);
+assert.deepEqual(makeWledFrameMessage([{ r: -5, g: Number.NaN, b: 12.4 }]).seg[0].i, ['00000C']);
 assert.throws(
   () => makeWledFrameMessage([{ r: 0, g: 0, b: 0 }, { r: 1, g: 1, b: 1 }], { maxPixels: 1 }),
   /max 1/,
@@ -391,9 +591,101 @@ assert.match(makeArtNetNotes(profile), /Universe start: 0/);
 assert.match(makeArtNetNotes(profile), /Channels: 720/);
 assert.equal(controllerProfileReadiness(profile).ready, false);
 assert.deepEqual(makeKnownGoodRecoveryState(), makeSafeWledTestState('amber'));
-assert.equal(makePixelMarkerState(5, 4).seg[0].i.length, 15);
+assert.deepEqual(makePixelMarkerState(5, 4).seg[0].i, ['000000', '000000', '000000', '000000', 'FF4000']);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Lightweaver Install Readiness/);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /aca704e2ece0/);
+
+const controllerAudit = auditWledControllerCompatibility({
+  info: {
+    name: 'WLED',
+    ver: '0.15.4',
+    release: 'ESP32-S3_16MB_opi',
+    arch: 'ESP32-S3',
+    ip: '192.168.18.66',
+    fxcount: 187,
+    palcount: 71,
+    time: '1970-1-2, 04:44:22',
+    leds: { count: 30, maxseg: 32 },
+  },
+  state: {
+    AudioReactive: { on: false },
+    seg: [{ id: 0, start: 0, stop: 30, fx: 0, pal: 0 }],
+  },
+  cfg: {
+    hw: { led: { total: 30, ins: [{ len: 30, pin: [16], order: 0, type: 22 }] } },
+    if: { live: { en: true, port: 5568, dmx: { uni: 1, addr: 1, mode: 4 } } },
+  },
+  presets: { 0: {} },
+  ledMap: null,
+  expected: {
+    pixelCount: 240,
+    segmentCount: 4,
+    requiresLedMap: true,
+    requiresArtNet: true,
+    usesAudioPatterns: true,
+  },
+});
+assert.equal(controllerAudit.summary.status, 'needs-configuration');
+assert.equal(controllerAudit.actual.ledCount, 30);
+assert.equal(controllerAudit.actual.effectCount, 187);
+assert.equal(controllerAudit.findings.find(item => item.id === 'firmware').level, CONTROLLER_COMPATIBILITY_LEVELS.READY);
+assert.equal(controllerAudit.findings.find(item => item.id === 'led-count').level, CONTROLLER_COMPATIBILITY_LEVELS.NEEDS_CONFIG);
+assert.equal(controllerAudit.findings.find(item => item.id === 'presets').level, CONTROLLER_COMPATIBILITY_LEVELS.NEEDS_INSTALL);
+assert.equal(controllerAudit.findings.find(item => item.id === 'led-map').level, CONTROLLER_COMPATIBILITY_LEVELS.NEEDS_CONFIG);
+assert.equal(controllerAudit.findings.find(item => item.id === 'artnet').level, CONTROLLER_COMPATIBILITY_LEVELS.READY);
+assert.equal(controllerAudit.findings.find(item => item.id === 'clock').level, CONTROLLER_COMPATIBILITY_LEVELS.NEEDS_CONFIG);
+assert.equal(controllerAudit.findings.find(item => item.id === 'audio-source').level, CONTROLLER_COMPATIBILITY_LEVELS.RUNTIME_ONLY);
+assert.equal(controllerAudit.runtimeGates.wledBasic.status, 'needs-install');
+assert.equal(controllerAudit.runtimeGates.advancedArtNet.status, 'needs-configuration');
+
+const blockedWizardPlan = buildWledInstallWizardPlan({
+  controllerAudit,
+  wledPackage: wledBasicPackage,
+  backupSaved: false,
+});
+assert.equal(blockedWizardPlan.status, 'blocked');
+assert.equal(blockedWizardPlan.canInstall, false);
+assert.ok(blockedWizardPlan.blockers.includes('led-count'));
+assert.equal(blockedWizardPlan.steps.find(step => step.id === 'backup').state, 'open');
+assert.equal(blockedWizardPlan.steps.find(step => step.id === 'geometry').state, 'blocked');
+
+const unauditedWizardPlan = buildWledInstallWizardPlan({
+  controllerAudit: null,
+  wledPackage: wledBasicPackage,
+  backupSaved: true,
+});
+assert.equal(unauditedWizardPlan.status, 'blocked');
+assert.equal(unauditedWizardPlan.canInstall, false);
+assert.ok(unauditedWizardPlan.blockers.includes('controller-audit'));
+assert.equal(unauditedWizardPlan.nextAction.id, 'run-controller-audit');
+
+const readyControllerAudit = auditWledControllerCompatibility({
+  info: {
+    name: 'Lightweaver Bench',
+    ver: '0.15.4',
+    release: 'ESP32-S3_16MB_opi',
+    arch: 'ESP32-S3',
+    ip: '192.168.18.66',
+    fxcount: 187,
+    palcount: 71,
+    time: '2026-5-25, 12:00:00',
+    leds: { count: 3, maxseg: 32 },
+  },
+  state: { seg: [{ id: 0, start: 0, stop: 3 }] },
+  cfg: { hw: { led: { total: 3, ins: [{ len: 3, pin: [16] }] } }, if: { live: { en: true, dmx: { uni: 1, addr: 1, mode: 4 } } } },
+  presets: { 0: {} },
+  expected: { pixelCount: 3, segmentCount: 1, requiresArtNet: false, requiresLedMap: false },
+});
+const readyWizardPlan = buildWledInstallWizardPlan({
+  controllerAudit: readyControllerAudit,
+  wledPackage: wledBasicPackage,
+  backupSaved: true,
+});
+assert.equal(readyWizardPlan.status, 'ready-to-apply');
+assert.equal(readyWizardPlan.canInstall, true);
+assert.equal(readyWizardPlan.steps.find(step => step.id === 'package').state, 'ready');
+assert.equal(readyWizardPlan.packageSummary.presets, wledBasicPackage.presets.length);
+assert.equal(readyWizardPlan.packageSummary.customEffectPorts, wledBasicPackage.customEffectPorts.length);
 
 const standaloneOutputs = normalizeStandaloneOutputs([
   { id: 'outer', pin: 16, pixels: 260 },

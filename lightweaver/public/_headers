@@ -1,0 +1,4 @@
+/*
+  Permissions-Policy: serial=(self), usb=(self), bluetooth=(self)
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff

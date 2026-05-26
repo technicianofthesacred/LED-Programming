@@ -2,6 +2,7 @@ node_modules/
 dist/
 .pio/
 firmware/**/.pio/
+backups/
 .DS_Store
 *.local
 .superpowers/

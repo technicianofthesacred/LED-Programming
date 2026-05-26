@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { resolveTimelinePlayback, resolveTimelineTargets, sampleLane, useProject } from '../state/ProjectContext.jsx';
 import { download, makeManifest, pixelsFromStrips, toCSV, toDmxCsv, toFastLED, toRawFrameDump, toWLEDLedmap } from '../lib/export.js';
 import { buildGammaLut, compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
+import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import {
   deriveStandaloneOutputsFromStrips,
   estimateLwseqBytes,
@@ -12,6 +13,7 @@ import {
 } from '../lib/standaloneController.js';
 
 const TARGETS = [
+  { id: 'wled-basic', name: 'Lightweaver Basic WLED', sub: 'WLED presets, playlist, and port checklist', tag: 'WLED', hw: 'ESP32-S3 / WLED' },
   { id: 'splay',   name: 'ENTTEC S-Play',      sub: 'Adapter bundle, not native .ssp',           tag: 'bundle', hw: 'S-Play Mini' },
   { id: 'pixlite', name: 'Advatek PixLite',     sub: 'Adapter bundle, not PixLite show mode',     tag: 'bundle', hw: 'PixLite 16 MkII' },
   { id: 'pharos',  name: 'Pharos LPC',          sub: 'Adapter bundle, not native Pharos project', tag: 'bundle', hw: 'LPC X' },
@@ -23,6 +25,7 @@ const TARGETS = [
 
 const FORMATS = [
   { id: 'bundle', name: 'Lightweaver bundle', sub: 'Project JSON + ledmap + metadata for adapter scripts', ext: '.json' },
+  { id: 'wledbasic', name: 'WLED Basic package', sub: 'presets.json bank, playlist preset, and custom-effect port list', ext: '.json' },
   { id: 'lwpackage', name: 'microSD package JSON', sub: 'lightweaver.json + base64 .lwseq files', ext: '.json' },
   { id: 'lwseq', name: 'Raw .lwseq sequence', sub: 'Standalone controller frame file', ext: '.lwseq' },
   { id: 'csv',    name: 'DMX CSV',            sub: 'Frame x channel matrix, editable and importable', ext: '.csv' },
@@ -38,8 +41,8 @@ export function ExportDialog({ open, onClose }) {
     standaloneController,
     serializeProject,
   } = project;
-  const [target, setTarget] = useState('splay');
-  const [format, setFormat] = useState('bundle');
+  const [target, setTarget] = useState('wled-basic');
+  const [format, setFormat] = useState('wledbasic');
   const [fps, setFps] = useState(44);
   const [loop, setLoop] = useState(true);
   const [bakeAuto, setBakeAuto] = useState(true);
@@ -98,25 +101,33 @@ export function ExportDialog({ open, onClose }) {
   const durationMins = Math.floor(showDuration / 60);
   const durationSecs = showDuration % 60;
   const durationStr = `${String(durationMins).padStart(2,'0')}:${String(durationSecs).padStart(2,'0')}`;
-  const exportFilename = target === 'standalone' && format === 'lwseq'
+  const exportFilename = target === 'wled-basic'
+    ? `${safeName}-wled-basic.json`
+    : target === 'standalone' && format === 'lwseq'
     ? makeStandaloneSequenceFilename(safeName)
     : target === 'standalone'
       ? `${safeName}-lightweaver-controller.json`
       : `${safeName}${selectedFormat?.ext || '.json'}`;
-  const modalSubtitle = target === 'standalone'
+  const modalSubtitle = target === 'wled-basic'
+    ? `${projectName || 'Untitled'} · WLED presets · ${totalLEDs > 0 ? totalLEDs : '—'} LEDs`
+    : target === 'standalone'
     ? `${projectName || 'Untitled'} · ${durationStr} · ${standaloneOutputs.length || '—'} outputs · ${standalonePixels || totalLEDs || '—'} LEDs`
     : `${projectName || 'Untitled'} · ${durationStr} · ${universes} universes · ${totalLEDs > 0 ? totalLEDs : '—'} LEDs`;
   const totalFrames = showDuration * fps;
   const frameSize = 512 * universes;
   const standaloneEstimate = estimateLwseqBytes({ pixels: standalonePixels || totalLEDs, fps, duration: showDuration });
-  const totalBytes = target === 'standalone'
+  const totalBytes = target === 'wled-basic'
+    ? 24 * 1024
+    : target === 'standalone'
     ? standaloneUsesFrames ? standaloneEstimate.totalBytes : 4096
     : totalFrames * frameSize;
   const mb = (totalBytes / 1024 / 1024).toFixed(1);
   const availableFormats = FORMATS
-    .filter(f => target === 'standalone'
-      ? standaloneMode === 'sequence' ? ['lwpackage', 'lwseq'].includes(f.id) : f.id === 'lwpackage'
-      : !['lwpackage', 'lwseq'].includes(f.id))
+    .filter(f => target === 'wled-basic'
+      ? f.id === 'wledbasic'
+      : target === 'standalone'
+        ? standaloneMode === 'sequence' ? ['lwpackage', 'lwseq'].includes(f.id) : f.id === 'lwpackage'
+        : !['lwpackage', 'lwseq', 'wledbasic'].includes(f.id))
     .map(f => f.id === 'lwpackage' && target === 'standalone' && standaloneMode !== 'sequence'
       ? {
           ...f,
@@ -128,11 +139,15 @@ export function ExportDialog({ open, onClose }) {
 
   const selectTarget = (id) => {
     setTarget(id);
+    if (id === 'wled-basic') {
+      setFormat('wledbasic');
+      return;
+    }
     if (id === 'standalone') {
       if (!['lwpackage', 'lwseq'].includes(format) || standaloneMode !== 'sequence') setFormat('lwpackage');
       if (![24, 30].includes(fps)) setFps(24);
     }
-    if (id !== 'standalone' && ['lwpackage', 'lwseq'].includes(format)) setFormat('bundle');
+    if (id !== 'standalone' && ['lwpackage', 'lwseq', 'wledbasic'].includes(format)) setFormat('bundle');
   };
 
   const buildFrames = () => {
@@ -233,6 +248,18 @@ export function ExportDialog({ open, onClose }) {
           fps,
           loop,
         }), null, 2);
+      } else if (target === 'wled-basic') {
+        filename = `${safeName}-wled-basic.json`;
+        content = JSON.stringify(buildWledBasicPackage({
+          projectName,
+          activePatternId,
+          showClips,
+          strips,
+          palette,
+          duration: showDuration,
+          brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
+          loop,
+        }), null, 2);
       } else if (target === 'pi') {
         filename = `${safeName}-lightweaver-pi.json`;
         content = JSON.stringify({
@@ -330,7 +357,7 @@ export function ExportDialog({ open, onClose }) {
                 <span className="k">Loop</span>
                 <label className="lw-exp-check">
                   <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)}/>
-                  Loop forever when played standalone
+                  {target === 'wled-basic' ? 'Loop WLED playlist continuously' : 'Loop forever when played standalone'}
                 </label>
               </div>
               {(target !== 'standalone' || standaloneMode === 'sequence') && (
@@ -348,13 +375,15 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-summary">
               <div><span className="k">Output</span><span className="v mono">{exportFilename}</span></div>
               <div><span className="k">Clips</span><span className="v mono">{showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} lanes</span></div>
-              {target !== 'standalone' || standaloneMode === 'sequence'
+              {target === 'wled-basic'
+                ? <div><span className="k">Preset bank</span><span className="v mono">stock WLED looks + playlist</span></div>
+                : target !== 'standalone' || standaloneMode === 'sequence'
                 ? <div><span className="k">Frames</span><span className="v mono">{Math.round(totalFrames).toLocaleString()} @ {fps} fps</span></div>
                 : <div><span className="k">Runtime</span><span className="v mono">{standaloneMode}</span></div>}
               <div><span className="k">Size</span><span className="v mono">~{mb} MB</span></div>
               {target === 'standalone' && <div><span className="k">Connectors</span><span className="v mono">{standaloneOutputs.length} outputs · {standalonePixels} px</span></div>}
               <div><span className="k">Target</span><span className="v">{sel.hw}</span></div>
-              <div><span className="k">Destination</span><span className="v mono">{target === 'standalone' ? 'browser download · microSD package' : 'browser download · adapter/import pipeline'}</span></div>
+              <div><span className="k">Destination</span><span className="v mono">{target === 'wled-basic' ? 'browser download · WLED preset package' : target === 'standalone' ? 'browser download · microSD package' : 'browser download · adapter/import pipeline'}</span></div>
             </div>
 
             <div className="lw-modal-foot">
@@ -389,14 +418,16 @@ export function ExportDialog({ open, onClose }) {
             <div className="lw-exp-stage-title">{stage === 'rendering' ? 'Rendering export…' : 'Preparing download…'}</div>
             <div className="lw-exp-stage-sub">
               {stage === 'rendering'
-                ? `Building ${format === 'csv' || format === 'bin' ? totalFrames.toLocaleString() + ' frames' : 'project bundle'} for ${sel.hw}`
+                ? `Building ${target === 'wled-basic' ? 'WLED preset package' : format === 'csv' || format === 'bin' ? totalFrames.toLocaleString() + ' frames' : 'project bundle'} for ${sel.hw}`
                 : `Preparing ${safeName}${selectedFormat?.ext || '.json'}`}
             </div>
             <div className="lw-exp-bar"><div className="fill" style={{ width: `${progress * 100}%` }}/></div>
             <div className="lw-exp-bar-meta">
               <span>{Math.round(progress * 100)}%</span>
               <span className="mono">
-                {stage === 'rendering'
+                {target === 'wled-basic'
+                  ? `${Math.round(progress * 100)} / 100 preset package`
+                  : stage === 'rendering'
                   ? `${Math.round(progress * totalFrames).toLocaleString()} / ${totalFrames.toLocaleString()} frames`
                   : `${(progress * parseFloat(mb)).toFixed(1)} / ${mb} MB`}
               </span>
@@ -406,11 +437,13 @@ export function ExportDialog({ open, onClose }) {
               <div className="entry ok">✓ validated timeline · {durationStr} · no gaps</div>
               <div className="entry ok">✓ resolved {showClips.length} clips · {showTransitions.length} transitions · {autoLanes.length} automation lanes</div>
               <div className="entry ok">
-                {target === 'standalone'
+                {target === 'wled-basic'
+                  ? `✓ mapped ${totalLEDs || '—'} LEDs → WLED Basic preset bank`
+                  : target === 'standalone'
                   ? `✓ mapped ${standalonePixels || totalLEDs || '—'} LEDs → ${standaloneOutputs.length || '—'} controller outputs`
                   : `✓ mapped ${totalLEDs || '—'} LEDs → ${universes} universes (${universes * 512} channels)`}
               </div>
-              {stage === 'writing' && <div className="entry ok">✓ baked {totalFrames.toLocaleString()} frames · {mb} MB</div>}
+              {stage === 'writing' && <div className="entry ok">{target === 'wled-basic' ? `✓ wrote WLED presets · ${mb} MB estimate` : `✓ baked ${totalFrames.toLocaleString()} frames · ${mb} MB`}</div>}
               {stage === 'writing' && <div className="entry">→ preparing browser download</div>}
               {stage === 'writing' && <div className="entry">→ writing {safeName}{selectedFormat?.ext || '.json'}</div>}
             </div>
@@ -427,7 +460,9 @@ export function ExportDialog({ open, onClose }) {
             </div>
             <div className="lw-exp-stage-title" style={{ color: 'var(--mint)' }}>Export complete</div>
             <div className="lw-exp-stage-sub">
-              {target === 'standalone'
+              {target === 'wled-basic'
+                ? 'WLED Basic preset package generated. Upload or apply the included presetsJson, then load the playlist preset to cycle looks.'
+                : target === 'standalone'
                 ? 'Standalone controller package generated and downloaded for microSD preparation.'
                 : `Export generated and downloaded. Native controller project files are not generated here; this is a Lightweaver bundle or interchange file for ${sel.hw}.`}
             </div>

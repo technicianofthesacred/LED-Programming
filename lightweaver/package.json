@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "deploy:pages": "npm run build && wrangler pages deploy dist --project-name lightweaver",
+    "pages:project": "wrangler pages project create lightweaver --production-branch main",
     "serve:pi": "node server/index.js",
     "pi:build": "npm run build",
     "pi:start": "npm run build && npm run serve:pi",

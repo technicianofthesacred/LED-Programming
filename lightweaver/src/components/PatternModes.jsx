@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
+import { makePatternStudioSummary } from '../lib/patternStudio.js';
 
 // ── @param live parser ──────────────────────────────────────────────────────
 function parseParamsFromCode(code) {
@@ -267,6 +268,11 @@ export function CardsMode({
     knobs: knobs.filter(k => getParamMeta(k).group === group),
   })).filter(entry => entry.knobs.length > 0);
   const myPresets = Object.keys(presets).filter(k => k.startsWith(`${tuningPatternId}/`));
+  const studioSummary = useMemo(() => makePatternStudioSummary(activeLibPattern || tuningPattern || {}, {
+    params: tuningParams,
+    palette,
+    targetRuntime: 'wled-basic',
+  }), [activeLibPattern, tuningPattern, tuningParams, palette]);
 
   const handleParamChange = (name, value) => {
     if (onPatternParamsChange) {
@@ -516,6 +522,45 @@ export function CardsMode({
             </div>
             <div className={`palette-state ${paletteIsUsed ? 'used' : ''}`}>
               {paletteIsUsed ? 'uses palette' : 'palette unused'}
+            </div>
+          </div>
+
+          <div className="lw-studio-panel">
+            <div className="lw-studio-panel-head">
+              <div>
+                <div className="eyebrow">Pattern Studio</div>
+                <div className="lw-studio-score">
+                  <span>{studioSummary.qualityScore}</span>
+                  <small>{studioSummary.qualityGrade}</small>
+                </div>
+              </div>
+              <span className={`lw-runtime-chip is-${studioSummary.compatibility.severity}`}>
+                {studioSummary.compatibility.chip}
+              </span>
+            </div>
+            <div className="lw-studio-metrics">
+              <span>{studioSummary.installability}</span>
+              <span>{studioSummary.controls.authoringSurface}</span>
+              <span>{studioSummary.controls.paramCount} controls</span>
+              <span>{studioSummary.controls.usesPalette ? 'palette' : 'fixed color'}</span>
+            </div>
+            <div className="lw-studio-routes">
+              {[
+                ['WLED', studioSummary.portability.wledBasic],
+                ['PORT', studioSummary.portability.wledCustom],
+                ['ART', studioSummary.portability.artnet],
+                ['SEQ', studioSummary.portability.standaloneSequence],
+              ].map(([label, ok]) => (
+                <span key={label} className={ok ? 'ready' : ''}>{label}</span>
+              ))}
+            </div>
+            <div className="lw-studio-actions">
+              {studioSummary.nextActions.slice(0, 2).map(action => (
+                <div key={action.id} className="lw-studio-action">
+                  <span>{action.label}</span>
+                  <small>{action.detail}</small>
+                </div>
+              ))}
             </div>
           </div>
 

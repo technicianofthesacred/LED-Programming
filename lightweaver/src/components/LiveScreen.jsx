@@ -5,6 +5,7 @@ import { LEDPreview } from './Preview.jsx';
 import { makeBlackoutFrame } from '../lib/deviceController.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { easeCrossfade, formatMotionSpeed, MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
+import { getPatternCompatibilityGate } from '../lib/patternCompatibility.js';
 
 const LIVE_CATS = ['all', 'audio', 'fire', 'water', 'space', 'chill', 'geo', 'glitch', 'bpm'];
 const LIVE_CATEGORY_RULES = {
@@ -95,12 +96,13 @@ function PatternCard({ pattern, isActive, isNextUp, onFire, recording }) {
   const color = pattern.preview
     ? undefined
     : (CARD_COLORS[pattern.id] || '#556');
+  const compatibility = getPatternCompatibilityGate(pattern);
 
   return (
     <button
       className={`lw-live-card ${isActive ? 'active' : ''} ${isNextUp ? 'next-up' : ''}`}
       onClick={() => onFire(pattern.id)}
-      title={pattern.desc || pattern.name}
+      title={`${pattern.desc || pattern.name}\n${compatibility.label}: ${compatibility.reason}`}
       aria-label={`${isActive ? 'Live pattern' : isNextUp ? 'Queued pattern' : 'Fade to pattern'} ${pattern.name}`}
     >
       <div className="lw-live-card-bg" style={
@@ -112,8 +114,13 @@ function PatternCard({ pattern, isActive, isNextUp, onFire, recording }) {
       <div className="lw-live-card-affordance">{isActive ? 'LIVE' : isNextUp ? 'NEXT' : 'FADE'}</div>
       <div className="lw-live-card-body">
         <div className="lw-live-card-name">{pattern.name}</div>
-        <div className="lw-live-card-action">
-          {isActive ? 'playing now' : isNextUp ? 'queued' : recording ? 'record fade' : 'fade'}
+        <div className="lw-live-card-meta">
+          <span className="lw-live-card-action">
+            {isActive ? 'playing now' : isNextUp ? 'queued' : recording ? 'record fade' : 'fade'}
+          </span>
+          <span className={`lw-runtime-chip is-${compatibility.severity}`}>
+            {compatibility.chip}
+          </span>
         </div>
       </div>
       {isActive && <div className="lw-live-card-pulse"/>}
