@@ -180,6 +180,7 @@ test('sends visible strip counts in AI project context', async ({ page }) => {
 test('uses OpenRouter as the normal provider setup and generation route', async ({ page }) => {
   let payload: any = null;
   let settingsPayload: any = null;
+  let connectionTestRequested = false;
   await page.route('**/api/ai/settings', async route => {
     if (route.request().method() === 'PUT') {
       settingsPayload = route.request().postDataJSON();
@@ -201,6 +202,19 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
       body: JSON.stringify(makeAiSettings()),
     });
   });
+  await page.route('**/api/ai/openrouter/test', async route => {
+    connectionTestRequested = true;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        provider: 'openrouter',
+        model: 'openai/gpt-5.4-mini',
+        message: 'OpenRouter connection works.',
+        account: {},
+      }),
+    });
+  });
   await page.route('**/api/ai/pattern', async route => {
     payload = route.request().postDataJSON();
     await route.fulfill({
@@ -212,14 +226,14 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
   const assistant = await openPatternAssistant(page);
   await expect(assistant.getByText('OpenRouter')).toBeVisible();
   await assistant.getByRole('button', { name: 'AI setup' }).click();
-  await expect(assistant.getByRole('heading', { name: 'AI provider setup' })).toBeVisible();
+  await expect(assistant.getByRole('heading', { name: 'OpenRouter setup' })).toBeVisible();
   await expect(assistant.getByLabel('Default AI provider')).toHaveCount(0);
   await expect(assistant.getByLabel('Claude key')).toHaveCount(0);
-  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
-  await expect(assistant.getByLabel('OpenRouter key')).toBeHidden();
-  await assistant.getByText('Advanced: paste OpenRouter key').click();
+  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeHidden();
+  await expect(assistant.getByLabel('OpenRouter key')).toBeVisible();
   await assistant.getByLabel('OpenRouter key').fill('openrouter-secret-test-key');
-  await assistant.getByRole('button', { name: 'Save AI settings' }).click();
+  await assistant.getByRole('button', { name: 'Save & test' }).click();
+  await expect.poll(() => connectionTestRequested).toBe(true);
   await expect(assistant.getByText('Saved. OpenRouter is active.')).toBeVisible();
   await assistant.locator('textarea').fill('make this slower and smoother');
   await assistant.getByRole('button', { name: 'Generate' }).click();
@@ -230,7 +244,7 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
   expect(payload.provider).toBe('openrouter');
 });
 
-test('shows OpenRouter model presets, callback status, cost note, and connection testing', async ({ page }) => {
+test('keeps OpenRouter setup compact with visible key entry and collapsed connection details', async ({ page }) => {
   let settingsPayload: any = null;
   let connectionTestRequested = false;
 
@@ -279,22 +293,26 @@ test('shows OpenRouter model presets, callback status, cost note, and connection
 
   await expect(assistant.getByLabel('AI model preset')).toHaveValue('balanced');
   await expect(assistant.getByLabel('Pattern quality')).toHaveValue('balanced');
-  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
-  await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeVisible();
-  await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeVisible();
+  await expect(assistant.getByLabel('OpenRouter key')).toBeVisible();
+  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeHidden();
+  await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeHidden();
+  await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeHidden();
 
   await assistant.getByLabel('AI model preset').selectOption('creative');
   await assistant.getByLabel('Pattern quality').selectOption('showpiece');
-  await assistant.getByRole('button', { name: 'Save setup' }).click();
+  await assistant.getByRole('button', { name: 'Save & test' }).click();
 
   expect(settingsPayload.modelPreset).toBe('creative');
   expect(settingsPayload.qualityPreset).toBe('showpiece');
   await expect(assistant.getByText('Saved. OpenRouter is active.')).toBeVisible();
-
-  await assistant.getByRole('button', { name: 'Test connection' }).click();
   await expect.poll(() => connectionTestRequested).toBe(true);
   await expect(assistant.getByText('OpenRouter connection works.')).toBeVisible();
   await expect(assistant.getByText('Remaining 8.75 of 10 monthly')).toBeVisible();
+
+  await assistant.getByText('Connection details').click();
+  await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
+  await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeVisible();
+  await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeVisible();
 });
 
 test('offers OpenRouter account OAuth as the primary AI setup path', async ({ page }) => {
@@ -319,11 +337,54 @@ test('offers OpenRouter account OAuth as the primary AI setup path', async ({ pa
   await assistant.getByRole('button', { name: 'AI setup' }).click();
 
   await expect(assistant.getByRole('button', { name: 'Connect OpenRouter account' })).toBeVisible();
-  await expect(assistant.getByText('ChatGPT and Claude account login are not available directly here.')).toBeVisible();
+  await expect(assistant.getByText('ChatGPT and Claude account login are not available directly here.')).toBeHidden();
   await assistant.getByRole('button', { name: 'Connect OpenRouter account' }).click();
 
   await expect.poll(() => oauthRequested).toBe(true);
   await expect(page).toHaveURL(/openrouter\.ai/);
+});
+
+test('uses plain language when AI setup cannot reach the server', async ({ page }) => {
+  await page.route('**/api/ai/settings', async route => {
+    await route.abort('failed');
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+
+  await expect(assistant.getByText('Cannot reach the Lightweaver AI server. Reload or restart the dev server.')).toBeVisible();
+  await expect(assistant.getByText('Failed to fetch')).toHaveCount(0);
+});
+
+test('clears stale AI setup errors when the setup panel is reopened', async ({ page }) => {
+  await page.route('**/api/ai/settings', async route => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(makeAiSettings()),
+    });
+  });
+  await page.route('**/api/ai/openrouter/test', async route => {
+    await route.fulfill({
+      status: 501,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: {
+          code: 'missing_api_key',
+          message: 'Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.',
+        },
+      }),
+    });
+  });
+
+  const assistant = await openPatternAssistant(page);
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+  await assistant.getByRole('button', { name: 'Save & test' }).click();
+  await expect(assistant.getByText('Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.')).toBeVisible();
+
+  await assistant.getByRole('button', { name: 'Close', exact: true }).click();
+  await assistant.getByRole('button', { name: 'AI setup' }).click();
+
+  await expect(assistant.getByText('Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.')).toHaveCount(0);
 });
 
 test('clears the AI draft when the selected pattern changes', async ({ page }) => {

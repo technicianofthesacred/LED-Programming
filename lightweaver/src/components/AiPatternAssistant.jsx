@@ -58,6 +58,14 @@ function formatOpenRouterUsage(account = {}) {
   return '';
 }
 
+function getAiSetupErrorMessage(error) {
+  const message = String(error?.message || '');
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return 'Cannot reach the Lightweaver AI server. Reload or restart the dev server.';
+  }
+  return message || 'AI setup failed.';
+}
+
 function hasCompletedAiSetupConnection() {
   try {
     return new URLSearchParams(window.location.hash.slice(1)).get('aiSetup') === 'connected';
@@ -163,7 +171,7 @@ export function AiPatternAssistant({
       setSettingsDraft(createSettingsDraft(nextProvider, data));
       return data;
     } catch (settingsLoadError) {
-      setSettingsError(settingsLoadError.message);
+      setSettingsError(getAiSetupErrorMessage(settingsLoadError));
       return null;
     } finally {
       setSettingsPending(false);
@@ -179,10 +187,14 @@ export function AiPatternAssistant({
   const openSettingsPanel = () => {
     setSettingsOpen(value => !value);
     setSettingsSaved('');
+    setSettingsError(null);
+    setConnectionResult(null);
     if (!settings) loadProviderSettings();
   };
 
   const updateSettingsKey = (id, value) => {
+    setSettingsError(null);
+    setConnectionResult(null);
     setSettingsDraft(current => ({
       ...current,
       keys: { ...current.keys, [id]: value },
@@ -190,17 +202,20 @@ export function AiPatternAssistant({
   };
 
   const updateSettingsChoice = (key, value) => {
+    setSettingsError(null);
+    setConnectionResult(null);
     setSettingsDraft(current => ({
       ...current,
       [key]: value,
     }));
   };
 
-  const saveSettings = async (event) => {
-    event.preventDefault();
+  const saveSettings = async (event, { testAfterSave = false } = {}) => {
+    event?.preventDefault();
     setSettingsPending(true);
     setSettingsError(null);
     setSettingsSaved('');
+    setConnectionResult(null);
     try {
       const saved = await saveAiProviderSettings({ ...settingsDraft, provider: PRIMARY_AI_PROVIDER });
       const nextProvider = getProviderOption(saved?.provider).id;
@@ -208,9 +223,11 @@ export function AiPatternAssistant({
       setProvider(nextProvider);
       setSettingsDraft(createSettingsDraft(nextProvider, saved));
       setSettingsSaved(`Saved. ${getProviderOption(nextProvider).label} is active.`);
-      setConnectionResult(null);
+      if (testAfterSave) {
+        await testConnection();
+      }
     } catch (settingsSaveError) {
-      setSettingsError(settingsSaveError.message);
+      setSettingsError(getAiSetupErrorMessage(settingsSaveError));
     } finally {
       setSettingsPending(false);
     }
@@ -230,7 +247,7 @@ export function AiPatternAssistant({
       }
       throw new Error('OpenRouter did not return a sign-in URL.');
     } catch (connectionError) {
-      setSettingsError(connectionError.message);
+      setSettingsError(getAiSetupErrorMessage(connectionError));
       setSettingsPending(false);
     }
   };
@@ -238,17 +255,18 @@ export function AiPatternAssistant({
   const testConnection = async () => {
     setConnectionPending(true);
     setSettingsError(null);
-    setSettingsSaved('');
     setConnectionResult(null);
     try {
       const result = await testOpenRouterConnection();
       setConnectionResult(result);
     } catch (connectionError) {
-      setSettingsError(connectionError.message);
+      setSettingsError(getAiSetupErrorMessage(connectionError));
     } finally {
       setConnectionPending(false);
     }
   };
+
+  const saveAndTestSettings = (event) => saveSettings(event, { testAfterSave: true });
 
   const sendInstruction = async (modeOverride = null) => {
     const instruction = input.trim();
@@ -339,21 +357,20 @@ export function AiPatternAssistant({
             </button>
           </div>
           {settingsOpen && (
-            <form className="lw-ai-settings" onSubmit={saveSettings}>
+            <form className="lw-ai-settings" onSubmit={saveAndTestSettings}>
               <div className="lw-ai-settings-head">
-                <h3>AI provider setup</h3>
+                <h3>OpenRouter setup</h3>
                 <button className="btn btn-ghost" type="button" onClick={() => setSettingsOpen(false)}>
                   Close
                 </button>
               </div>
-              <div className="lw-ai-account-connect">
+              <div className="lw-ai-connect-strip">
                 <div>
-                  <strong>Use OpenRouter</strong>
-                  <span>Connect your OpenRouter account. Lightweaver will use OpenRouter for AI pattern generation.</span>
-                  <em>ChatGPT and Claude account login are not available directly here.</em>
+                  <strong>{providerStatus?.configured ? 'Connected' : 'Not connected'}</strong>
+                  <span>{providerStatus?.configured ? 'OpenRouter is ready for pattern generation.' : 'Connect your account or paste an OpenRouter key.'}</span>
                 </div>
                 <button
-                  className="btn"
+                  className="btn btn-ghost"
                   type="button"
                   onClick={connectOpenRouterAccount}
                   disabled={settingsPending}
@@ -361,17 +378,26 @@ export function AiPatternAssistant({
                   Connect OpenRouter account
                 </button>
               </div>
-              <div className="lw-ai-setup-status">
-                <div>
-                  <strong>{providerStatus?.configured ? 'Connected key saved' : 'Not connected yet'}</strong>
-                  <span>{settings?.cost?.note || 'Uses your OpenRouter account credits.'}</span>
-                </div>
-                <div>
-                  <strong>OAuth callback</strong>
-                  <code>{settings?.oauth?.callbackUrl || 'Loading callback URL'}</code>
-                  <span>{settings?.oauth?.deploymentMessage || 'Checking callback status.'}</span>
-                </div>
-              </div>
+              {AI_PROVIDER_OPTIONS.filter(option => option.id === PRIMARY_AI_PROVIDER).map(option => {
+                const status = settings?.providers?.find(item => item.id === option.id);
+                return (
+                  <label className="lw-ai-key-row lw-ai-key-row-primary" key={option.id}>
+                    <span>
+                      <strong>{option.keyLabel}</strong>
+                      <em>{status?.configured ? 'Paste a new key only when replacing the saved one.' : 'Paste an OpenRouter key here, then save and test.'}</em>
+                    </span>
+                    <input
+                      aria-label={option.keyLabel}
+                      type="password"
+                      autoComplete="off"
+                      value={settingsDraft.keys[option.id] || ''}
+                      onChange={event => updateSettingsKey(option.id, event.target.value)}
+                      placeholder={status?.configured ? 'saved, leave blank to keep' : 'sk-or-v1-...'}
+                      disabled={settingsPending}
+                    />
+                  </label>
+                );
+              })}
               <div className="lw-ai-setup-grid">
                 <label className="lw-ai-select-row">
                   <span>
@@ -412,16 +438,8 @@ export function AiPatternAssistant({
                 </label>
               </div>
               <div className="lw-ai-settings-actions">
-                <button className="btn" type="submit" disabled={settingsPending}>
-                  {settingsPending ? 'Saving' : 'Save setup'}
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  type="button"
-                  onClick={testConnection}
-                  disabled={connectionPending}
-                >
-                  {connectionPending ? 'Testing' : 'Test connection'}
+                <button className="btn" type="submit" disabled={settingsPending || connectionPending}>
+                  {settingsPending ? 'Saving' : connectionPending ? 'Testing' : 'Save & test'}
                 </button>
               </div>
               {connectionResult && (
@@ -431,34 +449,13 @@ export function AiPatternAssistant({
                   {connectionResult.account?.label && <em>{connectionResult.account.label}</em>}
                 </div>
               )}
-              <details className="lw-ai-manual-settings">
-                <summary>Advanced: paste OpenRouter key</summary>
-                <div className="lw-ai-key-list">
-                  {AI_PROVIDER_OPTIONS.filter(option => option.id === PRIMARY_AI_PROVIDER).map(option => {
-                    const status = settings?.providers?.find(item => item.id === option.id);
-                    return (
-                      <label className="lw-ai-key-row" key={option.id}>
-                        <span>
-                          <strong>{option.keyLabel}</strong>
-                          <em>{status?.configured ? 'Saved on this computer. Paste a new key to replace it.' : 'Optional fallback if account connection is unavailable.'}</em>
-                        </span>
-                        <input
-                          aria-label={option.keyLabel}
-                          type="password"
-                          autoComplete="off"
-                          value={settingsDraft.keys[option.id] || ''}
-                          onChange={event => updateSettingsKey(option.id, event.target.value)}
-                          placeholder={status?.configured ? 'saved, leave blank to keep' : 'paste OpenRouter key'}
-                          disabled={settingsPending}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-                <div className="lw-ai-settings-actions">
-                  <button className="btn" type="submit" disabled={settingsPending}>
-                    {settingsPending ? 'Saving' : 'Save AI settings'}
-                  </button>
+              <details className="lw-ai-connection-details">
+                <summary>Connection details</summary>
+                <div>
+                  <span>{settings?.cost?.note || 'Uses your OpenRouter account credits.'}</span>
+                  <span>ChatGPT and Claude account login are not available directly here.</span>
+                  <code>{settings?.oauth?.callbackUrl || 'Loading callback URL'}</code>
+                  <span>{settings?.oauth?.deploymentMessage || 'Checking callback status.'}</span>
                 </div>
               </details>
               {settingsError && <div className="lw-ai-settings-error">{settingsError}</div>}
