@@ -30,6 +30,7 @@ const server = http.createServer(app);
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const DEFAULT_WLED = process.env.WLED_HOST || '';
 const HTTP_TIMEOUT_MS = Number.parseInt(process.env.WLED_TIMEOUT_MS || '3000', 10);
+const WS_UPSTREAM_TIMEOUT_MS = Number.parseInt(process.env.WLED_WS_TIMEOUT_MS || '5000', 10);
 
 const mdnsDevices = new Map();
 
@@ -279,8 +280,17 @@ wss.on('connection', (client, _req, url) => {
   }
 
   const upstream = new WebSocket(`ws://${host}/ws`);
+  const upstreamTimer = setTimeout(() => {
+    if (upstream.readyState === WebSocket.CONNECTING) {
+      upstream.terminate();
+      if (client.readyState === WebSocket.OPEN) {
+        client.close(1011, 'WLED upstream timeout');
+      }
+    }
+  }, WS_UPSTREAM_TIMEOUT_MS);
 
   upstream.on('open', () => {
+    clearTimeout(upstreamTimer);
     while (client._queuedMessages?.length) upstream.send(client._queuedMessages.shift());
   });
 
@@ -297,14 +307,17 @@ wss.on('connection', (client, _req, url) => {
   });
 
   upstream.on('close', (code, reason) => {
+    clearTimeout(upstreamTimer);
     if (client.readyState === WebSocket.OPEN) client.close(code || 1011, reason);
   });
 
   upstream.on('error', error => {
+    clearTimeout(upstreamTimer);
     if (client.readyState === WebSocket.OPEN) client.close(1011, error.message);
   });
 
   client.on('close', () => {
+    clearTimeout(upstreamTimer);
     if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
       upstream.close();
     }

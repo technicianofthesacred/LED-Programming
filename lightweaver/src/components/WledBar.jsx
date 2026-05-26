@@ -6,6 +6,7 @@ import { useProject } from '../state/ProjectContext.jsx';
  * Reads the shared WLED connection from ProjectContext (one WebSocket for the whole app).
  */
 const WLED_LED_WARN = 500;
+const CONNECTING_TIMEOUT_MS = 6500;
 
 export function WledBar() {
   const {
@@ -27,6 +28,12 @@ export function WledBar() {
   useEffect(() => {
     if (connected) setConnecting(false);
   }, [connected]);
+
+  useEffect(() => {
+    if (!connecting || connected) return undefined;
+    const timer = setTimeout(() => setConnecting(false), CONNECTING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [connecting, connected]);
 
   function handleConnect() {
     if (connected) {

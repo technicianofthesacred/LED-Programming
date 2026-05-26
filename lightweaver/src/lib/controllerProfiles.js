@@ -140,6 +140,17 @@ export function makePixelMarkerState(pixelCount = 30, index = 0, color = [255, 6
   return { on: true, bri: 32, transition: 0, v: true, seg: [{ id: 0, i: pixels }] };
 }
 
+export function makePixelCountProbeState(pixelCount = 30, markerIndex = null, color = [255, 64, 0]) {
+  const count = Math.max(1, Math.min(4096, Math.round(Number(pixelCount) || 1)));
+  const fallbackIndex = count - 1;
+  const selected = Math.max(0, Math.min(count - 1, Math.round(Number(markerIndex ?? fallbackIndex) || 0)));
+  return {
+    pixelCount: count,
+    markerIndex: selected,
+    state: makePixelMarkerState(count, selected, color),
+  };
+}
+
 export function makeEveryNthMarkerState(pixelCount = 30, every = 10) {
   const count = Math.max(1, Math.min(4096, Number(pixelCount) || 1));
   const step = Math.max(1, Number(every) || 10);

@@ -64,6 +64,18 @@ https://lightweaver-edw.pages.dev
 
 Cloudflare's Pages custom-domain flow must associate the domain with the Pages project. If the domain is under Cloudflare DNS, Cloudflare can usually create the DNS record during that flow. If not, create a CNAME manually.
 
+The local `wrangler pages` command in use here does not expose a custom-domain subcommand, so the terminal path is Cloudflare's Pages API. Use a Cloudflare API token with `Pages Write` permission:
+
+```bash
+export CLOUDFLARE_API_TOKEN="paste-token-with-pages-write"
+
+curl --request POST \
+  "https://api.cloudflare.com/client/v4/accounts/fea8f6648edae8cf1e35032a3ae43611/pages/projects/lightweaver/domains" \
+  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"name":"led.mandalacodes.com"}'
+```
+
 Dashboard path:
 
 1. Cloudflare Dashboard
@@ -84,6 +96,12 @@ Proxy: on
 ```
 
 Do not only create the CNAME without associating `led.mandalacodes.com` to the Pages project. Cloudflare Pages expects the custom domain to be added to the Pages project first.
+
+Verify after SSL activates:
+
+```bash
+curl -I https://led.mandalacodes.com/
+```
 
 ## WLED control path
 

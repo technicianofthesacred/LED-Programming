@@ -4,6 +4,7 @@ import { DEFAULT_WLED_PUSH_FPS, makeWledFrameMessage, makeWledWsUrl, requestWled
 const STORAGE_KEY = 'lw_wled_ip';
 const PUSH_FPS_KEY = 'lw_wled_push_fps';
 const RECONNECT_DELAY   = 3000;
+const CONNECT_TIMEOUT_MS = 5000;
 
 export function useWled() {
   const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
@@ -39,7 +40,7 @@ export function useWled() {
     setTransport('offline');
   }, []);
 
-  const connect = useCallback((targetIp, mode = 'proxy') => {
+  const connect = useCallback((targetIp, mode = defaultWledMode()) => {
     // Allow passing an explicit IP (e.g. from input field before state update)
     const addr = (targetIp ?? ip).trim();
     if (!addr) return;
@@ -55,6 +56,7 @@ export function useWled() {
 
     let ws;
     let opened = false;
+    let connectTimer = null;
     try {
       ws = new WebSocket(makeWledWsUrl(addr, { preferProxy: mode === 'proxy' }));
     } catch {
@@ -62,7 +64,14 @@ export function useWled() {
       return;
     }
 
+    connectTimer = setTimeout(() => {
+      if (!opened) {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     ws.onopen = () => {
+      clearTimeout(connectTimer);
       opened = true;
       wsRef.current = ws;
       setConnected(true);
@@ -74,6 +83,7 @@ export function useWled() {
     };
 
     ws.onclose = () => {
+      clearTimeout(connectTimer);
       if (intentionalCloseRef.current) return;
 
       if (wsRef.current === ws) {
@@ -170,4 +180,10 @@ export function useWled() {
     ip, setIp, connected, transport, connect, disconnect, push,
     setPreset, setPower, setBrightness, getState, getInfo,
   };
+}
+
+function defaultWledMode(locationObj = globalThis.location) {
+  const host = locationObj?.hostname || '';
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return isLocal ? 'direct' : 'proxy';
 }

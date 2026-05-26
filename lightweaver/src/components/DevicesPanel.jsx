@@ -15,6 +15,7 @@ import {
   makeEveryNthMarkerState,
   makeInstallReadinessReport,
   makeKnownGoodRecoveryState,
+  makePixelCountProbeState,
   makePixelMarkerState,
   makeSnapshotFilename,
   makeWledHostname,
@@ -88,10 +89,12 @@ export function DevicesPanel({ onClose }) {
   const [wledInfo, setWledInfo] = useState(null);
   const [installAudit, setInstallAudit] = useState(null);
   const [installAuditStatus, setInstallAuditStatus] = useState('');
+  const [pixelProbeIndex, setPixelProbeIndex] = useState(0);
   const activeProfile = useMemo(
     () => controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null,
     [activeControllerId, controllerProfiles],
   );
+  const activePixelCount = Math.max(1, Number(activeProfile?.led?.length || wledInfo?.leds?.count || 40));
   const readiness = useMemo(() => activeProfile ? controllerProfileReadiness(activeProfile) : null, [activeProfile]);
   const powerBudget = useMemo(() => activeProfile ? estimatePowerBudget(activeProfile) : null, [activeProfile]);
   const installReport = useMemo(
@@ -117,6 +120,10 @@ export function DevicesPanel({ onClose }) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  useEffect(() => {
+    setPixelProbeIndex(index => Math.max(0, Math.min(activePixelCount - 1, index)));
+  }, [activePixelCount]);
 
   const midi = useMidi({
     onCC: (ch, cc, val) => console.debug('[MIDI CC]', ch, cc, val),
@@ -286,6 +293,28 @@ export function DevicesPanel({ onClose }) {
       setProfileStatus(`${label} failed: ${error.message}`);
     }
     setTimeout(() => setProfileStatus(''), 3000);
+  };
+
+  const updatePixelCount = async (pixelCount, { sendEndpoint = false } = {}) => {
+    if (!activeProfile) return;
+    const nextCount = Math.max(1, Math.min(4096, Math.round(Number(pixelCount) || activePixelCount)));
+    const nextIndex = Math.max(0, Math.min(nextCount - 1, sendEndpoint ? nextCount - 1 : pixelProbeIndex));
+    updateActiveProfile(profile => ({
+      ...profile,
+      led: { ...profile.led, length: nextCount },
+      calibration: { ...profile.calibration, pixelCountConfirmed: false },
+    }));
+    setPixelProbeIndex(nextIndex);
+    if (sendEndpoint) {
+      const probe = makePixelCountProbeState(nextCount, nextIndex);
+      await sendState(probe.state, `Endpoint marker ${probe.markerIndex + 1}/${probe.pixelCount}`);
+    }
+  };
+
+  const sendPixelProbe = async (markerIndex = pixelProbeIndex, pixelCount = activePixelCount) => {
+    const probe = makePixelCountProbeState(pixelCount, markerIndex);
+    setPixelProbeIndex(probe.markerIndex);
+    await sendState(probe.state, `Marker ${probe.markerIndex + 1}/${probe.pixelCount}`);
   };
 
   const captureSnapshot = async () => {
@@ -630,6 +659,34 @@ export function DevicesPanel({ onClose }) {
                   <option value="forward">forward</option>
                   <option value="reverse">reverse</option>
                 </select>
+              </Row>
+              <Row label="Count probe" hint="WLED LED Preferences must be at least this count">
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
+                  onClick={() => updatePixelCount(activePixelCount - 1, { sendEndpoint: true })}>
+                  -1
+                </button>
+                <input type="number" min="1" max="4096" className="lw-search-input" style={{ width: 68 }}
+                  value={activePixelCount}
+                  onChange={e => updatePixelCount(e.target.value)}/>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
+                  onClick={() => updatePixelCount(activePixelCount + 1, { sendEndpoint: true })}>
+                  +1
+                </button>
+                <input type="range" min="0" max={Math.max(0, activePixelCount - 1)} step="1"
+                  value={Math.max(0, Math.min(activePixelCount - 1, pixelProbeIndex))}
+                  onChange={e => sendPixelProbe(Number(e.target.value), activePixelCount)}
+                  style={{ flex: 1, minWidth: 90 }}/>
+                <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)', fontFamily: 'var(--mono-font)', minWidth: 54 }}>
+                  {Math.max(0, Math.min(activePixelCount - 1, pixelProbeIndex)) + 1}/{activePixelCount}
+                </span>
+                <button className="btn btn-ghost" style={{ fontSize: 'var(--fs-xs)' }}
+                  onClick={() => sendPixelProbe(activePixelCount - 1, activePixelCount)}>
+                  End
+                </button>
+                <button className="btn btn-primary" style={{ fontSize: 'var(--fs-xs)' }}
+                  onClick={() => updateActiveProfile(profile => ({ ...profile, calibration: { ...profile.calibration, pixelCountConfirmed: true } }))}>
+                  Lock count
+                </button>
               </Row>
             </Section>
           )}

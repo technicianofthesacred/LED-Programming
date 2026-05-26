@@ -37,6 +37,7 @@ import {
   makeDhcpReservationNote,
   makeInstallReadinessReport,
   makeKnownGoodRecoveryState,
+  makePixelCountProbeState,
   makePixelMarkerState,
   makeWledHostname,
 } from '../src/lib/controllerProfiles.js';
@@ -592,6 +593,21 @@ assert.match(makeArtNetNotes(profile), /Channels: 720/);
 assert.equal(controllerProfileReadiness(profile).ready, false);
 assert.deepEqual(makeKnownGoodRecoveryState(), makeSafeWledTestState('amber'));
 assert.deepEqual(makePixelMarkerState(5, 4).seg[0].i, ['000000', '000000', '000000', '000000', 'FF4000']);
+assert.deepEqual(makePixelCountProbeState(40, 39), {
+  pixelCount: 40,
+  markerIndex: 39,
+  state: makePixelMarkerState(40, 39),
+});
+assert.deepEqual(makePixelCountProbeState(40, 60), {
+  pixelCount: 40,
+  markerIndex: 39,
+  state: makePixelMarkerState(40, 39),
+});
+assert.deepEqual(makePixelCountProbeState(40.4, 38.6), {
+  pixelCount: 40,
+  markerIndex: 39,
+  state: makePixelMarkerState(40, 39),
+});
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /Lightweaver Install Readiness/);
 assert.match(makeInstallReadinessReport(profile, { snapshotSaved: true }), /aca704e2ece0/);
 
