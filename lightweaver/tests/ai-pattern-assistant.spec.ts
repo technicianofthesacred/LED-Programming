@@ -226,11 +226,12 @@ test('uses OpenRouter as the normal provider setup and generation route', async 
   const assistant = await openPatternAssistant(page);
   await expect(assistant.getByText('OpenRouter')).toBeVisible();
   await assistant.getByRole('button', { name: 'AI setup' }).click();
-  await expect(assistant.getByRole('heading', { name: 'OpenRouter setup' })).toBeVisible();
+  await expect(assistant.getByRole('heading', { name: 'OpenRouter setup' })).toHaveCount(0);
   await expect(assistant.getByLabel('Default AI provider')).toHaveCount(0);
   await expect(assistant.getByLabel('Claude key')).toHaveCount(0);
   await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeHidden();
   await expect(assistant.getByLabel('OpenRouter key')).toBeVisible();
+  await expect(assistant.getByLabel('AI starting point')).toBeVisible();
   await assistant.getByLabel('OpenRouter key').fill('openrouter-secret-test-key');
   await assistant.getByRole('button', { name: 'Save & test' }).click();
   await expect.poll(() => connectionTestRequested).toBe(true);
@@ -291,15 +292,18 @@ test('keeps OpenRouter setup compact with visible key entry and collapsed connec
   const assistant = await openPatternAssistant(page);
   await assistant.getByRole('button', { name: 'AI setup' }).click();
 
-  await expect(assistant.getByLabel('AI model preset')).toHaveValue('balanced');
-  await expect(assistant.getByLabel('Pattern quality')).toHaveValue('balanced');
   await expect(assistant.getByLabel('OpenRouter key')).toBeVisible();
+  await expect(assistant.getByLabel('AI starting point')).toHaveValue('balanced');
+  await expect(assistant.getByLabel('AI model preset')).toHaveCount(0);
+  await expect(assistant.getByLabel('Pattern quality')).toHaveCount(0);
   await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeHidden();
   await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeHidden();
   await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeHidden();
 
-  await assistant.getByLabel('AI model preset').selectOption('creative');
-  await assistant.getByLabel('Pattern quality').selectOption('showpiece');
+  const setupHeight = await assistant.locator('.lw-ai-settings').evaluate(element => element.getBoundingClientRect().height);
+  expect(setupHeight).toBeLessThan(170);
+
+  await assistant.getByLabel('AI starting point').selectOption('creative');
   await assistant.getByRole('button', { name: 'Save & test' }).click();
 
   expect(settingsPayload.modelPreset).toBe('creative');
@@ -309,7 +313,7 @@ test('keeps OpenRouter setup compact with visible key entry and collapsed connec
   await expect(assistant.getByText('OpenRouter connection works.')).toBeVisible();
   await expect(assistant.getByText('Remaining 8.75 of 10 monthly')).toBeVisible();
 
-  await assistant.getByText('Connection details').click();
+  await assistant.getByText('Details').click();
   await expect(assistant.getByText('Uses your OpenRouter account credits.')).toBeVisible();
   await expect(assistant.getByText('Local callback. Connect from this computer; phone/public use needs a reachable server URL.')).toBeVisible();
   await expect(assistant.getByText('http://127.0.0.1:5174/api/ai/openrouter/oauth/callback')).toBeVisible();
@@ -336,9 +340,9 @@ test('offers OpenRouter account OAuth as the primary AI setup path', async ({ pa
   const assistant = await openPatternAssistant(page);
   await assistant.getByRole('button', { name: 'AI setup' }).click();
 
-  await expect(assistant.getByRole('button', { name: 'Connect OpenRouter account' })).toBeVisible();
+  await expect(assistant.getByRole('button', { name: 'Connect account' })).toBeVisible();
   await expect(assistant.getByText('ChatGPT and Claude account login are not available directly here.')).toBeHidden();
-  await assistant.getByRole('button', { name: 'Connect OpenRouter account' }).click();
+  await assistant.getByRole('button', { name: 'Connect account' }).click();
 
   await expect.poll(() => oauthRequested).toBe(true);
   await expect(page).toHaveURL(/openrouter\.ai/);
@@ -381,7 +385,7 @@ test('clears stale AI setup errors when the setup panel is reopened', async ({ p
   await assistant.getByRole('button', { name: 'Save & test' }).click();
   await expect(assistant.getByText('Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.')).toBeVisible();
 
-  await assistant.getByRole('button', { name: 'Close', exact: true }).click();
+  await assistant.getByRole('button', { name: 'Hide setup' }).click();
   await assistant.getByRole('button', { name: 'AI setup' }).click();
 
   await expect(assistant.getByText('Connect OpenRouter account in AI setup, paste an OpenRouter key, or set OPENROUTER_API_KEY on the Lightweaver server.')).toHaveCount(0);

@@ -16,17 +16,12 @@ const AI_PROVIDER_OPTIONS = [
   { id: 'anthropic', label: 'Claude', detail: 'Anthropic', keyLabel: 'Claude key' },
 ];
 const PRIMARY_AI_PROVIDER = 'openrouter';
-const AI_MODEL_PRESET_FALLBACKS = [
-  { id: 'balanced', label: 'Balanced', detail: 'Reliable default', model: 'openai/gpt-5.4-mini' },
-  { id: 'best', label: 'Best', detail: 'Higher quality', model: 'openai/gpt-5.5' },
-  { id: 'creative', label: 'Creative', detail: 'Claude Sonnet', model: 'anthropic/claude-sonnet-4.6' },
-  { id: 'fast', label: 'Fast', detail: 'Quick drafts', model: 'google/gemini-3.5-flash' },
-  { id: 'budget', label: 'Budget', detail: 'Lower-cost iterations', model: 'openai/gpt-5-mini' },
-];
-const AI_QUALITY_PRESET_FALLBACKS = [
-  { id: 'simple', label: 'Simple', detail: 'Short editable code' },
-  { id: 'balanced', label: 'Balanced', detail: 'Smooth and editable' },
-  { id: 'showpiece', label: 'Showpiece', detail: 'Layered gallery-ready motion' },
+const AI_STARTING_POINT_OPTIONS = [
+  { id: 'balanced', label: 'Balanced draft', modelPreset: 'balanced', qualityPreset: 'balanced' },
+  { id: 'creative', label: 'Creative showpiece', modelPreset: 'creative', qualityPreset: 'showpiece' },
+  { id: 'fast', label: 'Fast sketch', modelPreset: 'fast', qualityPreset: 'simple' },
+  { id: 'budget', label: 'Budget test', modelPreset: 'budget', qualityPreset: 'simple' },
+  { id: 'best', label: 'Best quality', modelPreset: 'best', qualityPreset: 'showpiece' },
 ];
 
 function getProviderOption(provider) {
@@ -64,6 +59,13 @@ function getAiSetupErrorMessage(error) {
     return 'Cannot reach the Lightweaver AI server. Reload or restart the dev server.';
   }
   return message || 'AI setup failed.';
+}
+
+function getStartingPointId(settingsDraft = {}) {
+  return AI_STARTING_POINT_OPTIONS.find(option => (
+    option.modelPreset === settingsDraft.modelPreset
+    && option.qualityPreset === settingsDraft.qualityPreset
+  ))?.id || 'balanced';
 }
 
 function hasCompletedAiSetupConnection() {
@@ -201,12 +203,14 @@ export function AiPatternAssistant({
     }));
   };
 
-  const updateSettingsChoice = (key, value) => {
+  const updateStartingPoint = (value) => {
+    const option = AI_STARTING_POINT_OPTIONS.find(item => item.id === value) || AI_STARTING_POINT_OPTIONS[0];
     setSettingsError(null);
     setConnectionResult(null);
     setSettingsDraft(current => ({
       ...current,
-      [key]: value,
+      modelPreset: option.modelPreset,
+      qualityPreset: option.qualityPreset,
     }));
   };
 
@@ -324,10 +328,7 @@ export function AiPatternAssistant({
   };
   const providerOption = getProviderOption(provider);
   const providerStatus = settings?.providers?.find(item => item.id === provider);
-  const modelPresets = settings?.modelPresets?.length ? settings.modelPresets : AI_MODEL_PRESET_FALLBACKS;
-  const qualityPresets = settings?.qualityPresets?.length ? settings.qualityPresets : AI_QUALITY_PRESET_FALLBACKS;
-  const selectedModelPreset = modelPresets.find(preset => preset.id === settingsDraft.modelPreset) || modelPresets[0];
-  const selectedQualityPreset = qualityPresets.find(preset => preset.id === settingsDraft.qualityPreset) || qualityPresets[1] || qualityPresets[0];
+  const startingPointId = getStartingPointId(settingsDraft);
   const connectionUsage = formatOpenRouterUsage(connectionResult?.account);
 
   return (
@@ -353,94 +354,66 @@ export function AiPatternAssistant({
               <em>{providerStatus?.configured ? 'key saved' : 'needs key'}</em>
             </div>
             <button className="btn btn-ghost" type="button" onClick={openSettingsPanel}>
-              AI setup
+              {settingsOpen ? 'Hide setup' : 'AI setup'}
             </button>
           </div>
           {settingsOpen && (
             <form className="lw-ai-settings" onSubmit={saveAndTestSettings}>
-              <div className="lw-ai-settings-head">
-                <h3>OpenRouter setup</h3>
-                <button className="btn btn-ghost" type="button" onClick={() => setSettingsOpen(false)}>
-                  Close
+              <div className="lw-ai-quick-row">
+                {AI_PROVIDER_OPTIONS.filter(option => option.id === PRIMARY_AI_PROVIDER).map(option => {
+                  const status = settings?.providers?.find(item => item.id === option.id);
+                  return (
+                    <label className="lw-ai-compact-field lw-ai-key-compact" key={option.id}>
+                      <span>{option.keyLabel}</span>
+                      <input
+                        aria-label={option.keyLabel}
+                        type="password"
+                        autoComplete="off"
+                        value={settingsDraft.keys[option.id] || ''}
+                        onChange={event => updateSettingsKey(option.id, event.target.value)}
+                        placeholder={status?.configured ? 'saved, leave blank to keep' : 'sk-or-v1-...'}
+                        disabled={settingsPending}
+                      />
+                    </label>
+                  );
+                })}
+                <button className="btn" type="submit" disabled={settingsPending || connectionPending}>
+                  {settingsPending ? 'Saving' : connectionPending ? 'Testing' : 'Save & test'}
                 </button>
               </div>
-              <div className="lw-ai-connect-strip">
-                <div>
-                  <strong>{providerStatus?.configured ? 'Connected' : 'Not connected'}</strong>
-                  <span>{providerStatus?.configured ? 'OpenRouter is ready for pattern generation.' : 'Connect your account or paste an OpenRouter key.'}</span>
-                </div>
+              <div className="lw-ai-quick-row secondary">
+                <label className="lw-ai-compact-field lw-ai-starting-point">
+                  <span>Starting point</span>
+                  <select
+                    aria-label="AI starting point"
+                    value={startingPointId}
+                    onChange={event => updateStartingPoint(event.target.value)}
+                    disabled={settingsPending}
+                  >
+                    {AI_STARTING_POINT_OPTIONS.map(option => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   className="btn btn-ghost"
                   type="button"
                   onClick={connectOpenRouterAccount}
                   disabled={settingsPending}
                 >
-                  Connect OpenRouter account
+                  Connect account
                 </button>
-              </div>
-              {AI_PROVIDER_OPTIONS.filter(option => option.id === PRIMARY_AI_PROVIDER).map(option => {
-                const status = settings?.providers?.find(item => item.id === option.id);
-                return (
-                  <label className="lw-ai-key-row lw-ai-key-row-primary" key={option.id}>
-                    <span>
-                      <strong>{option.keyLabel}</strong>
-                      <em>{status?.configured ? 'Paste a new key only when replacing the saved one.' : 'Paste an OpenRouter key here, then save and test.'}</em>
-                    </span>
-                    <input
-                      aria-label={option.keyLabel}
-                      type="password"
-                      autoComplete="off"
-                      value={settingsDraft.keys[option.id] || ''}
-                      onChange={event => updateSettingsKey(option.id, event.target.value)}
-                      placeholder={status?.configured ? 'saved, leave blank to keep' : 'sk-or-v1-...'}
-                      disabled={settingsPending}
-                    />
-                  </label>
-                );
-              })}
-              <div className="lw-ai-setup-grid">
-                <label className="lw-ai-select-row">
-                  <span>
-                    <strong>Model</strong>
-                    <em>{selectedModelPreset?.detail}</em>
-                  </span>
-                  <select
-                    aria-label="AI model preset"
-                    value={settingsDraft.modelPreset}
-                    onChange={event => updateSettingsChoice('modelPreset', event.target.value)}
-                    disabled={settingsPending}
-                  >
-                    {modelPresets.map(preset => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                  <code>{selectedModelPreset?.model}</code>
-                </label>
-                <label className="lw-ai-select-row">
-                  <span>
-                    <strong>Pattern quality</strong>
-                    <em>{selectedQualityPreset?.detail}</em>
-                  </span>
-                  <select
-                    aria-label="Pattern quality"
-                    value={settingsDraft.qualityPreset}
-                    onChange={event => updateSettingsChoice('qualityPreset', event.target.value)}
-                    disabled={settingsPending}
-                  >
-                    {qualityPresets.map(preset => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="lw-ai-settings-actions">
-                <button className="btn" type="submit" disabled={settingsPending || connectionPending}>
-                  {settingsPending ? 'Saving' : connectionPending ? 'Testing' : 'Save & test'}
-                </button>
+                <details className="lw-ai-connection-details">
+                  <summary>Details</summary>
+                  <div>
+                    <span>{settings?.cost?.note || 'Uses your OpenRouter account credits.'}</span>
+                    <span>ChatGPT and Claude account login are not available directly here.</span>
+                    <code>{settings?.oauth?.callbackUrl || 'Loading callback URL'}</code>
+                    <span>{settings?.oauth?.deploymentMessage || 'Checking callback status.'}</span>
+                  </div>
+                </details>
               </div>
               {connectionResult && (
                 <div className="lw-ai-connection-result">
@@ -449,15 +422,6 @@ export function AiPatternAssistant({
                   {connectionResult.account?.label && <em>{connectionResult.account.label}</em>}
                 </div>
               )}
-              <details className="lw-ai-connection-details">
-                <summary>Connection details</summary>
-                <div>
-                  <span>{settings?.cost?.note || 'Uses your OpenRouter account credits.'}</span>
-                  <span>ChatGPT and Claude account login are not available directly here.</span>
-                  <code>{settings?.oauth?.callbackUrl || 'Loading callback URL'}</code>
-                  <span>{settings?.oauth?.deploymentMessage || 'Checking callback status.'}</span>
-                </div>
-              </details>
               {settingsError && <div className="lw-ai-settings-error">{settingsError}</div>}
               {settingsSaved && <div className="lw-ai-settings-saved">{settingsSaved}</div>}
             </form>
