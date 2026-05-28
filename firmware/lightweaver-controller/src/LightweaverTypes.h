@@ -13,6 +13,16 @@ constexpr uint8_t LW_MAX_LOOKS = 12;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 12;
 constexpr uint8_t LW_MAX_ZONES = 8;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
+constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
+
+// One Art-Net universe → contiguous pixel range mapping. A single Madrix
+// patch typically streams several universes back-to-back; the card decodes
+// each into the global leds[] buffer at the configured offset.
+struct ArtnetUniverseConfig {
+  uint16_t universe = 0;     // 0..255 (net=0, subnet=0 assumed)
+  uint16_t pixelStart = 0;   // first pixel index in leds[]
+  uint16_t pixelCount = 0;   // number of RGB pixels, max 170 per universe
+};
 constexpr uint16_t LWSEQ_HEADER_BYTES = 64;
 constexpr uint8_t DEFAULT_STATUS_LED_PIN = 2;
 constexpr uint16_t DEFAULT_RENDER_FPS = 30;
