@@ -67,6 +67,12 @@ int16_t manualHueShift = 0;
 bool identifyActive = false;
 uint32_t identifyStartedAt = 0;
 
+// Custom-color (Color tile) state
+uint8_t customHue = 32;          // 0..255 (FastLED hue space)
+uint8_t customSaturation = 230;  // 0..255
+bool customBreathe = false;
+bool customDrift = false;
+
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
@@ -480,12 +486,24 @@ bool renderSequenceFrame(bool force) {
 }
 
 bool renderProceduralFrame(const String& preset) {
-  PatternModifiers mods; mods.speed = manualSpeed; mods.hueShift = manualHueShift;
+  PatternModifiers mods;
+  mods.speed = manualSpeed;
+  mods.hueShift = manualHueShift;
+  mods.customHue = customHue;
+  mods.customSaturation = customSaturation;
+  mods.customBreathe = customBreathe;
+  mods.customDrift = customDrift;
   return renderProceduralPattern(preset, leds, totalPixels, millis(), mods);
 }
 
 bool renderPresetFrame(const String& preset) {
-  PatternModifiers mods; mods.speed = manualSpeed; mods.hueShift = manualHueShift;
+  PatternModifiers mods;
+  mods.speed = manualSpeed;
+  mods.hueShift = manualHueShift;
+  mods.customHue = customHue;
+  mods.customSaturation = customSaturation;
+  mods.customBreathe = customBreathe;
+  mods.customDrift = customDrift;
   return renderPresetPattern(preset, leds, totalPixels, mods);
 }
 
@@ -692,3 +710,12 @@ bool runtimeRename(const String& newPieceName, const String& newHostname, String
   message = "saved";
   return true;
 }
+
+void runtimeSetCustomHue(uint8_t hue) { customHue = hue; }
+void runtimeSetCustomSaturation(uint8_t sat) { customSaturation = sat; }
+void runtimeSetCustomBreathe(bool on) { customBreathe = on; }
+void runtimeSetCustomDrift(bool on) { customDrift = on; }
+uint8_t runtimeGetCustomHue() { return customHue; }
+uint8_t runtimeGetCustomSaturation() { return customSaturation; }
+bool runtimeGetCustomBreathe() { return customBreathe; }
+bool runtimeGetCustomDrift() { return customDrift; }

@@ -101,6 +101,21 @@ void handleRoot() {
             ".sw.sw-warm-white{background:linear-gradient(90deg,#3a2c1a,#c89b5c,#f4ede0,#c89b5c,#3a2c1a);background-size:200% 100%;animation:flow 8s linear infinite}"
             ".sw.sw-cool-white{background:linear-gradient(90deg,#1a2a3a,#5c8ac8,#e0edf4,#5c8ac8,#1a2a3a);background-size:200% 100%;animation:flow 8s linear infinite}"
             ".sw.sw-photo-white{background:linear-gradient(90deg,#3a3328,#c8b89c,#f4ede0,#c8b89c,#3a3328);background-size:200% 100%;animation:flow 10s linear infinite}"
+            ".sw.sw-custom-color{background:linear-gradient(90deg,#e74c3c,#f39c12,#f1c40f,#27ae60,#3498db,#9b59b6,#e74c3c)}"
+            ".color-panel{background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:14px;display:none;flex-direction:column;gap:12px}"
+            ".color-panel.open{display:flex}"
+            ".color-row{display:flex;align-items:center;gap:12px}"
+            ".color-row .lbl{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#9a8d75;flex-shrink:0;width:64px}"
+            ".color-row .val{font-size:11px;color:#c89b5c;font-family:ui-monospace,SF Mono,monospace;flex-shrink:0;min-width:30px;text-align:right}"
+            ".hue-slider{flex:1;-webkit-appearance:none;height:14px;border-radius:7px;background:linear-gradient(90deg,#e74c3c,#f39c12,#f1c40f,#27ae60,#3498db,#9b59b6,#e74c3c);outline:none}"
+            ".hue-slider::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#f4ede0;border:2px solid #050505;cursor:pointer}"
+            ".hue-slider::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#f4ede0;border:2px solid #050505;cursor:pointer}"
+            ".sat-slider{flex:1;-webkit-appearance:none;height:6px;border-radius:3px;background:#262626;outline:none}"
+            ".sat-slider::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#c89b5c;cursor:pointer;border:0}"
+            ".swatch-large{height:42px;border-radius:8px;border:1px solid #262626;transition:background-color 0.1s}"
+            ".toggles{display:flex;gap:8px}"
+            ".toggle{flex:1;background:#0a0a0a;border:1px solid #333;color:#9a8d75;padding:8px;border-radius:8px;font-size:11px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;font-family:inherit}"
+            ".toggle.on{background:#c89b5c;color:#0a0a0a;border-color:#c89b5c}"
             "@keyframes flow{0%{background-position:0 0}100%{background-position:200% 0}}"
             "@keyframes scan{0%{background-position:100% 0}100%{background-position:-100% 0}}"
             "@keyframes flicker{0%,100%{opacity:0.9}25%{opacity:1}50%{opacity:0.7}75%{opacity:1}}"
@@ -123,6 +138,19 @@ void handleRoot() {
   page += escapeHtml(cfg.pieceName);
   page += F("</span></div>"
             "<div class='grid' id='grid'></div>"
+            "<div class='color-panel' id='color-panel'>"
+              "<div class='swatch-large' id='color-swatch'></div>"
+              "<div class='color-row'><span class='lbl'>Hue</span>"
+                "<input type='range' class='hue-slider' min='0' max='255' value='32' id='hue-slider'>"
+                "<span class='val' id='hue-val'>32</span></div>"
+              "<div class='color-row'><span class='lbl'>Saturation</span>"
+                "<input type='range' class='sat-slider' min='0' max='255' value='230' id='sat-slider'>"
+                "<span class='val' id='sat-val'>230</span></div>"
+              "<div class='toggles'>"
+                "<button class='toggle' id='breathe-btn'>Breathe</button>"
+                "<button class='toggle' id='drift-btn'>Drift</button>"
+              "</div>"
+            "</div>"
             "<div class='bright'>"
               "<span class='lbl'>Brightness</span>"
               "<input type='range' min='2' max='100' value='100' id='b-slider'>"
@@ -138,20 +166,46 @@ void handleRoot() {
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
             "const get=p=>fetch(p).then(r=>r.json());"
             "let patterns=[],currentId='',blackoutOn=false;"
+            "let customHue=32,customSat=230,customBreathe=false,customDrift=false;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
-            // Coalescing brightness sender
-            "let bPending=null,bInflight=false;"
-            "const flushBright=async()=>{if(bInflight||bPending===null)return;bInflight=true;const v=bPending;bPending=null;try{await post('/api/control',{brightness:v})}catch(e){}finally{bInflight=false;if(bPending!==null)flushBright()}};"
-            "$('b-slider').oninput=e=>{const pct=parseInt(e.target.value,10);$('b-val').textContent=pct+'%';bPending=pct/100;flushBright()};"
+            // Generic coalescing sender per field
+            "const makeSender=key=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{await post('/api/control',{[key]:v})}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
+            "const sendBright=makeSender('brightness');"
+            "const sendHue=makeSender('hue');"
+            "const sendSat=makeSender('saturation');"
+            "$('b-slider').oninput=e=>{const pct=parseInt(e.target.value,10);$('b-val').textContent=pct+'%';sendBright(pct/100)};"
+            // Hue helpers — FastLED hue 0..255 to CSS HSL deg 0..360
+            "const hueToHsl=(h,s)=>{return 'hsl('+(h/255*360)+','+(s/255*100)+'%,50%)'};"
+            "const renderColorPanel=()=>{"
+              "$('color-swatch').style.background=hueToHsl(customHue,customSat);"
+              "$('hue-val').textContent=customHue;"
+              "$('sat-val').textContent=customSat;"
+              "$('hue-slider').value=customHue;"
+              "$('sat-slider').value=customSat;"
+              "$('breathe-btn').classList.toggle('on',customBreathe);"
+              "$('drift-btn').classList.toggle('on',customDrift)"
+            "};"
+            "const showColorPanel=show=>{$('color-panel').classList.toggle('open',show)};"
+            "$('hue-slider').oninput=e=>{customHue=parseInt(e.target.value,10);renderColorPanel();sendHue(customHue)};"
+            "$('sat-slider').oninput=e=>{customSat=parseInt(e.target.value,10);renderColorPanel();sendSat(customSat)};"
+            "$('breathe-btn').onclick=async()=>{customBreathe=!customBreathe;renderColorPanel();await post('/api/control',{breathe:customBreathe})};"
+            "$('drift-btn').onclick=async()=>{customDrift=!customDrift;renderColorPanel();await post('/api/control',{drift:customDrift})};"
             // Pattern grid
             "const renderPat=()=>{const g=$('grid');g.innerHTML='';patterns.forEach(p=>{"
               "const el=document.createElement('div');el.className='tile'+(p.id===currentId?' active':'');"
-              "el.innerHTML='<div class=\"sw '+swClass(p.id)+'\"></div><div class=\"name\">'+p.label+'</div><div class=\"mode\">'+p.mode+'</div>';"
-              "el.onclick=async()=>{const wasActive=p.id===currentId;currentId=p.id;renderPat();if(!wasActive)await post('/api/control',{patternId:p.id})};"
+              "let swatchHtml='<div class=\"sw '+swClass(p.id)+'\"';"
+              "if(p.id==='custom-color')swatchHtml+=' style=\"background:'+hueToHsl(customHue,customSat)+'\"';"
+              "swatchHtml+='></div>';"
+              "el.innerHTML=swatchHtml+'<div class=\"name\">'+p.label+'</div><div class=\"mode\">'+p.mode+'</div>';"
+              "el.onclick=async()=>{const wasActive=p.id===currentId;currentId=p.id;renderPat();showColorPanel(p.id==='custom-color');if(!wasActive)await post('/api/control',{patternId:p.id})};"
               "g.appendChild(el)"
             "})};"
             "$('off-btn').onclick=async()=>{blackoutOn=!blackoutOn;$('off-btn').classList.toggle('on',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
-            "(async()=>{try{const s=await get('/api/status');const p=await get('/api/patterns');patterns=p.patterns||[];currentId=p.currentId||'';blackoutOn=!!s.blackout;$('off-btn').classList.toggle('on',blackoutOn);renderPat()}catch(e){}})();"
+            "(async()=>{try{const s=await get('/api/status');const p=await get('/api/patterns');patterns=p.patterns||[];currentId=p.currentId||'';blackoutOn=!!s.blackout;"
+              // Pull current custom-color state by posting an empty control (the echo includes it)
+              "try{const e=await post('/api/control',{});if(typeof e.hue==='number'){customHue=e.hue;customSat=e.saturation;customBreathe=!!e.breathe;customDrift=!!e.drift}}catch(_){}"
+              "renderColorPanel();showColorPanel(currentId==='custom-color');"
+              "$('off-btn').classList.toggle('on',blackoutOn);renderPat()}catch(e){}})();"
             "</script></body></html>");
 
   server.send(200, "text/html", page);
@@ -466,6 +520,10 @@ void handleControlPost() {
     String id = String(doc["patternId"].as<const char*>());
     if (id.length()) runtimeSelectPatternById(id);
   }
+  if (doc["hue"].is<int>()) runtimeSetCustomHue(uint8_t(doc["hue"].as<int>() & 0xff));
+  if (doc["saturation"].is<int>()) runtimeSetCustomSaturation(uint8_t(doc["saturation"].as<int>() & 0xff));
+  if (doc["breathe"].is<bool>()) runtimeSetCustomBreathe(doc["breathe"].as<bool>());
+  if (doc["drift"].is<bool>()) runtimeSetCustomDrift(doc["drift"].as<bool>());
   // Echo current state back
   JsonDocument out;
   out["ok"] = true;
@@ -473,6 +531,10 @@ void handleControlPost() {
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
   out["blackout"] = runtimeIsBlackedOut();
+  out["hue"] = runtimeGetCustomHue();
+  out["saturation"] = runtimeGetCustomSaturation();
+  out["breathe"] = runtimeGetCustomBreathe();
+  out["drift"] = runtimeGetCustomDrift();
   String body;
   serializeJson(out, body);
   server.send(200, "application/json", body);

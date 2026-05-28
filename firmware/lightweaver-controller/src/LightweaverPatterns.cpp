@@ -14,6 +14,20 @@ static inline uint8_t shiftHue(uint8_t base, int16_t shift) {
 
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
   uint32_t t = scaleTime(now, mods.speed);
+  if (preset == "custom-color") {
+    uint8_t hue = mods.customHue;
+    if (mods.customDrift) {
+      hue = (mods.customHue + uint8_t(t / 64)) & 0xff;
+    }
+    uint8_t value = 220;
+    if (mods.customBreathe) {
+      uint8_t b = beatsin8(uint8_t(8 * mods.speed > 0 ? 8 * mods.speed : 8), 60, 230);
+      value = b;
+    }
+    CHSV color(hue, mods.customSaturation, value);
+    fill_solid(leds, totalPixels, color);
+    return true;
+  }
   for (uint16_t i = 0; i < totalPixels; i++) {
     if (preset == "ember") {
       uint8_t flicker = inoise8(i * 18, t / 7);

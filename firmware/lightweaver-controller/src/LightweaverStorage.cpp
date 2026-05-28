@@ -168,11 +168,12 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   config.outputs[0].start = 0;
   config.outputs[0].enabled = true;
 
-  const char* ids[] = {"aurora", "ember", "rainbow", "breathe", "scanner", "warm-white"};
-  const char* modes[] = {"procedural", "procedural", "procedural", "procedural", "procedural", "preset"};
+  const char* ids[] = {"aurora", "ember", "rainbow", "breathe", "scanner", "custom-color"};
+  const char* labels[] = {"Aurora", "Ember", "Rainbow", "Breathe", "Scanner", "Color"};
+  const char* modes[] = {"procedural", "procedural", "procedural", "procedural", "procedural", "procedural"};
   for (uint8_t i = 0; i < 6; i++) {
     config.looks[i].id = ids[i];
-    config.looks[i].label = ids[i];
+    config.looks[i].label = labels[i];
     config.looks[i].mode = modes[i];
     config.looks[i].preset = ids[i];
     config.looks[i].brightness = 0.65f;

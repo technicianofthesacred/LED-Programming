@@ -7,6 +7,10 @@
 struct PatternModifiers {
   float speed = 1.0f;     // 0.25 .. 4.0
   int16_t hueShift = 0;   // -128 .. 128 (added to CHSV hues)
+  uint8_t customHue = 32;
+  uint8_t customSaturation = 230;
+  bool customBreathe = false;
+  bool customDrift = false;
 };
 
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods);
