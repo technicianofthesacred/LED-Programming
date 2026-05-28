@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { PATTERNS } from '../src/lib/patterns-library.js';
 import { compile, evalPixel } from '../src/lib/patterns.js';
-import { createDefaultProject, migrateProject, PROJECT_VERSION } from '../src/lib/projectModel.js';
+import { createDefaultProject, migrateProject, PROJECT_VERSION, resolveStartupProject } from '../src/lib/projectModel.js';
 import { normalizePalette, renderPixelFrame } from '../src/lib/frameEngine.js';
 import {
   easeCrossfade,
@@ -69,6 +69,7 @@ import {
   makeWledBasicPresetsJson,
 } from '../src/lib/wledBasicExport.js';
 import {
+  DEFAULT_WLED_PHYSICAL_CONTROLS,
   WLED_ENCODER_FIRMWARE_MODES,
   summarizeWledControlContract,
 } from '../src/lib/wledControlContract.js';
@@ -115,11 +116,46 @@ assert.equal(defaultProject.devices.wledIp, '');
 assert.deepEqual(defaultProject.devices.segmentMap, {});
 assert.deepEqual(defaultProject.devices.controllerProfiles, []);
 assert.equal(defaultProject.devices.activeControllerId, '');
+assert.deepEqual(defaultProject.devices.physicalControls, DEFAULT_WLED_PHYSICAL_CONTROLS);
 assert.equal(defaultProject.devices.standaloneController.outputs.length, 4);
 assert.equal(defaultProject.devices.standaloneController.outputs[0].pin, 16);
 assert.equal(defaultProject.devices.standaloneController.controls.blackout, 9);
 assert.equal(defaultProject.devices.standaloneController.runtimeMode, 'sequence');
 assert.equal(defaultProject.pattern.motionSmoothing, 'soft');
+
+const savedWithLayout = {
+  ...createDefaultProject(),
+  layout: {
+    ...createDefaultProject().layout,
+    strips: [{ id: 'saved-strip', pathData: 'M0 0 L10 0', pixelCount: 10, pixels: [{ x: 0, y: 0 }] }],
+  },
+  pattern: {
+    ...createDefaultProject().pattern,
+    activePatternId: 'gradient',
+  },
+};
+const emptyLegacyLayout = {
+  version: 2,
+  strips: [],
+  viewBox: '0 0 640 400',
+};
+assert.equal(
+  resolveStartupProject({ savedProject: savedWithLayout, legacyLayoutProject: emptyLegacyLayout }).layout.strips.length,
+  1,
+  'empty legacy layout autosave must not overwrite the canonical project layout',
+);
+
+const recoverableLegacyLayout = {
+  version: 2,
+  strips: [{ id: 'legacy-strip', pathData: 'M0 0 L20 0', pixelCount: 20 }],
+  viewBox: '0 0 640 400',
+};
+const recoveredStartup = resolveStartupProject({
+  savedProject: createDefaultProject(),
+  legacyLayoutProject: recoverableLegacyLayout,
+});
+assert.equal(recoveredStartup.layout.strips[0].id, 'legacy-strip');
+assert.equal(recoveredStartup.pattern.activePatternId, 'aurora');
 
 const wledBasicTier = getRuntimeTier(WLED_BASIC_TIER_ID);
 assert.equal(wledBasicTier.id, 'wled-basic');
@@ -324,6 +360,7 @@ const migratedV3 = migrateProject({
 assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
 assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
 assert.deepEqual(migratedV3.devices.controllerProfiles, []);
+assert.deepEqual(migratedV3.devices.physicalControls, DEFAULT_WLED_PHYSICAL_CONTROLS);
 assert.equal(migratedV3.devices.standaloneController.outputs.length, 4);
 assert.equal(migratedV3.pattern.symSettings.guide.mode, 'fold');
 assert.equal(migrateProject({ version: PROJECT_VERSION, pattern: { motionSmoothing: 'silk' } }).pattern.motionSmoothing, 'silk');
@@ -609,7 +646,7 @@ const profile = buildControllerProfile({
 assert.equal(profile.id, 'aca704e2ece0');
 assert.equal(profile.physicalControls.encoder.enabled, true);
 assert.equal(profile.physicalControls.encoder.firmware, WLED_ENCODER_FIRMWARE_MODES.ROTARY_USERMOD);
-assert.deepEqual(profile.physicalControls.encoder.pins, { a: 4, b: 5, press: 6 });
+assert.deepEqual(profile.physicalControls.encoder.pins, { a: 4, b: 5, press: 0 });
 assert.equal(makeWledHostname(profile), 'lightweaver-e2ece0.local');
 assert.equal(makeDhcpReservationNote(profile), 'Reserve MAC ac:a7:04:e2:ec:e0 as 192.168.18.66.');
 assert.deepEqual(estimatePowerBudget(profile), {
@@ -748,6 +785,26 @@ assert.equal(
   '1~ 8~',
 );
 assert.match(summarizeWledControlContract(controlledBasicPackage.controlContract), /WLED firmware/);
+
+const orderedControlPackage = buildWledBasicPackage({
+  projectName: 'Ordered Press Cycle',
+  activePatternId: 'fire',
+  strips: [{ id: 'main', pixels: [{ x: 0, y: 0 }] }],
+  physicalControls: {
+    encoder: {
+      enabled: true,
+      rotateDirection: 'clockwise-dimmer',
+      patternCycleIds: ['aurora', 'candle', 'breathe'],
+    },
+  },
+});
+assert.deepEqual(orderedControlPackage.presets.map(preset => preset.patternId), ['aurora', 'candle', 'breathe']);
+assert.equal(orderedControlPackage.controlContract.controls.encoder.rotateDirection, 'clockwise-dimmer');
+assert.equal(orderedControlPackage.controlContract.controls.encoder.patternCycleIds.length, 3);
+assert.equal(
+  orderedControlPackage.presetsJson[String(orderedControlPackage.controlContract.encoder.press.helperPresetId)].ps,
+  '1~ 3~',
+);
 
 const controlledWizardPlan = buildWledInstallWizardPlan({
   controllerAudit: readyControllerAudit,

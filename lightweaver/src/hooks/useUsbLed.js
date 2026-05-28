@@ -6,7 +6,13 @@ import {
   normalizeLwUsbPixelCount,
   pixelsToLwUsbFrameHex,
 } from '../lib/usbLedFrame.js';
-import { makeUsbLedColorOrderCommand, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
+import { getUsbLedStatusPollInterval } from '../lib/usbLedStatusPolling.js';
+import {
+  makeUsbLedCalibrationPixels,
+  makeUsbLedColorOrderCommand,
+  nextUsbLedColorOrder,
+  normalizeUsbLedColorOrder,
+} from '../lib/usbLedColorOrder.js';
 
 const USB_PUSH_FPS_KEY = 'lw_usb_push_fps';
 const USB_COLOR_ORDER_KEY = 'lw_usb_color_order';
@@ -41,6 +47,7 @@ export function useUsbLed() {
   const [colorOrder, setColorOrderState] = useState(() => normalizeUsbLedColorOrder(localStorage.getItem(USB_COLOR_ORDER_KEY)));
   const lastPushRef = useRef(0);
   const pushInFlightRef = useRef(false);
+  const holdUntilRef = useRef(0);
 
   const setColorOrder = useCallback((value) => {
     const next = normalizeUsbLedColorOrder(value);
@@ -64,22 +71,36 @@ export function useUsbLed() {
     }
   }, [setColorOrder]);
 
+  const holdOutput = useCallback((durationMs = 3200) => {
+    holdUntilRef.current = Math.max(holdUntilRef.current, Date.now() + durationMs);
+  }, []);
+
   useEffect(() => {
     refreshStatus();
   }, [refreshStatus]);
+
+  useEffect(() => {
+    const intervalMs = getUsbLedStatusPollInterval({ connected, connecting });
+    if (!intervalMs) return undefined;
+    const timer = setInterval(() => {
+      refreshStatus();
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [connected, connecting, refreshStatus]);
 
   const connect = useCallback(async ({ pixelCount, brightness = 64, portPath, colorOrder: requestedOrder } = {}) => {
     setConnecting(true);
     setLastError('');
     try {
+      const body = {
+        portPath,
+        pixelCount: normalizeLwUsbPixelCount(pixelCount, { maxPixels: status?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS }),
+        brightness,
+      };
+      if (requestedOrder != null) body.colorOrder = normalizeUsbLedColorOrder(requestedOrder);
       const next = await requestUsbLed('connect', {
         method: 'POST',
-        body: {
-          portPath,
-          pixelCount: normalizeLwUsbPixelCount(pixelCount, { maxPixels: status?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS }),
-          brightness,
-          colorOrder: normalizeUsbLedColorOrder(requestedOrder || colorOrder),
-        },
+        body,
         timeoutMs: 5000,
       });
       setStatus(next);
@@ -93,7 +114,7 @@ export function useUsbLed() {
     } finally {
       setConnecting(false);
     }
-  }, [colorOrder, setColorOrder, status?.maxPixels]);
+  }, [setColorOrder, status?.maxPixels]);
 
   const disconnect = useCallback(async () => {
     setConnecting(false);
@@ -107,6 +128,9 @@ export function useUsbLed() {
   }, []);
 
   const command = useCallback(async (commandText) => {
+    if (/^(SOLID|CHASE|WARM|TEST|CLEAR)\b/i.test(String(commandText || '').trim())) {
+      holdOutput(3200);
+    }
     try {
       const next = await requestUsbLed('command', {
         method: 'POST',
@@ -122,7 +146,7 @@ export function useUsbLed() {
       setLastError(error.message);
       throw error;
     }
-  }, [setColorOrder]);
+  }, [holdOutput, setColorOrder]);
 
   const applyColorOrder = useCallback(async (value) => {
     const nextOrder = setColorOrder(value);
@@ -130,12 +154,33 @@ export function useUsbLed() {
     return result;
   }, [command, setColorOrder]);
 
+  const calibrateColorOrder = useCallback(async (value, { pixelCount, holdMs = 7000 } = {}) => {
+    const nextOrder = setColorOrder(value);
+    holdOutput(holdMs);
+    await command(makeUsbLedColorOrderCommand(nextOrder));
+    const next = await requestUsbLed('frame', {
+      method: 'POST',
+      body: { pixels: makeUsbLedCalibrationPixels(pixelCount || status?.lastFramePixels || 30) },
+      timeoutMs: 1400,
+    });
+    const nextStatus = next.status || next;
+    setStatus(nextStatus);
+    if (nextStatus.colorOrder) setColorOrder(nextStatus.colorOrder);
+    setConnected(!!nextStatus.connected);
+    return next;
+  }, [command, holdOutput, setColorOrder, status?.lastFramePixels]);
+
+  const cycleColorOrder = useCallback(async ({ pixelCount, holdMs } = {}) => {
+    return calibrateColorOrder(nextUsbLedColorOrder(status?.colorOrder || colorOrder), { pixelCount, holdMs });
+  }, [calibrateColorOrder, colorOrder, status?.colorOrder]);
+
   const applyPixelCount = useCallback(async (value) => {
     return command(`COUNT ${normalizeLwUsbPixelCount(value, { maxPixels: status?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS })}`);
   }, [command, status?.maxPixels]);
 
   const push = useCallback((pixels) => {
     if (!connected || pushInFlightRef.current) return;
+    if (Date.now() < holdUntilRef.current) return;
     const now = performance.now();
     const hex = pixelsToLwUsbFrameHex(pixels, { maxPixels: status?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS });
     if (!hex) return;
@@ -175,6 +220,8 @@ export function useUsbLed() {
     colorOrder,
     setColorOrder,
     applyColorOrder,
+    calibrateColorOrder,
+    cycleColorOrder,
     applyPixelCount,
     connect,
     disconnect,

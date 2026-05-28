@@ -89,13 +89,15 @@ export function buildWledBasicPackage({
     ...strips.map(strip => strip.patternId),
     ...(Array.isArray(patternIds) ? patternIds : []),
   ]);
-  const exportPatternIds = collectWledBasicPatternIds({
+  const normalizedPhysicalControls = normalizeWledPhysicalControls(physicalControls || { encoder: { enabled: false } });
+  const controlPatternIds = normalizedPhysicalControls.encoder.patternCycleIds || [];
+  const exportPatternIds = orderWledBasicPatternIds(collectWledBasicPatternIds({
     activePatternId,
     showClips,
     strips,
     patterns,
-    patternIds,
-  });
+    patternIds: controlPatternIds.length ? controlPatternIds : patternIds,
+  }), normalizedPhysicalControls);
   const segments = makeWledBasicSegments(strips, { maxSegments });
   const compatibilityAudit = auditPatternCompatibility(patterns);
   const requestedCompatibilityAudit = requestedIds
@@ -146,7 +148,7 @@ export function buildWledBasicPackage({
 
   const resolvedPlaylistPresetId = playlistPresetId || presetStart + presets.length;
   const controlContract = buildWledControlContract({
-    physicalControls: normalizeWledPhysicalControls(physicalControls || { encoder: { enabled: false } }),
+    physicalControls: normalizedPhysicalControls,
     wledPackage: {
       presets,
       playlistPresetId: resolvedPlaylistPresetId,
@@ -202,6 +204,13 @@ export function buildWledBasicPackage({
     gateSummary,
     warnings,
   };
+}
+
+function orderWledBasicPatternIds(patternIds = [], physicalControls = {}) {
+  const cycleIds = physicalControls?.encoder?.patternCycleIds || [];
+  if (!cycleIds.length) return patternIds;
+  const runnable = new Set(patternIds);
+  return cycleIds.filter(id => runnable.has(id));
 }
 
 export function makeWledBasicPresetsJson({

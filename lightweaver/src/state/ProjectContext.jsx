@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useWled } from '../hooks/useWled.js';
 import { useUsbLed } from '../hooks/useUsbLed.js';
 import { samplePath } from '../lib/mapper.js';
@@ -15,9 +15,12 @@ import {
   defaultStandaloneController,
   migrateProject,
   PROJECT_VERSION,
+  resolveStartupProject,
 } from '../lib/projectModel.js';
 import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js';
 import { easeCrossfade } from '../lib/motionSmoothing.js';
+import { PATTERNS } from '../lib/patterns-library.js';
+import { resolveRotaryInputAction, selectFreshUsbRotaryEvents } from '../lib/usbRotaryInput.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
 const LS_AUTOSAVE_LEGACY_KEY = 'lw_autosave_v1';
@@ -196,6 +199,7 @@ export function ProjectProvider({ children }) {
 
   // ── Device/project hardware config ───────────────────────────────────────
   const [wledSegmentMap, setWledSegmentMap] = useState(defaults.devices.segmentMap || {});
+  const [physicalControls, setPhysicalControls] = useState(defaults.devices.physicalControls);
   const [controllerProfiles, setControllerProfiles] = useState(defaults.devices.controllerProfiles || []);
   const [activeControllerId, setActiveControllerId] = useState(defaults.devices.activeControllerId || '');
   const [standaloneController, setStandaloneController] = useState(defaults.devices.standaloneController || defaultStandaloneController());
@@ -227,6 +231,8 @@ export function ProjectProvider({ children }) {
     disconnect: usbLedDisconnect,
     command: usbLedCommand,
     applyColorOrder: usbLedApplyColorOrder,
+    calibrateColorOrder: usbLedCalibrateColorOrder,
+    cycleColorOrder: usbLedCycleColorOrder,
     applyPixelCount: usbLedApplyPixelCount,
     push: usbLedPush,
     refreshStatus: usbLedRefreshStatus,
@@ -236,6 +242,51 @@ export function ProjectProvider({ children }) {
     wledPush(pixels);
     usbLedPush(pixels);
   }, [usbLedPush, wledPush]);
+
+  const knownPatternIds = useMemo(() => new Set(PATTERNS.map(pattern => pattern.id)), []);
+  const usbRotaryLastEventIdRef = useRef(0);
+  const usbRotaryStartedAtRef = useRef(Date.now());
+
+  useEffect(() => {
+    const events = Array.isArray(usbLedStatus?.inputEvents) ? usbLedStatus.inputEvents : [];
+    if (!events.length) return;
+    const fresh = selectFreshUsbRotaryEvents(events, {
+      lastEventId: usbRotaryLastEventIdRef.current,
+      startedAt: usbRotaryStartedAtRef.current,
+    });
+    usbRotaryLastEventIdRef.current = fresh.lastEventId;
+    if (!fresh.events.length) return;
+
+    let brightnessCursor = masterBrightness;
+    let patternCursor = activePatternId;
+    for (const event of fresh.events) {
+      const action = resolveRotaryInputAction({
+        event,
+        currentBrightness: brightnessCursor,
+        currentPatternId: patternCursor,
+        showClips,
+        physicalControls,
+        knownPatternIds,
+        requireEnabled: false,
+      });
+      if (action?.type === 'brightness') {
+        brightnessCursor = action.brightness;
+        setMasterBrightness(action.brightness);
+      } else if (action?.type === 'pattern') {
+        patternCursor = action.patternId;
+        setActivePatternId(action.patternId);
+      }
+    }
+  }, [
+    activePatternId,
+    knownPatternIds,
+    masterBrightness,
+    physicalControls,
+    setActivePatternId,
+    setMasterBrightness,
+    showClips,
+    usbLedStatus?.inputEvents,
+  ]);
 
   const lastUsbLedPixelCountRef = useRef(0);
   useEffect(() => {
@@ -331,6 +382,7 @@ export function ProjectProvider({ children }) {
     setLiveQuantize(live.quantize || defaults.live.quantize);
     setSymSettings({ ...DEFAULT_SYM_SETTINGS, ...(pattern.symSettings || {}) });
     setWledSegmentMap(devices.segmentMap || {});
+    setPhysicalControls(devices.physicalControls || defaults.devices.physicalControls);
     setControllerProfiles(devices.controllerProfiles || []);
     setActiveControllerId(devices.activeControllerId || '');
     setStandaloneController(defaultStandaloneController(devices.standaloneController));
@@ -348,9 +400,10 @@ export function ProjectProvider({ children }) {
     try {
       const saved = localStorage.getItem(LS_AUTOSAVE_KEY) || localStorage.getItem(LS_AUTOSAVE_LEGACY_KEY);
       const layoutSaved = localStorage.getItem(LS_LAYOUT_LEGACY_KEY);
-      const project = saved ? migrateProject(JSON.parse(saved)) : createDefaultProject();
-      const layout = layoutSaved ? migrateProject(JSON.parse(layoutSaved)) : null;
-      if (layout) project.layout = { ...project.layout, ...layout.layout };
+      const project = resolveStartupProject({
+        savedProject: saved ? JSON.parse(saved) : null,
+        legacyLayoutProject: layoutSaved ? JSON.parse(layoutSaved) : null,
+      });
       applyProject(project);
     } catch {}
   }, [applyProject]);
@@ -388,6 +441,7 @@ export function ProjectProvider({ children }) {
     devices: {
       wledIp,
       segmentMap: wledSegmentMap,
+      physicalControls,
       controllerProfiles,
       activeControllerId,
       standaloneController,
@@ -399,7 +453,7 @@ export function ProjectProvider({ children }) {
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     motionSmoothing,
     showClips, showTransitions, showCues, autoLanes, showDuration,
-    liveRecording, liveQuantize, wledIp, wledSegmentMap, controllerProfiles, activeControllerId, standaloneController,
+    liveRecording, liveQuantize, wledIp, wledSegmentMap, physicalControls, controllerProfiles, activeControllerId, standaloneController,
   ]);
 
   useEffect(() => {
@@ -478,10 +532,13 @@ export function ProjectProvider({ children }) {
       usbLedColorOrder,
       usbLedConnect,   usbLedDisconnect,
       usbLedCommand,   usbLedApplyColorOrder,
+      usbLedCalibrateColorOrder,
+      usbLedCycleColorOrder,
       usbLedApplyPixelCount,
       usbLedRefreshStatus,
       pushOutputFrame,
       wledSegmentMap,  setWledSegmentMap,
+      physicalControls, setPhysicalControls,
       controllerProfiles, setControllerProfiles,
       activeControllerId, setActiveControllerId,
       standaloneController, setStandaloneController,

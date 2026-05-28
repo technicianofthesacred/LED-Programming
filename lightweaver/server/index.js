@@ -15,6 +15,7 @@ import http from 'http';
 import { Bonjour } from 'bonjour-service';
 import { WebSocket, WebSocketServer } from 'ws';
 import { LwUsbController } from './lwUsbController.js';
+import { readUsbLedConfig, writeUsbLedConfig } from './usbLedConfigStore.js';
 import { makeKnownGoodRecoveryState } from '../src/lib/controllerProfiles.js';
 import {
   makeSafeWledTestState,
@@ -32,10 +33,13 @@ const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const DEFAULT_WLED = process.env.WLED_HOST || '';
 const HTTP_TIMEOUT_MS = Number.parseInt(process.env.WLED_TIMEOUT_MS || '3000', 10);
 const WS_UPSTREAM_TIMEOUT_MS = Number.parseInt(process.env.WLED_WS_TIMEOUT_MS || '5000', 10);
+const USB_CONFIG_PATH = process.env.LWUSB_CONFIG || join(rootDir, '.lightweaver-usb.json');
+let usbConfig = readUsbLedConfig(USB_CONFIG_PATH);
 const usbLed = new LwUsbController({
   portPath: process.env.LWUSB_PORT || '',
   baudRate: Number.parseInt(process.env.LWUSB_BAUD || '115200', 10),
   maxPixels: Number.parseInt(process.env.LWUSB_MAX_PIXELS || '300', 10),
+  colorOrder: usbConfig.colorOrder || 'RGB',
 });
 
 const mdnsDevices = new Map();
@@ -160,7 +164,11 @@ app.get('/api/usb-led/ports', async (_req, res) => {
 
 app.post('/api/usb-led/connect', async (req, res) => {
   try {
-    const status = await usbLed.connect(req.body || {});
+    const status = await usbLed.connect({
+      colorOrder: usbConfig.colorOrder || usbLed.status().colorOrder,
+      ...(req.body || {}),
+    });
+    usbConfig = writeUsbLedConfig(USB_CONFIG_PATH, { colorOrder: status.colorOrder });
     res.json(status);
   } catch (error) {
     res.status(502).json({ error: error.message, status: usbLed.status() });
@@ -182,7 +190,9 @@ app.post('/api/usb-led/command', async (req, res) => {
   if (!allowed.test(command)) return res.status(400).json({ error: 'Unsupported USB LED command' });
   try {
     const result = await usbLed.sendCommand(command.toUpperCase());
-    res.json({ ok: true, result, status: usbLed.status() });
+    const status = usbLed.status();
+    if (/^ORDER\s+/i.test(command)) usbConfig = writeUsbLedConfig(USB_CONFIG_PATH, { colorOrder: status.colorOrder });
+    res.json({ ok: true, result, status });
   } catch (error) {
     res.status(502).json({ error: error.message, status: usbLed.status() });
   }

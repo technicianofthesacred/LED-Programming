@@ -18,6 +18,14 @@ import {
   normalizePalette,
   renderPixelFrame,
 } from './lib/frameEngine.js';
+import { normalizeWledPhysicalControls } from './lib/wledControlContract.js';
+import {
+  adjustRotaryBrightness,
+  getNextRotaryCyclePatternId,
+  makeDefaultRotaryCycleIds,
+  normalizeRotaryPatternCycle,
+} from './lib/rotaryPatternCycle.js';
+import { makePreviewFallbackStrip } from './lib/previewFallbackStrip.js';
 import {
   SPEED_SLIDER_MAX,
   SPEED_SLIDER_MIN,
@@ -380,6 +388,8 @@ function PatternScreen({ panelMode, setPanelMode }) {
     pushOutputFrame,
     symSettings, setSymSettings,
     audioBands,
+    physicalControls,
+    showClips,
   } = useProject();
 
   // Read URL hash for initial pattern on mount
@@ -441,9 +451,15 @@ function PatternScreen({ panelMode, setPanelMode }) {
     )));
   }, [setProjectStrips]);
 
+  const fallbackPreviewStrip = useMemo(
+    () => makePreviewFallbackStrip(projectViewBox, { pixelCount: 30 }),
+    [projectViewBox],
+  );
+  const previewStrips = projectStrips.length > 0 ? projectStrips : [fallbackPreviewStrip];
+  const previewHidden = projectStrips.length > 0 ? projectHidden : {};
   const visibleProjectStrips = useMemo(
-    () => projectStrips.filter(strip => !projectHidden[strip.id]),
-    [projectStrips, projectHidden],
+    () => previewStrips.filter(strip => !previewHidden[strip.id]),
+    [previewStrips, previewHidden],
   );
 
   const fittedPatternViewBox = useMemo(
@@ -549,6 +565,28 @@ function PatternScreen({ panelMode, setPanelMode }) {
 
   const cur = PATTERNS.find(p => p.id === patternId);
   const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
+  const knownPatternIds = useMemo(() => new Set(PATTERNS.map(pattern => pattern.id)), []);
+  const rotaryControls = useMemo(() => normalizeWledPhysicalControls(physicalControls), [physicalControls]);
+  const previewCycleIds = useMemo(() => {
+    const stored = normalizeRotaryPatternCycle(rotaryControls.encoder.patternCycleIds, knownPatternIds);
+    return stored.length ? stored : makeDefaultRotaryCycleIds({
+      activePatternId: patternId,
+      showClips: showClips || [],
+      knownPatternIds,
+    });
+  }, [knownPatternIds, patternId, rotaryControls.encoder.patternCycleIds, showClips]);
+  const handlePreviewRotaryTurn = useCallback((turn) => {
+    setMasterBrightness(current => adjustRotaryBrightness({
+      currentBrightness: current,
+      rotateDirection: rotaryControls.encoder.rotateDirection,
+      turn,
+      step: Math.max(0.01, (rotaryControls.encoder.brightnessStep || 8) / 255),
+    }));
+  }, [rotaryControls.encoder.brightnessStep, rotaryControls.encoder.rotateDirection, setMasterBrightness]);
+  const handlePreviewRotaryPush = useCallback(() => {
+    const nextPatternId = getNextRotaryCyclePatternId(previewCycleIds, patternId, knownPatternIds);
+    if (nextPatternId) handleSelectPattern(nextPatternId);
+  }, [handleSelectPattern, knownPatternIds, patternId, previewCycleIds]);
 
   return (
     <div className="lw-pattern-screen" style={{ gridTemplateColumns: gridCols }}>
@@ -604,7 +642,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
           {projectStrips.length === 0 && (
             <div className="lw-pattern-empty">
               <div className="title">No Layout strips</div>
-              <div className="meta">Create strips in Layout to preview effects here.</div>
+              <div className="meta">Using a 30 LED preview strip until the artwork layout is loaded.</div>
             </div>
           )}
           {compareMode ? (
@@ -613,7 +651,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <LEDPreview
                   key={`a-${previewResetKey}`}
                   patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                  strips={projectStrips}
+                  strips={previewStrips}
                   viewBox={previewViewBox}
                   svgText={projectSvgText}
                   masterSpeed={masterSpeed} masterBrightness={masterBrightness}
@@ -634,7 +672,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <LEDPreview
                   key={`b-${previewResetKey}`}
                   patternId={compareId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                  strips={projectStrips}
+                  strips={previewStrips}
                   viewBox={previewViewBox}
                   svgText={projectSvgText}
                   masterSpeed={masterSpeed} masterBrightness={masterBrightness}
@@ -674,7 +712,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <LEDPreview
                   key={previewResetKey}
                   patternId={patternId} playing={playing} glow={glow} dotSize={dot} speed={1}
-                  strips={projectStrips}
+                  strips={previewStrips}
                   viewBox={previewViewBox}
                   svgText={projectSvgText}
                   masterSpeed={masterSpeed}
@@ -722,6 +760,13 @@ function PatternScreen({ panelMode, setPanelMode }) {
                 <button onClick={() => setZoom(z => Math.max(0.25, z / 1.25))} title="Zoom out" aria-label="Zoom out">−</button>
                 <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={resetPatternView} title="Fit and center preview">Fit</button>
               </div>
+              <PreviewRotaryKnob
+                brightness={masterBrightness}
+                cycleCount={previewCycleIds.length}
+                rotateDirection={rotaryControls.encoder.rotateDirection}
+                onTurn={handlePreviewRotaryTurn}
+                onPress={handlePreviewRotaryPush}
+              />
             </>
           )}
         </div>
@@ -758,6 +803,98 @@ function PatternScreen({ panelMode, setPanelMode }) {
           />
         </>
       )}
+    </div>
+  );
+}
+
+function PreviewRotaryKnob({ brightness, cycleCount, rotateDirection, onTurn, onPress }) {
+  const knobRef = useRef(null);
+  const dragRef = useRef(null);
+  const clockwiseLabel = rotateDirection === 'clockwise-dimmer' ? 'dims' : 'brightens';
+
+  const angleFromPointer = useCallback((event) => {
+    const rect = knobRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return Math.atan2(
+      event.clientY - (rect.top + rect.height / 2),
+      event.clientX - (rect.left + rect.width / 2),
+    );
+  }, []);
+
+  const beginTurn = useCallback((event) => {
+    const angle = angleFromPointer(event);
+    if (angle == null) return;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      angle,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }, [angleFromPointer]);
+
+  const moveTurn = useCallback((event) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const nextAngle = angleFromPointer(event);
+    if (nextAngle == null) return;
+    let delta = nextAngle - drag.angle;
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    if (Math.abs(delta) > 0.18) {
+      onTurn(delta > 0 ? 'clockwise' : 'counterclockwise');
+      drag.angle = nextAngle;
+      drag.moved = true;
+    }
+    event.preventDefault();
+  }, [angleFromPointer, onTurn]);
+
+  const endTurn = useCallback((event) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    dragRef.current = null;
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const handleWheel = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onTurn(event.deltaY < 0 ? 'clockwise' : 'counterclockwise');
+  }, [onTurn]);
+
+  const handlePush = useCallback((event) => {
+    if (dragRef.current?.moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onPress();
+  }, [onPress]);
+
+  return (
+    <div className="lw-preview-rotary" aria-label="Preview rotary control">
+      <button
+        ref={knobRef}
+        className="lw-preview-rotary-dial"
+        type="button"
+        aria-label="Turn or push preview rotary button"
+        title="Drag or scroll to turn. Click to push through the pattern cycle."
+        onPointerDown={beginTurn}
+        onPointerMove={moveTurn}
+        onPointerUp={endTurn}
+        onPointerCancel={endTurn}
+        onClick={handlePush}
+        onWheel={handleWheel}
+      >
+        <span className="lw-preview-rotary-indicator" style={{ transform: `rotate(${Math.round(brightness * 270 - 135)}deg)` }} />
+        <span className="lw-preview-rotary-core">Push</span>
+      </button>
+      <div className="lw-preview-rotary-meta">
+        <span>{Math.round(brightness * 100)}%</span>
+        <span>cw {clockwiseLabel}</span>
+        <span>{cycleCount || 0} looks</span>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,10 @@ import {
 } from '../state/ProjectDefaults.js';
 import { normalizeMotionSmoothing } from './motionSmoothing.js';
 import {
+  DEFAULT_WLED_PHYSICAL_CONTROLS,
+  normalizeWledPhysicalControls,
+} from './wledControlContract.js';
+import {
   DEFAULT_STANDALONE_CONTROLS,
   DEFAULT_STANDALONE_LED,
   DEFAULT_STANDALONE_RUNTIME_MODE,
@@ -96,6 +100,7 @@ export function createDefaultProject() {
     devices: {
       wledIp: '',
       segmentMap: {},
+      physicalControls: DEFAULT_WLED_PHYSICAL_CONTROLS,
       controllerProfiles: [],
       activeControllerId: '',
       standaloneController: defaultStandaloneController(),
@@ -120,6 +125,7 @@ export function migrateProject(data) {
       devices: {
         ...base.devices,
         ...(data.devices || {}),
+        physicalControls: normalizeWledPhysicalControls(data.devices?.physicalControls),
         standaloneController: defaultStandaloneController(data.devices?.standaloneController),
       },
     };
@@ -175,12 +181,41 @@ export function migrateProject(data) {
         ...base.devices,
         wledIp: data.wledIp || '',
         segmentMap: data.wledSegmentMap || {},
+        physicalControls: normalizeWledPhysicalControls(data.devices?.physicalControls),
         standaloneController: defaultStandaloneController(data.devices?.standaloneController),
       },
     };
   }
 
   return null;
+}
+
+export function resolveStartupProject({
+  savedProject = null,
+  legacyProject = null,
+  legacyLayoutProject = null,
+} = {}) {
+  const saved = migrateProject(savedProject);
+  const legacy = migrateProject(legacyProject);
+  const legacyLayout = migrateProject(legacyLayoutProject);
+  const project = saved || legacy || createDefaultProject();
+
+  if (!legacyLayout?.layout) return project;
+
+  const projectHasLayout = Array.isArray(project.layout?.strips) && project.layout.strips.length > 0;
+  const legacyHasLayout = Array.isArray(legacyLayout.layout?.strips) && legacyLayout.layout.strips.length > 0;
+
+  if (!projectHasLayout && legacyHasLayout) {
+    return {
+      ...project,
+      layout: {
+        ...project.layout,
+        ...legacyLayout.layout,
+      },
+    };
+  }
+
+  return project;
 }
 
 export function toLegacyProject(project) {

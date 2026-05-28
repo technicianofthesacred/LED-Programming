@@ -27,6 +27,8 @@ export function WledBar() {
     usbLedDisconnect,
     usbLedCommand,
     usbLedApplyColorOrder,
+    usbLedCalibrateColorOrder,
+    usbLedCycleColorOrder,
   } = useProject();
   const totalLEDs = useMemo(() => strips.reduce((sum, strip) => (
     sum + (strip.pixels?.length || strip.pixelCount || 0)
@@ -84,8 +86,24 @@ export function WledBar() {
       if (usbLedConnected) {
         await usbLedDisconnect?.();
       } else {
-        await usbLedConnect?.({ pixelCount: usbPixelCount, brightness: 64, colorOrder: usbLedColorOrder });
+        await usbLedConnect?.({ pixelCount: usbPixelCount, brightness: 64 });
       }
+    } catch {
+      // The hook keeps the latest error for the status tooltip.
+    }
+  }
+
+  async function handleUsbColorOrderChange(order) {
+    try {
+      await usbLedCalibrateColorOrder?.(order, { pixelCount: usbPixelCount });
+    } catch {
+      await usbLedApplyColorOrder?.(order).catch(() => {});
+    }
+  }
+
+  async function handleUsbColorOrderCycle() {
+    try {
+      await usbLedCycleColorOrder?.({ pixelCount: usbPixelCount });
     } catch {
       // The hook keeps the latest error for the status tooltip.
     }
@@ -122,11 +140,29 @@ export function WledBar() {
       >
         Warm
       </button>
+      <button
+        aria-label="Send USB RGB calibration test"
+        onClick={() => usbLedCalibrateColorOrder?.(usbLedStatus?.colorOrder || usbLedColorOrder, { pixelCount: usbPixelCount }).catch(() => {})}
+        disabled={!usbLedConnected}
+        style={{ ...styles.btn, ...styles.btnGhost, opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Show red, green, blue sections for color-order calibration"
+      >
+        RGB Test
+      </button>
+      <button
+        aria-label="Cycle USB LED color order"
+        onClick={handleUsbColorOrderCycle}
+        disabled={!usbLedConnected}
+        style={{ ...styles.btn, ...styles.btnGhost, opacity: usbLedConnected ? 1 : 0.45 }}
+        title="Try the next color order and show the RGB calibration frame"
+      >
+        Cycle
+      </button>
       <select
         aria-label="USB LED color order"
         value={usbLedColorOrder || usbLedStatus?.colorOrder || 'RGB'}
         disabled={!usbLedConnected}
-        onChange={event => usbLedApplyColorOrder?.(event.target.value).catch(() => {})}
+        onChange={event => handleUsbColorOrderChange(event.target.value)}
         style={{ ...styles.select, opacity: usbLedConnected ? 1 : 0.45 }}
         title="Change color order if red appears green or blue"
       >

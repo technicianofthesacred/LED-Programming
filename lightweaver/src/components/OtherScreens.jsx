@@ -496,6 +496,7 @@ export function ExportScreen() {
     showDuration,
     controllerProfiles,
     activeControllerId,
+    physicalControls,
   } = useProject();
 
   const [normalize, setNormalize] = useState(true);
@@ -535,8 +536,8 @@ export function ExportScreen() {
     duration: showDuration,
     brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
     loop: true,
-    physicalControls: activeControllerProfile?.physicalControls,
-  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness, activeControllerProfile?.physicalControls]);
+    physicalControls: physicalControls || activeControllerProfile?.physicalControls,
+  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness, physicalControls, activeControllerProfile?.physicalControls]);
 
   const artifacts = [
     {

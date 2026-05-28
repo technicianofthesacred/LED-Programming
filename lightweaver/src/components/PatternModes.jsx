@@ -5,6 +5,16 @@ import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
 import { makePatternStudioSummary } from '../lib/patternStudio.js';
 import { stripOverrideIdsToClearForGlobalSelection } from '../lib/patternTargeting.js';
+import { useProject } from '../state/ProjectContext.jsx';
+import {
+  WLED_ENCODER_ROTATE_DIRECTIONS,
+  normalizeWledPhysicalControls,
+} from '../lib/wledControlContract.js';
+import {
+  insertPatternInCycle,
+  makeDefaultRotaryCycleIds,
+  normalizeRotaryPatternCycle,
+} from '../lib/rotaryPatternCycle.js';
 
 // ── @param live parser ──────────────────────────────────────────────────────
 function parseParamsFromCode(code) {
@@ -130,6 +140,7 @@ const PARAM_META = {
 
 const PARAM_GROUP_ORDER = ['Motion', 'Shape', 'Color', 'Intensity', 'Audio', 'Advanced'];
 const PARAM_SLIDER_STEPS = 1000;
+const ROTARY_PATTERN_DRAG_MIME = 'application/x-lightweaver-pattern-id';
 
 function titleizeParam(name) {
   return String(name)
@@ -194,6 +205,7 @@ export function CardsMode({
   strips = [],
   onAssignStripPattern = null,
 }) {
+  const { physicalControls, setPhysicalControls, showClips } = useProject();
   const [search, setSearch]     = useState('');
   const [showFavs, setShowFavs] = useState(false);
   const [cat, setCat]           = useState('all');
@@ -201,6 +213,9 @@ export function CardsMode({
   const [favs, setFavsState]    = useState(loadFavs);
   const [presets, setPresetsState] = useState(loadPresets);
   const [customPatterns, setCustomPatterns] = useState(loadCustomPatterns);
+  const [rotaryOpen, setRotaryOpen] = useState(false);
+  const [rotaryDragOverIndex, setRotaryDragOverIndex] = useState(null);
+  const [inspectorDragActive, setInspectorDragActive] = useState(false);
   const [recentIds, setRecentIds] = useState(() => {
     try { return JSON.parse(localStorage.getItem(LS_RECENT_KEY) || '[]'); } catch { return []; }
   });
@@ -305,6 +320,124 @@ export function CardsMode({
     palette,
     targetRuntime: 'wled-basic',
   }), [activeLibPattern, tuningPattern, tuningParams, palette]);
+  const rotaryControls = useMemo(
+    () => normalizeWledPhysicalControls(physicalControls),
+    [physicalControls],
+  );
+  const knownPatternIds = useMemo(() => new Set(PATTERNS.map(pattern => pattern.id)), []);
+  const storedCycleIds = normalizeRotaryPatternCycle(rotaryControls.encoder.patternCycleIds, knownPatternIds);
+  const defaultCycleIds = useMemo(() => makeDefaultRotaryCycleIds({
+    activePatternId: patternId,
+    showClips: showClips || [],
+    knownPatternIds,
+  }), [patternId, showClips, knownPatternIds]);
+  const visibleCycleIds = storedCycleIds.length ? storedCycleIds : defaultCycleIds;
+  const rotaryCycleIsCustom = storedCycleIds.length > 0;
+  const rotaryCycleNames = visibleCycleIds
+    .map(id => PATTERNS.find(pattern => pattern.id === id)?.name || id);
+  const rotaryTurnLabel = rotaryControls.encoder.rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER
+    ? 'clockwise dims'
+    : 'clockwise brightens';
+  const rotaryCycleSummary = rotaryCycleNames.length
+    ? rotaryCycleNames.slice(0, 3).join(' > ') + (rotaryCycleNames.length > 3 ? ` +${rotaryCycleNames.length - 3}` : '')
+    : 'no push cycle';
+
+  const updateRotaryControls = (patch) => {
+    setPhysicalControls(prev => {
+      const current = normalizeWledPhysicalControls(prev);
+      const nextPatch = typeof patch === 'function' ? patch(current.encoder) : patch;
+      return normalizeWledPhysicalControls({
+        ...current,
+        encoder: {
+          ...current.encoder,
+          ...nextPatch,
+        },
+      });
+    });
+  };
+
+  const saveCycleIds = (cycleIds) => {
+    updateRotaryControls({
+      enabled: true,
+      pressAction: 'next-preset',
+      patternCycleIds: normalizeRotaryPatternCycle(cycleIds, knownPatternIds),
+    });
+  };
+
+  const moveCycleId = (index, direction) => {
+    const cycleId = visibleCycleIds[index];
+    const target = index + direction;
+    if (!cycleId || target < 0 || target >= visibleCycleIds.length) return;
+    saveCycleIds(insertPatternInCycle(visibleCycleIds, cycleId, target, knownPatternIds));
+  };
+
+  const addCurrentToCycle = () => {
+    saveCycleIds(insertPatternInCycle(visibleCycleIds, tuningPatternId, visibleCycleIds.length, knownPatternIds));
+  };
+
+  const removeCycleId = (index) => {
+    saveCycleIds(visibleCycleIds.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const startPatternDrag = (event, patternIdToDrag) => {
+    if (!knownPatternIds.has(patternIdToDrag)) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData(ROTARY_PATTERN_DRAG_MIME, patternIdToDrag);
+    event.dataTransfer.setData('text/plain', patternIdToDrag);
+    setRotaryOpen(true);
+  };
+
+  const readDraggedPatternId = (event) => (
+    event.dataTransfer.getData(ROTARY_PATTERN_DRAG_MIME)
+    || event.dataTransfer.getData('text/plain')
+  );
+
+  const handleRotaryDragOver = (event, targetIndex = visibleCycleIds.length) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+    setRotaryOpen(true);
+    setRotaryDragOverIndex(targetIndex);
+  };
+
+  const handleRotaryDrop = (event, targetIndex = visibleCycleIds.length) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const draggedPatternId = readDraggedPatternId(event);
+    if (draggedPatternId) {
+      saveCycleIds(insertPatternInCycle(visibleCycleIds, draggedPatternId, targetIndex, knownPatternIds));
+    }
+    setRotaryOpen(true);
+    setRotaryDragOverIndex(null);
+    setInspectorDragActive(false);
+  };
+
+  const handleInspectorDragOver = (event) => {
+    if (!Array.from(event.dataTransfer.types || []).includes(ROTARY_PATTERN_DRAG_MIME)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setRotaryOpen(true);
+    setInspectorDragActive(true);
+    setRotaryDragOverIndex(visibleCycleIds.length);
+  };
+
+  const handleInspectorDragLeave = (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setInspectorDragActive(false);
+    setRotaryDragOverIndex(null);
+  };
+
+  const handleInspectorDrop = (event) => {
+    if (!Array.from(event.dataTransfer.types || []).includes(ROTARY_PATTERN_DRAG_MIME)) return;
+    event.preventDefault();
+    const draggedPatternId = readDraggedPatternId(event);
+    if (draggedPatternId) {
+      saveCycleIds(insertPatternInCycle(visibleCycleIds, draggedPatternId, visibleCycleIds.length, knownPatternIds));
+    }
+    setRotaryOpen(true);
+    setInspectorDragActive(false);
+    setRotaryDragOverIndex(null);
+  };
 
   const handleParamChange = (name, value) => {
     if (onPatternParamsChange) {
@@ -490,8 +623,10 @@ export function CardsMode({
         {filtered.map((p, cardIdx) => (
           <div key={p.id}
                className={`lw-pattern-card ${p.id === activeTargetPatternId ? 'selected' : ''}`}
+               draggable={knownPatternIds.has(p.id)}
+               onDragStart={event => startPatternDrag(event, p.id)}
                onClick={() => handleSelectPattern(p.id)}
-               title={p.desc || ''}>
+               title={p.desc || 'Drag into rotary push order'}>
             <div className="bg" style={{ background: p.preview }}/>
             <div className="scrim"/>
             <div className="label">
@@ -551,7 +686,12 @@ export function CardsMode({
       </div>
         </div>
 
-        <div className="lw-effect-inspector">
+        <div
+          className={`lw-effect-inspector ${inspectorDragActive ? 'is-rotary-drop-target' : ''}`}
+          onDragOver={handleInspectorDragOver}
+          onDragLeave={handleInspectorDragLeave}
+          onDrop={handleInspectorDrop}
+        >
           <div className="lw-effect-inspector-head">
             <div>
               <div className="eyebrow">{effectTarget === 'global' ? 'Global tune' : selectedTargetStrip?.name || 'Layer tune'}</div>
@@ -560,6 +700,98 @@ export function CardsMode({
             <div className={`palette-state ${paletteIsUsed ? 'used' : ''}`}>
               {paletteIsUsed ? 'uses palette' : 'palette unused'}
             </div>
+          </div>
+
+          <div
+            className={`lw-rotary-control-panel ${rotaryOpen ? 'is-open' : ''}`}
+            onDragOver={event => handleRotaryDragOver(event)}
+            onDragLeave={() => setRotaryDragOverIndex(null)}
+            onDrop={event => handleRotaryDrop(event)}
+          >
+            <button
+              className="lw-rotary-toggle"
+              type="button"
+              aria-expanded={rotaryOpen}
+              onClick={() => setRotaryOpen(open => !open)}
+            >
+              <span className="lw-rotary-toggle-copy">
+                <span className="lw-rotary-title">Rotary button</span>
+                <span className="lw-rotary-summary">{rotaryTurnLabel} · {visibleCycleIds.length} push {visibleCycleIds.length === 1 ? 'pattern' : 'patterns'} · on chip after WLED install</span>
+                <span className="lw-rotary-preview-line">{rotaryCycleSummary}</span>
+              </span>
+              <span className="lw-rotary-toggle-action">{rotaryOpen ? 'Close' : 'Organize'}</span>
+            </button>
+
+            {rotaryOpen && (
+              <div className="lw-rotary-body">
+                <div className="lw-rotary-row">
+                  <div>
+                    <div className="lw-rotary-label">Turn</div>
+                    <div className="lw-rotary-hint">Clockwise rotation</div>
+                  </div>
+                  <div className="lw-rotary-segmented" role="group" aria-label="Rotary turn mapping">
+                    <button
+                      className={rotaryControls.encoder.rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_BRIGHTER ? 'active' : ''}
+                      onClick={() => updateRotaryControls({
+                        enabled: true,
+                        rotateAction: 'brightness',
+                        rotateDirection: WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_BRIGHTER,
+                      })}>
+                      Brighten
+                    </button>
+                    <button
+                      className={rotaryControls.encoder.rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER ? 'active' : ''}
+                      onClick={() => updateRotaryControls({
+                        enabled: true,
+                        rotateAction: 'brightness',
+                        rotateDirection: WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER,
+                      })}>
+                      Dim
+                    </button>
+                  </div>
+                </div>
+
+                <div className="lw-rotary-cycle-head">
+                  <div>
+                    <div className="lw-rotary-label">Push order</div>
+                    <div className="lw-rotary-hint">{rotaryCycleIsCustom ? 'Custom WLED preset cycle' : 'Active show order'}</div>
+                  </div>
+                  <button className="btn btn-ghost" onClick={addCurrentToCycle} disabled={visibleCycleIds.includes(tuningPatternId)}>
+                    Add selected
+                  </button>
+                </div>
+
+                <div className="lw-rotary-cycle-list" aria-label="Rotary push pattern order">
+                  {visibleCycleIds.map((cycleId, index) => {
+                    const pattern = PATTERNS.find(item => item.id === cycleId);
+                    return (
+                      <div
+                        className={`lw-rotary-cycle-item ${rotaryDragOverIndex === index ? 'is-drop-target' : ''}`}
+                        key={`${cycleId}-${index}`}
+                        draggable
+                        onDragStart={event => startPatternDrag(event, cycleId)}
+                        onDragOver={event => handleRotaryDragOver(event, index)}
+                        onDrop={event => handleRotaryDrop(event, index)}
+                      >
+                        <span className="lw-rotary-cycle-index">{index + 1}</span>
+                        <span className="lw-rotary-cycle-swatch" style={{ background: pattern?.preview || 'var(--surface-2)' }} />
+                        <span className="lw-rotary-cycle-name">{pattern?.name || cycleId}</span>
+                        <button className="btn btn-ghost" onClick={() => moveCycleId(index, -1)} disabled={index === 0} title="Move earlier">↑</button>
+                        <button className="btn btn-ghost" onClick={() => moveCycleId(index, 1)} disabled={index === visibleCycleIds.length - 1} title="Move later">↓</button>
+                        <button className="btn btn-ghost" onClick={() => removeCycleId(index)} disabled={visibleCycleIds.length <= 1} title={`Remove ${pattern?.name || cycleId}`}>×</button>
+                      </div>
+                    );
+                  })}
+                  <div
+                    className={`lw-rotary-dropzone ${rotaryDragOverIndex === visibleCycleIds.length ? 'is-drop-target' : ''}`}
+                    onDragOver={event => handleRotaryDragOver(event, visibleCycleIds.length)}
+                    onDrop={event => handleRotaryDrop(event, visibleCycleIds.length)}
+                  >
+                    Drop pattern here
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="lw-studio-panel">

@@ -10,13 +10,20 @@ export const WLED_ENCODER_ACTIONS = Object.freeze({
   NONE: 'none',
 });
 
+export const WLED_ENCODER_ROTATE_DIRECTIONS = Object.freeze({
+  CLOCKWISE_BRIGHTER: 'clockwise-brighter',
+  CLOCKWISE_DIMMER: 'clockwise-dimmer',
+});
+
 export const DEFAULT_WLED_PHYSICAL_CONTROLS = Object.freeze({
   encoder: Object.freeze({
     enabled: true,
     firmware: WLED_ENCODER_FIRMWARE_MODES.ROTARY_USERMOD,
-    pins: Object.freeze({ a: 4, b: 5, press: 6 }),
+    pins: Object.freeze({ a: 4, b: 5, press: 0 }),
     rotateAction: WLED_ENCODER_ACTIONS.BRIGHTNESS,
+    rotateDirection: WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_BRIGHTER,
     pressAction: WLED_ENCODER_ACTIONS.NEXT_PRESET,
+    patternCycleIds: Object.freeze([]),
     brightnessStep: 8,
     helperPresetLabel: 'LW Next Look',
   }),
@@ -24,6 +31,7 @@ export const DEFAULT_WLED_PHYSICAL_CONTROLS = Object.freeze({
 
 const VALID_FIRMWARE_MODES = new Set(Object.values(WLED_ENCODER_FIRMWARE_MODES));
 const VALID_ACTIONS = new Set(Object.values(WLED_ENCODER_ACTIONS));
+const VALID_ROTATE_DIRECTIONS = new Set(Object.values(WLED_ENCODER_ROTATE_DIRECTIONS));
 const WLED_BUTTON_TYPE_PUSH = 2;
 
 export function normalizeWledPhysicalControls(controls = {}) {
@@ -39,7 +47,9 @@ export function normalizeWledPhysicalControls(controls = {}) {
         press: normalizeGpio(sourceEncoder.pins?.press ?? sourceEncoder.press ?? defaults.pins.press),
       },
       rotateAction: normalizeEnum(sourceEncoder.rotateAction, VALID_ACTIONS, defaults.rotateAction),
+      rotateDirection: normalizeEnum(sourceEncoder.rotateDirection, VALID_ROTATE_DIRECTIONS, defaults.rotateDirection),
       pressAction: normalizeEnum(sourceEncoder.pressAction, VALID_ACTIONS, defaults.pressAction),
+      patternCycleIds: uniqueStringIds(sourceEncoder.patternCycleIds || defaults.patternCycleIds),
       brightnessStep: clampInt(sourceEncoder.brightnessStep, defaults.brightnessStep, 1, 64),
       helperPresetLabel: String(sourceEncoder.helperPresetLabel || defaults.helperPresetLabel).trim() || defaults.helperPresetLabel,
     },
@@ -101,6 +111,9 @@ export function buildWledControlContract({
     ]);
   const pressReady = encoder.pressAction === WLED_ENCODER_ACTIONS.NONE
     || (encoder.pressAction === WLED_ENCODER_ACTIONS.NEXT_PRESET && presetIds.length > 0);
+  const clockwiseBrightens = encoder.rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_BRIGHTER;
+  const clockwiseState = makeBrightnessDeltaState(encoder.brightnessStep, clockwiseBrightens);
+  const counterClockwiseState = makeBrightnessDeltaState(encoder.brightnessStep, !clockwiseBrightens);
 
   const presetEntries = {};
   if (encoder.enabled && encoder.pressAction === WLED_ENCODER_ACTIONS.NEXT_PRESET && cycle.jsonCommand.ps && resolvedHelperPresetId) {
@@ -123,12 +136,15 @@ export function buildWledControlContract({
       pins: encoder.pins,
       rotate: {
         action: encoder.rotateAction,
+        direction: encoder.rotateDirection,
         ready: !encoder.enabled
           || encoder.rotateAction === WLED_ENCODER_ACTIONS.NONE
           || (encoder.rotateAction === WLED_ENCODER_ACTIONS.BRIGHTNESS && firmwareReady),
         brightnessStep: encoder.brightnessStep,
+        clockwiseState,
+        counterClockwiseState,
         note: firmwareReady
-          ? `Rotate controls WLED brightness on-device in ${encoder.brightnessStep}-point steps.`
+          ? `Clockwise rotation ${clockwiseBrightens ? 'brightens' : 'dims'} WLED brightness on-device in ${encoder.brightnessStep}-point steps.`
           : 'Rotation needs a WLED rotary encoder usermod or Lightweaver WLED firmware; stock WLED button settings do not read encoder rotation.',
       },
       press: {
@@ -150,8 +166,11 @@ export function buildWledControlContract({
 export function summarizeWledControlContract(contract = {}) {
   const encoder = contract.encoder || {};
   if (!encoder.enabled) return 'Physical encoder is disabled for this controller profile.';
+  const clockwiseVerb = encoder.rotate?.direction === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER
+    ? 'dims'
+    : 'brightens';
   const rotate = encoder.rotate?.ready
-    ? 'rotate dims WLED brightness on-device'
+    ? `clockwise rotate ${clockwiseVerb} WLED brightness on-device`
     : 'rotate needs rotary encoder firmware';
   const press = encoder.press?.ready
     ? `press triggers preset ${encoder.press.helperPresetId}`
@@ -167,7 +186,15 @@ export function makeWledEncoderPressTestState(contract = {}) {
 export function makeWledEncoderBrightnessState(contract = {}, direction = 'down') {
   const fallback = DEFAULT_WLED_PHYSICAL_CONTROLS.encoder.brightnessStep;
   const step = clampInt(contract?.encoder?.rotate?.brightnessStep, fallback, 1, 64);
-  return { bri: direction === 'up' ? `~${step}` : `~-${step}` };
+  const rotateDirection = contract?.encoder?.rotate?.direction || DEFAULT_WLED_PHYSICAL_CONTROLS.encoder.rotateDirection;
+  const normalizedDirection = String(direction || '').toLowerCase();
+  if (normalizedDirection === 'clockwise' || normalizedDirection === 'cw') {
+    return makeBrightnessDeltaState(step, rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_BRIGHTER);
+  }
+  if (normalizedDirection === 'counterclockwise' || normalizedDirection === 'ccw') {
+    return makeBrightnessDeltaState(step, rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER);
+  }
+  return makeBrightnessDeltaState(step, normalizedDirection === 'up');
 }
 
 export function makeWledEncoderPressButtonConfig({ contract = {}, cfg = {} } = {}) {
@@ -235,6 +262,18 @@ function uniquePositiveInts(values = []) {
     .map(value => Number.parseInt(value, 10))
     .filter(value => Number.isFinite(value) && value > 0))]
     .sort((a, b) => a - b);
+}
+
+function uniqueStringIds(values = []) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values
+    .map(value => String(value || '').trim())
+    .filter(Boolean))];
+}
+
+function makeBrightnessDeltaState(step, brighten) {
+  const normalizedStep = clampInt(step, DEFAULT_WLED_PHYSICAL_CONTROLS.encoder.brightnessStep, 1, 64);
+  return { bri: brighten ? `~${normalizedStep}` : `~-${normalizedStep}` };
 }
 
 function nextPresetId(values = []) {

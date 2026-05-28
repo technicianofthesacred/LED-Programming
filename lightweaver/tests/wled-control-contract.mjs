@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_WLED_PHYSICAL_CONTROLS,
   WLED_ENCODER_FIRMWARE_MODES,
+  WLED_ENCODER_ROTATE_DIRECTIONS,
   buildWledControlContract,
   hasWledRotaryEncoderSupport,
   makeWledEncoderBrightnessState,
@@ -17,16 +18,21 @@ const normalized = normalizeWledPhysicalControls({
     enabled: true,
     firmware: 'rotary-usermod',
     pins: { a: '4', b: '5', press: '6' },
+    rotateDirection: 'clockwise-dimmer',
+    patternCycleIds: ['aurora', 'candle', 'aurora', '', null, 'breathe'],
     brightnessStep: '12',
   },
 });
 
 assert.equal(DEFAULT_WLED_PHYSICAL_CONTROLS.encoder.rotateAction, 'brightness');
+assert.equal(DEFAULT_WLED_PHYSICAL_CONTROLS.encoder.pins.press, 0);
 assert.equal(normalized.encoder.enabled, true);
 assert.equal(normalized.encoder.firmware, WLED_ENCODER_FIRMWARE_MODES.ROTARY_USERMOD);
 assert.deepEqual(normalized.encoder.pins, { a: 4, b: 5, press: 6 });
 assert.equal(normalized.encoder.rotateAction, 'brightness');
+assert.equal(normalized.encoder.rotateDirection, WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER);
 assert.equal(normalized.encoder.pressAction, 'next-preset');
+assert.deepEqual(normalized.encoder.patternCycleIds, ['aurora', 'candle', 'breathe']);
 assert.equal(normalized.encoder.brightnessStep, 12);
 
 assert.deepEqual(makeWledPresetCycleCommand({ presetIds: [1, 2, 3] }), {
@@ -72,6 +78,9 @@ assert.equal(enabledContract.runtimeOwner, 'wled-firmware');
 assert.equal(enabledContract.encoder.enabled, true);
 assert.equal(enabledContract.encoder.rotate.ready, true);
 assert.equal(enabledContract.encoder.rotate.action, 'brightness');
+assert.equal(enabledContract.encoder.rotate.direction, WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER);
+assert.deepEqual(enabledContract.encoder.rotate.clockwiseState, { bri: '~-12' });
+assert.deepEqual(enabledContract.encoder.rotate.counterClockwiseState, { bri: '~12' });
 assert.equal(enabledContract.encoder.press.ready, true);
 assert.equal(enabledContract.encoder.press.helperPresetId, 5);
 assert.equal(enabledContract.encoder.press.httpCommand, 'P1=1&P2=3&PL=~');
@@ -85,6 +94,8 @@ assert.deepEqual(enabledContract.presetEntries, {
 assert.deepEqual(makeWledEncoderPressTestState(enabledContract), { ps: '1~ 3~' });
 assert.deepEqual(makeWledEncoderBrightnessState(enabledContract, 'down'), { bri: '~-12' });
 assert.deepEqual(makeWledEncoderBrightnessState(enabledContract, 'up'), { bri: '~12' });
+assert.deepEqual(makeWledEncoderBrightnessState(enabledContract, 'clockwise'), { bri: '~-12' });
+assert.deepEqual(makeWledEncoderBrightnessState(enabledContract, 'counterclockwise'), { bri: '~12' });
 
 const pressButtonConfig = makeWledEncoderPressButtonConfig({
   contract: enabledContract,

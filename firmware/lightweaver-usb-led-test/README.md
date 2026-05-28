@@ -4,6 +4,19 @@ Temporary bench firmware for verifying an ESP32-S3 controller and attached LEDs 
 
 It drives the expected Lightweaver output pins `16`, `17`, `18`, and `21` with the same pixel buffer at low brightness. If the LED data line is on any of those pins and power/ground are correct, the strip should respond.
 
+It also reads a pushable rotary encoder on pins `4` and `5`, with push on
+GPIO `0` or GPIO `6` by default, and emits input events over USB:
+
+```text
+LWUSB ROTARY turn=clockwise
+LWUSB ROTARY turn=counterclockwise
+LWUSB ROTARY press
+```
+
+Lightweaver maps those events through the Pattern screen rotary organizer:
+rotation changes brightness according to the chosen clockwise mapping, and press
+cycles through the ordered pattern list.
+
 ## Build and upload
 
 ```bash
@@ -41,3 +54,18 @@ TEST
 example, the line above sends one red, one green, and one blue pixel.
 
 The firmware replies with `LWUSB ...` lines so scripts and the app can detect it.
+
+## Rotary pins
+
+Default build flags:
+
+```ini
+-DLW_ENCODER_A_PIN=4
+-DLW_ENCODER_B_PIN=5
+-DLW_ENCODER_PRESS_PIN=0
+-DLW_ENCODER_PRESS_ALT_PIN=6
+-DLW_ENCODER_REVERSED=1
+```
+
+If clockwise/counterclockwise is backwards for a different encoder, either swap
+A/B wiring or change `-DLW_ENCODER_REVERSED`.

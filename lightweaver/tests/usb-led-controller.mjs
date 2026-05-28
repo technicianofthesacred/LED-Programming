@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import { LwUsbController } from '../server/lwUsbController.js';
 
 const writes = [];
+const preferred = new LwUsbController({ colorOrder: 'grb' });
+assert.equal(preferred.status().colorOrder, 'GRB');
+
 const controller = new LwUsbController({ maxPixels: 300 });
 controller.portPath = '/dev/mock-lightweaver';
 controller.port = {
   isOpen: true,
   writableLength: 0,
-  write(line) {
+  write(line, callback) {
     writes.push(line);
+    callback?.();
   },
 };
 
@@ -31,5 +35,30 @@ controller.sendFrame({ hex: '00ff000000ffff0000' });
 const changed = controller.status();
 assert.notEqual(changed.lastFrameHash, first.lastFrameHash);
 assert.equal(changed.lastFrameChanged, true);
+
+controller.handleLine('LWUSB ROTARY turn=clockwise');
+controller.handleLine('LWUSB ROTARY press');
+const inputStatus = controller.status();
+assert.deepEqual(
+  inputStatus.inputEvents.map(event => ({ type: event.type, turn: event.turn })),
+  [
+    { type: 'rotate', turn: 'clockwise' },
+    { type: 'press', turn: undefined },
+  ],
+);
+assert.equal(inputStatus.inputEvents[0].source, 'usb-serial');
+
+const backpressure = new LwUsbController({ maxPixels: 300 });
+backpressure.portPath = '/dev/mock-lightweaver';
+backpressure.port = {
+  isOpen: true,
+  writableLength: 0,
+  write() {},
+};
+backpressure.sendFrame({ hex: 'ff0000' });
+assert.deepEqual(
+  backpressure.sendFrame({ hex: '00ff00' }),
+  { skipped: true, pixels: 1, reason: 'serial write pending' },
+);
 
 console.log('usb-led-controller tests passed');

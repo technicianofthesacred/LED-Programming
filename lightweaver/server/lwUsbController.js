@@ -1,10 +1,13 @@
 import { SerialPort, ReadlineParser } from 'serialport';
 import { DEFAULT_LWUSB_MAX_PIXELS, isLwUsbFrameHex, pixelsToLwUsbFrameHex } from '../src/lib/usbLedFrame.js';
+import { normalizeUsbLedColorOrder } from '../src/lib/usbLedColorOrder.js';
+import { parseUsbRotaryInputLine } from '../src/lib/usbRotaryInput.js';
 
 const DEFAULT_BAUD_RATE = 115200;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 1800;
 const DEFAULT_CONNECT_SETTLE_MS = 900;
 const MAX_RECENT_LINES = 24;
+const MAX_INPUT_EVENTS = 48;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -71,6 +74,7 @@ export class LwUsbController {
     baudRate = DEFAULT_BAUD_RATE,
     maxPixels = DEFAULT_LWUSB_MAX_PIXELS,
     responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS,
+    colorOrder = 'RGB',
   } = {}) {
     this.defaultPortPath = normalizePortPath(portPath);
     this.baudRate = normalizePositiveInt(baudRate, DEFAULT_BAUD_RATE, 9600, 2000000);
@@ -87,7 +91,11 @@ export class LwUsbController {
     this.lastFrameHash = null;
     this.lastFrameChanged = false;
     this.lastFrameHead = '';
-    this.colorOrder = 'RGB';
+    this.frameWritePending = false;
+    this.frameWriteTimer = null;
+    this.colorOrder = normalizeUsbLedColorOrder(colorOrder);
+    this.inputEvents = [];
+    this.inputEventSeq = 0;
   }
 
   status() {
@@ -104,6 +112,7 @@ export class LwUsbController {
       lastFrameHead: this.lastFrameHead,
       colorOrder: this.colorOrder,
       recentLines: this.recentLines.slice(-8),
+      inputEvents: this.inputEvents.slice(-16),
     };
   }
 
@@ -145,9 +154,7 @@ export class LwUsbController {
     }
 
     await this.sendCommandRecoveringSerialNoise('ID?', { timeoutMs: 2400 });
-    if (colorOrder != null) {
-      await this.sendCommandRecoveringSerialNoise(`ORDER ${String(colorOrder).trim().toUpperCase()}`);
-    }
+    await this.sendCommandRecoveringSerialNoise(`ORDER ${normalizeUsbLedColorOrder(colorOrder, this.colorOrder)}`);
     if (pixelCount != null) {
       const count = normalizePositiveInt(pixelCount, 30, 1, this.maxPixels);
       await this.sendCommandRecoveringSerialNoise(`COUNT ${count}`);
@@ -162,6 +169,7 @@ export class LwUsbController {
 
   async disconnect() {
     this.rejectAll(new Error('USB LED serial port disconnected'));
+    this.releaseFrameWrite();
     const port = this.port;
     this.port = null;
     this.parser = null;
@@ -217,9 +225,19 @@ export class LwUsbController {
     if (!frameHex.length) return { skipped: true, pixels: 0 };
     const framePixels = frameHex.length / 6;
     if (framePixels > this.maxPixels) throw new Error(`USB LED frame has ${framePixels} pixels, max ${this.maxPixels}`);
+    if (this.frameWritePending) return { skipped: true, pixels: framePixels, reason: 'serial write pending' };
     if (this.port.writableLength > 24000) return { skipped: true, pixels: framePixels, reason: 'serial backpressure' };
 
-    this.port.write(`FRAME ${frameHex}\n`);
+    this.frameWritePending = true;
+    this.frameWriteTimer = setTimeout(() => {
+      this.releaseFrameWrite();
+    }, 250);
+    this.frameWriteTimer.unref?.();
+
+    this.port.write(`FRAME ${frameHex}\n`, error => {
+      if (error) this.lastError = error.message;
+      this.releaseFrameWrite();
+    });
     const frameHash = hashFrameHex(frameHex);
     this.lastFrameAt = Date.now();
     this.lastFramePixels = framePixels;
@@ -227,6 +245,14 @@ export class LwUsbController {
     this.lastFrameHash = frameHash;
     this.lastFrameHead = frameHex.slice(0, 24);
     return { ok: true, pixels: framePixels };
+  }
+
+  releaseFrameWrite() {
+    if (this.frameWriteTimer) {
+      clearTimeout(this.frameWriteTimer);
+      this.frameWriteTimer = null;
+    }
+    this.frameWritePending = false;
   }
 
   ensureOpen() {
@@ -240,6 +266,8 @@ export class LwUsbController {
     if (this.recentLines.length > MAX_RECENT_LINES) this.recentLines.shift();
     const orderMatch = line.match(/\bcolorOrder=(RGB|GRB|BRG|BGR|RBG|GBR)\b/i);
     if (orderMatch) this.colorOrder = orderMatch[1].toUpperCase();
+    const inputEvent = parseUsbRotaryInputLine(line);
+    if (inputEvent) this.pushInputEvent(inputEvent, line);
 
     for (const pending of [...this.pending]) {
       pending.lines.push(line);
@@ -252,6 +280,20 @@ export class LwUsbController {
         pending.resolve({ line, lines: pending.lines });
       }
       break;
+    }
+  }
+
+  pushInputEvent(event, line = '') {
+    this.inputEventSeq += 1;
+    this.inputEvents.push({
+      id: this.inputEventSeq,
+      at: Date.now(),
+      source: 'usb-serial',
+      line,
+      ...event,
+    });
+    if (this.inputEvents.length > MAX_INPUT_EVENTS) {
+      this.inputEvents.splice(0, this.inputEvents.length - MAX_INPUT_EVENTS);
     }
   }
 
