@@ -106,6 +106,10 @@ struct ZoneConfig {
   uint8_t customSaturation = 230;
   bool customBreathe = false;
   bool customDrift = false;
+  // Drift palette bounds. Default 0..255 = full rainbow. Warm = 0..60,
+  // Cool = 130..200. Custom lets the owner pick any range.
+  uint8_t driftHueMin = 0;
+  uint8_t driftHueMax = 255;
   bool blackout = false;
 };
 

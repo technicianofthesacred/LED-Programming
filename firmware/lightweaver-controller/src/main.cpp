@@ -75,6 +75,8 @@ uint8_t customHue = 32;          // 0..255 (FastLED hue space)
 uint8_t customSaturation = 230;  // 0..255
 bool customBreathe = false;
 bool customDrift = false;
+uint8_t driftHueMin = 0;
+uint8_t driftHueMax = 255;
 
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
@@ -514,6 +516,8 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   mods.customSaturation = zone.customSaturation;
   mods.customBreathe = zone.customBreathe;
   mods.customDrift = zone.customDrift;
+  mods.driftHueMin = zone.driftHueMin;
+  mods.driftHueMax = zone.driftHueMax;
 
   bool rendered = false;
   if (look->mode == "procedural") {
@@ -598,6 +602,8 @@ bool renderProceduralFrame(const String& preset) {
   mods.customSaturation = customSaturation;
   mods.customBreathe = customBreathe;
   mods.customDrift = customDrift;
+  mods.driftHueMin = driftHueMin;
+  mods.driftHueMax = driftHueMax;
   return renderProceduralPattern(preset, leds, totalPixels, millis(), mods);
 }
 
@@ -945,6 +951,18 @@ bool runtimeGetCustomDrift() { return customDrift; }
 void runtimeSetSyncZones(bool on) { runtimeConfig.syncZones = on; }
 bool runtimeGetSyncZones() { return runtimeConfig.syncZones; }
 
+void runtimeSetDriftRange(uint8_t lo, uint8_t hi) {
+  driftHueMin = lo;
+  driftHueMax = hi;
+  applyToZones("", [&](ZoneConfig& z) { z.driftHueMin = lo; z.driftHueMax = hi; });
+}
+void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi) {
+  if (targetId.length() == 0) { driftHueMin = lo; driftHueMax = hi; }
+  applyToZones(targetId, [&](ZoneConfig& z) { z.driftHueMin = lo; z.driftHueMax = hi; });
+}
+uint8_t runtimeGetDriftHueMin() { return driftHueMin; }
+uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
+
 String runtimeZonesJson() {
   JsonDocument doc;
   doc["syncZones"] = runtimeConfig.syncZones;
@@ -962,6 +980,8 @@ String runtimeZonesJson() {
     obj["customSaturation"] = z.customSaturation;
     obj["customBreathe"] = z.customBreathe;
     obj["customDrift"] = z.customDrift;
+    obj["driftHueMin"] = z.driftHueMin;
+    obj["driftHueMax"] = z.driftHueMax;
     obj["blackout"] = z.blackout;
     JsonArray ranges = obj["ranges"].to<JsonArray>();
     for (uint8_t r = 0; r < z.rangeCount; r++) {

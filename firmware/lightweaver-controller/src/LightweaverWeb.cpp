@@ -153,6 +153,9 @@ void handleRoot() {
             ".toggle.on{background:#c89b5c;border-color:#c89b5c}"
             ".toggle.on .t-name{color:#050505}"
             ".toggle.on .t-sub{color:#3a2c1a}"
+            ".pill-row{display:flex;gap:8px}"
+            ".pill{flex:1;border:0;color:#050505;padding:10px 8px;border-radius:24px;font-size:11px;letter-spacing:1.2px;text-transform:uppercase;cursor:pointer;font-family:inherit;font-weight:600;opacity:0.7;transition:opacity 0.15s}"
+            ".pill.on{opacity:1;box-shadow:0 0 0 2px #c89b5c}"
             "@keyframes flow{0%{background-position:0 0}100%{background-position:200% 0}}"
             "@keyframes scan{0%{background-position:100% 0}100%{background-position:-100% 0}}"
             "@keyframes flicker{0%,100%{opacity:0.9}25%{opacity:1}50%{opacity:0.7}75%{opacity:1}}"
@@ -166,8 +169,21 @@ void handleRoot() {
             ".foot{display:flex;justify-content:space-between;align-items:center;padding:4px 4px 0}"
             ".off-btn{background:transparent;border:1px solid #333;color:#f4ede0;padding:8px 18px;border-radius:20px;font-size:12px;letter-spacing:1px;text-transform:uppercase;font-family:inherit;cursor:pointer}"
             ".off-btn.on{background:#c89b5c;color:#0a0a0a;border-color:#c89b5c}"
-            ".set-link{color:#5a5247;text-decoration:none;font-size:11px;letter-spacing:1.5px;text-transform:uppercase}"
+            ".set-link{background:transparent;border:0;color:#5a5247;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;padding:8px 0}"
             ".set-link:active{color:#c89b5c}"
+            ".drawer{background:#141414;border:1px solid #262626;border-radius:14px;padding:0;margin-top:12px;display:none;flex-direction:column;overflow:hidden}"
+            ".drawer.open{display:flex}"
+            ".drawer .field{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#9a8d75;margin:14px 0 6px;padding:0 18px}"
+            ".drawer input[type=text]{margin:0 18px;width:calc(100% - 36px);background:#0a0a0a;color:#f4ede0;border:1px solid #333;border-radius:8px;padding:12px;font-size:16px;font-family:inherit}"
+            ".drawer input[type=text]:focus{outline:none;border-color:#c89b5c}"
+            ".drawer-row{padding:0 18px;margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}"
+            ".drawer-row .ghost{flex:1;background:transparent;border:1px solid #333;color:#f4ede0;padding:12px;border-radius:10px;font-size:12px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;font-family:inherit;text-align:center}"
+            ".drawer-row .primary{flex:1;background:#c89b5c;border:0;color:#050505;padding:12px;border-radius:10px;font-size:12px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;font-family:inherit;font-weight:500}"
+            ".drawer-row .danger{flex:1;background:#3a1f1f;border:1px solid #5a2a2a;color:#e07856;padding:12px;border-radius:10px;font-size:12px;letter-spacing:1px;text-transform:uppercase;cursor:pointer;font-family:inherit}"
+            ".drawer-note{padding:12px 18px 18px;font-size:11px;color:#5a5247;font-family:ui-monospace,SF Mono,monospace;border-top:1px solid #1f1f1f;margin-top:6px}"
+            ".drawer-msg{padding:0 18px;margin:12px 0 0;font-size:12px;color:#9a8d75}"
+            ".drawer-msg.ok{color:#7fb069}"
+            ".drawer-msg.err{color:#e07856}"
             "</style></head><body><div class='wrap'>"
             "<div class='head'>"
               "<span class='title'>Lightweaver</span>");
@@ -196,6 +212,11 @@ void handleRoot() {
                   "<span class='t-sub'>slowly cycle hues</span>"
                 "</button>"
               "</div>"
+              "<div class='pill-row' id='drift-palette-row'>"
+                "<button class='pill' data-lo='0' data-hi='60' id='pal-warm' style='background:linear-gradient(90deg,#8a2008,#d04a18,#f1c40f)'>Warm</button>"
+                "<button class='pill' data-lo='130' data-hi='200' id='pal-cool' style='background:linear-gradient(90deg,#0a3a4a,#2a8a9a,#5c5cc8)'>Cool</button>"
+                "<button class='pill' data-lo='0' data-hi='255' id='pal-rainbow' style='background:linear-gradient(90deg,#e74c3c,#f39c12,#27ae60,#3498db,#9b59b6)'>Rainbow</button>"
+              "</div>"
             "</div>"
             "<div class='bright'>"
               "<span class='lbl'>Brightness</span>"
@@ -204,7 +225,7 @@ void handleRoot() {
             "</div>"
             "<div class='bright'>"
               "<span class='lbl'>Speed</span>"
-              "<input type='range' min='25' max='400' value='100' id='s-slider'>"
+              "<input type='range' min='0' max='100' value='50' id='s-slider'>"
               "<span class='val' id='s-val'>1.00\xC3\x97</span>"
             "</div>"
             "<div class='bright'>"
@@ -214,7 +235,32 @@ void handleRoot() {
             "</div>"
             "<div class='foot'>"
               "<button class='off-btn' id='off-btn'>Off</button>"
-              "<a class='set-link' href='/advanced'>Settings</a>"
+              "<button class='set-link' id='set-toggle' type='button'>Settings</button>"
+            "</div>"
+            "<div class='drawer' id='drawer'>"
+              "<label class='field'>Piece name</label>"
+              "<input type='text' id='rn-piece' value='");
+  page += escapeHtml(cfg.pieceName);
+  page += F("'>"
+              "<label class='field'>Hostname</label>"
+              "<input type='text' id='rn-host' value='");
+  page += escapeHtml(cfg.activeHostname.length() ? cfg.activeHostname : cfg.wifi.hostname);
+  page += F("'>"
+              "<div class='drawer-row'>"
+                "<button class='primary' id='rn-save' type='button'>Save names</button>"
+              "</div>"
+              "<div class='drawer-row'>"
+                "<button class='ghost' id='identify' type='button'>Identify (3 flashes)</button>"
+              "</div>"
+              "<div class='drawer-row'>"
+                "<button class='ghost' id='reboot' type='button'>Reboot</button>"
+                "<button class='ghost' id='change-wifi' type='button'>Change WiFi</button>"
+              "</div>"
+              "<div class='drawer-row'>"
+                "<button class='danger' id='factory' type='button'>Factory reset</button>"
+              "</div>"
+              "<p class='drawer-msg' id='set-msg'></p>"
+              "<div class='drawer-note' id='fw-info'>\xE2\x80\x94</div>"
             "</div>"
             "</div>"
             "<script>"
@@ -222,7 +268,7 @@ void handleRoot() {
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
             "const get=p=>fetch(p).then(r=>r.json());"
             "let patterns=[],currentId='',blackoutOn=false;"
-            "let customHue=32,customSat=230,customBreathe=false,customDrift=false;"
+            "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
             // Generic coalescing sender per field
             "const makeSender=key=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{await post('/api/control',{[key]:v})}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
@@ -232,7 +278,13 @@ void handleRoot() {
             "const sendSpeed=makeSender('speed');"
             "const sendHueShift=makeSender('hueShift');"
             "$('b-slider').oninput=e=>{const pct=parseInt(e.target.value,10);$('b-val').textContent=pct+'%';sendBright(pct/100)};"
-            "$('s-slider').oninput=e=>{const pct=parseInt(e.target.value,10);$('s-val').textContent=(pct/100).toFixed(2)+'\xC3\x97';sendSpeed(pct/100)};"
+            // Speed slider is non-linear: 0..100 -> 0.25x..3x with ^1.8 curve.
+            // Slider midpoint (50) -> ~1x; bottom half gets fine slow control,
+            // top half compresses 1x..3x into less travel since users rarely
+            // want to push speed past 1.5x.
+            "const speedFromSlider=v=>{const t=Math.pow(v/100,1.8);return 0.25+t*2.75};"
+            "const sliderFromSpeed=s=>{const t=Math.max(0,Math.min(1,(s-0.25)/2.75));return Math.round(Math.pow(t,1/1.8)*100)};"
+            "$('s-slider').oninput=e=>{const sp=speedFromSlider(parseInt(e.target.value,10));$('s-val').textContent=sp.toFixed(2)+'\xC3\x97';sendSpeed(sp)};"
             "$('h-slider').oninput=e=>{const v=parseInt(e.target.value,10);$('h-val').textContent=v;sendHueShift(v)};"
             // Hue helpers — FastLED hue 0..255 to CSS HSL deg 0..360
             "const hueToHsl=(h,s)=>{return 'hsl('+(h/255*360)+','+(s/255*100)+'%,50%)'};"
@@ -243,13 +295,20 @@ void handleRoot() {
               "$('hue-slider').value=customHue;"
               "$('sat-slider').value=customSat;"
               "$('breathe-btn').classList.toggle('on',customBreathe);"
-              "$('drift-btn').classList.toggle('on',customDrift)"
+              "$('drift-btn').classList.toggle('on',customDrift);"
+              "$('pal-warm').classList.toggle('on',driftMin===0&&driftMax===60);"
+              "$('pal-cool').classList.toggle('on',driftMin===130&&driftMax===200);"
+              "$('pal-rainbow').classList.toggle('on',driftMin===0&&driftMax===255)"
             "};"
             "const showColorPanel=show=>{$('color-panel').classList.toggle('open',show)};"
             "$('hue-slider').oninput=e=>{customHue=parseInt(e.target.value,10);renderColorPanel();sendHue(customHue)};"
             "$('sat-slider').oninput=e=>{customSat=parseInt(e.target.value,10);renderColorPanel();sendSat(customSat)};"
             "$('breathe-btn').onclick=async()=>{customBreathe=!customBreathe;renderColorPanel();await post('/api/control',{breathe:customBreathe})};"
             "$('drift-btn').onclick=async()=>{customDrift=!customDrift;renderColorPanel();await post('/api/control',{drift:customDrift})};"
+            "const setPalette=async(lo,hi)=>{driftMin=lo;driftMax=hi;if(!customDrift){customDrift=true}renderColorPanel();await post('/api/control',{drift:customDrift,driftMin:lo,driftMax:hi})};"
+            "$('pal-warm').onclick=()=>setPalette(0,60);"
+            "$('pal-cool').onclick=()=>setPalette(130,200);"
+            "$('pal-rainbow').onclick=()=>setPalette(0,255);"
             // Pattern grid
             "const renderPat=()=>{const g=$('grid');g.innerHTML='';patterns.forEach(p=>{"
               "const el=document.createElement('div');el.className='tile'+(p.id===currentId?' active':'');"
@@ -261,11 +320,21 @@ void handleRoot() {
               "g.appendChild(el)"
             "})};"
             "$('off-btn').onclick=async()=>{blackoutOn=!blackoutOn;$('off-btn').classList.toggle('on',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
+            // Settings drawer (inline, no separate page)
+            "$('set-toggle').onclick=()=>{const open=$('drawer').classList.toggle('open');if(open){fetch('/api/firmware-info').then(r=>r.json()).then(d=>{$('fw-info').textContent='build '+d.build+' \xE2\x80\xA2 '+(d.freeHeap/1024|0)+'KB free \xE2\x80\xA2 '+d.rssi+' dBm'}).catch(()=>{})}};"
+            "const setMsg=(text,kind)=>{const m=$('set-msg');m.textContent=text;m.className='drawer-msg'+(kind?' '+kind:'')};"
+            "$('rn-save').onclick=async()=>{setMsg('Saving\xE2\x80\xA6');try{const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});if(r.ok){setMsg('Saved. Reboot to use new hostname.','ok')}else{setMsg(r.error||'Failed','err')}}catch(e){setMsg(e.message,'err')}};"
+            "$('identify').onclick=async()=>{setMsg('Identifying\xE2\x80\xA6','ok');try{await post('/api/identify',{});setTimeout(()=>setMsg(''),2200)}catch(_){setMsg('Could not reach card','err')}};"
+            "$('reboot').onclick=async()=>{if(!confirm('Reboot the card?'))return;setMsg('Rebooting\xE2\x80\xA6');try{await post('/api/reboot',{})}catch(_){}};"
+            "$('change-wifi').onclick=()=>{if(!confirm('Wipe WiFi credentials and restart in setup mode?'))return;post('/api/factory-reset',{})};"
+            "$('factory').onclick=()=>{if(!confirm('Erase ALL settings (patterns, WiFi, names) and restart? This cannot be undone.'))return;post('/api/factory-reset',{})};"
             "(async()=>{try{const s=await get('/api/status');const p=await get('/api/patterns');patterns=p.patterns||[];currentId=p.currentId||'';blackoutOn=!!s.blackout;"
               // Pull current custom-color state by posting an empty control (the echo includes it)
               "try{const e=await post('/api/control',{});if(typeof e.hue==='number'){customHue=e.hue;customSat=e.saturation;customBreathe=!!e.breathe;customDrift=!!e.drift}"
+                "if(typeof e.driftMin==='number')driftMin=e.driftMin;"
+                "if(typeof e.driftMax==='number')driftMax=e.driftMax;"
                 "if(typeof e.brightness==='number'){const pct=Math.round(e.brightness*100);$('b-slider').value=pct;$('b-val').textContent=pct+'%'}"
-                "if(typeof e.speed==='number'){const pct=Math.round(e.speed*100);$('s-slider').value=pct;$('s-val').textContent=e.speed.toFixed(2)+'\xC3\x97'}"
+                "if(typeof e.speed==='number'){$('s-slider').value=sliderFromSpeed(e.speed);$('s-val').textContent=e.speed.toFixed(2)+'\xC3\x97'}"
                 "if(typeof e.hueShift==='number'){$('h-slider').value=e.hueShift;$('h-val').textContent=e.hueShift}"
               "}catch(_){}"
               "renderColorPanel();showColorPanel(currentId==='custom-color');"
@@ -594,6 +663,11 @@ void handleControlPost() {
   if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
   if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
   if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
+  if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
+    uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
+    uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
+    runtimeSetDriftRangeZ(zoneTarget, lo, hi);
+  }
   if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
   // Echo current state back
   JsonDocument out;
@@ -606,6 +680,8 @@ void handleControlPost() {
   out["saturation"] = runtimeGetCustomSaturation();
   out["breathe"] = runtimeGetCustomBreathe();
   out["drift"] = runtimeGetCustomDrift();
+  out["driftMin"] = runtimeGetDriftHueMin();
+  out["driftMax"] = runtimeGetDriftHueMax();
   String body;
   serializeJson(out, body);
   server.send(200, "application/json", body);

@@ -11,6 +11,8 @@ struct PatternModifiers {
   uint8_t customSaturation = 230;
   bool customBreathe = false;
   bool customDrift = false;
+  uint8_t driftHueMin = 0;
+  uint8_t driftHueMax = 255;
 };
 
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods);

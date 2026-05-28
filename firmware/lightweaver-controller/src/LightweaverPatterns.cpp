@@ -17,7 +17,28 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
   if (preset == "custom-color") {
     uint8_t hue = mods.customHue;
     if (mods.customDrift) {
-      hue = (mods.customHue + uint8_t(t / 64)) & 0xff;
+      // Drift through a palette window: walk a triangle wave between min/max
+      // so the drift always stays inside the chosen colors. If min==max the
+      // hue is fixed (effectively disables drift). If min>max we wrap around
+      // the color wheel (e.g. min=240,max=20 covers magenta→red→orange).
+      uint8_t lo = mods.driftHueMin;
+      uint8_t hi = mods.driftHueMax;
+      uint16_t span;
+      if (hi >= lo) span = uint16_t(hi - lo);
+      else span = uint16_t(255 - lo + hi + 1);
+      if (span == 0) {
+        hue = lo;
+      } else {
+        // Triangle wave 0..span..0 with period proportional to span.
+        // Slow palette traversal: ~10 seconds end-to-end at speed=1.
+        uint32_t period = max<uint32_t>(2000, span * 80);
+        uint32_t phase = t % (period * 2);
+        uint16_t step;
+        if (phase < period) step = uint16_t((uint32_t(phase) * span) / period);
+        else step = uint16_t(span - ((uint32_t(phase - period) * span) / period));
+        if (hi >= lo) hue = lo + uint8_t(step);
+        else hue = uint8_t((uint16_t(lo) + step) & 0xff);
+      }
     }
     uint8_t value = 220;
     if (mods.customBreathe) {

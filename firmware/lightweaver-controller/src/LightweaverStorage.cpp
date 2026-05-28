@@ -113,6 +113,8 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
       zone.customSaturation = zoneJson["customSaturation"] | 230;
       zone.customBreathe = zoneJson["customBreathe"] | false;
       zone.customDrift = zoneJson["customDrift"] | false;
+      zone.driftHueMin = zoneJson["driftHueMin"] | 0;
+      zone.driftHueMax = zoneJson["driftHueMax"] | 255;
       zone.blackout = zoneJson["blackout"] | false;
       zone.rangeCount = 0;
       JsonArray ranges = zoneJson["ranges"].as<JsonArray>();

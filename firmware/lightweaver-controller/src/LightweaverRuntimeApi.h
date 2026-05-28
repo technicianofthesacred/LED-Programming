@@ -33,6 +33,12 @@ bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
 void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();
+
+// Drift palette (min/max hue bounds for custom-color drift)
+void runtimeSetDriftRange(uint8_t lo, uint8_t hi);
+void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi);
+uint8_t runtimeGetDriftHueMin();
+uint8_t runtimeGetDriftHueMax();
 float runtimeGetBrightness();
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
