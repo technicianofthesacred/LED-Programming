@@ -185,6 +185,20 @@ void handleRoot() {
             ".drawer-msg{padding:0 18px;margin:12px 0 0;font-size:12px;color:#9a8d75}"
             ".drawer-msg.ok{color:#7fb069}"
             ".drawer-msg.err{color:#e07856}"
+            // External-stream banner. Same dark background + bronze accent as
+            // .color-panel, but a single horizontal row that sits above the
+            // pattern grid only while Art-Net / WLED-realtime is driving us.
+            ".stream-banner{display:none;background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:12px 14px;align-items:center;gap:12px;transition:opacity 0.35s}"
+            ".stream-banner.on{display:flex}"
+            ".stream-banner.fading{opacity:0}"
+            ".stream-banner .dot{width:8px;height:8px;border-radius:50%;background:#c89b5c;flex-shrink:0;animation:breathe 1.6s ease-in-out infinite}"
+            ".stream-banner .msg{flex:1;font-size:12px;letter-spacing:0.4px;color:#f4ede0}"
+            ".stream-banner .msg b{color:#c89b5c;font-weight:600}"
+            ".stream-banner .cancel{background:transparent;border:1px solid #c89b5c;color:#c89b5c;padding:8px 14px;border-radius:18px;font-size:11px;letter-spacing:1px;text-transform:uppercase;font-family:inherit;cursor:pointer;flex-shrink:0}"
+            ".stream-banner .cancel:active{background:#c89b5c;color:#050505}"
+            // While streaming, pattern tiles look disabled — they're not
+            // controlling anything until the external source stops.
+            ".grid.streaming .tile{pointer-events:none;opacity:0.35;filter:grayscale(0.8)}"
             "</style></head><body><div class='wrap'>"
             "<div class='head'>"
               "<span class='title'>Lightweaver</span>");
@@ -194,6 +208,11 @@ void handleRoot() {
     page += F("</span>");
   }
   page += F("</div>"
+            "<div class='stream-banner' id='stream-banner'>"
+              "<span class='dot'></span>"
+              "<span class='msg'>Streaming from <b id='stream-src'>external source</b></span>"
+              "<button class='cancel' id='stream-cancel' type='button'>Cancel stream</button>"
+            "</div>"
             "<div class='grid' id='grid'></div>"
             "<div class='color-panel' id='color-panel'>"
               "<div class='swatch-large' id='color-swatch'></div>"
@@ -353,6 +372,27 @@ void handleRoot() {
               "}catch(_){}"
               "renderColorPanel();showColorPanel(currentId==='custom-color');"
               "$('off-btn').classList.toggle('on',blackoutOn);renderPat()}catch(e){}})();"
+            // Streaming-state poll. Cheap 1Hz GET on /api/status — well under
+            // anything that would compete with the 30fps Art-Net frames the
+            // card is also processing. When streaming flips on, dim the pattern
+            // grid and show the source banner; when it flips off, fade banner.
+            "let _streamWasOn=false;let _streamFadeT=null;"
+            "const srcLabel=k=>k==='artnet'?'Madrix / Art-Net':k==='wled-realtime'?'designer live preview':'external source';"
+            "const applyStream=s=>{const on=!!(s&&s.streaming);const bn=$('stream-banner');const gr=$('grid');"
+              "if(on){"
+                "$('stream-src').textContent=srcLabel(s.frameSource);"
+                "if(_streamFadeT){clearTimeout(_streamFadeT);_streamFadeT=null}"
+                "bn.classList.remove('fading');bn.classList.add('on');"
+                "gr.classList.add('streaming');_streamWasOn=true"
+              "}else if(_streamWasOn){"
+                "bn.classList.add('fading');gr.classList.remove('streaming');"
+                "if(_streamFadeT)clearTimeout(_streamFadeT);"
+                "_streamFadeT=setTimeout(()=>{bn.classList.remove('on');bn.classList.remove('fading');_streamFadeT=null},400);"
+                "_streamWasOn=false"
+              "}};"
+            "$('stream-cancel').onclick=async()=>{try{await post('/api/control',{cancelStream:true});applyStream({streaming:false})}catch(_){}};"
+            "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s)}catch(_){}};"
+            "pollStream();setInterval(pollStream,1000);"
             "</script></body></html>");
 
   server.send(200, "text/html", page);
@@ -579,12 +619,24 @@ void handleAdvancedRoot() {
 
 void handleStatus() {
   sendCors();
-  server.send(200, "application/json", runtimeStatusJson(
+  String body = runtimeStatusJson(
     *runtimeConfigPtr,
     *errorCodePtr,
     *totalPixelsPtr,
     *currentLookIndexPtr
-  ));
+  );
+  // Inject streaming state. Keeps runtimeStatusJson() decoupled from the
+  // Art-Net / WLED-realtime layer; the customer page polls /api/status so
+  // it only needs the flag + source label.
+  uint8_t src = runtimeFrameSource();
+  const char* srcLabel = src == 1 ? "wled-realtime" : src == 2 ? "artnet" : "internal";
+  int lastBrace = body.lastIndexOf('}');
+  if (lastBrace > 0) {
+    String tail = String(",\"streaming\":") + (runtimeIsStreaming() ? "true" : "false") +
+                  ",\"frameSource\":\"" + srcLabel + "\"}";
+    body = body.substring(0, lastBrace) + tail;
+  }
+  server.send(200, "application/json", body);
 }
 
 void handleConfigPost() {
@@ -690,6 +742,7 @@ void handleControlPost() {
     runtimeSetDriftRangeZ(zoneTarget, lo, hi);
   }
   if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
+  if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
   // Echo current state back
   JsonDocument out;
   out["ok"] = true;
