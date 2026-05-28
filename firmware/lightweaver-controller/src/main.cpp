@@ -10,6 +10,8 @@
 #include "LightweaverControls.h"
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
+#include "LightweaverFrameSource.h"
+#include "LightweaverWledRealtime.h"
 #include <Preferences.h>
 
 #ifndef LW_SD_CS
@@ -140,6 +142,7 @@ void setup() {
   applyRuntimeConfig(runtimeConfig);
   setupLightweaverControls(controls, controlState);
   setupLightweaverWeb(runtimeConfig, errorCode, totalPixels, currentLookIndex);
+  setupWledRealtime(leds, totalPixels);
 
   if (!setupLedOutputs()) return;
   currentLookIndex = findStartupLook();
@@ -156,6 +159,8 @@ void setup() {
 }
 
 void loop() {
+  handleWledRealtime();
+  frameSourceTick();
   handleLightweaverWeb();
 
   if (errorCode != ERROR_NONE) {
@@ -201,7 +206,15 @@ void loop() {
     return;
   }
 
-  if (renderCurrentLook()) {
+  if (frameSourceIsStreaming()) {
+    // An external producer (WLED realtime / Art-Net) has already written
+    // pixels into leds[] this tick. Skip the internal pattern renderer
+    // entirely, but still apply the customer's master brightness ceiling
+    // and push the frame to the strip so the dimmer knob still works
+    // during streaming.
+    FastLED.setBrightness(computeBrightnessByte());
+    FastLED.show();
+  } else if (renderCurrentLook()) {
     FastLED.setBrightness(computeBrightnessByte());
     FastLED.show();
   } else {
@@ -989,6 +1002,11 @@ void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi) {
 }
 uint8_t runtimeGetDriftHueMin() { return driftHueMin; }
 uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
+
+// ---- Frame-source state surfaced to the web/runtime layer ----
+bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
+uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
+void runtimeCancelStream() { frameSourceCancelStream(); }
 
 String runtimeZonesJson() {
   JsonDocument doc;

@@ -47,3 +47,13 @@ String runtimeFirmwareInfo();
 void runtimeFactoryReset();
 void runtimeResetWifi();
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
+
+// Frame-source state for the web/runtime layer. `runtimeIsStreaming()` tells
+// callers whether an external frame producer (WLED realtime UDP, Art-Net) is
+// currently driving the canvas. `runtimeFrameSource()` returns the enum
+// (cast to uint8_t for stable wire transport). `runtimeCancelStream()`
+// forces an immediate return to internal pattern rendering — used when the
+// customer taps a pattern tile during a stream.
+bool runtimeIsStreaming();
+uint8_t runtimeFrameSource();
+void runtimeCancelStream();
