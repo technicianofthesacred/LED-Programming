@@ -830,7 +830,6 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   }
 
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/advanced", HTTP_GET, handleAdvancedRoot);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
   server.on("/api/config", HTTP_POST, handleConfigPost);
