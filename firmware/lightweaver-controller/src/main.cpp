@@ -12,6 +12,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
 #include "LightweaverWledRealtime.h"
+#include "LightweaverArtnet.h"
 #include <Preferences.h>
 
 #ifndef LW_SD_CS
@@ -151,6 +152,8 @@ void setup() {
   if (!startLook(currentLookIndex)) return;
   fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
 
+  setupArtnet(leds, totalPixels);
+
   Serial.print("Ready: ");
   Serial.print(pieceName);
   Serial.print(" / ");
@@ -160,6 +163,7 @@ void setup() {
 
 void loop() {
   handleWledRealtime();
+  handleArtnet();
   frameSourceTick();
   handleLightweaverWeb();
 
