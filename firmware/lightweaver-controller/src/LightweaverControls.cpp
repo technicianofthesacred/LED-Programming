@@ -74,11 +74,11 @@ ControlEventType pollLightweaverControls(const ControlsConfig& controls, Control
       state.encoderDelta += delta;
       if (state.encoderDelta >= 4) {
         state.encoderDelta = 0;
-        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_DIMMER : CONTROL_BRIGHTER;
+        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_BRIGHTER : CONTROL_DIMMER;
       }
       if (state.encoderDelta <= -4) {
         state.encoderDelta = 0;
-        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_BRIGHTER : CONTROL_DIMMER;
+        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_DIMMER : CONTROL_BRIGHTER;
       }
     }
   }
