@@ -484,9 +484,16 @@ void handleAdvancedRoot() {
     page += escapeHtml(cfg.activeHostname.length() ? cfg.activeHostname : cfg.wifi.hostname);
     page += F("'><p class='note'>Reachable at <strong>&lt;hostname&gt;.local</strong> after reboot.</p>"
               "<div class='row'><button class='primary' id='rn-save'>Save names</button></div>"
-              "<div class='row'><button id='identify'>Identify (3 flashes)</button></div>"
-              "<div class='row'><button id='reboot'>Reboot</button><button class='ghost' id='change-wifi'>Change WiFi</button></div>"
-              "<div class='row'><button class='danger' id='factory'>Factory reset</button></div>"
+              "<div class='row'><button id='identify'>Find this card</button><span class='note' style='margin:0'>Flashes 3 times</span></div>"
+              "<div class='row'><button id='reboot'>Reboot</button><button class='ghost' id='change-wifi'>Reset WiFi only</button></div>"
+              "<p class='note' style='font-size:11px;color:#5a5247'>Reset WiFi only keeps your piece name and patterns. The card will reboot into setup mode \xE2\x80\x94 join its <strong>Lightweaver-XXXX</strong> WiFi from a phone to enter new credentials.</p>"
+              "<details style='margin-top:14px;border:1px solid #3a2c1a;border-radius:8px;padding:12px;background:rgba(58,44,26,0.2)'>"
+                "<summary style='cursor:pointer;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#e07856'>Dangerous \xE2\x80\x94 erase everything</summary>"
+                "<p class='note' style='margin-top:10px'>Erases <strong>all</strong> stored settings: WiFi, piece name, hostname, any custom patterns. Card returns to factory defaults. Only use this if the card is in an unknown state. <strong>Cannot be undone.</strong></p>"
+                "<p class='note'>To proceed, type <code style='background:#0a0a0a;padding:2px 6px;border-radius:4px;font-family:ui-monospace,monospace'>RESET</code> below:</p>"
+                "<input type='text' id='factory-confirm' placeholder='Type RESET to confirm' style='width:100%;background:#0a0a0a;border:1px solid #3a2c1a;color:#f4ede0;padding:10px;border-radius:6px;margin-bottom:10px'>"
+                "<div class='row'><button class='danger' id='factory'>Erase all settings</button></div>"
+              "</details>"
               "<p class='note' id='set-msg'></p>"
               "<p class='note' style='margin-top:18px;border-top:1px solid #262626;padding-top:14px'>"
                 "<span id='fw-info' style='font-family:ui-monospace,SF Mono,monospace;font-size:11px;color:#5a5247'>—</span>"
@@ -542,10 +549,10 @@ void handleAdvancedRoot() {
               "$('prev').onclick=async()=>{await post('/api/control',{previous:true});loadOnce()};"
               "$('next').onclick=async()=>{await post('/api/control',{next:true});loadOnce()};"
               "$('blackout').onclick=async()=>{blackoutOn=!blackoutOn;$('blackout').classList.toggle('primary',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
-              "$('identify').onclick=()=>{post('/api/identify',{});const m=$('set-msg');m.textContent='Identifying…';m.className='note ok';setTimeout(()=>m.textContent='',2000)};"
-              "$('reboot').onclick=async()=>{if(!confirm('Reboot the card?'))return;const m=$('set-msg');m.textContent='Rebooting…';m.className='note';await post('/api/reboot',{})};"
-              "$('change-wifi').onclick=()=>{if(!confirm('Wipe WiFi credentials and restart in setup mode?'))return;post('/api/factory-reset',{})};"
-              "$('factory').onclick=()=>{if(!confirm('Erase ALL settings (patterns, WiFi, names) and restart? This cannot be undone.'))return;post('/api/factory-reset',{})};"
+              "$('identify').onclick=()=>{post('/api/identify',{});const m=$('set-msg');m.textContent='Watch the strip — it will flash 3 times.';m.className='note ok';setTimeout(()=>m.textContent='',3000)};"
+              "$('reboot').onclick=async()=>{if(!confirm('Reboot the card? Everything stays saved; the strip will go dark for ~5 seconds.'))return;const m=$('set-msg');m.textContent='Rebooting…';m.className='note';await post('/api/reboot',{})};"
+              "$('change-wifi').onclick=()=>{if(!confirm('Reset WiFi only? Patterns and piece name stay. Card reboots into setup mode — you will need to rejoin it from a phone (Lightweaver-XXXX) to enter new WiFi credentials.'))return;const m=$('set-msg');m.textContent='Resetting WiFi…';m.className='note';post('/api/reset-wifi',{})};"
+              "$('factory').onclick=async()=>{const v=$('factory-confirm').value;if(v!=='RESET'){const m=$('set-msg');m.textContent='Type RESET in the box above first.';m.className='note err';return}const m=$('set-msg');m.textContent='Erasing everything and rebooting…';m.className='note';try{await post('/api/factory-reset',{confirm:'RESET'})}catch(e){}};"
               "$('rn-save').onclick=async()=>{const m=$('set-msg');m.textContent='Saving…';m.className='note';"
                 "const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});"
                 "if(r.ok){m.textContent='Saved. Reboot to use new hostname.';m.className='note ok'}else{m.textContent=r.error||'Failed';m.className='note err'}};"
@@ -701,9 +708,34 @@ void handleZones() {
 
 void handleFactoryReset() {
   sendCors();
-  server.send(200, "application/json", "{\"ok\":true,\"message\":\"wiping and rebooting\"}");
+  // Require a confirmation token in the body so this can't fire from a
+  // stray click. The card-side UI types "RESET" into a confirmation field.
+  if (server.hasArg("plain")) {
+    JsonDocument doc;
+    if (!deserializeJson(doc, server.arg("plain"))) {
+      String token = String(doc["confirm"] | "");
+      if (token != "RESET") {
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+        return;
+      }
+    } else {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+      return;
+    }
+  } else {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+    return;
+  }
+  server.send(200, "application/json", "{\"ok\":true,\"message\":\"erasing all settings and rebooting\"}");
   delay(200);
   runtimeFactoryReset();
+}
+
+void handleResetWifi() {
+  sendCors();
+  server.send(200, "application/json", "{\"ok\":true,\"message\":\"wiping wifi and rebooting into setup\"}");
+  delay(200);
+  runtimeResetWifi();
 }
 
 void handleRenamePost() {
@@ -845,6 +877,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/identify", HTTP_POST, handleIdentify);
   server.on("/api/factory-reset", HTTP_OPTIONS, handleOptions);
   server.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
+  server.on("/api/reset-wifi", HTTP_OPTIONS, handleOptions);
+  server.on("/api/reset-wifi", HTTP_POST, handleResetWifi);
   server.on("/api/rename", HTTP_OPTIONS, handleOptions);
   server.on("/api/rename", HTTP_POST, handleRenamePost);
   server.on("/api/firmware-info", HTTP_GET, handleFirmwareInfo);

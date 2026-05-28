@@ -884,6 +884,18 @@ void runtimeFactoryReset() {
   ESP.restart();
 }
 
+// Wipe only the WiFi key. Keeps piece name, hostname, and pattern config.
+// Card reboots into AP mode for re-pairing.
+void runtimeResetWifi() {
+  Preferences prefs;
+  if (prefs.begin("lightweaver", false)) {
+    prefs.remove("wifi");
+    prefs.end();
+  }
+  delay(200);
+  ESP.restart();
+}
+
 bool runtimeRename(const String& newPieceName, const String& newHostname, String& message) {
   Preferences prefs;
   if (!prefs.begin("lightweaver", false)) {

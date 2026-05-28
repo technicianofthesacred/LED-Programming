@@ -45,4 +45,5 @@ int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
 String runtimeFirmwareInfo();
 void runtimeFactoryReset();
+void runtimeResetWifi();
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
