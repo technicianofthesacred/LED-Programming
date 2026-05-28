@@ -551,20 +551,26 @@ void handleControlPost() {
       return;
     }
   }
-  if (hasControlField(doc, "brightness")) runtimeSetBrightness(controlFloat(doc, "brightness"));
-  if (hasControlField(doc, "speed")) runtimeSetSpeed(controlFloat(doc, "speed"));
-  if (hasControlField(doc, "hueShift")) runtimeSetHueShift(controlInt(doc, "hueShift"));
-  if (hasControlField(doc, "blackout")) runtimeSetBlackout(controlBool(doc, "blackout"));
+  // Optional `zone` field targets a single zone. Empty / missing = broadcast
+  // (under sync rules — see runtime API). Visitors using the basic page never
+  // send `zone`; the designer surface does.
+  String zoneTarget = hasControlField(doc, "zone") ? controlString(doc, "zone") : String("");
+
+  if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
+  if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
+  if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
+  if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
   if (hasControlField(doc, "next") && controlBool(doc, "next")) runtimeNextPattern();
   if (hasControlField(doc, "previous") && controlBool(doc, "previous")) runtimePreviousPattern();
   if (hasControlField(doc, "patternId")) {
     String id = controlString(doc, "patternId");
-    if (id.length()) runtimeSelectPatternById(id);
+    if (id.length()) runtimeSelectPatternByIdZ(zoneTarget, id);
   }
-  if (hasControlField(doc, "hue")) runtimeSetCustomHue(uint8_t(controlInt(doc, "hue") & 0xff));
-  if (hasControlField(doc, "saturation")) runtimeSetCustomSaturation(uint8_t(controlInt(doc, "saturation") & 0xff));
-  if (hasControlField(doc, "breathe")) runtimeSetCustomBreathe(controlBool(doc, "breathe"));
-  if (hasControlField(doc, "drift")) runtimeSetCustomDrift(controlBool(doc, "drift"));
+  if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
+  if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
+  if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
+  if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
+  if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
   // Echo current state back
   JsonDocument out;
   out["ok"] = true;
@@ -585,6 +591,11 @@ void handleIdentify() {
   sendCors();
   runtimeTriggerIdentify();
   server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleZones() {
+  sendCors();
+  server.send(200, "application/json", runtimeZonesJson());
 }
 
 void handleFactoryReset() {
@@ -738,6 +749,7 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/rename", HTTP_POST, handleRenamePost);
   server.on("/api/firmware-info", HTTP_GET, handleFirmwareInfo);
   server.on("/api/patterns", HTTP_GET, handlePatterns);
+  server.on("/api/zones", HTTP_GET, handleZones);
 
   // Captive-portal probes from iOS / Android / Windows — redirect to root
   server.on("/generate_204", HTTP_GET, handleCaptiveProbe);

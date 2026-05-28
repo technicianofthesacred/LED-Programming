@@ -18,6 +18,21 @@ uint8_t runtimeGetCustomHue();
 uint8_t runtimeGetCustomSaturation();
 bool runtimeGetCustomBreathe();
 bool runtimeGetCustomDrift();
+
+// Zone-targeted setters. Empty targetId broadcasts under sync rules.
+void runtimeSetBrightnessZ(const String& targetId, float value01);
+void runtimeSetSpeedZ(const String& targetId, float speed);
+void runtimeSetHueShiftZ(const String& targetId, int16_t shift);
+void runtimeSetBlackoutZ(const String& targetId, bool on);
+void runtimeSetCustomHueZ(const String& targetId, uint8_t hue);
+void runtimeSetCustomSaturationZ(const String& targetId, uint8_t sat);
+void runtimeSetCustomBreatheZ(const String& targetId, bool on);
+void runtimeSetCustomDriftZ(const String& targetId, bool on);
+bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
+
+void runtimeSetSyncZones(bool on);
+bool runtimeGetSyncZones();
+String runtimeZonesJson();
 float runtimeGetBrightness();
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();

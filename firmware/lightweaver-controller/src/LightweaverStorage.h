@@ -13,6 +13,7 @@ struct RuntimeLoadResult {
 };
 
 void applyDefaultRuntimeConfig(RuntimeConfig& config);
+void ensureDefaultZone(RuntimeConfig& config);
 RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config);
 bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& message);
 bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& message);

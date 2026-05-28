@@ -90,6 +90,44 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
     look.brightness = clampUnit(lookJson["brightness"] | 0.65f);
     config.lookCount++;
   }
+
+  // Zones — optional. If absent the caller falls back to the single-zone
+  // default after this function returns.
+  config.zoneCount = 0;
+  JsonArray zones = doc["zones"].as<JsonArray>();
+  if (!zones.isNull()) {
+    config.syncZones = doc["syncZones"] | true;
+    for (JsonVariant zoneValue : zones) {
+      if (config.zoneCount >= LW_MAX_ZONES) break;
+      JsonObject zoneJson = zoneValue.as<JsonObject>();
+      ZoneConfig& zone = config.zones[config.zoneCount];
+      zone.id = String(zoneJson["id"] | "");
+      zone.label = String(zoneJson["label"] | zone.id.c_str());
+      zone.patternId = String(zoneJson["patternId"] | "aurora");
+      zone.brightness = clampUnit(zoneJson["brightness"] | 1.0f);
+      zone.speed = zoneJson["speed"] | 1.0f;
+      if (zone.speed < 0.25f) zone.speed = 0.25f;
+      if (zone.speed > 4.0f) zone.speed = 4.0f;
+      zone.hueShift = zoneJson["hueShift"] | 0;
+      zone.customHue = zoneJson["customHue"] | 32;
+      zone.customSaturation = zoneJson["customSaturation"] | 230;
+      zone.customBreathe = zoneJson["customBreathe"] | false;
+      zone.customDrift = zoneJson["customDrift"] | false;
+      zone.blackout = zoneJson["blackout"] | false;
+      zone.rangeCount = 0;
+      JsonArray ranges = zoneJson["ranges"].as<JsonArray>();
+      if (!ranges.isNull()) {
+        for (JsonVariant rangeValue : ranges) {
+          if (zone.rangeCount >= LW_MAX_RANGES_PER_ZONE) break;
+          JsonObject rangeJson = rangeValue.as<JsonObject>();
+          zone.ranges[zone.rangeCount].start = rangeJson["start"] | 0;
+          zone.ranges[zone.rangeCount].count = rangeJson["count"] | 0;
+          if (zone.ranges[zone.rangeCount].count > 0) zone.rangeCount++;
+        }
+      }
+      if (zone.rangeCount > 0) config.zoneCount++;
+    }
+  }
 }
 
 bool loadJsonString(const String& json, RuntimeConfig& config, RuntimeSource source, String& message) {
@@ -179,6 +217,35 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
     config.looks[i].brightness = 0.65f;
   }
   config.lookCount = 6;
+
+  ensureDefaultZone(config);
+}
+
+void ensureDefaultZone(RuntimeConfig& config) {
+  if (config.zoneCount > 0) return;
+  // Default zone: one zone "all" covering every pixel on every output.
+  // This keeps single-strip cards behaving exactly as before; the multi-zone
+  // capability only surfaces when someone splits or adds a second output.
+  config.zoneCount = 1;
+  ZoneConfig& z = config.zones[0];
+  z.id = "all";
+  z.label = "All";
+  z.rangeCount = 1;
+  z.ranges[0].start = 0;
+  uint16_t total = 0;
+  for (uint8_t i = 0; i < config.outputCount; i++) total += config.outputs[i].pixels;
+  if (total == 0) total = 44;
+  z.ranges[0].count = total;
+  z.patternId = "aurora";
+  z.brightness = 1.0f;
+  z.speed = 1.0f;
+  z.hueShift = 0;
+  z.customHue = 32;
+  z.customSaturation = 230;
+  z.customBreathe = false;
+  z.customDrift = false;
+  z.blackout = false;
+  config.syncZones = true;
 }
 
 RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
@@ -186,6 +253,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   RuntimeLoadResult result;
   if (loadSdConfig(config, message)) {
     overlayNvsWifi(config);
+    ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_SD;
     result.message = message;
@@ -193,6 +261,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   }
   if (loadNvsConfig(config, message)) {
     overlayNvsWifi(config);
+    ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_NVS;
     result.message = message;
@@ -200,6 +269,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   }
   applyDefaultRuntimeConfig(config);
   overlayNvsWifi(config);
+  ensureDefaultZone(config);
   result.ok = true;
   result.source = SOURCE_DEFAULTS;
   result.message = "compiled defaults loaded";

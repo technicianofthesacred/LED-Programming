@@ -11,6 +11,8 @@
 constexpr uint8_t LW_MAX_OUTPUTS = 4;
 constexpr uint8_t LW_MAX_LOOKS = 12;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 12;
+constexpr uint8_t LW_MAX_ZONES = 8;
+constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
 constexpr uint16_t LWSEQ_HEADER_BYTES = 64;
 constexpr uint8_t DEFAULT_STATUS_LED_PIN = 2;
 constexpr uint16_t DEFAULT_RENDER_FPS = 30;
@@ -79,6 +81,34 @@ struct WifiConfig {
   String hostname = "lightweaver";
 };
 
+// A contiguous run of pixels on the global LED buffer.
+// Multiple ranges per zone let a single zone span discontinuous segments
+// (e.g. two physical strips chained behind one logical "outer ring").
+struct PixelRange {
+  uint16_t start = 0;
+  uint16_t count = 0;
+};
+
+// One controllable area of LEDs. Has its own pattern + appearance state,
+// so each zone can play something independent. The card-side default is
+// a single zone covering all pixels named "all"; the website's design
+// surface is what splits a card into multiple zones.
+struct ZoneConfig {
+  String id;
+  String label;
+  PixelRange ranges[LW_MAX_RANGES_PER_ZONE];
+  uint8_t rangeCount = 0;
+  String patternId = "aurora";
+  float brightness = 1.0f;
+  float speed = 1.0f;
+  int16_t hueShift = 0;
+  uint8_t customHue = 32;
+  uint8_t customSaturation = 230;
+  bool customBreathe = false;
+  bool customDrift = false;
+  bool blackout = false;
+};
+
 struct RuntimeConfig {
   String mode = "factory-flash";
   RuntimeSource source = SOURCE_DEFAULTS;
@@ -95,4 +125,10 @@ struct RuntimeConfig {
   WifiTransport activeTransport = WIFI_TRANSPORT_AP;
   String activeIp;
   String activeHostname;
+  ZoneConfig zones[LW_MAX_ZONES];
+  uint8_t zoneCount = 0;
+  // When true (default), control writes apply to every zone identically — the
+  // card looks single-zone to the casual visitor. When false, controls target
+  // a specific zone, exposing the multi-zone capability.
+  bool syncZones = true;
 };

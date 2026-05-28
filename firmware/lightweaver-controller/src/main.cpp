@@ -480,17 +480,80 @@ bool openSequence(const String& path) {
   return true;
 }
 
+// Find a look by id in the loaded bank. Falls back to the current index.
+const LookConfig* findLookById(const String& id) {
+  if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
+  for (uint8_t i = 0; i < lookCount; i++) {
+    if (looks[i].id == id) return &looks[i];
+  }
+  return lookCount ? &looks[currentLookIndex] : nullptr;
+}
+
+bool renderZone(const ZoneConfig& zone, uint32_t now) {
+  if (zone.rangeCount == 0) return false;
+  const LookConfig* look = findLookById(zone.patternId);
+  if (!look) return false;
+
+  // First range only for now — multi-range support is a follow-up.
+  const PixelRange& range = zone.ranges[0];
+  if (range.count == 0) return false;
+  if (range.start + range.count > totalPixels) return false;
+
+  CRGB* zoneLeds = leds + range.start;
+  uint16_t zonePixels = range.count;
+
+  if (zone.blackout) {
+    fill_solid(zoneLeds, zonePixels, CRGB::Black);
+    return true;
+  }
+
+  PatternModifiers mods;
+  mods.speed = zone.speed;
+  mods.hueShift = zone.hueShift;
+  mods.customHue = zone.customHue;
+  mods.customSaturation = zone.customSaturation;
+  mods.customBreathe = zone.customBreathe;
+  mods.customDrift = zone.customDrift;
+
+  bool rendered = false;
+  if (look->mode == "procedural") {
+    rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
+  } else if (look->mode == "preset") {
+    rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
+  }
+  if (!rendered) return false;
+
+  // Per-zone brightness scaling. The global FastLED.setBrightness() still
+  // applies on top of this — it represents the legacy "master" knob plus
+  // the brightnessLimit safety ceiling — so per-zone brightness multiplies
+  // into the final value.
+  uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
+  if (scale < 255) {
+    for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
+  }
+  return true;
+}
+
 bool renderCurrentLook() {
-  LookConfig& look = looks[currentLookIndex];
-  if (look.mode == "sequence") return renderSequenceFrame();
+  // Legacy sequence path: only when zone 0 holds the entire strip and the
+  // selected look is a frame sequence. Sequences predate zones; they take
+  // over the whole canvas.
+  if (lookCount && looks[currentLookIndex].mode == "sequence") {
+    return renderSequenceFrame();
+  }
 
   static uint32_t nextProceduralAt = 0;
   uint32_t now = millis();
   if (now < nextProceduralAt) return false;
   nextProceduralAt = now + (1000 / DEFAULT_RENDER_FPS);
 
-  if (look.mode == "procedural") return renderProceduralFrame(look.preset);
-  return renderPresetFrame(look.preset);
+  if (runtimeConfig.zoneCount == 0) return false;
+
+  bool anyRendered = false;
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    if (renderZone(runtimeConfig.zones[i], now)) anyRendered = true;
+  }
+  return anyRendered;
 }
 
 bool renderSequenceFrame(bool force) {
@@ -645,26 +708,61 @@ float clampUnit(float value) {
 
 // ---- Runtime control API (called by LightweaverWeb endpoints) ----
 
+// Apply a closure to one zone (when targetId matches) or all zones (when
+// targetId is empty AND syncZones is true, OR when there's only one zone).
+// Returns the number of zones actually touched.
+template <typename Fn>
+uint8_t applyToZones(const String& targetId, Fn fn) {
+  uint8_t touched = 0;
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) {
+        fn(runtimeConfig.zones[i]);
+        touched++;
+        break;
+      }
+    }
+    return touched;
+  }
+  // No target: when sync is on, broadcast. When sync is off, only zone 0.
+  if (runtimeConfig.syncZones || runtimeConfig.zoneCount == 1) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      fn(runtimeConfig.zones[i]);
+      touched++;
+    }
+  } else if (runtimeConfig.zoneCount > 0) {
+    fn(runtimeConfig.zones[0]);
+    touched = 1;
+  }
+  return touched;
+}
+
 void runtimeSetBrightness(float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
   manualBrightness = value01;
+  applyToZones("", [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
 void runtimeSetSpeed(float speed) {
   if (speed < 0.25f) speed = 0.25f;
   if (speed > 4.0f) speed = 4.0f;
   manualSpeed = speed;
+  applyToZones("", [&](ZoneConfig& z) { z.speed = speed; });
 }
 
 void runtimeSetHueShift(int16_t shift) {
   if (shift < -128) shift = -128;
   if (shift > 128) shift = 128;
   manualHueShift = shift;
+  applyToZones("", [&](ZoneConfig& z) { z.hueShift = shift; });
 }
 
 void runtimeSetBlackout(bool on) {
-  if (on == blackedOut) return;
+  if (on == blackedOut) {
+    applyToZones("", [&](ZoneConfig& z) { z.blackout = on; });
+    return;
+  }
   if (on) {
     fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
     FastLED.clear(true);
@@ -673,6 +771,37 @@ void runtimeSetBlackout(bool on) {
     blackedOut = false;
     fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
   }
+  applyToZones("", [&](ZoneConfig& z) { z.blackout = on; });
+}
+
+// Zone-targeted variants. Empty targetId broadcasts under sync rules.
+void runtimeSetBrightnessZ(const String& targetId, float value01) {
+  if (value01 < 0.02f) value01 = 0.02f;
+  if (value01 > 1.0f) value01 = 1.0f;
+  if (targetId.length() == 0) manualBrightness = value01;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.brightness = value01; });
+}
+
+void runtimeSetSpeedZ(const String& targetId, float speed) {
+  if (speed < 0.25f) speed = 0.25f;
+  if (speed > 4.0f) speed = 4.0f;
+  if (targetId.length() == 0) manualSpeed = speed;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.speed = speed; });
+}
+
+void runtimeSetHueShiftZ(const String& targetId, int16_t shift) {
+  if (shift < -128) shift = -128;
+  if (shift > 128) shift = 128;
+  if (targetId.length() == 0) manualHueShift = shift;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.hueShift = shift; });
+}
+
+void runtimeSetBlackoutZ(const String& targetId, bool on) {
+  if (targetId.length() == 0) {
+    runtimeSetBlackout(on);
+    return;
+  }
+  applyToZones(targetId, [&](ZoneConfig& z) { z.blackout = on; });
 }
 
 void runtimeNextPattern() {
@@ -687,10 +816,22 @@ bool runtimeSelectPatternById(const String& id) {
   for (uint8_t i = 0; i < lookCount; i++) {
     if (looks[i].id == id) {
       selectLook(i);
+      applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
       return true;
     }
   }
   return false;
+}
+
+// Zone-targeted pattern selection. Used by the per-zone designer flow.
+bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
+  if (targetId.length() == 0) return runtimeSelectPatternById(patternId);
+  // Verify the pattern exists in the bank
+  bool exists = false;
+  for (uint8_t i = 0; i < lookCount; i++) if (looks[i].id == patternId) { exists = true; break; }
+  if (!exists) return false;
+  uint8_t touched = applyToZones(targetId, [&](ZoneConfig& z) { z.patternId = patternId; });
+  return touched > 0;
 }
 
 void runtimeTriggerIdentify() {
@@ -764,11 +905,72 @@ bool runtimeRename(const String& newPieceName, const String& newHostname, String
   return true;
 }
 
-void runtimeSetCustomHue(uint8_t hue) { customHue = hue; }
-void runtimeSetCustomSaturation(uint8_t sat) { customSaturation = sat; }
-void runtimeSetCustomBreathe(bool on) { customBreathe = on; }
-void runtimeSetCustomDrift(bool on) { customDrift = on; }
+void runtimeSetCustomHue(uint8_t hue) {
+  customHue = hue;
+  applyToZones("", [&](ZoneConfig& z) { z.customHue = hue; });
+}
+void runtimeSetCustomSaturation(uint8_t sat) {
+  customSaturation = sat;
+  applyToZones("", [&](ZoneConfig& z) { z.customSaturation = sat; });
+}
+void runtimeSetCustomBreathe(bool on) {
+  customBreathe = on;
+  applyToZones("", [&](ZoneConfig& z) { z.customBreathe = on; });
+}
+void runtimeSetCustomDrift(bool on) {
+  customDrift = on;
+  applyToZones("", [&](ZoneConfig& z) { z.customDrift = on; });
+}
+void runtimeSetCustomHueZ(const String& targetId, uint8_t hue) {
+  if (targetId.length() == 0) customHue = hue;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.customHue = hue; });
+}
+void runtimeSetCustomSaturationZ(const String& targetId, uint8_t sat) {
+  if (targetId.length() == 0) customSaturation = sat;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.customSaturation = sat; });
+}
+void runtimeSetCustomBreatheZ(const String& targetId, bool on) {
+  if (targetId.length() == 0) customBreathe = on;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.customBreathe = on; });
+}
+void runtimeSetCustomDriftZ(const String& targetId, bool on) {
+  if (targetId.length() == 0) customDrift = on;
+  applyToZones(targetId, [&](ZoneConfig& z) { z.customDrift = on; });
+}
 uint8_t runtimeGetCustomHue() { return customHue; }
 uint8_t runtimeGetCustomSaturation() { return customSaturation; }
 bool runtimeGetCustomBreathe() { return customBreathe; }
 bool runtimeGetCustomDrift() { return customDrift; }
+
+void runtimeSetSyncZones(bool on) { runtimeConfig.syncZones = on; }
+bool runtimeGetSyncZones() { return runtimeConfig.syncZones; }
+
+String runtimeZonesJson() {
+  JsonDocument doc;
+  doc["syncZones"] = runtimeConfig.syncZones;
+  JsonArray arr = doc["zones"].to<JsonArray>();
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    const ZoneConfig& z = runtimeConfig.zones[i];
+    JsonObject obj = arr.add<JsonObject>();
+    obj["id"] = z.id;
+    obj["label"] = z.label;
+    obj["patternId"] = z.patternId;
+    obj["brightness"] = z.brightness;
+    obj["speed"] = z.speed;
+    obj["hueShift"] = z.hueShift;
+    obj["customHue"] = z.customHue;
+    obj["customSaturation"] = z.customSaturation;
+    obj["customBreathe"] = z.customBreathe;
+    obj["customDrift"] = z.customDrift;
+    obj["blackout"] = z.blackout;
+    JsonArray ranges = obj["ranges"].to<JsonArray>();
+    for (uint8_t r = 0; r < z.rangeCount; r++) {
+      JsonObject rng = ranges.add<JsonObject>();
+      rng["start"] = z.ranges[r].start;
+      rng["count"] = z.ranges[r].count;
+    }
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
