@@ -57,7 +57,135 @@ String escapeHtml(const String& in) {
   return out;
 }
 
+void handleAdvancedRoot();
+
 void handleRoot() {
+  sendCors();
+  RuntimeConfig& cfg = *runtimeConfigPtr;
+  bool stationActive = cfg.activeTransport == WIFI_TRANSPORT_STATION;
+  bool wifiConfigured = cfg.wifi.ssid.length() > 0;
+  bool needsSetup = !stationActive && !wifiConfigured;
+
+  // When the card hasn't been joined to home WiFi yet, the visitor surface
+  // is meaningless — defer to the advanced/setup flow which has the WiFi form.
+  if (needsSetup) {
+    handleAdvancedRoot();
+    return;
+  }
+
+  String page;
+  page.reserve(6144);
+  page += F("<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no'>"
+            "<title>");
+  page += escapeHtml(cfg.pieceName);
+  page += F("</title>"
+            "<style>"
+            "*{box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:manipulation}"
+            "html,body{height:100%;margin:0;overflow:hidden;background:#050505;color:#f4ede0;font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;-webkit-font-smoothing:antialiased;overscroll-behavior:none}"
+            ".stage{position:fixed;inset:0;display:flex;flex-direction:column}"
+            ".head{padding:24px 24px 0;display:flex;justify-content:space-between;align-items:baseline}"
+            ".head .title{font-size:14px;letter-spacing:2px;text-transform:uppercase;color:#9a8d75}"
+            ".head .piece{font-size:14px;letter-spacing:0.5px;color:#c89b5c}"
+            ".bright-area{flex:1;position:relative;display:flex;align-items:center;justify-content:center;cursor:grab}"
+            ".bright-area:active{cursor:grabbing}"
+            ".bright-track{position:absolute;left:50%;top:48px;bottom:48px;width:48px;transform:translateX(-50%);background:#141414;border:1px solid #262626;border-radius:24px;overflow:hidden}"
+            ".bright-fill{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(to top,#7a4a2a,#c89b5c);transition:height 0.06s linear;border-radius:0 0 24px 24px}"
+            ".bright-label{position:absolute;left:50%;transform:translateX(-50%);bottom:60px;font-size:48px;font-weight:200;letter-spacing:-1px;pointer-events:none;text-shadow:0 2px 12px rgba(0,0,0,0.6)}"
+            ".bright-hint{position:absolute;left:50%;transform:translateX(-50%);top:8px;font-size:10px;letter-spacing:2px;color:#9a8d75;text-transform:uppercase;pointer-events:none}"
+            ".pat-row{padding:24px 0 16px;background:linear-gradient(to top,rgba(5,5,5,1) 60%,rgba(5,5,5,0));position:relative;z-index:2}"
+            ".pat-track{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;padding:0 24px;-webkit-overflow-scrolling:touch}"
+            ".pat-track::-webkit-scrollbar{display:none}"
+            ".pat{flex:0 0 calc(100% - 48px);scroll-snap-align:center;background:#141414;border:1px solid #262626;border-radius:18px;padding:18px 20px;display:flex;flex-direction:column;gap:12px;cursor:pointer}"
+            ".pat.active{border-color:#c89b5c}"
+            ".pat .name{font-size:22px;font-weight:500;letter-spacing:0.3px}"
+            ".pat .mode{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#9a8d75}"
+            ".sw{height:36px;border-radius:8px;overflow:hidden;position:relative}"
+            ".sw.sw-aurora{background:linear-gradient(90deg,#0a3a4a,#2a8a9a,#4ac0d0,#2a8a9a,#0a3a4a);background-size:200% 100%;animation:flow 6s linear infinite}"
+            ".sw.sw-ember{background:radial-gradient(circle at 30% 50%,#d04a18,#8a2008 40%,#2a0800);animation:flicker 1.5s ease-in-out infinite}"
+            ".sw.sw-rainbow{background:linear-gradient(90deg,#e74c3c,#f39c12,#f1c40f,#27ae60,#3498db,#9b59b6,#e74c3c);background-size:200% 100%;animation:flow 4s linear infinite}"
+            ".sw.sw-breathe{background:radial-gradient(circle at 50% 50%,#c89b5c,#5a3a1a 60%,#1a1208);animation:breathe 3s ease-in-out infinite}"
+            ".sw.sw-scanner{background:linear-gradient(90deg,#000 0%,#000 30%,#c89b5c 50%,#000 70%,#000 100%);background-size:200% 100%;animation:scan 2.5s linear infinite}"
+            ".sw.sw-warm-white{background:linear-gradient(90deg,#3a2c1a,#c89b5c,#f4ede0,#c89b5c,#3a2c1a);background-size:200% 100%;animation:flow 8s linear infinite}"
+            ".sw.sw-cool-white{background:linear-gradient(90deg,#1a2a3a,#5c8ac8,#e0edf4,#5c8ac8,#1a2a3a);background-size:200% 100%;animation:flow 8s linear infinite}"
+            ".sw.sw-photo-white{background:linear-gradient(90deg,#3a3328,#c8b89c,#f4ede0,#c8b89c,#3a3328);background-size:200% 100%;animation:flow 10s linear infinite}"
+            "@keyframes flow{0%{background-position:0 0}100%{background-position:200% 0}}"
+            "@keyframes scan{0%{background-position:100% 0}100%{background-position:-100% 0}}"
+            "@keyframes flicker{0%,100%{opacity:0.9}25%{opacity:1}50%{opacity:0.7}75%{opacity:1}}"
+            "@keyframes breathe{0%,100%{transform:scale(1);opacity:0.6}50%{transform:scale(1.05);opacity:1}}"
+            ".dots{display:flex;justify-content:center;gap:6px;margin-top:14px;padding:0 24px}"
+            ".dot{width:6px;height:6px;border-radius:50%;background:#3a3328}"
+            ".dot.active{background:#c89b5c}"
+            ".bottom{padding:14px 24px 22px;display:flex;justify-content:space-between;align-items:center}"
+            ".off-btn{background:transparent;border:1px solid #333;color:#f4ede0;padding:10px 18px;border-radius:24px;font-size:13px;letter-spacing:1px;text-transform:uppercase;font-family:inherit;cursor:pointer}"
+            ".off-btn.on{background:#c89b5c;color:#0a0a0a;border-color:#c89b5c}"
+            ".set-link{color:#5a5247;text-decoration:none;font-size:12px;letter-spacing:1.5px;text-transform:uppercase}"
+            ".set-link:active{color:#c89b5c}"
+            "</style></head><body><div class='stage'>"
+            "<div class='head'>"
+              "<span class='title'>Lightweaver</span>"
+              "<span class='piece'>");
+  page += escapeHtml(cfg.pieceName);
+  page += F("</span></div>"
+            "<div class='bright-area' id='b-area'>"
+              "<div class='bright-track'><div class='bright-fill' id='b-fill'></div></div>"
+              "<div class='bright-hint'>Brightness</div>"
+              "<div class='bright-label' id='b-label'>—</div>"
+            "</div>"
+            "<div class='pat-row'>"
+              "<div class='pat-track' id='pat-track'></div>"
+              "<div class='dots' id='pat-dots'></div>"
+            "</div>"
+            "<div class='bottom'>"
+              "<button class='off-btn' id='off-btn'>Off</button>"
+              "<a class='set-link' href='/advanced'>Settings</a>"
+            "</div>"
+            "</div>"
+            "<script>"
+            "const $=id=>document.getElementById(id);"
+            "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
+            "const get=p=>fetch(p).then(r=>r.json());"
+            "let patterns=[],currentId='',blackoutOn=false;"
+            "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
+            "let brightVal=1.0;"
+            "const setBrightUi=v=>{$('b-fill').style.height=(v*100)+'%';$('b-label').textContent=Math.round(v*100)+'%'};"
+            // Coalescing brightness sender
+            "let bPending=null,bInflight=false;"
+            "const flushBright=async()=>{if(bInflight||bPending===null)return;bInflight=true;const v=bPending;bPending=null;try{await post('/api/control',{brightness:v})}catch(e){}finally{bInflight=false;if(bPending!==null)flushBright()}};"
+            "const sendBright=v=>{bPending=v;flushBright()};"
+            // Drag brightness
+            "const area=$('b-area');"
+            "const setFromY=(clientY)=>{const r=area.getBoundingClientRect();const y=clientY-r.top;const ratio=1-Math.max(0,Math.min(1,y/r.height));brightVal=Math.max(0.02,Math.min(1,ratio));setBrightUi(brightVal);sendBright(brightVal)};"
+            "let dragging=false;"
+            "area.addEventListener('pointerdown',e=>{dragging=true;area.setPointerCapture(e.pointerId);setFromY(e.clientY)});"
+            "area.addEventListener('pointermove',e=>{if(dragging)setFromY(e.clientY)});"
+            "area.addEventListener('pointerup',e=>{dragging=false;try{area.releasePointerCapture(e.pointerId)}catch(_){}});"
+            "area.addEventListener('pointercancel',()=>{dragging=false});"
+            // Pattern grid as swipeable cards
+            "const renderPat=()=>{const t=$('pat-track'),d=$('pat-dots');t.innerHTML='';d.innerHTML='';patterns.forEach((p,i)=>{"
+              "const el=document.createElement('div');el.className='pat'+(p.id===currentId?' active':'');el.dataset.id=p.id;"
+              "el.innerHTML='<div class=\"sw '+swClass(p.id)+'\"></div><div class=\"name\">'+p.label+'</div><div class=\"mode\">'+p.mode+'</div>';"
+              "el.onclick=async()=>{const wasActive=p.id===currentId;currentId=p.id;renderPat();if(!wasActive)await post('/api/control',{patternId:p.id})};"
+              "t.appendChild(el);"
+              "const dot=document.createElement('div');dot.className='dot'+(p.id===currentId?' active':'');d.appendChild(dot)"
+            "})};"
+            // Scroll snap → keep active dot in sync but don't auto-switch pattern; tapping is the commit
+            "$('pat-track').addEventListener('scroll',()=>{"
+              "const tr=$('pat-track');const w=tr.clientWidth;const i=Math.round(tr.scrollLeft/(w-48+14));const dots=$('pat-dots').children;"
+              "for(let k=0;k<dots.length;k++)dots[k].classList.toggle('active',k===i || (patterns[k] && patterns[k].id===currentId))"
+            "});"
+            "$('off-btn').onclick=async()=>{blackoutOn=!blackoutOn;$('off-btn').classList.toggle('on',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
+            "(async()=>{try{const s=await get('/api/status');const p=await get('/api/patterns');patterns=p.patterns||[];currentId=p.currentId||'';blackoutOn=!!s.blackout;$('off-btn').classList.toggle('on',blackoutOn);renderPat();"
+              // Scroll the active pattern into view on load
+              "setTimeout(()=>{const idx=patterns.findIndex(x=>x.id===currentId);if(idx>=0){const tr=$('pat-track');const w=tr.clientWidth;tr.scrollLeft=idx*(w-48+14)}},50);"
+              "brightVal=1.0;setBrightUi(brightVal)"
+            "}catch(e){}})();"
+            "</script></body></html>");
+
+  server.send(200, "text/html", page);
+}
+
+void handleAdvancedRoot() {
   sendCors();
   RuntimeConfig& cfg = *runtimeConfigPtr;
   bool stationActive = cfg.activeTransport == WIFI_TRANSPORT_STATION;
@@ -67,10 +195,10 @@ void handleRoot() {
   String page;
   page.reserve(8192);
   page += F("<!doctype html><html><head><meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no'>"
             "<title>Lightweaver Card</title>"
             "<style>"
-            "*{box-sizing:border-box}"
+            "*{box-sizing:border-box;touch-action:manipulation}"
             "body{font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;margin:0;background:#0a0a0a;color:#f4ede0;line-height:1.5;-webkit-font-smoothing:antialiased}"
             ".wrap{max-width:520px;margin:0 auto;padding:28px 20px 80px}"
             ".head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:28px}"
@@ -516,6 +644,7 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   }
 
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/advanced", HTTP_GET, handleAdvancedRoot);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
   server.on("/api/config", HTTP_POST, handleConfigPost);
