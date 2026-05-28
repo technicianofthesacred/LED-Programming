@@ -1,6 +1,7 @@
 import { DEFAULT_PARAMS, PALETTE_DEFAULT } from '../data.js';
-import { PATTERNS } from './patterns-library.js';
 import { compile, evalPixel } from './patterns.js';
+import { getPatternById } from './patternRegistry.js';
+import { parseParamsFromCode } from './patternParams.js';
 import { applySymmetry } from './symmetry.js';
 
 export function hexToNorm(hex) {
@@ -47,7 +48,7 @@ export function buildGammaLut(enabled, gammaValue = 2.2) {
 }
 
 export function compilePattern(patternId) {
-  const pat = PATTERNS.find(p => p.id === patternId);
+  const pat = getPatternById(patternId);
   if (!pat) return null;
   return compile(pat.code).fn;
 }
@@ -57,8 +58,109 @@ export function normalizePalette(palette = PALETTE_DEFAULT) {
 }
 
 export function resolvePatternParams(patternId, params = {}) {
-  const defaults = Object.fromEntries((DEFAULT_PARAMS[patternId] || []).map(k => [k.name, k.value]));
+  const staticDefaults = DEFAULT_PARAMS[patternId] || [];
+  const patternDefaults = staticDefaults.length > 0
+    ? staticDefaults
+    : parseParamsFromCode(getPatternById(patternId)?.code || '');
+  const defaults = Object.fromEntries(patternDefaults.map(k => [k.name, k.value]));
   return { ...defaults, ...params };
+}
+
+const TAU = Math.PI * 2;
+
+function clamp01(n) {
+  return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
+}
+
+function progressFromSymmetryCoords(x, y, fallback = 0) {
+  const dx = x - 0.5;
+  const dy = y - 0.5;
+  const radius = Math.sqrt(dx * dx + dy * dy);
+  if (radius < 0.0001) return clamp01(fallback);
+  return ((Math.atan2(dy, dx) + TAU) % TAU) / TAU;
+}
+
+function indexFromProgress(progress, pixelCount) {
+  if (pixelCount <= 1) return 0;
+  return Math.max(0, Math.min(pixelCount - 1, Math.round(clamp01(progress) * (pixelCount - 1))));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function lerpHueDegrees(a, b, t) {
+  const delta = ((b - a + 540) % 360) - 180;
+  return a + delta * t;
+}
+
+function applyJourneyColorInfluence(r, g, b, journey) {
+  const mixAmount = clamp01(journey?.colorMix ?? 0);
+  if (mixAmount <= 0) return { r, g, b };
+
+  const [baseH, baseS, baseL] = rgbToHsl(r, g, b);
+  const [journeyH, journeyS, journeyL] = rgbToHsl(journey.color.r, journey.color.g, journey.color.b);
+  const hue = lerpHueDegrees(baseH, journeyH, mixAmount * 0.62);
+  const sat = clamp01(lerp(baseS, journeyS, mixAmount * 0.5));
+  const light = clamp01(lerp(baseL, journeyL, mixAmount * 0.16));
+  const [nr, ng, nb] = hslToRgb(hue, sat, light);
+  return { r: nr, g: ng, b: nb };
+}
+
+function easeJourney(t, easing = 'smooth') {
+  const n = clamp01(t);
+  if (easing === 'linear') return n;
+  if (easing === 'ease-in') return n * n;
+  if (easing === 'ease-out') return 1 - (1 - n) * (1 - n);
+  return n * n * (3 - 2 * n);
+}
+
+function hexToRgb255(hex, fallback = { r: 255, g: 255, b: 255 }) {
+  const raw = String(hex || '').replace('#', '').trim();
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return fallback;
+  const n = parseInt(raw, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function resolvePatternJourney(params = {}, t = 0) {
+  const raw = params.__journey;
+  if (!raw?.enabled) return null;
+  const duration = Math.max(1, Number(raw.duration) || 24);
+  const cycle = ((t / duration) % 1 + 1) % 1;
+  const folded = raw.loop === 'pingpong'
+    ? (cycle < 0.5 ? cycle * 2 : 2 - cycle * 2)
+    : cycle;
+  const progress = easeJourney(folded, raw.easing || 'smooth');
+  const stops = Array.isArray(raw.colorStops) && raw.colorStops.length >= 2
+    ? raw.colorStops
+    : ['#ffd000', '#ff7a18', '#fff5d6'];
+  const colorPos = raw.loop === 'pingpong'
+    ? progress * (stops.length - 1)
+    : progress * stops.length;
+  const idx = raw.loop === 'pingpong'
+    ? Math.min(stops.length - 2, Math.max(0, Math.floor(colorPos)))
+    : Math.floor(colorPos) % stops.length;
+  const nextIdx = raw.loop === 'pingpong'
+    ? Math.min(stops.length - 1, idx + 1)
+    : (idx + 1) % stops.length;
+  const f = colorPos - Math.floor(colorPos);
+  const a = hexToRgb255(stops[idx]);
+  const b = hexToRgb255(stops[nextIdx], a);
+  return {
+    progress,
+    speed: lerp(Number(raw.speedStart) || 1, Number(raw.speedEnd) || 1, progress),
+    saturation: lerp(
+      raw.saturationStart == null ? 1 : Number(raw.saturationStart),
+      raw.saturationEnd == null ? 1 : Number(raw.saturationEnd),
+      progress,
+    ),
+    colorMix: clamp01(raw.colorMix == null ? 0 : Number(raw.colorMix)),
+    color: {
+      r: lerp(a.r, b.r, f),
+      g: lerp(a.g, b.g, f),
+      b: lerp(a.b, b.b, f),
+    },
+  };
 }
 
 export function renderPixelFrame({
@@ -100,6 +202,7 @@ export function renderPixelFrame({
       paramsForPattern.set(s.patternId, resolvePatternParams(s.patternId, patternParamsById[s.patternId] || {}));
     }
   }
+  const journey = resolvePatternJourney(resolvedParams, t);
   const beat = (t * bpm / 60) % 1;
   const beatSin = Math.sin(beat * Math.PI);
   const bass = audioBands?.bass ?? 0, mid = audioBands?.mid ?? 0, hi = audioBands?.hi ?? 0;
@@ -108,7 +211,7 @@ export function renderPixelFrame({
   let globalIdx = 0;
 
   for (const s of visibleStrips) {
-    const stripT = t * masterSpeed * (s.speed ?? 1);
+    const stripT = t * masterSpeed * (journey?.speed ?? 1) * (s.speed ?? 1);
     const stripTime = (stripT / 65.536) % 1;
     const stripFn = (s.patternId ? perStripFns.get(s.patternId) : null) ?? fnA;
     const stripParams = s.patternId ? paramsForPattern.get(s.patternId) || resolvedParams : resolvedParams;
@@ -128,10 +231,10 @@ export function renderPixelFrame({
         nx = sym.x; ny = sym.y;
         symSide = sym.side || 0;
         symSplit = !!sym.split;
-        stripProgress = Number.isFinite(sym.progress) ? sym.progress : stripProgress;
-        if (Number.isFinite(sym.progress) && pixelCount > 1) {
-          evalIndex = Math.round(stripProgress * (pixelCount - 1));
-        }
+        stripProgress = Number.isFinite(sym.progress)
+          ? sym.progress
+          : progressFromSymmetryCoords(nx, ny, pt.p);
+        evalIndex = indexFromProgress(stripProgress, pixelCount);
       }
 
       let r = 0, g = 0, b = 0;
@@ -162,6 +265,18 @@ export function renderPixelFrame({
 
       const bright = (s.brightness ?? 1) * masterBrightness;
       r *= bright; g *= bright; b *= bright;
+
+      if (journey?.colorMix > 0) {
+        const influenced = applyJourneyColorInfluence(r, g, b, journey);
+        r = influenced.r; g = influenced.g; b = influenced.b;
+      }
+
+      if (journey && journey.saturation < 0.999) {
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = gray + (r - gray) * journey.saturation;
+        g = gray + (g - gray) * journey.saturation;
+        b = gray + (b - gray) * journey.saturation;
+      }
 
       if (masterSaturation < 0.999) {
         const gray = 0.299 * r + 0.587 * g + 0.114 * b;

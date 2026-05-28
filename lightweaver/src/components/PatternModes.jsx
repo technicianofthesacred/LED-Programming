@@ -1,10 +1,18 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE, GRAPH_NODES, GRAPH_EDGES } from '../data.js';
+import { PATTERNS, DEFAULT_PARAMS, PATTERN_CODE } from '../data.js';
 import { curvedRangeValueToSlider, sliderValueToCurvedRange } from '../lib/controlScale.js';
 import { PATTERNS as LIB_PATTERNS } from '../lib/patterns-library.js';
 import { compile } from '../lib/patterns.js';
 import { makePatternStudioSummary } from '../lib/patternStudio.js';
 import { stripOverrideIdsToClearForGlobalSelection } from '../lib/patternTargeting.js';
+import {
+  CUSTOM_PATTERNS_EVENT,
+  deleteCustomPattern,
+  loadCustomPatterns,
+  saveCustomPattern,
+} from '../lib/customPatterns.js';
+import { getPatternById, getPatternCode } from '../lib/patternRegistry.js';
+import { parseParamsFromCode } from '../lib/patternParams.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
   WLED_ENCODER_ROTATE_DIRECTIONS,
@@ -15,20 +23,6 @@ import {
   makeDefaultRotaryCycleIds,
   normalizeRotaryPatternCycle,
 } from '../lib/rotaryPatternCycle.js';
-
-// ── @param live parser ──────────────────────────────────────────────────────
-function parseParamsFromCode(code) {
-  const re = /\/\/ @param\s+(\w+)\s+\w+\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
-  const params = [];
-  let m;
-  while ((m = re.exec(code)) !== null) {
-    const def = parseFloat(m[2]), min = parseFloat(m[3]), max = parseFloat(m[4]);
-    const range = max - min;
-    const step = range <= 1 ? 0.01 : range <= 10 ? 0.1 : 0.5;
-    params.push({ name: m[1], value: def, min, max, step });
-  }
-  return params;
-}
 
 // ── Pattern category system ─────────────────────────────────────────────────
 const CATEGORY_RULES = {
@@ -53,26 +47,6 @@ function getCategory(patternId) {
   return null;
 }
 
-// ── Custom patterns (user-saved from CodeMode) ──────────────────────────────
-const LS_CUSTOM_KEY  = 'lw_custom_patterns';
-const LW_CUSTOM_EVT  = 'lw:custom-updated';
-
-function loadCustomPatterns() {
-  try { return JSON.parse(localStorage.getItem(LS_CUSTOM_KEY) || '[]'); } catch { return []; }
-}
-
-function saveCustomPattern(id, name, code) {
-  const prev = loadCustomPatterns().filter(p => p.id !== id);
-  const entry = { id, name, code, preview: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', custom: true };
-  try { localStorage.setItem(LS_CUSTOM_KEY, JSON.stringify([entry, ...prev])); } catch {}
-  window.dispatchEvent(new CustomEvent(LW_CUSTOM_EVT));
-}
-
-function deleteCustomPattern(id) {
-  try { localStorage.setItem(LS_CUSTOM_KEY, JSON.stringify(loadCustomPatterns().filter(p => p.id !== id))); } catch {}
-  window.dispatchEvent(new CustomEvent(LW_CUSTOM_EVT));
-}
-
 // ── CARDS mode ─────────────────────────────────────────────────────────────
 const LS_FAV_KEY     = 'lw_fav_patterns';
 const LS_PRESETS_KEY = 'lw_param_presets';
@@ -91,6 +65,122 @@ function savePresets(presets) {
 }
 
 const CATS = ['all', 'recent', 'custom', 'audio', 'fire', 'water', 'space', 'geo', 'chill', 'glitch'];
+
+const DEFAULT_PATTERN_JOURNEY = {
+  enabled: false,
+  duration: 24,
+  loop: 'repeat',
+  easing: 'smooth',
+  colorMix: 0.65,
+  colorStops: ['#ffd000', '#ff7a18', '#fff5d6'],
+  saturationStart: 1,
+  saturationEnd: 0.35,
+  speedStart: 0.45,
+  speedEnd: 1.8,
+};
+
+function normalizeHexColor(value, fallback = '#ffffff') {
+  const raw = String(value || '').trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase();
+  if (/^[0-9a-f]{6}$/i.test(raw)) return `#${raw.toLowerCase()}`;
+  return fallback;
+}
+
+function getPatternJourney(params = {}) {
+  const savedStops = Array.isArray(params.__journey?.colorStops) && params.__journey.colorStops.length
+    ? params.__journey.colorStops
+    : DEFAULT_PATTERN_JOURNEY.colorStops;
+  const colorStops = savedStops.map((hex, index) => (
+    normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index % DEFAULT_PATTERN_JOURNEY.colorStops.length])
+  ));
+  while (colorStops.length < 2) {
+    colorStops.push(DEFAULT_PATTERN_JOURNEY.colorStops[colorStops.length] || '#ffffff');
+  }
+
+  return {
+    ...DEFAULT_PATTERN_JOURNEY,
+    ...(params.__journey || {}),
+    colorStops,
+  };
+}
+
+function BuilderSlider({ label, value, min, max, step = 0.01, onChange, readout }) {
+  return (
+    <label className="lw-builder-slider">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={event => onChange(Number(event.target.value))}
+      />
+      <strong>{readout}</strong>
+    </label>
+  );
+}
+
+function PaletteEditor({ palette, selectedIndex, setSelectedIndex, onPaletteChange }) {
+  const safePalette = palette?.length ? palette : ['#ff6b6b', '#ffd166', '#06d6a0'];
+  const selectedHex = normalizeHexColor(safePalette[selectedIndex] || safePalette[0]);
+  const [hexDraft, setHexDraft] = useState(selectedHex);
+  useEffect(() => setHexDraft(selectedHex), [selectedHex]);
+  const updateSelected = (value) => {
+    const nextHex = normalizeHexColor(value, selectedHex);
+    const next = [...safePalette];
+    next[selectedIndex] = nextHex;
+    onPaletteChange(next);
+  };
+
+  return (
+    <div className="lw-builder-block lw-palette-editor">
+      <div className="lw-builder-block-head">
+        <strong>Palette editor</strong>
+        <span>live preview</span>
+      </div>
+      <div className="lw-color-swatch-row" aria-label="Palette colors">
+        {safePalette.map((hex, index) => (
+          <button
+            key={`${hex}-${index}`}
+            type="button"
+            className="lw-color-swatch"
+            style={{ background: normalizeHexColor(hex) }}
+            aria-label={`Palette color ${index + 1}`}
+            aria-pressed={selectedIndex === index}
+            draggable
+            onDragStart={event => {
+              const color = normalizeHexColor(hex);
+              event.dataTransfer.effectAllowed = 'copy';
+              event.dataTransfer.setData('application/x-lightweaver-color', color);
+              event.dataTransfer.setData('text/plain', color);
+            }}
+            onClick={() => setSelectedIndex(index)}
+          />
+        ))}
+      </div>
+      <div className="lw-color-picker-row">
+        <input
+          aria-label="Selected palette color"
+          type="color"
+          value={selectedHex}
+          onChange={event => updateSelected(event.target.value)}
+        />
+        <input
+          aria-label="Selected palette hex"
+          type="text"
+          value={hexDraft}
+          onChange={event => {
+            const next = event.target.value;
+            setHexDraft(next);
+            if (/^#[0-9a-f]{6}$/i.test(next)) updateSelected(next);
+          }}
+          onBlur={() => setHexDraft(selectedHex)}
+        />
+      </div>
+    </div>
+  );
+}
 
 const PARAM_META = {
   speed: { label: 'Speed', group: 'Motion', desc: 'How fast the animation moves.', unit: 'x' },
@@ -189,7 +279,7 @@ function sliderToParamValue(value, param, meta) {
 }
 
 function patternUsesPalette(patternId) {
-  const code = PATTERN_CODE[patternId] || LIB_PATTERNS.find(p => p.id === patternId)?.code || '';
+  const code = PATTERN_CODE[patternId] || getPatternCode(patternId) || LIB_PATTERNS.find(p => p.id === patternId)?.code || '';
   return /\bsamplePalette\s*\(|\bpalette\b/.test(code);
 }
 
@@ -210,6 +300,7 @@ export function CardsMode({
   const [showFavs, setShowFavs] = useState(false);
   const [cat, setCat]           = useState('all');
   const [effectTarget, setEffectTarget] = useState('global');
+  const [showFullLibrary, setShowFullLibrary] = useState(false);
   const [favs, setFavsState]    = useState(loadFavs);
   const [presets, setPresetsState] = useState(loadPresets);
   const [customPatterns, setCustomPatterns] = useState(loadCustomPatterns);
@@ -222,9 +313,11 @@ export function CardsMode({
 
   useEffect(() => {
     const handler = () => setCustomPatterns(loadCustomPatterns());
-    window.addEventListener(LW_CUSTOM_EVT, handler);
-    return () => window.removeEventListener(LW_CUSTOM_EVT, handler);
+    window.addEventListener(CUSTOM_PATTERNS_EVENT, handler);
+    return () => window.removeEventListener(CUSTOM_PATTERNS_EVENT, handler);
   }, []);
+
+  const allPatterns = useMemo(() => [...customPatterns, ...PATTERNS], [customPatterns]);
 
   const savePreset = () => {
     const name = prompt('Preset name:');
@@ -265,7 +358,7 @@ export function CardsMode({
     });
   };
 
-  const globalPattern = PATTERNS.find(p => p.id === patternId);
+  const globalPattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
 
   const audioIds = useMemo(() =>
     new Set(LIB_PATTERNS.filter(p => p.code && (p.code.includes('bass') || p.code.includes(' mid') || p.code.includes(' hi'))).map(p => p.id)),
@@ -300,12 +393,12 @@ export function CardsMode({
     ? patternId
     : selectedTargetStrip?.patternId || patternId;
   const tuningPatternId = activeTargetPatternId;
-  const tuningPattern = PATTERNS.find(p => p.id === tuningPatternId);
+  const tuningPattern = getPatternById(tuningPatternId) || allPatterns.find(p => p.id === tuningPatternId);
   const tuningParams = patternParams?.[tuningPatternId] || (tuningPatternId === patternId ? params : {});
   const paletteIsUsed = patternUsesPalette(tuningPatternId);
 
   // Merge static DEFAULT_PARAMS with @param annotations from library code.
-  const activeLibPattern = LIB_PATTERNS.find(p => p.id === tuningPatternId);
+  const activeLibPattern = getPatternById(tuningPatternId) || LIB_PATTERNS.find(p => p.id === tuningPatternId);
   const libKnobs  = activeLibPattern?.code ? parseParamsFromCode(activeLibPattern.code) : [];
   const knobs     = (DEFAULT_PARAMS[tuningPatternId] || []).length > 0
                       ? DEFAULT_PARAMS[tuningPatternId] || []
@@ -324,7 +417,7 @@ export function CardsMode({
     () => normalizeWledPhysicalControls(physicalControls),
     [physicalControls],
   );
-  const knownPatternIds = useMemo(() => new Set(PATTERNS.map(pattern => pattern.id)), []);
+  const knownPatternIds = useMemo(() => new Set(allPatterns.map(pattern => pattern.id)), [allPatterns]);
   const storedCycleIds = normalizeRotaryPatternCycle(rotaryControls.encoder.patternCycleIds, knownPatternIds);
   const defaultCycleIds = useMemo(() => makeDefaultRotaryCycleIds({
     activePatternId: patternId,
@@ -334,7 +427,7 @@ export function CardsMode({
   const visibleCycleIds = storedCycleIds.length ? storedCycleIds : defaultCycleIds;
   const rotaryCycleIsCustom = storedCycleIds.length > 0;
   const rotaryCycleNames = visibleCycleIds
-    .map(id => PATTERNS.find(pattern => pattern.id === id)?.name || id);
+    .map(id => allPatterns.find(pattern => pattern.id === id)?.name || id);
   const rotaryTurnLabel = rotaryControls.encoder.rotateDirection === WLED_ENCODER_ROTATE_DIRECTIONS.CLOCKWISE_DIMMER
     ? 'clockwise dims'
     : 'clockwise brightens';
@@ -451,9 +544,9 @@ export function CardsMode({
   };
 
   const selectAdjacentPattern = (direction) => {
-    const idx = PATTERNS.findIndex(p => p.id === activeTargetPatternId);
-    const baseIdx = idx >= 0 ? idx : PATTERNS.findIndex(p => p.id === patternId);
-    const next = PATTERNS[(baseIdx + direction + PATTERNS.length) % PATTERNS.length];
+    const idx = allPatterns.findIndex(p => p.id === activeTargetPatternId);
+    const baseIdx = idx >= 0 ? idx : allPatterns.findIndex(p => p.id === patternId);
+    const next = allPatterns[(baseIdx + direction + allPatterns.length) % allPatterns.length];
     handleSelectPattern(next.id);
   };
 
@@ -462,16 +555,16 @@ export function CardsMode({
       const q = search.trim().toLowerCase();
       return q ? customPatterns.filter(p => p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)) : customPatterns;
     }
-    let base = showFavs ? PATTERNS.filter(p => favs.has(p.id)) : PATTERNS;
+    let base = showFavs ? allPatterns.filter(p => favs.has(p.id)) : PATTERNS;
     if (cat === 'recent') {
-      base = recentIds.map(id => PATTERNS.find(p => p.id === id)).filter(Boolean);
+      base = recentIds.map(id => allPatterns.find(p => p.id === id)).filter(Boolean);
     } else if (cat === 'audio') {
       base = base.filter(p => audioIds.has(p.id));
     } else if (cat !== 'all') {
       const rule = CATEGORY_RULES[cat];
       if (Array.isArray(rule)) base = base.filter(p => rule.includes(p.id));
     }
-    if (cat === 'all' && customPatterns.length > 0) base = [...customPatterns, ...base];
+    if (cat === 'all' && !showFavs && customPatterns.length > 0) base = [...customPatterns, ...base];
     const q = search.trim().toLowerCase();
     let result = q ? base.filter(p =>
       p.name.toLowerCase().includes(q) ||
@@ -479,7 +572,7 @@ export function CardsMode({
       (p.desc && p.desc.toLowerCase().includes(q))
     ) : base;
     return result;
-  }, [search, showFavs, favs, cat, audioIds, recentIds, customPatterns]);
+  }, [search, showFavs, favs, cat, audioIds, recentIds, customPatterns, allPatterns]);
 
   // Number keys 1-9 quick-select first 9 visible cards (must be after filtered + handleSelectPattern)
   useEffect(() => {
@@ -495,12 +588,23 @@ export function CardsMode({
     return () => window.removeEventListener('keydown', handler);
   }, [filtered, handleSelectPattern]);
 
+  const starterMode = !showFullLibrary && !search.trim() && !showFavs && cat === 'all';
+  const visiblePatterns = starterMode ? filtered.slice(0, 12) : filtered;
+
   return (
     <div className="lw-cards-mode">
       <div className="lw-sec-header">
         <span>Effects</span>
         <span className="meta">{effectTarget === 'global' ? 'global' : selectedTargetStrip?.name || 'layer'} target</span>
       </div>
+      {starterMode && (
+        <div className="lw-browse-guide">
+          <span>Start with one strong look, then tune color and motion.</span>
+          <button type="button" className="btn btn-ghost" onClick={() => setShowFullLibrary(true)}>
+            Show all patterns
+          </button>
+        </div>
+      )}
 
       <div className="lw-effect-targets">
         <button
@@ -512,7 +616,7 @@ export function CardsMode({
           <span className="meta">{globalPattern?.name || patternId}</span>
         </button>
         {strips.map(strip => {
-          const override = strip.patternId ? PATTERNS.find(p => p.id === strip.patternId)?.name || strip.patternId : 'Inherited';
+          const override = strip.patternId ? allPatterns.find(p => p.id === strip.patternId)?.name || strip.patternId : 'Inherited';
           return (
             <button
               key={strip.id}
@@ -593,7 +697,7 @@ export function CardsMode({
           style={{ fontSize: 'var(--fs-xs)', padding: '3px 7px', flexShrink: 0 }}
           title="Random pattern"
           onClick={() => {
-            const pool = showFavs && favs.size > 0 ? PATTERNS.filter(p => favs.has(p.id)) : PATTERNS;
+            const pool = showFavs && favs.size > 0 ? allPatterns.filter(p => favs.has(p.id)) : allPatterns;
             const pick = pool[Math.floor(Math.random() * pool.length)];
             handleSelectPattern(pick.id);
           }}>
@@ -620,7 +724,7 @@ export function CardsMode({
       )}
 
       <div className="lw-pattern-grid">
-        {filtered.map((p, cardIdx) => (
+        {visiblePatterns.map((p, cardIdx) => (
           <div key={p.id}
                className={`lw-pattern-card ${p.id === activeTargetPatternId ? 'selected' : ''}`}
                draggable={knownPatternIds.has(p.id)}
@@ -763,7 +867,7 @@ export function CardsMode({
 
                 <div className="lw-rotary-cycle-list" aria-label="Rotary push pattern order">
                   {visibleCycleIds.map((cycleId, index) => {
-                    const pattern = PATTERNS.find(item => item.id === cycleId);
+                    const pattern = allPatterns.find(item => item.id === cycleId);
                     return (
                       <div
                         className={`lw-rotary-cycle-item ${rotaryDragOverIndex === index ? 'is-drop-target' : ''}`}
@@ -944,7 +1048,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
   const [liveKnobs, setLiveKnobs] = useState([]);
   const tryCompileRef = useRef(null);
 
-  const initialCode = PATTERN_CODE[patternId] || '// Select a pattern\nreturn hsv(x, 1, 1);';
+  const initialCode = getPatternCode(patternId) || '// Select a pattern\nreturn hsv(x, 1, 1);';
 
   const tryCompile = (code) => {
     const { fn, error } = compile(code);
@@ -1007,7 +1111,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    const newCode = PATTERN_CODE[patternId] || '// Select a pattern\nreturn hsv(x, 1, 1);';
+    const newCode = getPatternCode(patternId) || '// Select a pattern\nreturn hsv(x, 1, 1);';
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: newCode } });
     tryCompileRef.current?.(newCode);
   }, [patternId]);
@@ -1066,8 +1170,7 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
               const code = viewRef.current?.state.doc.toString() || '';
               const name = prompt('Pattern name:', '');
               if (!name?.trim()) return;
-              const slug = `custom_${name.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')}`;
-              saveCustomPattern(slug, name.trim(), code);
+              saveCustomPattern({ name: name.trim(), code });
             }}>
             Save as…
           </button>
@@ -1172,77 +1275,482 @@ export function CodeMode({ patternId, onCodeChange, params, onParamChange }) {
 }
 
 // ── GRAPH mode ─────────────────────────────────────────────────────────────
-export function GraphMode() {
-  const [sel, setSel] = useState('n6');
-  const nodes   = GRAPH_NODES;
-  const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
-  const portOut  = n => ({ x: n.x + 140, y: n.y + 18 });
-  const portIn   = n => ({ x: n.x,       y: n.y + 18 });
+export function GraphMode({
+  patternId,
+  onOpenCode,
+  onOpenSymmetry,
+  masterSpeed,
+  setMasterSpeed,
+  masterBrightness,
+  setMasterBrightness,
+  masterSaturation,
+  setMasterSaturation,
+}) {
+  const [sel, setSel] = useState('color');
+  const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
+  const [lastChange, setLastChange] = useState('Ready to tune color, motion, and output.');
+  const [journeyScrub, setJourneyScrub] = useState(0);
+  const undoJourneyRef = useRef(null);
+  const { patternParams, setPatternParams, palette, setPalette, symSettings } = useProject();
+  const pattern = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
+  const currentParams = patternParams[patternId] || {};
+  const journey = getPatternJourney(currentParams);
+  const updateJourney = (patch, message = 'Updated the pattern journey.') => {
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      undoJourneyRef.current = getPatternJourney(existing);
+      const nextJourney = { ...getPatternJourney(existing), enabled: true, ...patch };
+      return { ...prev, [patternId]: { ...existing, __journey: nextJourney } };
+    });
+    setLastChange(message);
+  };
+  const undoTune = () => {
+    const previousJourney = undoJourneyRef.current;
+    if (!previousJourney) {
+      setLastChange('No earlier tuning step to restore yet.');
+      return;
+    }
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      return { ...prev, [patternId]: { ...existing, __journey: previousJourney } };
+    });
+    undoJourneyRef.current = null;
+    setLastChange('Restored the previous tuning step.');
+  };
+  const setJourneyEnabled = (enabled) => {
+    setPatternParams(prev => {
+      const existing = prev[patternId] || {};
+      return {
+        ...prev,
+        [patternId]: {
+          ...existing,
+          __journey: { ...getPatternJourney(existing), enabled },
+        },
+      };
+    });
+  };
+  const updateJourneyColor = (index, value) => {
+    const colorStops = [...journey.colorStops];
+    colorStops[index] = normalizeHexColor(value, colorStops[index]);
+    updateJourney({ colorStops }, `Changed color stop ${index + 1}.`);
+  };
+  const addJourneyColor = () => {
+    const fallback = journey.colorStops[journey.colorStops.length - 1] || '#ffffff';
+    const selectedPaletteColor = palette?.[selectedPaletteIndex];
+    updateJourney({
+      colorStops: [
+        ...journey.colorStops,
+        normalizeHexColor(selectedPaletteColor, fallback),
+      ],
+    }, 'Added another color stop to the loop.');
+  };
+  const moveJourneyColor = (fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    if (fromIndex < 0 || fromIndex >= journey.colorStops.length) return;
+    if (toIndex < 0 || toIndex >= journey.colorStops.length) return;
+    const colorStops = [...journey.colorStops];
+    const [moved] = colorStops.splice(fromIndex, 1);
+    colorStops.splice(toIndex, 0, moved);
+    updateJourney({ colorStops }, `Moved color stop ${fromIndex + 1} to position ${toIndex + 1}.`);
+  };
+  const setJourneyColorFromDrop = (event, targetIndex) => {
+    event.preventDefault();
+    const sourceIndexText = event.dataTransfer.getData('application/x-lightweaver-journey-index');
+    const sourceIndex = Number(sourceIndexText);
+    if (sourceIndexText !== '' && Number.isInteger(sourceIndex)) {
+      moveJourneyColor(sourceIndex, targetIndex);
+      return;
+    }
+
+    const droppedColor = event.dataTransfer.getData('application/x-lightweaver-color')
+      || event.dataTransfer.getData('text/plain');
+    if (/^#?[0-9a-f]{6}$/i.test(droppedColor.trim())) {
+      updateJourneyColor(targetIndex, droppedColor);
+    }
+  };
+  const tabs = [
+    { id: 'color', label: 'Color' },
+    { id: 'motion', label: 'Motion' },
+    { id: 'output', label: 'Output' },
+  ];
+  const resetColor = () => {
+    updateJourney({
+      colorStops: [...DEFAULT_PATTERN_JOURNEY.colorStops],
+      colorMix: DEFAULT_PATTERN_JOURNEY.colorMix,
+      saturationEnd: DEFAULT_PATTERN_JOURNEY.saturationEnd,
+    }, 'Reset color journey to the starter loop.');
+  };
+  const resetMotion = () => {
+    updateJourney({
+      speedStart: DEFAULT_PATTERN_JOURNEY.speedStart,
+      speedEnd: DEFAULT_PATTERN_JOURNEY.speedEnd,
+      easing: DEFAULT_PATTERN_JOURNEY.easing,
+    }, 'Reset motion ramp to the starter feel.');
+  };
+  const resetOutput = () => {
+    setMasterBrightness(1);
+    setMasterSaturation(1);
+    setLastChange('Reset live output to full brightness and saturation.');
+  };
+  const applyPaletteToJourney = () => {
+    const nextStops = (palette?.length ? palette : DEFAULT_PATTERN_JOURNEY.colorStops)
+      .slice(0, 6)
+      .map((hex, index) => normalizeHexColor(hex, DEFAULT_PATTERN_JOURNEY.colorStops[index % DEFAULT_PATTERN_JOURNEY.colorStops.length]));
+    updateJourney({ colorStops: nextStops }, 'Applied the palette to the color journey.');
+  };
+  const reverseColorJourney = () => {
+    updateJourney({ colorStops: [...journey.colorStops].reverse() }, 'Reversed the color journey.');
+  };
+  const recipeParts = [
+    pattern?.name || patternId,
+    journey.enabled ? `${journey.colorStops.length} color journey` : 'static pattern',
+    `${journey.speedStart.toFixed(2)}x to ${journey.speedEnd.toFixed(2)}x motion`,
+    `${Math.round(masterBrightness * 100)}% brightness`,
+    symSettings?.enabled && symSettings.type !== 'none' ? `${symSettings.type} symmetry` : 'no symmetry',
+  ];
+  const stackRows = [
+    {
+      label: 'Base pattern',
+      value: pattern?.name || patternId,
+      detail: 'keeps its own motion, flashes, and spatial structure',
+    },
+    {
+      label: 'Journey layer',
+      value: journey.enabled ? `${Math.round(journey.colorMix * 100)}% influence` : 'off',
+      detail: 'influences color and speed over time',
+    },
+    {
+      label: 'AI drafts',
+      value: 'preview only',
+      detail: 'not applied until accepted',
+    },
+    {
+      label: 'Live output',
+      value: `${Math.round(masterBrightness * 100)}% bright`,
+      detail: symSettings?.enabled && symSettings.type !== 'none'
+        ? `brightness, saturation, and ${symSettings.type} symmetry`
+        : 'brightness, saturation, and symmetry',
+    },
+  ];
 
   return (
-    <div>
+    <div className="lw-graph-mode lw-builder-mode">
       <div className="lw-sec-header">
-        <span>Node graph</span>
-        <span className="meta">read-only signal map</span>
+        <span>Tune Pattern</span>
+        <span className="meta">{pattern?.name || patternId}</span>
       </div>
-      <div className="lw-graph-wrap">
-        <div className="lw-graph-toolbar" aria-label="Graph mode status">
-          <span>Compiled from current pattern chain</span>
+
+      <div className="lw-tune-recipe">
+        <div className="lw-tune-recipe-top">
+          <div>
+            <strong>Now editing</strong>
+            <span>{pattern?.name || patternId}</span>
+          </div>
+          <button type="button" className="btn btn-ghost" onClick={undoTune}>
+            Undo tuning
+          </button>
         </div>
-        <svg className="lw-graph-svg">
-          {GRAPH_EDGES.map(([a, b], i) => {
-            const na = nodeById[a], nb = nodeById[b];
-            if (!na || !nb) return null;
-            const s = portOut(na), e = portIn(nb);
-            const cx = (s.x + e.x) / 2;
-            return <path key={i} d={`M ${s.x} ${s.y} C ${cx} ${s.y}, ${cx} ${e.y}, ${e.x} ${e.y}`}
-                         stroke="oklch(46% 0.02 260)" strokeWidth="1.5" fill="none"/>;
-          })}
-          {GRAPH_EDGES.filter(([a,b]) => b === sel || a === sel).map(([a, b], i) => {
-            const na = nodeById[a], nb = nodeById[b];
-            const s = portOut(na), e = portIn(nb);
-            const cx = (s.x + e.x) / 2;
-            return <path key={i} d={`M ${s.x} ${s.y} C ${cx} ${s.y}, ${cx} ${e.y}, ${e.x} ${e.y}`}
-                         stroke="var(--accent)" strokeWidth="1.5" fill="none" strokeDasharray="4 4">
-              <animate attributeName="stroke-dashoffset" from="8" to="0" dur="0.8s" repeatCount="indefinite"/>
-            </path>;
-          })}
-        </svg>
-        {nodes.map(n => (
-          <div key={n.id}
-               className={`lw-graph-node kind-${n.kind} ${n.id === sel ? 'selected' : ''}`}
-               style={{ left: n.x, top: n.y }}
-               onClick={() => setSel(n.id)}>
-            <div className="lw-graph-node-header">
-              <span className="kind-dot"/><span>{n.title}</span>
+        <div className="lw-tune-recipe-line">
+          <strong>Pattern recipe</strong>
+          <span>{recipeParts.join(' + ')}</span>
+        </div>
+        <div className="lw-tune-recipe-line">
+          <strong>Last change</strong>
+          <span>{lastChange}</span>
+        </div>
+      </div>
+
+      <div className="lw-effect-stack" aria-label="Pattern effect stack">
+        <div className="lw-effect-stack-head">
+          <strong>Effect stack</strong>
+          <span>top controls influence lower layers</span>
+        </div>
+        {stackRows.map(row => (
+          <div className="lw-effect-stack-row" key={row.label}>
+            <span className="lw-effect-stack-pin" aria-hidden="true" />
+            <div>
+              <strong>{row.label}</strong>
+              <span>{row.detail}</span>
             </div>
-            <div className="lw-graph-node-body">
-              {n.rows.map((r, i) => (
-                <div className="row" key={i}><span className="k">{r[0]}</span><span>{r[1]}</span></div>
+            <em>{row.value}</em>
+          </div>
+        ))}
+      </div>
+
+      <div className="lw-journey-panel">
+        <label className="lw-journey-toggle">
+          <input
+            type="checkbox"
+            checked={!!journey.enabled}
+            onChange={event => setJourneyEnabled(event.target.checked)}
+          />
+          <span>
+            <strong>Pattern journey</strong>
+            <small>Build the long phrase inside this pattern.</small>
+          </span>
+        </label>
+        <BuilderSlider
+          label="Duration"
+          min={5}
+          max={120}
+          step={1}
+          value={journey.duration}
+          onChange={duration => updateJourney({ duration }, `Set journey length to ${Math.round(duration)} seconds.`)}
+          readout={`${Math.round(journey.duration)}s`}
+        />
+        <div className="lw-builder-segment" aria-label="Journey loop mode">
+          {[
+            ['repeat', 'Repeat'],
+            ['pingpong', 'Ping-pong'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={journey.loop === value ? 'active' : ''}
+              onClick={() => updateJourney({ loop: value }, value === 'repeat' ? 'Journey now loops back to the first color.' : 'Journey now runs forward then backward.')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="lw-builder-tabs" role="tablist" aria-label="Pattern builder sections">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={sel === tab.id}
+            className={sel === tab.id ? 'active' : ''}
+            onClick={() => setSel(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="lw-builder-pane">
+        {sel === 'color' && (
+          <>
+            <PaletteEditor
+              palette={palette}
+              selectedIndex={selectedPaletteIndex}
+              setSelectedIndex={setSelectedPaletteIndex}
+              onPaletteChange={setPalette}
+            />
+            <div className="lw-builder-block">
+              <div className="lw-builder-block-head">
+                <strong>Color journey</strong>
+                <span>Loops back to first</span>
+              </div>
+              <div className="lw-color-timeline" aria-label="Color journey timeline">
+                <div
+                  className="lw-color-timeline-track"
+                  style={{ background: `linear-gradient(90deg, ${journey.colorStops.join(', ')}, ${journey.colorStops[0]})` }}
+                />
+                <span className="lw-color-timeline-playhead" style={{ left: `${journeyScrub}%` }}/>
+              </div>
+              <BuilderSlider
+                label="Scrub"
+                min={0}
+                max={100}
+                step={1}
+                value={journeyScrub}
+                onChange={value => {
+                  setJourneyScrub(value);
+                  setLastChange(`Previewing ${Math.round(value)}% through the journey.`);
+                }}
+                readout={`${Math.round(journeyScrub)}%`}
+              />
+              <div className="lw-journey-stop-list" aria-label="Color journey stops">
+                {journey.colorStops.map((hex, index) => (
+                  <div
+                    key={`${hex}-${index}`}
+                    className="lw-journey-stop"
+                    draggable
+                    aria-label={`Color stop ${index + 1}`}
+                    onDragStart={event => {
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('application/x-lightweaver-journey-index', String(index));
+                    }}
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={event => setJourneyColorFromDrop(event, index)}
+                  >
+                    <span className="lw-journey-stop-handle" aria-hidden="true">::</span>
+                    <label>
+                      <span>{index === 0 ? '1 Start' : `${index + 1}`}</span>
+                      <input
+                        aria-label={`Color stop ${index + 1}`}
+                        type="color"
+                        value={hex}
+                        onChange={event => updateJourneyColor(index, event.target.value)}
+                      />
+                    </label>
+                  </div>
+                ))}
+                <button
+                  className="lw-add-journey-stop"
+                  type="button"
+                  aria-label="Add color stop"
+                  onClick={addJourneyColor}
+                >
+                  <span aria-hidden="true">+</span>
+                  <strong>Add color stop</strong>
+                </button>
+              </div>
+              <div className="lw-builder-action-row">
+                <button className="btn btn-ghost" type="button" onClick={applyPaletteToJourney}>
+                  Apply palette to journey
+                </button>
+                <button className="btn btn-ghost" type="button" onClick={reverseColorJourney}>
+                  Reverse color order
+                </button>
+                <button className="btn btn-ghost" type="button" onClick={resetColor}>
+                  Reset Color
+                </button>
+              </div>
+              <BuilderSlider
+                label="Color influence"
+                min={0}
+                max={1}
+                step={0.01}
+                value={journey.colorMix}
+                onChange={colorMix => updateJourney({ colorMix }, `Color influence is now ${Math.round(colorMix * 100)}%.`)}
+                readout={`${Math.round(journey.colorMix * 100)}%`}
+              />
+              <div className="lw-tune-explainer">
+                <strong>Pattern stays underneath</strong>
+                <span>Steers journey colors without replacing the pattern underneath.</span>
+              </div>
+              <BuilderSlider
+                label="End intensity"
+                min={0}
+                max={1}
+                step={0.01}
+                value={journey.saturationEnd}
+                onChange={saturationEnd => updateJourney({ saturationEnd }, `Ending color intensity is now ${Math.round(saturationEnd * 100)}%.`)}
+                readout={`${Math.round(journey.saturationEnd * 100)}%`}
+              />
+            </div>
+          </>
+        )}
+
+        {sel === 'motion' && (
+          <div className="lw-builder-block">
+            <div className="lw-builder-block-head">
+              <strong>Live speed</strong>
+              <span>global</span>
+            </div>
+            <div className="lw-tune-explainer">
+              <strong>Speed story</strong>
+              <span>Set how the pattern starts, where it ends, and how smooth that change feels.</span>
+            </div>
+            <BuilderSlider
+              label="Speed"
+              min={0}
+              max={4}
+              step={0.01}
+              value={masterSpeed}
+              onChange={value => {
+                setMasterSpeed(value);
+                setLastChange(`Live speed is now ${value.toFixed(2)}x.`);
+              }}
+              readout={`${masterSpeed.toFixed(2)}x`}
+            />
+            <div className="lw-builder-block-head">
+              <strong>Motion journey</strong>
+              <span>speed ramp</span>
+            </div>
+            <BuilderSlider
+              label="Start"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedStart}
+              onChange={speedStart => updateJourney({ speedStart }, `Motion now starts at ${speedStart.toFixed(2)}x.`)}
+              readout={`${journey.speedStart.toFixed(2)}x`}
+            />
+            <BuilderSlider
+              label="End"
+              min={0}
+              max={4}
+              step={0.01}
+              value={journey.speedEnd}
+              onChange={speedEnd => updateJourney({ speedEnd }, `Motion now ends at ${speedEnd.toFixed(2)}x.`)}
+              readout={`${journey.speedEnd.toFixed(2)}x`}
+            />
+            <div className="lw-builder-segment" aria-label="Journey easing">
+              {[
+                ['smooth', 'Smooth'],
+                ['linear', 'Linear'],
+                ['ease-out', 'Ease out'],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={journey.easing === value ? 'active' : ''}
+                  onClick={() => updateJourney({ easing: value }, `Motion easing set to ${label}.`)}
+                >
+                  {label}
+                </button>
               ))}
             </div>
-            {n.kind !== 'source' && <div className="lw-graph-port left"/>}
-            {n.kind !== 'output' && <div className={`lw-graph-port right ${n.id === sel ? 'active' : ''}`}/>}
+            <div className="lw-builder-action-row">
+              <button className="btn btn-ghost" type="button" onClick={resetMotion}>
+                Reset Motion
+              </button>
+            </div>
           </div>
-        ))}
-        <div className="lw-graph-legend">
-          <span className="item"><span className="d" style={{background:'var(--accent)'}}/>Source</span>
-          <span className="item"><span className="d" style={{background:'oklch(76% 0.14 340)'}}/>Modifier</span>
-          <span className="item"><span className="d" style={{background:'var(--accent-2)'}}/>Color</span>
-          <span className="item"><span className="d" style={{background:'var(--mint)'}}/>Output</span>
-        </div>
-      </div>
-      <div className="lw-sec-header">
-        <span>{nodeById[sel]?.title} · inspector</span>
-        <span className="meta">{nodeById[sel]?.kind}</span>
-      </div>
-      <div className="lw-knobs">
-        {(nodeById[sel]?.rows || []).map((r, i) => (
-          <div className="lw-knob lw-knob-readonly" key={i}>
-            <div className="lw-knob-name">{r[0]}</div>
-            <div className="lw-knob-val">{r[1]}</div>
+        )}
+
+        {sel === 'output' && (
+          <div className="lw-builder-block">
+            <div className="lw-builder-block-head">
+              <strong>Live output</strong>
+              <span>applies globally</span>
+            </div>
+            <div className="lw-tune-explainer">
+              <strong>What is live right now</strong>
+              <span>Brightness and saturation affect the preview immediately and carry into the hardware output.</span>
+            </div>
+            <BuilderSlider
+              label="Brightness"
+              min={0}
+              max={1}
+              step={0.01}
+              value={masterBrightness}
+              onChange={value => {
+                setMasterBrightness(value);
+                setLastChange(`Brightness is now ${Math.round(value * 100)}%.`);
+              }}
+              readout={`${Math.round(masterBrightness * 100)}%`}
+            />
+            <BuilderSlider
+              label="Saturation"
+              min={0}
+              max={1}
+              step={0.01}
+              value={masterSaturation}
+              onChange={value => {
+                setMasterSaturation(value);
+                setLastChange(`Saturation is now ${Math.round(value * 100)}%.`);
+              }}
+              readout={`${Math.round(masterSaturation * 100)}%`}
+            />
+            <div className="lw-builder-action-row">
+              <button className="btn btn-ghost" type="button" onClick={resetOutput}>
+                Reset Output
+              </button>
+              <button className="btn" type="button" onClick={onOpenSymmetry}>
+                Open Symmetry
+              </button>
+              <button className="btn btn-ghost" type="button" onClick={onOpenCode}>
+                Open Code
+              </button>
+            </div>
           </div>
-        ))}
+        )}
       </div>
     </div>
   );

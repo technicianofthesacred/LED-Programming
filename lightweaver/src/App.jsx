@@ -33,11 +33,14 @@ import {
   sliderValueToSpeed,
   speedToSliderValue,
 } from './lib/controlScale.js';
+import { acceptAiDraftAsCustomPattern } from './lib/customPatterns.js';
+import { getPatternById } from './lib/patternRegistry.js';
 
 const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 
 const CardsMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CardsMode })));
 const CodeMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.CodeMode })));
+const GraphMode = lazy(() => import('./components/PatternModes.jsx').then(m => ({ default: m.GraphMode })));
 const SymmetryMode = lazy(() => import('./components/SymmetryMode.jsx').then(m => ({ default: m.SymmetryMode })));
 const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
 const TimelineScreen = lazy(() => import('./components/TimelineScreen.jsx').then(m => ({ default: m.TimelineScreen })));
@@ -46,6 +49,7 @@ const ExportScreen = lazy(() => import('./components/OtherScreens.jsx').then(m =
 const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.FlashScreen })));
 const DevicesPanel = lazy(() => import('./components/DevicesPanel.jsx').then(m => ({ default: m.DevicesPanel })));
 const SettingsScreen = lazy(() => import('./components/SettingsScreen.jsx').then(m => ({ default: m.SettingsScreen })));
+const AiPatternAssistant = lazy(() => import('./components/AiPatternAssistant.jsx').then(m => ({ default: m.AiPatternAssistant })));
 
 function parseViewBoxRect(viewBox) {
   const parts = String(viewBox || '0 0 640 400').trim().split(/[\s,]+/).map(Number);
@@ -290,6 +294,9 @@ function PatternPanel({
   palette, onPaletteChange,
   strips, onAssignStripPattern,
   onCodeChange,
+  hidden,
+  audioBands,
+  onAcceptAiDraft,
   masterSpeed, setMasterSpeed,
   masterBrightness, setMasterBrightness,
   masterSaturation, setMasterSaturation,
@@ -297,18 +304,29 @@ function PatternPanel({
   gammaValue, setGammaValue,
   onCollapse,
 }) {
-  const safePanelMode = panelMode === 'graph' ? 'cards' : panelMode;
+  const safePanelMode = ['cards', 'graph', 'code', 'sym'].includes(panelMode) ? panelMode : 'cards';
 
   return (
     <div className="lw-panel">
       <div className="lw-panel-mode-switch">
         <button className="lw-panel-collapse-btn" onClick={onCollapse} title="Collapse panel">‹</button>
-        {[['cards','Effects',ModeIcon.cards],['sym','Geometry',ModeIcon.sym],['code','Code',ModeIcon.code]].map(([v,l,ic]) => (
+        {[['cards','Effects',ModeIcon.cards],['graph','Tune',ModeIcon.graph],['sym','Geometry',ModeIcon.sym],['code','Code',ModeIcon.code]].map(([v,l,ic]) => (
           <button key={v} className={`lw-panel-mode-btn ${safePanelMode === v ? 'active' : ''}`} onClick={() => setPanelMode(v)}>
             {ic}<span>{l}</span>
           </button>
         ))}
       </div>
+      <Suspense fallback={null}>
+        <AiPatternAssistant
+          patternId={patternId}
+          palette={palette}
+          params={params}
+          strips={strips}
+          hidden={hidden}
+          audioBands={audioBands}
+          onAcceptDraft={onAcceptAiDraft}
+        />
+      </Suspense>
       <div className={`lw-panel-body ${safePanelMode === 'cards' ? 'lw-panel-body--effects' : ''}`}>
         {safePanelMode === 'cards' && (
           <CardsMode patternId={patternId} onSelectPattern={onSelectPattern}
@@ -327,7 +345,21 @@ function PatternPanel({
             onParamChange={(k, v) => setParams({ ...params, [k]: v })}
           />
         )}
+        {safePanelMode === 'graph' && (
+          <GraphMode
+            patternId={patternId}
+            onOpenCode={() => setPanelMode('code')}
+            onOpenSymmetry={() => setPanelMode('sym')}
+            masterSpeed={masterSpeed}
+            setMasterSpeed={setMasterSpeed}
+            masterBrightness={masterBrightness}
+            setMasterBrightness={setMasterBrightness}
+            masterSaturation={masterSaturation}
+            setMasterSaturation={setMasterSaturation}
+          />
+        )}
         {safePanelMode === 'sym'   && <SymmetryMode/>}
+        {safePanelMode !== 'graph' && (
         <div className={`lw-panel-master-block ${safePanelMode === 'cards' ? 'lw-panel-master-block--effects' : ''}`}>
           <div className="lw-sec-header">
             <span>Master</span>
@@ -356,6 +388,7 @@ function PatternPanel({
             <span className="v">{gammaValue.toFixed(1)}</span>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
@@ -450,6 +483,24 @@ function PatternScreen({ panelMode, setPanelMode }) {
       strip.id === stripId ? { ...strip, patternId: nextPatternId || null } : strip
     )));
   }, [setProjectStrips]);
+
+  const handleAcceptAiDraft = useCallback((acceptedDraft, sourcePattern, parsedParams = []) => {
+    const accepted = acceptAiDraftAsCustomPattern({ sourcePattern, draft: acceptedDraft });
+    if (!accepted?.id) return null;
+    setPatternId(accepted.id);
+    setCompiledFn(null);
+    setPreviewResetKey(key => key + 1);
+    if (accepted.palette?.length) setPalette(accepted.palette);
+    const defaults = Object.fromEntries(parsedParams.map(param => [param.name, param.value]));
+    setPatternParams(prev => ({
+      ...prev,
+      [accepted.id]: {
+        ...defaults,
+        ...(accepted.params || {}),
+      },
+    }));
+    return accepted;
+  }, [setPalette, setPatternId, setPatternParams]);
 
   const fallbackPreviewStrip = useMemo(
     () => makePreviewFallbackStrip(projectViewBox, { pixelCount: 30 }),
@@ -563,7 +614,7 @@ function PatternScreen({ panelMode, setPanelMode }) {
     };
   }, [finishPreviewPan]);
 
-  const cur = PATTERNS.find(p => p.id === patternId);
+  const cur = getPatternById(patternId) || PATTERNS.find(p => p.id === patternId);
   const gridCols = panelCollapsed ? '1fr 32px' : `1fr 5px ${panelWidth}px`;
   const knownPatternIds = useMemo(() => new Set(PATTERNS.map(pattern => pattern.id)), []);
   const rotaryControls = useMemo(() => normalizeWledPhysicalControls(physicalControls), [physicalControls]);
@@ -794,6 +845,9 @@ function PatternScreen({ panelMode, setPanelMode }) {
             strips={projectStrips}
             onAssignStripPattern={handleAssignStripPattern}
             onCodeChange={handleCodeChange}
+            hidden={projectHidden}
+            audioBands={audioBands}
+            onAcceptAiDraft={handleAcceptAiDraft}
             masterSpeed={masterSpeed} setMasterSpeed={setMasterSpeed}
             masterBrightness={masterBrightness} setMasterBrightness={setMasterBrightness}
             masterSaturation={masterSaturation} setMasterSaturation={setMasterSaturation}
