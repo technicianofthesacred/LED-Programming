@@ -266,7 +266,7 @@ export function StatusBar() {
   return (
     <div className="lw-statusbar">
       <span>
-        <span className="k">WLED</span>&nbsp;
+        <span className="k">Card</span>&nbsp;
         <span className={wledConnected ? 'ok' : 'err'}>
           {wledConnected ? '● connected' : '○ disconnected'}
         </span>

@@ -205,18 +205,20 @@ export function WledBar() {
         }}
       />
 
-      {/* WLED label */}
-      <span style={styles.label}>WLED</span>
+      {/* Card label */}
+      <span style={styles.label}>Card</span>
 
-      {/* IP input */}
+      {/* Hostname or IP input */}
       <input
-        aria-label="WLED IP address"
+        aria-label="Card hostname or IP"
         type="text"
         value={ip}
         onChange={e => setIp(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="192.168.x.x"
+        placeholder="lightweaver.local or 192.168.x.x"
         spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
         disabled={connected}
         style={{
           ...styles.input,
@@ -227,7 +229,7 @@ export function WledBar() {
 
       {/* Connect / Disconnect button */}
       <button
-        aria-label={connected ? 'Disconnect from WLED' : 'Connect to WLED'}
+        aria-label={connected ? 'Disconnect from card' : 'Connect to card'}
         onClick={handleConnect}
         disabled={connecting && !connected}
         style={{
@@ -241,12 +243,12 @@ export function WledBar() {
 
       {/* Push rate hint when connected */}
       {connected && (
-        <span style={styles.hint}>{wledTransport === 'proxy' ? 'Pi proxy' : 'direct'} · 25 fps max</span>
+        <span style={styles.hint}>{wledTransport === 'proxy' ? 'via Pi' : 'direct'} · 25 fps max</span>
       )}
       {/* LED count warning */}
       {totalLEDs > WLED_LED_WARN && (
         <span style={{ ...styles.hint, color: 'oklch(80% 0.18 70)' }}
-              title={`${totalLEDs} LEDs — WLED WebSocket may have trouble above ~500 LEDs per segment. Consider splitting into segments.`}>
+              title={`${totalLEDs} LEDs — above ~500 LEDs the card's realtime stream may stutter. Consider splitting into zones.`}>
           ⚠ {totalLEDs} LEDs
         </span>
       )}
