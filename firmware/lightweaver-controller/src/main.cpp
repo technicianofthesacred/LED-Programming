@@ -4,6 +4,8 @@
 #include <SD.h>
 #include <SPI.h>
 
+#include "LightweaverTypes.h"
+
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
 #endif
@@ -20,65 +22,12 @@
 #define LW_SPI_MISO 13
 #endif
 
-#ifndef LW_MAX_PIXELS
-#define LW_MAX_PIXELS 1024
-#endif
-
-constexpr uint8_t MAX_OUTPUTS = 4;
-constexpr uint8_t MAX_LOOKS = 12;
-constexpr uint16_t LWSEQ_HEADER_BYTES = 64;
-constexpr uint8_t DEFAULT_STATUS_LED_PIN = 2;
-constexpr uint16_t DEFAULT_RENDER_FPS = 30;
-constexpr uint16_t BUTTON_DEBOUNCE_MS = 180;
-
-enum ErrorCode : uint8_t {
-  ERROR_NONE = 0,
-  ERROR_SD = 1,
-  ERROR_PROFILE = 2,
-  ERROR_PIXELS = 3,
-  ERROR_PIN = 4,
-  ERROR_SEQUENCE = 5
-};
-
-struct OutputConfig {
-  String id;
-  String name;
-  uint8_t pin = 0;
-  uint16_t pixels = 0;
-  uint16_t start = 0;
-  bool enabled = false;
-};
-
-struct ControlsConfig {
-  int encoderA = 4;
-  int encoderB = 5;
-  int encoderPress = 6;
-  int previous = 7;
-  int next = 8;
-  int blackout = 9;
-  int brightness = 1;
-  int statusLed = DEFAULT_STATUS_LED_PIN;
-};
-
-struct LookConfig {
-  String id;
-  String label;
-  String mode;
-  String file;
-  String preset;
-  uint16_t fps = 24;
-  bool loop = true;
-  uint16_t fadeOutMs = 800;
-  uint16_t fadeInMs = 1200;
-  float brightness = 0.35f;
-};
-
 CRGB leds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 
-OutputConfig outputs[MAX_OUTPUTS];
+OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
-LookConfig looks[MAX_LOOKS];
+LookConfig looks[LW_MAX_LOOKS];
 
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
@@ -246,7 +195,7 @@ bool loadProfile() {
 
   JsonArray outputArray = doc["outputs"].as<JsonArray>();
   for (JsonVariant outputValue : outputArray) {
-    if (outputCount >= MAX_OUTPUTS) break;
+    if (outputCount >= LW_MAX_OUTPUTS) break;
     JsonObject output = outputValue.as<JsonObject>();
     int pixels = output["pixels"] | 0;
     if (pixels <= 0) continue;
@@ -269,7 +218,7 @@ bool loadProfile() {
 
   JsonArray lookArray = doc["looks"].as<JsonArray>();
   for (JsonVariant lookValue : lookArray) {
-    if (lookCount >= MAX_LOOKS) break;
+    if (lookCount >= LW_MAX_LOOKS) break;
     JsonObject lookJson = lookValue.as<JsonObject>();
     LookConfig& look = looks[lookCount];
     look.id = String(lookJson["id"] | "look");
