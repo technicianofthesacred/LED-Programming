@@ -1,0 +1,59 @@
+import assert from 'node:assert/strict';
+import {
+  CARD_RUNTIME_MODES,
+  DEFAULT_CARD_PATTERN_BANK,
+  buildCardRuntimeConfig,
+  normalizeCardRuntimeConfig,
+  makeCardRuntimePackage,
+} from '../src/lib/cardRuntimeContract.js';
+
+assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
+
+assert.deepEqual(
+  DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id),
+  ['aurora', 'ember', 'rainbow', 'breathe', 'scanner', 'warm-white'],
+);
+
+const normalized = normalizeCardRuntimeConfig({
+  mode: 'website-flash',
+  led: { pixels: 44, colorOrder: 'rgb', brightnessLimit: 0.7 },
+  controls: {
+    encoder: {
+      a: 4,
+      b: 5,
+      press: 0,
+      rotateDirection: 'clockwise-brighter',
+      brightnessStep: 18,
+      patternCycleIds: ['scanner', 'aurora', 'ember'],
+    },
+  },
+});
+
+assert.equal(normalized.mode, 'website-flash');
+assert.equal(normalized.led.pixels, 44);
+assert.equal(normalized.led.colorOrder, 'RGB');
+assert.equal(normalized.led.brightnessLimit, 0.7);
+assert.equal(normalized.controls.encoder.press, 0);
+assert.deepEqual(normalized.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+
+const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
+assert.equal(fallback.mode, 'factory-flash');
+assert.equal(fallback.piece.name, 'Bench Piece');
+assert.deepEqual(fallback.patterns.map(pattern => pattern.id), DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id));
+
+const pkg = makeCardRuntimePackage({
+  projectName: 'Bench Piece',
+  mode: 'website-flash',
+  led: { pixels: 44, colorOrder: 'RGB' },
+  controls: normalized.controls,
+});
+
+assert.equal(pkg.app, 'Lightweaver');
+assert.equal(pkg.format, 'lightweaver-card-runtime-package');
+assert.equal(pkg.version, 1);
+assert.equal(pkg.config.mode, 'website-flash');
+assert.equal(pkg.config.piece.name, 'Bench Piece');
+assert.equal(pkg.config.led.pixels, 44);
+assert.deepEqual(pkg.config.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+
+console.log('card-runtime-contract tests passed');
