@@ -6,7 +6,7 @@ import { auditWledControllerCompatibility } from '../lib/controllerCompatibility
 import { makeSafeWledTestState, pickBestWledDevice, sortWledDevices } from '../lib/wledDiscovery.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { buildWledInstallWizardPlan } from '../lib/wledInstallWizard.js';
-import { makeCardRuntimePackage } from '../lib/cardRuntimeContract.js';
+import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeContract.js';
 import {
   WLED_ENCODER_FIRMWARE_MODES,
   makeWledEncoderBrightnessState,
@@ -87,10 +87,18 @@ export function DevicesPanel({ onClose }) {
     controllerProfiles, setControllerProfiles,
     activeControllerId, setActiveControllerId,
     projectName, activePatternId, showClips, palette,
-    standaloneController,
+    standaloneController, patchBoard,
   } = useProject();
   const [cardLoadStatus, setCardLoadStatus] = useState('');
   const [cardConfigJson, setCardConfigJson] = useState('');
+  // Designer talks to one card at a time. Default is the AP-mode IP (first
+  // boot, before WiFi has been set up); once joined to home WiFi the same
+  // card is reachable at <hostname>.local. Persist the last-used host so the
+  // designer remembers which card it was pushing to.
+  const [cardHost, setCardHost] = useState(() => {
+    try { return window.localStorage.getItem('lw_designer_target') || 'lightweaver.local'; }
+    catch { return 'lightweaver.local'; }
+  });
   const [scanResults, setScanResults] = useState([]);
   const [scanning,    setScanning]    = useState(false);
   const [pingMs,      setPingMs]      = useState(null);
@@ -493,6 +501,11 @@ export function DevicesPanel({ onClose }) {
       pin: o.pin,
       pixels: o.pixels,
     }));
+    // Convert the designer's patch board (named slices of strips with per-patch
+    // playback state) into the card's zone schema. Falls back to undefined so
+    // makeCardRuntimePackage knows to omit the zones array — the card will
+    // then synthesize its single 'all' default zone covering every pixel.
+    const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : undefined;
     return makeCardRuntimePackage({
       projectName,
       mode: 'website-flash',
@@ -503,17 +516,35 @@ export function DevicesPanel({ onClose }) {
         outputs: outputs.length ? outputs : undefined,
       },
       controls: standaloneController?.controls,
+      zones: zones && zones.length ? zones : undefined,
     });
+  };
+
+  // Normalize whatever the user typed into a URL we can fetch. Accepts
+  // "lightweaver", "lightweaver.local", "192.168.18.70", or full URLs.
+  const cardUrlBase = () => {
+    let h = (cardHost || '').trim();
+    if (!h) return 'http://192.168.4.1';
+    if (h.startsWith('http://') || h.startsWith('https://')) return h.replace(/\/$/, '');
+    // bare hostname → assume .local if there's no dot and no IP digits
+    if (!h.includes('.') && !/^\d+$/.test(h)) h = `${h}.local`;
+    return `http://${h}`;
+  };
+
+  const persistCardHost = (value) => {
+    setCardHost(value);
+    try { window.localStorage.setItem('lw_designer_target', value); } catch { /* quota */ }
   };
 
   const loadToCard = async () => {
     const payload = buildCardConfigPayload();
     const body = JSON.stringify(payload.config);
-    setCardLoadStatus('Sending to card...');
+    const target = cardUrlBase();
+    setCardLoadStatus(`Sending to ${target}…`);
     try {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5000);
-      const r = await fetch('http://192.168.4.1/api/config', {
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch(`${target}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -521,13 +552,21 @@ export function DevicesPanel({ onClose }) {
       });
       clearTimeout(timer);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setCardLoadStatus('Saved on card');
+      setCardLoadStatus(`Saved on ${target.replace(/^https?:\/\//, '')}`);
       setCardConfigJson('');
-    } catch {
-      setCardLoadStatus('Direct save blocked. Copy the JSON below, connect to Lightweaver-XXXX, open http://192.168.4.1, paste, and press Save to card.');
+    } catch (err) {
+      // Common failure modes: mixed-content block (designer served over HTTPS
+      // trying to reach plain HTTP card), card unreachable on this network,
+      // or timeout. Surface the JSON so the user can paste it into the card's
+      // onboard /advanced page as a fallback.
+      const isMixed = typeof window !== 'undefined' && window.location.protocol === 'https:';
+      const reason = isMixed
+        ? 'Browser blocks https → http. Open the designer on http (npm run dev or the card’s LAN) to push directly.'
+        : `Couldn't reach ${target}. Check the card is on this WiFi and the hostname is right.`;
+      setCardLoadStatus(`${reason} Or paste this JSON into the card's settings page.`);
       setCardConfigJson(JSON.stringify(payload.config, null, 2));
     }
-    setTimeout(() => setCardLoadStatus(s => s.startsWith('Saved') ? '' : s), 8000);
+    setTimeout(() => setCardLoadStatus(s => s.startsWith('Saved') ? '' : s), 10000);
   };
 
   const handlePrimaryConnect = async () => {
@@ -1012,11 +1051,23 @@ export function DevicesPanel({ onClose }) {
           <Section title="Lightweaver Card">
             <Row label="Setup">
               <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>
-                Connect to the card WiFi (Lightweaver-XXXX), then save this pattern order to ESP32 internal flash. The card keeps running after the website closes.
+                Push the current project to a card by hostname. Default is <code>lightweaver.local</code>; if the card is in first-boot setup mode the AP address <code>192.168.4.1</code> also works.
               </span>
             </Row>
+            <Row label="Target">
+              <input
+                type="text"
+                value={cardHost}
+                onChange={(e) => persistCardHost(e.target.value)}
+                placeholder="lightweaver.local"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                style={{ flex: 1, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg-1)', color: 'var(--text-1)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 8px' }}
+              />
+            </Row>
             <Row label="Actions">
-              <button className="btn btn-primary" onClick={loadToCard}>Load to Card</button>
+              <button className="btn btn-primary" onClick={loadToCard}>Push to Card</button>
               <button className="btn btn-ghost" disabled title="Use the Export dialog → Lightweaver Card target → microSD package">
                 Prepare Memory Card
               </button>
