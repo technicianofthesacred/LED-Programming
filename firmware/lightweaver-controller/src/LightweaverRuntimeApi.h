@@ -47,3 +47,11 @@ String runtimeFirmwareInfo();
 void runtimeFactoryReset();
 void runtimeResetWifi();
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
+
+// External-frame streaming (Art-Net / WLED-realtime). When a source is
+// pushing frames at us, runtimeIsStreaming() is true and the internal
+// renderer should yield. runtimeFrameSource(): 0 = INTERNAL,
+// 1 = WLED_REALTIME, 2 = ARTNET.
+bool runtimeIsStreaming();
+uint8_t runtimeFrameSource();
+void runtimeCancelStream();

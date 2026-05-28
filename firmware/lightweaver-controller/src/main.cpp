@@ -865,6 +865,14 @@ float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
 
+// Streaming state. The Art-Net / WLED-realtime receivers (defined in their
+// own translation units when wired up) override these via weak linkage in
+// future patches; for now they default to "no external source" so the
+// internal renderer and the customer page behave as before.
+__attribute__((weak)) bool runtimeIsStreaming() { return false; }
+__attribute__((weak)) uint8_t runtimeFrameSource() { return 0; }
+__attribute__((weak)) void runtimeCancelStream() {}
+
 String runtimeFirmwareInfo() {
   JsonDocument doc;
   doc["build"] = __DATE__ " " __TIME__;
