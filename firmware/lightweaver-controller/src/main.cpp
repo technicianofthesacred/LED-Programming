@@ -8,6 +8,7 @@
 #include "LightweaverStorage.h"
 #include "LightweaverPatterns.h"
 #include "LightweaverControls.h"
+#include "LightweaverWeb.h"
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -117,6 +118,7 @@ void setup() {
   }
   applyRuntimeConfig(runtimeConfig);
   setupLightweaverControls(controls, controlState);
+  setupLightweaverWeb(runtimeConfig, errorCode, totalPixels, currentLookIndex);
 
   if (!setupLedOutputs()) return;
   currentLookIndex = findStartupLook();
@@ -133,6 +135,8 @@ void setup() {
 }
 
 void loop() {
+  handleLightweaverWeb();
+
   if (errorCode != ERROR_NONE) {
     FastLED.clear(true);
     blinkError();
