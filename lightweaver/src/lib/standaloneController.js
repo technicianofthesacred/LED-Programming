@@ -154,6 +154,9 @@ export function makeStandalonePackage({
     led,
     looks,
   });
+  if (mode === 'sequence') {
+    profile.runtimeMode = 'sd-sequence';
+  }
   const files = { '/lightweaver.json': profile };
   if (mode === 'sequence') {
     const sequence = toLwseqBytes(frames, { fps, outputs });

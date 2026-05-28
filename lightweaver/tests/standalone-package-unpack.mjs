@@ -19,6 +19,7 @@ const pkg = makeStandalonePackage({
   sequenceFilename: '001-bench.lwseq',
   frames: [[{ r: 10, g: 20, b: 30 }]],
   fps: 24,
+  led: { colorOrder: 'RGB' },
 });
 await writeFile(packagePath, JSON.stringify(pkg, null, 2));
 
@@ -31,6 +32,9 @@ const { stdout } = await execFileAsync(process.execPath, [
 assert.match(stdout, /Wrote lightweaver.json/);
 const profile = JSON.parse(await readFile(join(outputDir, 'lightweaver.json'), 'utf8'));
 assert.equal(profile.piece.name, 'Bench Piece');
+assert.equal(profile.mode || profile.runtimeMode, 'sd-sequence');
+assert.equal(profile.led.colorOrder, 'RGB');
+assert.equal(profile.outputs[0].pin, 16);
 const sequence = await readFile(join(outputDir, 'sequences', '001-bench.lwseq'));
 assert.equal(sequence.length, LWSEQ_HEADER_BYTES + 3);
 assert.equal(sequence.subarray(0, 6).toString('utf8'), 'LWSEQ1');

@@ -18,7 +18,7 @@ await mkdir(outputDir, { recursive: true });
 
 for (const [packageFilePath, fileValue] of Object.entries(packageJson.files)) {
   const cleanPath = packageFilePath.replace(/^\/+/, '');
-  if (!cleanPath || cleanPath.includes('..')) {
+  if (!cleanPath || cleanPath.includes('..') || cleanPath.startsWith('/') || cleanPath.startsWith('~')) {
     throw new Error(`Unsafe package path: ${packageFilePath}`);
   }
 
