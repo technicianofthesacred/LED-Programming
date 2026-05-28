@@ -6,6 +6,7 @@ import { auditWledControllerCompatibility } from '../lib/controllerCompatibility
 import { makeSafeWledTestState, pickBestWledDevice, sortWledDevices } from '../lib/wledDiscovery.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { buildWledInstallWizardPlan } from '../lib/wledInstallWizard.js';
+import { makeCardRuntimePackage } from '../lib/cardRuntimeContract.js';
 import {
   WLED_ENCODER_FIRMWARE_MODES,
   makeWledEncoderBrightnessState,
@@ -86,7 +87,10 @@ export function DevicesPanel({ onClose }) {
     controllerProfiles, setControllerProfiles,
     activeControllerId, setActiveControllerId,
     projectName, activePatternId, showClips, palette,
+    standaloneController,
   } = useProject();
+  const [cardLoadStatus, setCardLoadStatus] = useState('');
+  const [cardConfigJson, setCardConfigJson] = useState('');
   const [scanResults, setScanResults] = useState([]);
   const [scanning,    setScanning]    = useState(false);
   const [pingMs,      setPingMs]      = useState(null);
@@ -480,6 +484,50 @@ export function DevicesPanel({ onClose }) {
       setProfileStatus(`Knob setup failed: ${error.message}`);
     }
     setTimeout(() => setProfileStatus(''), 5000);
+  };
+
+  const buildCardConfigPayload = () => {
+    const outputs = (standaloneController?.outputs || []).map((o, i) => ({
+      id: o.id || `out${i + 1}`,
+      name: o.name || `Output ${i + 1}`,
+      pin: o.pin,
+      pixels: o.pixels,
+    }));
+    return makeCardRuntimePackage({
+      projectName,
+      mode: 'website-flash',
+      led: {
+        pixels: totalStripPixels(strips) || outputs.reduce((s, o) => s + (o.pixels || 0), 0) || undefined,
+        colorOrder: standaloneController?.led?.colorOrder,
+        brightnessLimit: standaloneController?.led?.brightnessLimit,
+        outputs: outputs.length ? outputs : undefined,
+      },
+      controls: standaloneController?.controls,
+    });
+  };
+
+  const loadToCard = async () => {
+    const payload = buildCardConfigPayload();
+    const body = JSON.stringify(payload.config);
+    setCardLoadStatus('Sending to card...');
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch('http://192.168.4.1/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setCardLoadStatus('Saved on card');
+      setCardConfigJson('');
+    } catch {
+      setCardLoadStatus('Direct save blocked. Copy the JSON below, connect to Lightweaver-XXXX, open http://192.168.4.1, paste, and press Save to card.');
+      setCardConfigJson(JSON.stringify(payload.config, null, 2));
+    }
+    setTimeout(() => setCardLoadStatus(s => s.startsWith('Saved') ? '' : s), 8000);
   };
 
   const handlePrimaryConnect = async () => {
@@ -959,6 +1007,30 @@ export function DevicesPanel({ onClose }) {
                 {installAuditStatus && <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--accent)' }}>{installAuditStatus}</span>}
               </Row>
             </div>
+          </Section>
+
+          <Section title="Lightweaver Card">
+            <Row label="Setup">
+              <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-3)' }}>
+                Connect to the card WiFi (Lightweaver-XXXX), then save this pattern order to ESP32 internal flash. The card keeps running after the website closes.
+              </span>
+            </Row>
+            <Row label="Actions">
+              <button className="btn btn-primary" onClick={loadToCard}>Load to Card</button>
+              <button className="btn btn-ghost" disabled title="Use the Export dialog → Lightweaver Card target → microSD package">
+                Prepare Memory Card
+              </button>
+              {cardLoadStatus && <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--accent)' }}>{cardLoadStatus}</span>}
+            </Row>
+            {cardConfigJson && (
+              <Row label="Config">
+                <textarea
+                  readOnly
+                  value={cardConfigJson}
+                  style={{ width: '100%', minHeight: 140, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', background: 'var(--bg-1)', color: 'var(--text-2)', border: '1px solid var(--border)', padding: 6 }}
+                />
+              </Row>
+            )}
           </Section>
 
           {activeProfile && (
