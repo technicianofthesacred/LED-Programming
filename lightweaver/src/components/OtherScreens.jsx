@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
-import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromStrips } from '../lib/export.js';
+import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromPatchBoard } from '../lib/export.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
 import { DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
@@ -489,6 +489,7 @@ export function ExportScreen() {
     projectName,
     strips: projectStrips,
     viewBox,
+    patchBoard,
     activePatternId,
     showClips,
     palette,
@@ -509,7 +510,7 @@ export function ExportScreen() {
   const usingDemo = !(projectStrips && projectStrips.length > 0);
 
   const pixels = useMemo(() => {
-    if (!usingDemo) return pixelsFromStrips(sourceStrips);
+    if (!usingDemo) return pixelsFromPatchBoard(patchBoard, sourceStrips);
     const withPixels = sourceStrips.map(s => {
       const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       pathEl.setAttribute('d', s.path);
@@ -518,14 +519,14 @@ export function ExportScreen() {
     });
     assignIndices(withPixels);
     return getAllPixels(withPixels);
-  }, [sourceStrips, usingDemo]);
+  }, [sourceStrips, usingDemo, patchBoard]);
 
   const exportOpts = { normalize, scaleX, scaleY, offsetX, offsetY };
 
   const ledmapJson = useMemo(() => toWLEDLedmap(pixels, exportOpts), [pixels, normalize, scaleX, scaleY, offsetX, offsetY]);
   const previewJson = ledmapJson.slice(0, 400) + '\n  …';
 
-  const totalLeds = sourceStrips.reduce((a, s) => a + (s.leds || s.pixelCount || s.pixels?.length || 0), 0);
+  const totalLeds = pixels.length;
   const activeControllerProfile = controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null;
   const wledBasicPackageJson = useMemo(() => JSON.stringify(buildWledBasicPackage({
     projectName,
@@ -541,14 +542,14 @@ export function ExportScreen() {
 
   const artifacts = [
     {
-      file: 'wled-basic.json', desc: 'WLED presets, playlist, port list',
-      size: `${(wledBasicPackageJson.length / 1024).toFixed(1)} KB`,
-      action: () => download(wledBasicPackageJson, 'wled-basic.json', 'application/json'),
-    },
-    {
       file: 'ledmap.json', desc: 'WLED 2D layout',
       size: `${(ledmapJson.length / 1024).toFixed(1)} KB`,
       action: () => download(ledmapJson, 'ledmap.json', 'application/json'),
+    },
+    {
+      file: 'wled-basic.json', desc: 'WLED presets, playlist, port list',
+      size: `${(wledBasicPackageJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(wledBasicPackageJson, 'wled-basic.json', 'application/json'),
     },
     {
       file: 'ledmap.h', desc: 'FastLED C++ header',

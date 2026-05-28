@@ -1,6 +1,16 @@
 import { useState, useEffect } from 'react';
 import { resolveTimelinePlayback, resolveTimelineTargets, sampleLane, useProject } from '../state/ProjectContext.jsx';
-import { download, makeManifest, pixelsFromStrips, toCSV, toDmxCsv, toFastLED, toRawFrameDump, toWLEDLedmap } from '../lib/export.js';
+import {
+  download,
+  makeManifest,
+  pixelsFromPatchBoard,
+  remapFrameToPatchBoard,
+  toCSV,
+  toDmxCsv,
+  toFastLED,
+  toRawFrameDump,
+  toWLEDLedmap,
+} from '../lib/export.js';
 import { buildGammaLut, compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import {
@@ -37,10 +47,10 @@ const FORMATS = [
 export function ExportDialog({ open, onClose }) {
   const project = useProject();
   const {
-    projectName, showDuration, showClips, showTransitions, autoLanes, strips,
+    projectName, showDuration, showClips, showTransitions, autoLanes, strips, patchBoard,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
-    standaloneController, controllerProfiles, activeControllerId,
+    standaloneController, controllerProfiles, activeControllerId, physicalControls,
     serializeProject,
   } = project;
   const [target, setTarget] = useState('wled-basic');
@@ -94,7 +104,8 @@ export function ExportDialog({ open, onClose }) {
 
   const sel = TARGETS.find(t => t.id === target);
   const selectedFormat = FORMATS.find(f => f.id === format);
-  const totalLEDs = strips.reduce((s, st) => s + (st.pixels?.length || 0), 0);
+  const mapPixels = pixelsFromPatchBoard(patchBoard, strips);
+  const totalLEDs = mapPixels.length;
   const standaloneMode = standaloneController?.runtimeMode || 'sequence';
   const standaloneUsesFrames = target === 'standalone' && standaloneMode === 'sequence';
   const standaloneOutputs = deriveStandaloneOutputsFromStrips(strips, standaloneController?.outputs || []);
@@ -180,6 +191,7 @@ export function ExportDialog({ open, onClose }) {
     ]);
     const perStripFns = new Map([...uniquePatternIds].map(id => [id, compilePattern(id)]).filter(([, fn]) => fn));
     const frameCount = Math.max(1, Math.round(showDuration * fps));
+    const patchPixels = pixelsFromPatchBoard(patchBoard, strips);
     const frames = [];
     for (let f = 0; f < frameCount; f++) {
       const t = f / fps;
@@ -210,7 +222,7 @@ export function ExportDialog({ open, onClose }) {
         symSettings,
         perStripFns,
       });
-      frames.push(frame.pixels);
+      frames.push(remapFrameToPatchBoard(frame.pixels, patchPixels, strips));
     }
     return frames;
   };
@@ -220,7 +232,6 @@ export function ExportDialog({ open, onClose }) {
     setProgress(0);
     requestAnimationFrame(() => {
       const projectData = serializeProject();
-      const mapPixels = pixelsFromStrips(strips);
       const manifest = makeManifest(projectData, { target, format, fps });
       let filename = `${safeName}.json`;
       let content;
@@ -283,7 +294,7 @@ export function ExportDialog({ open, onClose }) {
           duration: showDuration,
           brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
           loop,
-          physicalControls: activeControllerProfile?.physicalControls,
+          physicalControls: physicalControls || activeControllerProfile?.physicalControls,
         }), null, 2);
       } else if (target === 'pi') {
         filename = `${safeName}-lightweaver-pi.json`;

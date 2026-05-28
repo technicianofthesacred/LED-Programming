@@ -78,7 +78,7 @@ export function TopBar({ projectName: _pn, onSave, onOpen, onKbdHelp, audio, mid
     <div className="lw-topbar">
       <div className="lw-brand">
         <span className="lw-brand-dot"/>
-        <span>Light Weaver</span>
+        <span>Lightweaver v2</span>
       </div>
       <div className="lw-projbreadcrumbs">
         <span>Projects</span><span className="sep">/</span>
@@ -125,10 +125,6 @@ export function TopBar({ projectName: _pn, onSave, onOpen, onKbdHelp, audio, mid
         <button className="btn-ghost btn" onClick={onKbdHelp} title="Keyboard shortcuts (?)">
           {Icon.kbd}
         </button>
-        <a className="btn-ghost btn lw-version-link" href="http://localhost:9999" title="Switch to v1 — LED Art Mapper">
-          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 6h8M6 2l4 4-4 4"/></svg>
-          v1 Mapper
-        </a>
         <button className="btn-ghost btn" onClick={() => {
           if (window.confirm('Start a new project? Unsaved changes will be lost.')) newProject();
         }}>New</button>

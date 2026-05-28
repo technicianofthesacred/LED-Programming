@@ -7,6 +7,11 @@ import {
   resolvePatternParams,
 } from '../lib/frameEngine.js';
 import { smoothPixelFrame } from '../lib/motionSmoothing.js';
+import {
+  activeLedCoreAlpha,
+  activeLedCoronaAlpha,
+  restingLedColor,
+} from '../lib/previewVisuals.js';
 import { DEMO_STRIPS, PALETTE_DEFAULT } from '../data.js';
 
 function hexToNorm(hex) {
@@ -137,7 +142,7 @@ function renderFrame(canvas, t, p) {
     };
   });
 
-  // ── Physical strip paths — keep the mapper line visible in Pattern preview ─
+  // ── Physical strip paths — visible structure, dim enough for patterns to read ─
   if (stripData.length) {
     const lineWidth = clamp(medianSpacing * scale * 0.17, 1.0, 3.4);
     ctx.save();
@@ -257,7 +262,7 @@ function renderFrame(canvas, t, p) {
   ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
-      ctx.fillStyle = 'rgba(122, 160, 184, 0.16)';
+      ctx.fillStyle = restingLedColor(l);
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), beadR, 0, TAU);
       ctx.fill();
@@ -267,7 +272,7 @@ function renderFrame(canvas, t, p) {
   for (const sd of stripData) {
     for (const l of sd.leds) {
       if ((l.r | l.g | l.b) === 0) continue;
-      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},0.20)`;
+      ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},${activeLedCoronaAlpha(l).toFixed(3)})`;
       ctx.beginPath();
       ctx.arc(toX(l.x), toY(l.y), coronaR, 0, TAU);
       ctx.fill();
@@ -276,7 +281,8 @@ function renderFrame(canvas, t, p) {
   ctx.globalCompositeOperation = 'source-over';
   for (const sd of stripData) {
     for (const l of sd.leds) {
-      if ((l.r | l.g | l.b) === 0) continue;
+      const coreAlpha = activeLedCoreAlpha(l);
+      if (!coreAlpha) continue;
       const brightness = Math.max(l.r, l.g, l.b) / 255;
       ctx.fillStyle = `rgba(${l.r},${l.g},${l.b},${clamp(0.78 + brightness * 0.18, 0.78, 0.96)})`;
       ctx.beginPath();

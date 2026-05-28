@@ -143,3 +143,58 @@ test('groups selected strips and merges them into one composite strip', async ({
   await page.getByTitle('Directed glow — elongate bloom along strip direction').click();
   await expect.poll(() => page.locator('[data-light-cone]').count()).toBeGreaterThan(0);
 });
+
+test('clicked vector path can be deleted from the canvas with the keyboard', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-vector-delete-'));
+  const fixture = path.join(tmp, 'vector-delete.svg');
+  fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300">
+  <g id="bg-layer" data-name="Background">
+    <path d="M 20 20 H 380 V 280 H 20 Z" fill="none" stroke="#888" stroke-width="2"/>
+  </g>
+  <g id="circle-layer" data-name="Circle">
+    <path d="M 130 130 C 130 55 270 55 270 130 C 270 205 130 205 130 130" fill="none" stroke="#e74c3c" stroke-width="3"/>
+  </g>
+  <g id="bar-layer" data-name="Bar">
+    <path d="M 60 230 H 340" fill="none" stroke="#27ae60" stroke-width="4"/>
+  </g>
+</svg>`);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(3\)/ }).click();
+  await expect(page.locator('.lw-layer-row')).toHaveCount(3);
+  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+
+  const circlePath = page.locator('path[data-vector-path-id="circle-layer-p0"]').first();
+  const target = await circlePath.evaluate((path: SVGPathElement) => {
+    const point = path.getPointAtLength(path.getTotalLength() * 0.2);
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    return {
+      x: point.x * ctm.a + point.y * ctm.c + ctm.e,
+      y: point.x * ctm.b + point.y * ctm.d + ctm.f,
+    };
+  });
+  expect(target).not.toBeNull();
+  await page.mouse.click(target!.x, target!.y);
+
+  await page.keyboard.press('Delete');
+
+  await expect(page.locator('.lw-layer-row')).toHaveCount(2);
+  await expect(page.locator('.lw-strip-row')).toHaveCount(2);
+  await expect(page.locator('.lw-layer-row', { hasText: 'Circle' })).toHaveCount(0);
+  await expect(page.locator('.lw-strip-row', { hasText: 'Circle' })).toHaveCount(0);
+  await expect(page.locator('path[data-vector-path-id^="circle-layer-"]')).toHaveCount(0);
+
+  const saveDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project JSON').click();
+  const savedProject = await saveDownload;
+  const projectPath = path.join(tmp, await savedProject.suggestedFilename());
+  await savedProject.saveAs(projectPath);
+  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  expect(projectData.layout.layers.map((layer: any) => layer.layerId)).toEqual(['bg-layer', 'bar-layer']);
+  expect(projectData.layout.strips.map((strip: any) => strip.id)).toEqual(['bg-layer', 'bar-layer']);
+});

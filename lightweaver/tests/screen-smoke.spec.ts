@@ -30,4 +30,3 @@ for (const viewport of [
     expect(consoleErrors).toEqual([]);
   });
 }
-

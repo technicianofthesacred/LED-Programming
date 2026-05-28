@@ -20,6 +20,7 @@ import {
 import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js';
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
+import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { resolveRotaryInputAction, selectFreshUsbRotaryEvents } from '../lib/usbRotaryInput.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
@@ -116,6 +117,7 @@ export function ProjectProvider({ children }) {
   const [layoutEditCounts,  setLayoutEditCounts]  = useState(defaults.layout.editCounts);
   const [layoutLayerGroups, setLayoutLayerGroups] = useState(defaults.layout.layerGroups);
   const [layoutLayerOrder,  setLayoutLayerOrder]  = useState(defaults.layout.layerOrder);
+  const [patchBoard,        setPatchBoard]        = useState(() => normalizePatchBoard(defaults.layout.patchBoard, []));
   const [projectRevision,   setProjectRevision]   = useState(0);
 
   // ── Pattern ──────────────────────────────────────────────────────────────
@@ -351,8 +353,9 @@ export function ProjectProvider({ children }) {
     const data = migrateProject(rawProject);
     if (!data) return false;
     const { layout, pattern, show, live, devices } = data;
+    const restoredStrips = restoreStripPixels(layout.strips || []);
     setProjectName(data.name || defaults.name);
-    setStrips(restoreStripPixels(layout.strips || []));
+    setStrips(restoredStrips);
     setViewBox(layout.viewBox || defaults.layout.viewBox);
     setSvgText(layout.svgText ?? null);
     setHidden(layout.hidden || {});
@@ -362,6 +365,7 @@ export function ProjectProvider({ children }) {
     setLayoutEditCounts(layout.editCounts || {});
     setLayoutLayerGroups(layout.layerGroups || []);
     setLayoutLayerOrder(layout.layerOrder || []);
+    setPatchBoard(normalizePatchBoard(layout.patchBoard, restoredStrips));
     setActivePatternId(pattern.activePatternId || defaults.pattern.activePatternId);
     setPalette(pattern.palette?.length ? pattern.palette : defaults.pattern.palette);
     setMasterSpeed(pattern.masterSpeed ?? defaults.pattern.masterSpeed);
@@ -392,6 +396,10 @@ export function ProjectProvider({ children }) {
     return true;
   }, [setWledIp]);
 
+  useEffect(() => {
+    setPatchBoard(prev => normalizePatchBoard(prev, strips));
+  }, [strips]);
+
   // ── Auto-load from localStorage on mount ─────────────────────────────────
   const didLoadRef = useRef(false);
   useEffect(() => {
@@ -421,6 +429,7 @@ export function ProjectProvider({ children }) {
       editCounts: layoutEditCounts,
       layerGroups: layoutLayerGroups,
       layerOrder: layoutLayerOrder,
+      patchBoard: normalizePatchBoard(patchBoard, strips),
     },
     pattern: {
       activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
@@ -447,7 +456,7 @@ export function ProjectProvider({ children }) {
       standaloneController,
     },
   }), [
-    projectName, strips, viewBox, svgText, hidden,
+    projectName, strips, viewBox, svgText, hidden, patchBoard,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
@@ -488,6 +497,7 @@ export function ProjectProvider({ children }) {
       layoutEditCounts,  setLayoutEditCounts,
       layoutLayerGroups, setLayoutLayerGroups,
       layoutLayerOrder,  setLayoutLayerOrder,
+      patchBoard,        setPatchBoard,
       projectRevision,
       // Pattern
       activePatternId, setActivePatternId,

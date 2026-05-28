@@ -1096,7 +1096,8 @@ export default function App() {
   const [screen, setScreen]         = useState(() => {
     const hash = window.location.hash.slice(1);
     const params = new URLSearchParams(hash.includes('=') ? hash : '');
-    return params.get('screen') || 'layout';
+    const requested = params.get('screen') || 'layout';
+    return requested === 'patch' ? 'layout' : requested;
   });
   const [panelMode, setPanelMode]   = useState(
     () => localStorage.getItem('lw-panel-mode') || 'cards'

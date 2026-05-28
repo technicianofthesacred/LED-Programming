@@ -9,6 +9,11 @@ import {
   normalizePalette,
   renderPixelFrame,
 } from '../lib/frameEngine.js';
+import {
+  activeLedCoreAlpha,
+  ledCssColor,
+  restingLedAlpha,
+} from '../lib/previewVisuals.js';
 import { usePersistentPanelSize } from '../hooks/usePersistentPanelSize.js';
 import { shouldRebuildStripPixels } from '../lib/stripPixels.js';
 import {
@@ -23,6 +28,16 @@ import {
   sliderValueToSpeed,
   speedToSliderValue,
 } from '../lib/controlScale.js';
+import { PatchBoardScreen } from './PatchBoardScreen.jsx';
+import {
+  applyPatchRouteOrder,
+  cutsForStrip,
+  deleteStripCut,
+  mainChain,
+  nudgeStripCut,
+  normalizePatchBoard,
+  sliceStripIntoPatchesPreservingRoute,
+} from '../lib/patchBoard.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -96,6 +111,51 @@ function offsetArrow(arrow, dx = 0, dy = 0) {
   if (!arrow || (!dx && !dy)) return arrow;
   const move = pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy });
   return { tip: move(arrow.tip), left: move(arrow.left), right: move(arrow.right), start: move(arrow.start), end: move(arrow.end) };
+}
+
+function pointsAttr(points = []) {
+  return points.map(point => `${point.x},${point.y}`).join(' ');
+}
+
+function escapeAttr(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function layerArtworkMarkup(layer) {
+  const children = (layer.subPaths?.length ? layer.subPaths : [{
+    pathId: layer.layerId,
+    name: layer.name,
+    pathData: layer.pathData,
+  }])
+    .filter(item => item.pathData)
+    .map(item => (
+      `<path id="${escapeAttr(item.pathId)}"` +
+      ` data-artwork-path-id="${escapeAttr(item.pathId)}"` +
+      ` d="${escapeAttr(item.pathData)}"` +
+      ` fill="none" stroke="${escapeAttr(layer._color || 'currentColor')}"` +
+      ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    ))
+    .join('');
+
+  return `<g id="${escapeAttr(layer.layerId)}" data-name="${escapeAttr(layer.name || layer.layerId)}">${children}</g>`;
+}
+
+function actionablePolylinePoints(points = []) {
+  if (points.length < 2) return points;
+  const xs = points.map(point => point.x);
+  const ys = points.map(point => point.y);
+  const hasWidth = Math.max(...xs) - Math.min(...xs) > 0.01;
+  const hasHeight = Math.max(...ys) - Math.min(...ys) > 0.01;
+  if (hasWidth && hasHeight) return points;
+  const next = points.map(point => ({ ...point }));
+  const last = next[next.length - 1];
+  if (!hasWidth) last.x += 0.05;
+  if (!hasHeight) last.y += 0.05;
+  return next;
 }
 
 function translateStripFromStart(strip, dx, dy) {
@@ -498,6 +558,11 @@ export function LayoutScreen() {
   const [pendingDrawName, setPendingDrawName] = useState('');
   const [pendingDrawCount, setPendingDrawCount] = useState(0);
   const pendingDrawNameRef = useRef(null);
+  const [wireOverlayMode, setWireOverlayMode] = useState('idle');
+  const [selectedWireCut, setSelectedWireCut] = useState(null);
+  const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
+  const [linkRouteIds, setLinkRouteIds] = useState([]);
+  const linkRouteStartedRef = useRef(false);
 
   // Rubber-band lasso select — coords stored in CLIENT (viewport px), not SVG
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -574,6 +639,7 @@ export function LayoutScreen() {
     layoutLayerOrder,
     setLayoutLayerOrder,
     projectRevision,
+    setPatchBoard,
     setStrips: setProjectStrips,
     setViewBox: setProjectViewBox,
     setSvgText: setProjectSvgText,
@@ -776,19 +842,9 @@ export function LayoutScreen() {
   // ── Inline SVG artwork ─────────────────────────────────────────────────────
 
   const artworkHTML = useMemo(() => {
-    if (!svgText) return null;
-    const doc2 = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-    const srcSvg2 = doc2.querySelector('svg');
-    if (!srcSvg2) return null;
-    let groups = Array.from(srcSvg2.children).filter(el => el.tagName === 'g' && el.hasAttribute('data-name'));
-    if (!groups.length) groups = Array.from(srcSvg2.children).filter(el => el.tagName === 'g');
-    if (groups.length === 1) {
-      const inner = Array.from(groups[0].children).filter(el => el.tagName === 'g');
-      if (inner.length > 1) groups = inner;
-    }
-    groups.forEach((g, i) => { if (!g.id) g.setAttribute('id', `layer-${i}`); });
-    return srcSvg2.innerHTML;
-  }, [svgText]);
+    if (!svgText || !layers.length) return null;
+    return layers.map(layerArtworkMarkup).join('');
+  }, [svgText, layers]);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
@@ -1247,15 +1303,108 @@ export function LayoutScreen() {
   // ── Delete layer ───────────────────────────────────────────────────────────
 
   const deleteLayer = useCallback((layerId) => {
+    const layer = layers.find(item => item.layerId === layerId);
+    const relatedPathIds = new Set([
+      layerId,
+      ...(layer?.subPaths || []).map(path => path.pathId),
+    ]);
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
-    setLayers(prev => prev.filter(l => l.layerId !== layerId));
+    const nextLayers = layers.filter(l => l.layerId !== layerId);
+    const nextStrips = strips.filter(s => !relatedPathIds.has(s.id));
+    const nextEditCounts = { ...editCounts };
+    const nextHidden = { ...hidden };
+    relatedPathIds.forEach(id => {
+      delete nextEditCounts[id];
+      delete nextHidden[id];
+    });
+    setLayers(nextLayers);
     setLayerOrder(prev => prev.filter(x => x.id !== layerId));
     setLayerGroups(prev => prev.map(g => ({ ...g, members: g.members.filter(m => m.layerId !== layerId) }))
                                .filter(g => g.members.length > 0));
-    setStrips(prev => { const next = prev.filter(s => s.id !== layerId); lsSave(next, layers.filter(l=>l.layerId!==layerId), editCounts, hidden, svgText, viewBox, density); return next; });
+    setStrips(nextStrips);
+    setEditCounts(nextEditCounts);
+    setHidden(nextHidden);
+    setSelectedStripIds(prev => prev.filter(id => !relatedPathIds.has(id)));
     if (selLayerId === layerId) setSelLayerId(null);
-    if (selStripId === layerId) setSelStripId(null);
+    if (selStripId && relatedPathIds.has(selStripId)) setSelStripId(null);
+    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
   }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushHistory, lsSave]);
+
+  const deleteSelectedVectorPaths = useCallback(() => {
+    if (!pathSel.length) return;
+
+    const selectedPathIds = new Set(pathSel.map(path => path.pathId));
+    const selectedLayerIds = new Set(pathSel.map(path => path.layerId));
+    const selectedPathData = new Set(pathSel.map(path => path.pathData));
+    const deletedLayerIds = new Set();
+
+    const nextLayers = [];
+    for (const layer of layers) {
+      if (!selectedLayerIds.has(layer.layerId) && !selectedPathIds.has(layer.layerId)) {
+        nextLayers.push(layer);
+        continue;
+      }
+
+      const wholeLayerSelected = selectedPathIds.has(layer.layerId) || !(layer.subPaths?.length);
+      if (wholeLayerSelected) {
+        deletedLayerIds.add(layer.layerId);
+        continue;
+      }
+
+      const nextSubPaths = layer.subPaths.filter(path => !selectedPathIds.has(path.pathId));
+      if (!nextSubPaths.length) {
+        deletedLayerIds.add(layer.layerId);
+        continue;
+      }
+
+      nextLayers.push({
+        ...layer,
+        subPaths: nextSubPaths,
+        pathData: nextSubPaths.map(path => path.pathData).join(' '),
+        svgLength: nextSubPaths.reduce((sum, path) => sum + (path.svgLength || 0), 0),
+      });
+    }
+
+    const removedIds = new Set([...selectedPathIds, ...deletedLayerIds]);
+    const nextStrips = strips.filter(strip =>
+      !removedIds.has(strip.id) &&
+      !selectedPathData.has(strip.pathData));
+    const nextEditCounts = { ...editCounts };
+    const nextHidden = { ...hidden };
+    removedIds.forEach(id => {
+      delete nextEditCounts[id];
+      delete nextHidden[id];
+    });
+
+    const nextLayerGroups = layerGroups
+      .map(group => ({
+        ...group,
+        members: group.members.filter(member =>
+          !removedIds.has(member.stripId || member.pathId) &&
+          !deletedLayerIds.has(member.layerId)),
+      }))
+      .filter(group => group.members.length > 0);
+    const liveGroupIds = new Set(nextLayerGroups.map(group => group.groupId));
+    const liveLayerIds = new Set(nextLayers.map(layer => layer.layerId));
+    const nextLayerOrder = layerOrder.filter(item =>
+      item.type === 'group'
+        ? liveGroupIds.has(item.id)
+        : liveLayerIds.has(item.id));
+
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    setLayers(nextLayers);
+    setStrips(nextStrips);
+    setEditCounts(nextEditCounts);
+    setHidden(nextHidden);
+    setLayerGroups(nextLayerGroups);
+    setLayerOrder(nextLayerOrder);
+    setPathSel([]);
+    setPathSelName('');
+    setSelectedStripIds(prev => prev.filter(id => nextStrips.some(strip => strip.id === id)));
+    if (selLayerId && deletedLayerIds.has(selLayerId)) setSelLayerId(null);
+    if (selStripId && !nextStrips.some(strip => strip.id === selStripId)) setSelStripId(null);
+    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
+  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, selLayerId, selStripId, pushHistory, lsSave]);
 
   // ── Duplicate strip ────────────────────────────────────────────────────────
 
@@ -1428,6 +1577,86 @@ export function LayoutScreen() {
       return next;
     });
   }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+
+  const updatePatchBoard = useCallback((mutate) => {
+    setPatchBoard(prev => {
+      const next = normalizePatchBoard(prev, strips);
+      mutate(next);
+      return normalizePatchBoard(next, strips);
+    });
+  }, [setPatchBoard, strips]);
+
+  const nearestLedIndex = useCallback((event, strip) => {
+    if (!svgRef.current || !strip?.pixels?.length) return null;
+    const point = svgPt(svgRef.current, event.clientX, event.clientY);
+    let nearestIndex = 0;
+    let nearestDistance = Infinity;
+    strip.pixels.forEach((pixel, index) => {
+      const distance = Math.hypot(point.x - pixel.x, point.y - pixel.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = index;
+      }
+    });
+    const maxCut = strip.pixels.length - 2;
+    if (maxCut < 0) return null;
+    return Math.max(0, Math.min(maxCut, nearestIndex));
+  }, []);
+
+  const chopStripAtEvent = useCallback((event, strip) => {
+    if (!strip || project.patchBoard?.physicalLocked) return;
+    const cutLed = nearestLedIndex(event, strip);
+    if (cutLed === null) return;
+    const currentCuts = cutsForStrip(normalizePatchBoard(project.patchBoard, strips), strip.id);
+    const nextCuts = [...new Set([...currentCuts, cutLed])].sort((a, b) => a - b);
+    updatePatchBoard(next => sliceStripIntoPatchesPreservingRoute(next, strip, nextCuts));
+    setSelStripId(strip.id);
+    setSelectedStripIds([strip.id]);
+    setSelectedWireCut({ stripId: strip.id, cutLed });
+    setSelectedWirePatchId(null);
+  }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard]);
+
+  const toggleRoutePatch = useCallback((patchId) => {
+    if (wireOverlayMode !== 'link' || project.patchBoard?.physicalLocked) return;
+    setLinkRouteIds(prev => {
+      const baseRoute = linkRouteStartedRef.current ? prev : [];
+      const nextRoute = baseRoute.includes(patchId)
+        ? baseRoute.filter(id => id !== patchId)
+        : [...baseRoute, patchId];
+      linkRouteStartedRef.current = true;
+      updatePatchBoard(next => applyPatchRouteOrder(next, nextRoute));
+      setSelectedWirePatchId(patchId);
+      setSelectedWireCut(null);
+      return nextRoute;
+    });
+  }, [project.patchBoard, updatePatchBoard, wireOverlayMode]);
+
+  const nudgeSelectedWireCut = useCallback((delta) => {
+    if (!selectedWireCut) return;
+    const strip = strips.find(item => item.id === selectedWireCut.stripId);
+    if (!strip) return;
+    const step = Math.sign(Number(delta) || 0);
+    if (!step) return;
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    const currentCuts = cutsForStrip(board, strip.id);
+    const index = currentCuts.indexOf(selectedWireCut.cutLed);
+    if (index < 0) return;
+    const maxLed = Math.max(0, strip.pixels?.length ?? strip.pixelCount ?? 1) - 1;
+    const previousLimit = index === 0 ? 0 : currentCuts[index - 1] + 1;
+    const nextLimit = index === currentCuts.length - 1 ? maxLed - 1 : currentCuts[index + 1] - 1;
+    const nextCutLed = selectedWireCut.cutLed + step;
+    if (nextCutLed < previousLimit || nextCutLed > nextLimit) return;
+    updatePatchBoard(next => nudgeStripCut(next, strip, selectedWireCut.cutLed, step));
+    setSelectedWireCut({ stripId: strip.id, cutLed: nextCutLed });
+  }, [project.patchBoard, selectedWireCut, strips, updatePatchBoard]);
+
+  const deleteSelectedWireCut = useCallback(() => {
+    if (!selectedWireCut) return;
+    const strip = strips.find(item => item.id === selectedWireCut.stripId);
+    if (!strip) return;
+    updatePatchBoard(next => deleteStripCut(next, strip, selectedWireCut.cutLed));
+    setSelectedWireCut(null);
+  }, [selectedWireCut, strips, updatePatchBoard]);
 
   const resampleStrip = useCallback((id, newCount) => {
     setStrips(prev => {
@@ -1672,10 +1901,21 @@ export function LayoutScreen() {
       switch (e.key) {
         case 's': setDrawMode(false); setWaypoints([]); setGhostPt(null); break;
         case 'd': setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); break;
-        case 'x':
+        case 'Backspace':
         case 'Delete':
+          e.preventDefault();
+          if (pathSel.length > 0) deleteSelectedVectorPaths();
+          else if (selectedStripIds.length > 1) removeSelectedStrips();
+          else if (selStripId && layers.some(layer => layer.layerId === selStripId)) deleteLayer(selStripId);
+          else if (selStripId) removeStrip(selStripId);
+          else if (selLayerId) deleteLayer(selLayerId);
+          break;
+        case 'x':
+          e.preventDefault();
           if (selectedStripIds.length > 1) removeSelectedStrips();
           else if (selStripId) removeStrip(selStripId);
+          else if (pathSel.length > 0) deleteSelectedVectorPaths();
+          else if (selLayerId) deleteLayer(selLayerId);
           break;
         case 'g':
           if (selectedStripIds.length > 1) groupSelectedStrips();
@@ -1710,7 +1950,7 @@ export function LayoutScreen() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
+  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
 
   // ── Memoised visualisation data ────────────────────────────────────────────
 
@@ -1790,6 +2030,101 @@ export function LayoutScreen() {
     if (isEditingGesture) return {};
     return Object.fromEntries(strips.map(s => [s.id, offsetArrow(calcArrow(s.pathData, s.reversed ?? false), s.x || 0, s.y || 0)]));
   }, [strips, isEditingGesture]);
+
+  const wirePathCanvasSegments = useMemo(() => {
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    const stripsById = new Map(strips.map(strip => [strip.id, strip]));
+    const rowOrder = new Map(mainChain(board).rowIds.map((patchId, order) => [patchId, order]));
+    const segmentPatches = board.patches
+      .filter(patch => patch.source?.type === 'strip')
+      .map(patch => ({
+        patch,
+        order: rowOrder.get(patch.id),
+        linked: rowOrder.has(patch.id),
+      }));
+    const patchCountsByStrip = segmentPatches.reduce((counts, { patch }) => {
+      const stripId = patch.source.stripId;
+      counts.set(stripId, (counts.get(stripId) || 0) + 1);
+      return counts;
+    }, new Map());
+
+    const segments = [];
+    segmentPatches.forEach(({ patch, order, linked }) => {
+      const stripId = patch.source.stripId;
+      if (hidden[stripId]) return;
+      const strip = stripsById.get(stripId);
+      if (!strip?.pixels?.length) return;
+      const start = Number(patch.source.startLed);
+      const end = Number(patch.source.endLed);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      const min = Math.min(start, end);
+      const max = Math.max(start, end);
+      const sampledPoints = strip.pixels
+        .filter((point, index) => index >= min && index <= max)
+        .map(point => ({ x: point.x, y: point.y }));
+      if (!sampledPoints.length) return;
+      const points = start > end ? [...sampledPoints].reverse() : sampledPoints;
+      const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
+      const isFullStrip = min === 0 && max === strip.pixels.length - 1;
+      segments.push({
+        id: patch.id,
+        patchId: patch.id,
+        stripId,
+        color: strip.color || 'var(--accent)',
+        order,
+        linked,
+        showWhenIdle: (patchCountsByStrip.get(stripId) || 0) > 1 || !isFullStrip,
+        points: renderPoints,
+        mid: points[Math.floor(points.length / 2)],
+        startPoint: renderPoints[0],
+        endPoint: renderPoints[renderPoints.length - 1],
+      });
+    });
+    return segments;
+  }, [project.patchBoard, strips, hidden]);
+
+  const visibleWirePathCanvasSegments = useMemo(
+    () => wireOverlayMode === 'link'
+      ? wirePathCanvasSegments
+      : wirePathCanvasSegments.filter(segment => segment.showWhenIdle),
+    [wireOverlayMode, wirePathCanvasSegments],
+  );
+
+  const wireRouteJumps = useMemo(() => {
+    const linked = wirePathCanvasSegments
+      .filter(segment => segment.linked && Number.isFinite(segment.order))
+      .sort((a, b) => a.order - b.order);
+    return linked.slice(0, -1).map((segment, index) => ({
+      id: `${segment.patchId}-${linked[index + 1].patchId}`,
+      from: segment.endPoint,
+      to: linked[index + 1].startPoint,
+    }));
+  }, [wirePathCanvasSegments]);
+
+  const wireCutMarkers = useMemo(() => {
+    const board = normalizePatchBoard(project.patchBoard, strips);
+    return strips
+      .filter(strip => !hidden[strip.id] && strip.pixels?.length)
+      .flatMap(strip => cutsForStrip(board, strip.id)
+        .map(cutLed => {
+          const point = strip.pixels[cutLed];
+          if (!point) return null;
+          const before = strip.pixels[Math.max(0, cutLed - 1)] || point;
+          const after = strip.pixels[Math.min(strip.pixels.length - 1, cutLed + 1)] || point;
+          const angle = Math.atan2(after.y - before.y, after.x - before.x) * 180 / Math.PI;
+          return {
+            id: `${strip.id}-${cutLed}`,
+            stripId: strip.id,
+            cutLed,
+            x: point.x,
+            y: point.y,
+            angle: Number.isFinite(angle) ? angle : 0,
+            color: strip.color || 'var(--accent)',
+            selected: selectedWireCut?.stripId === strip.id && selectedWireCut?.cutLed === cutLed,
+          };
+        })
+        .filter(Boolean));
+  }, [project.patchBoard, strips, hidden, selectedWireCut]);
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
   const selectedStrips = useMemo(() => {
@@ -2019,12 +2354,52 @@ export function LayoutScreen() {
           <button
             className={`btn ${drawMode ? 'btn-primary' : 'btn-ghost'}`}
             title={drawMode ? 'Cancel draw (Esc / right-click)' : 'Draw strip (D) — click waypoints, double-click to finish, backspace to undo point'}
-            onClick={() => { setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); }}>
+            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
             <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
               <path d="M2 10 L8 2 M8 2 L10 4 M5 8 L10 4" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             {drawMode ? 'Drawing…' : 'Draw'}
           </button>
+
+          <button
+            className={`btn ${wireOverlayMode === 'chop' ? 'btn-primary' : 'btn-ghost'}`}
+            title="Chop wire path segments on the artwork"
+            onClick={() => {
+              setDrawMode(false);
+              setWaypoints([]);
+              setGhostPt(null);
+              setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
+            }}>
+            Chop
+          </button>
+          <button
+            className={`btn ${wireOverlayMode === 'link' ? 'btn-primary' : 'btn-ghost'}`}
+            title="Link chopped segments into physical order"
+            onClick={() => {
+              setDrawMode(false);
+              setWaypoints([]);
+              setGhostPt(null);
+              setSelectedWirePatchId(null);
+              setWireOverlayMode(mode => {
+                const nextMode = mode === 'link' ? 'idle' : 'link';
+                if (nextMode === 'link') {
+                  const currentRows = mainChain(normalizePatchBoard(project.patchBoard, strips)).rowIds;
+                  setLinkRouteIds(currentRows);
+                  linkRouteStartedRef.current = false;
+                } else {
+                  setLinkRouteIds([]);
+                  linkRouteStartedRef.current = false;
+                }
+                return nextMode;
+              });
+            }}>
+            Link
+          </button>
+          {wireOverlayMode !== 'idle' && (
+            <span className="lw-route-mode-chip">
+              {wireOverlayMode === 'chop' ? 'Chop' : 'Link'}
+            </span>
+          )}
 
           <span className="tbar-divider"/>
 
@@ -2227,8 +2602,10 @@ export function LayoutScreen() {
                 };
                 return (
                   <path key={t.pathId} d={t.pathData}
-                        fill="rgba(0,0,0,0)" stroke="#fff" strokeOpacity="0"
-                        strokeWidth="16" strokeLinecap="round" pointerEvents="all"
+                        data-vector-layer-id={l.layerId}
+                        data-vector-path-id={t.pathId}
+                        fill="none" stroke="#fff" strokeOpacity="0.001"
+                        strokeWidth="16" strokeLinecap="round" pointerEvents="stroke"
                         style={{ cursor: 'pointer' }}
                         onMouseDown={e => e.stopPropagation()}
                         onMouseEnter={() => { setHoveredLayerId(l.layerId); setHoveredSubPathId(t.pathId); }}
@@ -2335,10 +2712,21 @@ export function LayoutScreen() {
                         strokeLinecap="round"
                         pointerEvents="visibleStroke"
                         style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
-                        onMouseDown={e => startStripMove(e, s)}
+                        onMouseDown={e => {
+                          if (wireOverlayMode === 'chop') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            return;
+                          }
+                          startStripMove(e, s);
+                        }}
                         onClick={e => {
                           e.stopPropagation();
                           if (stripDragSuppressClickRef.current) return;
+                          if (wireOverlayMode === 'chop') {
+                            chopStripAtEvent(e, s);
+                            return;
+                          }
                           if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSelection(s.id);
                           else selectStrip(s.id);
                         }}/>
@@ -2358,20 +2746,98 @@ export function LayoutScreen() {
               );
             })}
 
-            {/* ── LED dots — white so they read clearly against any strip color ── */}
+            {!isEditingGesture && visibleWirePathCanvasSegments.length > 0 && (
+              <g
+                className="lw-wire-canvas-segments"
+                style={{ pointerEvents: wireOverlayMode === 'link' ? 'auto' : 'none' }}
+              >
+                {visibleWirePathCanvasSegments.map(segment => (
+                  <g key={segment.id}>
+                    {wireOverlayMode === 'link' && (
+                      <polyline
+                        points={pointsAttr(actionablePolylinePoints(segment.points))}
+                        className="lw-wire-canvas-segment-hit"
+                        onClick={event => {
+                          event.stopPropagation();
+                          toggleRoutePatch(segment.patchId);
+                        }}
+                      />
+                    )}
+                    <polyline
+                      points={pointsAttr(segment.points)}
+                      className="lw-wire-canvas-segment"
+                      style={{ '--wire-color': segment.color }}
+                    />
+                    {segment.linked && Number.isFinite(segment.order) && (
+                      <g className="lw-route-badge">
+                        <circle cx={segment.mid.x} cy={segment.mid.y} r={vbScale * 9}/>
+                        <text x={segment.mid.x} y={segment.mid.y + vbScale * 3.5} fontSize={vbScale * 8}>
+                          {segment.order + 1}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                ))}
+              </g>
+            )}
+
+            {!isEditingGesture && wireRouteJumps.length > 0 && (
+              <g className="lw-wire-route-jumps" style={{ pointerEvents: 'none' }}>
+                {wireRouteJumps.map(jump => (
+                  <line
+                    key={jump.id}
+                    className="lw-wire-route-jump"
+                    x1={jump.from.x}
+                    y1={jump.from.y}
+                    x2={jump.to.x}
+                    y2={jump.to.y}
+                  />
+                ))}
+              </g>
+            )}
+
+            {!isEditingGesture && wireCutMarkers.length > 0 && (
+              <g className="lw-wire-cut-markers" style={{ pointerEvents: 'none' }}>
+                {wireCutMarkers.map(marker => {
+                  const notchSize = vbScale * (marker.selected ? 10 : 8);
+                  const wing = notchSize * 0.48;
+                  return (
+                    <g
+                      key={marker.id}
+                      className={`lw-wire-cut-marker ${marker.selected ? 'selected' : ''}`}
+                      transform={`translate(${marker.x} ${marker.y}) rotate(${marker.angle})`}
+                      style={{ '--wire-color': marker.color }}
+                    >
+                      <path
+                        className="lw-wire-cut-marker-notch"
+                        d={`M 0 ${-notchSize} L 0 ${notchSize} M ${-wing} ${-notchSize * 0.62} L 0 0 L ${-wing} ${notchSize * 0.62}`}
+                      />
+                    </g>
+                  );
+                })}
+              </g>
+            )}
+
+            {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
             {showLeds && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
 	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
-                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
+                    const selected = s.id === selStripId;
+                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    const shellOpacity = restingLedAlpha(ledFrame, { selected });
+                    const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
                     <g key={i}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
-                              fill={ledColor} opacity={s.id === selStripId ? 0.2 : 0.13}/>
-                      <circle cx={px.x} cy={px.y}
-                              r={s.id === selStripId ? vbScale * 2.9 : vbScale * 2.25}
-                              fill={ledColor} opacity={s.id === selStripId ? 0.95 : 0.78}/>
+                              fill={ledColor} opacity={shellOpacity}/>
+                      {coreOpacity > 0 && (
+                        <circle cx={px.x} cy={px.y}
+                                r={selected ? vbScale * 2.9 : vbScale * 2.25}
+                                fill={ledColor} opacity={coreOpacity}/>
+                      )}
                     </g>
                     );
                   })}
@@ -2379,14 +2845,16 @@ export function LayoutScreen() {
               ) : (
 	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
-                    const ledColor = rgbCss(layoutPatternFrame.get(s.id)?.leds?.[i], s.color || 'white');
+                    const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
+                    const selected = s.id === selStripId;
+                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
+                    const restOpacity = restingLedAlpha(ledFrame, { selected }) * 0.45;
                     return (
                     <circle key={i} cx={px.x} cy={px.y}
                             r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                             fill={ledColor}
-                            opacity={effectiveGlowMode === 'outward'
-                              ? (s.id === selStripId ? 0.4 : 0.3)
-                              : (s.id === selStripId ? 0.55 : 0.4)}/>
+                            opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
                     );
                   })}
                 </g>
@@ -3082,7 +3550,7 @@ export function LayoutScreen() {
         )}
 
         {/* ── Strips list ── */}
-	        {strips.length > 0 && (
+        {strips.length > 0 && (
 	          <>
 	            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
 	              <span>LED strips</span>
@@ -3121,7 +3589,7 @@ export function LayoutScreen() {
 	                </div>
 	              </div>
 	            )}
-	            <div ref={stripListRef} style={{ flex: 1, overflow: 'auto' }}>
+	            <div ref={stripListRef} style={{ flex: '0 0 auto', overflow: 'auto', minHeight: 0, maxHeight: 220 }}>
 	              {strips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
@@ -3334,6 +3802,23 @@ export function LayoutScreen() {
               })}
             </div>
           </>
+        )}
+
+        {strips.length > 0 && (
+          <details className="lw-patch-details" open>
+            <summary>
+              <span>Wire Path</span>
+              <span>{strips.length} paths · visual order</span>
+            </summary>
+            <PatchBoardScreen
+              embedded
+              wireOverlayMode={wireOverlayMode}
+              selectedWireCut={selectedWireCut}
+              onNudgeSelectedCut={nudgeSelectedWireCut}
+              onDeleteSelectedCut={deleteSelectedWireCut}
+              onClearSelectedCut={() => setSelectedWireCut(null)}
+            />
+          </details>
         )}
 
         {/* ── Empty state ── */}
