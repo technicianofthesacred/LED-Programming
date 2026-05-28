@@ -43,6 +43,32 @@ void handleOptions() {
   server.send(204, "text/plain", "");
 }
 
+bool hasControlField(JsonDocument& doc, const char* key) {
+  return !doc[key].isNull() || server.hasArg(key);
+}
+
+String controlString(JsonDocument& doc, const char* key) {
+  if (!doc[key].isNull()) return String(doc[key].as<const char*>());
+  return server.arg(key);
+}
+
+float controlFloat(JsonDocument& doc, const char* key) {
+  if (!doc[key].isNull()) return doc[key].as<float>();
+  return server.arg(key).toFloat();
+}
+
+int controlInt(JsonDocument& doc, const char* key) {
+  if (!doc[key].isNull()) return doc[key].as<int>();
+  return server.arg(key).toInt();
+}
+
+bool controlBool(JsonDocument& doc, const char* key) {
+  if (!doc[key].isNull()) return doc[key].as<bool>();
+  String value = server.arg(key);
+  value.toLowerCase();
+  return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 String escapeHtml(const String& in) {
   String out;
   out.reserve(in.length());
@@ -500,30 +526,28 @@ void handleReboot() {
 
 void handleControlPost() {
   sendCors();
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
-    return;
-  }
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
-  if (err) {
-    server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err.c_str() + "\"}");
-    return;
+  if (server.hasArg("plain") && server.arg("plain").length()) {
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    if (err) {
+      server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err.c_str() + "\"}");
+      return;
+    }
   }
-  if (doc["brightness"].is<float>()) runtimeSetBrightness(doc["brightness"].as<float>());
-  if (doc["speed"].is<float>()) runtimeSetSpeed(doc["speed"].as<float>());
-  if (doc["hueShift"].is<int>()) runtimeSetHueShift(doc["hueShift"].as<int>());
-  if (doc["blackout"].is<bool>()) runtimeSetBlackout(doc["blackout"].as<bool>());
-  if (doc["next"].is<bool>() && doc["next"].as<bool>()) runtimeNextPattern();
-  if (doc["previous"].is<bool>() && doc["previous"].as<bool>()) runtimePreviousPattern();
-  if (doc["patternId"].is<const char*>()) {
-    String id = String(doc["patternId"].as<const char*>());
+  if (hasControlField(doc, "brightness")) runtimeSetBrightness(controlFloat(doc, "brightness"));
+  if (hasControlField(doc, "speed")) runtimeSetSpeed(controlFloat(doc, "speed"));
+  if (hasControlField(doc, "hueShift")) runtimeSetHueShift(controlInt(doc, "hueShift"));
+  if (hasControlField(doc, "blackout")) runtimeSetBlackout(controlBool(doc, "blackout"));
+  if (hasControlField(doc, "next") && controlBool(doc, "next")) runtimeNextPattern();
+  if (hasControlField(doc, "previous") && controlBool(doc, "previous")) runtimePreviousPattern();
+  if (hasControlField(doc, "patternId")) {
+    String id = controlString(doc, "patternId");
     if (id.length()) runtimeSelectPatternById(id);
   }
-  if (doc["hue"].is<int>()) runtimeSetCustomHue(uint8_t(doc["hue"].as<int>() & 0xff));
-  if (doc["saturation"].is<int>()) runtimeSetCustomSaturation(uint8_t(doc["saturation"].as<int>() & 0xff));
-  if (doc["breathe"].is<bool>()) runtimeSetCustomBreathe(doc["breathe"].as<bool>());
-  if (doc["drift"].is<bool>()) runtimeSetCustomDrift(doc["drift"].as<bool>());
+  if (hasControlField(doc, "hue")) runtimeSetCustomHue(uint8_t(controlInt(doc, "hue") & 0xff));
+  if (hasControlField(doc, "saturation")) runtimeSetCustomSaturation(uint8_t(controlInt(doc, "saturation") & 0xff));
+  if (hasControlField(doc, "breathe")) runtimeSetCustomBreathe(controlBool(doc, "breathe"));
+  if (hasControlField(doc, "drift")) runtimeSetCustomDrift(controlBool(doc, "drift"));
   // Echo current state back
   JsonDocument out;
   out["ok"] = true;

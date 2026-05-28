@@ -31,6 +31,9 @@
 CRGB leds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 
+constexpr uint8_t MIRROR_OUTPUT_PINS[] = {16, 17, 18, 21, 38, 39, 40, 48};
+constexpr uint8_t MIRROR_OUTPUT_PIN_COUNT = sizeof(MIRROR_OUTPUT_PINS) / sizeof(MIRROR_OUTPUT_PINS[0]);
+
 OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
 LookConfig looks[LW_MAX_LOOKS];
@@ -305,6 +308,17 @@ bool loadProfile() {
 bool setupLedOutputs() {
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
+  uint8_t addedPins[LW_MAX_OUTPUTS + MIRROR_OUTPUT_PIN_COUNT] = {};
+  uint8_t addedPinCount = 0;
+  auto wasAdded = [&](uint8_t pin) {
+    for (uint8_t j = 0; j < addedPinCount; j++) {
+      if (addedPins[j] == pin) return true;
+    }
+    return false;
+  };
+  auto markAdded = [&](uint8_t pin) {
+    if (addedPinCount < sizeof(addedPins)) addedPins[addedPinCount++] = pin;
+  };
 
   for (uint8_t i = 0; i < outputCount; i++) {
     OutputConfig& output = outputs[i];
@@ -313,6 +327,26 @@ bool setupLedOutputs() {
       Serial.println(output.pin);
       fail(ERROR_PIN, "unsupported LED output pin");
       return false;
+    }
+    markAdded(output.pin);
+    Serial.print("LED output ");
+    Serial.print(output.id);
+    Serial.print(" -> GPIO ");
+    Serial.print(output.pin);
+    Serial.print(" / ");
+    Serial.print(output.pixels);
+    Serial.println(" px");
+  }
+
+  if (outputCount == 1) {
+    OutputConfig& output = outputs[0];
+    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) {
+      uint8_t pin = MIRROR_OUTPUT_PINS[i];
+      if (wasAdded(pin)) continue;
+      if (!addLedsForPin(pin, leds + output.start, output.pixels)) continue;
+      markAdded(pin);
+      Serial.print("Mirroring LED frame on GPIO ");
+      Serial.println(pin);
     }
   }
 
@@ -331,6 +365,14 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
       return addLedsForOrder<18>(start, count);
     case 21:
       return addLedsForOrder<21>(start, count);
+    case 38:
+      return addLedsForOrder<38>(start, count);
+    case 39:
+      return addLedsForOrder<39>(start, count);
+    case 40:
+      return addLedsForOrder<40>(start, count);
+    case 48:
+      return addLedsForOrder<48>(start, count);
     default:
       return false;
   }
@@ -669,6 +711,17 @@ String runtimeFirmwareInfo() {
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
+  JsonArray outputArray = doc["outputs"].to<JsonArray>();
+  for (uint8_t i = 0; i < outputCount; i++) {
+    JsonObject output = outputArray.add<JsonObject>();
+    output["id"] = outputs[i].id;
+    output["pin"] = outputs[i].pin;
+    output["pixels"] = outputs[i].pixels;
+  }
+  JsonArray mirrors = doc["mirrorPins"].to<JsonArray>();
+  if (outputCount == 1) {
+    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) mirrors.add(MIRROR_OUTPUT_PINS[i]);
+  }
   String out;
   serializeJson(doc, out);
   return out;
