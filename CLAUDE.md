@@ -55,3 +55,6 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 - **Hardware research** → `research.md`
 - **Visitor UI design plan** → `branded-installation-ui.md`
 - **LED layout design tool** → `led-art-mapper/`
+- **Direction / strategy log** → `THINKING.md` (rejected paths + tensions across chats)
+
+@./THINKING.md
