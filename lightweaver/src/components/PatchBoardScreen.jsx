@@ -10,6 +10,16 @@ import {
   sliceStripIntoPatchesPreservingRoute,
   updatePatchRange,
 } from '../lib/patchBoard.js';
+import {
+  makeCardRuntimePackage,
+  patchBoardToZones,
+} from '../lib/cardRuntimeContract.js';
+import {
+  getCardHostname,
+  setCardHostname,
+  pushConfigToCard,
+  CardPushError,
+} from '../lib/cardPushClient.js';
 
 function patchLength(patch) {
   if (patch.source?.type === 'off') return Math.max(0, Math.trunc(patch.source.ledCount || 0));
@@ -44,7 +54,11 @@ export function PatchBoardScreen({
   onDeleteSelectedCut,
   onClearSelectedCut,
 }) {
-  const { strips, patchBoard, setPatchBoard } = useProject();
+  const { strips, patchBoard, setPatchBoard, projectName, standaloneController } = useProject();
+  const [pushHost, setPushHost] = useState(() => getCardHostname());
+  const [pushStatus, setPushStatus] = useState('');
+  const [pushKind, setPushKind] = useState(''); // '' | 'ok' | 'err' | 'pending'
+  const [pushFallbackJson, setPushFallbackJson] = useState('');
   const [activeStripId, setActiveStripId] = useState(() => strips[0]?.id || null);
   const [selectedPatchId, setSelectedPatchId] = useState(null);
   const [offCount, setOffCount] = useState(1);
@@ -97,6 +111,55 @@ export function PatchBoardScreen({
     if (patch) patch.output = { ...(patch.output || {}), mode };
   });
 
+  // Serialize the current patch board into the firmware's runtime contract
+  // (zones + LED outputs + controls) and POST to the live card. The card
+  // adopts the new config immediately and persists it to NVS.
+  const pushToCard = async () => {
+    const cleanHost = pushHost.trim().toLowerCase() || 'lightweaver';
+    setCardHostname(cleanHost);
+    setPushHost(getCardHostname());
+    setPushKind('pending');
+    setPushStatus(`Pushing to ${cleanHost}.local…`);
+    setPushFallbackJson('');
+    const zones = patchBoardToZones(board, strips);
+    const outputs = (standaloneController?.outputs || []).map((o, i) => ({
+      id: o.id || `out${i + 1}`,
+      name: o.name || `Output ${i + 1}`,
+      pin: o.pin,
+      pixels: o.pixels,
+    }));
+    const totalPixels = strips.reduce((sum, s) => sum + (s.pixelCount ?? s.pixels?.length ?? 0), 0);
+    const pkg = makeCardRuntimePackage({
+      projectName,
+      mode: 'website-flash',
+      led: {
+        pixels: totalPixels || undefined,
+        colorOrder: standaloneController?.led?.colorOrder,
+        brightnessLimit: standaloneController?.led?.brightnessLimit,
+        outputs: outputs.length ? outputs : undefined,
+      },
+      controls: standaloneController?.controls,
+      zones,
+      syncZones: zones.length <= 1,
+    });
+    try {
+      await pushConfigToCard(pkg, { host: getCardHostname() });
+      setPushKind('ok');
+      setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}.local`);
+      setTimeout(() => { setPushStatus(''); setPushKind(''); }, 4000);
+    } catch (err) {
+      setPushKind('err');
+      if (err instanceof CardPushError && err.reason === 'mixed-content') {
+        setPushStatus('Browser blocked the request. Use the JSON below: connect to the card and paste at its onboard page.');
+        setPushFallbackJson(JSON.stringify(pkg.config, null, 2));
+      } else if (err instanceof CardPushError) {
+        setPushStatus(err.message);
+      } else {
+        setPushStatus(`Push failed: ${err.message || err}`);
+      }
+    }
+  };
+
   const resetActivePath = () => {
     if (!activeStrip || board.physicalLocked) return;
     updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, []));
@@ -119,7 +182,25 @@ export function PatchBoardScreen({
           <h1>Wire Path</h1>
           <p>Physical route setup for the selected artwork layers.</p>
         </div>
-        <div className="lw-wire-head-actions">
+        <div className="lw-wire-head-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={pushHost}
+            onChange={e => setPushHost(e.target.value)}
+            placeholder="hostname"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            style={{ width: 120, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border, #444)', background: 'var(--bg-1, #0a0a0a)', color: 'var(--text-1, #f4ede0)', fontFamily: 'ui-monospace, SF Mono, monospace', fontSize: 13 }}
+          />
+          <span style={{ fontSize: 12, color: 'var(--text-3, #9a8d75)', fontFamily: 'ui-monospace, SF Mono, monospace' }}>.local</span>
+          <button
+            className="btn btn-primary"
+            onClick={pushToCard}
+            disabled={pushKind === 'pending'}
+          >
+            {pushKind === 'pending' ? 'Pushing…' : 'Push to card'}
+          </button>
           <button
             className={`btn ${board.physicalLocked ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => updateBoard(next => { next.physicalLocked = !next.physicalLocked; })}
@@ -128,6 +209,40 @@ export function PatchBoardScreen({
           </button>
         </div>
       </div>
+
+      {pushStatus && (
+        <div style={{
+          padding: '10px 14px',
+          margin: '4px 0 12px',
+          borderRadius: 8,
+          fontSize: 13,
+          background: pushKind === 'ok' ? 'rgba(127,176,105,0.1)' : pushKind === 'err' ? 'rgba(224,120,86,0.1)' : 'rgba(154,141,117,0.1)',
+          border: `1px solid ${pushKind === 'ok' ? 'rgba(127,176,105,0.5)' : pushKind === 'err' ? 'rgba(224,120,86,0.5)' : 'rgba(154,141,117,0.3)'}`,
+          color: pushKind === 'ok' ? '#7fb069' : pushKind === 'err' ? '#e07856' : '#9a8d75',
+        }}>
+          {pushStatus}
+          {pushFallbackJson && (
+            <textarea
+              readOnly
+              value={pushFallbackJson}
+              onClick={e => e.target.select()}
+              style={{
+                width: '100%',
+                minHeight: 140,
+                marginTop: 10,
+                fontFamily: 'ui-monospace, SF Mono, monospace',
+                fontSize: 11,
+                padding: 10,
+                borderRadius: 6,
+                border: '1px solid var(--border, #333)',
+                background: 'var(--bg-1, #0a0a0a)',
+                color: 'var(--text-2, #c89b5c)',
+                boxSizing: 'border-box',
+              }}
+            />
+          )}
+        </div>
+      )}
 
       {selectedWireCut && (
         <section className="lw-wire-selected-detail">

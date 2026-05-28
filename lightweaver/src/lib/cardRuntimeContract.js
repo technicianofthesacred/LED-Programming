@@ -36,6 +36,9 @@ export const DEFAULT_CARD_LED = Object.freeze({
 export function normalizeCardRuntimeConfig(config = {}) {
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
   const patternIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
+  const led = normalizeLed(config.led);
+  const totalPixels = led.pixels;
+  const zones = normalizeZones(config.zones, totalPixels);
   return {
     version: 1,
     mode,
@@ -43,7 +46,7 @@ export function normalizeCardRuntimeConfig(config = {}) {
       id: sanitizeId(config.piece?.id || config.projectName || 'lightweaver-piece'),
       name: String(config.piece?.name || config.projectName || 'Lightweaver Piece'),
     },
-    led: normalizeLed(config.led),
+    led,
     controls: normalizeControls({
       ...config.controls,
       encoder: {
@@ -53,7 +56,75 @@ export function normalizeCardRuntimeConfig(config = {}) {
     }),
     patterns: normalizePatterns(config.patterns),
     startupPatternId: sanitizeId(config.startupPatternId || patternIds[0] || DEFAULT_CARD_PATTERN_BANK[0].id),
+    zones,
+    syncZones: config.syncZones === undefined ? true : Boolean(config.syncZones),
   };
+}
+
+// Translate a designer-side PatchBoard (or raw zone list) into the firmware's
+// zone wire format. Each patch becomes one zone with one pixel range.
+// PatchBoard input shape: { patches: [{ id, name, source: { type: 'strip', stripId, startLed, endLed }, playback, output }] }
+// Raw zones input shape: [{ id, label, patternId, brightness, ..., ranges: [{ start, count }] }]
+export function patchBoardToZones(patchBoard, strips = []) {
+  if (!patchBoard || !Array.isArray(patchBoard.patches)) return [];
+  const stripPixelOffsets = new Map();
+  let cursor = 0;
+  for (const strip of strips) {
+    stripPixelOffsets.set(strip.id, cursor);
+    cursor += strip.pixelCount ?? strip.pixels?.length ?? 0;
+  }
+  return patchBoard.patches
+    .filter(p => p?.source?.type === 'strip' && p.output?.mode !== 'off')
+    .map(p => {
+      const stripOffset = stripPixelOffsets.get(p.source.stripId) || 0;
+      const start = stripOffset + (p.source.startLed || 0);
+      const count = (p.source.endLed - p.source.startLed) + 1;
+      const playback = p.playback || {};
+      return {
+        id: sanitizeId(p.id || `zone-${start}`),
+        label: String(p.name || p.id || 'Zone'),
+        patternId: sanitizeId(playback.patternId || ''),
+        brightness: clampUnit(playback.brightness ?? 1.0),
+        speed: Number.isFinite(playback.speed) ? playback.speed : 1.0,
+        hueShift: Number.isFinite(playback.hueShift) ? playback.hueShift : 0,
+        customHue: clampInt(playback.customHue, 32, 0, 255),
+        customSaturation: clampInt(playback.customSaturation, 230, 0, 255),
+        customBreathe: Boolean(playback.customBreathe),
+        customDrift: Boolean(playback.customDrift),
+        ranges: [{ start, count }],
+      };
+    });
+}
+
+function normalizeZones(zones, totalPixels) {
+  if (!Array.isArray(zones) || zones.length === 0) return [];
+  return zones
+    .slice(0, 8)
+    .map((z, i) => ({
+      id: sanitizeId(z.id || `zone-${i + 1}`),
+      label: String(z.label || z.id || `Zone ${i + 1}`),
+      patternId: sanitizeId(z.patternId || 'aurora'),
+      brightness: clampUnit(z.brightness ?? 1.0),
+      speed: clampSpeed(z.speed),
+      hueShift: clampInt(z.hueShift, 0, -128, 128),
+      customHue: clampInt(z.customHue, 32, 0, 255),
+      customSaturation: clampInt(z.customSaturation, 230, 0, 255),
+      customBreathe: Boolean(z.customBreathe),
+      customDrift: Boolean(z.customDrift),
+      ranges: Array.isArray(z.ranges) && z.ranges.length
+        ? z.ranges.slice(0, 4).map(r => ({
+            start: clampInt(r.start, 0, 0, Math.max(0, totalPixels - 1)),
+            count: clampInt(r.count, 0, 0, totalPixels),
+          })).filter(r => r.count > 0)
+        : [{ start: 0, count: totalPixels }],
+    }))
+    .filter(z => z.ranges.length > 0);
+}
+
+function clampSpeed(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1.0;
+  return Math.max(0.05, Math.min(3.0, n));
 }
 
 export function buildCardRuntimeConfig({
