@@ -751,8 +751,8 @@ void runtimeSetBrightness(float value01) {
 }
 
 void runtimeSetSpeed(float speed) {
-  if (speed < 0.25f) speed = 0.25f;
-  if (speed > 4.0f) speed = 4.0f;
+  if (speed < 0.05f) speed = 0.05f;
+  if (speed > 3.0f) speed = 3.0f;
   manualSpeed = speed;
   applyToZones("", [&](ZoneConfig& z) { z.speed = speed; });
 }
@@ -789,8 +789,8 @@ void runtimeSetBrightnessZ(const String& targetId, float value01) {
 }
 
 void runtimeSetSpeedZ(const String& targetId, float speed) {
-  if (speed < 0.25f) speed = 0.25f;
-  if (speed > 4.0f) speed = 4.0f;
+  if (speed < 0.05f) speed = 0.05f;
+  if (speed > 3.0f) speed = 3.0f;
   if (targetId.length() == 0) manualSpeed = speed;
   applyToZones(targetId, [&](ZoneConfig& z) { z.speed = speed; });
 }

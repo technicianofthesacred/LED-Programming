@@ -278,12 +278,13 @@ void handleRoot() {
             "const sendSpeed=makeSender('speed');"
             "const sendHueShift=makeSender('hueShift');"
             "$('b-slider').oninput=e=>{const pct=parseInt(e.target.value,10);$('b-val').textContent=pct+'%';sendBright(pct/100)};"
-            // Speed slider is non-linear: 0..100 -> 0.25x..3x with ^1.8 curve.
-            // Slider midpoint (50) -> ~1x; bottom half gets fine slow control,
-            // top half compresses 1x..3x into less travel since users rarely
-            // want to push speed past 1.5x.
-            "const speedFromSlider=v=>{const t=Math.pow(v/100,1.8);return 0.25+t*2.75};"
-            "const sliderFromSpeed=s=>{const t=Math.max(0,Math.min(1,(s-0.25)/2.75));return Math.round(Math.pow(t,1/1.8)*100)};"
+            // Speed slider is non-linear: 0..100 -> 0.05x..3x with ^1.63 curve.
+            // Slider midpoint (50) maps to 1.0x; the bottom half spans 0.05x to 1x
+            // (extra-slow meditation range with plenty of fine control), the top
+            // half spans 1x to 3x. Floor is 0.05x because below that the Breathe
+            // pattern's beat-rate math rounds to zero BPM and visibly freezes.
+            "const speedFromSlider=v=>{const t=Math.pow(v/100,1.63);return 0.05+t*2.95};"
+            "const sliderFromSpeed=s=>{const t=Math.max(0,Math.min(1,(s-0.05)/2.95));return Math.round(Math.pow(t,1/1.63)*100)};"
             "$('s-slider').oninput=e=>{const sp=speedFromSlider(parseInt(e.target.value,10));$('s-val').textContent=sp.toFixed(2)+'\xC3\x97';sendSpeed(sp)};"
             "$('h-slider').oninput=e=>{const v=parseInt(e.target.value,10);$('h-val').textContent=v;sendHueShift(v)};"
             // Hue helpers — FastLED hue 0..255 to CSS HSL deg 0..360

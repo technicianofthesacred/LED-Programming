@@ -106,8 +106,8 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
       zone.patternId = String(zoneJson["patternId"] | "aurora");
       zone.brightness = clampUnit(zoneJson["brightness"] | 1.0f);
       zone.speed = zoneJson["speed"] | 1.0f;
-      if (zone.speed < 0.25f) zone.speed = 0.25f;
-      if (zone.speed > 4.0f) zone.speed = 4.0f;
+      if (zone.speed < 0.05f) zone.speed = 0.05f;
+      if (zone.speed > 3.0f) zone.speed = 3.0f;
       zone.hueShift = zoneJson["hueShift"] | 0;
       zone.customHue = zoneJson["customHue"] | 32;
       zone.customSaturation = zoneJson["customSaturation"] | 230;
