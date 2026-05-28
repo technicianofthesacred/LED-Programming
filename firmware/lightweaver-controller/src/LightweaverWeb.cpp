@@ -36,6 +36,7 @@ void sendCors() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
 void handleOptions() {
@@ -103,6 +104,9 @@ void handleRoot() {
   page.reserve(6144);
   page += F("<!doctype html><html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no'>"
+            "<meta http-equiv='Cache-Control' content='no-store, no-cache, must-revalidate'>"
+            "<meta http-equiv='Pragma' content='no-cache'>"
+            "<meta http-equiv='Expires' content='0'>"
             "<title>");
   page += escapeHtml(cfg.pieceName);
   page += F("</title>"
