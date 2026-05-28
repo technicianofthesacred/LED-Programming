@@ -206,17 +206,16 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   config.outputs[0].start = 0;
   config.outputs[0].enabled = true;
 
-  const char* ids[] = {"aurora", "ember", "rainbow", "breathe", "scanner", "custom-color"};
-  const char* labels[] = {"Aurora", "Ember", "Rainbow", "Breathe", "Scanner", "Color"};
-  const char* modes[] = {"procedural", "procedural", "procedural", "procedural", "procedural", "procedural"};
-  for (uint8_t i = 0; i < 6; i++) {
+  const char* ids[] = {"aurora", "ember", "rainbow", "breathe", "scanner", "sunset", "twinkle", "wave", "custom-color"};
+  const char* labels[] = {"Aurora", "Ember", "Rainbow", "Breathe", "Scanner", "Sunset", "Twinkle", "Wave", "Color"};
+  for (uint8_t i = 0; i < 9; i++) {
     config.looks[i].id = ids[i];
     config.looks[i].label = labels[i];
-    config.looks[i].mode = modes[i];
+    config.looks[i].mode = "procedural";
     config.looks[i].preset = ids[i];
     config.looks[i].brightness = 0.65f;
   }
-  config.lookCount = 6;
+  config.lookCount = 9;
 
   ensureDefaultZone(config);
 }

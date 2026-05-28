@@ -44,7 +44,33 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
       uint8_t level = distance > 8 ? 0 : 220 - (distance * 24);
       CHSV color(shiftHue(16, mods.hueShift), 200, level);
       leds[i] = color;
+    } else if (preset == "sunset") {
+      // Slow gradient that drifts through warm hues: deep magenta to
+      // orange to gold. Position-dependent base, time-dependent drift.
+      uint8_t drift = uint8_t(t / 60);
+      uint8_t pos = uint8_t((i * 256 / max<uint16_t>(1, totalPixels)) + drift);
+      // Map 0..255 onto 220..32 (magenta through red/orange to gold)
+      uint8_t hue = 220 - uint8_t((uint16_t(pos) * 188) / 255);
+      uint8_t sat = 210 + (sin8(pos * 2) / 16);
+      uint8_t val = 140 + (sin8(pos) / 4);
+      leds[i] = CHSV(shiftHue(hue, mods.hueShift), sat, val);
+    } else if (preset == "twinkle") {
+      // Dim warm base with random sparkles. Each pixel has a pseudo-random
+      // time offset that periodically peaks. Reads like a fireplace.
+      uint8_t baseHue = shiftHue(24, mods.hueShift);
+      uint8_t base = 36 + (inoise8(i * 30, t / 12) / 8);
+      uint8_t sparkPhase = uint8_t((t / 6) + (i * 47));
+      uint8_t sparkle = sin8(sparkPhase);
+      uint8_t boost = sparkle > 200 ? uint8_t((sparkle - 200) * 3) : 0;
+      leds[i] = CHSV(baseHue, 220, qadd8(base, boost));
+    } else if (preset == "wave") {
+      // Structured sinusoidal motion: clean palette ride, no chaos.
+      uint8_t phase = uint8_t(i * 8 + t / 14);
+      uint8_t wave = sin8(phase);
+      uint8_t hue = shiftHue(140 + (wave / 4), mods.hueShift);
+      leds[i] = CHSV(hue, 180, 90 + (wave / 2));
     } else {
+      // Default / aurora — teal wave.
       uint8_t wave = sin8(i * 6 + t / 18);
       uint8_t hue = shiftHue(118 + (wave / 5), mods.hueShift);
       leds[i] = CHSV(hue, 135 + (wave / 5), 120 + (wave / 3));
