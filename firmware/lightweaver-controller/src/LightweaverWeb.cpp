@@ -1,5 +1,6 @@
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
+#include "LightweaverWledJsonApi.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -896,6 +897,10 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/firmware-info", HTTP_GET, handleFirmwareInfo);
   server.on("/api/patterns", HTTP_GET, handlePatterns);
   server.on("/api/zones", HTTP_GET, handleZones);
+
+  // Pretend-WLED JSON API — lets the existing designer's WLED bar +
+  // DevicesPanel + live-frame push path talk to the card without changes.
+  lw_wled::registerEndpoints(server);
 
   // Captive-portal probes from iOS / Android / Windows — redirect to root
   server.on("/generate_204", HTTP_GET, handleCaptiveProbe);
