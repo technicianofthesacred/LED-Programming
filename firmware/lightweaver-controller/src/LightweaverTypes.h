@@ -32,6 +32,11 @@ enum RuntimeSource : uint8_t {
   SOURCE_SD = 2
 };
 
+enum WifiTransport : uint8_t {
+  WIFI_TRANSPORT_AP = 0,
+  WIFI_TRANSPORT_STATION = 1
+};
+
 struct OutputConfig {
   String id;
   String name;
@@ -68,6 +73,12 @@ struct LookConfig {
   float brightness = 0.65f;
 };
 
+struct WifiConfig {
+  String ssid;
+  String password;
+  String hostname = "lightweaver";
+};
+
 struct RuntimeConfig {
   String mode = "factory-flash";
   RuntimeSource source = SOURCE_DEFAULTS;
@@ -80,4 +91,8 @@ struct RuntimeConfig {
   LookConfig looks[LW_MAX_LOOKS];
   uint8_t lookCount = 0;
   ControlsConfig controls;
+  WifiConfig wifi;
+  WifiTransport activeTransport = WIFI_TRANSPORT_AP;
+  String activeIp;
+  String activeHostname;
 };

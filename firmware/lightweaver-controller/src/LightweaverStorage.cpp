@@ -3,6 +3,7 @@
 namespace {
 constexpr const char* NVS_NAMESPACE = "lightweaver";
 constexpr const char* NVS_CONFIG_KEY = "config";
+constexpr const char* NVS_WIFI_KEY = "wifi";
 
 uint16_t clampPixels(int value) {
   if (value < 1) return 1;
@@ -44,6 +45,13 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.controls.blackout = controlsJson["blackout"] | 9;
   config.controls.brightness = controlsJson["brightness"] | -1;
   config.controls.statusLed = controlsJson["statusLed"] | DEFAULT_STATUS_LED_PIN;
+
+  JsonObject wifi = doc["wifi"].as<JsonObject>();
+  if (!wifi.isNull()) {
+    config.wifi.ssid = String(wifi["ssid"] | "");
+    config.wifi.password = String(wifi["password"] | "");
+    config.wifi.hostname = String(wifi["hostname"] | "lightweaver");
+  }
 
   uint16_t totalPixels = 0;
   JsonArray outputs = doc["led"]["outputs"].as<JsonArray>();
@@ -129,6 +137,19 @@ bool loadNvsConfig(RuntimeConfig& config, String& message) {
   }
   return loadJsonString(json, config, SOURCE_NVS, message);
 }
+
+void overlayNvsWifi(RuntimeConfig& config) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return;
+  String json = prefs.getString(NVS_WIFI_KEY, "");
+  prefs.end();
+  if (!json.length()) return;
+  JsonDocument doc;
+  if (deserializeJson(doc, json)) return;
+  config.wifi.ssid = String(doc["ssid"] | config.wifi.ssid.c_str());
+  config.wifi.password = String(doc["password"] | config.wifi.password.c_str());
+  config.wifi.hostname = String(doc["hostname"] | config.wifi.hostname.c_str());
+}
 }
 
 void applyDefaultRuntimeConfig(RuntimeConfig& config) {
@@ -163,18 +184,21 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   String message;
   RuntimeLoadResult result;
   if (loadSdConfig(config, message)) {
+    overlayNvsWifi(config);
     result.ok = true;
     result.source = SOURCE_SD;
     result.message = message;
     return result;
   }
   if (loadNvsConfig(config, message)) {
+    overlayNvsWifi(config);
     result.ok = true;
     result.source = SOURCE_NVS;
     result.message = message;
     return result;
   }
   applyDefaultRuntimeConfig(config);
+  overlayNvsWifi(config);
   result.ok = true;
   result.source = SOURCE_DEFAULTS;
   result.message = "compiled defaults loaded";
@@ -195,8 +219,54 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "nvs write failed";
     return false;
   }
+  WifiConfig preservedWifi = config.wifi;
+  WifiTransport preservedTransport = config.activeTransport;
+  String preservedIp = config.activeIp;
+  String preservedHostname = config.activeHostname;
   config = parsed;
+  config.wifi = preservedWifi;
+  config.activeTransport = preservedTransport;
+  config.activeIp = preservedIp;
+  config.activeHostname = preservedHostname;
   message = "saved to internal flash";
+  return true;
+}
+
+bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& message) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) {
+    message = String("json parse failed: ") + err.c_str();
+    return false;
+  }
+  String ssid = String(doc["ssid"] | "");
+  if (!ssid.length()) {
+    message = "wifi ssid missing";
+    return false;
+  }
+  String password = String(doc["password"] | "");
+  String hostname = String(doc["hostname"] | "lightweaver");
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs write open failed";
+    return false;
+  }
+  JsonDocument out;
+  out["ssid"] = ssid;
+  out["password"] = password;
+  out["hostname"] = hostname;
+  String serialized;
+  serializeJson(out, serialized);
+  bool ok = prefs.putString(NVS_WIFI_KEY, serialized) > 0;
+  prefs.end();
+  if (!ok) {
+    message = "nvs write failed";
+    return false;
+  }
+  config.wifi.ssid = ssid;
+  config.wifi.password = password;
+  config.wifi.hostname = hostname;
+  message = "wifi credentials saved";
   return true;
 }
 
@@ -211,6 +281,11 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["led"]["colorOrder"] = config.ledColorOrder;
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
+  doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
+  doc["wifi"]["ssid"] = config.activeTransport == WIFI_TRANSPORT_STATION ? config.wifi.ssid : "";
+  doc["wifi"]["hostname"] = config.activeHostname;
+  doc["wifi"]["ip"] = config.activeIp;
+  doc["wifi"]["configured"] = config.wifi.ssid.length() > 0;
   String output;
   serializeJson(doc, output);
   return output;
