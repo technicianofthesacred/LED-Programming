@@ -1,6 +1,6 @@
 # Lightweaver Standalone Controller Firmware
 
-Arduino/PlatformIO firmware for the sellable ESP32-S3 controller. It does not require WLED, a Raspberry Pi, Madrix, or live Art-Net at runtime. The controller reads a Lightweaver microSD package and drives one to four LED outputs with physical controls.
+Arduino/PlatformIO firmware for the sellable ESP32-S3 Lightweaver card. It does not require WLED, a Raspberry Pi, Madrix, a laptop, or live Art-Net at runtime. It boots from internal flash by default, can be configured from the Lightweaver website, and can optionally read advanced `.lwseq` frame packages from microSD.
 
 ## Hardware Target
 
@@ -53,6 +53,13 @@ The card should contain:
 Non-sequence controller modes still use `/lightweaver.json`, but may not include a `/sequences` folder.
 
 ## Runtime Modes
+
+1. Factory Card: internal flash defaults, no website or microSD.
+2. Website Loaded Card: website saves config to ESP32 internal flash.
+3. Memory Card Advanced: microSD provides `/lightweaver.json` and `.lwseq` sequences.
+4. Live Host Reserved: laptop/Pi/Madrix/sound-reactive control is a future runtime lane.
+
+## Look Types
 
 - `sequence`: plays raw RGB `.lwseq` frame files from microSD.
 - `procedural`: renders built-in generative looks such as `aurora`, `ember`, and `rainbow`.
