@@ -281,6 +281,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["led"]["colorOrder"] = config.ledColorOrder;
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
+  doc["piece"]["hostname"] = config.activeHostname;
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["ssid"] = config.activeTransport == WIFI_TRANSPORT_STATION ? config.wifi.ssid : "";
   doc["wifi"]["hostname"] = config.activeHostname;

@@ -9,6 +9,8 @@
 #include "LightweaverPatterns.h"
 #include "LightweaverControls.h"
 #include "LightweaverWeb.h"
+#include "LightweaverRuntimeApi.h"
+#include <Preferences.h>
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -60,6 +62,10 @@ uint32_t nextSequenceFrameAt = 0;
 
 ControlState controlState;
 float manualBrightness = 1.0f;
+float manualSpeed = 1.0f;
+int16_t manualHueShift = 0;
+bool identifyActive = false;
+uint32_t identifyStartedAt = 0;
 
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
@@ -100,7 +106,11 @@ bool addLedsForOrder(CRGB* start, uint16_t count) {
 
 void setup() {
   Serial.begin(115200);
-  delay(300);
+  uint32_t serialWaitStart = millis();
+  while (!Serial && millis() - serialWaitStart < 2000) {
+    delay(10);
+  }
+  delay(200);
   pinMode(DEFAULT_STATUS_LED_PIN, OUTPUT);
   digitalWrite(DEFAULT_STATUS_LED_PIN, LOW);
 
@@ -145,6 +155,21 @@ void loop() {
   }
 
   handleControlEvent(pollLightweaverControls(controls, controlState));
+
+  if (identifyActive) {
+    uint32_t elapsed = millis() - identifyStartedAt;
+    uint32_t cycle = elapsed % 300;
+    if (elapsed > 1500) {
+      identifyActive = false;
+    } else {
+      fill_solid(leds, totalPixels, cycle < 150 ? CRGB::White : CRGB::Black);
+      FastLED.setBrightness(220);
+      FastLED.show();
+      delay(10);
+      return;
+    }
+  }
+
   if (blackedOut) {
     delay(10);
     return;
@@ -455,11 +480,13 @@ bool renderSequenceFrame(bool force) {
 }
 
 bool renderProceduralFrame(const String& preset) {
-  return renderProceduralPattern(preset, leds, totalPixels, millis());
+  PatternModifiers mods; mods.speed = manualSpeed; mods.hueShift = manualHueShift;
+  return renderProceduralPattern(preset, leds, totalPixels, millis(), mods);
 }
 
 bool renderPresetFrame(const String& preset) {
-  return renderPresetPattern(preset, leds, totalPixels);
+  PatternModifiers mods; mods.speed = manualSpeed; mods.hueShift = manualHueShift;
+  return renderPresetPattern(preset, leds, totalPixels, mods);
 }
 
 CRGB colorForPreset(const String& preset) {
@@ -554,4 +581,114 @@ float clampUnit(float value) {
   if (value < 0.0f) return 0.0f;
   if (value > 1.0f) return 1.0f;
   return value;
+}
+
+// ---- Runtime control API (called by LightweaverWeb endpoints) ----
+
+void runtimeSetBrightness(float value01) {
+  if (value01 < 0.02f) value01 = 0.02f;
+  if (value01 > 1.0f) value01 = 1.0f;
+  manualBrightness = value01;
+}
+
+void runtimeSetSpeed(float speed) {
+  if (speed < 0.25f) speed = 0.25f;
+  if (speed > 4.0f) speed = 4.0f;
+  manualSpeed = speed;
+}
+
+void runtimeSetHueShift(int16_t shift) {
+  if (shift < -128) shift = -128;
+  if (shift > 128) shift = 128;
+  manualHueShift = shift;
+}
+
+void runtimeSetBlackout(bool on) {
+  if (on == blackedOut) return;
+  if (on) {
+    fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
+    FastLED.clear(true);
+    blackedOut = true;
+  } else {
+    blackedOut = false;
+    fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
+  }
+}
+
+void runtimeNextPattern() {
+  selectLook(currentLookIndex + 1);
+}
+
+void runtimePreviousPattern() {
+  selectLook(currentLookIndex == 0 ? lookCount - 1 : currentLookIndex - 1);
+}
+
+bool runtimeSelectPatternById(const String& id) {
+  for (uint8_t i = 0; i < lookCount; i++) {
+    if (looks[i].id == id) {
+      selectLook(i);
+      return true;
+    }
+  }
+  return false;
+}
+
+void runtimeTriggerIdentify() {
+  identifyActive = true;
+  identifyStartedAt = millis();
+}
+
+float runtimeGetBrightness() { return manualBrightness; }
+float runtimeGetSpeed() { return manualSpeed; }
+int16_t runtimeGetHueShift() { return manualHueShift; }
+bool runtimeIsBlackedOut() { return blackedOut; }
+
+String runtimeFirmwareInfo() {
+  JsonDocument doc;
+  doc["build"] = __DATE__ " " __TIME__;
+  doc["pixels"] = totalPixels;
+  doc["lookCount"] = lookCount;
+  doc["uptimeMs"] = millis();
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["rssi"] = WiFi.RSSI();
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+void runtimeFactoryReset() {
+  Preferences prefs;
+  if (prefs.begin("lightweaver", false)) {
+    prefs.clear();
+    prefs.end();
+  }
+  delay(200);
+  ESP.restart();
+}
+
+bool runtimeRename(const String& newPieceName, const String& newHostname, String& message) {
+  Preferences prefs;
+  if (!prefs.begin("lightweaver", false)) {
+    message = "nvs unavailable";
+    return false;
+  }
+  if (newPieceName.length()) {
+    runtimeConfig.pieceName = newPieceName;
+    pieceName = newPieceName;
+    prefs.putString("pieceName", newPieceName);
+  }
+  if (newHostname.length()) {
+    runtimeConfig.wifi.hostname = newHostname;
+    // Persist via the wifi JSON path so it sticks across reboots
+    JsonDocument doc;
+    doc["ssid"] = runtimeConfig.wifi.ssid;
+    doc["password"] = runtimeConfig.wifi.password;
+    doc["hostname"] = newHostname;
+    String serialized;
+    serializeJson(doc, serialized);
+    prefs.putString("wifi", serialized);
+  }
+  prefs.end();
+  message = "saved";
+  return true;
 }
