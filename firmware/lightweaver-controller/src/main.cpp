@@ -14,6 +14,7 @@
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
+#include "LightweaverRelay.h"
 #include <Preferences.h>
 
 #ifndef LW_SD_CS
@@ -155,6 +156,7 @@ void setup() {
 
   setupArtnet(leds, totalPixels);
   setupWledWebSocket();
+  setupRelay(runtimeConfig.pieceName);
 
   Serial.print("Ready: ");
   Serial.print(pieceName);
@@ -167,6 +169,7 @@ void loop() {
   handleWledRealtime();
   handleArtnet();
   handleWledWebSocket();
+  handleRelay();
   frameSourceTick();
   handleLightweaverWeb();
 

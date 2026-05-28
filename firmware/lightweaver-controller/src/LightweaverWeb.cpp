@@ -1,6 +1,7 @@
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWledJsonApi.h"
+#include "LightweaverRelay.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -285,6 +286,9 @@ void handleRoot() {
                 "<button class='primary' id='cfg-apply' type='button'>Apply config</button>"
               "</div>"
               "<p class='drawer-msg' id='set-msg'></p>"
+              "<label class='field'>Pair to led.mandalacodes.com</label>"
+              "<div class='drawer-note' id='pair-info' style='padding:8px 18px 0;color:#c89b5c;font-size:16px;letter-spacing:3px;text-align:center;font-family:ui-monospace,SF Mono,monospace;border-top:0;margin-top:0'>\xE2\x80\x94</div>"
+              "<p class='drawer-msg' style='font-size:11px;color:#5a5247'>Type this code at led.mandalacodes.com to control your piece from anywhere. Codes expire after 10 minutes; if it's expired, reboot the card to get a new one.</p>"
               "<div class='drawer-note' id='fw-info'>\xE2\x80\x94</div>"
             "</div>"
             "</div>"
@@ -347,7 +351,10 @@ void handleRoot() {
             "})};"
             "$('off-btn').onclick=async()=>{blackoutOn=!blackoutOn;$('off-btn').classList.toggle('on',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
             // Settings drawer (inline, no separate page)
-            "$('set-toggle').onclick=()=>{const open=$('drawer').classList.toggle('open');if(open){fetch('/api/firmware-info').then(r=>r.json()).then(d=>{$('fw-info').textContent='build '+d.build+' \xE2\x80\xA2 '+(d.freeHeap/1024|0)+'KB free \xE2\x80\xA2 '+d.rssi+' dBm'}).catch(()=>{})}};"
+            "$('set-toggle').onclick=()=>{const open=$('drawer').classList.toggle('open');if(open){"
+              "fetch('/api/firmware-info').then(r=>r.json()).then(d=>{$('fw-info').textContent='build '+d.build+' \xE2\x80\xA2 '+(d.freeHeap/1024|0)+'KB free \xE2\x80\xA2 '+d.rssi+' dBm'}).catch(()=>{});"
+              "fetch('/api/status').then(r=>r.json()).then(d=>{const code=d.relay&&d.relay.pairCode?d.relay.pairCode:'';$('pair-info').textContent=code||(d.relay&&d.relay.connected?'already paired':'connecting\xE2\x80\xA6')}).catch(()=>{});"
+            "}};"
             "const setMsg=(text,kind)=>{const m=$('set-msg');m.textContent=text;m.className='drawer-msg'+(kind?' '+kind:'')};"
             "$('rn-save').onclick=async()=>{setMsg('Saving\xE2\x80\xA6');try{const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});if(r.ok){setMsg('Saved. Reboot to use new hostname.','ok')}else{setMsg(r.error||'Failed','err')}}catch(e){setMsg(e.message,'err')}};"
             "$('identify').onclick=async()=>{setMsg('Identifying\xE2\x80\xA6','ok');try{await post('/api/identify',{});setTimeout(()=>setMsg(''),2200)}catch(_){setMsg('Could not reach card','err')}};"
@@ -632,8 +639,12 @@ void handleStatus() {
   const char* srcLabel = src == 1 ? "wled-realtime" : src == 2 ? "artnet" : "internal";
   int lastBrace = body.lastIndexOf('}');
   if (lastBrace > 0) {
+    String relayCode = relayPairCode();
     String tail = String(",\"streaming\":") + (runtimeIsStreaming() ? "true" : "false") +
-                  ",\"frameSource\":\"" + srcLabel + "\"}";
+                  ",\"frameSource\":\"" + srcLabel + "\"" +
+                  ",\"relay\":{\"connected\":" + (relayConnected() ? "true" : "false") +
+                  ",\"cardId\":\"" + relayCardId() + "\"" +
+                  ",\"pairCode\":\"" + relayCode + "\"}}";
     body = body.substring(0, lastBrace) + tail;
   }
   server.send(200, "application/json", body);
