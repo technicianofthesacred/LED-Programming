@@ -5,6 +5,7 @@
 #include <SPI.h>
 
 #include "LightweaverTypes.h"
+#include "LightweaverStorage.h"
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -28,6 +29,8 @@ uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
 LookConfig looks[LW_MAX_LOOKS];
+
+RuntimeConfig runtimeConfig;
 
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
@@ -62,6 +65,7 @@ uint32_t lastPressAt = 0;
 uint32_t lastBlackoutAt = 0;
 int lastEncoderA = HIGH;
 
+void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
@@ -109,12 +113,16 @@ void setup() {
   Serial.println();
   Serial.println("Lightweaver standalone controller booting");
   SPI.begin(LW_SPI_SCK, LW_SPI_MISO, LW_SPI_MOSI, LW_SD_CS);
-  if (!SD.begin(LW_SD_CS, SPI)) {
-    fail(ERROR_SD, "microSD mount failed");
+  RuntimeLoadResult loadResult = loadRuntimeConfig(runtimeConfig);
+  Serial.print("Runtime source: ");
+  Serial.print(loadResult.source == SOURCE_SD ? "sd" : loadResult.source == SOURCE_NVS ? "internal-flash" : "defaults");
+  Serial.print(" / ");
+  Serial.println(loadResult.message);
+  if (!loadResult.ok) {
+    fail(ERROR_CONFIG, loadResult.message.c_str());
     return;
   }
-
-  if (!loadProfile()) return;
+  applyRuntimeConfig(runtimeConfig);
   setupControlPins();
 
   if (!setupLedOutputs()) return;
@@ -150,6 +158,26 @@ void loop() {
     FastLED.show();
   } else {
     delay(1);
+  }
+}
+
+void applyRuntimeConfig(const RuntimeConfig& config) {
+  pieceName = config.pieceName;
+  runtimeMode = config.mode;
+  startupLookId = config.startupLookId;
+  ledColorOrder = config.ledColorOrder;
+  brightnessLimit = config.brightnessLimit;
+  outputCount = config.outputCount;
+  totalPixels = 0;
+  for (uint8_t i = 0; i < outputCount; i++) {
+    outputs[i] = config.outputs[i];
+    outputs[i].start = totalPixels;
+    totalPixels += outputs[i].pixels;
+  }
+  controls = config.controls;
+  lookCount = config.lookCount;
+  for (uint8_t i = 0; i < lookCount; i++) {
+    looks[i] = config.looks[i];
   }
 }
 
