@@ -6,6 +6,8 @@
 
 #include "LightweaverTypes.h"
 #include "LightweaverStorage.h"
+#include "LightweaverPatterns.h"
+#include "LightweaverControls.h"
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -55,23 +57,14 @@ uint32_t sequenceFrameBytes = 0;
 uint16_t sequenceFps = 24;
 uint32_t nextSequenceFrameAt = 0;
 
-bool prevDown = false;
-bool nextDown = false;
-bool pressDown = false;
-bool blackoutDown = false;
-uint32_t lastPrevAt = 0;
-uint32_t lastNextAt = 0;
-uint32_t lastPressAt = 0;
-uint32_t lastBlackoutAt = 0;
-int lastEncoderA = HIGH;
+ControlState controlState;
+float manualBrightness = 1.0f;
 
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
-void setupControlPins();
-void handleControls();
-bool buttonPressed(int pin, bool& wasDown, uint32_t& lastAt);
+void handleControlEvent(ControlEventType event);
 void selectLook(int index);
 bool startLook(uint8_t index);
 void closeSequence();
@@ -123,7 +116,7 @@ void setup() {
     return;
   }
   applyRuntimeConfig(runtimeConfig);
-  setupControlPins();
+  setupLightweaverControls(controls, controlState);
 
   if (!setupLedOutputs()) return;
   currentLookIndex = findStartupLook();
@@ -147,7 +140,7 @@ void loop() {
     return;
   }
 
-  handleControls();
+  handleControlEvent(pollLightweaverControls(controls, controlState));
   if (blackedOut) {
     delay(10);
     return;
@@ -308,29 +301,12 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
   }
 }
 
-void setupControlPins() {
-  pinMode(controls.statusLed, OUTPUT);
-  digitalWrite(controls.statusLed, HIGH);
-  pinMode(controls.encoderA, INPUT_PULLUP);
-  pinMode(controls.encoderB, INPUT_PULLUP);
-  pinMode(controls.encoderPress, INPUT_PULLUP);
-  pinMode(controls.previous, INPUT_PULLUP);
-  pinMode(controls.next, INPUT_PULLUP);
-  pinMode(controls.blackout, INPUT_PULLUP);
-  lastEncoderA = digitalRead(controls.encoderA);
-}
-
-void handleControls() {
-  if (buttonPressed(controls.next, nextDown, lastNextAt) ||
-      buttonPressed(controls.encoderPress, pressDown, lastPressAt)) {
+void handleControlEvent(ControlEventType event) {
+  if (event == CONTROL_NEXT_LOOK) {
     selectLook(currentLookIndex + 1);
-  }
-
-  if (buttonPressed(controls.previous, prevDown, lastPrevAt)) {
+  } else if (event == CONTROL_PREVIOUS_LOOK) {
     selectLook(currentLookIndex == 0 ? lookCount - 1 : currentLookIndex - 1);
-  }
-
-  if (buttonPressed(controls.blackout, blackoutDown, lastBlackoutAt)) {
+  } else if (event == CONTROL_BLACKOUT) {
     if (blackedOut) {
       blackedOut = false;
       fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
@@ -339,27 +315,9 @@ void handleControls() {
       FastLED.clear(true);
       blackedOut = true;
     }
+  } else if (event == CONTROL_BRIGHTER || event == CONTROL_DIMMER) {
+    manualBrightness = applyRotaryBrightness(manualBrightness, event, controls.brightnessStep);
   }
-
-  int encoderA = digitalRead(controls.encoderA);
-  if (encoderA != lastEncoderA && encoderA == LOW) {
-    int encoderB = digitalRead(controls.encoderB);
-    if (encoderB == HIGH) {
-      selectLook(currentLookIndex + 1);
-    } else {
-      selectLook(currentLookIndex == 0 ? lookCount - 1 : currentLookIndex - 1);
-    }
-  }
-  lastEncoderA = encoderA;
-}
-
-bool buttonPressed(int pin, bool& wasDown, uint32_t& lastAt) {
-  bool isDown = digitalRead(pin) == LOW;
-  uint32_t now = millis();
-  bool pressed = isDown && !wasDown && now - lastAt > BUTTON_DEBOUNCE_MS;
-  wasDown = isDown;
-  if (pressed) lastAt = now;
-  return pressed;
 }
 
 void selectLook(int index) {
@@ -493,27 +451,11 @@ bool renderSequenceFrame(bool force) {
 }
 
 bool renderProceduralFrame(const String& preset) {
-  uint32_t now = millis();
-  for (uint16_t i = 0; i < totalPixels; i++) {
-    if (preset == "ember") {
-      uint8_t flicker = inoise8(i * 18, now / 7);
-      CRGB color = CRGB(190, 48, 8);
-      color.nscale8(120 + (flicker / 2));
-      leds[i] = color;
-    } else if (preset == "rainbow") {
-      leds[i] = CHSV((i * 4 + now / 22) & 0xff, 190, 220);
-    } else {
-      uint8_t wave = sin8(i * 6 + now / 18);
-      uint8_t hue = 118 + (wave / 5);
-      leds[i] = CHSV(hue, 135 + (wave / 5), 120 + (wave / 3));
-    }
-  }
-  return true;
+  return renderProceduralPattern(preset, leds, totalPixels, millis());
 }
 
 bool renderPresetFrame(const String& preset) {
-  fill_solid(leds, totalPixels, colorForPreset(preset));
-  return true;
+  return renderPresetPattern(preset, leds, totalPixels);
 }
 
 CRGB colorForPreset(const String& preset) {
@@ -552,7 +494,7 @@ void fadeTo(float target, uint16_t durationMs) {
 uint8_t computeBrightnessByte() {
   if (blackedOut) return 0;
   float lookBrightness = lookCount ? looks[currentLookIndex].brightness : 0.35f;
-  float brightness = clampUnit(brightnessLimit) * clampUnit(lookBrightness) * clampUnit(fadeScale) * readBrightnessKnob();
+  float brightness = clampUnit(brightnessLimit) * clampUnit(lookBrightness) * clampUnit(fadeScale) * readBrightnessKnob() * clampUnit(manualBrightness);
   return uint8_t(roundf(clampUnit(brightness) * 255.0f));
 }
 
