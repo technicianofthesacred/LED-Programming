@@ -11,6 +11,7 @@ import {
   toLwseqBytes,
   totalStandalonePixels,
 } from '../lib/standaloneController.js';
+import { makeCardRuntimePackage } from '../lib/cardRuntimeContract.js';
 
 const TARGETS = [
   { id: 'wled-basic', name: 'Lightweaver Basic WLED', sub: 'WLED presets, playlist, and port checklist', tag: 'WLED', hw: 'ESP32-S3 / WLED' },
@@ -19,13 +20,14 @@ const TARGETS = [
   { id: 'pharos',  name: 'Pharos LPC',          sub: 'Adapter bundle, not native Pharos project', tag: 'bundle', hw: 'LPC X' },
   { id: 'madrix',  name: 'Madrix / Art-Net',    sub: 'DMX/Art-Net interchange data',              tag: 'DMX',    hw: 'Madrix Art-Net' },
   { id: 'pi',      name: 'Raspberry Pi + WLED', sub: 'Pi-hosted Lightweaver project + ledmap',    tag: 'Pi JSON', hw: 'Pi 5' },
-  { id: 'standalone', name: 'Lightweaver Controller', sub: 'ESP32-S3 + microSD package',           tag: 'SD',      hw: 'ESP32-S3' },
+  { id: 'standalone', name: 'Lightweaver Card', sub: 'ESP32 internal flash or memory card package', tag: 'CARD', hw: 'ESP32-S3' },
   { id: 'raw',     name: 'Raw RGB frames',      sub: 'Universal .bin frame dump or DMX CSV',      tag: 'frames', hw: 'Any player' },
 ];
 
 const FORMATS = [
   { id: 'bundle', name: 'Lightweaver bundle', sub: 'Project JSON + ledmap + metadata for adapter scripts', ext: '.json' },
   { id: 'wledbasic', name: 'WLED Basic package', sub: 'presets.json bank, playlist preset, and custom-effect port list', ext: '.json' },
+  { id: 'cardconfig', name: 'Internal flash card config', sub: 'Saved by website to ESP32 flash', ext: '.json' },
   { id: 'lwpackage', name: 'microSD package JSON', sub: 'lightweaver.json + base64 .lwseq files', ext: '.json' },
   { id: 'lwseq', name: 'Raw .lwseq sequence', sub: 'Standalone controller frame file', ext: '.lwseq' },
   { id: 'csv',    name: 'DMX CSV',            sub: 'Frame x channel matrix, editable and importable', ext: '.csv' },
@@ -39,6 +41,7 @@ export function ExportDialog({ open, onClose }) {
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     standaloneController, controllerProfiles, activeControllerId,
+    physicalControls,
     serializeProject,
   } = project;
   const [target, setTarget] = useState('wled-basic');
@@ -83,8 +86,8 @@ export function ExportDialog({ open, onClose }) {
   }, [open]);
 
   useEffect(() => {
-    if (target === 'standalone' && standaloneController?.runtimeMode && standaloneController.runtimeMode !== 'sequence' && format === 'lwseq') {
-      setFormat('lwpackage');
+    if (target === 'standalone' && standaloneController?.runtimeMode && standaloneController.runtimeMode !== 'sequence' && (format === 'lwseq' || format === 'lwpackage')) {
+      setFormat('cardconfig');
     }
   }, [format, standaloneController?.runtimeMode, target]);
 
@@ -106,6 +109,8 @@ export function ExportDialog({ open, onClose }) {
     ? `${safeName}-wled-basic.json`
     : target === 'standalone' && format === 'lwseq'
     ? makeStandaloneSequenceFilename(safeName)
+    : target === 'standalone' && format === 'cardconfig'
+      ? `${safeName}-lightweaver-card.json`
     : target === 'standalone'
       ? `${safeName}-lightweaver-controller.json`
       : `${safeName}${selectedFormat?.ext || '.json'}`;
@@ -127,14 +132,14 @@ export function ExportDialog({ open, onClose }) {
     .filter(f => target === 'wled-basic'
       ? f.id === 'wledbasic'
       : target === 'standalone'
-        ? standaloneMode === 'sequence' ? ['lwpackage', 'lwseq'].includes(f.id) : f.id === 'lwpackage'
-        : !['lwpackage', 'lwseq', 'wledbasic'].includes(f.id))
-    .map(f => f.id === 'lwpackage' && target === 'standalone' && standaloneMode !== 'sequence'
+        ? standaloneMode === 'sequence' ? ['lwpackage', 'lwseq'].includes(f.id) : f.id === 'cardconfig'
+        : !['lwpackage', 'lwseq', 'wledbasic', 'cardconfig'].includes(f.id))
+    .map(f => f.id === 'cardconfig' && target === 'standalone' && standaloneMode !== 'sequence'
       ? {
           ...f,
           sub: standaloneMode === 'procedural'
-            ? 'lightweaver.json only; firmware renders patterns'
-            : 'lightweaver.json only; firmware renders fixed cues',
+            ? 'Saved by website to ESP32 flash; firmware renders patterns'
+            : 'Saved by website to ESP32 flash; firmware renders fixed cues',
         }
       : f);
 
@@ -145,10 +150,14 @@ export function ExportDialog({ open, onClose }) {
       return;
     }
     if (id === 'standalone') {
-      if (!['lwpackage', 'lwseq'].includes(format) || standaloneMode !== 'sequence') setFormat('lwpackage');
+      if (standaloneMode === 'sequence') {
+        if (!['lwpackage', 'lwseq'].includes(format)) setFormat('lwpackage');
+      } else {
+        setFormat('cardconfig');
+      }
       if (![24, 30].includes(fps)) setFps(24);
     }
-    if (id !== 'standalone' && ['lwpackage', 'lwseq', 'wledbasic'].includes(format)) setFormat('bundle');
+    if (id !== 'standalone' && ['lwpackage', 'lwseq', 'wledbasic', 'cardconfig'].includes(format)) setFormat('bundle');
   };
 
   const buildFrames = () => {
@@ -229,6 +238,25 @@ export function ExportDialog({ open, onClose }) {
         filename = `${safeName}-frames.bin`;
         content = toRawFrameDump(frames);
         mime = 'application/octet-stream';
+      } else if (target === 'standalone' && format === 'cardconfig') {
+        filename = `${safeName}-lightweaver-card.json`;
+        const cardLed = {
+          pixels: standalonePixels || totalLEDs || undefined,
+          colorOrder: standaloneController?.led?.colorOrder,
+          brightnessLimit: standaloneController?.led?.brightnessLimit,
+          outputs: standaloneOutputs.map((o, i) => ({
+            id: o.id || `out${i + 1}`,
+            name: o.name || `Output ${i + 1}`,
+            pin: o.pin,
+            pixels: o.pixels,
+          })),
+        };
+        content = JSON.stringify(makeCardRuntimePackage({
+          projectName,
+          mode: 'website-flash',
+          led: cardLed,
+          controls: standaloneController?.controls,
+        }), null, 2);
       } else if (target === 'standalone' && format === 'lwseq') {
         const frames = buildFrames();
         filename = makeStandaloneSequenceFilename(safeName);
@@ -260,7 +288,7 @@ export function ExportDialog({ open, onClose }) {
           duration: showDuration,
           brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
           loop,
-          physicalControls: activeControllerProfile?.physicalControls,
+          physicalControls: physicalControls || activeControllerProfile?.physicalControls,
         }), null, 2);
       } else if (target === 'pi') {
         filename = `${safeName}-lightweaver-pi.json`;
