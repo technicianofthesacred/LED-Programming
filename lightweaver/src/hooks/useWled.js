@@ -7,7 +7,10 @@ const RECONNECT_DELAY   = 3000;
 const CONNECT_TIMEOUT_MS = 5000;
 
 export function useWled() {
-  const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
+  // First-run default: lightweaver.local (the card's default hostname).
+  // After the user connects to a renamed card or a raw IP, that value
+  // sticks in localStorage and we reuse it.
+  const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? 'lightweaver.local');
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState('offline');
 
@@ -166,6 +169,18 @@ export function useWled() {
     return requestWledJson(addr, 'info');
   }, [ip]);
 
+  // Auto-connect on mount when we have an IP. First run uses the default
+  // 'lightweaver.local'; subsequent loads reuse whatever the user last
+  // connected to. Mixed-content blocks the attempt on HTTPS origins —
+  // those users hit the Push-to-card button on PatchBoardScreen instead.
+  useEffect(() => {
+    if (!ip) return;
+    const t = setTimeout(() => connect(ip), 250);
+    return () => clearTimeout(t);
+    // Intentionally empty deps — fires once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
@@ -183,7 +198,9 @@ export function useWled() {
 }
 
 function defaultWledMode(locationObj = globalThis.location) {
-  const host = locationObj?.hostname || '';
-  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-  return isLocal ? 'direct' : 'proxy';
+  // Pi proxy was the original plan when the designer ran on a Pi serving
+  // both itself and the WLED endpoint. Today the designer talks directly
+  // to the card's WebSocket on the LAN. The proxy route only exists on
+  // a Pi deployment; default to direct everywhere.
+  return 'direct';
 }

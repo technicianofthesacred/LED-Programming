@@ -45,7 +45,11 @@ export function makeWledProxyUrl(ip, route = 'info') {
 export function makeWledWsUrl(ip, { preferProxy = true, locationObj = globalThis.location } = {}) {
   const host = normalizeWledHost(ip);
   if (!host) throw new Error('Missing WLED IP address');
-  if (!preferProxy) return `ws://${host}/ws`;
+  // Direct path talks to a Lightweaver card. Card serves its WebSocket on
+  // port 81 (port 80 is the HTTP API). Stock WLED uses port 80; if you
+  // point this at a real WLED controller, set preferProxy=false and add
+  // ?wsPort=80 or similar — out of scope for the current rebrand pass.
+  if (!preferProxy) return `ws://${host}:81/`;
   const protocol = locationObj?.protocol === 'https:' ? 'wss:' : 'ws:';
   const originHost = locationObj?.host || 'localhost';
   return `${protocol}//${originHost}/api/wled/ws?ip=${encodeURIComponent(host)}`;

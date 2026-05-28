@@ -1750,7 +1750,7 @@ assert.deepEqual(makeWledSegments([{ id: 'z', pixelCount: 0 }, { id: 'a', pixelC
 ]);
 
 assert.equal(makeWledProxyUrl('http://192.168.1.50/json', 'state'), '/api/wled/state?ip=192.168.1.50');
-assert.equal(makeWledWsUrl('192.168.1.50', { preferProxy: false }), 'ws://192.168.1.50/ws');
+assert.equal(makeWledWsUrl('192.168.1.50', { preferProxy: false }), 'ws://192.168.1.50:81/');
 assert.equal(
   makeWledWsUrl('192.168.1.50', { locationObj: { protocol: 'https:', host: 'lightweaver.local' } }),
   'wss://lightweaver.local/api/wled/ws?ip=192.168.1.50',
