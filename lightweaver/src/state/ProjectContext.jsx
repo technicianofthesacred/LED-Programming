@@ -353,7 +353,9 @@ export function ProjectProvider({ children }) {
     const data = migrateProject(rawProject);
     if (!data) return false;
     const { layout, pattern, show, live, devices } = data;
-    const restoredStrips = restoreStripPixels(layout.strips || []);
+    const shouldSeedDefaultLayout = !layout.svgText && !(layout.layers || []).length && !(layout.strips || []).length;
+    const sourceStrips = shouldSeedDefaultLayout ? defaults.layout.strips : (layout.strips || []);
+    const restoredStrips = restoreStripPixels(sourceStrips);
     setProjectName(data.name || defaults.name);
     setStrips(restoredStrips);
     setViewBox(layout.viewBox || defaults.layout.viewBox);
@@ -365,7 +367,7 @@ export function ProjectProvider({ children }) {
     setLayoutEditCounts(layout.editCounts || {});
     setLayoutLayerGroups(layout.layerGroups || []);
     setLayoutLayerOrder(layout.layerOrder || []);
-    setPatchBoard(normalizePatchBoard(layout.patchBoard, restoredStrips));
+    setPatchBoard(normalizePatchBoard(shouldSeedDefaultLayout ? defaults.layout.patchBoard : layout.patchBoard, restoredStrips));
     setActivePatternId(pattern.activePatternId || defaults.pattern.activePatternId);
     setPalette(pattern.palette?.length ? pattern.palette : defaults.pattern.palette);
     setMasterSpeed(pattern.masterSpeed ?? defaults.pattern.masterSpeed);

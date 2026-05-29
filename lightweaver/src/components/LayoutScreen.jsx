@@ -794,6 +794,7 @@ export function LayoutScreen() {
     setSvgText(text);
     setLayers(newLayers);
     setStrips([]);
+    setPatchBoard(normalizePatchBoard(null, []));
     setEditCounts({});
     setHidden({});
     setLayerGroups([]);
@@ -804,7 +805,7 @@ export function LayoutScreen() {
     setWaypoints([]);
     resetView();
     lsSave([], newLayers, {}, {}, text, vb, density);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave, setPatchBoard]);
 
   // ── SVG import via button ─────────────────────────────────────────────────
 
@@ -2918,7 +2919,7 @@ export function LayoutScreen() {
             )}
 
             {/* ── Empty state ── */}
-            {!svgText && (
+            {!svgText && strips.length === 0 && (
               <>
                 <rect x="1" y="1" width="638" height="398" rx="4" fill="none"
                       stroke="oklch(30% 0.01 260)" strokeDasharray="6 4"/>

@@ -18,6 +18,8 @@ import {
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { createDefaultPatchBoard } from './patchBoard.js';
+import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -59,11 +61,12 @@ export function defaultStandaloneController(overrides = {}) {
 }
 
 export function createDefaultProject() {
+  const defaultStrips = createDefaultCircleLayout();
   return {
     version: PROJECT_VERSION,
     name: 'Untitled Project',
     layout: {
-      strips: [],
+      strips: defaultStrips,
       viewBox: '0 0 640 400',
       svgText: null,
       hidden: {},
@@ -73,7 +76,7 @@ export function createDefaultProject() {
       editCounts: {},
       layerGroups: [],
       layerOrder: [],
-      patchBoard: null,
+      patchBoard: createDefaultPatchBoard(defaultStrips),
     },
     pattern: {
       activePatternId: 'aurora',
@@ -206,7 +209,9 @@ export function resolveStartupProject({
 
   if (!legacyLayout?.layout) return project;
 
-  const projectHasLayout = Array.isArray(project.layout?.strips) && project.layout.strips.length > 0;
+  const projectHasLayout = Array.isArray(project.layout?.strips) &&
+    project.layout.strips.length > 0 &&
+    !isDefaultCircleLayout(project.layout.strips);
   const legacyHasLayout = Array.isArray(legacyLayout.layout?.strips) && legacyLayout.layout.strips.length > 0;
 
   if (!projectHasLayout && legacyHasLayout) {

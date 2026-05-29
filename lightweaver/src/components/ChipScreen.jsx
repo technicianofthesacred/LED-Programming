@@ -5,9 +5,18 @@ import {
   DEFAULT_CARD_PATTERN_BANK,
   patchBoardToZones,
 } from '../lib/cardRuntimeContract.js';
-import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
+import { buildCardRuntimePackageFromProject, totalProjectPixels } from '../lib/cardRuntimeProject.js';
+import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
+import {
+  clampHardwarePixelCount,
+  clampHardwareSectionCount,
+  countsFromDefaultCircleLayout,
+  createDefaultCircleLayout,
+  DEFAULT_CIRCLE_SECTION_COUNT,
+  DEFAULT_CIRCLE_TOTAL_PIXELS,
+  isDefaultCircleLayout,
+} from '../lib/defaultCircleLayout.js';
 import {
   cardHostToUrl,
   cardLoadMethodForProtocol,
@@ -67,6 +76,10 @@ export function ChipScreen() {
   const {
     projectName,
     strips,
+    setStrips,
+    viewBox,
+    setViewBox,
+    svgText,
     patchBoard,
     setPatchBoard,
     standaloneController,
@@ -95,10 +108,83 @@ export function ChipScreen() {
     },
   };
 
-  const controllerOutputs = DEFAULT_STANDALONE_OUTPUTS.map((output, index) => ({
+  const defaultLayoutActive = isDefaultCircleLayout(strips);
+  const editableDefaultLayout = !svgText && (defaultLayoutActive || strips.length === 0);
+  const defaultSectionCounts = defaultLayoutActive ? countsFromDefaultCircleLayout(strips) : [];
+  const hardwareSectionCount = zones.length || strips.length || DEFAULT_CIRCLE_SECTION_COUNT;
+  const hardwareSections = strips.length
+    ? strips.map((strip, index) => ({
+        id: strip.id || `section-${index + 1}`,
+        name: strip.name || `Section ${index + 1}`,
+        pixels: strip.pixelCount || strip.pixels?.length || 0,
+      }))
+    : Array.from({ length: hardwareSectionCount }, (_, index) => ({
+        id: `section-${index + 1}`,
+        name: index === 0 ? 'Outer circle' : index === 1 ? 'Inner circle' : `Section ${index + 1}`,
+        pixels: 0,
+      }));
+
+  const configuredOutputs = standaloneController?.outputs || [];
+  const layoutPixelTotal = totalProjectPixels(strips);
+  const configuredOutputPixels = configuredOutputs.reduce((sum, output) => sum + Math.max(0, Math.floor(Number(output?.pixels || 0))), 0);
+  const hasConfiguredOutputPixels = configuredOutputPixels > 0 && (!layoutPixelTotal || configuredOutputPixels === layoutPixelTotal);
+  const outputSource = hasConfiguredOutputPixels
+    ? DEFAULT_STANDALONE_OUTPUTS.map((output, index) => ({
+        ...output,
+        ...((configuredOutputs || [])[index] || {}),
+      }))
+    : deriveStandaloneOutputsFromStrips(strips, []);
+  const controllerOutputs = (outputSource.length ? outputSource : DEFAULT_STANDALONE_OUTPUTS).map((output, index) => ({
+    ...(DEFAULT_STANDALONE_OUTPUTS[index] || {}),
     ...output,
-    ...((standaloneController?.outputs || [])[index] || {}),
   }));
+
+  const applyDefaultHardwareLayout = ({
+    totalPixels = null,
+    sectionCount = null,
+    sectionPixelCounts = null,
+  } = {}) => {
+    if (!editableDefaultLayout) return;
+    const currentTotal = defaultSectionCounts.reduce((sum, count) => sum + count, 0) || config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS;
+    const nextTotal = clampHardwarePixelCount(totalPixels ?? currentTotal, currentTotal);
+    const nextSectionCount = clampHardwareSectionCount(
+      sectionCount ?? sectionPixelCounts?.length ?? defaultSectionCounts.length ?? DEFAULT_CIRCLE_SECTION_COUNT,
+      DEFAULT_CIRCLE_SECTION_COUNT,
+    );
+    const nextStrips = createDefaultCircleLayout({
+      totalPixels: nextTotal,
+      sectionCount: nextSectionCount,
+      sectionPixelCounts,
+      viewBox: viewBox || '0 0 640 400',
+    });
+    const nextOutputs = deriveStandaloneOutputsFromStrips(nextStrips, DEFAULT_STANDALONE_OUTPUTS);
+
+    setViewBox(viewBox || '0 0 640 400');
+    setStrips(nextStrips);
+    setPatchBoard(normalizePatchBoard(null, nextStrips));
+    setStandaloneController(prev => {
+      const current = prev || {};
+      const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
+        const previous = current.outputs?.[index] || {};
+        const derived = nextOutputs[index];
+        return {
+          ...base,
+          ...previous,
+          ...(derived ? { id: derived.id, name: derived.name, pixels: derived.pixels } : { pixels: 0 }),
+        };
+      });
+      return { ...current, outputs };
+    });
+  };
+
+  const updateDefaultSectionPixels = (index, value) => {
+    const fallbackCount = Math.max(1, Math.floor((config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS) / Math.max(1, hardwareSectionCount)));
+    const counts = defaultSectionCounts.length
+      ? [...defaultSectionCounts]
+      : Array.from({ length: hardwareSectionCount }, () => fallbackCount);
+    counts[index] = clampHardwarePixelCount(value, counts[index] || 1);
+    applyDefaultHardwareLayout({ sectionPixelCounts: counts });
+  };
 
   const updateController = (patch) => {
     setStandaloneController(prev => {
@@ -288,6 +374,66 @@ export function ChipScreen() {
               </FieldRow>
             </Section>
 
+            <Section title="Hardware layout" meta={`${config.led.pixels} pixels · ${hardwareSections.length || hardwareSectionCount} sections`}>
+              <FieldRow
+                label="Total LEDs"
+                hint={editableDefaultLayout ? 'used by the default circles' : 'from the imported layout'}
+              >
+                <input
+                  className="lw-search-input"
+                  type="number"
+                  min="1"
+                  max="2048"
+                  value={config.led.pixels}
+                  disabled={!editableDefaultLayout}
+                  onChange={event => applyDefaultHardwareLayout({ totalPixels: event.target.value })}
+                  style={{ maxWidth: 180 }}
+                />
+              </FieldRow>
+              <FieldRow
+                label="Sections"
+                hint={editableDefaultLayout ? 'zones on the chip' : 'from strips and patches'}
+              >
+                <input
+                  className="lw-search-input"
+                  type="number"
+                  min="1"
+                  max="8"
+                  value={hardwareSections.length || hardwareSectionCount}
+                  disabled={!editableDefaultLayout}
+                  onChange={event => applyDefaultHardwareLayout({ sectionCount: event.target.value })}
+                  style={{ maxWidth: 180 }}
+                />
+              </FieldRow>
+              <FieldRow label="Section LEDs" hint={editableDefaultLayout ? 'inner and outer counts' : 'read from layout'}>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {hardwareSections.map((section, index) => (
+                    <div
+                      key={section.id}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'minmax(120px, 1fr) 112px',
+                        gap: 8,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>{section.name}</span>
+                      <input
+                        className="lw-search-input"
+                        type="number"
+                        min="1"
+                        max="2048"
+                        value={section.pixels}
+                        disabled={!editableDefaultLayout}
+                        onChange={event => updateDefaultSectionPixels(index, event.target.value)}
+                        style={{ fontFamily: 'var(--mono-font)' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </FieldRow>
+            </Section>
+
             <Section title="Zones" meta={zones.length ? `${zones.length} written` : 'default all LEDs'}>
               {zones.length === 0 ? (
                 <div style={{ color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.55 }}>
@@ -359,7 +505,7 @@ export function ChipScreen() {
                 <span style={{ color: 'var(--text-4)' }}>Piece</span><span>{config.piece.name}</span>
                 <span style={{ color: 'var(--text-4)' }}>Pixels</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.led.pixels}</span>
                 <span style={{ color: 'var(--text-4)' }}>Outputs</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.led.outputs.length}</span>
-                <span style={{ color: 'var(--text-4)' }}>Zones</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.zones.length || 1}</span>
+                <span style={{ color: 'var(--text-4)' }}>Sections</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.zones.length || 1}</span>
                 <span style={{ color: 'var(--text-4)' }}>Knob cycle</span><span>{config.controls.encoder.patternCycleIds.map(id => DEFAULT_CARD_PATTERN_BANK.find(pattern => pattern.id === id)?.label || id).join(', ')}</span>
               </div>
             </Section>

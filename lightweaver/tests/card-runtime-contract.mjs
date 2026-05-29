@@ -164,4 +164,17 @@ assert.equal(visualLookZonedPkg.config.zones[0].customHue, 88);
 assert.equal(visualLookZonedPkg.config.zones[0].customSaturation, 180);
 assert.equal(visualLookZonedPkg.config.zones[0].customBreathe, true);
 
+const staleOutputPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Stale Output Counts',
+  strips: [
+    { id: 'outer', name: 'Outer circle', pixelCount: 22 },
+    { id: 'inner', name: 'Inner circle', pixelCount: 22 },
+  ],
+  standaloneController: {
+    outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 1 }],
+  },
+});
+assert.equal(staleOutputPkg.config.led.pixels, 44);
+assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [22, 22]);
+
 console.log('card-runtime-contract tests passed');

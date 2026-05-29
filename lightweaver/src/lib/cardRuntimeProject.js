@@ -1,5 +1,5 @@
 import { DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
-import { deriveStandaloneOutputsFromStrips } from './standaloneController.js';
+import { deriveStandaloneOutputsFromStrips, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
 
@@ -13,8 +13,13 @@ export function buildCardRuntimePackageFromProject({
   patchBoard = null,
   standaloneController = {},
 } = {}) {
-  const outputs = deriveStandaloneOutputsFromStrips(strips, standaloneController?.outputs || []);
   const totalPixels = totalProjectPixels(strips);
+  const configuredOutputs = standaloneController?.outputs || [];
+  const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
+  const outputSource = totalPixels > 0 && configuredOutputPixels !== totalPixels
+    ? []
+    : configuredOutputs;
+  const outputs = deriveStandaloneOutputsFromStrips(strips, outputSource);
   const resolvedPixels = totalPixels || outputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || 44;
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
   const patterns = resolvePackagePatterns(standaloneController, visualLook.patternId);
