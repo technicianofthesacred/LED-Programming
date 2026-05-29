@@ -31,6 +31,7 @@ import {
   normalizePatchBoard,
   sliceStripIntoPatchesPreservingRoute,
 } from '../lib/patchBoard.js';
+import { isDefaultCircleLayout } from '../lib/defaultCircleLayout.js';
 
 // ── Pure utility functions ─────────────────────────────────────────────────
 
@@ -2121,6 +2122,7 @@ export function LayoutScreen() {
   }, [project.patchBoard, strips, hidden, selectedWireCut]);
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
+  const defaultCircleLayoutActive = !svgText && layers.length === 0 && isDefaultCircleLayout(strips);
   const selectedStrips = useMemo(() => {
     const selected = new Set(selectedStripIds);
     return strips.filter(s => selected.has(s.id));
@@ -3726,9 +3728,45 @@ export function LayoutScreen() {
                     )}
                   </div>
                 );
-              })}
-            </div>
-          </>
+	              })}
+	            </div>
+              {defaultCircleLayoutActive && (
+                <div
+                  data-testid="default-circle-layout-panel"
+                  style={{
+                    margin: '8px 12px 10px',
+                    padding: 12,
+                    border: '1px solid oklch(70% 0.12 210 / 0.38)',
+                    borderRadius: 6,
+                    background: 'linear-gradient(135deg, oklch(24% 0.04 220 / 0.72), oklch(18% 0.02 280 / 0.58))',
+                    boxShadow: 'inset 0 1px 0 oklch(100% 0 0 / 0.06)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+                    <strong style={{ fontSize: 'var(--fs-sm)', color: 'var(--text)', letterSpacing: 0 }}>
+                      Default two-circle hardware
+                    </strong>
+                    <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--accent)' }}>
+                      {strips.length} rings
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 'var(--fs-xs)', lineHeight: 1.45, color: 'var(--text-3)', marginBottom: 10 }}>
+                    Outer and inner circles stay here until an SVG or saved project replaces the layout.
+                  </div>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {strips.map(strip => (
+                      <div key={strip.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 'var(--fs-xs)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: strip.color, flexShrink: 0 }}/>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{strip.name}</span>
+                        </span>
+                        <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--text-3)', flexShrink: 0 }}>{strip.pixelCount} LEDs</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+	          </>
         )}
 
         {strips.length > 0 && (
@@ -3749,7 +3787,7 @@ export function LayoutScreen() {
         )}
 
         {/* ── Empty state ── */}
-        {!svgText && !error && (
+        {!svgText && !error && !defaultCircleLayoutActive && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
                         justifyContent: 'center', gap: 14, padding: 32, color: 'var(--text-3)', textAlign: 'center' }}>
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.35">

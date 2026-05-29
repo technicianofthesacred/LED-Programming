@@ -107,7 +107,7 @@ export function ProjectProvider({ children }) {
   const defaults = createDefaultProject();
 
   // ── Layout ──────────────────────────────────────────────────────────────
-  const [strips,    setStrips]    = useState([]);
+  const [strips,    setStrips]    = useState(defaults.layout.strips);
   const [viewBox,   setViewBox]   = useState('0 0 640 400');
   const [svgText,   setSvgText]   = useState(null);
   const [hidden,    setHidden]    = useState({});
@@ -117,7 +117,7 @@ export function ProjectProvider({ children }) {
   const [layoutEditCounts,  setLayoutEditCounts]  = useState(defaults.layout.editCounts);
   const [layoutLayerGroups, setLayoutLayerGroups] = useState(defaults.layout.layerGroups);
   const [layoutLayerOrder,  setLayoutLayerOrder]  = useState(defaults.layout.layerOrder);
-  const [patchBoard,        setPatchBoard]        = useState(() => normalizePatchBoard(defaults.layout.patchBoard, []));
+  const [patchBoard,        setPatchBoard]        = useState(() => normalizePatchBoard(defaults.layout.patchBoard, defaults.layout.strips));
   const [projectRevision,   setProjectRevision]   = useState(0);
 
   // ── Pattern ──────────────────────────────────────────────────────────────
