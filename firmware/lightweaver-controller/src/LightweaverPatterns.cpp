@@ -12,6 +12,15 @@ static inline uint8_t shiftHue(uint8_t base, int16_t shift) {
   return static_cast<uint8_t>(v);
 }
 
+static inline uint8_t hash8(uint16_t value, uint16_t salt = 0) {
+  uint16_t x = value;
+  x ^= salt * 109u;
+  x ^= x >> 7;
+  x *= 251u;
+  x ^= x >> 9;
+  return uint8_t(x & 0xff);
+}
+
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
   uint32_t t = scaleTime(now, mods.speed);
   if (preset == "custom-color") {
@@ -50,21 +59,123 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
     return true;
   }
   for (uint16_t i = 0; i < totalPixels; i++) {
+    uint16_t count = max<uint16_t>(1, totalPixels);
+    uint8_t pos = uint8_t((uint32_t(i) * 255u) / count);
     if (preset == "ember") {
       uint8_t flicker = inoise8(i * 18, t / 7);
       CHSV color(shiftHue(8, mods.hueShift), 220, 120 + (flicker / 2));
       leds[i] = color;
+    } else if (preset == "plasma") {
+      uint8_t a = sin8(i * 9 + t / 12);
+      uint8_t b = sin8(i * 5 - t / 17);
+      uint8_t hue = shiftHue(uint8_t((uint16_t(a) + b) / 2), mods.hueShift);
+      leds[i] = CHSV(hue, 210, 165 + (sin8(a + b) / 4));
+    } else if (preset == "fire") {
+      uint8_t heat = qadd8(inoise8(i * 24, t / 5), sin8(pos + t / 10) / 5);
+      uint8_t hue = shiftHue(uint8_t(2 + heat / 9), mods.hueShift);
+      leds[i] = CHSV(hue, 245, uint8_t(70 + (uint16_t(heat) * 2) / 3));
+    } else if (preset == "ocean") {
+      uint8_t w1 = sin8(i * 6 + t / 18);
+      uint8_t w2 = sin8(i * 3 - t / 25);
+      uint8_t wave = uint8_t((uint16_t(w1) + w2) / 2);
+      leds[i] = CHSV(shiftHue(135 + wave / 8, mods.hueShift), 190, 70 + wave / 2);
+    } else if (preset == "ripple") {
+      int mid = int(totalPixels) / 2;
+      uint8_t dist = uint8_t(min(255, abs(int(i) - mid) * 510 / max<int>(1, totalPixels)));
+      uint8_t ring = sin8(dist * 4 - t / 8);
+      uint8_t level = ring > 150 ? uint8_t((ring - 150) * 2) : uint8_t(ring / 8);
+      leds[i] = CHSV(shiftHue(145, mods.hueShift), 190, level);
+    } else if (preset == "lava") {
+      uint8_t blob = inoise8(i * 11 + sin8(t / 24), t / 18);
+      uint8_t hue = shiftHue(250 + blob / 14, mods.hueShift);
+      leds[i] = CHSV(hue, 235, 58 + blob / 2);
     } else if (preset == "rainbow") {
       leds[i] = CHSV(shiftHue((i * 4 + t / 22) & 0xff, mods.hueShift), 190, 220);
+    } else if (preset == "sparkle") {
+      uint16_t frame = uint16_t(t / 70);
+      uint8_t spark = hash8(i * 19u, frame);
+      if (spark > 242) leds[i] = CRGB::White;
+      else leds[i] = CHSV(shiftHue(160, mods.hueShift), 150, 18 + inoise8(i * 12, t / 30) / 10);
     } else if (preset == "breathe") {
       uint8_t level = beatsin8(uint8_t(12 * mods.speed > 0 ? 12 * mods.speed : 12), 45, 190);
       leds[i] = CHSV(shiftHue(32, mods.hueShift), 90, level);
+    } else if (preset == "meteor") {
+      uint16_t head = (t / 18) % count;
+      uint16_t forward = (i + count - head) % count;
+      uint8_t tail = forward > 18 ? 0 : uint8_t(230 - forward * 12);
+      leds[i] = CHSV(shiftHue(165, mods.hueShift), tail > 190 ? 40 : 150, tail);
+    } else if (preset == "chase") {
+      uint16_t head = (t / 16) % count;
+      uint16_t distance = min<uint16_t>((i + count - head) % count, (head + count - i) % count);
+      uint8_t level = distance > 6 ? 8 : uint8_t(230 - distance * 30);
+      leds[i] = CHSV(shiftHue(uint8_t(t / 28), mods.hueShift), 230, level);
     } else if (preset == "scanner") {
       uint16_t head = (t / 28) % max<uint16_t>(1, totalPixels);
       uint16_t distance = abs(int(i) - int(head));
       uint8_t level = distance > 8 ? 0 : 220 - (distance * 24);
       CHSV color(shiftHue(16, mods.hueShift), 200, level);
       leds[i] = color;
+    } else if (preset == "candle") {
+      uint8_t flicker = qadd8(inoise8(i * 17, t / 4) / 2, inoise8(i * 31 + 80, t / 7) / 3);
+      leds[i] = CHSV(shiftHue(22 + flicker / 24, mods.hueShift), 210, 70 + flicker / 2);
+    } else if (preset == "lightning") {
+      uint16_t frame = uint16_t(t / 110);
+      bool strike = hash8(frame, 77) > 218;
+      uint8_t bolt = hash8(i * 23u, frame);
+      if (strike && bolt > 116) leds[i] = CHSV(shiftHue(164, mods.hueShift), bolt > 224 ? 20 : 80, bolt);
+      else leds[i] = CRGB::Black;
+    } else if (preset == "neon") {
+      uint8_t seg = uint8_t((uint32_t(i) * 7u) / count);
+      uint8_t flicker = hash8(seg * 31u, uint16_t(t / 90));
+      uint8_t level = flicker > 18 ? 220 : 30;
+      leds[i] = CHSV(shiftHue(seg * 36 + t / 80, mods.hueShift), 240, level);
+    } else if (preset == "matrix") {
+      uint8_t stream = uint8_t((i * 13 + t / 9) % 48);
+      uint8_t level = stream < 8 ? uint8_t(230 - stream * 24) : 8;
+      leds[i] = CHSV(shiftHue(96, mods.hueShift), stream < 2 ? 40 : 240, level);
+    } else if (preset == "heartbeat") {
+      uint8_t phase = uint8_t((t / 5) & 0xff);
+      uint8_t p1 = phase < 26 ? uint8_t(230 - phase * 7) : 0;
+      uint8_t p2 = phase > 42 && phase < 68 ? uint8_t(170 - (phase - 42) * 5) : 0;
+      leds[i] = CHSV(shiftHue(252, mods.hueShift), 240, max<uint8_t>(18, max<uint8_t>(p1, p2)));
+    } else if (preset == "stained") {
+      uint8_t cell = inoise8(i * 42, 12);
+      uint8_t vein = abs(int(cell) - 128) < 18 ? 24 : 180;
+      leds[i] = CHSV(shiftHue(cell + t / 90, mods.hueShift), 220, vein);
+    } else if (preset == "confetti") {
+      uint16_t frame = uint16_t(t / 85);
+      uint8_t seed = hash8(i * 29u, frame);
+      if (seed > 232) leds[i] = CHSV(shiftHue(hash8(i * 9u, frame + 31), mods.hueShift), 230, 230);
+      else leds[i] = CRGB::Black;
+    } else if (preset == "warp") {
+      int mid = int(totalPixels) / 2;
+      uint8_t dist = uint8_t(min(255, abs(int(i) - mid) * 510 / max<int>(1, totalPixels)));
+      uint8_t streak = sin8(dist * 5 - t / 5);
+      uint8_t level = streak > 185 ? uint8_t((streak - 185) * 3) : uint8_t(streak / 12);
+      leds[i] = CHSV(shiftHue(166, mods.hueShift), level > 180 ? 30 : 120, level);
+    } else if (preset == "pulse-ring") {
+      int mid = int(totalPixels) / 2;
+      uint8_t dist = uint8_t(min(255, abs(int(i) - mid) * 510 / max<int>(1, totalPixels)));
+      uint8_t pulse = sin8(dist * 3 - t / 7);
+      uint8_t level = pulse > 145 ? uint8_t((pulse - 145) * 2) : 8;
+      leds[i] = CHSV(shiftHue(218, mods.hueShift), 220, level);
+    } else if (preset == "blocks") {
+      uint8_t block = uint8_t((i / 6 + t / 360) % 6);
+      leds[i] = CHSV(shiftHue(block * 42, mods.hueShift), 220, 180);
+    } else if (preset == "bloom") {
+      int mid = int(totalPixels) / 2;
+      uint8_t dist = uint8_t(min(255, abs(int(i) - mid) * 510 / max<int>(1, totalPixels)));
+      uint8_t bloom = qsub8(255, dist);
+      uint8_t pulse = sin8(t / 16);
+      leds[i] = CHSV(shiftHue(226 + bloom / 12, mods.hueShift), 155, 42 + scale8(bloom, pulse));
+    } else if (preset == "calm") {
+      uint8_t level = beatsin8(5, 38, 150);
+      uint8_t wave = sin8(i * 5 + t / 32);
+      leds[i] = CHSV(shiftHue(132 + wave / 10, mods.hueShift), 110, level);
+    } else if (preset == "drift") {
+      uint8_t hue = shiftHue(uint8_t(pos + t / 80), mods.hueShift);
+      uint8_t level = 105 + sin8(i * 4 + t / 30) / 3;
+      leds[i] = CHSV(hue, 105, level);
     } else if (preset == "sunset") {
       // Slow gradient that drifts through warm hues: deep magenta to
       // orange to gold. Position-dependent base, time-dependent drift.

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
+import { getCardPatternById } from '../lib/cardPatternBank.js';
 import {
   cardHueToDegrees,
   cardSaturationToChroma,
@@ -12,6 +13,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
+import { LEDPreview } from './Preview.jsx';
 
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
 
@@ -38,12 +40,14 @@ function Section({ title, meta, children }) {
 }
 
 function LookPreview({ patternId, look, large = false }) {
+  const pattern = getCardPatternById(patternId);
   const hue = cardHueToDegrees(look.customHue);
   const chroma = cardSaturationToChroma(look.customSaturation);
   return (
     <div
       className={`lw-look-preview lw-look-${patternId} ${large ? 'is-large' : ''}`}
       style={{
+        '--look-preview-bg': pattern?.preview,
         '--look-hue': `${hue}deg`,
         '--look-color': `oklch(72% ${chroma} ${hue})`,
         '--look-bright': `oklch(84% ${chroma} ${hue})`,
@@ -62,11 +66,11 @@ function LookPreview({ patternId, look, large = false }) {
 function LookCard({ pattern, look, selected, inCycle, onSelect, onCycleChange }) {
   return (
     <article className={`lw-look-card ${selected ? 'is-selected' : ''}`}>
-      <button type="button" className="lw-look-card-main" onClick={onSelect}>
+      <button type="button" className="lw-look-card-main" data-pattern-id={pattern.id} onClick={onSelect}>
         <LookPreview patternId={pattern.id} look={{ ...look, patternId: pattern.id }}/>
         <span className="lw-look-card-copy">
           <strong>{pattern.label}</strong>
-          <span>{selected ? 'Starts when the card turns on' : 'Tap to make this the startup look'}</span>
+          <span>{selected ? 'Previewing and starts on power-up' : pattern.description || 'Tap to preview and start with this look'}</span>
         </span>
       </button>
       <label className="lw-look-card-toggle">
@@ -101,6 +105,8 @@ export function PatternsScreen() {
   const cycleIds = controls.encoder.patternCycleIds?.length
     ? controls.encoder.patternCycleIds
     : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+  const selectedPattern = getCardPatternById(look.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
+  const previewPatternId = selectedPattern?.previewPatternId || selectedPattern?.id || look.patternId;
 
   const runtimePackage = useMemo(
     () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard, standaloneController }),
@@ -181,8 +187,8 @@ export function PatternsScreen() {
         <div className="lw-patterns-grid">
           <section className="lw-look-picker">
             <div className="lw-sec-header">
-              <span>Tap a look</span>
-              <span className="meta">{cycleIds.length} on knob</span>
+              <span>Tap a pattern to preview</span>
+              <span className="meta">{DEFAULT_CARD_PATTERN_BANK.length} chip-ready / {cycleIds.length} on knob</span>
             </div>
             <div className="lw-look-grid">
               {DEFAULT_CARD_PATTERN_BANK.map(pattern => (
@@ -200,6 +206,23 @@ export function PatternsScreen() {
           </section>
 
           <aside className="lw-patterns-aside">
+            <Section title="Preview" meta={selectedPattern?.label || look.patternId}>
+              <div className="lw-pattern-led-preview" style={{ '--pattern-preview-bg': selectedPattern?.preview }}>
+                <LEDPreview
+                  patternId={previewPatternId}
+                  playing={true}
+                  speed={1}
+                  glow={1.1}
+                  dotSize={3.2}
+                  masterBrightness={look.brightness}
+                  masterSaturation={Math.max(0.2, look.customSaturation / 255)}
+                  masterHueShift={Math.round((look.customHue - 32) / 2)}
+                  motionSmoothing="soft"
+                />
+              </div>
+              <p className="lw-pattern-preview-copy">{selectedPattern?.description}</p>
+            </Section>
+
             <Section title="Color" meta="stored on the card">
               <LookPreview patternId={look.patternId} look={look} large/>
               <div className="lw-swatch-grid" aria-label="Color swatches">
@@ -236,8 +259,8 @@ export function PatternsScreen() {
 
             <Section title="Card" meta={`${config.led.pixels} pixels`}>
               <div className="lw-card-load-summary">
-                <span>Starts with</span><strong>{DEFAULT_CARD_PATTERN_BANK.find(pattern => pattern.id === look.patternId)?.label || look.patternId}</strong>
-                <span>Knob cycle</span><strong>{cycleIds.map(id => DEFAULT_CARD_PATTERN_BANK.find(pattern => pattern.id === id)?.label || id).join(', ')}</strong>
+                <span>Starts with</span><strong>{selectedPattern?.label || look.patternId}</strong>
+                <span>Knob cycle</span><strong>{cycleIds.map(id => getCardPatternById(id)?.label || id).join(', ')}</strong>
                 <span>Local page</span>
                 <div className="lw-card-host-row">
                   <input

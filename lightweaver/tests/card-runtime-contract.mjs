@@ -10,10 +10,10 @@ import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProjec
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
-assert.deepEqual(
-  DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id),
-  ['aurora', 'ember', 'rainbow', 'breathe', 'scanner', 'warm-white'],
-);
+assert.ok(DEFAULT_CARD_PATTERN_BANK.length >= 24);
+for (const id of ['aurora', 'ember', 'rainbow', 'breathe', 'scanner', 'warm-white']) {
+  assert.ok(DEFAULT_CARD_PATTERN_BANK.some(pattern => pattern.id === id), `missing default pattern ${id}`);
+}
 
 const normalized = normalizeCardRuntimeConfig({
   mode: 'website-flash',

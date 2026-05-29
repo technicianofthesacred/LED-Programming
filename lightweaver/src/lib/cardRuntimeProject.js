@@ -1,6 +1,7 @@
-import { makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
+import { DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
 import { deriveStandaloneOutputsFromStrips } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
 
 export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
@@ -16,6 +17,7 @@ export function buildCardRuntimePackageFromProject({
   const totalPixels = totalProjectPixels(strips);
   const resolvedPixels = totalPixels || outputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || 44;
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
+  const patterns = resolvePackagePatterns(standaloneController, visualLook.patternId);
   const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
@@ -46,10 +48,26 @@ export function buildCardRuntimePackageFromProject({
         : undefined,
     },
     controls: standaloneController?.controls,
+    patterns,
     startupPatternId: visualLook.patternId,
     zones: runtimeZones,
     syncZones: runtimeZones.length <= 1,
   });
+}
+
+function resolvePackagePatterns(standaloneController = {}, startupPatternId = '') {
+  const configuredCycle = standaloneController?.controls?.encoder?.patternCycleIds;
+  const requested = Array.isArray(configuredCycle) && configuredCycle.length
+    ? configuredCycle
+    : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+  const ids = [
+    startupPatternId,
+    ...requested,
+  ].filter(Boolean);
+  const selected = orderedCardPatterns(ids);
+  if (selected.some(pattern => pattern.id === startupPatternId)) return selected;
+  const startupPattern = getCardPatternById(startupPatternId);
+  return startupPattern ? [startupPattern, ...selected] : selected;
 }
 
 function applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) {

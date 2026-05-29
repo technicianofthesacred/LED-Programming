@@ -5069,12 +5069,12 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
   gap: 12px;
 }
 
 .lw-look-card {
-  min-height: 214px;
+  min-height: 204px;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   border: 1px solid var(--border);
@@ -5092,7 +5092,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-card-main {
   display: grid;
-  grid-template-rows: minmax(124px, 1fr) auto;
+  grid-template-rows: minmax(116px, 1fr) auto;
   gap: 10px;
   padding: 10px;
   border: 0;
@@ -5145,7 +5145,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 6px;
   overflow: hidden;
-  background: oklch(9% 0.01 250);
+  background: var(--look-preview-bg, oklch(9% 0.01 250));
   isolation: isolate;
   filter: brightness(var(--look-dim, 1));
 }
@@ -5170,7 +5170,8 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     radial-gradient(circle at 25% 35%, var(--look-bright), transparent 18%),
     radial-gradient(circle at 72% 62%, var(--look-color), transparent 22%),
     linear-gradient(135deg, var(--look-deep), oklch(9% 0.012 250));
-  opacity: 0.86;
+  opacity: 0.52;
+  mix-blend-mode: screen;
 }
 
 .lw-look-preview::after {
@@ -5240,6 +5241,23 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-warm-white::before {
   background: radial-gradient(circle at 50% 50%, oklch(90% 0.045 78), oklch(66% 0.05 70) 42%, transparent 70%), oklch(13% 0.015 70);
+}
+
+.lw-pattern-led-preview {
+  height: clamp(220px, 29vh, 340px);
+  border: 1px solid oklch(100% 0 0 / 0.1);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, oklch(7% 0.012 250 / 0.72), oklch(5% 0.01 250 / 0.92)),
+    var(--pattern-preview-bg, oklch(9% 0.014 250));
+}
+
+.lw-pattern-preview-copy {
+  margin: 10px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
 }
 
 .lw-patterns-aside {

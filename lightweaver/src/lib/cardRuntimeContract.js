@@ -1,13 +1,8 @@
+import { CARD_PATTERN_BANK } from './cardPatternBank.js';
+
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 
-export const DEFAULT_CARD_PATTERN_BANK = Object.freeze([
-  { id: 'aurora', label: 'Aurora', mode: 'procedural' },
-  { id: 'ember', label: 'Ember', mode: 'procedural' },
-  { id: 'rainbow', label: 'Rainbow', mode: 'procedural' },
-  { id: 'breathe', label: 'Breathe', mode: 'procedural' },
-  { id: 'scanner', label: 'Scanner', mode: 'procedural' },
-  { id: 'warm-white', label: 'Warm White', mode: 'preset' },
-]);
+export const DEFAULT_CARD_PATTERN_BANK = CARD_PATTERN_BANK;
 
 export const DEFAULT_CARD_CONTROLS = Object.freeze({
   encoder: {
@@ -222,6 +217,7 @@ function normalizePatterns(patterns = DEFAULT_CARD_PATTERN_BANK) {
       id,
       label: String(pattern.label || titleFromId(id)),
       mode: pattern.mode === 'preset' ? 'preset' : 'procedural',
+      ...(pattern.preset ? { preset: sanitizeId(pattern.preset) } : {}),
     };
   });
 }
