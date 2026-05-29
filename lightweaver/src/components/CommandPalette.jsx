@@ -7,8 +7,9 @@ function buildCommands(ctx, navigate) {
   } = ctx;
 
   return [
-    { id: 'nav-chip', label: 'Go to: Chip', category: 'Navigate', action: () => navigate('chip') },
+    { id: 'nav-patterns', label: 'Go to: Patterns', category: 'Navigate', action: () => navigate('patterns') },
     { id: 'nav-layout', label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
+    { id: 'nav-load', label: 'Go to: Load', category: 'Navigate', action: () => navigate('load') },
     { id: 'proj-new',    label: 'New project', category: 'Project', action: () => { if (window.confirm('Start a new project?')) newProject(); } },
   ];
 }
@@ -73,7 +74,7 @@ export function CommandPalette({ open, onClose, navigate }) {
             ref={inputRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Type a command or pattern name…"
+            placeholder="Type a command..."
             style={{ flex: 1, background: 'none', border: 'none', outline: 'none',
                      color: 'var(--text)', fontSize: 'var(--fs-md)', fontFamily: 'inherit' }}
           />

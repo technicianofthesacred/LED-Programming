@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 
 const Icon = {
+  pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
   chip:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="10" y="10" width="4" height="4" rx=".5"/></svg>,
   layout:  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18M9 21V9"/></svg>,
 };
@@ -83,8 +84,9 @@ export function TopBar() {
 
 export function LeftRail({ screen, onScreen }) {
   const items = [
-    { id: 'chip',     label: 'Chip',     icon: Icon.chip },
+    { id: 'patterns', label: 'Patterns', icon: Icon.pattern },
     { id: 'layout',   label: 'Layout',   icon: Icon.layout },
+    { id: 'load',     label: 'Load',     icon: Icon.chip },
   ];
   return (
     <div className="lw-rail">
@@ -212,7 +214,7 @@ export function StatusBar() {
         </span>
       )}
       <span className="sep">·</span>
-      <span className="v">1 Chip · 2 Layout · ? shortcuts</span>
+      <span className="v">1 Patterns · 2 Layout · 3 Load · ? shortcuts</span>
     </div>
   );
 }

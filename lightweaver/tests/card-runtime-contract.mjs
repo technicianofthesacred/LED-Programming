@@ -109,4 +109,59 @@ assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 
+const visualLookPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Visual Look',
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 60 }],
+    defaultLook: {
+      patternId: 'scanner',
+      brightness: 0.72,
+      customHue: 138,
+      customSaturation: 210,
+      customBreathe: true,
+      customDrift: true,
+    },
+    controls: { encoder: { patternCycleIds: ['scanner', 'aurora'] } },
+  },
+});
+assert.equal(visualLookPkg.config.startupPatternId, 'scanner');
+assert.equal(visualLookPkg.config.zones.length, 1);
+assert.equal(visualLookPkg.config.zones[0].patternId, 'scanner');
+assert.equal(visualLookPkg.config.zones[0].brightness, 0.72);
+assert.equal(visualLookPkg.config.zones[0].customHue, 138);
+assert.equal(visualLookPkg.config.zones[0].customSaturation, 210);
+assert.equal(visualLookPkg.config.zones[0].customBreathe, true);
+assert.equal(visualLookPkg.config.zones[0].customDrift, true);
+assert.deepEqual(visualLookPkg.config.zones[0].ranges, [{ start: 0, count: 60 }]);
+
+const visualLookZonedPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Visual Zoned Look',
+  strips: [{ id: 'main', name: 'Main', pixelCount: 16 }],
+  patchBoard: {
+    patches: [
+      {
+        id: 'front-zone',
+        name: 'Front Zone',
+        source: { type: 'strip', stripId: 'main', startLed: 0, endLed: 15 },
+        output: { mode: 'on' },
+        playback: {},
+      },
+    ],
+  },
+  standaloneController: {
+    defaultLook: {
+      patternId: 'rainbow',
+      brightness: 0.66,
+      customHue: 88,
+      customSaturation: 180,
+      customBreathe: true,
+    },
+  },
+});
+assert.equal(visualLookZonedPkg.config.zones[0].patternId, 'rainbow');
+assert.equal(visualLookZonedPkg.config.zones[0].brightness, 0.66);
+assert.equal(visualLookZonedPkg.config.zones[0].customHue, 88);
+assert.equal(visualLookZonedPkg.config.zones[0].customSaturation, 180);
+assert.equal(visualLookZonedPkg.config.zones[0].customBreathe, true);
+
 console.log('card-runtime-contract tests passed');

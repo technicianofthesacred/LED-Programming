@@ -166,7 +166,7 @@ export function ChipScreen() {
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
-      setStatus('Chip config copied. Paste it into the card Settings drawer.');
+      setStatus('Chip config copied. Paste it into the card page.');
     } catch {
       setStatusKind('err');
       setStatus('Clipboard was blocked. Use Download chip config instead.');
@@ -197,9 +197,9 @@ export function ChipScreen() {
       <div style={{ maxWidth: 1180, margin: '0 auto', display: 'grid', gap: 18 }}>
         <header style={{ display: 'flex', gap: 18, justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 520, color: 'var(--text)' }}>Chip</h1>
+            <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 520, color: 'var(--text)' }}>Load</h1>
             <p style={{ margin: '6px 0 0', maxWidth: 650, color: 'var(--text-3)', fontSize: 'var(--fs-md)', lineHeight: 1.55 }}>
-              Version 3 only shows settings that are written into the ESP32 runtime config.
+              Copy or download the chip config, then paste it into the card page.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -291,7 +291,7 @@ export function ChipScreen() {
             <Section title="Zones" meta={zones.length ? `${zones.length} written` : 'default all LEDs'}>
               {zones.length === 0 ? (
                 <div style={{ color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.55 }}>
-                  No wire zones are defined yet. The card will use one default zone across all LEDs.
+                  No wire zones are defined yet. The card will use the visual pattern and color from the Patterns screen across all LEDs.
                 </div>
               ) : (
                 <div style={{ display: 'grid', gap: 8 }}>

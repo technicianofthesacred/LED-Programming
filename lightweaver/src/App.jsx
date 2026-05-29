@@ -9,12 +9,20 @@ const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 
 const ChipScreen = lazy(() => import('./components/ChipScreen.jsx').then(m => ({ default: m.ChipScreen })));
 const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
+const PatternsScreen = lazy(() => import('./components/PatternsScreen.jsx').then(m => ({ default: m.PatternsScreen })));
+
+function normalizeScreen(requested = '') {
+  const screen = String(requested || '').trim().toLowerCase();
+  if (screen === 'layout' || screen === 'patch') return 'layout';
+  if (screen === 'chip' || screen === 'load' || screen === 'export' || screen === 'devices' || screen === 'flash' || screen === 'settings') return 'load';
+  if (screen === 'pattern' || screen === 'patterns' || screen === 'look' || screen === 'looks') return 'patterns';
+  return 'patterns';
+}
 
 function screenFromHash() {
   const hash = window.location.hash.slice(1);
   const params = new URLSearchParams(hash.includes('=') ? hash : '');
-  const requested = params.get('screen') || 'chip';
-  return requested === 'patch' || requested === 'layout' ? 'layout' : 'chip';
+  return normalizeScreen(params.get('screen') || 'patterns');
 }
 
 function replaceScreenHash(screen) {
@@ -30,7 +38,7 @@ export default function App() {
   const { tweaks, visible, set } = useTweaks();
 
   const navigate = useCallback((nextScreen) => {
-    const normalized = nextScreen === 'layout' || nextScreen === 'patch' ? 'layout' : 'chip';
+    const normalized = normalizeScreen(nextScreen);
     setScreen(normalized);
     setKbdOpen(false);
     setCmdOpen(false);
@@ -65,8 +73,9 @@ export default function App() {
         return;
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey) {
-        if (event.key === '1') navigate('chip');
+        if (event.key === '1') navigate('patterns');
         if (event.key === '2') navigate('layout');
+        if (event.key === '3') navigate('load');
       }
     };
     window.addEventListener('keydown', handler);
@@ -80,8 +89,9 @@ export default function App() {
         <div className="lw-main">
           <LeftRail screen={screen} onScreen={navigate}/>
           <Suspense fallback={<LoadingPane/>}>
-            {screen === 'chip' && <ChipScreen/>}
+            {screen === 'patterns' && <PatternsScreen/>}
             {screen === 'layout' && <LayoutScreen/>}
+            {screen === 'load' && <ChipScreen/>}
           </Suspense>
         </div>
         <StatusBar/>

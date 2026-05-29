@@ -17,6 +17,7 @@ import {
   DEFAULT_STANDALONE_OUTPUTS,
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
+import { normalizeCardVisualLook } from './cardVisualLook.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -53,6 +54,7 @@ export function defaultStandaloneController(overrides = {}) {
       ...DEFAULT_STANDALONE_LED,
       ...(overrides.led || {}),
     },
+    defaultLook: normalizeCardVisualLook(overrides.defaultLook),
   };
 }
 

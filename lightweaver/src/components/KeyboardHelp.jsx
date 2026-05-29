@@ -3,8 +3,9 @@ import { useState, useEffect } from 'react';
 const SHORTCUTS = [
   { category: 'Global',     key: '?',          desc: 'Open keyboard shortcuts' },
   { category: 'Global',     key: '⌘ K',         desc: 'Command palette' },
-  { category: 'Navigation', key: '1',           desc: 'Chip screen' },
+  { category: 'Navigation', key: '1',           desc: 'Patterns screen' },
   { category: 'Navigation', key: '2',           desc: 'Layout screen' },
+  { category: 'Navigation', key: '3',           desc: 'Load screen' },
   { category: 'Layout',     key: 'D',           desc: 'Draw strip mode' },
   { category: 'Layout',     key: 'S',           desc: 'Select mode' },
   { category: 'Layout',     key: 'X',           desc: 'Delete selected' },
