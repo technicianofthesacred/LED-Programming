@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
 deploy: web interface (phone/browser, hosted on Raspberry Pi or publicly)
 family: installation
-last_reviewed: 2026-05-28
+last_reviewed: 2026-05-29
 ---
 
 # Lightweaver — branded LED installation controller
@@ -56,5 +56,9 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 - **Visitor UI design plan** → `branded-installation-ui.md`
 - **LED layout design tool** → `led-art-mapper/`
 - **Direction / strategy log** → `THINKING.md` (rejected paths + tensions across chats)
+- **Outstanding work** → `TODO.md` (project root)
+
+## TODO format
+`TODO.md` items follow the workspace convention: `- [ ] **Bold lead.** _(band: agent-runnable | you-required | routine)_ One descriptive sentence.` with an optional link/detail line underneath pointing to the full plan doc, PR, or referenced files. Group items under `## Soon` / `## Future` / `## Operational notes`. The band hint tells the i64os Temple page which lane to render the item in.
 
 @./THINKING.md

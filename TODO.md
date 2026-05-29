@@ -1,6 +1,6 @@
-# TODO — Lightweaver (folder `led/`)
+# TODO: Lightweaver (folder `led/`)
 
-Living list of outstanding work on the LED installation controller. Project is branded **Lightweaver** in user-facing copy — `led/` is just the folder slug. See `CLAUDE.md` for stack and intent.
+Living list of outstanding work on the LED installation controller. Project is branded **Lightweaver** in user-facing copy, `led/` is just the folder slug. See `CLAUDE.md` for stack and intent.
 
 ## Soon
 
@@ -8,10 +8,11 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Future
 
-- [ ] **Mode 4 — Live Host runtime.** Reserved for future laptop/Pi/Madrix/sound-reactive streaming. Spec sketched but not built. See `docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md` for the four-mode runtime architecture (Mode 1 Factory Card / Mode 2 Website Loads The Card / Mode 3 Memory Card Advanced Sequence / Mode 4 Live Host).
+- [ ] **Mode 4, Live Host runtime.** _(band: agent-runnable)_ Reserved for future laptop/Pi/Madrix/sound-reactive streaming. Spec sketched but not built.
+- Architecture (four-mode runtime: Mode 1 Factory Card / Mode 2 Website Loads The Card / Mode 3 Memory Card Advanced Sequence / Mode 4 Live Host): [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
 
-## Operational notes (not TODOs — context for future-you)
+## Operational notes (not TODOs: context for future-you)
 
 - Lightweaver is hosted on Cloudflare Pages project `lightweaver` (NOT `mandalacodes`, NOT `adrian-website`). Custom domain `led.mandalacodes.com` is attached. Fallback URL: `lightweaver-edw.pages.dev`.
 
-- ESP32-S3 firmware + WLED for the hardware side. Reliable write path is the ESP32 AP page at `http://192.168.4.1` — public HTTPS-to-private HTTP may be blocked by browsers.
+- ESP32-S3 firmware + WLED for the hardware side. Reliable write path is the ESP32 AP page at `http://192.168.4.1`, public HTTPS-to-private HTTP may be blocked by browsers.
