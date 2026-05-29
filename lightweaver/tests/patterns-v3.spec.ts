@@ -2,6 +2,15 @@ import { test, expect } from '@playwright/test';
 import { createDefaultCircleLayout } from '../src/lib/defaultCircleLayout.js';
 import { createDefaultPatchBoard } from '../src/lib/patchBoard.js';
 
+async function setRangeValue(locator, value: string) {
+  await locator.evaluate((node: HTMLInputElement, nextValue) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(node, nextValue);
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+
 test('v3 patterns show a chip-ready catalog with live local preview', async ({ page }) => {
   const controlRequests: unknown[] = [];
   const configRequests: unknown[] = [];
@@ -182,6 +191,59 @@ test('v3 patterns includes searchable visual pattern browsing', async ({ page })
   await expect(page.locator('.lw-look-card')).toHaveCount(1);
   await expect(page.locator('button[data-pattern-id="ocean"]')).toBeVisible();
   await expect(page.getByText('1 shown')).toBeVisible();
+});
+
+test('v3 tuning controls show immediate values and send card-ready color modifiers', async ({ page }) => {
+  const controlRequests: unknown[] = [];
+  await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await expect.poll(() => controlRequests.length).toBe(1);
+
+  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
+  await expect(page.getByTestId('look-hue-readout')).toHaveText('226 deg');
+
+  await setRangeValue(page.getByTestId('look-saturation-slider'), '80');
+  await expect(page.getByTestId('look-saturation-readout')).toHaveText('31%');
+
+  await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
+  await expect(page.getByTestId('look-brightness-readout')).toHaveText('42%');
+
+  await setRangeValue(page.getByTestId('look-speed-slider'), '1.75');
+  await expect(page.getByTestId('look-speed-readout')).toHaveText('1.75x');
+
+  await setRangeValue(page.getByTestId('look-hue-shift-slider'), '-24');
+  await expect(page.getByTestId('look-hue-shift-readout')).toHaveText('-24');
+
+  await expect.poll(() => controlRequests.some(request => {
+    const body = request as Record<string, unknown>;
+    return body.patternId === 'ocean'
+      && body.hue === 160
+      && body.saturation === 80
+      && body.brightness === 0.42
+      && body.speed === 1.75
+      && body.hueShift === -24;
+  })).toBe(true);
+});
+
+test('v3 patterns restores the WLED/live mirror geometry control', async ({ page }) => {
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('button', { name: 'Mirror' })).toBeVisible();
+  await page.getByRole('button', { name: 'Mirror' }).click();
+
+  await expect(page.locator('section', { hasText: 'Geometry' })).toContainText('mirror-hv');
+  await expect(page.getByRole('button', { name: 'Top/bottom' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Left/right' })).toBeVisible();
 });
 
 test('v3 patterns previews on the whole card when the card has not loaded section zones yet', async ({ page }) => {

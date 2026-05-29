@@ -4,8 +4,11 @@ import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRun
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
 import {
+  cardColorToHex,
+  cardHueDeltaToDegrees,
   cardHueToDegrees,
   cardSaturationToChroma,
+  hexToCardColor,
 } from '../lib/cardVisualLook.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import {
@@ -28,6 +31,21 @@ import { pushLivePreviewToCard } from '../lib/cardLiveControl.js';
 import { LEDPreview } from './Preview.jsx';
 
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
+const DEFAULT_TUNING = {
+  brightness: 1,
+  speed: 1,
+  hueShift: 0,
+  customHue: 32,
+  customSaturation: 230,
+  customBreathe: false,
+  customDrift: false,
+};
+const GEOMETRY_PRESETS = [
+  { id: 'none', label: 'Original', settings: { enabled: false, type: 'none' } },
+  { id: 'mirror-hv', label: 'Mirror', settings: { enabled: true, type: 'mirror-hv' } },
+  { id: 'radial', label: 'Mandala', settings: { enabled: true, type: 'radial', count: 8, twist: 0 } },
+  { id: 'kaleido', label: 'Kaleido', settings: { enabled: true, type: 'kaleido', slices: 6 } },
+];
 const PATTERN_CATEGORIES = [
   { id: 'all', label: 'All', ids: null },
   { id: 'calm', label: 'Calm', ids: ['aurora', 'breathe', 'calm', 'drift', 'bloom', 'warm-white'] },
@@ -82,6 +100,48 @@ function LookPreview({ patternId, look, large = false }) {
       <span className="lw-look-scan"/>
     </div>
   );
+}
+
+function TuningSlider({ label, testId, min, max, step, value, readout, onChange }) {
+  const readoutId = testId.replace(/-slider$/, '-readout');
+  return (
+    <label className="lw-look-slider-row">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        data-testid={testId}
+        aria-label={label}
+        onChange={event => onChange(Number(event.target.value))}
+      />
+      <strong data-testid={readoutId}>{readout}</strong>
+    </label>
+  );
+}
+
+function geometryTypeFromSettings(settings = {}) {
+  return settings?.enabled && settings.type !== 'none' ? settings.type : 'none';
+}
+
+function clampByte(value) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(255, n));
+}
+
+function randomLookTuning() {
+  return {
+    customHue: Math.floor(Math.random() * 256),
+    customSaturation: 120 + Math.floor(Math.random() * 136),
+    brightness: 0.58 + Math.random() * 0.42,
+    speed: 0.45 + Math.random() * 1.9,
+    hueShift: Math.floor(Math.random() * 121) - 60,
+    customBreathe: Math.random() > 0.55,
+    customDrift: Math.random() > 0.72,
+  };
 }
 
 function looksMatch(a, b) {
@@ -208,6 +268,8 @@ export function PatternsScreen() {
     setPatchBoard,
     standaloneController,
     setStandaloneController,
+    symSettings,
+    setSymSettings,
   } = useProject();
   const [cardHost, setCardHost] = useState(readStoredCardHost);
   const [status, setStatus] = useState('');
@@ -276,6 +338,8 @@ export function PatternsScreen() {
   const hasUnsavedPreview = !looksMatch(look, savedTargetLook);
   const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
   const currentComboLabel = comboLabelFromTargets(effectiveSectionTargets, draftDefaultLook);
+  const colorHex = cardColorToHex(look.customHue, look.customSaturation);
+  const geometryType = geometryTypeFromSettings(symSettings);
   const filteredPatterns = useMemo(() => {
     const query = patternSearch.trim().toLowerCase();
     return DEFAULT_CARD_PATTERN_BANK.filter(pattern => {
@@ -378,6 +442,10 @@ export function PatternsScreen() {
     const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
     setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
     if (push) scheduleLivePreview(nextLook, selectedTarget);
+  };
+
+  const updateGeometry = (settings) => {
+    setSymSettings(prev => ({ ...(prev || {}), ...settings }));
   };
 
   const buildCurrentHardwareState = ({ saveNamedLook = false, label = '', uniqueLookId = false } = {}) => {
@@ -702,8 +770,9 @@ export function PatternsScreen() {
                   viewBox={viewBox}
                   svgText={svgText}
                   masterBrightness={look.brightness}
-                  masterSaturation={Math.max(0.2, look.customSaturation / 255)}
-                  masterHueShift={look.hueShift + Math.round((look.customHue - 32) / 2)}
+                  masterSaturation={look.customSaturation / 255}
+                  masterHueShift={cardHueDeltaToDegrees(look.hueShift + (look.customHue - 32))}
+                  symSettings={symSettings?.enabled ? symSettings : null}
                   motionSmoothing="soft"
                 />
               </div>
@@ -712,6 +781,22 @@ export function PatternsScreen() {
 
             <Section title="Color & motion" meta={selectedTargetName}>
               <LookPreview patternId={look.patternId} look={look} large/>
+              <div className="lw-look-color-picker">
+                <label>
+                  <span>Pick color</span>
+                  <input
+                    type="color"
+                    value={colorHex}
+                    data-testid="look-color-picker"
+                    aria-label="Pick color"
+                    onChange={event => updatePreviewLook(hexToCardColor(event.target.value, look))}
+                  />
+                </label>
+                <span className="lw-look-color-current" style={{ '--swatch': colorHex }}>
+                  <strong>{cardHueToDegrees(look.customHue)} deg</strong>
+                  <em>{Math.round((look.customSaturation / 255) * 100)}%</em>
+                </span>
+              </div>
               <div className="lw-swatch-grid" aria-label="Color swatches">
                 {SWATCHES.map(hue => (
                   <button
@@ -725,31 +810,124 @@ export function PatternsScreen() {
                 ))}
               </div>
               <div className="lw-look-sliders">
-                <label>
-                  <span>Hue</span>
-                  <input type="range" min="0" max="255" step="1" value={look.customHue} onChange={event => updatePreviewLook({ customHue: +event.target.value })}/>
-                </label>
-                <label>
-                  <span>Color</span>
-                  <input type="range" min="0" max="255" step="1" value={look.customSaturation} onChange={event => updatePreviewLook({ customSaturation: +event.target.value })}/>
-                </label>
-                <label>
-                  <span>Brightness</span>
-                  <input type="range" min="0.05" max="1" step="0.01" value={look.brightness} onChange={event => updatePreviewLook({ brightness: +event.target.value })}/>
-                </label>
-                <label>
-                  <span>Speed</span>
-                  <input type="range" min="0.05" max="3" step="0.01" value={look.speed} onChange={event => updatePreviewLook({ speed: +event.target.value })}/>
-                </label>
-                <label>
-                  <span>Hue shift</span>
-                  <input type="range" min="-128" max="128" step="1" value={look.hueShift} onChange={event => updatePreviewLook({ hueShift: +event.target.value })}/>
-                </label>
+                <TuningSlider
+                  label="Hue"
+                  testId="look-hue-slider"
+                  min="0"
+                  max="255"
+                  step="1"
+                  value={look.customHue}
+                  readout={`${cardHueToDegrees(look.customHue)} deg`}
+                  onChange={customHue => updatePreviewLook({ customHue: clampByte(customHue) })}
+                />
+                <TuningSlider
+                  label="Color"
+                  testId="look-saturation-slider"
+                  min="0"
+                  max="255"
+                  step="1"
+                  value={look.customSaturation}
+                  readout={`${Math.round((look.customSaturation / 255) * 100)}%`}
+                  onChange={customSaturation => updatePreviewLook({ customSaturation: clampByte(customSaturation) })}
+                />
+                <TuningSlider
+                  label="Brightness"
+                  testId="look-brightness-slider"
+                  min="0.05"
+                  max="1"
+                  step="0.01"
+                  value={look.brightness}
+                  readout={`${Math.round(look.brightness * 100)}%`}
+                  onChange={brightness => updatePreviewLook({ brightness })}
+                />
+                <TuningSlider
+                  label="Speed"
+                  testId="look-speed-slider"
+                  min="0.05"
+                  max="3"
+                  step="0.01"
+                  value={look.speed}
+                  readout={`${look.speed.toFixed(2)}x`}
+                  onChange={speed => updatePreviewLook({ speed })}
+                />
+                <TuningSlider
+                  label="Shift"
+                  testId="look-hue-shift-slider"
+                  min="-128"
+                  max="128"
+                  step="1"
+                  value={look.hueShift}
+                  readout={String(look.hueShift)}
+                  onChange={hueShift => updatePreviewLook({ hueShift })}
+                />
               </div>
               <div className="lw-look-switches">
                 <label><input type="checkbox" checked={look.customBreathe} onChange={event => updatePreviewLook({ customBreathe: event.target.checked })}/> Breathe</label>
                 <label><input type="checkbox" checked={look.customDrift} onChange={event => updatePreviewLook({ customDrift: event.target.checked })}/> Drift</label>
               </div>
+              <div className="lw-look-tune-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => updatePreviewLook(DEFAULT_TUNING)}>Reset</button>
+                <button type="button" className="btn btn-ghost" onClick={() => updatePreviewLook(randomLookTuning())}>Randomize</button>
+              </div>
+            </Section>
+
+            <Section title="Geometry" meta={geometryType}>
+              <div className="lw-geometry-presets">
+                {GEOMETRY_PRESETS.map(preset => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={geometryType === preset.id ? 'active' : ''}
+                    onClick={() => updateGeometry(preset.settings)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              {geometryType.startsWith('mirror') && (
+                <div className="lw-geometry-segmented" aria-label="Mirror axis">
+                  {[
+                    ['mirror-h', 'Top/bottom'],
+                    ['mirror-v', 'Left/right'],
+                    ['mirror-hv', 'Both'],
+                  ].map(([type, label]) => (
+                    <button
+                      key={type}
+                      type="button"
+                      className={geometryType === type ? 'active' : ''}
+                      onClick={() => updateGeometry({ enabled: true, type })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {geometryType === 'radial' && (
+                <div className="lw-geometry-counts" aria-label="Mandala repeats">
+                  {[3, 4, 5, 6, 8, 12].map(count => (
+                    <button
+                      key={count}
+                      type="button"
+                      className={(symSettings?.count || 8) === count ? 'active' : ''}
+                      onClick={() => updateGeometry({ enabled: true, type: 'radial', count })}
+                    >
+                      {count}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {geometryType === 'kaleido' && (
+                <TuningSlider
+                  label="Slices"
+                  testId="look-kaleido-slices-slider"
+                  min="2"
+                  max="16"
+                  step="1"
+                  value={symSettings?.slices || 6}
+                  readout={String(symSettings?.slices || 6)}
+                  onChange={slices => updateGeometry({ enabled: true, type: 'kaleido', slices })}
+                />
+              )}
             </Section>
 
             <Section title="Knob" meta={`${cycleIds.length} patterns`}>

@@ -12,6 +12,53 @@ static inline uint8_t shiftHue(uint8_t base, int16_t shift) {
   return static_cast<uint8_t>(v);
 }
 
+static constexpr uint8_t LW_DEFAULT_CUSTOM_HUE = 32;
+static constexpr uint8_t LW_DEFAULT_CUSTOM_SATURATION = 230;
+
+static uint8_t resolveDriftHue(uint32_t t, const PatternModifiers& mods) {
+  uint8_t lo = mods.driftHueMin;
+  uint8_t hi = mods.driftHueMax;
+  uint16_t span;
+  if (hi >= lo) span = uint16_t(hi - lo);
+  else span = uint16_t(255 - lo + hi + 1);
+  if (span == 0) return lo;
+
+  uint32_t period = max<uint32_t>(2000, span * 80);
+  uint32_t phase = t % (period * 2);
+  uint16_t step;
+  if (phase < period) step = uint16_t((uint32_t(phase) * span) / period);
+  else step = uint16_t(span - ((uint32_t(phase - period) * span) / period));
+  if (hi >= lo) return lo + uint8_t(step);
+  return uint8_t((uint16_t(lo) + step) & 0xff);
+}
+
+void applyGlobalColorModifiers(CRGB* leds, uint16_t totalPixels, uint32_t t, const PatternModifiers& mods) {
+  int16_t hueShift = int16_t(mods.customHue) - int16_t(LW_DEFAULT_CUSTOM_HUE);
+  if (mods.customDrift) {
+    hueShift += int16_t(resolveDriftHue(t, mods)) - int16_t(mods.customHue);
+  }
+  const bool shiftsHue = hueShift != 0;
+  const bool changesSaturation = mods.customSaturation != LW_DEFAULT_CUSTOM_SATURATION;
+  const uint8_t breatheScale = mods.customBreathe
+    ? uint8_t(86 + scale8(sin8(uint8_t(t / 14)), 169))
+    : 255;
+  if (!shiftsHue && !changesSaturation && breatheScale >= 255) return;
+
+  for (uint16_t i = 0; i < totalPixels; i++) {
+    if (!(leds[i].r || leds[i].g || leds[i].b)) continue;
+    if (shiftsHue || changesSaturation) {
+      CHSV hsv = rgb2hsv_approximate(leds[i]);
+      if (shiftsHue) hsv.hue = shiftHue(hsv.hue, hueShift);
+      if (changesSaturation) {
+        uint16_t sat = (uint16_t(hsv.saturation) * mods.customSaturation + (LW_DEFAULT_CUSTOM_SATURATION / 2)) / LW_DEFAULT_CUSTOM_SATURATION;
+        hsv.saturation = uint8_t(sat > 255 ? 255 : sat);
+      }
+      leds[i] = hsv;
+    }
+    if (breatheScale < 255) leds[i].nscale8(breatheScale);
+  }
+}
+
 static inline uint8_t hash8(uint16_t value, uint16_t salt = 0) {
   uint16_t x = value;
   x ^= salt * 109u;
@@ -208,6 +255,7 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
       leds[i] = CHSV(hue, 135 + (wave / 5), 120 + (wave / 3));
     }
   }
+  applyGlobalColorModifiers(leds, totalPixels, t, mods);
   return true;
 }
 
@@ -236,5 +284,6 @@ bool renderPresetPattern(const String& preset, CRGB* leds, uint16_t totalPixels,
   else if (preset == "photo-white") { baseHue = 28; saturation = 60; }
   CHSV color(shiftHue(baseHue, mods.hueShift), saturation, value);
   fill_solid(leds, totalPixels, color);
+  applyGlobalColorModifiers(leds, totalPixels, millis(), mods);
   return true;
 }
