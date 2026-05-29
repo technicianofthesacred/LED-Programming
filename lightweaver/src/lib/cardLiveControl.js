@@ -10,8 +10,11 @@ export function buildLivePreviewControlPayload(look = {}) {
   const normalized = normalizeCardVisualLook(look);
   return {
     cancelStream: true,
+    ...(look.zone ? { zone: String(look.zone) } : {}),
     patternId: normalized.patternId,
     brightness: normalized.brightness,
+    speed: normalized.speed,
+    hueShift: normalized.hueShift,
     hue: normalized.customHue,
     saturation: normalized.customSaturation,
     breathe: normalized.customBreathe,

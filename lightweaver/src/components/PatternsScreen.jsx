@@ -6,8 +6,18 @@ import { getCardPatternById } from '../lib/cardPatternBank.js';
 import {
   cardHueToDegrees,
   cardSaturationToChroma,
-  normalizeCardVisualLook,
 } from '../lib/cardVisualLook.js';
+import { normalizePatchBoard } from '../lib/patchBoard.js';
+import {
+  ALL_SECTIONS_TARGET_ID,
+  applyLookToPatchBoard,
+  applySavedLookToPatchBoard,
+  deriveSectionTargets,
+  normalizeSavedLooks,
+  normalizeSectionVisualLook,
+  saveCurrentLookToController,
+  targetLabel,
+} from '../lib/sectionLookModel.js';
 import {
   cardHostToUrl,
   readStoredCardHost,
@@ -68,6 +78,8 @@ function LookPreview({ patternId, look, large = false }) {
 function looksMatch(a, b) {
   return a.patternId === b.patternId
     && a.brightness === b.brightness
+    && a.speed === b.speed
+    && a.hueShift === b.hueShift
     && a.customHue === b.customHue
     && a.customSaturation === b.customSaturation
     && a.customBreathe === b.customBreathe
@@ -76,8 +88,8 @@ function looksMatch(a, b) {
 
 function LookCard({ pattern, look, previewing, saved, inCycle, onSelect, onCycleChange }) {
   const summary = previewing
-    ? saved ? 'Previewing and saved as startup' : 'Previewing on LEDs'
-    : saved ? 'Saved as startup' : pattern.description || 'Tap to preview this look';
+    ? saved ? 'Previewing and saved here' : 'Previewing on LEDs'
+    : saved ? 'Saved for this target' : pattern.description || 'Tap to preview this look';
   return (
     <article className={`lw-look-card ${saved ? 'is-selected' : ''} ${previewing ? 'is-previewing' : ''}`}>
       <button type="button" className="lw-look-card-main" data-pattern-id={pattern.id} onClick={onSelect}>
@@ -95,11 +107,46 @@ function LookCard({ pattern, look, previewing, saved, inCycle, onSelect, onCycle
   );
 }
 
+function TargetButton({ target, active, onSelect }) {
+  const pattern = getCardPatternById(target.look?.patternId);
+  return (
+    <button
+      type="button"
+      className={`lw-section-target ${active ? 'is-active' : ''}`}
+      onClick={onSelect}
+      data-testid={`section-target-${target.id}`}
+    >
+      <span>
+        <strong>{target.label}</strong>
+        <em>{target.kind === 'all' ? 'whole piece' : `${target.pixelCount} LEDs`}</em>
+      </span>
+      <b>{pattern?.label || target.look?.patternId || 'Pattern'}</b>
+    </button>
+  );
+}
+
+function SavedLookCard({ look, active, onApply }) {
+  const pattern = getCardPatternById(look.defaultLook?.patternId);
+  const sectionCount = Object.keys(look.sectionLooks || {}).length;
+  return (
+    <button type="button" className={`lw-saved-look-card ${active ? 'is-active' : ''}`} onClick={onApply}>
+      <LookPreview patternId={look.defaultLook?.patternId} look={look.defaultLook}/>
+      <span>
+        <strong>{look.label}</strong>
+        <em>{pattern?.label || look.defaultLook?.patternId} · {sectionCount || 1} section{sectionCount === 1 ? '' : 's'}</em>
+      </span>
+    </button>
+  );
+}
+
 export function PatternsScreen() {
   const {
     projectName,
     strips,
+    viewBox,
+    svgText,
     patchBoard,
+    setPatchBoard,
     standaloneController,
     setStandaloneController,
   } = useProject();
@@ -107,12 +154,34 @@ export function PatternsScreen() {
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
   const [livePreviewEnabled, setLivePreviewEnabled] = useState(true);
-  const [previewLook, setPreviewLook] = useState(() => normalizeCardVisualLook(standaloneController?.defaultLook));
+  const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
+  const [draftLooks, setDraftLooks] = useState({});
+  const [lookLabel, setLookLabel] = useState('');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
 
-  const savedLook = normalizeCardVisualLook(standaloneController?.defaultLook);
-  const look = normalizeCardVisualLook(previewLook);
+  const savedGlobalLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
+  const savedLooks = normalizeSavedLooks(standaloneController?.looks);
+  const activeLookId = standaloneController?.activeLookId || '';
+  const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
+  const sectionTargets = useMemo(
+    () => deriveSectionTargets({ strips, patchBoard: board, defaultLook: savedGlobalLook }),
+    [
+      strips,
+      board,
+      savedGlobalLook.patternId,
+      savedGlobalLook.brightness,
+      savedGlobalLook.speed,
+      savedGlobalLook.hueShift,
+      savedGlobalLook.customHue,
+      savedGlobalLook.customSaturation,
+      savedGlobalLook.customBreathe,
+      savedGlobalLook.customDrift,
+    ],
+  );
+  const selectedTarget = sectionTargets.find(target => target.id === selectedTargetId) || sectionTargets[0];
+  const savedTargetLook = normalizeSectionVisualLook(selectedTarget?.look || savedGlobalLook);
+  const look = normalizeSectionVisualLook(draftLooks[selectedTarget?.id] || savedTargetLook);
   const controls = {
     ...DEFAULT_CARD_CONTROLS,
     ...(standaloneController?.controls || {}),
@@ -126,27 +195,39 @@ export function PatternsScreen() {
     : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
   const selectedPattern = getCardPatternById(look.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
   const previewPatternId = selectedPattern?.previewPatternId || selectedPattern?.id || look.patternId;
-  const savedPattern = getCardPatternById(savedLook.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
-  const hasUnsavedPreview = !looksMatch(look, savedLook);
+  const savedPattern = getCardPatternById(savedGlobalLook.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
+  const hasUnsavedPreview = !looksMatch(look, savedTargetLook);
+  const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
 
   const runtimePackage = useMemo(
-    () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard, standaloneController }),
-    [projectName, strips, patchBoard, standaloneController],
+    () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
+    [projectName, strips, board, standaloneController],
   );
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const config = runtimePackage.config;
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  const previewStrips = useMemo(() => {
+    return (strips || []).map(strip => {
+      const stripTarget = sectionTargets.find(target => target.kind === 'section' && target.stripId === strip.id);
+      const targetLook = selectedTarget?.kind === 'all'
+        ? look
+        : selectedTarget?.stripId === strip.id
+          ? look
+          : normalizeSectionVisualLook(stripTarget?.look || savedGlobalLook);
+      return {
+        ...strip,
+        patternId: targetLook.patternId,
+        brightness: targetLook.brightness,
+        speed: targetLook.speed,
+        hueShift: targetLook.hueShift,
+      };
+    });
+  }, [look, savedGlobalLook, sectionTargets, selectedTarget, strips]);
 
   useEffect(() => {
-    setPreviewLook(savedLook);
-  }, [
-    savedLook.patternId,
-    savedLook.brightness,
-    savedLook.customHue,
-    savedLook.customSaturation,
-    savedLook.customBreathe,
-    savedLook.customDrift,
-  ]);
+    if (sectionTargets.some(target => target.id === selectedTargetId)) return;
+    setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+  }, [sectionTargets, selectedTargetId]);
 
   const updateController = (patch) => {
     setStandaloneController(prev => {
@@ -155,7 +236,7 @@ export function PatternsScreen() {
         ...current,
         ...patch,
         defaultLook: patch.defaultLook
-          ? normalizeCardVisualLook({ ...(current.defaultLook || {}), ...patch.defaultLook })
+          ? normalizeSectionVisualLook({ ...(current.defaultLook || {}), ...patch.defaultLook })
           : current.defaultLook,
         controls: patch.controls
           ? {
@@ -170,18 +251,19 @@ export function PatternsScreen() {
     });
   };
 
-  const scheduleLivePreview = useCallback((nextLook) => {
+  const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
     if (!livePreviewEnabled) return;
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
+    const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
     livePreviewTimer.current = setTimeout(async () => {
       setStatusKind('');
-      setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${cardHostToUrl(cardHost)}...`);
+      setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)} at ${cardHostToUrl(cardHost)}...`);
       try {
-        await pushLivePreviewToCard(nextLook, { host: cardHost, timeoutMs: 2200 });
+        await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 });
         if (sequence === livePreviewSeq.current) {
           setStatusKind('ok');
-          setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on the LEDs. Not saved yet.`);
+          setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)}. Not saved yet.`);
         }
       } catch (error) {
         if (sequence === livePreviewSeq.current) {
@@ -192,45 +274,88 @@ export function PatternsScreen() {
         }
       }
     }, 80);
-  }, [cardHost, livePreviewEnabled]);
+  }, [cardHost, livePreviewEnabled, selectedTarget]);
 
   useEffect(() => () => {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
   }, []);
 
   const updatePreviewLook = (patch, { push = true } = {}) => {
-    const nextLook = normalizeCardVisualLook({ ...look, ...patch });
-    setPreviewLook(nextLook);
-    if (push) scheduleLivePreview(nextLook);
+    if (!selectedTarget) return;
+    const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
+    setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
+    if (push) scheduleLivePreview(nextLook, selectedTarget);
   };
 
-  const buildPackageForLook = (nextLook) => buildCardRuntimePackageFromProject({
-    projectName,
-    strips,
-    patchBoard,
-    standaloneController: {
-      ...(standaloneController || {}),
-      defaultLook: nextLook,
-    },
-  });
+  const commitCurrentLook = ({ label = '' } = {}) => {
+    const nextLook = normalizeSectionVisualLook(look);
+    const nextDefaultLook = selectedTarget?.kind === 'all' ? nextLook : savedGlobalLook;
+    const nextBoard = applyLookToPatchBoard({
+      patchBoard: board,
+      strips,
+      targetId: selectedTarget?.id || ALL_SECTIONS_TARGET_ID,
+      look: nextLook,
+    });
+    const nextTargets = deriveSectionTargets({ strips, patchBoard: nextBoard, defaultLook: nextDefaultLook });
+    const fallbackLabel = selectedTarget?.kind === 'all'
+      ? `${selectedPattern?.label || 'Pattern'} look`
+      : `${selectedTargetName} ${selectedPattern?.label || 'look'}`;
+    const nextController = saveCurrentLookToController(standaloneController, {
+      label: label || lookLabel.trim() || fallbackLabel,
+      defaultLook: nextDefaultLook,
+      targets: nextTargets,
+    });
+    setPatchBoard(nextBoard);
+    setStandaloneController(nextController);
+    setDraftLooks({});
+    setLookLabel('');
+    return { nextLook, nextBoard, nextController };
+  };
+
+  const saveLookOnly = () => {
+    const { nextController } = commitCurrentLook({});
+    const saved = normalizeSavedLooks(nextController.looks)[0];
+    setStatusKind('ok');
+    setStatus(`${saved?.label || 'Look'} saved. Load now uses this Look in the chip config.`);
+  };
 
   const savePreviewToCard = async () => {
-    const nextLook = normalizeCardVisualLook(look);
-    const nextPackage = buildPackageForLook(nextLook);
-    updateController({ defaultLook: nextLook });
+    const { nextLook, nextBoard, nextController } = commitCurrentLook({});
+    const nextPackage = buildCardRuntimePackageFromProject({
+      projectName,
+      strips,
+      patchBoard: nextBoard,
+      standaloneController: nextController,
+    });
     setStatusKind('');
     setStatus(`Saving ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} to ${cardHostToUrl(cardHost)}...`);
     try {
       await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000 });
-      await pushLivePreviewToCard(nextLook, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
+      const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
+      await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
       setStatusKind('ok');
-      setStatus('Saved on the card. This is now the startup look and knob cycle config.');
+      setStatus('Saved on the card. This is now the startup Look and knob cycle config.');
     } catch (error) {
       setStatusKind('err');
       setStatus(error?.reason === 'mixed-content'
         ? 'Saved in the Studio, but the hosted HTTPS page cannot write to the local card. Copy or download the chip config and paste it on the card page.'
         : 'Saved in the Studio, but could not reach the card. Copy or download the chip config and paste it on the card page.');
     }
+  };
+
+  const applySavedLook = (savedLook) => {
+    const nextBoard = applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook });
+    setPatchBoard(nextBoard);
+    setStandaloneController(prev => ({
+      ...(prev || {}),
+      defaultLook: savedLook.defaultLook,
+      activeLookId: savedLook.id,
+      looks: savedLooks,
+    }));
+    setDraftLooks({});
+    setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+    setStatusKind('ok');
+    setStatus(`${savedLook.label} applied. Preview or save it to the card when ready.`);
   };
 
   const setCycleEnabled = (patternId, enabled) => {
@@ -261,10 +386,11 @@ export function PatternsScreen() {
       <div className="lw-patterns-shell">
         <header className="lw-patterns-hero">
           <div>
-            <h1>Patterns</h1>
-            <p>Tap patterns to try them on the LEDs first. Save to card only when the preview is the startup look you want anchored on the chip.</p>
+            <h1>Patterns & Looks</h1>
+            <p>Choose a section, preview patterns and colors, then save the whole result as a Look before loading it onto the card.</p>
           </div>
           <div className="lw-patterns-actions">
+            <button type="button" className="btn btn-primary" onClick={saveLookOnly}>Save Look</button>
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
@@ -281,7 +407,7 @@ export function PatternsScreen() {
         <div className="lw-patterns-grid">
           <section className="lw-look-picker">
             <div className="lw-sec-header">
-              <span>Tap a pattern to preview on LEDs</span>
+              <span>Tap a pattern to preview</span>
               <span className="meta">{DEFAULT_CARD_PATTERN_BANK.length} chip-ready / {cycleIds.length} on knob</span>
             </div>
             <div className="lw-live-preview-bar">
@@ -293,7 +419,23 @@ export function PatternsScreen() {
                 />
                 Preview taps on the LED card
               </label>
-              <span>{hasUnsavedPreview ? 'Preview not saved' : 'Preview matches saved startup'}</span>
+              <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
+            </div>
+            <div className="lw-target-panel">
+              <div className="lw-sec-header">
+                <span>Design target</span>
+                <span className="meta">{Math.max(0, sectionTargets.length - 1)} sections · card limit 8</span>
+              </div>
+              <div className="lw-target-grid">
+                {sectionTargets.map(target => (
+                  <TargetButton
+                    key={target.id}
+                    target={target.id === selectedTarget?.id ? { ...target, look } : target}
+                    active={target.id === selectedTarget?.id}
+                    onSelect={() => setSelectedTargetId(target.id)}
+                  />
+                ))}
+              </div>
             </div>
             <div className="lw-look-grid">
               {DEFAULT_CARD_PATTERN_BANK.map(pattern => (
@@ -302,7 +444,7 @@ export function PatternsScreen() {
                   pattern={pattern}
                   look={look}
                   previewing={look.patternId === pattern.id}
-                  saved={savedLook.patternId === pattern.id}
+                  saved={savedTargetLook.patternId === pattern.id}
                   inCycle={cycleIds.includes(pattern.id)}
                   onSelect={() => updatePreviewLook({ patternId: pattern.id })}
                   onCycleChange={enabled => setCycleEnabled(pattern.id, enabled)}
@@ -312,24 +454,27 @@ export function PatternsScreen() {
           </section>
 
           <aside className="lw-patterns-aside">
-            <Section title="Preview" meta={selectedPattern?.label || look.patternId}>
+            <Section title="Preview" meta={`${selectedTargetName} · ${selectedPattern?.label || look.patternId}`}>
               <div className="lw-pattern-led-preview" style={{ '--pattern-preview-bg': selectedPattern?.preview }}>
                 <LEDPreview
                   patternId={previewPatternId}
                   playing={true}
-                  speed={1}
+                  speed={look.speed}
                   glow={1.1}
                   dotSize={3.2}
+                  strips={previewStrips}
+                  viewBox={viewBox}
+                  svgText={svgText}
                   masterBrightness={look.brightness}
                   masterSaturation={Math.max(0.2, look.customSaturation / 255)}
-                  masterHueShift={Math.round((look.customHue - 32) / 2)}
+                  masterHueShift={look.hueShift + Math.round((look.customHue - 32) / 2)}
                   motionSmoothing="soft"
                 />
               </div>
               <p className="lw-pattern-preview-copy">{selectedPattern?.description}</p>
             </Section>
 
-            <Section title="Color" meta="stored on the card">
+            <Section title="Color & motion" meta={selectedTargetName}>
               <LookPreview patternId={look.patternId} look={look} large/>
               <div className="lw-swatch-grid" aria-label="Color swatches">
                 {SWATCHES.map(hue => (
@@ -356,6 +501,14 @@ export function PatternsScreen() {
                   <span>Brightness</span>
                   <input type="range" min="0.05" max="1" step="0.01" value={look.brightness} onChange={event => updatePreviewLook({ brightness: +event.target.value })}/>
                 </label>
+                <label>
+                  <span>Speed</span>
+                  <input type="range" min="0.05" max="3" step="0.01" value={look.speed} onChange={event => updatePreviewLook({ speed: +event.target.value })}/>
+                </label>
+                <label>
+                  <span>Hue shift</span>
+                  <input type="range" min="-128" max="128" step="1" value={look.hueShift} onChange={event => updatePreviewLook({ hueShift: +event.target.value })}/>
+                </label>
               </div>
               <div className="lw-look-switches">
                 <label><input type="checkbox" checked={look.customBreathe} onChange={event => updatePreviewLook({ customBreathe: event.target.checked })}/> Breathe</label>
@@ -363,10 +516,73 @@ export function PatternsScreen() {
               </div>
             </Section>
 
+            <Section title="Saved Looks" meta={savedLooks.length ? `${savedLooks.length} saved` : 'none yet'}>
+              <div className="lw-save-look-row">
+                <input
+                  className="lw-search-input"
+                  value={lookLabel}
+                  onChange={event => setLookLabel(event.target.value)}
+                  placeholder={`${selectedPattern?.label || 'Pattern'} look`}
+                />
+                <button type="button" className="btn btn-primary" onClick={saveLookOnly}>Save</button>
+              </div>
+              {savedLooks.length ? (
+                <div className="lw-saved-look-list">
+                  {savedLooks.map(savedLook => (
+                    <SavedLookCard
+                      key={savedLook.id}
+                      look={savedLook}
+                      active={savedLook.id === activeLookId}
+                      onApply={() => applySavedLook(savedLook)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="lw-pattern-preview-copy">Save a Look to keep this pattern, color, motion, and section setup together.</p>
+              )}
+            </Section>
+
+            <Section title="Knob" meta={`${cycleIds.length} patterns`}>
+              <div className="lw-knob-control-grid">
+                <div>
+                  <span>Rotate</span>
+                  <div className="lw-tweaks-seg">
+                    <button
+                      type="button"
+                      className={controls.encoder.rotateDirection === 'clockwise-brighter' ? 'active' : ''}
+                      onClick={() => updateController({ controls: { encoder: { rotateDirection: 'clockwise-brighter' } } })}
+                    >
+                      Brighter
+                    </button>
+                    <button
+                      type="button"
+                      className={controls.encoder.rotateDirection === 'clockwise-dimmer' ? 'active' : ''}
+                      onClick={() => updateController({ controls: { encoder: { rotateDirection: 'clockwise-dimmer' } } })}
+                    >
+                      Dimmer
+                    </button>
+                  </div>
+                </div>
+                <label>
+                  <span>Step</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="64"
+                    step="1"
+                    value={controls.encoder.brightnessStep}
+                    onChange={event => updateController({ controls: { encoder: { brightnessStep: +event.target.value } } })}
+                  />
+                  <b>{controls.encoder.brightnessStep}</b>
+                </label>
+              </div>
+            </Section>
+
             <Section title="Card" meta={`${config.led.pixels} pixels`}>
               <div className="lw-card-load-summary">
                 <span>Live preview</span><strong data-testid="card-live-preview-label">{selectedPattern?.label || look.patternId}</strong>
-                <span>Starts with</span><strong data-testid="card-startup-label">{savedPattern?.label || savedLook.patternId}</strong>
+                <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>
+                <span>Starts with</span><strong data-testid="card-startup-label">{savedPattern?.label || savedGlobalLook.patternId}</strong>
                 <span>Knob cycle</span><strong data-testid="card-knob-cycle-label">{cycleIds.map(id => getCardPatternById(id)?.label || id).join(', ')}</strong>
                 <span>Local page</span>
                 <div className="lw-card-host-row">

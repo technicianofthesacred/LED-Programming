@@ -18,6 +18,7 @@ import {
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { normalizeSavedLooks } from './sectionLookModel.js';
 import { createDefaultPatchBoard } from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
 
@@ -57,6 +58,8 @@ export function defaultStandaloneController(overrides = {}) {
       ...(overrides.led || {}),
     },
     defaultLook: normalizeCardVisualLook(overrides.defaultLook),
+    activeLookId: String(overrides.activeLookId || ''),
+    looks: normalizeSavedLooks(overrides.looks || []),
   };
 }
 

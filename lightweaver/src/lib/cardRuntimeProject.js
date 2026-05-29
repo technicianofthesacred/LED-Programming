@@ -22,19 +22,25 @@ export function buildCardRuntimePackageFromProject({
   const outputs = deriveStandaloneOutputsFromStrips(strips, outputSource);
   const resolvedPixels = totalPixels || outputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || 44;
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
-  const patterns = resolvePackagePatterns(standaloneController, visualLook.patternId);
   const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
     label: 'Full Piece',
     patternId: visualLook.patternId,
     brightness: visualLook.brightness,
+    speed: visualLook.speed,
+    hueShift: visualLook.hueShift,
     customHue: visualLook.customHue,
     customSaturation: visualLook.customSaturation,
     customBreathe: visualLook.customBreathe,
     customDrift: visualLook.customDrift,
     ranges: [{ start: 0, count: resolvedPixels }],
   }];
+  const patterns = resolvePackagePatterns(
+    standaloneController,
+    visualLook.patternId,
+    runtimeZones.map(zone => zone.patternId),
+  );
 
   return makeCardRuntimePackage({
     projectName,
@@ -60,13 +66,14 @@ export function buildCardRuntimePackageFromProject({
   });
 }
 
-function resolvePackagePatterns(standaloneController = {}, startupPatternId = '') {
+function resolvePackagePatterns(standaloneController = {}, startupPatternId = '', zonePatternIds = []) {
   const configuredCycle = standaloneController?.controls?.encoder?.patternCycleIds;
   const requested = Array.isArray(configuredCycle) && configuredCycle.length
     ? configuredCycle
     : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
   const ids = [
     startupPatternId,
+    ...zonePatternIds,
     ...requested,
   ].filter(Boolean);
   const selected = orderedCardPatterns(ids);
@@ -86,6 +93,8 @@ function applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) {
       ...zone,
       patternId: hasExplicit(playback.patternId) ? zone.patternId : visualLook.patternId,
       brightness: hasExplicit(playback.brightness) ? zone.brightness : visualLook.brightness,
+      speed: hasExplicit(playback.speed) ? zone.speed : visualLook.speed,
+      hueShift: hasExplicit(playback.hueShift) ? zone.hueShift : visualLook.hueShift,
       customHue: hasExplicit(playback.customHue) ? zone.customHue : visualLook.customHue,
       customSaturation: hasExplicit(playback.customSaturation) ? zone.customSaturation : visualLook.customSaturation,
       customBreathe: hasExplicit(playback.customBreathe) ? zone.customBreathe : visualLook.customBreathe,

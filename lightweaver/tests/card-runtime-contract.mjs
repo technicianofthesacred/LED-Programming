@@ -116,6 +116,8 @@ const visualLookPkg = buildCardRuntimePackageFromProject({
     defaultLook: {
       patternId: 'scanner',
       brightness: 0.72,
+      speed: 1.45,
+      hueShift: -18,
       customHue: 138,
       customSaturation: 210,
       customBreathe: true,
@@ -128,6 +130,8 @@ assert.equal(visualLookPkg.config.startupPatternId, 'scanner');
 assert.equal(visualLookPkg.config.zones.length, 1);
 assert.equal(visualLookPkg.config.zones[0].patternId, 'scanner');
 assert.equal(visualLookPkg.config.zones[0].brightness, 0.72);
+assert.equal(visualLookPkg.config.zones[0].speed, 1.45);
+assert.equal(visualLookPkg.config.zones[0].hueShift, -18);
 assert.equal(visualLookPkg.config.zones[0].customHue, 138);
 assert.equal(visualLookPkg.config.zones[0].customSaturation, 210);
 assert.equal(visualLookPkg.config.zones[0].customBreathe, true);
@@ -152,6 +156,8 @@ const visualLookZonedPkg = buildCardRuntimePackageFromProject({
     defaultLook: {
       patternId: 'rainbow',
       brightness: 0.66,
+      speed: 1.72,
+      hueShift: 22,
       customHue: 88,
       customSaturation: 180,
       customBreathe: true,
@@ -160,9 +166,66 @@ const visualLookZonedPkg = buildCardRuntimePackageFromProject({
 });
 assert.equal(visualLookZonedPkg.config.zones[0].patternId, 'rainbow');
 assert.equal(visualLookZonedPkg.config.zones[0].brightness, 0.66);
+assert.equal(visualLookZonedPkg.config.zones[0].speed, 1.72);
+assert.equal(visualLookZonedPkg.config.zones[0].hueShift, 22);
 assert.equal(visualLookZonedPkg.config.zones[0].customHue, 88);
 assert.equal(visualLookZonedPkg.config.zones[0].customSaturation, 180);
 assert.equal(visualLookZonedPkg.config.zones[0].customBreathe, true);
+
+const sectionLookPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Section Looks',
+  strips: [
+    { id: 'outer', name: 'Outer', pixelCount: 10 },
+    { id: 'inner', name: 'Inner', pixelCount: 6 },
+  ],
+  patchBoard: {
+    patches: [
+      {
+        id: 'patch-outer',
+        name: 'Outer',
+        source: { type: 'strip', stripId: 'outer', startLed: 0, endLed: 9 },
+        output: { mode: 'normal' },
+        playback: {
+          patternId: 'fire',
+          brightness: 0.5,
+          speed: 0.65,
+          hueShift: 12,
+          customHue: 18,
+          customSaturation: 240,
+          customBreathe: true,
+        },
+      },
+      {
+        id: 'patch-inner',
+        name: 'Inner',
+        source: { type: 'strip', stripId: 'inner', startLed: 0, endLed: 5 },
+        output: { mode: 'normal' },
+        playback: {},
+      },
+    ],
+  },
+  standaloneController: {
+    defaultLook: {
+      patternId: 'ocean',
+      brightness: 0.8,
+      speed: 1.2,
+      hueShift: -8,
+      customHue: 160,
+      customSaturation: 190,
+    },
+  },
+});
+assert.deepEqual(sectionLookPkg.config.zones.map(zone => zone.patternId), ['fire', 'ocean']);
+assert.equal(sectionLookPkg.config.zones[0].brightness, 0.5);
+assert.equal(sectionLookPkg.config.zones[0].speed, 0.65);
+assert.equal(sectionLookPkg.config.zones[0].hueShift, 12);
+assert.equal(sectionLookPkg.config.zones[0].customHue, 18);
+assert.equal(sectionLookPkg.config.zones[0].customSaturation, 240);
+assert.equal(sectionLookPkg.config.zones[0].customBreathe, true);
+assert.equal(sectionLookPkg.config.zones[1].brightness, 0.8);
+assert.equal(sectionLookPkg.config.zones[1].speed, 1.2);
+assert.equal(sectionLookPkg.config.zones[1].hueShift, -8);
+assert.equal(sectionLookPkg.config.zones[1].customHue, 160);
 
 const staleOutputPkg = buildCardRuntimePackageFromProject({
   projectName: 'Stale Output Counts',

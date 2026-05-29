@@ -7,16 +7,22 @@ import {
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
   brightness: 0.72,
+  speed: 1.35,
+  hueShift: -9,
   customHue: 138,
   customSaturation: 210,
   customBreathe: true,
   customDrift: false,
+  zone: 'patch-inner',
 });
 
 assert.deepEqual(payload, {
   cancelStream: true,
+  zone: 'patch-inner',
   patternId: 'ocean',
   brightness: 0.72,
+  speed: 1.35,
+  hueShift: -9,
   hue: 138,
   saturation: 210,
   breathe: true,

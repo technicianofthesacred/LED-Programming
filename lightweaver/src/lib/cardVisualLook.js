@@ -5,6 +5,8 @@ const PATTERN_IDS = new Set(DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id)
 export const DEFAULT_CARD_VISUAL_LOOK = Object.freeze({
   patternId: DEFAULT_CARD_PATTERN_BANK[0]?.id || 'aurora',
   brightness: 1,
+  speed: 1,
+  hueShift: 0,
   customHue: 32,
   customSaturation: 230,
   customBreathe: false,
@@ -16,6 +18,8 @@ export function normalizeCardVisualLook(look = {}) {
   return {
     patternId,
     brightness: clampUnit(look.brightness ?? DEFAULT_CARD_VISUAL_LOOK.brightness),
+    speed: clampSpeed(look.speed ?? DEFAULT_CARD_VISUAL_LOOK.speed),
+    hueShift: clampInt(look.hueShift, DEFAULT_CARD_VISUAL_LOOK.hueShift, -128, 128),
     customHue: clampInt(look.customHue, DEFAULT_CARD_VISUAL_LOOK.customHue, 0, 255),
     customSaturation: clampInt(look.customSaturation, DEFAULT_CARD_VISUAL_LOOK.customSaturation, 0, 255),
     customBreathe: Boolean(look.customBreathe),
@@ -36,6 +40,12 @@ function clampUnit(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 1;
   return Math.max(0, Math.min(1, n));
+}
+
+function clampSpeed(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0.05, Math.min(3, n));
 }
 
 function clampInt(value, fallback, min, max) {

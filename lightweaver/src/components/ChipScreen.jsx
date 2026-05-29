@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
-  DEFAULT_CARD_CONTROLS,
   DEFAULT_CARD_PATTERN_BANK,
   patchBoardToZones,
 } from '../lib/cardRuntimeContract.js';
+import { getCardPatternById } from '../lib/cardPatternBank.js';
+import {
+  deriveSectionTargets,
+  normalizeSavedLooks,
+  normalizeSectionVisualLook,
+} from '../lib/sectionLookModel.js';
 import { buildCardRuntimePackageFromProject, totalProjectPixels } from '../lib/cardRuntimeProject.js';
 import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
@@ -99,14 +104,24 @@ export function ChipScreen() {
   const config = runtimePackage.config;
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
-  const controls = {
-    ...DEFAULT_CARD_CONTROLS,
-    ...(standaloneController?.controls || {}),
-    encoder: {
-      ...DEFAULT_CARD_CONTROLS.encoder,
-      ...(standaloneController?.controls?.encoder || {}),
-    },
-  };
+  const savedLooks = normalizeSavedLooks(standaloneController?.looks);
+  const activeSavedLook = savedLooks.find(look => look.id === standaloneController?.activeLookId) || savedLooks[0] || null;
+  const defaultLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
+  const sectionTargets = useMemo(
+    () => deriveSectionTargets({ strips, patchBoard: board, defaultLook }),
+    [
+      strips,
+      board,
+      defaultLook.patternId,
+      defaultLook.brightness,
+      defaultLook.speed,
+      defaultLook.hueShift,
+      defaultLook.customHue,
+      defaultLook.customSaturation,
+      defaultLook.customBreathe,
+      defaultLook.customDrift,
+    ],
+  );
 
   const defaultLayoutActive = isDefaultCircleLayout(strips);
   const editableDefaultLayout = !svgText && (defaultLayoutActive || strips.length === 0);
@@ -218,23 +233,6 @@ export function ChipScreen() {
     });
   };
 
-  const updateZonePlayback = (patchId, patch) => {
-    setPatchBoard(prev => {
-      const next = normalizePatchBoard(prev, strips);
-      const target = next.patches.find(item => item.id === patchId);
-      if (target) target.playback = { ...(target.playback || {}), ...patch };
-      return normalizePatchBoard(next, strips);
-    });
-  };
-
-  const setCycleEnabled = (patternId, enabled) => {
-    const current = controls.encoder.patternCycleIds || DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
-    const next = enabled
-      ? DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id).filter(id => id === patternId || current.includes(id))
-      : current.filter(id => id !== patternId);
-    updateController({ controls: { encoder: { patternCycleIds: next.length ? next : [patternId] } } });
-  };
-
   const persistHost = (value) => {
     setCardHost(value);
     writeStoredCardHost(value);
@@ -340,40 +338,6 @@ export function ChipScreen() {
               )}
             </Section>
 
-            <Section title="Looks on the knob" meta={`${controls.encoder.patternCycleIds?.length || DEFAULT_CARD_PATTERN_BANK.length} enabled`}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-                {DEFAULT_CARD_PATTERN_BANK.map(pattern => {
-                  const enabled = (controls.encoder.patternCycleIds || []).length
-                    ? controls.encoder.patternCycleIds.includes(pattern.id)
-                    : true;
-                  return (
-                    <label key={pattern.id} style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px', color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>
-                      <input type="checkbox" checked={enabled} onChange={event => setCycleEnabled(pattern.id, event.target.checked)} />
-                      <span>{pattern.label}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              <FieldRow label="Knob rotate" hint="customer brightness control">
-                <Segmented
-                  value={controls.encoder.rotateDirection}
-                  onChange={value => updateController({ controls: { encoder: { rotateDirection: value } } })}
-                  options={[
-                    { value: 'clockwise-brighter', label: 'Clockwise brighter' },
-                    { value: 'clockwise-dimmer', label: 'Clockwise dimmer' },
-                  ]}
-                />
-              </FieldRow>
-              <FieldRow label="Brightness step" hint="one detent">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <input type="range" min="1" max="64" step="1" value={controls.encoder.brightnessStep}
-                         onChange={event => updateController({ controls: { encoder: { brightnessStep: +event.target.value } } })}
-                         style={{ flex: 1 }}/>
-                  <span style={{ fontFamily: 'var(--mono-font)', minWidth: 36 }}>{controls.encoder.brightnessStep}</span>
-                </div>
-              </FieldRow>
-            </Section>
-
             <Section title="Hardware layout" meta={`${config.led.pixels} pixels · ${hardwareSections.length || hardwareSectionCount} sections`}>
               <FieldRow
                 label="Total LEDs"
@@ -434,39 +398,37 @@ export function ChipScreen() {
               </FieldRow>
             </Section>
 
-            <Section title="Zones" meta={zones.length ? `${zones.length} written` : 'default all LEDs'}>
-              {zones.length === 0 ? (
+            <Section title="Sections in this load" meta={`${Math.max(0, sectionTargets.length - 1)} sections`}>
+              {sectionTargets.length <= 1 ? (
                 <div style={{ color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.55 }}>
-                  No wire zones are defined yet. The card will use the visual pattern and color from the Patterns screen across all LEDs.
+                  No separate sections are defined yet. The card will use the saved Look across all LEDs.
                 </div>
               ) : (
                 <div style={{ display: 'grid', gap: 8 }}>
-                  {board.patches
-                    .filter(patch => patch.source?.type === 'strip' && patch.output?.mode !== 'off')
-                    .slice(0, 8)
-                    .map(patch => {
-                      const playback = patch.playback || {};
-                      return (
-                        <div key={patch.id} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, alignItems: 'center', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
-                          <div>
-                            <div style={{ color: 'var(--text)', fontSize: 'var(--fs-sm)' }}>{patch.name || patch.id}</div>
-                            <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)', fontFamily: 'var(--mono-font)' }}>
-                              LED {patch.source.startLed} to {patch.source.endLed}
-                            </div>
+                  {sectionTargets.slice(1, 9).map(target => {
+                    const pattern = getCardPatternById(target.look.patternId);
+                    return (
+                      <div key={target.id} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: 8, alignItems: 'center', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                        <div>
+                          <div style={{ color: 'var(--text)', fontSize: 'var(--fs-sm)' }}>{target.label}</div>
+                          <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)', fontFamily: 'var(--mono-font)' }}>
+                            {target.pixelCount} LEDs
                           </div>
-                          <select className="lw-search-input" value={playback.patternId || 'aurora'} onChange={event => updateZonePlayback(patch.id, { patternId: event.target.value })}>
-                            {DEFAULT_CARD_PATTERN_BANK.map(pattern => <option key={pattern.id} value={pattern.id}>{pattern.label}</option>)}
-                          </select>
-                          <input type="range" min="0" max="1" step="0.01" value={playback.brightness ?? 1}
-                                 onChange={event => updateZonePlayback(patch.id, { brightness: +event.target.value })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', textAlign: 'right' }}>
-                            {Math.round((playback.brightness ?? 1) * 100)}%
-                          </span>
                         </div>
-                      );
-                    })}
+                        <span style={{ color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>{pattern?.label || target.look.patternId}</span>
+                        <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-xs)', fontFamily: 'var(--mono-font)' }}>{Math.round(target.look.brightness * 100)}%</span>
+                        <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-xs)', fontFamily: 'var(--mono-font)' }}>{target.look.speed.toFixed(2)}x</span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
+              <FieldRow label="Change sections" hint="patterns and zones">
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=patterns'; }}>Edit Looks</button>
+                  <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=layout'; }}>Edit Layout</button>
+                </div>
+              </FieldRow>
             </Section>
 
             <Section title="LED hardware" meta={`${config.led.pixels} pixels`}>
@@ -503,6 +465,7 @@ export function ChipScreen() {
             <Section title="What will be loaded" meta="chip package">
               <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '8px 12px', fontSize: 'var(--fs-sm)' }}>
                 <span style={{ color: 'var(--text-4)' }}>Piece</span><span>{config.piece.name}</span>
+                <span style={{ color: 'var(--text-4)' }}>Look</span><span>{activeSavedLook?.label || 'Current saved Look'}</span>
                 <span style={{ color: 'var(--text-4)' }}>Pixels</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.led.pixels}</span>
                 <span style={{ color: 'var(--text-4)' }}>Outputs</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.led.outputs.length}</span>
                 <span style={{ color: 'var(--text-4)' }}>Sections</span><span style={{ fontFamily: 'var(--mono-font)' }}>{config.zones.length || 1}</span>
