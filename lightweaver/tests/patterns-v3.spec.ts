@@ -60,3 +60,31 @@ test('v3 patterns saves section-specific Looks that appear in Load', async ({ pa
   await expect(page.locator('section', { hasText: 'Sections in this load' }).getByText('Inner circle', { exact: true })).toBeVisible();
   await expect(page.locator('textarea')).toContainText('"patternId": "ocean"');
 });
+
+test('v3 patterns keeps separate unsaved section choices before saving the Look', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="sparkle"]').click();
+
+  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
+
+  await page.locator('.lw-save-look-row button').click();
+  await page.getByText('Load', { exact: true }).click();
+
+  const config = JSON.parse(await page.locator('textarea').inputValue());
+  const zonePatterns = Object.fromEntries(config.zones.map(zone => [zone.id, zone.patternId]));
+  expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
+  expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
+});

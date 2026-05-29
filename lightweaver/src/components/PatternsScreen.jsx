@@ -181,7 +181,22 @@ export function PatternsScreen() {
   );
   const selectedTarget = sectionTargets.find(target => target.id === selectedTargetId) || sectionTargets[0];
   const savedTargetLook = normalizeSectionVisualLook(selectedTarget?.look || savedGlobalLook);
-  const look = normalizeSectionVisualLook(draftLooks[selectedTarget?.id] || savedTargetLook);
+  const draftDefaultLook = normalizeSectionVisualLook(draftLooks[ALL_SECTIONS_TARGET_ID] || savedGlobalLook);
+  const resolveDraftTargetLook = useCallback((target) => {
+    if (!target) return draftDefaultLook;
+    const targetDraft = draftLooks[target.id];
+    if (targetDraft) return normalizeSectionVisualLook(targetDraft);
+    if (target.kind === 'section' && draftLooks[ALL_SECTIONS_TARGET_ID]) return draftDefaultLook;
+    return normalizeSectionVisualLook(target.look || draftDefaultLook);
+  }, [draftDefaultLook, draftLooks]);
+  const look = normalizeSectionVisualLook(
+    draftLooks[selectedTarget?.id] ||
+    (selectedTarget?.kind === 'section' && draftLooks[ALL_SECTIONS_TARGET_ID] ? draftDefaultLook : savedTargetLook),
+  );
+  const effectiveSectionTargets = useMemo(
+    () => sectionTargets.map(target => ({ ...target, look: resolveDraftTargetLook(target) })),
+    [resolveDraftTargetLook, sectionTargets],
+  );
   const controls = {
     ...DEFAULT_CARD_CONTROLS,
     ...(standaloneController?.controls || {}),
@@ -208,12 +223,12 @@ export function PatternsScreen() {
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
   const previewStrips = useMemo(() => {
     return (strips || []).map(strip => {
-      const stripTarget = sectionTargets.find(target => target.kind === 'section' && target.stripId === strip.id);
+      const stripTarget = effectiveSectionTargets.find(target => target.kind === 'section' && target.stripId === strip.id);
       const targetLook = selectedTarget?.kind === 'all'
         ? look
         : selectedTarget?.stripId === strip.id
           ? look
-          : normalizeSectionVisualLook(stripTarget?.look || savedGlobalLook);
+          : normalizeSectionVisualLook(stripTarget?.look || draftDefaultLook);
       return {
         ...strip,
         patternId: targetLook.patternId,
@@ -222,7 +237,7 @@ export function PatternsScreen() {
         hueShift: targetLook.hueShift,
       };
     });
-  }, [look, savedGlobalLook, sectionTargets, selectedTarget, strips]);
+  }, [draftDefaultLook, effectiveSectionTargets, look, selectedTarget, strips]);
 
   useEffect(() => {
     if (sectionTargets.some(target => target.id === selectedTargetId)) return;
@@ -289,13 +304,35 @@ export function PatternsScreen() {
 
   const commitCurrentLook = ({ label = '' } = {}) => {
     const nextLook = normalizeSectionVisualLook(look);
-    const nextDefaultLook = selectedTarget?.kind === 'all' ? nextLook : savedGlobalLook;
-    const nextBoard = applyLookToPatchBoard({
-      patchBoard: board,
-      strips,
-      targetId: selectedTarget?.id || ALL_SECTIONS_TARGET_ID,
-      look: nextLook,
-    });
+    const draftLookEntries = {
+      ...draftLooks,
+      [selectedTarget?.id || ALL_SECTIONS_TARGET_ID]: nextLook,
+    };
+    const validTargetIds = new Set(sectionTargets.map(target => target.id));
+    const normalizedDraftLooks = Object.fromEntries(
+      Object.entries(draftLookEntries)
+        .filter(([targetId]) => validTargetIds.has(targetId))
+        .map(([targetId, draftLook]) => [targetId, normalizeSectionVisualLook(draftLook)]),
+    );
+    const nextDefaultLook = normalizeSectionVisualLook(normalizedDraftLooks[ALL_SECTIONS_TARGET_ID] || savedGlobalLook);
+    let nextBoard = board;
+    if (normalizedDraftLooks[ALL_SECTIONS_TARGET_ID]) {
+      nextBoard = applyLookToPatchBoard({
+        patchBoard: nextBoard,
+        strips,
+        targetId: ALL_SECTIONS_TARGET_ID,
+        look: nextDefaultLook,
+      });
+    }
+    for (const target of sectionTargets) {
+      if (target.kind !== 'section' || !normalizedDraftLooks[target.id]) continue;
+      nextBoard = applyLookToPatchBoard({
+        patchBoard: nextBoard,
+        strips,
+        targetId: target.id,
+        look: normalizedDraftLooks[target.id],
+      });
+    }
     const nextTargets = deriveSectionTargets({ strips, patchBoard: nextBoard, defaultLook: nextDefaultLook });
     const fallbackLabel = selectedTarget?.kind === 'all'
       ? `${selectedPattern?.label || 'Pattern'} look`
@@ -430,7 +467,9 @@ export function PatternsScreen() {
                 {sectionTargets.map(target => (
                   <TargetButton
                     key={target.id}
-                    target={target.id === selectedTarget?.id ? { ...target, look } : target}
+                    target={target.id === selectedTarget?.id
+                      ? { ...target, look }
+                      : effectiveSectionTargets.find(effectiveTarget => effectiveTarget.id === target.id) || target}
                     active={target.id === selectedTarget?.id}
                     onSelect={() => setSelectedTargetId(target.id)}
                   />
