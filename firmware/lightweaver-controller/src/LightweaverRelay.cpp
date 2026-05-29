@@ -17,7 +17,7 @@ extern LookConfig looks[];
 
 namespace {
 
-constexpr const char* RELAY_HOST = "feb57a3e.mandalacodes.pages.dev";
+constexpr const char* RELAY_HOST = "led.mandalacodes.com";
 constexpr const char* NVS_NS = "lwrelay";
 constexpr const char* NVS_CARD_ID = "id";
 constexpr const char* NVS_TOKEN = "token";
@@ -195,7 +195,19 @@ bool doPoll() {
   if (resp["pending"].isNull()) return true;
   Serial.print("[relay] poll got pending: ");
   Serial.println(response);
+  String commandId = String(resp["pending"]["commandId"] | "");
   applyPending(resp["pending"].as<JsonObject>());
+  if (commandId.length()) {
+    JsonDocument req;
+    req["commandId"] = commandId;
+    String body;
+    serializeJson(req, body);
+    String ackResponse;
+    if (!httpJson("POST", String("/api/lw/poll/") + cardId, body, ackResponse)) {
+      Serial.println("[relay] poll ack failed");
+      return false;
+    }
+  }
   return true;
 }
 
