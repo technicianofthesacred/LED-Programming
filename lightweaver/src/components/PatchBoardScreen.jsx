@@ -183,24 +183,9 @@ export function PatchBoardScreen({
           <p>Physical route setup for the selected artwork layers.</p>
         </div>
         <div className="lw-wire-head-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input
-            type="text"
-            value={pushHost}
-            onChange={e => setPushHost(e.target.value)}
-            placeholder="hostname"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            style={{ width: 120, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border, #444)', background: 'var(--bg-1, #0a0a0a)', color: 'var(--text-1, #f4ede0)', fontFamily: 'ui-monospace, SF Mono, monospace', fontSize: 13 }}
-          />
-          <span style={{ fontSize: 12, color: 'var(--text-3, #9a8d75)', fontFamily: 'ui-monospace, SF Mono, monospace' }}>.local</span>
-          <button
-            className="btn btn-primary"
-            onClick={pushToCard}
-            disabled={pushKind === 'pending'}
-          >
-            {pushKind === 'pending' ? 'Pushing…' : 'Push to card'}
-          </button>
+          <span style={{ fontSize: 12, color: 'var(--text-3, #9a8d75)' }}>
+            Saved into the Chip package
+          </span>
           <button
             className={`btn ${board.physicalLocked ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => updateBoard(next => { next.physicalLocked = !next.physicalLocked; })}

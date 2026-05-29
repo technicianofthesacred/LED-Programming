@@ -1,8 +1,6 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath } from '../lib/mapper.js';
-import { WledBar } from './WledBar.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
-import { PATTERNS } from '../data.js';
 import {
   buildGammaLut,
   compilePattern,
@@ -20,13 +18,8 @@ import {
   LED_COUNT_MAX,
   LED_COUNT_SLIDER_MAX,
   LED_COUNT_SLIDER_MIN,
-  SPEED_SLIDER_MAX,
-  SPEED_SLIDER_MIN,
-  formatControlSpeed,
   ledCountToSliderValue,
   sliderValueToLedCount,
-  sliderValueToSpeed,
-  speedToSliderValue,
 } from '../lib/controlScale.js';
 import { PatchBoardScreen } from './PatchBoardScreen.jsx';
 import {
@@ -2979,7 +2972,6 @@ export function LayoutScreen() {
             </div>
           )}
         </div>
-        <WledBar/>
       </div>
 
       <div
@@ -3657,49 +3649,6 @@ export function LayoutScreen() {
                     </div>
                     {isSel && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, padding: '8px 0 2px 0', borderTop: '1px solid var(--border)', marginTop: 6 }}>
-                        {/* Speed */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Speed</span>
-                          <input type="range" min={SPEED_SLIDER_MIN} max={SPEED_SLIDER_MAX} step="1" value={speedToSliderValue(s.speed ?? 1)}
-                                 style={{ flex: 1 }}
-                                 onChange={e => updateStrip(s.id, { speed: sliderValueToSpeed(e.target.value) })}
-                                 onPointerUp={e => updateStripWithHistory(s.id, { speed: sliderValueToSpeed(e.target.value) })}
-                                 onDoubleClick={() => updateStrip(s.id, { speed: 1 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 42, textAlign: 'right' }}>{formatControlSpeed(s.speed ?? 1)}</span>
-                        </div>
-                        {/* Brightness */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Bright</span>
-                          <input type="range" min="0" max="1" step="0.01" value={s.brightness ?? 1}
-                                 style={{ flex: 1 }}
-                                 onChange={e => updateStrip(s.id, { brightness: +e.target.value })}
-                                 onPointerUp={e => updateStripWithHistory(s.id, { brightness: +e.target.value })}
-                                 onDoubleClick={() => updateStrip(s.id, { brightness: 1 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{Math.round((s.brightness ?? 1) * 100)}%</span>
-                        </div>
-                        {/* Hue shift */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Hue</span>
-                          <input type="range" min="-180" max="180" step="1" value={s.hueShift ?? 0}
-                                 style={{ flex: 1 }}
-                                 onChange={e => updateStrip(s.id, { hueShift: +e.target.value })}
-                                 onPointerUp={e => updateStripWithHistory(s.id, { hueShift: +e.target.value })}
-                                 onDoubleClick={() => updateStrip(s.id, { hueShift: 0 })}/>
-                          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 32, textAlign: 'right' }}>{s.hueShift ?? 0}°</span>
-                        </div>
-                        {/* Per-strip pattern override */}
-	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-	                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Pattern</span>
-	                          <select value={s.patternId ?? ''}
-	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text)', padding: '2px 4px' }}
-	                                  onChange={e => {
-	                                    const v = e.target.value || null;
-	                                    updateStrip(s.id, { patternId: v });
-	                                  }}>
-	                            <option value="">Inherited</option>
-	                            {PATTERNS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-	                          </select>
-	                        </div>
 	                        {/* Position */}
 	                        <div style={{ display: 'grid', gridTemplateColumns: '52px 1fr 1fr', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
 	                          <span style={{ color: 'var(--text-3)' }}>Move</span>
@@ -3725,29 +3674,6 @@ export function LayoutScreen() {
 	                        <div style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)', paddingLeft: 60 }}>
 	                          Drag this strip on the canvas to reposition it.
 	                        </div>
-	                        {/* Emit */}
-	                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-	                          <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Emit</span>
-	                          <button className={`btn ${(s.emit || 'dir') === 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
-	                                  onClick={e => { e.stopPropagation(); updateStrip(s.id, { emit: 'omni', angle: 0 }); }}>
-	                            Omni
-	                          </button>
-	                          <button className={`btn ${(s.emit || 'dir') !== 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-	                                  style={{ flex: 1, fontSize: 'var(--fs-xs)' }}
-	                                  onClick={e => { e.stopPropagation(); setDirectedGlow(true); enableLightPreview(); updateStrip(s.id, { emit: 'dir' }); }}>
-	                            Dir
-	                          </button>
-	                        </div>
-	                        {(s.emit || 'dir') !== 'omni' && (
-	                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
-	                            <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Angle</span>
-	                            <input type="range" min="0" max="360" step="1" value={s.angle || 0}
-	                                   style={{ flex: 1 }}
-	                                   onChange={e => { setDirectedGlow(true); enableLightPreview(); updateStrip(s.id, { angle: +e.target.value }); }}/>
-	                            <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', width: 36, textAlign: 'right' }}>{Math.round(s.angle || 0)}°</span>
-	                          </div>
-	                        )}
                         {/* LED count */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)' }}>
                           <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>LEDs</span>
@@ -3781,7 +3707,7 @@ export function LayoutScreen() {
                         </div>
                         {usbLedConnected && (
                           <div style={{ marginLeft: 60, marginTop: -2, fontSize: 'var(--fs-xs)', color: s.pixelCount > usbLedMaxPixels ? 'var(--accent-2)' : 'var(--text-4)' }}>
-                            USB direct cap {usbLedMaxPixels} LEDs; WLED/export can keep the project count above that.
+                            USB direct cap {usbLedMaxPixels} LEDs.
                           </div>
                         )}
                         {/* Strip actions */}

@@ -7,10 +7,7 @@ const RECONNECT_DELAY   = 3000;
 const CONNECT_TIMEOUT_MS = 5000;
 
 export function useWled() {
-  // First-run default: lightweaver.local (the card's default hostname).
-  // After the user connects to a renamed card or a raw IP, that value
-  // sticks in localStorage and we reuse it.
-  const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? 'lightweaver.local');
+  const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState('offline');
 
@@ -168,18 +165,6 @@ export function useWled() {
     if (!addr) return Promise.reject(new Error('No WLED IP configured'));
     return requestWledJson(addr, 'info');
   }, [ip]);
-
-  // Auto-connect on mount when we have an IP. First run uses the default
-  // 'lightweaver.local'; subsequent loads reuse whatever the user last
-  // connected to. Mixed-content blocks the attempt on HTTPS origins —
-  // those users hit the Push-to-card button on PatchBoardScreen instead.
-  useEffect(() => {
-    if (!ip) return;
-    const t = setTimeout(() => connect(ip), 250);
-    return () => clearTimeout(t);
-    // Intentionally empty deps — fires once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Clean up on unmount
   useEffect(() => {

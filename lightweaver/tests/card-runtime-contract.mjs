@@ -6,6 +6,7 @@ import {
   normalizeCardRuntimeConfig,
   makeCardRuntimePackage,
 } from '../src/lib/cardRuntimeContract.js';
+import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
@@ -77,5 +78,35 @@ assert.equal(zoned.config.led.outputs.length, 1);
 assert.equal(zoned.config.led.outputs[0].pixels, 96);
 assert.deepEqual(zoned.config.zones.map(zone => zone.id), ['outer', 'inner']);
 assert.equal(zoned.config.syncZones, false);
+
+const projectPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Customer V3',
+  strips: [
+    { id: 'inner', name: 'Inner', pixelCount: 8 },
+    { id: 'outer', name: 'Outer', pixelCount: 12 },
+  ],
+  patchBoard: {
+    patches: [
+      {
+        id: 'inner-zone',
+        name: 'Inner Zone',
+        source: { type: 'strip', stripId: 'inner', startLed: 0, endLed: 7 },
+        output: { mode: 'on' },
+        playback: { patternId: 'ember', brightness: 0.4 },
+      },
+    ],
+  },
+  standaloneController: {
+    led: { colorOrder: 'GRB', brightnessLimit: 0.55 },
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
+    controls: { encoder: { patternCycleIds: ['ember', 'scanner'] } },
+  },
+});
+assert.equal(projectPkg.config.piece.name, 'Customer V3');
+assert.equal(projectPkg.config.led.pixels, 20);
+assert.equal(projectPkg.config.led.colorOrder, 'GRB');
+assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
+assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
+assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 
 console.log('card-runtime-contract tests passed');

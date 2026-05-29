@@ -1,61 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
-import { PATTERNS } from '../data.js';
 
 function buildCommands(ctx, navigate) {
   const {
-    setActivePatternId,
-    setTimelinePlaying, timelinePlaying,
-    setTimelinePlayhead,
-    setBpm,
-    setMasterBrightness, setMasterSpeed, setMasterSaturation,
     newProject,
-    undoTimeline, redoTimeline,
-    showDuration,
   } = ctx;
 
   return [
-    // Navigation
-    { id: 'nav-patterns', label: 'Go to: Pattern screen', category: 'Navigate', action: () => navigate('pattern') },
-    { id: 'nav-timeline', label: 'Go to: Timeline', category: 'Navigate', action: () => navigate('timeline') },
-    { id: 'nav-live',     label: 'Go to: Live screen', category: 'Navigate', action: () => navigate('live') },
-    { id: 'nav-layout',  label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
-    { id: 'nav-devices', label: 'Go to: Devices', category: 'Navigate', action: () => navigate('devices') },
-    { id: 'nav-settings',label: 'Go to: Settings', category: 'Navigate', action: () => navigate('settings') },
-    { id: 'nav-export',  label: 'Go to: Export', category: 'Navigate', action: () => navigate('export') },
-
-    // Playback
-    { id: 'play-toggle', label: timelinePlaying ? 'Stop timeline' : 'Play timeline', category: 'Playback', action: () => setTimelinePlaying(p => !p) },
-    { id: 'play-rewind', label: 'Rewind to start', category: 'Playback', action: () => { setTimelinePlayhead(0); setTimelinePlaying(false); } },
-    { id: 'play-end',    label: 'Jump to end', category: 'Playback', action: () => setTimelinePlayhead(showDuration) },
-
-    // Undo/Redo
-    { id: 'undo', label: 'Undo', category: 'Edit', action: undoTimeline },
-    { id: 'redo', label: 'Redo', category: 'Edit', action: redoTimeline },
-
-    // Project
+    { id: 'nav-chip', label: 'Go to: Chip', category: 'Navigate', action: () => navigate('chip') },
+    { id: 'nav-layout', label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
     { id: 'proj-new',    label: 'New project', category: 'Project', action: () => { if (window.confirm('Start a new project?')) newProject(); } },
-
-    // Master controls
-    { id: 'master-full',  label: 'Master brightness: 100%', category: 'Controls', action: () => setMasterBrightness(1) },
-    { id: 'master-dim',   label: 'Master brightness: 50%',  category: 'Controls', action: () => setMasterBrightness(0.5) },
-    { id: 'master-dark',  label: 'Master brightness: 10%',  category: 'Controls', action: () => setMasterBrightness(0.1) },
-    { id: 'speed-1x',     label: 'Speed: 1×',               category: 'Controls', action: () => setMasterSpeed(1) },
-    { id: 'speed-half',   label: 'Speed: 0.5×',             category: 'Controls', action: () => setMasterSpeed(0.5) },
-    { id: 'speed-2x',     label: 'Speed: 2×',               category: 'Controls', action: () => setMasterSpeed(2) },
-    { id: 'sat-full',     label: 'Saturation: 100%',         category: 'Controls', action: () => setMasterSaturation(1) },
-    { id: 'sat-bw',       label: 'Saturation: 0% (grayscale)', category: 'Controls', action: () => setMasterSaturation(0) },
-    { id: 'bpm-120',      label: 'BPM: 120',                 category: 'Controls', action: () => setBpm(120) },
-    { id: 'bpm-140',      label: 'BPM: 140',                 category: 'Controls', action: () => setBpm(140) },
-    { id: 'bpm-90',       label: 'BPM: 90',                  category: 'Controls', action: () => setBpm(90) },
-
-    // Patterns
-    ...PATTERNS.slice(0, 30).map(p => ({
-      id: `pattern-${p.id}`,
-      label: `Pattern: ${p.name}`,
-      category: 'Pattern',
-      action: () => setActivePatternId(p.id),
-    })),
   ];
 }
 
