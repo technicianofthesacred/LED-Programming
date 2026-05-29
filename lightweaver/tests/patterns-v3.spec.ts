@@ -118,3 +118,66 @@ test('v3 patterns previews on the whole card when the card has not loaded sectio
   expect(controlRequests[0]).not.toHaveProperty('zone');
   await expect(page.locator('.lw-chip-status')).toContainText('whole card');
 });
+
+test('v3 patterns can apply the split zone config, then live-preview each section physically', async ({ page }) => {
+  const configRequests: unknown[] = [];
+  const controlRequests: unknown[] = [];
+  let splitConfigApplied = false;
+
+  await page.route('http://lightweaver.local/api/zones', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(splitConfigApplied
+        ? {
+            syncZones: false,
+            zones: [
+              { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
+              { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+            ],
+          }
+        : {
+            syncZones: true,
+            zones: [{ id: 'all', label: 'All', ranges: [{ start: 0, count: 44 }] }],
+          }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/config', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    configRequests.push(body);
+    splitConfigApplied = true;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="sparkle"]').click();
+
+  await page.getByRole('button', { name: 'Apply split to card' }).click();
+
+  await expect.poll(() => configRequests.length).toBe(1);
+  expect(configRequests[0].syncZones).toBe(false);
+  expect(configRequests[0].zones.map(zone => zone.id)).toEqual([
+    'patch-default-outer-circle',
+    'patch-default-inner-circle',
+  ]);
+  expect(Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]))).toMatchObject({
+    'patch-default-outer-circle': 'ocean',
+    'patch-default-inner-circle': 'sparkle',
+  });
+  await expect(page.locator('.lw-chip-status')).toContainText('Split preview is live');
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="fire"]').click();
+
+  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-outer-circle' && request.patternId === 'fire')).toBe(true);
+});

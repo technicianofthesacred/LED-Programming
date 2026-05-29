@@ -308,7 +308,7 @@ export function PatternsScreen() {
     if (push) scheduleLivePreview(nextLook, selectedTarget);
   };
 
-  const commitCurrentLook = ({ label = '' } = {}) => {
+  const buildCurrentHardwareState = ({ saveNamedLook = false, label = '' } = {}) => {
     const nextLook = normalizeSectionVisualLook(look);
     const draftLookEntries = {
       ...draftLooks,
@@ -340,19 +340,62 @@ export function PatternsScreen() {
       });
     }
     const nextTargets = deriveSectionTargets({ strips, patchBoard: nextBoard, defaultLook: nextDefaultLook });
+    let nextController = {
+      ...(standaloneController || {}),
+      defaultLook: nextDefaultLook,
+    };
+    if (!saveNamedLook) {
+      return { nextLook, nextBoard, nextController, nextTargets };
+    }
     const fallbackLabel = selectedTarget?.kind === 'all'
       ? `${selectedPattern?.label || 'Pattern'} look`
       : `${selectedTargetName} ${selectedPattern?.label || 'look'}`;
-    const nextController = saveCurrentLookToController(standaloneController, {
+    nextController = saveCurrentLookToController(standaloneController, {
       label: label || lookLabel.trim() || fallbackLabel,
       defaultLook: nextDefaultLook,
       targets: nextTargets,
     });
+    return { nextLook, nextBoard, nextController, nextTargets };
+  };
+
+  const commitCurrentLook = ({ label = '' } = {}) => {
+    const { nextLook, nextBoard, nextController } = buildCurrentHardwareState({ saveNamedLook: true, label });
     setPatchBoard(nextBoard);
     setStandaloneController(nextController);
     setDraftLooks({});
     setLookLabel('');
     return { nextLook, nextBoard, nextController };
+  };
+
+  const applySplitPreviewToCard = async () => {
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    const sequence = ++livePreviewSeq.current;
+    const { nextLook, nextBoard, nextController } = buildCurrentHardwareState();
+    const nextPackage = buildCardRuntimePackageFromProject({
+      projectName,
+      strips,
+      patchBoard: nextBoard,
+      standaloneController: nextController,
+    });
+    setStatusKind('');
+    setStatus(`Applying split preview to ${cardHostToUrl(cardHost)}...`);
+    try {
+      await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000 });
+      setPatchBoard(nextBoard);
+      setStandaloneController(nextController);
+      setDraftLooks({});
+      const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
+      await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('ok');
+      setStatus('Split preview is live on the card. Section taps now target Outer and Inner separately.');
+    } catch (error) {
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? 'The hosted HTTPS page cannot write split preview to the local card. Open this Studio from localhost, or copy the config to the card page.'
+        : `Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);
+    }
   };
 
   const saveLookOnly = () => {
@@ -434,6 +477,7 @@ export function PatternsScreen() {
           </div>
           <div className="lw-patterns-actions">
             <button type="button" className="btn btn-primary" onClick={saveLookOnly}>Save Look</button>
+            <button type="button" className="btn btn-primary" onClick={applySplitPreviewToCard}>Apply split to card</button>
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>

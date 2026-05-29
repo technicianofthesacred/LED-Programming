@@ -1,4 +1,5 @@
 #include "LightweaverStorage.h"
+#include <new>
 
 namespace {
 constexpr const char* NVS_NAMESPACE = "lightweaver";
@@ -17,8 +18,88 @@ float clampUnit(float value) {
   return value;
 }
 
+void resetOutput(OutputConfig& output) {
+  output.id = "";
+  output.name = "";
+  output.pin = 0;
+  output.pixels = 0;
+  output.start = 0;
+  output.enabled = false;
+}
+
+void resetControls(ControlsConfig& controls) {
+  controls.encoderA = 4;
+  controls.encoderB = 5;
+  controls.encoderPress = 0;
+  controls.encoderPressAlt = 6;
+  controls.previous = 7;
+  controls.next = 8;
+  controls.blackout = 9;
+  controls.brightness = -1;
+  controls.statusLed = DEFAULT_STATUS_LED_PIN;
+  controls.rotateDirection = "clockwise-brighter";
+  controls.brightnessStep = 18;
+}
+
+void resetLook(LookConfig& look) {
+  look.id = "";
+  look.label = "";
+  look.mode = "";
+  look.file = "";
+  look.preset = "";
+  look.fps = 24;
+  look.loop = true;
+  look.fadeOutMs = 320;
+  look.fadeInMs = 420;
+  look.brightness = 0.65f;
+}
+
+void resetWifi(WifiConfig& wifi) {
+  wifi.ssid = "";
+  wifi.password = "";
+  wifi.hostname = "lightweaver";
+}
+
+void resetZone(ZoneConfig& zone) {
+  zone.id = "";
+  zone.label = "";
+  for (uint8_t i = 0; i < LW_MAX_RANGES_PER_ZONE; i++) {
+    zone.ranges[i].start = 0;
+    zone.ranges[i].count = 0;
+  }
+  zone.rangeCount = 0;
+  zone.patternId = "aurora";
+  zone.brightness = 1.0f;
+  zone.speed = 1.0f;
+  zone.hueShift = 0;
+  zone.customHue = 32;
+  zone.customSaturation = 230;
+  zone.customBreathe = false;
+  zone.customDrift = false;
+  zone.driftHueMin = 0;
+  zone.driftHueMax = 255;
+  zone.blackout = false;
+}
+
 void resetConfig(RuntimeConfig& config) {
-  config = RuntimeConfig();
+  config.mode = "factory-flash";
+  config.source = SOURCE_DEFAULTS;
+  config.pieceName = "Lightweaver";
+  config.startupLookId = "aurora";
+  config.ledColorOrder = "RGB";
+  config.brightnessLimit = 0.65f;
+  for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
+  config.outputCount = 0;
+  for (uint8_t i = 0; i < LW_MAX_LOOKS; i++) resetLook(config.looks[i]);
+  config.lookCount = 0;
+  resetControls(config.controls);
+  resetWifi(config.wifi);
+  config.activeTransport = WIFI_TRANSPORT_AP;
+  config.activeIp = "";
+  config.activeHostname = "";
+  for (uint8_t i = 0; i < LW_MAX_ZONES; i++) resetZone(config.zones[i]);
+  config.zoneCount = 0;
+  config.syncZones = true;
 }
 
 void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource source) {
@@ -290,16 +371,25 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 }
 
 bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& message) {
-  RuntimeConfig parsed;
-  if (!loadJsonString(json, parsed, SOURCE_NVS, message)) return false;
+  RuntimeConfig* parsed = new (std::nothrow) RuntimeConfig();
+  if (!parsed) {
+    message = "runtime config allocation failed";
+    return false;
+  }
+  if (!loadJsonString(json, *parsed, SOURCE_NVS, message)) {
+    delete parsed;
+    return false;
+  }
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) {
+    delete parsed;
     message = "nvs write open failed";
     return false;
   }
   bool ok = prefs.putString(NVS_CONFIG_KEY, json) > 0;
   prefs.end();
   if (!ok) {
+    delete parsed;
     message = "nvs write failed";
     return false;
   }
@@ -307,7 +397,8 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   WifiTransport preservedTransport = config.activeTransport;
   String preservedIp = config.activeIp;
   String preservedHostname = config.activeHostname;
-  config = parsed;
+  config = *parsed;
+  delete parsed;
   config.wifi = preservedWifi;
   config.activeTransport = preservedTransport;
   config.activeIp = preservedIp;
