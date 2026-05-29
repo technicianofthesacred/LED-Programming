@@ -6,29 +6,30 @@ Current product rule: the public site is a Studio, installer, and support surfac
 
 ## Current recommended setup
 
-Use a separate Cloudflare Pages project named `lightweaver`, built from `lightweaver/dist`, then attach `led.mandalacodes.com` as the custom domain.
+Use a separate Cloudflare Pages project named `lightweaver`, then attach `led.mandalacodes.com` as the custom domain. The artifact currently deployed to that project is the Mandala Codes public bundle from `mandalacodes/dist`, with Lightweaver Studio v3 embedded under `/design/`.
 
-Keep Mandala Codes as the parent/public brand site at `mandalacodes.com`. Do not fold the Lightweaver app into the Mandala Codes route tree unless we intentionally want shared navigation, styling, and release coupling.
+This gives `led.mandalacodes.com` a small customer landing/install surface at `/` and the actual chip-config Studio at `/design/`, while keeping the hardware runtime on the ESP32 card page.
 
 ## Why separate Pages project
 
-- The Lightweaver app has different dependencies, build output, and hardware-facing behavior than Mandala Codes.
 - A separate Pages project gives `led.mandalacodes.com` its own deployment history and rollback path.
-- The Mandala Codes app can keep deploying from `technicianofthesacred/mandalacodes` without bundling LED controller code.
-- Lightweaver can deploy from `technicianofthesacred/LED-Programming` or direct Wrangler uploads.
+- The main Mandala Codes project can keep serving `mandalacodes.com` and `www.mandalacodes.com`.
+- The `lightweaver` Pages project can receive a direct Wrangler upload whenever the customer LED surface needs to move faster than the parent site.
 
 ## Local build
 
 ```bash
-cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
+cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/mandalacodes"
+npm run build:designer
 npm run build
 ```
 
 Important public routes:
 
-- `/` - full Lightweaver app
-- `/visitor` - simple visitor scene selector
-- `/src/visitor/visitor.html` - raw Vite multi-page output for the visitor UI
+- `/` - Lightweaver customer landing/install surface
+- `/design/` - Lightweaver Studio v3 chip-config tool
+- `/design/#screen=patterns` - visual pattern/color selection
+- `/design/#screen=load` - copy/download chip config and open the card page
 
 ## Cloudflare Pages deployment
 
@@ -52,8 +53,10 @@ wrangler pages project create lightweaver --production-branch main
 Deploy:
 
 ```bash
-cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
-npm run deploy:pages
+cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/mandalacodes"
+npm run build:designer
+npm run build
+wrangler pages deploy dist --project-name lightweaver --branch main --commit-dirty=true
 ```
 
 The deployed fallback URL will be:
