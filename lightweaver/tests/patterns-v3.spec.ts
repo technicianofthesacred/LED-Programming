@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import { createDefaultCircleLayout } from '../src/lib/defaultCircleLayout.js';
+import { createDefaultPatchBoard } from '../src/lib/patchBoard.js';
 
 test('v3 patterns show a chip-ready catalog with live local preview', async ({ page }) => {
   const controlRequests: unknown[] = [];
@@ -120,6 +122,54 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
 
   await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
   await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
+});
+
+test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {
+  const strips = createDefaultCircleLayout({ totalPixels: 80, sectionCount: 4 });
+  const project = {
+    version: 3,
+    name: 'Four Ring Test',
+    layout: {
+      strips,
+      viewBox: '0 0 640 400',
+      svgText: null,
+      hidden: {},
+      layers: [],
+      density: 60,
+      pxPerMm: 3.7795,
+      editCounts: {},
+      layerGroups: [],
+      layerOrder: [],
+      patchBoard: createDefaultPatchBoard(strips),
+    },
+  };
+  await page.addInitScript(savedProject => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('.lw-section-target')).toHaveCount(5);
+  await expect(page.locator('.lw-combo-targets > span')).toHaveCount(4);
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="sparkle"]').click();
+  await page.getByTestId('section-target-patch-default-ring-3').click();
+  await page.locator('button[data-pattern-id="fire"]').click();
+  await page.getByTestId('section-target-patch-default-ring-4').click();
+  await page.locator('button[data-pattern-id="calm"]').click();
+  await page.getByTestId('save-current-combo').click();
+
+  const savedCard = page.locator('.lw-saved-look-card').first();
+  await expect(savedCard).toContainText('4-section combo');
+  await expect(savedCard).toContainText('Ring 3: Fire');
+  await expect(savedCard).toContainText('Ring 4: Calm');
+  await expect(savedCard.locator('.lw-look-preview')).toHaveCount(4);
 });
 
 test('v3 patterns includes searchable visual pattern browsing', async ({ page }) => {

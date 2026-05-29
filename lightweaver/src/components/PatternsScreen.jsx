@@ -110,6 +110,7 @@ function titleFromId(value = '') {
 function comboLabelFromTargets(targets = [], defaultLook = {}) {
   const sections = (targets || []).filter(target => target?.kind === 'section');
   if (sections.length) {
+    if (sections.length > 2) return `${sections.length}-section combo`;
     return sections
       .map(target => `${targetLabel(target)} ${patternLabel(target.look?.patternId)}`)
       .join(' + ');
@@ -169,10 +170,18 @@ function SavedLookCard({ look, active, onApply, targets = [] }) {
     look: normalizeSectionVisualLook(sectionLook),
   }));
   const sectionCount = sectionSummaries.length;
+  const previewSections = sectionSummaries.length
+    ? sectionSummaries
+    : [{ id: 'all', label: 'All', look: look.defaultLook }];
+  const previewCols = previewSections.length <= 2 ? previewSections.length : previewSections.length <= 4 ? 2 : 3;
   return (
     <button type="button" className={`lw-saved-look-card ${active ? 'is-active' : ''}`} onClick={onApply}>
-      <span className="lw-saved-combo-previews" aria-hidden="true">
-        {(sectionSummaries.length ? sectionSummaries : [{ id: 'all', label: 'All', look: look.defaultLook }]).slice(0, 3).map(section => (
+      <span
+        className="lw-saved-combo-previews"
+        style={{ '--combo-preview-cols': previewCols }}
+        aria-hidden="true"
+      >
+        {previewSections.map(section => (
           <LookPreview key={section.id} patternId={section.look?.patternId} look={section.look}/>
         ))}
       </span>
@@ -545,7 +554,7 @@ export function PatternsScreen() {
         <header className="lw-patterns-hero">
           <div>
             <h1>Patterns & Combos</h1>
-            <p>Choose Outer and Inner patterns, tune the colors, then save the pairing as a reusable combo for the card.</p>
+            <p>Choose section patterns, tune the colors, then save the result as a reusable combo for the card.</p>
           </div>
           <div className="lw-patterns-actions">
             <button type="button" className="btn btn-primary" onClick={applySplitPreviewToCard}>Apply split to card</button>
@@ -583,7 +592,7 @@ export function PatternsScreen() {
               <div className="lw-combo-bench-copy">
                 <span>Current combo</span>
                 <strong>{lookLabel.trim() || currentComboLabel}</strong>
-                <em>Save this Outer and Inner pairing as an option.</em>
+                <em>Save this section setup as an option.</em>
                 <input
                   className="lw-search-input"
                   value={lookLabel}
