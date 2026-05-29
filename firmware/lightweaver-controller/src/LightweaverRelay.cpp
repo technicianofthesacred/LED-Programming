@@ -17,7 +17,7 @@ extern LookConfig looks[];
 
 namespace {
 
-constexpr const char* RELAY_HOST = "led.mandalacodes.com";
+constexpr const char* RELAY_HOST = "feb57a3e.mandalacodes.pages.dev";
 constexpr const char* NVS_NS = "lwrelay";
 constexpr const char* NVS_CARD_ID = "id";
 constexpr const char* NVS_TOKEN = "token";
@@ -97,6 +97,12 @@ bool httpJson(const String& method, const String& path, const String& body, Stri
     code = http.GET();
   }
   if (code < 200 || code >= 300) {
+    Serial.print("[relay] http ");
+    Serial.print(method);
+    Serial.print(" ");
+    Serial.print(path);
+    Serial.print(" -> ");
+    Serial.println(code);
     http.end();
     return false;
   }
@@ -171,11 +177,24 @@ void applyPending(JsonObject pending) {
 
 bool doPoll() {
   String response;
-  if (!httpJson("GET", String("/api/lw/poll/") + cardId, "", response)) return false;
+  if (!httpJson("GET", String("/api/lw/poll/") + cardId, "", response)) {
+    Serial.println("[relay] poll httpJson failed");
+    return false;
+  }
   JsonDocument resp;
-  if (deserializeJson(resp, response)) return false;
-  if (!resp["ok"].as<bool>()) return false;
+  if (deserializeJson(resp, response)) {
+    Serial.print("[relay] poll JSON parse failed, body=");
+    Serial.println(response);
+    return false;
+  }
+  if (!resp["ok"].as<bool>()) {
+    Serial.print("[relay] poll ok=false, body=");
+    Serial.println(response);
+    return false;
+  }
   if (resp["pending"].isNull()) return true;
+  Serial.print("[relay] poll got pending: ");
+  Serial.println(response);
   applyPending(resp["pending"].as<JsonObject>());
   return true;
 }
