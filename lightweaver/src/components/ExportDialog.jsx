@@ -21,7 +21,7 @@ import {
   toLwseqBytes,
   totalStandalonePixels,
 } from '../lib/standaloneController.js';
-import { makeCardRuntimePackage } from '../lib/cardRuntimeContract.js';
+import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeContract.js';
 
 const TARGETS = [
   { id: 'wled-basic', name: 'Lightweaver Basic WLED', sub: 'WLED presets, playlist, and port checklist', tag: 'WLED', hw: 'ESP32-S3 / WLED' },
@@ -249,11 +249,13 @@ export function ExportDialog({ open, onClose }) {
         mime = 'application/octet-stream';
       } else if (target === 'standalone' && format === 'cardconfig') {
         filename = `${safeName}-lightweaver-card.json`;
-        content = JSON.stringify(makeCardRuntimePackage({
+        const zones = patchBoardToZones(patchBoard, strips);
+        const pkg = makeCardRuntimePackage({
           projectName,
           mode: 'website-flash',
           led: {
             ...standaloneController?.led,
+            pixels: standalonePixels || totalLEDs || undefined,
             outputs: standaloneOutputs.map((o, i) => ({
               id: o.id || `out${i + 1}`,
               name: o.name || `Output ${i + 1}`,
@@ -262,7 +264,10 @@ export function ExportDialog({ open, onClose }) {
             })),
           },
           controls: standaloneController?.controls,
-        }), null, 2);
+          zones: zones.length ? zones : undefined,
+          syncZones: zones.length <= 1,
+        });
+        content = JSON.stringify(pkg.config, null, 2);
       } else if (target === 'standalone' && format === 'lwseq') {
         const frames = buildFrames();
         filename = makeStandaloneSequenceFilename(safeName);

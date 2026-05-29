@@ -2,6 +2,8 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
 import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromPatchBoard } from '../lib/export.js';
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
+import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeContract.js';
+import { deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
 import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
 import { DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
 import { DEMO_STRIPS } from '../data.js';
@@ -25,6 +27,10 @@ const LAYERS = [
     path: 'M 320 120 L 360 160 L 320 200 L 280 160 Z',
     emit: 'omni', angle: 0, color: 'oklch(78% 0.17 30)' },
 ];
+
+function totalStripPixels(strips = []) {
+  return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || 0), 0);
+}
 
 function samplePath(d, count) {
   const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -498,6 +504,7 @@ export function ExportScreen() {
     controllerProfiles,
     activeControllerId,
     physicalControls,
+    standaloneController,
   } = useProject();
 
   const [normalize, setNormalize] = useState(true);
@@ -540,7 +547,41 @@ export function ExportScreen() {
     physicalControls: physicalControls || activeControllerProfile?.physicalControls,
   }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness, physicalControls, activeControllerProfile?.physicalControls]);
 
+  const standaloneOutputs = useMemo(
+    () => deriveStandaloneOutputsFromStrips(sourceStrips, standaloneController?.outputs || []),
+    [sourceStrips, standaloneController?.outputs],
+  );
+  const cardRuntimeConfigJson = useMemo(() => {
+    const zones = !usingDemo && patchBoard ? patchBoardToZones(patchBoard, sourceStrips) : [];
+    const pkg = makeCardRuntimePackage({
+      projectName,
+      mode: 'website-flash',
+      led: {
+        pixels: totalLeds || totalStripPixels(sourceStrips) || standaloneOutputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || undefined,
+        colorOrder: standaloneController?.led?.colorOrder,
+        brightnessLimit: standaloneController?.led?.brightnessLimit,
+        outputs: standaloneOutputs.length
+          ? standaloneOutputs.map((output, index) => ({
+              id: output.id || `out${index + 1}`,
+              name: output.name || `Output ${index + 1}`,
+              pin: output.pin,
+              pixels: output.pixels,
+            }))
+          : undefined,
+      },
+      controls: standaloneController?.controls,
+      zones: zones.length ? zones : undefined,
+      syncZones: zones.length <= 1,
+    });
+    return JSON.stringify(pkg.config, null, 2);
+  }, [projectName, sourceStrips, standaloneController, totalLeds, patchBoard, usingDemo, standaloneOutputs]);
+
   const artifacts = [
+    {
+      file: 'lightweaver-card-config.json', desc: 'ESP32 local runtime config',
+      size: `${(cardRuntimeConfigJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(cardRuntimeConfigJson, 'lightweaver-card-config.json', 'application/json'),
+    },
     {
       file: 'ledmap.json', desc: 'WLED 2D layout',
       size: `${(ledmapJson.length / 1024).toFixed(1)} KB`,
@@ -630,6 +671,11 @@ export function ExportScreen() {
         <div className="lw-sec-header" style={{ marginTop: 8 }}>
           <span>Artifacts</span>
           <span className="meta">{pixels.length} LEDs · {sourceStrips.length} strips</span>
+        </div>
+        <div style={{ padding: '8px 12px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', lineHeight: 1.5 }}>
+          Install path: download <span style={{ fontFamily: 'var(--mono-font)' }}>lightweaver-card-config.json</span>,
+          open the card at <span style={{ fontFamily: 'var(--mono-font)' }}>http://lightweaver.local</span>,
+          then paste it in Settings → Paste designer config.
         </div>
         {artifacts.map(({ file, desc, size, action }) => (
           <div key={file} style={{ display:'flex', alignItems:'center', gap: 12, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 6 }}>

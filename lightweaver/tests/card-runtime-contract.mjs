@@ -56,4 +56,26 @@ assert.equal(pkg.config.piece.name, 'Bench Piece');
 assert.equal(pkg.config.led.pixels, 44);
 assert.deepEqual(pkg.config.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
 
+const zoned = makeCardRuntimePackage({
+  projectName: 'Zoned Piece',
+  mode: 'website-flash',
+  led: {
+    pixels: 96,
+    outputs: [
+      { id: 'out1', pin: 16, pixels: 0 },
+      { id: 'out2', pin: 17, pixels: 0 },
+    ],
+  },
+  zones: [
+    { id: 'outer', label: 'Outer', patternId: 'scanner', ranges: [{ start: 0, count: 48 }] },
+    { id: 'inner', label: 'Inner', patternId: 'ember', ranges: [{ start: 48, count: 48 }] },
+  ],
+  syncZones: false,
+});
+assert.equal(zoned.config.led.pixels, 96);
+assert.equal(zoned.config.led.outputs.length, 1);
+assert.equal(zoned.config.led.outputs[0].pixels, 96);
+assert.deepEqual(zoned.config.zones.map(zone => zone.id), ['outer', 'inner']);
+assert.equal(zoned.config.syncZones, false);
+
 console.log('card-runtime-contract tests passed');

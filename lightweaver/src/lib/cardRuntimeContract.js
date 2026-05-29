@@ -134,6 +134,8 @@ export function buildCardRuntimeConfig({
   controls = {},
   patterns = DEFAULT_CARD_PATTERN_BANK,
   startupPatternId = '',
+  zones,
+  syncZones,
 } = {}) {
   return normalizeCardRuntimeConfig({
     mode,
@@ -142,6 +144,8 @@ export function buildCardRuntimeConfig({
     controls,
     patterns,
     startupPatternId,
+    zones,
+    syncZones,
   });
 }
 
@@ -155,16 +159,20 @@ export function makeCardRuntimePackage(options = {}) {
 }
 
 function normalizeLed(led = {}) {
-  const outputs = Array.isArray(led.outputs) && led.outputs.length
-    ? led.outputs
-    : DEFAULT_CARD_LED.outputs;
+  const requestedPixels = clampInt(led.pixels, DEFAULT_CARD_LED.pixels, 1, 4096);
+  const configuredOutputs = Array.isArray(led.outputs)
+    ? led.outputs.filter(output => Number(output?.pixels || output?.pixelCount || 0) > 0)
+    : [];
+  const outputs = configuredOutputs.length
+    ? configuredOutputs
+    : [{ ...DEFAULT_CARD_LED.outputs[0], pixels: requestedPixels }];
   const normalizedOutputs = outputs
     .slice(0, 4)
     .map((output, index) => ({
       id: sanitizeId(output.id || `out${index + 1}`),
       name: String(output.name || `Output ${index + 1}`),
       pin: clampInt(output.pin, [16, 17, 18, 21][index] || 16, 0, 48),
-      pixels: clampInt(output.pixels, DEFAULT_CARD_LED.pixels, 1, 2048),
+      pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, 2048),
     }));
   const pixels = clampInt(
     led.pixels,
