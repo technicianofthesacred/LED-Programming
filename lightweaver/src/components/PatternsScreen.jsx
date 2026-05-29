@@ -275,10 +275,16 @@ export function PatternsScreen() {
       setStatusKind('');
       setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)} at ${cardHostToUrl(cardHost)}...`);
       try {
-        await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 });
+        const response = await pushLivePreviewToCard(
+          { ...nextLook, zone },
+          { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: true },
+        );
         if (sequence === livePreviewSeq.current) {
           setStatusKind('ok');
-          setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)}. Not saved yet.`);
+          const patternLabel = getCardPatternById(nextLook.patternId)?.label || nextLook.patternId;
+          setStatus(response?.previewZoneFallback
+            ? `Previewing ${patternLabel} on the whole card. Load this config onto the card once to preview ${targetLabel(target)} separately.`
+            : `Previewing ${patternLabel} on ${targetLabel(target)}. Not saved yet.`);
         }
       } catch (error) {
         if (sequence === livePreviewSeq.current) {

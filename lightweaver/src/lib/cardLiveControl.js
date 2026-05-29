@@ -22,10 +22,49 @@ export function buildLivePreviewControlPayload(look = {}) {
   };
 }
 
+async function readCardZones(host, timeoutMs = 1200) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${cardHostToUrl(host)}/api/zones`, { signal: ctrl.signal });
+    if (!response.ok) return null;
+    return await response.json().catch(() => null);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function zoneExists(zonesPayload, zoneId = '') {
+  if (!zoneId || !Array.isArray(zonesPayload?.zones)) return false;
+  return zonesPayload.zones.some(zone => String(zone?.id || '') === zoneId);
+}
+
+function hasCardZones(zonesPayload) {
+  return Array.isArray(zonesPayload?.zones) && zonesPayload.zones.length > 0;
+}
+
 export async function pushLivePreviewToCard(look, options = {}) {
   const host = options.host || readStoredCardHost();
+  let previewLook = look;
+  let previewZoneFallback = null;
+  if (options.fallbackMissingZoneToAll && look?.zone) {
+    try {
+      const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
+      if (hasCardZones(zonesPayload) && !zoneExists(zonesPayload, String(look.zone))) {
+        const { zone: requestedZone, ...fallbackLook } = look;
+        previewLook = fallbackLook;
+        previewZoneFallback = {
+          requestedZone: String(requestedZone),
+          availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
+        };
+      }
+    } catch {
+      // If the zone probe fails, keep the original targeted request so the
+      // normal connection error path can report the real card reachability issue.
+    }
+  }
   const url = `${cardHostToUrl(host)}/api/control`;
-  const body = JSON.stringify(buildLivePreviewControlPayload(look));
+  const body = JSON.stringify(buildLivePreviewControlPayload(previewLook));
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 2500);
   try {
@@ -39,7 +78,10 @@ export async function pushLivePreviewToCard(look, options = {}) {
       const text = await response.text().catch(() => '');
       throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
     }
-    return await response.json().catch(() => ({ ok: true }));
+    const json = await response.json().catch(() => ({ ok: true }));
+    return previewZoneFallback
+      ? { ...json, previewZoneFallback: true, ...previewZoneFallback }
+      : json;
   } catch (error) {
     if (error instanceof CardPushError) throw error;
     if (isMixedContentBlocked()) {

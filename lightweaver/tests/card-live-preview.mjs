@@ -57,4 +57,67 @@ assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
 
+const requests = [];
+globalThis.fetch = async (url, options = {}) => {
+  requests.push({ url, options });
+  if (String(url).endsWith('/api/zones')) {
+    return {
+      ok: true,
+      json: async () => ({
+        syncZones: true,
+        zones: [{ id: 'all', label: 'All', ranges: [{ start: 0, count: 44 }] }],
+      }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true }),
+  };
+};
+
+const fallbackResponse = await pushLivePreviewToCard({
+  patternId: 'sparkle',
+  zone: 'patch-default-outer-circle',
+}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+  fallbackMissingZoneToAll: true,
+});
+
+assert.equal(fallbackResponse.previewZoneFallback, true);
+assert.equal(requests[0].url, 'http://192.168.18.70/api/zones');
+assert.equal(requests[1].url, 'http://192.168.18.70/api/control');
+assert.equal(JSON.parse(requests[1].options.body).zone, undefined);
+assert.equal(JSON.parse(requests[1].options.body).patternId, 'sparkle');
+
+const targetedRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  targetedRequests.push({ url, options });
+  if (String(url).endsWith('/api/zones')) {
+    return {
+      ok: true,
+      json: async () => ({
+        syncZones: false,
+        zones: [{ id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] }],
+      }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true }),
+  };
+};
+
+const targetedResponse = await pushLivePreviewToCard({
+  patternId: 'ocean',
+  zone: 'patch-default-inner-circle',
+}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+  fallbackMissingZoneToAll: true,
+});
+
+assert.equal(targetedResponse.previewZoneFallback, undefined);
+assert.equal(JSON.parse(targetedRequests[1].options.body).zone, 'patch-default-inner-circle');
+
 console.log('card-live-preview tests passed');

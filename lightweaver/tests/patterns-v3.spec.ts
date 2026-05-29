@@ -88,3 +88,33 @@ test('v3 patterns keeps separate unsaved section choices before saving the Look'
   expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
   expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
 });
+
+test('v3 patterns previews on the whole card when the card has not loaded section zones yet', async ({ page }) => {
+  const controlRequests: unknown[] = [];
+  await page.route('http://lightweaver.local/api/zones', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        syncZones: true,
+        zones: [{ id: 'all', label: 'All', ranges: [{ start: 0, count: 44 }] }],
+      }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+
+  await expect.poll(() => controlRequests.length).toBe(1);
+  expect(controlRequests[0]).toMatchObject({ patternId: 'ocean' });
+  expect(controlRequests[0]).not.toHaveProperty('zone');
+  await expect(page.locator('.lw-chip-status')).toContainText('whole card');
+});
