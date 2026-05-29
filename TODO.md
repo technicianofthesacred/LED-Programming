@@ -4,12 +4,38 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Soon
 
-(Add items here as they come up. Project is in active build, status snapshots live in [[project_led_is_lightweaver]] and recent capture logs.)
+### Hardware and install setup (Adrian, at the artwork)
+
+- [ ] Set the final WLED LED count, data pin, LED type, color order, and brightness limit for the real artwork _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Rename the controller and reserve its install IP, then back up the existing presets before installing Lightweaver presets _(band: you-required)_ _(effort: quick)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Configure and test Madrix Art-Net output into WLED, then define the WLED segments matching the laser-cut zones _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+
+### Pi-hosted visitor UI
+
+- [ ] Set up the Pi: hostname, autostart the visitor-ui server, AP-mode SSID, and a phone captive-portal end-to-end test _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Customize the visitor-ui brand constant and match the scenes list to the real saved WLED presets _(band: agent-runnable)_ _(effort: quick)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
 
 ## Future
 
-- [ ] **Mode 4, Live Host runtime.** _(band: agent-runnable)_ Reserved for future laptop/Pi/Madrix/sound-reactive streaming. Spec sketched but not built.
-- Architecture (four-mode runtime: Mode 1 Factory Card / Mode 2 Website Loads The Card / Mode 3 Memory Card Advanced Sequence / Mode 4 Live Host): [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
+- [ ] Build the Live Host runtime for laptop, Pi, Madrix, and sound-reactive streaming _(band: agent-runnable)_ _(effort: deep)_ → Plan: [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
+
+### Mapper and firmware follow-ups
+
+- [ ] Add a direct USB controller mode using the verified bench serial protocol as the first hardware handshake _(band: agent-runnable)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Split the 4,713-line mapper main file into state, ui, render, and export modules _(band: agent-runnable)_ _(effort: deep)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Build the first branded custom WLED effects (Candle Drift, Ember Slow, Warm Pulse, Amber Aurora, Gallery Idle) _(band: agent-runnable)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Build standalone-controller export (lightweaver.json and microSD sequence packages) for offline ESP32 playback _(band: agent-runnable)_ _(effort: deep)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Add a Vitest unit suite for the mapper pattern helpers and export functions _(band: agent-runnable)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+
+### Mapper design tool feature roadmap
+
+- [ ] Add the quick per-section controls (brightness, hue shift, direction reversal) and master brightness _(band: agent-runnable)_ _(effort: moderate)_ → Plan: [led-art-mapper/ROADMAP.md](led-art-mapper/ROADMAP.md)
+- [ ] Add the color palette system, BPM tap tempo with beat variables, scene presets, and per-pattern parameter sliders _(band: agent-runnable)_ _(effort: deep)_ → Plan: [led-art-mapper/ROADMAP.md](led-art-mapper/ROADMAP.md)
+- [ ] Build the complex show tooling: scene crossfades, the timeline sequencer, and the spatial effect bus _(band: agent-runnable)_ _(effort: deep)_ → Plan: [led-art-mapper/ROADMAP.md](led-art-mapper/ROADMAP.md)
+
+### Deeper WLED protocol compatibility (deferred by design)
+
+- [ ] Add the deferred WLED protocol features if a real user needs them (DNRGB or E1.31 realtime, preset bank, per-segment params and palettes) _(band: agent-runnable)_ _(effort: deep)_ → Plan: [firmware/lightweaver-controller/FUTURE_WLED_COMPAT.md](firmware/lightweaver-controller/FUTURE_WLED_COMPAT.md)
 
 ## Operational notes (not TODOs: context for future-you)
 

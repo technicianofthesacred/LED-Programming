@@ -1,5 +1,7 @@
 # Lightweaver — development roadmap
 
+> Open items are now also surfaced in ../TODO.md (consolidated 2026-05-29). This file stays the detailed living roadmap and changelog (Done items are the project history); TODO.md is the scannable open-work view and links back here for detail.
+
 Living source of truth for project work. Update as items move between sections.
 
 Last updated: 2026-05-29
