@@ -2,6 +2,8 @@
 
 Goal: the Lightweaver browser UI lives at `led.mandalacodes.com`.
 
+Current product rule: the public site is a Studio, installer, and support surface. It is not a Cloudflare relay and it does not provide pairing-code remote control. The ESP32 card owns runtime playback.
+
 ## Current recommended setup
 
 Use a separate Cloudflare Pages project named `lightweaver`, built from `lightweaver/dist`, then attach `led.mandalacodes.com` as the custom domain.
@@ -30,15 +32,15 @@ Important public routes:
 
 ## Cloudflare Pages deployment
 
-Status on 2026-05-26:
+Status on 2026-05-29:
 
 - Cloudflare Pages project created: `lightweaver`
 - Current Pages domain: `https://lightweaver-edw.pages.dev`
-- Latest branch deployment: `https://codex-standalone-sequence-co.lightweaver-edw.pages.dev`
+- Current custom domain: `https://led.mandalacodes.com`
 - `https://lightweaver-edw.pages.dev/` returns HTTP 200
-- `https://codex-standalone-sequence-co.lightweaver-edw.pages.dev/` returns HTTP 200
-- `https://codex-standalone-sequence-co.lightweaver-edw.pages.dev/visitor` returns HTTP 200 after Cloudflare's clean-URL redirect
-- Custom domain `led.mandalacodes.com` is not attached yet; DNS did not resolve on 2026-05-26
+- `https://led.mandalacodes.com/` returns HTTP 200
+- `https://led.mandalacodes.com/design/#screen=patterns` opens Studio v3
+- `/api/lw/*` is intentionally excluded from Pages Functions and the old KV namespace has been deleted
 
 One-time project creation:
 
@@ -103,26 +105,27 @@ Verify after SSL activates:
 curl -I https://led.mandalacodes.com/
 ```
 
-## WLED control path
+## Card control path
 
-The UI can live publicly at `led.mandalacodes.com`, but the actual command path to WLED still needs one of these:
+The UI can live publicly at `led.mandalacodes.com`, but the actual runtime path stays local:
 
-- direct local WLED access when the browser allows it
-- WLED's built-in local UI
-- Pi-hosted Lightweaver server using `lightweaver/server/index.js`
-- a future local bridge/proxy
+- the card's onboard page at `http://lightweaver.local` or `http://192.168.4.1`
+- a copied/downloaded chip config from Studio v3
+- direct local HTTP push only when the browser allows it
+- optional Pi/local bridge work later, if intentionally added
 
-Reason: public HTTPS pages can be blocked from commanding private-network HTTP WLED controllers directly. The public UI should therefore detect when direct control fails and guide the operator to a local command path.
+Reason: public HTTPS pages can be blocked from commanding private-network HTTP controllers directly. The hosted Studio therefore defaults to copy/download/open-card instead of pretending it can reliably remote-control the card.
+
+Do not reintroduce Cloudflare KV as a transport. A polling card burns quota and adds latency. If future remote control is required, use a deliberately provisioned persistent transport such as a WebSocket/MQTT service or Durable Object WebSocket, not KV polling.
 
 ## Today checklist
 
 - [x] Build `lightweaver`
 - [x] Create or confirm Cloudflare Pages project `lightweaver`
 - [x] Deploy `dist`
-- [ ] Attach `led.mandalacodes.com`
+- [x] Attach `led.mandalacodes.com`
 - [x] Confirm `https://lightweaver-edw.pages.dev` loads
-- [x] Confirm branch preview `https://codex-standalone-sequence-co.lightweaver-edw.pages.dev` loads
-- [ ] Confirm `https://led.mandalacodes.com` loads after SSL activation
+- [x] Confirm `https://led.mandalacodes.com` loads after SSL activation
 - [x] Test `/visitor`
-- [ ] On the installation WiFi, test WLED connection behavior from a phone
-- [ ] If direct WLED control is blocked, use WLED local UI or Pi/local bridge for commands
+- [ ] On the installation WiFi, test card page loading from a phone
+- [ ] Flash current firmware to existing cards so old relay-polling firmware is gone from hardware too

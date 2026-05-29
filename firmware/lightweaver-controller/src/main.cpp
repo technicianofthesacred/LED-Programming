@@ -920,7 +920,7 @@ void runtimeFactoryReset() {
 }
 
 // Wipe only the WiFi key. Keeps piece name, hostname, and pattern config.
-// Card reboots into AP mode for re-pairing.
+// Card reboots into AP setup mode for new WiFi credentials.
 void runtimeResetWifi() {
   Preferences prefs;
   if (prefs.begin("lightweaver", false)) {

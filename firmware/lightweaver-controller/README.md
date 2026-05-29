@@ -2,6 +2,8 @@
 
 Arduino/PlatformIO firmware for the sellable ESP32-S3 Lightweaver card. It does not require WLED, a Raspberry Pi, Madrix, a laptop, or live Art-Net at runtime. It boots from internal flash by default, can be configured from the Lightweaver website, and can optionally read advanced `.lwseq` frame packages from microSD.
 
+There is no public relay in this firmware. It does not register with `led.mandalacodes.com`, display pairing codes, heartbeat to Cloudflare, or poll for remote commands. The public Studio exports a chip config; the card stores and runs it locally.
+
 ## Hardware Target
 
 - ESP32-S3 N16R8 or compatible ESP32-S3 board.
@@ -55,7 +57,7 @@ Non-sequence controller modes still use `/lightweaver.json`, but may not include
 ## Runtime Modes
 
 1. Factory Card: internal flash defaults, no website or microSD.
-2. Website Loaded Card: website saves config to ESP32 internal flash.
+2. Website Loaded Card: Studio v3 exports a config, then the card page saves it to ESP32 internal flash.
 3. Memory Card Advanced: microSD provides `/lightweaver.json` and `.lwseq` sequences.
 4. Live Host Reserved: laptop/Pi/Madrix/sound-reactive control is a future runtime lane.
 
@@ -84,9 +86,10 @@ The firmware assumes the four default LED output pins: 16, 17, 18, and 21. The p
 
 1. Format the microSD card as FAT32.
 2. Export the controller package from Lightweaver.
-3. Unpack the package to the microSD card root.
-4. Power the LEDs from the final supply, not from USB.
-5. Confirm shared ground between LED power and controller.
-6. Verify output 1, then add outputs 2-4 one at a time.
-7. Test next, previous, encoder press, brightness, and blackout controls.
-8. Let the piece loop for at least 30 minutes before handing it to a buyer.
+3. For website-flash pieces, paste the chip config into the card page and apply it.
+4. For microSD pieces, unpack the package to the microSD card root.
+5. Power the LEDs from the final supply, not from USB.
+6. Confirm shared ground between LED power and controller.
+7. Verify output 1, then add outputs 2-4 one at a time.
+8. Test next, previous, encoder press, brightness, and blackout controls.
+9. Let the piece loop for at least 30 minutes before handing it to a buyer.

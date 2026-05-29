@@ -8,22 +8,14 @@ import {
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
+import {
+  cardHostToUrl,
+  cardLoadMethodForProtocol,
+  readStoredCardHost,
+  writeStoredCardHost,
+} from '../lib/cardConnection.js';
 
-const HOST_KEY = 'lw_chip_card_host';
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
-
-function readHost() {
-  try { return window.localStorage.getItem(HOST_KEY) || 'lightweaver.local'; }
-  catch { return 'lightweaver.local'; }
-}
-
-function hostToUrl(rawHost = '') {
-  let host = String(rawHost || '').trim().toLowerCase();
-  if (!host) host = 'lightweaver.local';
-  if (host.startsWith('http://') || host.startsWith('https://')) return host.replace(/\/$/, '');
-  if (!host.includes('.') && !/^\d+$/.test(host)) host = `${host}.local`;
-  return `http://${host}`;
-}
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -80,7 +72,7 @@ export function ChipScreen() {
     standaloneController,
     setStandaloneController,
   } = useProject();
-  const [cardHost, setCardHost] = useState(readHost);
+  const [cardHost, setCardHost] = useState(readStoredCardHost);
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
 
@@ -159,26 +151,27 @@ export function ChipScreen() {
 
   const persistHost = (value) => {
     setCardHost(value);
-    try { window.localStorage.setItem(HOST_KEY, value); } catch { /* quota */ }
+    writeStoredCardHost(value);
   };
 
   const copyConfig = async () => {
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
-      setStatus('Chip config copied. Paste it into the card page.');
+      setStatus('Chip config copied. Paste it into the card page on the same WiFi.');
     } catch {
       setStatusKind('err');
       setStatus('Clipboard was blocked. Use Download chip config instead.');
     }
   };
 
-  const directPushAvailable = typeof window !== 'undefined' && window.location.protocol !== 'https:';
+  const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
+  const directPushAvailable = loadMethod.directPush;
   const pushDirect = async () => {
     setStatusKind('');
-    setStatus(`Sending to ${hostToUrl(cardHost)}...`);
+    setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
     try {
-      const response = await fetch(`${hostToUrl(cardHost)}/api/config`, {
+      const response = await fetch(`${cardHostToUrl(cardHost)}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -199,13 +192,13 @@ export function ChipScreen() {
           <div>
             <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 520, color: 'var(--text)' }}>Load</h1>
             <p style={{ margin: '6px 0 0', maxWidth: 650, color: 'var(--text-3)', fontSize: 'var(--fs-md)', lineHeight: 1.55 }}>
-              Copy or download the chip config, then paste it into the card page.
+              Copy or download the chip config, then paste it into the card page. The hosted Studio does not use pairing codes, cloud relay, or background polling.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download chip config</button>
-            <button className="btn btn-ghost" onClick={() => window.open(hostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card page</button>
+            <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card page</button>
           </div>
         </header>
 
@@ -225,7 +218,7 @@ export function ChipScreen() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: 18, alignItems: 'start' }}>
           <div style={{ display: 'grid', gap: 18 }}>
-            <Section title="Load to card" meta="reliable hosted path">
+            <Section title="Load to card" meta={loadMethod.label}>
               <FieldRow label="Card page" hint="same WiFi as the card">
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
                   <input
@@ -237,7 +230,7 @@ export function ChipScreen() {
                     autoCorrect="off"
                     placeholder="lightweaver.local"
                   />
-                  <button className="btn btn-ghost" onClick={() => window.open(hostToUrl(cardHost), '_blank')}>Open</button>
+                  <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open</button>
                 </div>
               </FieldRow>
               <FieldRow label="Install steps">
@@ -247,6 +240,13 @@ export function ChipScreen() {
                   <li>Paste into Paste designer config, then apply.</li>
                 </ol>
               </FieldRow>
+              {!directPushAvailable && (
+                <FieldRow label="Why no push" hint="hosted HTTPS">
+                  <div style={{ color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 }}>
+                    Browsers block hosted HTTPS pages from writing directly to local HTTP hardware. This screen exports the config; the card stores and runs it locally.
+                  </div>
+                </FieldRow>
+              )}
               {directPushAvailable && (
                 <FieldRow label="Direct push" hint="local HTTP only">
                   <button className="btn" onClick={pushDirect}>Push directly to card</button>

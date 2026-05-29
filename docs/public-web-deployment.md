@@ -14,21 +14,22 @@ Parent site: `mandalacodes.com`
 Use `led.mandalacodes.com` as the public-facing Lightweaver browser UI:
 
 - scene/pattern selection
-- WLED Basic setup and installation flow
-- Art-Net / Advanced mode entry points
+- chip config setup and installation flow
 - installer/download entry point
 - QR-code destination
-- project overview and WLED setup instructions
-- pattern package downloads
+- project overview and card setup instructions
+- chip package downloads
 - links into local controller pages
 
 Keep actual controller commands local:
 
-- WLED built-in UI on the controller
-- Pi-hosted Lightweaver UI on the installation LAN
-- a local bridge/proxy running beside the controller
+- the Lightweaver card's onboard page on the installation LAN
+- a local HTTP/file Studio session when direct push is needed
+- a Pi/local bridge only if a future install explicitly includes it
 
-The reason is browser security. A public HTTPS UI cannot reliably control a private-network HTTP WLED controller from every phone/browser without a local command path. Mixed-content rules, private-network access restrictions, captive portal behavior, and local IP changes can all break direct control. Treat the public subdomain as the canonical UI home; treat WLED, the Pi, or a local bridge as the command surface when direct controller calls are blocked.
+The reason is browser security and quota safety. A public HTTPS UI cannot reliably control a private-network HTTP controller from every phone/browser without a local command path. Mixed-content rules, private-network access restrictions, captive portal behavior, and local IP changes can all break direct control. Treat the public subdomain as the canonical Studio and support home; treat the card page as the command and install surface.
+
+Do not use Cloudflare Workers KV as a card transport. Cards polling a public KV-backed relay consume quota continuously and make the customer path depend on Cloudflare reads. As of 2026-05-29 the old `/api/lw/*` relay is removed, `/api/lw/*` is excluded from Pages Functions, and the KV namespace has been deleted.
 
 ## Mandala Codes vs I-64 OS
 
@@ -54,8 +55,9 @@ Do not make I-64 OS a requirement for the Basic WLED product.
 - Add `led.mandalacodes.com` as a custom domain in Cloudflare Pages, or create a separate Pages project for Lightweaver.
 - Add the required `led` CNAME if Cloudflare does not create it automatically.
 - Confirm SSL is active before printing QR codes.
-- Decide whether `led.mandalacodes.com` serves a standalone Lightweaver UI app or redirects/rewrites to a Mandala Codes route.
-- Do not promise direct public-site-to-WLED control unless a local bridge or Pi proxy is part of the install.
+- Confirm `led.mandalacodes.com` opens the Studio/support surface.
+- Confirm `/api/lw/*` remains excluded from Pages Functions.
+- Do not promise direct public-site-to-card control unless a local bridge or Pi proxy is part of the install.
 
 ## Route options
 
@@ -74,5 +76,6 @@ Cleaner isolation:
 Recommended choice for shipping:
 
 - Use `led.mandalacodes.com` as the public Lightweaver UI surface.
-- Keep WLED control local/Pi/WLED-served for Basic.
+- Keep card control local to the ESP32 page.
+- Use Studio v3 to export what can actually be loaded onto the chip.
 - Add I-64 OS only for advanced/admin integrations later.

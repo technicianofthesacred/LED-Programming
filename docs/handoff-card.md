@@ -39,7 +39,7 @@ an envelope, or just hand it to the customer. Keep it short. Plain language.
 
 
   Questions? hello@mandalacodes.com
-  More patterns: led.mandalacodes.com
+  Studio: led.mandalacodes.com
 ```
 
 ---
@@ -49,6 +49,7 @@ an envelope, or just hand it to the customer. Keep it short. Plain language.
 - Warm white paper, deep ink. Not glossy.
 - Typography should match the piece's identity — same wordmark, same letter spacing.
 - The two URLs are the only things that need to be exactly right; everything else can be loosened.
+- Do not mention pairing codes or remote control. The public Studio makes chip configs; the card page runs locally.
 - If the customer is buying multiple pieces, write each piece's hostname in pen on the back (the default is `lightweaver` but you can rename per piece in the designer before handoff).
 
 ## Print sizing

@@ -2,7 +2,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-05-26
+Last updated: 2026-05-29
 
 ## Done
 
@@ -38,6 +38,11 @@ Last updated: 2026-05-26
 - [x] Verify bench ESP32-S3 is reachable at `192.168.18.66` running WLED `0.15.4`
 - [x] Back up and flash the non-lit USB ESP32-S3 with temporary Lightweaver USB LED test firmware; verify `LWUSB` serial commands on `/dev/cu.usbmodem5B5E0414831` — see `docs/usb-controller-audit.md`
 
+### Cloud relay removal
+- [x] Remove Cloudflare KV relay as a Lightweaver transport; the card no longer registers, heartbeats, polls, or shows pairing codes.
+- [x] Delete the Cloudflare KV namespace and keep `/api/lw/*` excluded from Pages Functions.
+- [x] Reframe Studio v3 as chip-config export/load only: public HTTPS uses copy/download/open-card; direct card push is local HTTP/file only.
+
 ## Open — user/hardware actions
 
 These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
@@ -51,8 +56,8 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 
 ## Open — deployment
 
-- [ ] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
-- [ ] Keep actual WLED control local, WLED-served, or Pi-proxied unless a local bridge is present
+- [x] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
+- [x] Keep actual card control local to the ESP32 page unless a local bridge is intentionally added
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
 - [ ] AP mode SSID convention: "Lightweaver — Adrian Rasmussen — Piece 01"
 - [ ] Captive portal end-to-end test from a phone on the AP
@@ -62,6 +67,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 ## Open — software follow-ups
 
 - [ ] Add direct USB controller mode: Web Serial/local bridge transport in the app, using the verified `LWUSB` bench protocol as the first hardware handshake
+- [ ] Flash current no-relay firmware to any existing cards that were built with the old relay polling module.
 - [ ] **Refactor**: split 4,713-line `led-art-mapper/app/src/main.js` into modules (state, ui, render, export) — *deferred from this round; best done in a focused session because it touches everything*
 - [ ] Extend runtime target badges to Pattern, Timeline, and Export screens
 - [ ] WLED Basic installer: run controller compatibility audit, back up existing presets, then apply the generated package directly to a connected WLED controller

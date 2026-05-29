@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const SCREENS = ['Layout', 'Pattern', 'Show', 'Live', 'Export', 'Flash', 'Settings', 'Devices'];
+const SCREENS = ['Patterns', 'Layout', 'Load'];
 
 for (const viewport of [
   { name: 'desktop', width: 1280, height: 900 },

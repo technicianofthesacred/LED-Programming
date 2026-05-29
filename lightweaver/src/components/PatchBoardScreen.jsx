@@ -111,15 +111,15 @@ export function PatchBoardScreen({
     if (patch) patch.output = { ...(patch.output || {}), mode };
   });
 
-  // Serialize the current patch board into the firmware's runtime contract
-  // (zones + LED outputs + controls) and POST to the live card. The card
-  // adopts the new config immediately and persists it to NVS.
+  // Serialize the current patch board into the firmware's runtime contract.
+  // Direct push is only for local HTTP/file Studio sessions; hosted HTTPS
+  // flows use the copy-paste fallback shown by the error state.
   const pushToCard = async () => {
-    const cleanHost = pushHost.trim().toLowerCase() || 'lightweaver';
+    const cleanHost = pushHost.trim().toLowerCase() || 'lightweaver.local';
     setCardHostname(cleanHost);
     setPushHost(getCardHostname());
     setPushKind('pending');
-    setPushStatus(`Pushing to ${cleanHost}.local…`);
+    setPushStatus(`Pushing to ${cleanHost}...`);
     setPushFallbackJson('');
     const zones = patchBoardToZones(board, strips);
     const outputs = (standaloneController?.outputs || []).map((o, i) => ({
@@ -145,7 +145,7 @@ export function PatchBoardScreen({
     try {
       await pushConfigToCard(pkg, { host: getCardHostname() });
       setPushKind('ok');
-      setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}.local`);
+      setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}`);
       setTimeout(() => { setPushStatus(''); setPushKind(''); }, 4000);
     } catch (err) {
       setPushKind('err');

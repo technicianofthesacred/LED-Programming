@@ -7,22 +7,13 @@ import {
   cardSaturationToChroma,
   normalizeCardVisualLook,
 } from '../lib/cardVisualLook.js';
+import {
+  cardHostToUrl,
+  readStoredCardHost,
+  writeStoredCardHost,
+} from '../lib/cardConnection.js';
 
-const HOST_KEY = 'lw_chip_card_host';
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
-
-function readHost() {
-  try { return window.localStorage.getItem(HOST_KEY) || 'lightweaver.local'; }
-  catch { return 'lightweaver.local'; }
-}
-
-function hostToUrl(rawHost = '') {
-  let host = String(rawHost || '').trim().toLowerCase();
-  if (!host) host = 'lightweaver.local';
-  if (host.startsWith('http://') || host.startsWith('https://')) return host.replace(/\/$/, '');
-  if (!host.includes('.') && !/^\d+$/.test(host)) host = `${host}.local`;
-  return `http://${host}`;
-}
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -94,7 +85,7 @@ export function PatternsScreen() {
     standaloneController,
     setStandaloneController,
   } = useProject();
-  const [cardHost, setCardHost] = useState(readHost);
+  const [cardHost, setCardHost] = useState(readStoredCardHost);
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
 
@@ -152,14 +143,14 @@ export function PatternsScreen() {
 
   const persistHost = (value) => {
     setCardHost(value);
-    try { window.localStorage.setItem(HOST_KEY, value); } catch { /* quota */ }
+    writeStoredCardHost(value);
   };
 
   const copyConfig = async () => {
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
-      setStatus('Chip config copied. Paste it into the card page.');
+      setStatus('Chip config copied. Paste it into the card page on the same WiFi.');
     } catch {
       setStatusKind('err');
       setStatus('Clipboard was blocked. Download the chip config instead.');
@@ -172,12 +163,12 @@ export function PatternsScreen() {
         <header className="lw-patterns-hero">
           <div>
             <h1>Patterns</h1>
-            <p>Choose what the card starts with, tune the color by eye, and pick which looks the knob cycles through.</p>
+            <p>Choose what starts on the card, tune the color by eye, and pick the looks the knob cycles through. These choices are written to the chip config, not sent through a cloud relay.</p>
           </div>
           <div className="lw-patterns-actions">
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
-            <button type="button" className="btn btn-ghost" onClick={() => window.open(hostToUrl(cardHost), '_blank')}>Open card</button>
+            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
           </div>
         </header>
 
@@ -258,7 +249,7 @@ export function PatternsScreen() {
                     autoCorrect="off"
                     placeholder="lightweaver.local"
                   />
-                  <button type="button" className="btn btn-ghost" onClick={() => window.open(hostToUrl(cardHost), '_blank')}>Open</button>
+                  <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open</button>
                 </div>
               </div>
             </Section>
