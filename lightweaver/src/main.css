@@ -5014,7 +5014,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-patterns-hero h1 {
   margin: 0;
   color: var(--text);
-  font-size: clamp(28px, 4vw, 54px);
+  font-size: 36px;
   font-weight: 520;
   letter-spacing: 0;
 }
@@ -5069,12 +5069,12 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+  gap: 10px;
 }
 
 .lw-look-card {
-  min-height: 204px;
+  min-height: 166px;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   border: 1px solid var(--border);
@@ -5101,9 +5101,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-card-main {
   display: grid;
-  grid-template-rows: minmax(116px, 1fr) auto;
-  gap: 10px;
-  padding: 10px;
+  grid-template-rows: minmax(86px, 1fr) auto;
+  gap: 8px;
+  padding: 8px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -5122,7 +5122,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-card-copy strong {
   color: var(--text);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
   font-weight: 560;
 }
 
@@ -5136,11 +5136,148 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
+  padding: 7px 8px;
   border-top: 1px solid var(--border);
   color: var(--text-3);
   font-size: var(--fs-sm);
   cursor: pointer;
+}
+
+.lw-combo-bench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid oklch(76% 0.17 165 / 0.3);
+  border-radius: 6px;
+  background:
+    linear-gradient(135deg, oklch(18% 0.024 225 / 0.82), oklch(12% 0.012 250 / 0.88));
+}
+
+.lw-combo-bench-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.lw-combo-bench-copy .lw-search-input {
+  margin-top: 5px;
+}
+
+.lw-combo-bench-copy span,
+.lw-combo-bench-copy em {
+  color: var(--text-4);
+  font-size: var(--fs-xs);
+  font-style: normal;
+}
+
+.lw-combo-bench-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-combo-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lw-combo-targets span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 6px;
+  background: oklch(11% 0.012 250 / 0.82);
+}
+
+.lw-combo-targets .lw-look-preview {
+  grid-row: span 2;
+  min-height: 38px;
+}
+
+.lw-combo-targets b,
+.lw-combo-targets em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-combo-targets b {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 560;
+}
+
+.lw-combo-targets em {
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+}
+
+.lw-pattern-browse-tools {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.lw-combo-library {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 6px;
+  background: oklch(12% 0.012 250 / 0.62);
+}
+
+.lw-combo-library-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 8px;
+}
+
+.lw-pattern-filter-row {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.lw-pattern-filter-row .btn {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+}
+
+.lw-pattern-browse-tools > span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.lw-pattern-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-4);
+  text-align: center;
 }
 
 .lw-look-card-toggle input,
@@ -5251,7 +5388,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-look-preview {
   position: relative;
-  min-height: 126px;
+  min-height: 96px;
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 6px;
   overflow: hidden;
@@ -5443,9 +5580,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-saved-look-card {
-  min-height: 74px;
+  min-height: 82px;
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   border: 1px solid var(--border);
@@ -5468,11 +5605,17 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   background: oklch(18% 0.025 225);
 }
 
-.lw-saved-look-card .lw-look-preview {
-  min-height: 56px;
+.lw-saved-combo-previews {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
 }
 
-.lw-saved-look-card span {
+.lw-saved-combo-previews .lw-look-preview {
+  min-height: 54px;
+}
+
+.lw-saved-combo-copy {
   min-width: 0;
   display: grid;
   gap: 3px;
@@ -5483,6 +5626,15 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   color: var(--text);
   font-size: var(--fs-sm);
   font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-saved-combo-sections {
+  overflow: hidden;
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5574,6 +5726,15 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   }
 
   .lw-look-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lw-combo-bench,
+  .lw-pattern-browse-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .lw-combo-targets {
     grid-template-columns: 1fr;
   }
 }

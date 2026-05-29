@@ -28,6 +28,15 @@ import { pushLivePreviewToCard } from '../lib/cardLiveControl.js';
 import { LEDPreview } from './Preview.jsx';
 
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
+const PATTERN_CATEGORIES = [
+  { id: 'all', label: 'All', ids: null },
+  { id: 'calm', label: 'Calm', ids: ['aurora', 'breathe', 'calm', 'drift', 'bloom', 'warm-white'] },
+  { id: 'water', label: 'Water', ids: ['ocean', 'ripple', 'wave', 'plasma'] },
+  { id: 'warm', label: 'Warm', ids: ['fire', 'lava', 'candle', 'ember', 'sunset', 'warm-white'] },
+  { id: 'spark', label: 'Spark', ids: ['sparkle', 'twinkle', 'meteor', 'confetti', 'lightning'] },
+  { id: 'motion', label: 'Motion', ids: ['chase', 'scanner', 'warp', 'pulse-ring', 'blocks', 'rainbow'] },
+  { id: 'electric', label: 'Electric', ids: ['neon', 'matrix', 'heartbeat', 'stained'] },
+];
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -86,6 +95,33 @@ function looksMatch(a, b) {
     && a.customDrift === b.customDrift;
 }
 
+function patternLabel(patternId) {
+  return getCardPatternById(patternId)?.label || String(patternId || 'Pattern');
+}
+
+function titleFromId(value = '') {
+  return String(value || '')
+    .split('-')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function comboLabelFromTargets(targets = [], defaultLook = {}) {
+  const sections = (targets || []).filter(target => target?.kind === 'section');
+  if (sections.length) {
+    return sections
+      .map(target => `${targetLabel(target)} ${patternLabel(target.look?.patternId)}`)
+      .join(' + ');
+  }
+  return `${patternLabel(defaultLook.patternId)} whole piece`;
+}
+
+function patternMatchesCategory(pattern, categoryId) {
+  const category = PATTERN_CATEGORIES.find(item => item.id === categoryId) || PATTERN_CATEGORIES[0];
+  return !category.ids || category.ids.includes(pattern.id);
+}
+
 function LookCard({ pattern, look, previewing, saved, inCycle, onSelect, onCycleChange }) {
   const summary = previewing
     ? saved ? 'Previewing and saved here' : 'Previewing on LEDs'
@@ -125,15 +161,29 @@ function TargetButton({ target, active, onSelect }) {
   );
 }
 
-function SavedLookCard({ look, active, onApply }) {
-  const pattern = getCardPatternById(look.defaultLook?.patternId);
-  const sectionCount = Object.keys(look.sectionLooks || {}).length;
+function SavedLookCard({ look, active, onApply, targets = [] }) {
+  const targetById = new Map(targets.map(target => [target.id, target]));
+  const sectionSummaries = Object.entries(look.sectionLooks || {}).map(([targetId, sectionLook]) => ({
+    id: targetId,
+    label: targetById.get(targetId)?.label || titleFromId(targetId),
+    look: normalizeSectionVisualLook(sectionLook),
+  }));
+  const sectionCount = sectionSummaries.length;
   return (
     <button type="button" className={`lw-saved-look-card ${active ? 'is-active' : ''}`} onClick={onApply}>
-      <LookPreview patternId={look.defaultLook?.patternId} look={look.defaultLook}/>
-      <span>
+      <span className="lw-saved-combo-previews" aria-hidden="true">
+        {(sectionSummaries.length ? sectionSummaries : [{ id: 'all', label: 'All', look: look.defaultLook }]).slice(0, 3).map(section => (
+          <LookPreview key={section.id} patternId={section.look?.patternId} look={section.look}/>
+        ))}
+      </span>
+      <span className="lw-saved-combo-copy">
         <strong>{look.label}</strong>
-        <em>{pattern?.label || look.defaultLook?.patternId} · {sectionCount || 1} section{sectionCount === 1 ? '' : 's'}</em>
+        <em>{sectionCount || 1} section{sectionCount === 1 ? '' : 's'}</em>
+        {sectionSummaries.length > 0 && (
+          <span className="lw-saved-combo-sections">
+            {sectionSummaries.map(section => `${section.label}: ${patternLabel(section.look.patternId)}`).join(' · ')}
+          </span>
+        )}
       </span>
     </button>
   );
@@ -157,8 +207,11 @@ export function PatternsScreen() {
   const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
   const [draftLooks, setDraftLooks] = useState({});
   const [lookLabel, setLookLabel] = useState('');
+  const [patternSearch, setPatternSearch] = useState('');
+  const [patternCategory, setPatternCategory] = useState('all');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
+  const savedComboSeq = useRef(0);
 
   const savedGlobalLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
@@ -213,6 +266,16 @@ export function PatternsScreen() {
   const savedPattern = getCardPatternById(savedGlobalLook.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
   const hasUnsavedPreview = !looksMatch(look, savedTargetLook);
   const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
+  const currentComboLabel = comboLabelFromTargets(effectiveSectionTargets, draftDefaultLook);
+  const filteredPatterns = useMemo(() => {
+    const query = patternSearch.trim().toLowerCase();
+    return DEFAULT_CARD_PATTERN_BANK.filter(pattern => {
+      if (!patternMatchesCategory(pattern, patternCategory)) return false;
+      if (!query) return true;
+      const searchable = `${pattern.label} ${pattern.description || ''} ${pattern.id}`.toLowerCase();
+      return searchable.includes(query);
+    });
+  }, [patternCategory, patternSearch]);
 
   const runtimePackage = useMemo(
     () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
@@ -308,7 +371,7 @@ export function PatternsScreen() {
     if (push) scheduleLivePreview(nextLook, selectedTarget);
   };
 
-  const buildCurrentHardwareState = ({ saveNamedLook = false, label = '' } = {}) => {
+  const buildCurrentHardwareState = ({ saveNamedLook = false, label = '', uniqueLookId = false } = {}) => {
     const nextLook = normalizeSectionVisualLook(look);
     const draftLookEntries = {
       ...draftLooks,
@@ -347,11 +410,11 @@ export function PatternsScreen() {
     if (!saveNamedLook) {
       return { nextLook, nextBoard, nextController, nextTargets };
     }
-    const fallbackLabel = selectedTarget?.kind === 'all'
-      ? `${selectedPattern?.label || 'Pattern'} look`
-      : `${selectedTargetName} ${selectedPattern?.label || 'look'}`;
+    const fallbackLabel = comboLabelFromTargets(nextTargets, nextDefaultLook);
+    const resolvedLabel = label || lookLabel.trim() || fallbackLabel;
     nextController = saveCurrentLookToController(standaloneController, {
-      label: label || lookLabel.trim() || fallbackLabel,
+      lookId: uniqueLookId ? `combo-${Date.now()}-${++savedComboSeq.current}` : '',
+      label: resolvedLabel,
       defaultLook: nextDefaultLook,
       targets: nextTargets,
     });
@@ -365,6 +428,22 @@ export function PatternsScreen() {
     setDraftLooks({});
     setLookLabel('');
     return { nextLook, nextBoard, nextController };
+  };
+
+  const saveComboOnly = () => {
+    const { nextController } = buildCurrentHardwareState({
+      saveNamedLook: true,
+      label: lookLabel.trim() || currentComboLabel,
+      uniqueLookId: true,
+    });
+    const nextLooks = normalizeSavedLooks(nextController.looks);
+    const saved = nextLooks[0];
+    setPatchBoard(applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook: saved }));
+    setStandaloneController(nextController);
+    setDraftLooks({});
+    setLookLabel('');
+    setStatusKind('ok');
+    setStatus(`${saved?.label || 'Combo'} saved. You can save another Outer and Inner combination now.`);
   };
 
   const applySplitPreviewToCard = async () => {
@@ -396,13 +475,6 @@ export function PatternsScreen() {
         ? 'The hosted HTTPS page cannot write split preview to the local card. Open this Studio from localhost, or copy the config to the card page.'
         : `Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);
     }
-  };
-
-  const saveLookOnly = () => {
-    const { nextController } = commitCurrentLook({});
-    const saved = normalizeSavedLooks(nextController.looks)[0];
-    setStatusKind('ok');
-    setStatus(`${saved?.label || 'Look'} saved. Load now uses this Look in the chip config.`);
   };
 
   const savePreviewToCard = async () => {
@@ -472,11 +544,10 @@ export function PatternsScreen() {
       <div className="lw-patterns-shell">
         <header className="lw-patterns-hero">
           <div>
-            <h1>Patterns & Looks</h1>
-            <p>Choose a section, preview patterns and colors, then save the whole result as a Look before loading it onto the card.</p>
+            <h1>Patterns & Combos</h1>
+            <p>Choose Outer and Inner patterns, tune the colors, then save the pairing as a reusable combo for the card.</p>
           </div>
           <div className="lw-patterns-actions">
-            <button type="button" className="btn btn-primary" onClick={saveLookOnly}>Save Look</button>
             <button type="button" className="btn btn-primary" onClick={applySplitPreviewToCard}>Apply split to card</button>
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
@@ -508,6 +579,49 @@ export function PatternsScreen() {
               </label>
               <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
             </div>
+            <div className="lw-combo-bench">
+              <div className="lw-combo-bench-copy">
+                <span>Current combo</span>
+                <strong>{lookLabel.trim() || currentComboLabel}</strong>
+                <em>Save this Outer and Inner pairing as an option.</em>
+                <input
+                  className="lw-search-input"
+                  value={lookLabel}
+                  onChange={event => setLookLabel(event.target.value)}
+                  placeholder="Name this combo (optional)"
+                  aria-label="Combo name"
+                />
+              </div>
+              <div className="lw-combo-targets">
+                {effectiveSectionTargets.filter(target => target.kind === 'section').map(target => (
+                  <span key={target.id}>
+                    <LookPreview patternId={target.look?.patternId} look={target.look}/>
+                    <b>{target.label}</b>
+                    <em>{patternLabel(target.look?.patternId)}</em>
+                  </span>
+                ))}
+              </div>
+              <button type="button" className="btn btn-primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save combo</button>
+            </div>
+            {savedLooks.length > 0 && (
+              <div className="lw-combo-library">
+                <div className="lw-sec-header">
+                  <span>Saved combos</span>
+                  <span className="meta">{savedLooks.length} saved</span>
+                </div>
+                <div className="lw-combo-library-list">
+                  {savedLooks.map(savedLook => (
+                    <SavedLookCard
+                      key={savedLook.id}
+                      look={savedLook}
+                      targets={sectionTargets}
+                      active={savedLook.id === activeLookId}
+                      onApply={() => applySavedLook(savedLook)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="lw-target-panel">
               <div className="lw-sec-header">
                 <span>Design target</span>
@@ -526,8 +640,29 @@ export function PatternsScreen() {
                 ))}
               </div>
             </div>
+            <div className="lw-pattern-browse-tools">
+              <input
+                className="lw-search-input"
+                value={patternSearch}
+                onChange={event => setPatternSearch(event.target.value)}
+                placeholder="Search chip patterns"
+              />
+              <div className="lw-pattern-filter-row" aria-label="Pattern filters">
+                {PATTERN_CATEGORIES.map(category => (
+                  <button
+                    key={category.id}
+                    type="button"
+                    className={`btn btn-ghost ${patternCategory === category.id ? 'active' : ''}`}
+                    onClick={() => setPatternCategory(category.id)}
+                  >
+                    {category.label}
+                  </button>
+                ))}
+              </div>
+              <span>{filteredPatterns.length} shown</span>
+            </div>
             <div className="lw-look-grid">
-              {DEFAULT_CARD_PATTERN_BANK.map(pattern => (
+              {filteredPatterns.map(pattern => (
                 <LookCard
                   key={pattern.id}
                   pattern={pattern}
@@ -539,6 +674,9 @@ export function PatternsScreen() {
                   onCycleChange={enabled => setCycleEnabled(pattern.id, enabled)}
                 />
               ))}
+              {!filteredPatterns.length && (
+                <p className="lw-pattern-empty">No chip-ready patterns match this search.</p>
+              )}
             </div>
           </section>
 
@@ -603,32 +741,6 @@ export function PatternsScreen() {
                 <label><input type="checkbox" checked={look.customBreathe} onChange={event => updatePreviewLook({ customBreathe: event.target.checked })}/> Breathe</label>
                 <label><input type="checkbox" checked={look.customDrift} onChange={event => updatePreviewLook({ customDrift: event.target.checked })}/> Drift</label>
               </div>
-            </Section>
-
-            <Section title="Saved Looks" meta={savedLooks.length ? `${savedLooks.length} saved` : 'none yet'}>
-              <div className="lw-save-look-row">
-                <input
-                  className="lw-search-input"
-                  value={lookLabel}
-                  onChange={event => setLookLabel(event.target.value)}
-                  placeholder={`${selectedPattern?.label || 'Pattern'} look`}
-                />
-                <button type="button" className="btn btn-primary" onClick={saveLookOnly}>Save</button>
-              </div>
-              {savedLooks.length ? (
-                <div className="lw-saved-look-list">
-                  {savedLooks.map(savedLook => (
-                    <SavedLookCard
-                      key={savedLook.id}
-                      look={savedLook}
-                      active={savedLook.id === activeLookId}
-                      onApply={() => applySavedLook(savedLook)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <p className="lw-pattern-preview-copy">Save a Look to keep this pattern, color, motion, and section setup together.</p>
-              )}
             </Section>
 
             <Section title="Knob" meta={`${cycleIds.length} patterns`}>

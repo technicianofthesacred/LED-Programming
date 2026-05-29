@@ -37,7 +37,7 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.getByTestId('card-startup-label')).toHaveText('Ocean');
 });
 
-test('v3 patterns saves section-specific Looks that appear in Load', async ({ page }) => {
+test('v3 patterns saves section-specific combos that appear in Load', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
@@ -51,7 +51,7 @@ test('v3 patterns saves section-specific Looks that appear in Load', async ({ pa
 
   await page.locator('button[data-pattern-id="ocean"]').click();
   await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
-  await page.locator('.lw-save-look-row button').click();
+  await page.getByTestId('save-current-combo').click();
 
   await expect(page.locator('.lw-saved-look-card', { hasText: 'Inner circle Ocean' })).toBeVisible();
   await page.getByText('Load', { exact: true }).click();
@@ -61,7 +61,7 @@ test('v3 patterns saves section-specific Looks that appear in Load', async ({ pa
   await expect(page.locator('textarea')).toContainText('"patternId": "ocean"');
 });
 
-test('v3 patterns keeps separate unsaved section choices before saving the Look', async ({ page }) => {
+test('v3 patterns keeps separate unsaved section choices before saving the combo', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
@@ -80,13 +80,58 @@ test('v3 patterns keeps separate unsaved section choices before saving the Look'
   await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
   await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
 
-  await page.locator('.lw-save-look-row button').click();
+  await page.getByTestId('save-current-combo').click();
+  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
   await page.getByText('Load', { exact: true }).click();
 
   const config = JSON.parse(await page.locator('textarea').inputValue());
   const zonePatterns = Object.fromEntries(config.zones.map(zone => [zone.id, zone.patternId]));
   expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
   expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
+});
+
+test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="sparkle"]').click();
+  await page.getByTestId('save-current-combo').click();
+
+  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="fire"]').click();
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await page.getByTestId('save-current-combo').click();
+
+  await expect(page.locator('.lw-saved-look-card')).toHaveCount(2);
+  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Fire + Inner circle Ocean' })).toBeVisible();
+
+  await page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
+
+  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
+});
+
+test('v3 patterns includes searchable visual pattern browsing', async ({ page }) => {
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByPlaceholder('Search chip patterns').fill('ocean');
+
+  await expect(page.locator('.lw-look-card')).toHaveCount(1);
+  await expect(page.locator('button[data-pattern-id="ocean"]')).toBeVisible();
+  await expect(page.getByText('1 shown')).toBeVisible();
 });
 
 test('v3 patterns previews on the whole card when the card has not loaded section zones yet', async ({ page }) => {
