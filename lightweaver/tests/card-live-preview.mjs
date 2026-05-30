@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   buildLivePreviewControlPayload,
   pushLivePreviewToCard,
+  pushSectionPreviewToCard,
 } from '../src/lib/cardLiveControl.js';
 
 const payload = buildLivePreviewControlPayload({
@@ -14,11 +15,13 @@ const payload = buildLivePreviewControlPayload({
   customBreathe: true,
   customDrift: false,
   zone: 'patch-inner',
+  syncZones: false,
 });
 
 assert.deepEqual(payload, {
   cancelStream: true,
   zone: 'patch-inner',
+  syncZones: false,
   patternId: 'ocean',
   brightness: 0.72,
   speed: 1.35,
@@ -119,6 +122,47 @@ const targetedResponse = await pushLivePreviewToCard({
 
 assert.equal(targetedResponse.previewZoneFallback, undefined);
 assert.equal(JSON.parse(targetedRequests[1].options.body).zone, 'patch-default-inner-circle');
+
+const comboRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  comboRequests.push({ url, options });
+  if (String(url).endsWith('/api/zones')) {
+    return {
+      ok: true,
+      json: async () => ({
+        syncZones: false,
+        zones: [
+          { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
+          { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+        ],
+      }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true }),
+  };
+};
+
+const comboResponse = await pushSectionPreviewToCard([
+  { id: 'all', kind: 'all', look: { patternId: 'aurora' } },
+  { id: 'patch-default-outer-circle', zoneId: 'patch-default-outer-circle', kind: 'section', look: { patternId: 'ocean' } },
+  { id: 'patch-default-inner-circle', zoneId: 'patch-default-inner-circle', kind: 'section', look: { patternId: 'sparkle' } },
+], {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+
+assert.equal(comboResponse.zonesPreviewed, 2);
+assert.equal(comboRequests[0].url, 'http://192.168.18.70/api/zones');
+assert.deepEqual(comboRequests.slice(1).map(item => JSON.parse(item.options.body)).map(body => ({
+  zone: body.zone,
+  patternId: body.patternId,
+  syncZones: body.syncZones,
+})), [
+  { zone: 'patch-default-outer-circle', patternId: 'ocean', syncZones: false },
+  { zone: 'patch-default-inner-circle', patternId: 'sparkle', syncZones: false },
+]);
 
 const retryRequests = [];
 globalThis.fetch = async (url, options = {}) => {

@@ -27,7 +27,7 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { pushConfigToCard } from '../lib/cardPushClient.js';
-import { pushLivePreviewToCard } from '../lib/cardLiveControl.js';
+import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
 import { LEDPreview } from './Preview.jsx';
 
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
@@ -412,7 +412,7 @@ export function PatternsScreen() {
       setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)} at ${cardHostToUrl(cardHost)}...`);
       try {
         const response = await pushLivePreviewToCard(
-          { ...nextLook, zone },
+          { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
           { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: true },
         );
         if (sequence === livePreviewSeq.current) {
@@ -589,8 +589,13 @@ export function PatternsScreen() {
     }
   };
 
-  const applySavedLook = (savedLook) => {
+  const applySavedLook = async (savedLook) => {
     const nextBoard = applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook });
+    const nextTargets = deriveSectionTargets({
+      strips,
+      patchBoard: nextBoard,
+      defaultLook: savedLook.defaultLook,
+    });
     setPatchBoard(nextBoard);
     setStandaloneController(prev => ({
       ...(prev || {}),
@@ -600,8 +605,26 @@ export function PatternsScreen() {
     }));
     setDraftLooks({});
     setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
-    setStatusKind('ok');
-    setStatus(`${savedLook.label} applied. Preview or save it to the card when ready.`);
+    if (!livePreviewEnabled) {
+      setStatusKind('ok');
+      setStatus(`${savedLook.label} applied. Turn on LED preview or save it to the card when ready.`);
+      return;
+    }
+
+    setStatusKind('');
+    setStatus(`Previewing ${savedLook.label} on ${cardHostToUrl(cardHost)}...`);
+    try {
+      const response = await pushSectionPreviewToCard(nextTargets, { host: cardHost, timeoutMs: 2200 });
+      setStatusKind('ok');
+      setStatus(response?.previewZoneFallback
+        ? `${savedLook.label} applied in Studio. Load this config onto the card once to preview sections separately.`
+        : `${savedLook.label} previewing on the card. Save to card when ready.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? 'The hosted HTTPS page cannot talk directly to local HTTP hardware. Open this Studio from localhost, or copy the config to the card page.'
+        : `Could not preview ${savedLook.label} on the card at ${cardHostToUrl(cardHost)}.`);
+    }
   };
 
   const setCycleEnabled = (patternId, enabled) => {

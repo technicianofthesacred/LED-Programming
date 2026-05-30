@@ -102,7 +102,22 @@ test('v3 patterns keeps separate unsaved section choices before saving the combo
 });
 
 test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/zones', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        syncZones: false,
+        zones: [
+          { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
+          { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+        ],
+      }),
+    });
+  });
   await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
 
@@ -127,10 +142,14 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
   await expect(page.locator('.lw-saved-look-card')).toHaveCount(2);
   await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Fire + Inner circle Ocean' })).toBeVisible();
 
+  controlRequests.length = 0;
   await page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
 
   await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
   await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
+  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-outer-circle' && request.patternId === 'ocean')).toBe(true);
+  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-inner-circle' && request.patternId === 'sparkle')).toBe(true);
+  await expect(page.locator('.lw-chip-status')).toContainText('previewing on the card');
 });
 
 test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {

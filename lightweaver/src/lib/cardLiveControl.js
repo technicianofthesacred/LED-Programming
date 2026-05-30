@@ -17,6 +17,7 @@ export function buildLivePreviewControlPayload(look = {}) {
   return {
     cancelStream: true,
     ...(look.zone ? { zone: String(look.zone) } : {}),
+    ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
     patternId: normalized.patternId,
     brightness: normalized.brightness,
     speed: normalized.speed,
@@ -92,6 +93,64 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   }
 }
 
+function normalizedPreviewTargets(targets = []) {
+  return Array.isArray(targets)
+    ? targets
+        .filter(Boolean)
+        .map(target => ({
+          kind: target.kind || 'section',
+          zone: target.kind === 'section' ? String(target.zoneId || target.id || '') : '',
+          look: normalizeCardVisualLook(target.look || target),
+        }))
+    : [];
+}
+
+async function pushSectionPreviewToHost(host, targets = [], options = {}) {
+  const normalizedTargets = normalizedPreviewTargets(targets);
+  const sectionTargets = normalizedTargets.filter(target => target.kind === 'section' && target.zone);
+  const allTarget = normalizedTargets.find(target => target.kind === 'all') || normalizedTargets[0];
+
+  if (!sectionTargets.length) {
+    return allTarget
+      ? pushLivePreviewToHost(host, { ...allTarget.look, syncZones: true }, options)
+      : { ok: true, zonesPreviewed: 0 };
+  }
+
+  let zonesPayload = null;
+  try {
+    zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
+  } catch {
+    zonesPayload = null;
+  }
+
+  if (hasCardZones(zonesPayload)) {
+    const missingZones = sectionTargets
+      .map(target => target.zone)
+      .filter(zoneId => !zoneExists(zonesPayload, zoneId));
+    if (missingZones.length) {
+      const fallback = allTarget || sectionTargets[0];
+      const response = await pushLivePreviewToHost(host, { ...fallback.look, syncZones: true }, options);
+      return {
+        ...response,
+        previewZoneFallback: true,
+        requestedZones: sectionTargets.map(target => target.zone),
+        missingZones,
+        availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
+      };
+    }
+  }
+
+  const results = [];
+  for (const target of sectionTargets) {
+    results.push(await pushLivePreviewToHost(
+      host,
+      { ...target.look, zone: target.zone, syncZones: false },
+      options,
+    ));
+  }
+  return { ok: true, zonesPreviewed: sectionTargets.length, results };
+}
+
 function normalizePreviewError(host, error) {
   if (error instanceof CardPushError) return error;
   if (isMixedContentBlocked()) {
@@ -120,6 +179,28 @@ export async function pushLivePreviewToCard(look, options = {}) {
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
           return await pushLivePreviewToHost(found.host, look, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
+  }
+}
+
+export async function pushSectionPreviewToCard(targets, options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    return await pushSectionPreviewToHost(host, targets, options);
+  } catch (error) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 2500, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await pushSectionPreviewToHost(found.host, targets, options);
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
         }
