@@ -120,4 +120,37 @@ const targetedResponse = await pushLivePreviewToCard({
 assert.equal(targetedResponse.previewZoneFallback, undefined);
 assert.equal(JSON.parse(targetedRequests[1].options.body).zone, 'patch-default-inner-circle');
 
+const retryRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  retryRequests.push({ url, options });
+  if (String(url).startsWith('http://lightweaver.local/')) {
+    throw new TypeError('mDNS failed');
+  }
+  if (String(url).endsWith('/api/status')) {
+    return {
+      ok: true,
+      json: async () => ({ ok: true, led: { pixels: 44 } }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true, recovered: true }),
+  };
+};
+
+const retryResponse = await pushLivePreviewToCard({
+  patternId: 'rainbow',
+}, {
+  host: 'lightweaver.local',
+  timeoutMs: 1000,
+});
+
+assert.equal(retryResponse.recovered, true);
+assert.deepEqual(retryRequests.map(item => item.url), [
+  'http://lightweaver.local/api/control',
+  'http://lightweaver.local/api/status',
+  'http://192.168.18.70/api/status',
+  'http://192.168.18.70/api/control',
+]);
+
 console.log('card-live-preview tests passed');

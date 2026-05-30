@@ -1,5 +1,7 @@
 export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
+export const CARD_HOST_CHANGED_EVENT = 'lightweaver-card-host-changed';
+export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.18.70', '192.168.4.1'];
 
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
@@ -66,11 +68,55 @@ export function writeStoredCardHost(rawHost = '') {
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(CARD_HOST_STORAGE_KEY, host);
+      window.dispatchEvent?.(new CustomEvent(CARD_HOST_CHANGED_EVENT, { detail: { host } }));
     } catch {
       /* quota */
     }
   }
   return host;
+}
+
+export function candidateCardHosts(preferredHost = '') {
+  const preferred = normalizeCardHost(preferredHost || readStoredCardHost());
+  const hosts = [preferred, ...CARD_HOST_FALLBACKS.map(normalizeCardHost)];
+  return [...new Set(hosts.filter(Boolean))];
+}
+
+export async function discoverCardStatus({
+  preferredHost = '',
+  timeoutMs = 900,
+  persist = true,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const hosts = candidateCardHosts(preferredHost);
+  let lastError = null;
+  for (const host of hosts) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(`${cardHostToUrl(host)}/api/status`, { signal: ctrl.signal });
+      if (!response?.ok) throw new Error(`status ${response?.status || 'failed'}`);
+      const status = await response.json().catch(() => ({ ok: true }));
+      if (status?.ok === false) throw new Error(status.error || 'card not ok');
+      if (persist) writeStoredCardHost(host);
+      return {
+        connected: true,
+        host,
+        url: cardHostToUrl(host),
+        status,
+      };
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    connected: false,
+    host: hosts[0] || DEFAULT_CARD_HOST,
+    url: cardHostToUrl(hosts[0] || DEFAULT_CARD_HOST),
+    error: lastError,
+  };
 }
 
 export function canPushDirectlyToCard(protocol = '') {

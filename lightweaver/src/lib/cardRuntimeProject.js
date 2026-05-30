@@ -1,7 +1,8 @@
-import { DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
-import { deriveStandaloneOutputsFromStrips, totalStandalonePixels } from './standaloneController.js';
+import { DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
+import { normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
+import { isDefaultCircleLayout } from './defaultCircleLayout.js';
 
 export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
@@ -16,11 +17,12 @@ export function buildCardRuntimePackageFromProject({
   const totalPixels = totalProjectPixels(strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
-  const outputSource = totalPixels > 0 && configuredOutputPixels !== totalPixels
-    ? []
-    : configuredOutputs;
-  const outputs = deriveStandaloneOutputsFromStrips(strips, outputSource);
-  const resolvedPixels = totalPixels || outputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || 44;
+  const resolvedPixels = totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels;
+  const outputs = resolveCardOutputs({
+    strips,
+    configuredOutputs,
+    resolvedPixels,
+  });
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
   const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
@@ -64,6 +66,24 @@ export function buildCardRuntimePackageFromProject({
     zones: runtimeZones,
     syncZones: runtimeZones.length <= 1,
   });
+}
+
+function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixels = DEFAULT_CARD_LED.pixels } = {}) {
+  const normalizedConfigured = normalizeStandaloneOutputs(configuredOutputs);
+  const configuredPixelTotal = normalizedConfigured.reduce((sum, output) => sum + output.pixels, 0);
+  const pixels = Math.max(1, Math.floor(Number(resolvedPixels) || DEFAULT_CARD_LED.pixels));
+
+  if (!isDefaultCircleLayout(strips) && normalizedConfigured.length > 0 && configuredPixelTotal === pixels) {
+    return normalizedConfigured;
+  }
+
+  const firstOutput = normalizedConfigured[0] || DEFAULT_CARD_LED.outputs[0];
+  return [{
+    id: 'out1',
+    name: 'Output 1',
+    pin: firstOutput.pin ?? DEFAULT_CARD_LED.outputs[0].pin,
+    pixels,
+  }];
 }
 
 function resolvePackagePatterns(standaloneController = {}, startupPatternId = '', zonePatternIds = []) {

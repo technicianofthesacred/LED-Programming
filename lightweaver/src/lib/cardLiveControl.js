@@ -1,9 +1,15 @@
-import { canPushDirectlyToCard, cardHostToUrl, readStoredCardHost } from './cardConnection.js';
+import {
+  canPushDirectlyToCard,
+  cardHostToUrl,
+  discoverCardStatus,
+  normalizeCardHost,
+  readStoredCardHost,
+} from './cardConnection.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { CardPushError } from './cardPushClient.js';
 
 function isMixedContentBlocked() {
-  return !canPushDirectlyToCard(typeof window !== 'undefined' ? window.location.protocol : 'https:');
+  return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
 }
 
 export function buildLivePreviewControlPayload(look = {}) {
@@ -43,8 +49,7 @@ function hasCardZones(zonesPayload) {
   return Array.isArray(zonesPayload?.zones) && zonesPayload.zones.length > 0;
 }
 
-export async function pushLivePreviewToCard(look, options = {}) {
-  const host = options.host || readStoredCardHost();
+async function pushLivePreviewToHost(host, look, options = {}) {
   let previewLook = look;
   let previewZoneFallback = null;
   if (options.fallbackMissingZoneToAll && look?.zone) {
@@ -82,20 +87,44 @@ export async function pushLivePreviewToCard(look, options = {}) {
     return previewZoneFallback
       ? { ...json, previewZoneFallback: true, ...previewZoneFallback }
       : json;
-  } catch (error) {
-    if (error instanceof CardPushError) throw error;
-    if (isMixedContentBlocked()) {
-      throw new CardPushError(
-        'mixed-content',
-        'Browser blocked the local card connection. Open the Studio from localhost or copy the config to the card page.',
-        error,
-      );
-    }
-    if (error?.name === 'AbortError') {
-      throw new CardPushError('offline', `Timed out reaching ${cardHostToUrl(host)}`, error);
-    }
-    throw new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, error);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function normalizePreviewError(host, error) {
+  if (error instanceof CardPushError) return error;
+  if (isMixedContentBlocked()) {
+    return new CardPushError(
+      'mixed-content',
+      'Browser blocked the local card connection. Open the Studio from localhost or copy the config to the card page.',
+      error,
+    );
+  }
+  if (error?.name === 'AbortError') {
+    return new CardPushError('offline', `Timed out reaching ${cardHostToUrl(host)}`, error);
+  }
+  return new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, error);
+}
+
+export async function pushLivePreviewToCard(look, options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    return await pushLivePreviewToHost(host, look, options);
+  } catch (error) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 2500, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await pushLivePreviewToHost(found.host, look, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
   }
 }

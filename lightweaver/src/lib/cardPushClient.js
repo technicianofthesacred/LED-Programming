@@ -10,6 +10,8 @@
 import {
   canPushDirectlyToCard,
   cardHostToUrl,
+  discoverCardStatus,
+  normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
@@ -31,13 +33,10 @@ export class CardPushError extends Error {
 }
 
 function isMixedContentBlocked() {
-  return !canPushDirectlyToCard(typeof window !== 'undefined' ? window.location.protocol : 'https:');
+  return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
 }
 
-// POST the runtime config to the card. Returns the parsed JSON echo on
-// success; throws CardPushError on failure with a typed reason.
-export async function pushConfigToCard(runtimePackage, options = {}) {
-  const host = options.host || getCardHostname();
+async function postConfigToHost(host, runtimePackage, options = {}) {
   const url = `${cardHostToUrl(host)}/api/config`;
   const body = JSON.stringify(runtimePackage.config || runtimePackage);
   const ctrl = new AbortController();
@@ -53,21 +52,108 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       const text = await r.text().catch(() => '');
       throw new CardPushError('http', `card returned ${r.status}: ${text || 'no body'}`);
     }
-    return await r.json().catch(() => ({ ok: true }));
-  } catch (err) {
-    if (err instanceof CardPushError) throw err;
-    if (isMixedContentBlocked()) {
-      throw new CardPushError(
-        'mixed-content',
-        'Browser blocked the connection (mixed content). Use the copy-paste fallback or open the designer over plain HTTP.',
-        err,
-      );
+    const json = await r.json().catch(() => ({ ok: true }));
+    const shouldReboot = options.reboot === true ||
+      (options.reboot === 'if-needed' && await cardNeedsConfigReboot(host, runtimePackage, options));
+    if (shouldReboot) {
+      await requestCardReboot(host, options);
+      return { ...json, rebooting: true };
     }
-    if (err && err.name === 'AbortError') {
-      throw new CardPushError('offline', `Timed out reaching ${cardHostToUrl(host)}`, err);
-    }
-    throw new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, err);
+    return json;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function normalizeOutputsForCompare(outputs = []) {
+  return Array.isArray(outputs)
+    ? outputs.map(output => ({
+        pin: Number(output?.pin),
+        pixels: Number(output?.pixels ?? output?.pixelCount),
+      }))
+    : [];
+}
+
+function outputsMatch(a = [], b = []) {
+  const left = normalizeOutputsForCompare(a);
+  const right = normalizeOutputsForCompare(b);
+  if (left.length !== right.length) return false;
+  return left.every((output, index) => (
+    output.pin === right[index]?.pin &&
+    output.pixels === right[index]?.pixels
+  ));
+}
+
+async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
+  const targetOutputs = normalizeOutputsForCompare((runtimePackage.config || runtimePackage)?.led?.outputs);
+  if (!targetOutputs.length) return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
+  try {
+    const response = await fetch(`${cardHostToUrl(host)}/api/firmware-info`, { signal: ctrl.signal });
+    if (!response.ok) return false;
+    const current = await response.json().catch(() => null);
+    return !outputsMatch(current?.outputs, targetOutputs);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function requestCardReboot(host, options = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
+  try {
+    await fetch(`${cardHostToUrl(host)}/api/reboot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: ctrl.signal,
+    });
+  } catch {
+    // The card may close the HTTP connection as it reboots; the config is
+    // already saved, so treat this as an accepted reboot request.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeConfigPushError(host, err) {
+  if (err instanceof CardPushError) return err;
+  if (isMixedContentBlocked()) {
+    return new CardPushError(
+      'mixed-content',
+      'Browser blocked the connection (mixed content). Use the copy-paste fallback or open the designer over plain HTTP.',
+      err,
+    );
+  }
+  if (err && err.name === 'AbortError') {
+    return new CardPushError('offline', `Timed out reaching ${cardHostToUrl(host)}`, err);
+  }
+  return new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, err);
+}
+
+// POST the runtime config to the card. Returns the parsed JSON echo on
+// success; throws CardPushError on failure with a typed reason.
+export async function pushConfigToCard(runtimePackage, options = {}) {
+  const host = options.host || getCardHostname();
+  try {
+    return await postConfigToHost(host, runtimePackage, options);
+  } catch (err) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 6000, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await postConfigToHost(found.host, runtimePackage, options);
+        } catch (retryErr) {
+          throw normalizeConfigPushError(found.host, retryErr);
+        }
+      }
+    }
+    throw normalizeConfigPushError(host, err);
   }
 }

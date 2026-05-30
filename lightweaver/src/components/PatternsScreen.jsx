@@ -536,10 +536,16 @@ export function PatternsScreen() {
     setStatusKind('');
     setStatus(`Applying split preview to ${cardHostToUrl(cardHost)}...`);
     try {
-      await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000 });
+      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
       setPatchBoard(nextBoard);
       setStandaloneController(nextController);
       setDraftLooks({});
+      if (response.rebooting) {
+        if (sequence !== livePreviewSeq.current) return;
+        setStatusKind('ok');
+        setStatus('Split preview was saved. The card is rebooting now so the LED output layout takes effect.');
+        return;
+      }
       const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
       await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
       if (sequence !== livePreviewSeq.current) return;
@@ -565,7 +571,12 @@ export function PatternsScreen() {
     setStatusKind('');
     setStatus(`Saving ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} to ${cardHostToUrl(cardHost)}...`);
     try {
-      await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000 });
+      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      if (response.rebooting) {
+        setStatusKind('ok');
+        setStatus('Saved on the card. The card is rebooting now so the LED output layout takes effect.');
+        return;
+      }
       const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
       await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
       setStatusKind('ok');

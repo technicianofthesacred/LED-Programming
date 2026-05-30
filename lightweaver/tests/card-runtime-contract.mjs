@@ -238,6 +238,7 @@ const staleOutputPkg = buildCardRuntimePackageFromProject({
   },
 });
 assert.equal(staleOutputPkg.config.led.pixels, 44);
-assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [22, 22]);
+assert.equal(staleOutputPkg.config.led.outputs.length, 1);
+assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
 
 console.log('card-runtime-contract tests passed');

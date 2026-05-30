@@ -10,8 +10,8 @@ import {
   normalizeSavedLooks,
   normalizeSectionVisualLook,
 } from '../lib/sectionLookModel.js';
-import { buildCardRuntimePackageFromProject, totalProjectPixels } from '../lib/cardRuntimeProject.js';
-import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
+import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
+import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import {
   clampHardwarePixelCount,
@@ -28,6 +28,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
+import { pushConfigToCard } from '../lib/cardPushClient.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
@@ -139,17 +140,7 @@ export function ChipScreen() {
         pixels: 0,
       }));
 
-  const configuredOutputs = standaloneController?.outputs || [];
-  const layoutPixelTotal = totalProjectPixels(strips);
-  const configuredOutputPixels = configuredOutputs.reduce((sum, output) => sum + Math.max(0, Math.floor(Number(output?.pixels || 0))), 0);
-  const hasConfiguredOutputPixels = configuredOutputPixels > 0 && (!layoutPixelTotal || configuredOutputPixels === layoutPixelTotal);
-  const outputSource = hasConfiguredOutputPixels
-    ? DEFAULT_STANDALONE_OUTPUTS.map((output, index) => ({
-        ...output,
-        ...((configuredOutputs || [])[index] || {}),
-      }))
-    : deriveStandaloneOutputsFromStrips(strips, []);
-  const controllerOutputs = (outputSource.length ? outputSource : DEFAULT_STANDALONE_OUTPUTS).map((output, index) => ({
+  const controllerOutputs = (config.led.outputs.length ? config.led.outputs : DEFAULT_STANDALONE_OUTPUTS).map((output, index) => ({
     ...(DEFAULT_STANDALONE_OUTPUTS[index] || {}),
     ...output,
   }));
@@ -172,8 +163,6 @@ export function ChipScreen() {
       sectionPixelCounts,
       viewBox: viewBox || '0 0 640 400',
     });
-    const nextOutputs = deriveStandaloneOutputsFromStrips(nextStrips, DEFAULT_STANDALONE_OUTPUTS);
-
     setViewBox(viewBox || '0 0 640 400');
     setStrips(nextStrips);
     setPatchBoard(normalizePatchBoard(null, nextStrips));
@@ -181,11 +170,12 @@ export function ChipScreen() {
       const current = prev || {};
       const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
         const previous = current.outputs?.[index] || {};
-        const derived = nextOutputs[index];
         return {
           ...base,
           ...previous,
-          ...(derived ? { id: derived.id, name: derived.name, pixels: derived.pixels } : { pixels: 0 }),
+          id: index === 0 ? 'out1' : base.id,
+          name: index === 0 ? 'Output 1' : base.name,
+          pixels: index === 0 ? nextTotal : 0,
         };
       });
       return { ...current, outputs };
@@ -255,14 +245,15 @@ export function ChipScreen() {
     setStatusKind('');
     setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
     try {
-      const response = await fetch(`${cardHostToUrl(cardHost)}/api/config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
+      const response = await pushConfigToCard(runtimePackage, {
+        host: cardHost,
+        timeoutMs: 6000,
+        reboot: 'if-needed',
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setStatusKind('ok');
-      setStatus('Saved on card.');
+      setStatus(response.rebooting
+        ? 'Saved on card. Rebooting now so the LED output layout takes effect.'
+        : 'Saved on card.');
     } catch (error) {
       setStatusKind('err');
       setStatus(`Could not reach the card. Copy or download the config and paste it on the card page.`);

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
+import { useCardStatus } from '../hooks/useCardStatus.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -192,16 +193,22 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
 
 export function StatusBar() {
   const { wledConnected, wledIp, strips, lastSaved } = useProject();
+  const cardStatus = useCardStatus();
   const savedAgo = lastSaved ? Math.round((Date.now() - lastSaved) / 1000) : null;
   const totalLEDs = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
+  const cardConnected = cardStatus.connected || wledConnected;
+  const cardHost = cardStatus.connected ? cardStatus.host : wledIp;
+  const cardLabel = cardStatus.checking && !cardConnected
+    ? '◌ checking'
+    : cardConnected ? '● connected' : '○ disconnected';
   return (
     <div className="lw-statusbar">
       <span>
         <span className="k">Card</span>&nbsp;
-        <span className={wledConnected ? 'ok' : 'err'}>
-          {wledConnected ? '● connected' : '○ disconnected'}
+        <span className={cardConnected ? 'ok' : 'err'}>
+          {cardLabel}
         </span>
-        {wledIp && <>&nbsp;<span className="v">{wledIp}</span></>}
+        {cardHost && <>&nbsp;<span className="v">{cardHost}</span></>}
       </span>
       <span className="sep">·</span>
       <span><span className="k">strip</span>&nbsp;<span className="v">WS2812B · 60/m</span></span>
