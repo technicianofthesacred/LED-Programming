@@ -4,8 +4,11 @@ import {
   cardHostToUrl,
   cardLoadMethodForProtocol,
   candidateCardHosts,
+  CARD_HOST_CHANGED_EVENT,
+  CARD_HOST_STORAGE_KEY,
   discoverCardStatus,
   normalizeCardHost,
+  writeStoredCardHost,
 } from '../src/lib/cardConnection.js';
 
 assert.equal(normalizeCardHost(''), 'lightweaver.local');
@@ -64,5 +67,27 @@ assert.deepEqual(probed.slice(0, 2), [
   'http://lightweaver.local/api/status',
   'http://192.168.18.70/api/status',
 ]);
+
+const storage = new Map();
+const events = [];
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.detail = init.detail;
+  }
+};
+globalThis.window = {
+  localStorage: {
+    getItem: key => storage.get(key) || null,
+    setItem: (key, value) => storage.set(key, value),
+  },
+  dispatchEvent: event => events.push(event),
+};
+
+writeStoredCardHost('192.168.18.70');
+writeStoredCardHost('192.168.18.70');
+assert.equal(storage.get(CARD_HOST_STORAGE_KEY), '192.168.18.70');
+assert.equal(events.filter(event => event.type === CARD_HOST_CHANGED_EVENT).length, 1);
+assert.deepEqual(events[0].detail, { host: '192.168.18.70' });
 
 console.log('card-connection-mode tests passed');

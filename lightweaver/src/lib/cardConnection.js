@@ -67,6 +67,8 @@ export function writeStoredCardHost(rawHost = '') {
   const host = normalizeCardHost(rawHost);
   if (typeof window !== 'undefined') {
     try {
+      const previous = normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
+      if (previous === host) return host;
       window.localStorage.setItem(CARD_HOST_STORAGE_KEY, host);
       window.dispatchEvent?.(new CustomEvent(CARD_HOST_CHANGED_EVENT, { detail: { host } }));
     } catch {

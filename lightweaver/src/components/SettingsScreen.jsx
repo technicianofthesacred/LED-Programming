@@ -354,11 +354,11 @@ export function SettingsScreen() {
               ))}
             </div>
           </Row>
-          <Row label="Color order" hint="WS2815 commonly uses GRB">
+          <Row label="Color order" hint="This Lightweaver card is calibrated to RGB">
             <div className="lw-tweaks-seg">
-              {['GRB', 'RGB', 'BRG'].map(order => (
+              {['RGB', 'GRB', 'BRG'].map(order => (
                 <button key={order}
-                        className={(standalone.led?.colorOrder || 'GRB') === order ? 'active' : ''}
+                        className={(standalone.led?.colorOrder || 'RGB') === order ? 'active' : ''}
                         onClick={() => updateStandalone({ led: { colorOrder: order } })}>
                   {order}
                 </button>

@@ -18,7 +18,7 @@ export const DEFAULT_STANDALONE_CONTROLS = {
 
 export const DEFAULT_STANDALONE_LED = {
   type: 'WS2815',
-  colorOrder: 'GRB',
+  colorOrder: 'RGB',
   brightnessLimit: 0.45,
 };
 

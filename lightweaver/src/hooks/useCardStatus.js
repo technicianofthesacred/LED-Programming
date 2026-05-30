@@ -19,6 +19,7 @@ export function useCardStatus({ intervalMs = 5000, timeoutMs = 900 } = {}) {
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
       timeoutMs,
+      persist: false,
     });
     setState({
       checking: false,
@@ -37,6 +38,7 @@ export function useCardStatus({ intervalMs = 5000, timeoutMs = 900 } = {}) {
       const result = await discoverCardStatus({
         preferredHost: readStoredCardHost(),
         timeoutMs,
+        persist: false,
       });
       if (!active) return;
       setState({
