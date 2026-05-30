@@ -12,7 +12,7 @@ export const DEFAULT_STANDALONE_CONTROLS = {
   previous: 7,
   next: 8,
   blackout: 9,
-  brightness: 1,
+  brightness: -1,
   statusLed: 2,
 };
 

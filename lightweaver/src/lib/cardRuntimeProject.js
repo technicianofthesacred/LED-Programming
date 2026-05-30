@@ -1,4 +1,4 @@
-import { DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
+import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
 import { normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
@@ -60,12 +60,19 @@ export function buildCardRuntimePackageFromProject({
           }))
         : undefined,
     },
-    controls: standaloneController?.controls,
+    controls: cardSafeControls(standaloneController?.controls),
     patterns,
     startupPatternId: visualLook.patternId,
     zones: runtimeZones,
     syncZones: runtimeZones.length <= 1,
   });
+}
+
+function cardSafeControls(controls = {}) {
+  return {
+    ...(controls || {}),
+    brightness: DEFAULT_CARD_CONTROLS.brightness,
+  };
 }
 
 function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixels = DEFAULT_CARD_LED.pixels } = {}) {

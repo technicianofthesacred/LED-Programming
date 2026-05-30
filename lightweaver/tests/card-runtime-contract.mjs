@@ -7,6 +7,7 @@ import {
   makeCardRuntimePackage,
 } from '../src/lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+import { DEFAULT_STANDALONE_CONTROLS } from '../src/lib/standaloneController.js';
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
@@ -36,6 +37,7 @@ assert.equal(normalized.led.colorOrder, 'RGB');
 assert.equal(normalized.led.brightnessLimit, 0.7);
 assert.equal(normalized.controls.encoder.press, 0);
 assert.deepEqual(normalized.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+assert.equal(DEFAULT_STANDALONE_CONTROLS.brightness, -1);
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
@@ -240,5 +242,15 @@ const staleOutputPkg = buildCardRuntimePackageFromProject({
 assert.equal(staleOutputPkg.config.led.pixels, 44);
 assert.equal(staleOutputPkg.config.led.outputs.length, 1);
 assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
+
+const staleAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
+  projectName: 'No Floating Analog Brightness',
+  standaloneController: {
+    controls: {
+      brightness: 1,
+    },
+  },
+});
+assert.equal(staleAnalogBrightnessPkg.config.controls.brightness, -1);
 
 console.log('card-runtime-contract tests passed');
