@@ -745,6 +745,9 @@ void handleControlPost() {
   // send `zone`; the designer surface does.
   String zoneTarget = hasControlField(doc, "zone") ? controlString(doc, "zone") : String("");
 
+  // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
+  // command sent while the card is in split preview mode updates only zone 0.
+  if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
   if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
   if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
   if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
@@ -764,7 +767,6 @@ void handleControlPost() {
     uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
     runtimeSetDriftRangeZ(zoneTarget, lo, hi);
   }
-  if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
   if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
   // Echo current state back
   JsonDocument out;
