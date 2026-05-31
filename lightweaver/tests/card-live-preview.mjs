@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {
+  buildLiveHardwareControlPayload,
   buildLivePreviewControlPayload,
+  pushLiveHardwareToCard,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
 } from '../src/lib/cardLiveControl.js';
@@ -59,6 +61,30 @@ assert.equal(request.options.method, 'POST');
 assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
+
+assert.deepEqual(buildLiveHardwareControlPayload({ colorOrder: 'grb' }), {
+  colorOrder: 'GRB',
+});
+
+const hardwareRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  hardwareRequests.push({ url, options });
+  return {
+    ok: true,
+    json: async () => ({ ok: true, colorOrder: 'GBR' }),
+  };
+};
+
+const hardwareResponse = await pushLiveHardwareToCard({
+  colorOrder: 'GBR',
+}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+
+assert.equal(hardwareResponse.colorOrder, 'GBR');
+assert.equal(hardwareRequests[0].url, 'http://192.168.18.70/api/control');
+assert.deepEqual(JSON.parse(hardwareRequests[0].options.body), { colorOrder: 'GBR' });
 
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {

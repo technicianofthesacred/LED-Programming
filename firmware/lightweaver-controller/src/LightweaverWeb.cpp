@@ -748,6 +748,7 @@ void handleControlPost() {
   // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
   // command sent while the card is in split preview mode updates only zone 0.
   if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
+  if (hasControlField(doc, "colorOrder")) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
   if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
   if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
   if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
@@ -777,6 +778,7 @@ void handleControlPost() {
   out["blackout"] = runtimeIsBlackedOut();
   out["hue"] = runtimeGetCustomHue();
   out["saturation"] = runtimeGetCustomSaturation();
+  out["colorOrder"] = runtimeGetLedColorOrder();
   out["breathe"] = runtimeGetCustomBreathe();
   out["drift"] = runtimeGetCustomDrift();
   out["driftMin"] = runtimeGetDriftHueMin();

@@ -29,6 +29,7 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { pushConfigToCard } from '../lib/cardPushClient.js';
+import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
@@ -163,6 +164,7 @@ export function ChipScreen() {
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const liveHardwareSeq = useRef(0);
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const zones = useMemo(() => patchBoardToZones(board, strips), [board, strips]);
@@ -376,6 +378,33 @@ export function ChipScreen() {
 
   const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
   const directPushAvailable = loadMethod.directPush;
+
+  const updateColorOrder = (value) => {
+    const colorOrder = String(value || '').toUpperCase();
+    updateController({ led: { colorOrder } });
+
+    if (!directPushAvailable) {
+      setStatusKind('');
+      setStatus('Color order changed in Studio. Open the local Studio to preview this live on the card.');
+      return;
+    }
+
+    const seq = ++liveHardwareSeq.current;
+    setStatusKind('');
+    setStatus(`Previewing ${colorOrder} color order on ${cardHostToUrl(cardHost)}...`);
+    pushLiveHardwareToCard({ colorOrder }, { host: cardHost, timeoutMs: 2000 })
+      .then(response => {
+        if (seq !== liveHardwareSeq.current) return;
+        setStatusKind('ok');
+        setStatus(`Color order is live on the card: ${response.colorOrder || colorOrder}. Save to card to keep it after restart.`);
+      })
+      .catch(() => {
+        if (seq !== liveHardwareSeq.current) return;
+        setStatusKind('err');
+        setStatus(`Color order changed in Studio, but ${cardHostToUrl(cardHost)} did not answer.`);
+      });
+  };
+
   const pushDirect = async () => {
     setStatusKind('');
     setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
@@ -500,7 +529,7 @@ export function ChipScreen() {
                   <FieldRow label="Color order" hint="must match the strip">
                     <Segmented
                       value={config.led.colorOrder}
-                      onChange={value => updateController({ led: { colorOrder: value } })}
+                      onChange={updateColorOrder}
                       options={['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR']}
                     />
                   </FieldRow>

@@ -30,6 +30,8 @@ void runtimeSetCustomBreatheZ(const String& targetId, bool on);
 void runtimeSetCustomDriftZ(const String& targetId, bool on);
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
 
+void runtimeSetLedColorOrder(const String& order);
+String runtimeGetLedColorOrder();
 void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();

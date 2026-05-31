@@ -12,6 +12,15 @@ function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
 }
 
+const COLOR_ORDER_OPTIONS = new Set(['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR']);
+
+export function buildLiveHardwareControlPayload(settings = {}) {
+  const colorOrder = String(settings.colorOrder || '').toUpperCase();
+  return {
+    ...(COLOR_ORDER_OPTIONS.has(colorOrder) ? { colorOrder } : {}),
+  };
+}
+
 export function buildLivePreviewControlPayload(look = {}) {
   const normalized = normalizeCardVisualLook(look);
   return {
@@ -27,6 +36,28 @@ export function buildLivePreviewControlPayload(look = {}) {
     breathe: normalized.customBreathe,
     drift: normalized.customDrift,
   };
+}
+
+async function postControlPayloadToHost(host, payload, options = {}) {
+  const url = `${cardHostToUrl(host)}/api/control`;
+  const body = JSON.stringify(payload);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 2500);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: ctrl.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    }
+    return await response.json().catch(() => ({ ok: true }));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readCardZones(host, timeoutMs = 1200) {
@@ -179,6 +210,29 @@ export async function pushLivePreviewToCard(look, options = {}) {
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
           return await pushLivePreviewToHost(found.host, look, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
+  }
+}
+
+export async function pushLiveHardwareToCard(settings, options = {}) {
+  const host = options.host || readStoredCardHost();
+  const payload = buildLiveHardwareControlPayload(settings);
+  try {
+    return await postControlPayloadToHost(host, payload, options);
+  } catch (error) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 2500, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await postControlPayloadToHost(found.host, payload, options);
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
         }

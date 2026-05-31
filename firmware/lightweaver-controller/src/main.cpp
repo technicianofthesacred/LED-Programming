@@ -33,6 +33,7 @@
 #endif
 
 CRGB leds[LW_MAX_PIXELS];
+CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 
 constexpr uint8_t MIRROR_OUTPUT_PINS[] = {16, 17, 18, 21, 38, 39, 40, 48};
@@ -97,6 +98,10 @@ bool renderSequenceFrame(bool force = false);
 bool renderProceduralFrame(const String& preset);
 bool renderPresetFrame(const String& preset);
 CRGB colorForPreset(const String& preset);
+void showLeds();
+void copyLogicalToPhysicalLeds();
+CRGB mapLogicalToPhysicalColor(const CRGB& color);
+bool isValidLedColorOrder(const String& order);
 void fadeTo(float target, uint16_t durationMs);
 uint8_t computeBrightnessByte();
 float readBrightnessKnob();
@@ -110,13 +115,7 @@ float clampUnit(float value);
 
 template<uint8_t DATA_PIN>
 bool addLedsForOrder(CRGB* start, uint16_t count) {
-  if (ledColorOrder == "RGB") {
-    FastLED.addLeds<WS2812B, DATA_PIN, RGB>(start, count);
-  } else if (ledColorOrder == "BRG") {
-    FastLED.addLeds<WS2812B, DATA_PIN, BRG>(start, count);
-  } else {
-    FastLED.addLeds<WS2812B, DATA_PIN, GRB>(start, count);
-  }
+  FastLED.addLeds<WS2812B, DATA_PIN, RGB>(start, count);
   return true;
 }
 
@@ -194,7 +193,7 @@ void loop() {
     } else {
       fill_solid(leds, totalPixels, cycle < 150 ? CRGB::White : CRGB::Black);
       FastLED.setBrightness(220);
-      FastLED.show();
+      showLeds();
       delay(10);
       return;
     }
@@ -210,7 +209,7 @@ void loop() {
     uint8_t pulse = beatsin8(8, 30, 200); // 8 BPM gentle pulse
     fill_solid(leds, totalPixels, CHSV(28, 180, pulse));
     FastLED.setBrightness(uint8_t(clampUnit(brightnessLimit) * 255.0f));
-    FastLED.show();
+    showLeds();
     delay(20);
     return;
   }
@@ -227,10 +226,10 @@ void loop() {
     // and push the frame to the strip so the dimmer knob still works
     // during streaming.
     FastLED.setBrightness(computeBrightnessByte());
-    FastLED.show();
+    showLeds();
   } else if (renderCurrentLook()) {
     FastLED.setBrightness(computeBrightnessByte());
-    FastLED.show();
+    showLeds();
   } else {
     delay(1);
   }
@@ -366,7 +365,7 @@ bool setupLedOutputs() {
 
   for (uint8_t i = 0; i < outputCount; i++) {
     OutputConfig& output = outputs[i];
-    if (!addLedsForPin(output.pin, leds + output.start, output.pixels)) {
+    if (!addLedsForPin(output.pin, physicalLeds + output.start, output.pixels)) {
       if (Serial) {
         Serial.print("Unsupported LED output pin: ");
         Serial.println(output.pin);
@@ -391,7 +390,7 @@ bool setupLedOutputs() {
     for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) {
       uint8_t pin = MIRROR_OUTPUT_PINS[i];
       if (wasAdded(pin)) continue;
-      if (!addLedsForPin(pin, leds + output.start, output.pixels)) continue;
+      if (!addLedsForPin(pin, physicalLeds + output.start, output.pixels)) continue;
       markAdded(pin);
       if (Serial) {
         Serial.print("Mirroring LED frame on GPIO ");
@@ -471,7 +470,7 @@ void selectLookInstant(int index) {
   fadeScale = 1.0f;
   if (!startLook(currentLookIndex)) return;
   FastLED.setBrightness(computeBrightnessByte());
-  FastLED.show();
+  showLeds();
 }
 
 bool startLook(uint8_t index) {
@@ -700,7 +699,7 @@ void fadeTo(float target, uint16_t durationMs) {
   if (durationMs == 0) {
     fadeScale = target;
     FastLED.setBrightness(computeBrightnessByte());
-    FastLED.show();
+    showLeds();
     return;
   }
 
@@ -708,13 +707,39 @@ void fadeTo(float target, uint16_t durationMs) {
     float t = float(millis() - startMs) / float(durationMs);
     fadeScale = start + ((target - start) * t);
     FastLED.setBrightness(computeBrightnessByte());
-    FastLED.show();
+    showLeds();
     delay(16);
   }
 
   fadeScale = target;
   FastLED.setBrightness(computeBrightnessByte());
+  showLeds();
+}
+
+void showLeds() {
+  copyLogicalToPhysicalLeds();
   FastLED.show();
+}
+
+void copyLogicalToPhysicalLeds() {
+  uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
+  for (uint16_t i = 0; i < limit; i++) {
+    physicalLeds[i] = mapLogicalToPhysicalColor(leds[i]);
+  }
+}
+
+CRGB mapLogicalToPhysicalColor(const CRGB& color) {
+  if (ledColorOrder == "GRB") return CRGB(color.g, color.r, color.b);
+  if (ledColorOrder == "BRG") return CRGB(color.b, color.r, color.g);
+  if (ledColorOrder == "BGR") return CRGB(color.b, color.g, color.r);
+  if (ledColorOrder == "RBG") return CRGB(color.r, color.b, color.g);
+  if (ledColorOrder == "GBR") return CRGB(color.g, color.b, color.r);
+  return color;
+}
+
+bool isValidLedColorOrder(const String& order) {
+  return order == "RGB" || order == "GRB" || order == "BRG" ||
+         order == "BGR" || order == "RBG" || order == "GBR";
 }
 
 uint8_t computeBrightnessByte() {
@@ -1027,6 +1052,15 @@ uint8_t runtimeGetCustomHue() { return customHue; }
 uint8_t runtimeGetCustomSaturation() { return customSaturation; }
 bool runtimeGetCustomBreathe() { return customBreathe; }
 bool runtimeGetCustomDrift() { return customDrift; }
+
+void runtimeSetLedColorOrder(const String& order) {
+  String normalized = order;
+  normalized.toUpperCase();
+  if (!isValidLedColorOrder(normalized)) return;
+  ledColorOrder = normalized;
+  runtimeConfig.ledColorOrder = normalized;
+}
+String runtimeGetLedColorOrder() { return ledColorOrder; }
 
 void runtimeSetSyncZones(bool on) { runtimeConfig.syncZones = on; }
 bool runtimeGetSyncZones() { return runtimeConfig.syncZones; }
