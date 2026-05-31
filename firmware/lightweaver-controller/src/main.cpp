@@ -88,6 +88,7 @@ bool setupLedOutputs();
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
 void handleControlEvent(ControlEventType event);
 void selectLook(int index);
+void selectLookInstant(int index);
 bool startLook(uint8_t index);
 void closeSequence();
 bool openSequence(const String& path);
@@ -129,14 +130,18 @@ void setup() {
   pinMode(DEFAULT_STATUS_LED_PIN, OUTPUT);
   digitalWrite(DEFAULT_STATUS_LED_PIN, LOW);
 
-  Serial.println();
-  Serial.println("Lightweaver standalone controller booting");
+  if (Serial) {
+    Serial.println();
+    Serial.println("Lightweaver standalone controller booting");
+  }
   SPI.begin(LW_SPI_SCK, LW_SPI_MISO, LW_SPI_MOSI, LW_SD_CS);
   RuntimeLoadResult loadResult = loadRuntimeConfig(runtimeConfig);
-  Serial.print("Runtime source: ");
-  Serial.print(loadResult.source == SOURCE_SD ? "sd" : loadResult.source == SOURCE_NVS ? "internal-flash" : "defaults");
-  Serial.print(" / ");
-  Serial.println(loadResult.message);
+  if (Serial) {
+    Serial.print("Runtime source: ");
+    Serial.print(loadResult.source == SOURCE_SD ? "sd" : loadResult.source == SOURCE_NVS ? "internal-flash" : "defaults");
+    Serial.print(" / ");
+    Serial.println(loadResult.message);
+  }
   if (!loadResult.ok) {
     fail(ERROR_CONFIG, loadResult.message.c_str());
     return;
@@ -156,11 +161,13 @@ void setup() {
   setupArtnet(leds, totalPixels);
   setupWledWebSocket();
 
-  Serial.print("Ready: ");
-  Serial.print(pieceName);
-  Serial.print(" / ");
-  Serial.print(totalPixels);
-  Serial.println(" pixels");
+  if (Serial) {
+    Serial.print("Ready: ");
+    Serial.print(pieceName);
+    Serial.print(" / ");
+    Serial.print(totalPixels);
+    Serial.println(" pixels");
+  }
 }
 
 void loop() {
@@ -360,19 +367,23 @@ bool setupLedOutputs() {
   for (uint8_t i = 0; i < outputCount; i++) {
     OutputConfig& output = outputs[i];
     if (!addLedsForPin(output.pin, leds + output.start, output.pixels)) {
-      Serial.print("Unsupported LED output pin: ");
-      Serial.println(output.pin);
+      if (Serial) {
+        Serial.print("Unsupported LED output pin: ");
+        Serial.println(output.pin);
+      }
       fail(ERROR_PIN, "unsupported LED output pin");
       return false;
     }
     markAdded(output.pin);
-    Serial.print("LED output ");
-    Serial.print(output.id);
-    Serial.print(" -> GPIO ");
-    Serial.print(output.pin);
-    Serial.print(" / ");
-    Serial.print(output.pixels);
-    Serial.println(" px");
+    if (Serial) {
+      Serial.print("LED output ");
+      Serial.print(output.id);
+      Serial.print(" -> GPIO ");
+      Serial.print(output.pin);
+      Serial.print(" / ");
+      Serial.print(output.pixels);
+      Serial.println(" px");
+    }
   }
 
   if (outputCount == 1) {
@@ -382,8 +393,10 @@ bool setupLedOutputs() {
       if (wasAdded(pin)) continue;
       if (!addLedsForPin(pin, leds + output.start, output.pixels)) continue;
       markAdded(pin);
-      Serial.print("Mirroring LED frame on GPIO ");
-      Serial.println(pin);
+      if (Serial) {
+        Serial.print("Mirroring LED frame on GPIO ");
+        Serial.println(pin);
+      }
     }
   }
 
@@ -447,13 +460,29 @@ void selectLook(int index) {
   fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
 }
 
+void selectLookInstant(int index) {
+  if (lookCount == 0) return;
+  uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
+  if (nextIndex == currentLookIndex && !blackedOut) return;
+
+  closeSequence();
+  currentLookIndex = nextIndex;
+  blackedOut = false;
+  fadeScale = 1.0f;
+  if (!startLook(currentLookIndex)) return;
+  FastLED.setBrightness(computeBrightnessByte());
+  FastLED.show();
+}
+
 bool startLook(uint8_t index) {
   LookConfig& look = looks[index];
-  Serial.print("Starting look: ");
-  Serial.print(look.label);
-  Serial.print(" (");
-  Serial.print(look.mode);
-  Serial.println(")");
+  if (Serial) {
+    Serial.print("Starting look: ");
+    Serial.print(look.label);
+    Serial.print(" (");
+    Serial.print(look.mode);
+    Serial.println(")");
+  }
 
   if (look.mode == "sequence") {
     if (!openSequence(look.file)) {
@@ -482,8 +511,10 @@ bool openSequence(const String& path) {
 
   sequenceFile = SD.open(path.c_str(), FILE_READ);
   if (!sequenceFile) {
-    Serial.print("Missing sequence file: ");
-    Serial.println(path);
+    if (Serial) {
+      Serial.print("Missing sequence file: ");
+      Serial.println(path);
+    }
     return false;
   }
 
@@ -709,10 +740,12 @@ uint8_t findStartupLook() {
 
 void fail(ErrorCode code, const char* message) {
   errorCode = code;
-  Serial.print("ERROR ");
-  Serial.print(uint8_t(code));
-  Serial.print(": ");
-  Serial.println(message);
+  if (Serial) {
+    Serial.print("ERROR ");
+    Serial.print(uint8_t(code));
+    Serial.print(": ");
+    Serial.println(message);
+  }
 }
 
 void blinkError() {
@@ -856,7 +889,7 @@ void runtimePreviousPattern() {
 bool runtimeSelectPatternById(const String& id) {
   for (uint8_t i = 0; i < lookCount; i++) {
     if (looks[i].id == id) {
-      selectLook(i);
+      selectLookInstant(i);
       applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
       return true;
     }

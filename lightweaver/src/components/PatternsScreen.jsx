@@ -22,6 +22,7 @@ import {
   targetLabel,
 } from '../lib/sectionLookModel.js';
 import {
+  canPushDirectlyToCard,
   cardHostToUrl,
   readStoredCardHost,
   writeStoredCardHost,
@@ -271,10 +272,10 @@ function patternMatchesCategory(pattern, categoryId) {
   return !category.ids || category.ids.includes(pattern.id);
 }
 
-function LookCard({ pattern, look, previewing, saved, inCycle, onSelect, onCycleChange }) {
+function LookCard({ pattern, look, previewing, saved, inCycle, livePreviewAvailable, onSelect, onCycleChange }) {
   const fingerprint = getCardPatternFingerprint(pattern.id);
   const summary = previewing
-    ? saved ? 'Previewing and saved here' : 'Previewing on LEDs'
+    ? saved ? 'Previewing and saved here' : livePreviewAvailable ? 'Previewing on LEDs' : 'Previewing in Studio'
     : saved ? 'Saved for this target' : pattern.description || 'Tap to preview this look';
   return (
     <article className={`lw-look-card ${saved ? 'is-selected' : ''} ${previewing ? 'is-previewing' : ''}`}>
@@ -372,6 +373,7 @@ export function PatternsScreen() {
   const [patternCategory, setPatternCategory] = useState('all');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
+  const livePreviewAvailable = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const savedComboSeq = useRef(0);
 
   const savedGlobalLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
@@ -495,6 +497,11 @@ export function PatternsScreen() {
 
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
     if (!livePreviewEnabled) return;
+    if (!livePreviewAvailable) {
+      setStatusKind('err');
+      setStatus('The hosted HTTPS page cannot talk directly to local HTTP hardware. Open this Studio from localhost, or copy the config to the card page.');
+      return;
+    }
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
     const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
@@ -522,7 +529,7 @@ export function PatternsScreen() {
         }
       }
     }, 80);
-  }, [cardHost, livePreviewEnabled, selectedTarget]);
+  }, [cardHost, livePreviewAvailable, livePreviewEnabled, selectedTarget]);
 
   useEffect(() => () => {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
@@ -775,9 +782,10 @@ export function PatternsScreen() {
                 <input
                   type="checkbox"
                   checked={livePreviewEnabled}
+                  disabled={!livePreviewAvailable}
                   onChange={event => setLivePreviewEnabled(event.target.checked)}
                 />
-                Preview taps on the LED card
+                {livePreviewAvailable ? 'Preview taps on the LED card' : 'Studio preview only'}
               </label>
               <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
             </div>
@@ -872,6 +880,7 @@ export function PatternsScreen() {
                   previewing={look.patternId === pattern.id}
                   saved={savedTargetLook.patternId === pattern.id}
                   inCycle={cycleIds.includes(pattern.id)}
+                  livePreviewAvailable={livePreviewAvailable}
                   onSelect={() => updatePreviewLook({ patternId: pattern.id })}
                   onCycleChange={enabled => setCycleEnabled(pattern.id, enabled)}
                 />

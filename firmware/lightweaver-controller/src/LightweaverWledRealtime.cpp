@@ -36,14 +36,16 @@ void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
   if (WiFi.status() != WL_CONNECTED) {
     // Still safe to begin() — WiFiUDP will bind once the interface is up.
     // We log a hint so it's obvious in serial if streaming never starts.
-    Serial.println("WLED realtime: WiFi not connected yet at setup; will bind anyway");
+    if (Serial) Serial.println("WLED realtime: WiFi not connected yet at setup; will bind anyway");
   }
   if (g_udp.begin(WLED_REALTIME_PORT)) {
     g_started = true;
-    Serial.print("WLED realtime listening on UDP ");
-    Serial.println(WLED_REALTIME_PORT);
+    if (Serial) {
+      Serial.print("WLED realtime listening on UDP ");
+      Serial.println(WLED_REALTIME_PORT);
+    }
   } else {
-    Serial.println("WLED realtime: udp.begin() failed");
+    if (Serial) Serial.println("WLED realtime: udp.begin() failed");
   }
 }
 
@@ -72,8 +74,10 @@ void handleWledRealtime() {
         if (got <= 0) break;
         remaining -= got;
       }
-      Serial.print("WLED realtime: dropped oversize packet ");
-      Serial.println(packetSize);
+      if (Serial) {
+        Serial.print("WLED realtime: dropped oversize packet ");
+        Serial.println(packetSize);
+      }
       continue;
     }
 
@@ -98,9 +102,11 @@ void handleWledRealtime() {
     if (proto != WLED_PROTO_DRGB) {
       uint32_t now = millis();
       if (proto != g_lastUnsupportedProto || now - g_lastUnsupportedWarnAt > 5000) {
-        Serial.print("WLED realtime: unsupported protocol id ");
-        Serial.print(proto);
-        Serial.println(" (only DRGB=2 implemented)");
+        if (Serial) {
+          Serial.print("WLED realtime: unsupported protocol id ");
+          Serial.print(proto);
+          Serial.println(" (only DRGB=2 implemented)");
+        }
         g_lastUnsupportedProto = proto;
         g_lastUnsupportedWarnAt = now;
       }

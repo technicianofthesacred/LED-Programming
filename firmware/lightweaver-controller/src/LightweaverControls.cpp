@@ -5,12 +5,28 @@ bool validPin(int pin) {
   return pin >= 0;
 }
 
-bool buttonPressed(int pin, bool& wasDown, uint32_t& lastAt) {
+bool readPressed(int pin) {
+  return validPin(pin) && digitalRead(pin) == LOW;
+}
+
+bool buttonPressed(
+  int pin,
+  bool& debouncedDown,
+  bool& rawDown,
+  uint32_t& changedAt,
+  uint32_t& lastAt
+) {
   if (!validPin(pin)) return false;
-  bool isDown = digitalRead(pin) == LOW;
+  bool isDown = readPressed(pin);
   uint32_t now = millis();
-  bool pressed = isDown && !wasDown && now - lastAt > BUTTON_DEBOUNCE_MS;
-  wasDown = isDown;
+  if (isDown != rawDown) {
+    rawDown = isDown;
+    changedAt = now;
+  }
+
+  bool stable = now - changedAt >= BUTTON_DEBOUNCE_MS;
+  bool pressed = stable && rawDown && !debouncedDown && now - lastAt > BUTTON_DEBOUNCE_MS;
+  if (stable) debouncedDown = rawDown;
   if (pressed) lastAt = now;
   return pressed;
 }
@@ -49,20 +65,31 @@ void setupLightweaverControls(const ControlsConfig& controls, ControlState& stat
   if (validPin(controls.next)) pinMode(controls.next, INPUT_PULLUP);
   if (validPin(controls.blackout)) pinMode(controls.blackout, INPUT_PULLUP);
   state.encoderLastState = readEncoderState(controls);
+  uint32_t now = millis();
+  state.prevRawDown = state.prevDown = readPressed(controls.previous);
+  state.nextRawDown = state.nextDown = readPressed(controls.next);
+  state.pressRawDown = state.pressDown = readPressed(controls.encoderPress);
+  state.pressAltRawDown = state.pressAltDown = readPressed(controls.encoderPressAlt);
+  state.blackoutRawDown = state.blackoutDown = readPressed(controls.blackout);
+  state.prevChangedAt = now;
+  state.nextChangedAt = now;
+  state.pressChangedAt = now;
+  state.pressAltChangedAt = now;
+  state.blackoutChangedAt = now;
 }
 
 ControlEventType pollLightweaverControls(const ControlsConfig& controls, ControlState& state) {
-  if (buttonPressed(controls.next, state.nextDown, state.lastNextAt) ||
-      buttonPressed(controls.encoderPress, state.pressDown, state.lastPressAt) ||
-      buttonPressed(controls.encoderPressAlt, state.pressAltDown, state.lastPressAltAt)) {
+  if (buttonPressed(controls.next, state.nextDown, state.nextRawDown, state.nextChangedAt, state.lastNextAt) ||
+      buttonPressed(controls.encoderPress, state.pressDown, state.pressRawDown, state.pressChangedAt, state.lastPressAt) ||
+      buttonPressed(controls.encoderPressAlt, state.pressAltDown, state.pressAltRawDown, state.pressAltChangedAt, state.lastPressAltAt)) {
     return CONTROL_NEXT_LOOK;
   }
 
-  if (buttonPressed(controls.previous, state.prevDown, state.lastPrevAt)) {
+  if (buttonPressed(controls.previous, state.prevDown, state.prevRawDown, state.prevChangedAt, state.lastPrevAt)) {
     return CONTROL_PREVIOUS_LOOK;
   }
 
-  if (buttonPressed(controls.blackout, state.blackoutDown, state.lastBlackoutAt)) {
+  if (buttonPressed(controls.blackout, state.blackoutDown, state.blackoutRawDown, state.blackoutChangedAt, state.lastBlackoutAt)) {
     return CONTROL_BLACKOUT;
   }
 

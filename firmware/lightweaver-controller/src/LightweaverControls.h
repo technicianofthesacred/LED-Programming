@@ -9,6 +9,16 @@ struct ControlState {
   bool pressDown = false;
   bool pressAltDown = false;
   bool blackoutDown = false;
+  bool prevRawDown = false;
+  bool nextRawDown = false;
+  bool pressRawDown = false;
+  bool pressAltRawDown = false;
+  bool blackoutRawDown = false;
+  uint32_t prevChangedAt = 0;
+  uint32_t nextChangedAt = 0;
+  uint32_t pressChangedAt = 0;
+  uint32_t pressAltChangedAt = 0;
+  uint32_t blackoutChangedAt = 0;
   uint32_t lastPrevAt = 0;
   uint32_t lastNextAt = 0;
   uint32_t lastPressAt = 0;

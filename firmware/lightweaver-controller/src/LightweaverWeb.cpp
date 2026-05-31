@@ -892,53 +892,61 @@ bool tryStationJoin(RuntimeConfig& config) {
   if (config.wifi.ssid.length() == 0) return false;
   String hostname = sanitizeHostname(config.wifi.hostname);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.setHostname(hostname.c_str());
   WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
-  Serial.print("Joining WiFi ");
-  Serial.print(config.wifi.ssid);
-  Serial.print(" as ");
-  Serial.println(hostname);
+  if (Serial) {
+    Serial.print("Joining WiFi ");
+    Serial.print(config.wifi.ssid);
+    Serial.print(" as ");
+    Serial.println(hostname);
+  }
 
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
     delay(250);
   }
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi join failed, falling back to AP");
+    if (Serial) Serial.println("WiFi join failed, falling back to AP");
     WiFi.disconnect(true, true);
     return false;
   }
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = WiFi.localIP().toString();
   config.activeHostname = hostname;
-  Serial.print("WiFi joined: ");
-  Serial.print(config.activeIp);
-  Serial.print(" / ");
-  Serial.print(hostname);
-  Serial.println(".local");
+  if (Serial) {
+    Serial.print("WiFi joined: ");
+    Serial.print(config.activeIp);
+    Serial.print(" / ");
+    Serial.print(hostname);
+    Serial.println(".local");
+  }
   if (MDNS.begin(hostname.c_str())) {
     MDNS.addService("http", "tcp", 80);
-    Serial.println("mDNS responder up");
+    if (Serial) Serial.println("mDNS responder up");
   }
   return true;
 }
 
 void startApMode(RuntimeConfig& config) {
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
   String ssid = apSsid();
   WiFi.softAP(ssid.c_str());
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = WiFi.softAPIP().toString();
   config.activeHostname = "";
-  Serial.print("Lightweaver AP: ");
-  Serial.print(ssid);
-  Serial.print(" / ");
-  Serial.println(config.activeIp);
+  if (Serial) {
+    Serial.print("Lightweaver AP: ");
+    Serial.print(ssid);
+    Serial.print(" / ");
+    Serial.println(config.activeIp);
+  }
 
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   dnsServerActive = dnsServer.start(53, "*", WiFi.softAPIP());
   if (dnsServerActive) {
-    Serial.println("Captive DNS up");
+    if (Serial) Serial.println("Captive DNS up");
   }
 }
 }

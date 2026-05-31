@@ -130,14 +130,16 @@ void setupArtnet(CRGB* leds, uint16_t totalPixels) {
   // socket is created. Once STA associates, packets start arriving.
   if (gUdp.begin(LW_ARTNET_PORT)) {
     gListening = true;
-    Serial.print("Art-Net listening on UDP ");
-    Serial.print(LW_ARTNET_PORT);
-    Serial.print(" / ");
-    Serial.print(gUniverseCount);
-    Serial.println(" universes");
+    if (Serial) {
+      Serial.print("Art-Net listening on UDP ");
+      Serial.print(LW_ARTNET_PORT);
+      Serial.print(" / ");
+      Serial.print(gUniverseCount);
+      Serial.println(" universes");
+    }
   } else {
     gListening = false;
-    Serial.println("Art-Net UDP bind failed");
+    if (Serial) Serial.println("Art-Net UDP bind failed");
   }
 }
 
