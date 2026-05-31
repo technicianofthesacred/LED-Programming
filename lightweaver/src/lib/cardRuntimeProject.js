@@ -1,8 +1,7 @@
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
-import { normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
+import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
-import { isDefaultCircleLayout } from './defaultCircleLayout.js';
 
 export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
@@ -80,11 +79,18 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
   const configuredPixelTotal = normalizedConfigured.reduce((sum, output) => sum + output.pixels, 0);
   const pixels = Math.max(1, Math.floor(Number(resolvedPixels) || DEFAULT_CARD_LED.pixels));
 
-  if (!isDefaultCircleLayout(strips) && normalizedConfigured.length > 0 && configuredPixelTotal === pixels) {
+  if (normalizedConfigured.length > 0 && configuredPixelTotal === pixels) {
     return normalizedConfigured;
   }
 
-  const firstOutput = normalizedConfigured[0] || DEFAULT_CARD_LED.outputs[0];
+  const configuredPins = (configuredOutputs || []).map(output => ({ ...output, pixels: 0 }));
+  const derivedOutputs = deriveStandaloneOutputsFromStrips(strips, configuredPins);
+  const derivedPixelTotal = derivedOutputs.reduce((sum, output) => sum + output.pixels, 0);
+  if (derivedOutputs.length > 0 && derivedPixelTotal === pixels) {
+    return derivedOutputs;
+  }
+
+  const firstOutput = normalizedConfigured[0] || configuredOutputs[0] || DEFAULT_CARD_LED.outputs[0];
   return [{
     id: 'out1',
     name: 'Output 1',

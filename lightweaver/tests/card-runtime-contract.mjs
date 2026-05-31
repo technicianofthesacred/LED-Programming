@@ -241,8 +241,22 @@ const staleOutputPkg = buildCardRuntimePackageFromProject({
   },
 });
 assert.equal(staleOutputPkg.config.led.pixels, 44);
-assert.equal(staleOutputPkg.config.led.outputs.length, 1);
-assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
+assert.equal(staleOutputPkg.config.led.outputs.length, 2);
+assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pin), [16, 17]);
+assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [22, 22]);
+
+const singleOutputPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Single Wired Output',
+  strips: [
+    { id: 'outer', name: 'Outer circle', pixelCount: 22 },
+    { id: 'inner', name: 'Inner circle', pixelCount: 22 },
+  ],
+  standaloneController: {
+    outputs: [{ id: 'out1', name: 'Main chain', pin: 16, pixels: 44 }],
+  },
+});
+assert.equal(singleOutputPkg.config.led.outputs.length, 1);
+assert.deepEqual(singleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
 
 const staleAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
   projectName: 'No Floating Analog Brightness',

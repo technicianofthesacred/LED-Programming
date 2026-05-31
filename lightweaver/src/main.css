@@ -6200,6 +6200,52 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   gap: 6px;
 }
 
+.lw-chip-output-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.lw-chip-output-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: oklch(12% 0.012 250 / 0.62);
+}
+
+.lw-chip-output-toolbar > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lw-chip-output-toolbar strong {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+}
+
+.lw-chip-output-toolbar span,
+.lw-chip-output-row-head em {
+  overflow: hidden;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-chip-output-toolbar > div:last-child {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .lw-chip-section-count {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 112px;
@@ -6289,6 +6335,43 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   grid-template-columns: minmax(140px, 1fr) minmax(82px, 0.5fr) minmax(90px, 0.6fr);
   gap: 6px;
   align-items: end;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: oklch(12% 0.012 250 / 0.62);
+}
+
+.lw-chip-output-row-head {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lw-chip-output-row-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-chip-output-row-head span {
+  min-height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 8px;
+  border: 1px solid oklch(74% 0.13 190 / 0.28);
+  border-radius: 999px;
+  background: oklch(18% 0.024 220 / 0.62);
+  color: oklch(81% 0.14 165);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
 }
 
 .lw-chip-output-row label {

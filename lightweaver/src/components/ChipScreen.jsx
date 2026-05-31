@@ -292,6 +292,38 @@ export function ChipScreen() {
     });
   };
 
+  const routeAsSingleOutput = () => {
+    setStandaloneController(prev => {
+      const current = prev || {};
+      const totalPixels = config.led.pixels || hardwareSections.reduce((sum, section) => sum + section.pixels, 0) || DEFAULT_CIRCLE_TOTAL_PIXELS;
+      const previous = current.outputs?.[0] || {};
+      const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => ({
+        ...base,
+        ...((current.outputs || [])[index] || {}),
+        name: index === 0 ? (previous.name || 'Main chain') : base.name,
+        pixels: index === 0 ? totalPixels : 0,
+      }));
+      return { ...current, outputs };
+    });
+  };
+
+  const routeBySections = () => {
+    setStandaloneController(prev => {
+      const current = prev || {};
+      const nextOutputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
+        const section = hardwareSections[index];
+        const previous = current.outputs?.[index] || {};
+        return {
+          ...base,
+          ...previous,
+          name: section?.name || previous.name || base.name,
+          pixels: section ? section.pixels : 0,
+        };
+      });
+      return { ...current, outputs: nextOutputs };
+    });
+  };
+
   const persistHost = (value) => {
     setCardHost(value);
     writeStoredCardHost(value);
@@ -480,9 +512,25 @@ export function ChipScreen() {
                     </div>
                   </FieldRow>
                   <FieldRow label="Outputs" hint="GPIO and pixel count">
-                    <div className="lw-chip-output-list">
+                    <div className="lw-chip-output-editor">
+                      <div className="lw-chip-output-toolbar">
+                        <div data-testid="output-routing-summary">
+                          <strong>{controllerOutputs.length} {controllerOutputs.length === 1 ? 'output' : 'outputs'}</strong>
+                          <span>{config.led.outputs.reduce((sum, output) => sum + output.pixels, 0)} LEDs routed</span>
+                        </div>
+                        <div>
+                          <button className="btn btn-ghost" type="button" onClick={routeAsSingleOutput}>Single output</button>
+                          <button className="btn btn-ghost" type="button" onClick={routeBySections}>Split by sections</button>
+                        </div>
+                      </div>
+                      <div className="lw-chip-output-list">
                       {controllerOutputs.map((output, index) => (
                         <div key={output.id || index} className="lw-chip-output-row">
+                          <div className="lw-chip-output-row-head">
+                            <strong>{output.name || `Output ${index + 1}`}</strong>
+                            <span>GPIO {output.pin ?? 0}</span>
+                            <em>{output.pixels || 0} LEDs</em>
+                          </div>
                           <input
                             className="lw-search-input"
                             value={output.name || `Output ${index + 1}`}
@@ -499,6 +547,7 @@ export function ChipScreen() {
                           </label>
                         </div>
                       ))}
+                      </div>
                     </div>
                   </FieldRow>
                 </div>

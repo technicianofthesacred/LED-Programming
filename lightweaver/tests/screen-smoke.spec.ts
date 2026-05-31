@@ -25,6 +25,16 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   await expect(page.getByText('Card setup')).toBeVisible();
   await expect(page.getByText('What the card will run')).toBeVisible();
   await expect(page.getByText('Studio project')).toBeVisible();
+  await expect(page.getByTestId('output-routing-summary')).toContainText('2 outputs');
+  await expect(page.locator('.lw-chip-output-row')).toHaveCount(2);
+  await expect(page.locator('.lw-chip-output-row', { hasText: 'Outer circle' })).toContainText('GPIO 16');
+  await expect(page.locator('.lw-chip-output-row', { hasText: 'Inner circle' })).toContainText('GPIO 17');
+  await expect(page.locator('.lw-card-load-summary')).toContainText('Outputs2');
+
+  await page.getByRole('button', { name: 'Single output' }).click();
+  await expect(page.getByTestId('output-routing-summary')).toContainText('1 output');
+  await expect(page.locator('.lw-chip-output-row')).toHaveCount(1);
+  await expect(page.locator('.lw-card-load-summary')).toContainText('Outputs1');
   await expect(page.locator('.lw-chip-settings-json')).toHaveCount(0);
 
   await page.getByText('Advanced').click();
