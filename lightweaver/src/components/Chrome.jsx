@@ -207,7 +207,7 @@ export function StatusBar({ screen = 'patterns' }) {
     : cardConnected ? '● connected' : '○ disconnected';
   return (
     <div className="lw-statusbar">
-      <span>
+      <span className="lw-status-item lw-status-card">
         <span className="k">Card</span>&nbsp;
         <span className={cardConnected ? 'ok' : 'err'}>
           {cardLabel}
@@ -215,17 +215,17 @@ export function StatusBar({ screen = 'patterns' }) {
         {cardHost && <>&nbsp;<span className="v">{cardHost}</span></>}
       </span>
       <span className="sep">·</span>
-      <span><span className="k">strip</span>&nbsp;<span className="v">WS2812B · 60/m</span></span>
+      <span className="lw-status-item lw-status-strip"><span className="k">strip</span>&nbsp;<span className="v">WS2812B · 60/m</span></span>
       <span className="sep">·</span>
-      <span><span className="k">total</span>&nbsp;<span className="v">{totalLEDs > 0 ? totalLEDs.toLocaleString() : '—'} LEDs · {strips.length} strips</span></span>
-      <div style={{ flex: 1 }}/>
+      <span className="lw-status-item lw-status-total"><span className="k">total</span>&nbsp;<span className="v">{totalLEDs > 0 ? totalLEDs.toLocaleString() : '—'} LEDs · {strips.length} strips</span></span>
+      <div className="lw-status-spacer"/>
       {lastSaved && (
-        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>
+        <span className="lw-status-item lw-status-save">
           autosaved {savedAgo < 5 ? 'just now' : `${savedAgo}s ago`}
         </span>
       )}
       <span className="sep">·</span>
-      <span className="v">1 Patterns · 2 Layout · 3 Settings · 4 Flash · 5 Installer · ? shortcuts</span>
+      <span className="lw-status-item lw-status-shortcuts v">1 Patterns · 2 Layout · 3 Settings · 4 Flash · 5 Installer · ? shortcuts</span>
     </div>
   );
 }

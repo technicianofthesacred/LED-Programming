@@ -66,6 +66,39 @@ test('installer screen gives a worker the full chip setup checklist', async ({ p
   await expect(page.getByRole('link', { name: 'Flash chip' })).toHaveAttribute('href', '#screen=flash');
 });
 
+test('patterns target selector and footer stay single-line controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const targetMetrics = await page.locator('.lw-target-grid').evaluate(el => ({
+    clientWidth: el.clientWidth,
+    scrollWidth: el.scrollWidth,
+    overflowX: getComputedStyle(el).overflowX,
+    targetTops: Array.from(el.querySelectorAll('.lw-section-target'), target =>
+      Math.round(target.getBoundingClientRect().top),
+    ),
+  }));
+  expect(targetMetrics.overflowX).toBe('hidden');
+  expect(targetMetrics.scrollWidth).toBeLessThanOrEqual(targetMetrics.clientWidth + 1);
+  expect(new Set(targetMetrics.targetTops).size).toBe(1);
+
+  const statusMetrics = await page.locator('.lw-statusbar').evaluate(el => ({
+    height: el.getBoundingClientRect().height,
+    lineHeight: getComputedStyle(el).lineHeight,
+    overflowX: getComputedStyle(el).overflowX,
+    whiteSpace: getComputedStyle(el).whiteSpace,
+    childTops: Array.from(el.querySelectorAll('.lw-status-item, .sep'), child =>
+      Math.round(child.getBoundingClientRect().top),
+    ),
+  }));
+  expect(statusMetrics.height).toBeLessThanOrEqual(25);
+  expect(statusMetrics.overflowX).toBe('hidden');
+  expect(statusMetrics.whiteSpace).toBe('nowrap');
+  expect(new Set(statusMetrics.childTops).size).toBe(1);
+});
+
 for (const viewport of [
   { name: 'desktop', width: 1280, height: 900 },
   { name: 'mobile', width: 390, height: 844 },
