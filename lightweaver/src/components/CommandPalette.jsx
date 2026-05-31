@@ -9,7 +9,9 @@ function buildCommands(ctx, navigate) {
   return [
     { id: 'nav-patterns', label: 'Go to: Patterns', category: 'Navigate', action: () => navigate('patterns') },
     { id: 'nav-layout', label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
-    { id: 'nav-load', label: 'Go to: Load', category: 'Navigate', action: () => navigate('load') },
+    { id: 'nav-settings', label: 'Go to: Settings', category: 'Navigate', action: () => navigate('settings') },
+    { id: 'nav-flash', label: 'Go to: Flash chip', category: 'Navigate', action: () => navigate('flash') },
+    { id: 'nav-installer', label: 'Go to: Installer', category: 'Navigate', action: () => navigate('installer') },
     { id: 'proj-new',    label: 'New project', category: 'Project', action: () => { if (window.confirm('Start a new project?')) newProject(); } },
   ];
 }

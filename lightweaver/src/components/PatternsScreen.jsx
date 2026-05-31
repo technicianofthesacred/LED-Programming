@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { getCardPatternById } from '../lib/cardPatternBank.js';
+import { getCardPatternById, getCardPatternFingerprint } from '../lib/cardPatternBank.js';
 import {
   cardColorToHex,
   cardHueDeltaToDegrees,
@@ -55,6 +55,8 @@ const PATTERN_CATEGORIES = [
   { id: 'motion', label: 'Motion', ids: ['chase', 'scanner', 'warp', 'pulse-ring', 'blocks', 'rainbow'] },
   { id: 'electric', label: 'Electric', ids: ['neon', 'matrix', 'heartbeat', 'stained'] },
 ];
+const PREVIEW_LED_COUNT = 34;
+const PREVIEW_LED_INDEXES = Array.from({ length: PREVIEW_LED_COUNT }, (_, index) => index);
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -78,28 +80,114 @@ function Section({ title, meta, children }) {
   );
 }
 
-function LookPreview({ patternId, look, large = false }) {
+function LookPreview({ patternId, look, large = false, tuned = false }) {
   const pattern = getCardPatternById(patternId);
-  const hue = cardHueToDegrees(look.customHue);
-  const chroma = cardSaturationToChroma(look.customSaturation);
+  const fingerprint = getCardPatternFingerprint(patternId);
+  const tunedLedColor = cardColorToHex(look.customHue, look.customSaturation);
   return (
     <div
-      className={`lw-look-preview lw-look-${patternId} ${large ? 'is-large' : ''}`}
+      className={`lw-look-preview lw-look-${patternId} ${fingerprint.cssClass} ${large ? 'is-large' : ''}`}
       style={{
         '--look-preview-bg': pattern?.preview,
-        '--look-hue': `${hue}deg`,
-        '--look-color': `oklch(72% ${chroma} ${hue})`,
-        '--look-bright': `oklch(84% ${chroma} ${hue})`,
-        '--look-deep': `oklch(31% ${Math.max(0.04, Number(chroma) * 0.72).toFixed(3)} ${hue})`,
         '--look-dim': String(0.3 + look.brightness * 0.7),
+        '--palette-a': fingerprint.palette[0],
+        '--palette-b': fingerprint.palette[1],
+        '--palette-c': fingerprint.palette[2],
+        '--palette-d': fingerprint.palette[3] || fingerprint.palette[0],
       }}
       aria-hidden="true"
     >
-      <span className="lw-look-orbit one"/>
-      <span className="lw-look-orbit two"/>
+      <span className="lw-look-led-field">
+        {PREVIEW_LED_INDEXES.map(index => {
+          const point = previewLedPoint(index, PREVIEW_LED_COUNT, fingerprint.cssClass);
+          return (
+            <i
+              key={index}
+              style={{
+                '--x': `${point.x}%`,
+                '--y': `${point.y}%`,
+                '--delay': `${point.delay}s`,
+                '--scale': point.scale,
+                '--led-color': tuned ? tunedLedColor : fingerprint.palette[index % fingerprint.palette.length],
+              }}
+            />
+          );
+        })}
+      </span>
       <span className="lw-look-scan"/>
     </div>
   );
+}
+
+function PatternFingerprint({ fingerprint, compact = false }) {
+  return (
+    <span className={`lw-pattern-fingerprint ${compact ? 'is-compact' : ''}`}>
+      <span className="lw-pattern-palette" aria-hidden="true">
+        {fingerprint.palette.slice(0, 5).map((color, index) => (
+          <i key={`${color}-${index}`} style={{ '--swatch': color }}/>
+        ))}
+      </span>
+      <span className="lw-pattern-fingerprint-copy">
+        <b>{fingerprint.motionLabel}</b>
+        <em>{fingerprint.tempoLabel} / {fingerprint.intensityLabel}</em>
+      </span>
+    </span>
+  );
+}
+
+function previewLedPoint(index, count, cssClass) {
+  const t = count > 1 ? index / (count - 1) : 0.5;
+  const phase = t * Math.PI * 2;
+  if (cssClass === 'motion-ring' || cssClass === 'motion-pulse' || cssClass === 'motion-pane') {
+    return {
+      x: 50 + Math.cos(phase) * 33,
+      y: 50 + Math.sin(phase) * 22,
+      delay: -t * 2.8,
+      scale: 0.82 + Math.sin(phase + 0.7) * 0.14,
+    };
+  }
+  if (cssClass === 'motion-rain') {
+    const col = index % 7;
+    const row = Math.floor(index / 7);
+    return {
+      x: 15 + col * 11.5 + (row % 2) * 2,
+      y: 16 + row * 15,
+      delay: -(row * 0.22 + col * 0.07),
+      scale: 0.78 + ((index % 3) * 0.1),
+    };
+  }
+  if (cssClass === 'motion-organic' || cssClass === 'motion-liquid' || cssClass === 'motion-breathe') {
+    return {
+      x: 12 + t * 76,
+      y: 50 + Math.sin(phase * 1.25) * 16 + Math.sin(phase * 2.1) * 5,
+      delay: -t * 3.6,
+      scale: 0.76 + Math.sin(phase * 1.8) * 0.2,
+    };
+  }
+  if (cssClass === 'motion-spark' || cssClass === 'motion-strike' || cssClass === 'motion-flicker') {
+    const col = index % 9;
+    const row = Math.floor(index / 9);
+    return {
+      x: 10 + col * 10 + ((row * 7) % 9),
+      y: 19 + row * 18 + ((index * 11) % 7),
+      delay: -((index * 0.13) % 2.4),
+      scale: 0.72 + ((index % 4) * 0.12),
+    };
+  }
+  if (cssClass === 'motion-comet' || cssClass === 'motion-chase' || cssClass === 'motion-scan' || cssClass === 'motion-warp') {
+    return {
+      x: 10 + t * 80,
+      y: 50 + Math.sin(phase) * 9,
+      delay: -t * 2.2,
+      scale: 0.78 + t * 0.22,
+    };
+  }
+  return {
+    x: 10 + t * 80,
+    y: 50 + Math.sin(phase * 1.5) * 13,
+    delay: -t * 3,
+    scale: 0.82 + Math.sin(phase) * 0.1,
+  };
 }
 
 function TuningSlider({ label, testId, min, max, step, value, readout, onChange }) {
@@ -184,16 +272,18 @@ function patternMatchesCategory(pattern, categoryId) {
 }
 
 function LookCard({ pattern, look, previewing, saved, inCycle, onSelect, onCycleChange }) {
+  const fingerprint = getCardPatternFingerprint(pattern.id);
   const summary = previewing
     ? saved ? 'Previewing and saved here' : 'Previewing on LEDs'
     : saved ? 'Saved for this target' : pattern.description || 'Tap to preview this look';
   return (
     <article className={`lw-look-card ${saved ? 'is-selected' : ''} ${previewing ? 'is-previewing' : ''}`}>
       <button type="button" className="lw-look-card-main" data-pattern-id={pattern.id} onClick={onSelect}>
-        <LookPreview patternId={pattern.id} look={{ ...look, patternId: pattern.id }}/>
+        <LookPreview patternId={pattern.id} look={{ ...look, patternId: pattern.id }} tuned={previewing || saved}/>
         <span className="lw-look-card-copy">
           <strong>{pattern.label}</strong>
           <span>{summary}</span>
+          <PatternFingerprint fingerprint={fingerprint} compact/>
         </span>
       </button>
       <label className="lw-look-card-toggle">
@@ -242,7 +332,7 @@ function SavedLookCard({ look, active, onApply, targets = [] }) {
         aria-hidden="true"
       >
         {previewSections.map(section => (
-          <LookPreview key={section.id} patternId={section.look?.patternId} look={section.look}/>
+          <LookPreview key={section.id} patternId={section.look?.patternId} look={section.look} tuned/>
         ))}
       </span>
       <span className="lw-saved-combo-copy">
@@ -333,6 +423,7 @@ export function PatternsScreen() {
     ? controls.encoder.patternCycleIds
     : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
   const selectedPattern = getCardPatternById(look.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
+  const selectedFingerprint = getCardPatternFingerprint(selectedPattern.id);
   const previewPatternId = selectedPattern?.previewPatternId || selectedPattern?.id || look.patternId;
   const savedPattern = getCardPatternById(savedGlobalLook.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
   const hasUnsavedPreview = !looksMatch(look, savedTargetLook);
@@ -419,7 +510,7 @@ export function PatternsScreen() {
           setStatusKind('ok');
           const patternLabel = getCardPatternById(nextLook.patternId)?.label || nextLook.patternId;
           setStatus(response?.previewZoneFallback
-            ? `Previewing ${patternLabel} on the whole card. Load this config onto the card once to preview ${targetLabel(target)} separately.`
+            ? `Previewing ${patternLabel} on the whole card. Save these Settings to the card once to preview ${targetLabel(target)} separately.`
             : `Previewing ${patternLabel} on ${targetLabel(target)}. Not saved yet.`);
         }
       } catch (error) {
@@ -617,7 +708,7 @@ export function PatternsScreen() {
       const response = await pushSectionPreviewToCard(nextTargets, { host: cardHost, timeoutMs: 2200 });
       setStatusKind('ok');
       setStatus(response?.previewZoneFallback
-        ? `${savedLook.label} applied in Studio. Load this config onto the card once to preview sections separately.`
+        ? `${savedLook.label} applied in Studio. Save these Settings to the card once to preview sections separately.`
         : `${savedLook.label} previewing on the card. Save to card when ready.`);
     } catch (error) {
       setStatusKind('err');
@@ -706,7 +797,7 @@ export function PatternsScreen() {
               <div className="lw-combo-targets">
                 {effectiveSectionTargets.filter(target => target.kind === 'section').map(target => (
                   <span key={target.id}>
-                    <LookPreview patternId={target.look?.patternId} look={target.look}/>
+                    <LookPreview patternId={target.look?.patternId} look={target.look} tuned/>
                     <b>{target.label}</b>
                     <em>{patternLabel(target.look?.patternId)}</em>
                   </span>
@@ -814,7 +905,8 @@ export function PatternsScreen() {
             </Section>
 
             <Section title="Color & motion" meta={selectedTargetName}>
-              <LookPreview patternId={look.patternId} look={look} large/>
+              <LookPreview patternId={look.patternId} look={look} large tuned/>
+              <PatternFingerprint fingerprint={selectedFingerprint}/>
               <div className="lw-look-color-picker">
                 <label>
                   <span>Pick color</span>

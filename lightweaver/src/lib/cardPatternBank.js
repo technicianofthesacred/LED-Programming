@@ -217,6 +217,249 @@ export const CARD_PATTERN_BANK = Object.freeze([
 
 export const CARD_PATTERN_BY_ID = new Map(CARD_PATTERN_BANK.map(pattern => [pattern.id, pattern]));
 
+const CARD_PATTERN_FINGERPRINTS = Object.freeze({
+  aurora: {
+    motionLabel: 'Curtain drift',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Soft',
+    cssClass: 'motion-drift',
+    palette: ['#102b10', '#31ce73', '#56f2cd', '#7d44b7'],
+    tags: ['calm', 'curtain', 'gradient'],
+  },
+  plasma: {
+    motionLabel: 'Liquid fold',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Colorful',
+    cssClass: 'motion-liquid',
+    palette: ['#5b1ac9', '#258bd8', '#18d6a3', '#b8fff0'],
+    tags: ['liquid', 'fold', 'full-color'],
+  },
+  fire: {
+    motionLabel: 'Rising flame',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Hot',
+    cssClass: 'motion-flame',
+    palette: ['#220300', '#b81905', '#ff5c05', '#ffd45a'],
+    tags: ['flame', 'warm', 'bright'],
+  },
+  ocean: {
+    motionLabel: 'Rolling wave',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Cool',
+    cssClass: 'motion-wave',
+    palette: ['#eefcff', '#49c7df', '#0975a7', '#101a64'],
+    tags: ['wave', 'water', 'cool'],
+  },
+  ripple: {
+    motionLabel: 'Expanding rings',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Cool',
+    cssClass: 'motion-ring',
+    palette: ['#f2ffff', '#1acff2', '#1555b8', '#05093a'],
+    tags: ['ring', 'pulse', 'water'],
+  },
+  lava: {
+    motionLabel: 'Organic blobs',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Warm',
+    cssClass: 'motion-organic',
+    palette: ['#290604', '#b51606', '#ff7a1a', '#ffd05a'],
+    tags: ['blob', 'warm', 'organic'],
+  },
+  rainbow: {
+    motionLabel: 'Spectrum travel',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Full color',
+    cssClass: 'motion-flow',
+    palette: ['#ff334d', '#ffdd38', '#25d66f', '#2eb9ff', '#b842ff'],
+    tags: ['spectrum', 'flow', 'saturated'],
+  },
+  sparkle: {
+    motionLabel: 'Random sparks',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Bright points',
+    cssClass: 'motion-spark',
+    palette: ['#09091e', '#fffbdd', '#b9dcff', '#ffd0b3'],
+    tags: ['spark', 'random', 'points'],
+  },
+  twinkle: {
+    motionLabel: 'Soft stars',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Soft points',
+    cssClass: 'motion-spark',
+    palette: ['#080817', '#d2eeff', '#ffe5c7', '#c8ffeb'],
+    tags: ['twinkle', 'soft', 'points'],
+  },
+  meteor: {
+    motionLabel: 'Comet tail',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Cool bright',
+    cssClass: 'motion-comet',
+    palette: ['#05051f', '#20246d', '#818cff', '#ffffff'],
+    tags: ['comet', 'tail', 'directional'],
+  },
+  chase: {
+    motionLabel: 'Chasing point',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Focused',
+    cssClass: 'motion-chase',
+    palette: ['#050817', '#1c718f', '#55d4f7', '#ffffff'],
+    tags: ['chase', 'dot', 'directional'],
+  },
+  scanner: {
+    motionLabel: 'Sweep beam',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Focused',
+    cssClass: 'motion-scan',
+    palette: ['#080808', '#641106', '#ff2d0d', '#ffffff'],
+    tags: ['scan', 'beam', 'back-forth'],
+  },
+  breathe: {
+    motionLabel: 'Breathing glow',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Soft',
+    cssClass: 'motion-breathe',
+    palette: ['#05130d', '#096044', '#23ca94', '#d7fff0'],
+    tags: ['breathe', 'calm', 'ambient'],
+  },
+  candle: {
+    motionLabel: 'Small flicker',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Warm soft',
+    cssClass: 'motion-flame',
+    palette: ['#190503', '#a64208', '#ff9a20', '#fff0b8'],
+    tags: ['flicker', 'warm', 'quiet'],
+  },
+  ember: {
+    motionLabel: 'Uneven ember',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Warm low',
+    cssClass: 'motion-organic',
+    palette: ['#1c0501', '#6f1809', '#c54216', '#f18b38'],
+    tags: ['ember', 'warm', 'low'],
+  },
+  lightning: {
+    motionLabel: 'Electric strike',
+    tempoLabel: 'Burst',
+    intensityLabel: 'High contrast',
+    cssClass: 'motion-strike',
+    palette: ['#050516', '#4d55cf', '#b7bfff', '#ffffff'],
+    tags: ['strike', 'electric', 'flash'],
+  },
+  neon: {
+    motionLabel: 'Tube flicker',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Saturated',
+    cssClass: 'motion-flicker',
+    palette: ['#f91aa6', '#13efcb', '#fff13a', '#101014'],
+    tags: ['neon', 'flicker', 'segments'],
+  },
+  matrix: {
+    motionLabel: 'Falling code',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Green',
+    cssClass: 'motion-rain',
+    palette: ['#020902', '#075c16', '#16ff65', '#eaffef'],
+    tags: ['rain', 'vertical', 'digital'],
+  },
+  heartbeat: {
+    motionLabel: 'Double pulse',
+    tempoLabel: 'Pulse',
+    intensityLabel: 'Red',
+    cssClass: 'motion-pulse',
+    palette: ['#130004', '#7c0716', '#ff2440', '#ffbcc4'],
+    tags: ['pulse', 'beat', 'red'],
+  },
+  stained: {
+    motionLabel: 'Pane shift',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Full color',
+    cssClass: 'motion-pane',
+    palette: ['#f43a16', '#f3b31c', '#26c466', '#1f75e8', '#b43be8'],
+    tags: ['pane', 'color', 'structured'],
+  },
+  confetti: {
+    motionLabel: 'Color pops',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Bright points',
+    cssClass: 'motion-spark',
+    palette: ['#0b0b0d', '#ff2b75', '#22d987', '#ffd23f'],
+    tags: ['confetti', 'random', 'points'],
+  },
+  warp: {
+    motionLabel: 'Radial streaks',
+    tempoLabel: 'Fast',
+    intensityLabel: 'Bright',
+    cssClass: 'motion-warp',
+    palette: ['#02020c', '#171c68', '#788dff', '#ffffff'],
+    tags: ['streak', 'radial', 'speed'],
+  },
+  'pulse-ring': {
+    motionLabel: 'Center pulse',
+    tempoLabel: 'Pulse',
+    intensityLabel: 'Bright',
+    cssClass: 'motion-ring',
+    palette: ['#09020f', '#391060', '#e43dff', '#ffffff'],
+    tags: ['ring', 'pulse', 'center'],
+  },
+  blocks: {
+    motionLabel: 'Stepped blocks',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Bold',
+    cssClass: 'motion-block',
+    palette: ['#ff2b73', '#ffd23f', '#24cc71', '#1ea5ff', '#7457ff'],
+    tags: ['blocks', 'stepped', 'saturated'],
+  },
+  bloom: {
+    motionLabel: 'Soft bloom',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Soft warm',
+    cssClass: 'motion-breathe',
+    palette: ['#160711', '#7c244e', '#ff6fb5', '#ffe0aa'],
+    tags: ['bloom', 'soft', 'floral'],
+  },
+  calm: {
+    motionLabel: 'Low breath',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Low',
+    cssClass: 'motion-breathe',
+    palette: ['#06161d', '#14525c', '#22907e', '#aef5e5'],
+    tags: ['calm', 'low', 'ambient'],
+  },
+  drift: {
+    motionLabel: 'Pastel drift',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Soft color',
+    cssClass: 'motion-drift',
+    palette: ['#7fc7ff', '#d9a8ff', '#ffc2d6', '#ffe7a8'],
+    tags: ['pastel', 'drift', 'soft'],
+  },
+  wave: {
+    motionLabel: 'Sine wave',
+    tempoLabel: 'Medium',
+    intensityLabel: 'Cool',
+    cssClass: 'motion-wave',
+    palette: ['#121445', '#5c5cc8', '#a9a9ee', '#d7d8ff'],
+    tags: ['wave', 'sine', 'cool'],
+  },
+  sunset: {
+    motionLabel: 'Warm drift',
+    tempoLabel: 'Slow',
+    intensityLabel: 'Warm color',
+    cssClass: 'motion-drift',
+    palette: ['#2a0830', '#8a2050', '#d04a18', '#f1c40f'],
+    tags: ['sunset', 'warm', 'drift'],
+  },
+  'warm-white': {
+    motionLabel: 'Steady output',
+    tempoLabel: 'Static',
+    intensityLabel: 'Warm white',
+    cssClass: 'motion-static',
+    palette: ['#2f2113', '#b98644', '#f4e4c7', '#fff6dd'],
+    tags: ['white', 'steady', 'installation'],
+  },
+});
+
 export function getCardPatternById(id) {
   return CARD_PATTERN_BY_ID.get(String(id || '').trim().toLowerCase()) || null;
 }
@@ -227,4 +470,41 @@ export function orderedCardPatterns(ids = []) {
     .filter(Boolean))];
   const selected = requested.map(getCardPatternById).filter(Boolean);
   return selected.length ? selected : CARD_PATTERN_BANK;
+}
+
+export function getCardPatternFingerprint(patternOrId) {
+  const pattern = typeof patternOrId === 'object' && patternOrId
+    ? patternOrId
+    : getCardPatternById(patternOrId);
+  const id = String(pattern?.id || patternOrId || '').trim().toLowerCase();
+  const metadata = CARD_PATTERN_FINGERPRINTS[id] || makeFallbackFingerprint(pattern, id);
+  return {
+    id,
+    motionLabel: metadata.motionLabel,
+    tempoLabel: metadata.tempoLabel,
+    intensityLabel: metadata.intensityLabel,
+    cssClass: metadata.cssClass,
+    palette: [...metadata.palette],
+    tags: [...metadata.tags],
+  };
+}
+
+function makeFallbackFingerprint(pattern = {}, id = '') {
+  const label = pattern?.label || titleFromId(id) || 'Pattern';
+  return {
+    motionLabel: label,
+    tempoLabel: 'Medium',
+    intensityLabel: pattern?.mode === 'preset' ? 'Static' : 'Pattern',
+    cssClass: 'motion-flow',
+    palette: ['#1c2230', '#4e9ec9', '#8ce2d3'],
+    tags: ['pattern', pattern?.mode || 'procedural'],
+  };
+}
+
+function titleFromId(value = '') {
+  return String(value || '')
+    .split('-')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }

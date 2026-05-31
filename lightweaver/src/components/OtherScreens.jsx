@@ -4,8 +4,8 @@ import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromPatchBoard } from '
 import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
 import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeContract.js';
 import { deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
-import { connectESP, disconnectESP, flashFirmware, fetchLatestWLEDRelease } from '../lib/flash.js';
-import { DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
+import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
+import { DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS, DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
 import { DEMO_STRIPS } from '../data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 
@@ -706,6 +706,9 @@ function fmtSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
+const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
+const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
+
 export function FlashScreen() {
   const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
@@ -717,10 +720,9 @@ export function FlashScreen() {
   const [statusKind, setStatusKind]   = useState('');
   const [log, setLog]                 = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
-  const [address, setAddress]         = useState(DEFAULT_WLED_APP_FLASH_ADDRESS);
-  const [eraseAll, setEraseAll]       = useState(false);
-  const [release, setRelease]         = useState(null);
-  const [fetchingRelease, setFetchingRelease] = useState(false);
+  const [address, setAddress]         = useState(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
+  const [eraseAll, setEraseAll]       = useState(true);
+  const [loadingBundledFirmware, setLoadingBundledFirmware] = useState(false);
 
   const loaderRef    = useRef(null);
   const transportRef = useRef(null);
@@ -777,29 +779,27 @@ export function FlashScreen() {
     const file = e.target.files?.[0];
     if (!file) return;
     setSelectedFile(file);
-    setRelease(null);
   };
 
-  const handleFetchRelease = async () => {
-    setFetchingRelease(true);
-    setStatusMsg('Checking GitHub…');
+  const handleSelectBundledFirmware = async () => {
+    setLoadingBundledFirmware(true);
+    setStatusMsg('Loading Lightweaver firmware…');
     try {
-      const info = await fetchLatestWLEDRelease();
-      setRelease(info);
-      setStatusMsg(`Found ${info.tagName}`);
+      const response = await fetch(LIGHTWEAVER_FIRMWARE_URL, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`firmware file ${response.status}`);
+      const blob = await response.blob();
+      const file = new File([blob], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
+      setSelectedFile(file);
+      setAddress(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
+      setEraseAll(true);
+      setStatusMsg('Lightweaver firmware selected.', 'connected');
+      appendLog(`Selected ${LIGHTWEAVER_FIRMWARE_NAME} (${fmtSize(file.size)})`);
     } catch (err) {
-      setStatusMsg(`✕ ${err.message}`, 'error');
-      appendLog(`GitHub fetch failed: ${err.message}`);
+      setStatusMsg(`✕ Could not load bundled firmware: ${err.message}`, 'error');
+      appendLog(`Bundled firmware failed: ${err.message}`);
     } finally {
-      setFetchingRelease(false);
+      setLoadingBundledFirmware(false);
     }
-  };
-
-  const handleOpenDownload = () => {
-    if (!release) return;
-    window.open(release.asset.downloadUrl, '_blank');
-    appendLog(`Opening download for ${release.asset.name} — save the file, then use Browse to select it.`);
-    setStatusMsg('Save the downloaded file, then use Browse ↑');
   };
 
   const handleFlash = async () => {
@@ -825,8 +825,8 @@ export function FlashScreen() {
         setStatusMsg(`Flashing… ${Math.round(pct * 100)}%`);
       });
       setProgress(1);
-      setStatusMsg('● Flash complete — WLED is booting', 'connected');
-      appendLog('Flash complete. WLED should start in a few seconds.');
+      setStatusMsg('● Flash complete — Lightweaver is booting', 'connected');
+      appendLog('Flash complete. Lightweaver should start in a few seconds.');
     } catch (err) {
       setStatusMsg(`✕ Flash failed: ${err.message ?? err}`, 'error');
       appendLog(`Error: ${err.message ?? err}`);
@@ -868,39 +868,19 @@ export function FlashScreen() {
         ))}
       </div>
 
-      <div className="lw-sec-header"><span>Firmware</span></div>
+      <div className="lw-sec-header"><span>Lightweaver firmware</span></div>
       <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <button className="btn" onClick={handleFetchRelease} disabled={fetchingRelease}>
-            {fetchingRelease ? 'Checking…' : 'Fetch latest WLED'}
+        <p style={{ margin: '0 0 12px', color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 }}>
+          Use the bundled Lightweaver factory firmware for sellable cards and blank ESP32-S3 boards. Only browse for a file if Adrian gave you a specific replacement binary.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={handleSelectBundledFirmware} disabled={loadingBundledFirmware}>
+            {loadingBundledFirmware ? 'Loading…' : 'Use Lightweaver firmware'}
           </button>
           <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>or</span>
-          <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse…</button>
+          <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse .bin</button>
           <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange}/>
         </div>
-
-        {release && (
-          <div style={{ padding: '10px 12px', marginBottom: 12, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', gap: '4px 10px', alignItems: 'baseline' }}>
-                <span style={{ color: 'var(--text-4)' }}>Version</span>
-                <span style={{ fontFamily: 'var(--mono-font)', fontWeight: 600 }}>{release.tagName}</span>
-                <span style={{ color: 'var(--text-4)' }}>Date</span>
-                <span style={{ fontFamily: 'var(--mono-font)' }}>{release.date}</span>
-                <span style={{ color: 'var(--text-4)' }}>File</span>
-                <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', wordBreak: 'break-all' }}>{release.asset.name}</span>
-                <span style={{ color: 'var(--text-4)' }}>Size</span>
-                <span style={{ fontFamily: 'var(--mono-font)' }}>{fmtSize(release.asset.size)}</span>
-              </div>
-              <button className="btn btn-primary" onClick={handleOpenDownload} style={{ flexShrink: 0 }}>
-                Open download
-              </button>
-            </div>
-            <div style={{ marginTop: 8, fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
-              Save the file, then use Browse above to select it.
-            </div>
-          </div>
-        )}
 
         {selectedFile && (
           <div style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: 'var(--text-2)', padding: '6px 0' }}>
@@ -920,7 +900,7 @@ export function FlashScreen() {
           />
           <span></span>
           <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
-            Official WLED release binaries are app images for {DEFAULT_WLED_APP_FLASH_ADDRESS}. Erase-all requires a true merged image at 0x0 or the four-part esptool flow.
+            Bundled Lightweaver factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS} and can erase the chip first. App-only replacement binaries usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with Erase all off.
           </span>
           <span style={{ color: 'var(--text-3)' }}>Erase all</span>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>

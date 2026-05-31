@@ -10,11 +10,15 @@ const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 const ChipScreen = lazy(() => import('./components/ChipScreen.jsx').then(m => ({ default: m.ChipScreen })));
 const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
 const PatternsScreen = lazy(() => import('./components/PatternsScreen.jsx').then(m => ({ default: m.PatternsScreen })));
+const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.FlashScreen })));
+const InstallerScreen = lazy(() => import('./components/InstallerScreen.jsx').then(m => ({ default: m.InstallerScreen })));
 
 function normalizeScreen(requested = '') {
   const screen = String(requested || '').trim().toLowerCase();
   if (screen === 'layout' || screen === 'patch') return 'layout';
-  if (screen === 'chip' || screen === 'load' || screen === 'export' || screen === 'devices' || screen === 'flash' || screen === 'settings') return 'load';
+  if (screen === 'installer' || screen === 'install' || screen === 'directions' || screen === 'setup') return 'installer';
+  if (screen === 'flash') return 'flash';
+  if (screen === 'chip' || screen === 'load' || screen === 'export' || screen === 'devices' || screen === 'settings') return 'settings';
   if (screen === 'pattern' || screen === 'patterns' || screen === 'look' || screen === 'looks') return 'patterns';
   return 'patterns';
 }
@@ -75,7 +79,9 @@ export default function App() {
       if (!event.metaKey && !event.ctrlKey && !event.altKey) {
         if (event.key === '1') navigate('patterns');
         if (event.key === '2') navigate('layout');
-        if (event.key === '3') navigate('load');
+        if (event.key === '3') navigate('settings');
+        if (event.key === '4') navigate('flash');
+        if (event.key === '5') navigate('installer');
       }
     };
     window.addEventListener('keydown', handler);
@@ -91,10 +97,12 @@ export default function App() {
           <Suspense fallback={<LoadingPane/>}>
             {screen === 'patterns' && <PatternsScreen/>}
             {screen === 'layout' && <LayoutScreen/>}
-            {screen === 'load' && <ChipScreen/>}
+            {screen === 'settings' && <ChipScreen/>}
+            {screen === 'flash' && <FlashScreen/>}
+            {screen === 'installer' && <InstallerScreen/>}
           </Suspense>
         </div>
-        <StatusBar/>
+        <StatusBar screen={screen}/>
         <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
         <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>
         <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate}/>

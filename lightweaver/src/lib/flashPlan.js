@@ -1,4 +1,5 @@
 export const DEFAULT_WLED_APP_FLASH_ADDRESS = '0x10000';
+export const DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS = '0x0';
 
 export function parseFlashAddress(value) {
   const text = String(value ?? '').trim();
@@ -16,7 +17,7 @@ export function validateFlashPlan({ address, eraseAll }) {
   const parsedAddress = parseFlashAddress(address);
 
   if (eraseAll && parsedAddress !== 0) {
-    throw new Error('A single WLED app binary cannot be flashed after erasing all flash. Use the four-part ESP32-S3 install flow first, or flash a true merged image at 0x0.');
+    throw new Error('Erase all requires a merged factory image flashed at 0x0.');
   }
 
   return { address: parsedAddress };

@@ -28,6 +28,8 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await expect(page.locator('.lw-look-card')).toHaveCount(30);
+  await expect(page.locator('.lw-look-orbit')).toHaveCount(0);
+  await expect(page.locator('.lw-look-led-field i')).not.toHaveCount(0);
   await expect(page.locator('.lw-pattern-led-preview canvas')).toBeVisible();
   await expect(page.getByText('30 chip-ready / 30 on knob')).toBeVisible();
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
@@ -48,7 +50,7 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.getByTestId('card-startup-label')).toHaveText('Ocean');
 });
 
-test('v3 patterns saves section-specific combos that appear in Load', async ({ page }) => {
+test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
@@ -65,10 +67,11 @@ test('v3 patterns saves section-specific combos that appear in Load', async ({ p
   await page.getByTestId('save-current-combo').click();
 
   await expect(page.locator('.lw-saved-look-card', { hasText: 'Inner circle Ocean' })).toBeVisible();
-  await page.getByText('Load', { exact: true }).click();
+  await page.getByText('Settings', { exact: true }).click();
 
-  await expect(page.getByText('Sections in this load')).toBeVisible();
-  await expect(page.locator('section', { hasText: 'Sections in this load' }).getByText('Inner circle', { exact: true })).toBeVisible();
+  await expect(page.getByText('What the card will run')).toBeVisible();
+  await expect(page.locator('section', { hasText: 'What the card will run' }).getByText('Inner circle', { exact: true })).toBeVisible();
+  await page.getByText('Advanced').click();
   await expect(page.locator('textarea')).toContainText('"patternId": "ocean"');
 });
 
@@ -93,7 +96,8 @@ test('v3 patterns keeps separate unsaved section choices before saving the combo
 
   await page.getByTestId('save-current-combo').click();
   await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
-  await page.getByText('Load', { exact: true }).click();
+  await page.getByText('Settings', { exact: true }).click();
+  await page.getByText('Advanced').click();
 
   const config = JSON.parse(await page.locator('textarea').inputValue());
   const zonePatterns = Object.fromEntries(config.zones.map(zone => [zone.id, zone.patternId]));
@@ -226,8 +230,14 @@ test('v3 tuning controls show immediate values and send card-ready color modifie
   await page.locator('button[data-pattern-id="ocean"]').click();
   await expect.poll(() => controlRequests.length).toBe(1);
 
+  const tunedPreviewLed = page.locator('.lw-patterns-aside .lw-look-preview.is-large .lw-look-led-field i').first();
+  const initialLedColor = await tunedPreviewLed.evaluate(node => getComputedStyle(node).getPropertyValue('--led-color').trim());
+
   await setRangeValue(page.getByTestId('look-hue-slider'), '160');
   await expect(page.getByTestId('look-hue-readout')).toHaveText('226 deg');
+  await expect.poll(async () => (
+    await tunedPreviewLed.evaluate(node => getComputedStyle(node).getPropertyValue('--led-color').trim())
+  )).not.toBe(initialLedColor);
 
   await setRangeValue(page.getByTestId('look-saturation-slider'), '80');
   await expect(page.getByTestId('look-saturation-readout')).toHaveText('31%');

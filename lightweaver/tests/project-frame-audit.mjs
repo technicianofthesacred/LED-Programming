@@ -21,6 +21,7 @@ import {
   requestWledJson,
 } from '../src/lib/deviceController.js';
 import {
+  DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS,
   DEFAULT_WLED_APP_FLASH_ADDRESS,
   validateFlashPlan,
 } from '../src/lib/flashPlan.js';
@@ -1756,10 +1757,11 @@ assert.equal(
   'wss://lightweaver.local/api/wled/ws?ip=192.168.1.50',
 );
 assert.equal(DEFAULT_WLED_APP_FLASH_ADDRESS, '0x10000');
+assert.equal(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS, '0x0');
 assert.deepEqual(validateFlashPlan({ address: '0x10000', eraseAll: false }), { address: 0x10000 });
 assert.throws(
   () => validateFlashPlan({ address: '0x10000', eraseAll: true }),
-  /single WLED app binary cannot be flashed after erasing all flash/,
+  /merged factory image flashed at 0x0/,
 );
 assert.deepEqual(
   summarizeWledInfo({
