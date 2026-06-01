@@ -140,13 +140,40 @@ export function bootstrapCardBridgeFromOpener() {
   return true;
 }
 
-export function openCardBridge(rawHost = '') {
+function bridgeStudioUrl(rawHost = '', rawStudioUrl = '') {
+  const win = browserWindow();
+  const host = normalizeCardHost(rawHost || readStoredCardHost());
+  const fallback = win?.location?.href || 'https://led.mandalacodes.com/#screen=patterns';
+  const studio = new URL(rawStudioUrl || fallback, fallback);
+  studio.searchParams.set('cardBridge', '1');
+  studio.searchParams.set('cardHost', host);
+  studio.searchParams.set('studioTakeover', '1');
+  if (!studio.hash) studio.hash = '#screen=patterns';
+  return studio.href;
+}
+
+export function buildCardBridgeLaunchUrl(rawHost = '', rawStudioUrl = '') {
+  const host = normalizeCardHost(rawHost || readStoredCardHost());
+  const url = new URL(`${cardHostToUrl(host)}/`);
+  url.searchParams.set('studioAutoOpen', '1');
+  url.searchParams.set('studioUrl', bridgeStudioUrl(host, rawStudioUrl));
+  url.hash = '#studioBridge=1';
+  return url.href;
+}
+
+export function openCardBridge(rawHost = '', {
+  autoOpenStudio = false,
+  studioUrl = '',
+} = {}) {
   const win = browserWindow();
   if (!win?.open) return null;
   attachCardBridgeListener();
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const origin = cardHostToUrl(host);
-  const opened = win.open(`${origin}/#studioBridge=1`, 'lightweaver-card-bridge');
+  const bridgeUrl = autoOpenStudio
+    ? buildCardBridgeLaunchUrl(host, studioUrl)
+    : `${origin}/#studioBridge=1`;
+  const opened = win.open(bridgeUrl, 'lightweaver-card-bridge');
   if (opened) {
     setBridgeState({ source: opened, origin, host, connected: false });
   }

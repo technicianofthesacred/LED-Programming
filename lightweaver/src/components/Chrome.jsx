@@ -234,18 +234,21 @@ export function StatusBar({ screen = 'patterns' }) {
       : bridgeConnected ? '● bridge' : cardConnected ? '● connected' : '○ disconnected';
   const cardStatusClass = cardRecovering ? 'warn' : cardConnected ? 'ok' : 'err';
   const cardActionLabel = cardStatus.checking && !cardConnected
-    ? directCardControl ? 'scan' : 'open card'
+    ? directCardControl ? 'scan' : 'handoff'
     : cardRecovering
-      ? directCardControl ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3` : 'open card'
-      : bridgeConnected ? 'ready' : cardConnected ? 'recheck' : directCardControl ? 'reconnect' : 'open card';
+      ? directCardControl ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3` : 'handoff'
+      : bridgeConnected ? 'ready' : cardConnected ? 'recheck' : directCardControl ? 'reconnect' : 'handoff';
   const cardTitle = directCardControl
     ? 'Click to run a deeper reconnect. Lightweaver remembers working card addresses and keeps retrying in the background.'
-    : 'Public HTTPS browsers block direct local-card reconnects. Click to open the card page on your network.';
+    : 'Public HTTPS browsers block direct local-card reconnects. Click to open the local card bridge and hand Studio to it.';
   const handleCardReconnect = async () => {
     setCardHint('');
     if (!directCardControl) {
-      openCardBridge(cardHost);
-      setCardHint('bridge opened');
+      openCardBridge(cardHost, {
+        autoOpenStudio: true,
+        studioUrl: typeof window !== 'undefined' ? window.location.href : '',
+      });
+      setCardHint('handoff opened');
       return;
     }
     const result = await cardStatus.connect();

@@ -82,6 +82,11 @@ assert.match(
   /searchParams\.set\('cardHost',location\.host\)/,
   'simple local card page should rewrite cardHost to the actual local origin before embedding Studio',
 );
+assert.match(
+  web,
+  /studioAutoOpen/,
+  'card page should support public Studio opening the local card bridge and auto-launching the embedded Studio handoff',
+);
 assert.doesNotMatch(
   web,
   /Open Lightweaver app[^;]+rel='noopener'/,

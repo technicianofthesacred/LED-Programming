@@ -51,6 +51,7 @@ import {
   cardBridgeAutoPreviewEnabled,
   CARD_BRIDGE_CHANGED_EVENT,
   getCardBridgeState,
+  openCardBridge,
 } from '../lib/cardBridge.js';
 import { LEDPreview } from './Preview.jsx';
 
@@ -334,7 +335,7 @@ function TargetButton({
     <div
       role="button"
       tabIndex={0}
-      className={`lw-section-target ${active ? 'is-active' : ''}`}
+      className={`lw-section-target is-${target.kind} ${active ? 'is-active' : ''}`}
       onClick={onSelect}
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return;
@@ -346,17 +347,21 @@ function TargetButton({
       data-testid={`section-target-${target.id}`}
     >
       <span className="lw-section-target-main">
-        <input
-          className="lw-target-name-input"
-          value={target.label}
-          readOnly={readOnlyName}
-          aria-label={`${target.label} name`}
-          data-testid={`section-target-name-${target.id}`}
-          onClick={onInputClick}
-          onFocus={onSelect}
-          onChange={event => onNameChange?.(target, event.target.value)}
-        />
-        <span className="lw-target-led-row">
+        <label className="lw-target-edit-field lw-target-name-field">
+          <span>{readOnlyName ? 'Target' : 'Name'}</span>
+          <input
+            className="lw-target-name-input"
+            value={target.label}
+            readOnly={readOnlyName}
+            aria-label={`${target.label} name`}
+            data-testid={`section-target-name-${target.id}`}
+            onClick={onInputClick}
+            onFocus={onSelect}
+            onChange={event => onNameChange?.(target, event.target.value)}
+          />
+        </label>
+        <label className="lw-target-edit-field lw-target-led-field">
+          <span>{target.kind === 'all' ? 'Total LEDs' : 'LEDs'}</span>
           <input
             className="lw-target-led-input"
             type="number"
@@ -370,10 +375,12 @@ function TargetButton({
             onFocus={onSelect}
             onChange={event => onPixelCountChange?.(target, event.target.value)}
           />
-          <em>{target.kind === 'all' ? 'LEDs whole piece' : 'LEDs'}</em>
-        </span>
+        </label>
       </span>
-      <b>{pattern?.label || target.look?.patternId || 'Pattern'}</b>
+      <span className="lw-section-target-look">
+        <span>Pattern</span>
+        <b>{pattern?.label || target.look?.patternId || 'Pattern'}</b>
+      </span>
     </div>
   );
 }
@@ -1131,6 +1138,21 @@ export function PatternsScreen() {
     }
   };
 
+  const beginCardBridgeHandoff = () => {
+    setHandoffUrl('');
+    const opened = openCardBridge(cardHost, {
+      autoOpenStudio: true,
+      studioUrl: typeof window !== 'undefined' ? window.location.href : '',
+    });
+    if (opened) {
+      setStatusKind('');
+      setStatus(`Opening the local card bridge at ${cardHostToUrl(cardHost)}. Studio will take over the LEDs when it loads there.`);
+      return;
+    }
+    setStatusKind('err');
+    setStatus(`Could not open ${cardHostToUrl(cardHost)}. Allow popups or open the card from the bottom-left Card status.`);
+  };
+
   return (
     <div className="lw-patterns-screen">
       <div className="lw-patterns-shell">
@@ -1144,6 +1166,7 @@ export function PatternsScreen() {
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
+            <button type="button" className="btn" onClick={beginCardBridgeHandoff}>Connect through card</button>
             <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
           </div>
         </header>

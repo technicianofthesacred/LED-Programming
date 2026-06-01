@@ -114,7 +114,14 @@ String studioOpenScript() {
            "document.body.innerHTML='';"
            "document.body.appendChild(frame);"
            "return false"
-           "}");
+           "}"
+           "function lwMaybeAutoOpenStudio(){"
+           "try{const p=new URLSearchParams(location.search);"
+           "if(p.get('studioAutoOpen')==='1'){"
+           "const link=document.getElementById('studio-link');"
+           "const url=p.get('studioUrl')||(link&&link.href)||'';"
+           "if(url)setTimeout(()=>lwOpenStudio(null,url),80)"
+           "}}catch(_){}}");
 }
 
 String studioBridgeScript() {
@@ -360,6 +367,7 @@ void handleRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
+            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
@@ -667,6 +675,7 @@ void handleAdvancedRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
+            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"

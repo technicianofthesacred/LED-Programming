@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
   isCardBridgeLaunch,
@@ -30,6 +31,21 @@ assert.equal(cardBridgeAutoPreviewEnabled(), false);
 globalThis.window.location.search = '?screen=patterns';
 assert.equal(isCardBridgeLaunch(), false);
 assert.equal(cardBridgeAutoPreviewEnabled(), false);
+
+const handoffUrl = buildCardBridgeLaunchUrl(
+  '192.168.18.70',
+  'https://led.mandalacodes.com/?deployCheck=123#screen=patterns',
+);
+const handoff = new URL(handoffUrl);
+assert.equal(handoff.origin, 'http://192.168.18.70');
+assert.equal(handoff.searchParams.get('studioAutoOpen'), '1');
+assert.equal(handoff.hash, '#studioBridge=1');
+const embeddedStudio = new URL(handoff.searchParams.get('studioUrl'));
+assert.equal(embeddedStudio.origin, 'https://led.mandalacodes.com');
+assert.equal(embeddedStudio.searchParams.get('cardBridge'), '1');
+assert.equal(embeddedStudio.searchParams.get('cardHost'), '192.168.18.70');
+assert.equal(embeddedStudio.searchParams.get('studioTakeover'), '1');
+assert.equal(embeddedStudio.hash, '#screen=patterns');
 
 const messages = [];
 const parentBridge = {

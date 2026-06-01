@@ -131,6 +131,54 @@ test('v3 patterns edits design target names and LED counts inline', async ({ pag
   expect(config.led.pixels).toBe(52);
 });
 
+test('v3 patterns lays out editable section targets in a compact desktop matrix', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const outer = page.getByTestId('section-target-patch-default-outer-circle');
+  const inner = page.getByTestId('section-target-patch-default-inner-circle');
+  const outerBox = await outer.boundingBox();
+  const innerBox = await inner.boundingBox();
+  expect(outerBox).not.toBeNull();
+  expect(innerBox).not.toBeNull();
+  expect(innerBox!.x).toBeGreaterThan(outerBox!.x + 180);
+  expect(Math.abs(innerBox!.y - outerBox!.y)).toBeLessThan(12);
+  await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toBeEditable();
+  await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toBeEditable();
+});
+
+test('v3 patterns can start the local card bridge handoff from the hosted web interface', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    (window as any).__lwOpened = [];
+    window.open = ((url: string, name: string) => {
+      (window as any).__lwOpened.push({ url, name });
+      return { postMessage() {} } as any;
+    }) as any;
+  });
+
+  await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect through card' }).click();
+
+  const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
+  expect(opened.name).toBe('lightweaver-card-bridge');
+  const bridgeUrl = new URL(opened.url);
+  expect(bridgeUrl.origin).toBe('http://192.168.18.70');
+  expect(bridgeUrl.searchParams.get('studioAutoOpen')).toBe('1');
+  const studioUrl = new URL(bridgeUrl.searchParams.get('studioUrl') || '');
+  expect(studioUrl.origin).toBe(await page.evaluate(() => window.location.origin));
+  expect(studioUrl.searchParams.get('cardBridge')).toBe('1');
+  expect(studioUrl.searchParams.get('cardHost')).toBe('192.168.18.70');
+  expect(studioUrl.searchParams.get('studioTakeover')).toBe('1');
+  expect(studioUrl.hash).toBe('#screen=patterns');
+  await expect(page.locator('.lw-chip-status')).toContainText('Opening the local card bridge');
+});
+
 test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/zones', async route => {
@@ -436,6 +484,16 @@ test('v3 patterns can apply the split zone config, then live-preview each sectio
     splitConfigApplied = true;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
+  await page.route('http://lightweaver.local/api/firmware-info', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ outputs: [{ pin: 16, pixels: 44 }] }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/reboot', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
   await page.route('http://lightweaver.local/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
@@ -462,7 +520,7 @@ test('v3 patterns can apply the split zone config, then live-preview each sectio
     'patch-default-outer-circle': 'ocean',
     'patch-default-inner-circle': 'sparkle',
   });
-  await expect(page.locator('.lw-chip-status')).toContainText('Split preview is live');
+  await expect(page.locator('.lw-chip-status')).toContainText(/Split preview (is live|was saved)/);
 
   await page.getByTestId('section-target-patch-default-outer-circle').click();
   await page.locator('button[data-pattern-id="fire"]').click();

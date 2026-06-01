@@ -5405,7 +5405,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-target-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-content: start;
   gap: 6px;
   min-width: 0;
@@ -5425,19 +5425,28 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target {
   width: 100%;
   min-width: 0;
-  min-height: 50px;
+  min-height: 62px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(76px, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.26fr);
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: oklch(13% 0.012 250);
   color: var(--text-3);
-  padding: 8px 10px;
+  padding: 6px;
   text-align: left;
   cursor: pointer;
   transition: border-color 160ms ease-out, background 160ms ease-out, transform 160ms ease-out;
+}
+
+.lw-section-target:not(.is-all) {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+}
+
+.lw-section-target.is-all {
+  grid-column: 1 / -1;
 }
 
 .lw-section-target:hover {
@@ -5454,18 +5463,38 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target-main {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.24fr);
+  gap: 6px;
+}
+
+.lw-target-edit-field {
+  min-width: 0;
+  display: grid;
   gap: 3px;
+}
+
+.lw-target-edit-field > span,
+.lw-section-target-look > span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .lw-target-name-input,
 .lw-target-led-input {
   width: 100%;
   min-width: 0;
-  border: 0;
-  background: transparent;
+  height: 30px;
+  border: 1px solid oklch(100% 0 0 / 0.1);
+  border-radius: 4px;
+  background: oklch(7% 0.01 255 / 0.55);
   color: var(--text);
   font: inherit;
   outline: none;
+  padding: 0 8px;
+  transition: border-color 160ms ease-out, background 160ms ease-out, color 160ms ease-out;
 }
 
 .lw-target-name-input {
@@ -5478,48 +5507,54 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-target-name-input:read-only {
   cursor: pointer;
+  color: var(--text-2);
 }
 
 .lw-target-name-input:not(:read-only):focus,
 .lw-target-led-input:focus {
+  border-color: oklch(76% 0.17 165 / 0.62);
+  background: oklch(16% 0.018 235 / 0.82);
   color: oklch(83% 0.15 170);
 }
 
-.lw-target-led-row {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-}
-
 .lw-target-led-input {
-  flex: 0 0 54px;
   color: var(--text-3);
   font-family: var(--mono-font);
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-xs);
+  text-align: right;
 }
 
 .lw-target-led-input:disabled {
   opacity: 0.58;
 }
 
-.lw-target-led-row em {
-  overflow: hidden;
-  color: var(--text-4);
-  font-size: var(--fs-2xs);
-  font-style: normal;
-  line-height: 1.1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.lw-section-target-look {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  align-self: stretch;
+  align-content: center;
+  padding-left: 6px;
+  border-left: 1px solid oklch(100% 0 0 / 0.08);
 }
 
-.lw-section-target b {
+.lw-section-target:not(.is-all) .lw-section-target-look {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 5px;
+  padding-left: 0;
+  border-top: 1px solid oklch(100% 0 0 / 0.08);
+  border-left: 0;
+}
+
+.lw-section-target-look b {
   min-width: 0;
   overflow: hidden;
   color: var(--text-2);
   font-size: var(--fs-xs);
   font-weight: 560;
-  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -7296,6 +7331,10 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
   .lw-combo-bench,
   .lw-pattern-browse-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .lw-target-grid {
     grid-template-columns: 1fr;
   }
 
