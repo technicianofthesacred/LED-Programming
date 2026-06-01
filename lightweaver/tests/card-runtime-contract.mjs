@@ -7,7 +7,11 @@ import {
   makeCardRuntimePackage,
 } from '../src/lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
-import { DEFAULT_STANDALONE_CONTROLS, DEFAULT_STANDALONE_LED } from '../src/lib/standaloneController.js';
+import {
+  DEFAULT_STANDALONE_CONTROLS,
+  DEFAULT_STANDALONE_LED,
+} from '../src/lib/standaloneController.js';
+import { defaultStandaloneController } from '../src/lib/projectModel.js';
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
@@ -44,6 +48,20 @@ const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
 assert.equal(fallback.piece.name, 'Bench Piece');
 assert.deepEqual(fallback.patterns.map(pattern => pattern.id), DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id));
+
+const cleanStudioController = defaultStandaloneController({
+  playlist: DEFAULT_CARD_PATTERN_BANK.map((pattern, index) => ({
+    id: pattern.id,
+    type: 'pattern',
+    patternId: pattern.id,
+    label: pattern.label,
+    enabled: true,
+    createdAt: index,
+  })),
+  controls: { encoder: { patternCycleIds: DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id) } },
+});
+assert.deepEqual(cleanStudioController.playlist, []);
+assert.deepEqual(cleanStudioController.controls.encoder.patternCycleIds, []);
 
 const pkg = makeCardRuntimePackage({
   projectName: 'Bench Piece',

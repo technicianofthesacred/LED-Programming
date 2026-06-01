@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
+import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { getCardPatternById, getCardPatternFingerprint } from '../lib/cardPatternBank.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
 import {
   derivePlaylistLookIds,
+  isImplicitDefaultPatternPlaylist,
   makeComboPlaylistItem,
   makePatternPlaylistItem,
   normalizeCardPlaylist,
@@ -129,7 +130,7 @@ function PlaylistRow({
         <button type="button" className="btn btn-ghost" disabled={index === count - 1} onClick={() => onMove(index, 1)}>Down</button>
         <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onFirst(index)}>Make first</button>
         <button type="button" className="btn btn-ghost" onClick={() => onDuplicate(index)}>Copy</button>
-        <button type="button" className="btn btn-ghost" disabled={count <= 1} onClick={() => onRemove(index)}>Remove</button>
+        <button type="button" className="btn btn-ghost" onClick={() => onRemove(index)}>Remove</button>
       </div>
     </article>
   );
@@ -152,21 +153,12 @@ export function PlaylistScreen() {
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
   const savedLookById = new Map(savedLooks.map(look => [look.id, look]));
-  const defaultLook = normalizeCardVisualLook(standaloneController?.defaultLook);
-  const controls = {
-    ...DEFAULT_CARD_CONTROLS,
-    ...(standaloneController?.controls || {}),
-    encoder: {
-      ...DEFAULT_CARD_CONTROLS.encoder,
-      ...(standaloneController?.controls?.encoder || {}),
-    },
-  };
-  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+  const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
+    ? []
+    : standaloneController?.playlist;
+  const playlist = normalizeCardPlaylist(rawPlaylist, {
     savedLooks,
-    fallbackPatternIds: [
-      defaultLook.patternId,
-      ...(Array.isArray(controls.encoder.patternCycleIds) ? controls.encoder.patternCycleIds : []),
-    ],
+    allowEmpty: true,
   });
   const runtimePackage = useMemo(
     () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
@@ -179,7 +171,7 @@ export function PlaylistScreen() {
   const writePlaylist = (nextItems, message = '') => {
     const normalized = normalizeCardPlaylist(nextItems, {
       savedLooks,
-      fallbackPatternIds: [defaultLook.patternId],
+      allowEmpty: true,
     });
     setStandaloneController(prev => {
       const current = prev || {};
@@ -233,7 +225,6 @@ export function PlaylistScreen() {
   };
 
   const removeItem = (index) => {
-    if (playlist.length <= 1) return;
     const item = playlist[index];
     const next = playlist.filter((_, itemIndex) => itemIndex !== index);
     writePlaylist(next, `${item?.label || 'Look'} removed from the playlist.`);

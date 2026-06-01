@@ -8,6 +8,7 @@ import {
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
 export const CARD_BRIDGE_APP = 'LightweaverCardBridge';
+export const LOCAL_CHIP_DEFAULT_KEY = 'lw_local_chip_default';
 
 let bridgeWindow = null;
 let bridgeOrigin = '';
@@ -20,6 +21,25 @@ const pending = new Map();
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
+}
+
+export function readLocalChipDefault() {
+  const win = browserWindow();
+  try {
+    return win?.localStorage?.getItem(LOCAL_CHIP_DEFAULT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function writeLocalChipDefault(enabled) {
+  const win = browserWindow();
+  try {
+    if (enabled) win?.localStorage?.setItem(LOCAL_CHIP_DEFAULT_KEY, '1');
+    else win?.localStorage?.removeItem(LOCAL_CHIP_DEFAULT_KEY);
+  } catch {
+    /* noop */
+  }
 }
 
 function dispatchBridgeChange() {

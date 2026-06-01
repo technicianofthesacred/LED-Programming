@@ -28,10 +28,14 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await expect(page.locator('.lw-look-card')).toHaveCount(30);
+  await expect(page.locator('.lw-look-grid')).toHaveAttribute('data-preview-mode', 'compact');
+  await expect(page.locator('.lw-look-card .lw-pattern-thumb')).toHaveCount(30);
+  await expect(page.locator('.lw-look-card .lw-look-led-field i')).toHaveCount(0);
   await expect(page.locator('.lw-look-orbit')).toHaveCount(0);
   await expect(page.locator('.lw-look-led-field i')).not.toHaveCount(0);
   await expect(page.locator('.lw-pattern-led-preview canvas')).toBeVisible();
-  await expect(page.getByText('30 chip-ready / 30 in playlist')).toBeVisible();
+  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
 
   await page.locator('button[data-pattern-id="ocean"]').click();
@@ -42,12 +46,60 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
+  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Save to card' }).click();
 
   await expect.poll(() => configRequests.length).toBe(1);
   expect(configRequests[0]).toMatchObject({ startupPatternId: 'ocean' });
   await expect(page.getByTestId('card-startup-label')).toHaveText('Ocean');
+});
+
+test('patterns only go on the knob after adding them to the playlist', async ({ page }) => {
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
+
+  await page.locator('.lw-look-card', { hasText: 'Ocean' }).locator('.lw-look-card-toggle input').check();
+  await expect(page.getByText('30 chip-ready / 1 in playlist')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Playlist', exact: true }).click();
+  await expect(page.locator('.lw-playlist-row')).toHaveCount(1);
+  await expect(page.locator('.lw-playlist-row').first()).toContainText('Ocean');
+});
+
+test('selected patterns can reset color and motion back to defaults', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
+  await setRangeValue(page.getByTestId('look-saturation-slider'), '80');
+  await setRangeValue(page.getByTestId('look-speed-slider'), '1.75');
+
+  await page.getByRole('button', { name: 'Reset pattern defaults' }).click();
+
+  await expect(page.getByTestId('look-hue-readout')).toHaveText('45 deg');
+  await expect(page.getByTestId('look-saturation-readout')).toHaveText('90%');
+  await expect(page.getByTestId('look-speed-readout')).toHaveText('1.00x');
+  await expect.poll(() => controlRequests.some(request => (
+    request.patternId === 'ocean' &&
+    request.hue === 32 &&
+    request.saturation === 230 &&
+    request.speed === 1
+  ))).toBe(true);
 });
 
 test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
@@ -64,8 +116,11 @@ test('v3 patterns saves section-specific combos that appear in Settings', async 
 
   await page.locator('button[data-pattern-id="ocean"]').click();
   await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
+  await expect(page.locator('.lw-look-card.is-previewing .lw-pattern-thumb')).toBeVisible();
+  await expect(page.locator('.lw-patterns-aside .lw-look-preview.is-large')).toBeVisible();
   await page.getByTestId('save-current-combo').click();
 
+  await expect(page.getByText('Compound patterns')).toBeVisible();
   await expect(page.locator('.lw-saved-look-card', { hasText: 'Inner circle Ocean' })).toBeVisible();
   await page.getByText('Settings', { exact: true }).click();
 
@@ -179,6 +234,30 @@ test('v3 patterns can start the local card bridge handoff from the hosted web in
   await expect(page.locator('.lw-chip-status')).toContainText('Opening the local card bridge');
 });
 
+test('v3 patterns can make the local chip the default control path', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    (window as any).__lwOpened = [];
+    window.open = ((url: string, name: string) => {
+      (window as any).__lwOpened.push({ url, name });
+      return { postMessage() {} } as any;
+    }) as any;
+  });
+
+  await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
+  const toggle = page.getByRole('button', { name: 'Use local chip by default' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+  await toggle.click();
+
+  await expect(page.getByRole('button', { name: 'Local chip default on' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_local_chip_default'))).toBe('1');
+  const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
+  expect(opened.name).toBe('lightweaver-card-bridge');
+  expect(new URL(opened.url).searchParams.get('studioAutoOpen')).toBe('1');
+  await expect(page.locator('.lw-chip-status')).toContainText('Local chip is now the default control path');
+});
+
 test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/zones', async route => {
@@ -255,7 +334,7 @@ test('playlist adds saved combos and loads the knob order as card looks', async 
   await page.locator('.lw-playlist-combo-pool button', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
   const comboRow = page.locator('.lw-playlist-row', { hasText: 'Outer circle Ocean + Inner circle Sparkle' });
   await expect(comboRow).toBeVisible();
-  await comboRow.getByRole('button', { name: 'Make first' }).click();
+  await expect(comboRow.getByRole('button', { name: 'Make first' })).toBeDisabled();
 
   await page.getByRole('button', { name: 'Load playlist to card' }).click();
   await expect.poll(() => configRequests.length).toBe(1);
@@ -278,6 +357,9 @@ test('playlist rows drag into knob-button order and load that order to the card'
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Aurora' }).click();
+  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Ocean' }).click();
+  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Plasma' }).click();
 
   await page.getByTestId('playlist-row-ocean').dragTo(page.getByTestId('playlist-row-aurora'));
 
@@ -287,8 +369,8 @@ test('playlist rows drag into knob-button order and load that order to the card'
   await expect.poll(() => configRequests.length).toBe(1);
 
   const config = configRequests[0] as any;
-  expect(config.looks.map(look => look.id).slice(0, 3)).toEqual(['ocean', 'aurora', 'plasma']);
-  expect(config.controls.encoder.patternCycleIds.slice(0, 3)).toEqual(['ocean', 'aurora', 'plasma']);
+  expect(config.looks.map(look => look.id)).toEqual(['ocean', 'aurora', 'plasma']);
+  expect(config.controls.encoder.patternCycleIds).toEqual(['ocean', 'aurora', 'plasma']);
   expect(config.startupPatternId).toBe('ocean');
 });
 

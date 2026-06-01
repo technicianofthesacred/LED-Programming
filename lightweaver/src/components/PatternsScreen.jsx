@@ -32,6 +32,7 @@ import {
 } from '../lib/sectionLookModel.js';
 import {
   derivePlaylistLookIds,
+  isImplicitDefaultPatternPlaylist,
   makeComboPlaylistItem,
   makePatternPlaylistItem,
   normalizeCardPlaylist,
@@ -52,6 +53,8 @@ import {
   CARD_BRIDGE_CHANGED_EVENT,
   getCardBridgeState,
   openCardBridge,
+  readLocalChipDefault,
+  writeLocalChipDefault,
 } from '../lib/cardBridge.js';
 import { LEDPreview } from './Preview.jsx';
 
@@ -484,6 +487,7 @@ export function PatternsScreen() {
   const [lookLabel, setLookLabel] = useState('');
   const [patternSearch, setPatternSearch] = useState('');
   const [patternCategory, setPatternCategory] = useState('all');
+  const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
   const bridgeAutoPreviewDone = useRef(false);
@@ -538,12 +542,12 @@ export function PatternsScreen() {
       ...(standaloneController?.controls?.encoder || {}),
     },
   };
-  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+  const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
+    ? []
+    : standaloneController?.playlist;
+  const playlist = normalizeCardPlaylist(rawPlaylist, {
     savedLooks,
-    fallbackPatternIds: [
-      savedGlobalLook.patternId,
-      ...(Array.isArray(controls.encoder.patternCycleIds) ? controls.encoder.patternCycleIds : []),
-    ],
+    allowEmpty: true,
   });
   const playlistIds = derivePlaylistLookIds(playlist);
   const playlistSummary = playlistLabels(playlist, 4).join(', ');
@@ -797,6 +801,10 @@ export function PatternsScreen() {
     if (push) scheduleLivePreview(nextLook, selectedTarget);
   };
 
+  const resetPatternDefaults = () => {
+    updatePreviewLook({ ...DEFAULT_TUNING, patternId: look.patternId });
+  };
+
   const updateGeometry = (settings) => {
     setSymSettings(prev => ({ ...(prev || {}), ...settings }));
   };
@@ -1029,7 +1037,7 @@ export function PatternsScreen() {
   const writePlaylist = (nextItems, message = '') => {
     const normalized = normalizeCardPlaylist(nextItems, {
       savedLooks,
-      fallbackPatternIds: [savedGlobalLook.patternId],
+      allowEmpty: true,
     });
     updateController({
       playlist: normalized,
@@ -1138,7 +1146,7 @@ export function PatternsScreen() {
     }
   };
 
-  const beginCardBridgeHandoff = () => {
+  const beginCardBridgeHandoff = ({ localDefault = false } = {}) => {
     setHandoffUrl('');
     const opened = openCardBridge(cardHost, {
       autoOpenStudio: true,
@@ -1146,11 +1154,25 @@ export function PatternsScreen() {
     });
     if (opened) {
       setStatusKind('');
-      setStatus(`Opening the local card bridge at ${cardHostToUrl(cardHost)}. Studio will take over the LEDs when it loads there.`);
+      setStatus(localDefault
+        ? `Local chip is now the default control path. Opening ${cardHostToUrl(cardHost)} so Studio can take over the LEDs there.`
+        : `Opening the local card bridge at ${cardHostToUrl(cardHost)}. Studio will take over the LEDs when it loads there.`);
       return;
     }
     setStatusKind('err');
     setStatus(`Could not open ${cardHostToUrl(cardHost)}. Allow popups or open the card from the bottom-left Card status.`);
+  };
+
+  const toggleLocalChipDefault = () => {
+    const next = !localChipDefault;
+    writeLocalChipDefault(next);
+    setLocalChipDefault(next);
+    if (next) {
+      beginCardBridgeHandoff({ localDefault: true });
+      return;
+    }
+    setStatusKind('ok');
+    setStatus('Local chip default is off. Studio will use direct local access when the browser allows it.');
   };
 
   return (
@@ -1166,7 +1188,15 @@ export function PatternsScreen() {
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
-            <button type="button" className="btn" onClick={beginCardBridgeHandoff}>Connect through card</button>
+            <button
+              type="button"
+              className={`btn ${localChipDefault ? 'btn-primary' : ''}`}
+              aria-pressed={localChipDefault}
+              onClick={toggleLocalChipDefault}
+            >
+              {localChipDefault ? 'Local chip default on' : 'Use local chip by default'}
+            </button>
+            <button type="button" className="btn" onClick={() => beginCardBridgeHandoff()}>Connect through card</button>
             <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
           </div>
         </header>
@@ -1296,10 +1326,10 @@ export function PatternsScreen() {
                   look={look}
                   previewing={look.patternId === pattern.id}
                   saved={savedTargetLook.patternId === pattern.id}
-                      inPlaylist={playlistContainsPattern(playlist, pattern.id)}
-                      livePreviewAvailable={livePreviewAvailable}
-                      onSelect={() => updatePreviewLook({ patternId: pattern.id })}
-                      onPlaylistChange={enabled => setPatternInPlaylist(pattern.id, enabled)}
+                  inPlaylist={playlistContainsPattern(playlist, pattern.id)}
+                  livePreviewAvailable={livePreviewAvailable}
+                  onSelect={() => updatePreviewLook({ patternId: pattern.id })}
+                  onPlaylistChange={enabled => setPatternInPlaylist(pattern.id, enabled)}
                 />
               ))}
               {!filteredPatterns.length && (
@@ -1418,7 +1448,7 @@ export function PatternsScreen() {
                 <label><input type="checkbox" checked={look.customDrift} onChange={event => updatePreviewLook({ customDrift: event.target.checked })}/> Drift</label>
               </div>
               <div className="lw-look-tune-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => updatePreviewLook(DEFAULT_TUNING)}>Reset</button>
+                <button type="button" className="btn btn-ghost" onClick={resetPatternDefaults}>Reset pattern defaults</button>
                 <button type="button" className="btn btn-ghost" onClick={() => updatePreviewLook(randomLookTuning())}>Randomize</button>
               </div>
             </Section>

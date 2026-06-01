@@ -7,6 +7,7 @@ const PATTERN_BY_ID = new Map(DEFAULT_CARD_PATTERN_BANK.map(pattern => [pattern.
 export function normalizeCardPlaylist(playlist = [], {
   savedLooks = [],
   fallbackPatternIds = [],
+  allowEmpty = false,
 } = {}) {
   const savedLookById = new Map((Array.isArray(savedLooks) ? savedLooks : [])
     .filter(Boolean)
@@ -58,7 +59,7 @@ export function normalizeCardPlaylist(playlist = [], {
   if (!normalized.length) {
     const fallbackIds = uniqueStrings(fallbackPatternIds).length
       ? uniqueStrings(fallbackPatternIds)
-      : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+      : allowEmpty ? [] : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
     fallbackIds.forEach((patternId, index) => pushPattern({ patternId }, index));
   }
 
@@ -73,6 +74,27 @@ export function playlistFromPatternCycleIds(patternCycleIds = [], {
       startupPatternId,
       ...(Array.isArray(patternCycleIds) ? patternCycleIds : []),
     ].filter(Boolean),
+  });
+}
+
+export function isDefaultPatternCycle(ids = []) {
+  const normalized = uniqueStrings(ids);
+  const defaults = DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+  return normalized.length === defaults.length && normalized.every((id, index) => id === defaults[index]);
+}
+
+export function isImplicitDefaultPatternPlaylist(playlist = []) {
+  const input = Array.isArray(playlist) ? playlist : [];
+  const defaults = DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+  if (input.length !== defaults.length) return false;
+  return input.every((item, index) => {
+    const patternId = sanitizeId(item?.patternId || item?.pattern || item?.preset || item?.id);
+    const createdAt = Number(item?.createdAt);
+    const defaultCreatedAt = !Number.isFinite(createdAt) || createdAt === index;
+    return patternId === defaults[index] &&
+      (!item?.type || item.type === 'pattern') &&
+      item?.enabled !== false &&
+      defaultCreatedAt;
   });
 }
 

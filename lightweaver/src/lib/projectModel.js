@@ -21,7 +21,12 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
 import { createDefaultPatchBoard } from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
-import { deriveLegacyPatternCycleIds, normalizeCardPlaylist } from './cardPlaylist.js';
+import {
+  deriveLegacyPatternCycleIds,
+  isDefaultPatternCycle,
+  isImplicitDefaultPatternPlaylist,
+  normalizeCardPlaylist,
+} from './cardPlaylist.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -53,13 +58,17 @@ export function defaultStandaloneController(overrides = {}) {
       ...(overrides.controls?.encoder || {}),
     },
   };
-  const hasConfiguredCycle = Array.isArray(overrides.controls?.encoder?.patternCycleIds) &&
-    overrides.controls.encoder.patternCycleIds.length > 0;
-  const playlist = normalizeCardPlaylist(overrides.playlist, {
+  const rawCycleIds = Array.isArray(overrides.controls?.encoder?.patternCycleIds)
+    ? overrides.controls.encoder.patternCycleIds
+    : [];
+  const hasConfiguredCycle = rawCycleIds.length > 0 && !isDefaultPatternCycle(rawCycleIds);
+  const rawPlaylist = isImplicitDefaultPatternPlaylist(overrides.playlist) ? [] : overrides.playlist;
+  const playlist = normalizeCardPlaylist(rawPlaylist, {
     savedLooks: looks,
     fallbackPatternIds: hasConfiguredCycle
-      ? [defaultLook.patternId, ...overrides.controls.encoder.patternCycleIds]
+      ? [defaultLook.patternId, ...rawCycleIds]
       : [],
+    allowEmpty: true,
   });
   return {
     runtimeMode,

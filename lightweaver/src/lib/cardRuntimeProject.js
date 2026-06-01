@@ -3,7 +3,12 @@ import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalSta
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
-import { derivePlaylistLookIds, normalizeCardPlaylist } from './cardPlaylist.js';
+import {
+  derivePlaylistLookIds,
+  isDefaultPatternCycle,
+  isImplicitDefaultPatternPlaylist,
+  normalizeCardPlaylist,
+} from './cardPlaylist.js';
 
 export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
@@ -26,13 +31,18 @@ export function buildCardRuntimePackageFromProject({
   });
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
-  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+  const legacyCycleIds = Array.isArray(standaloneController?.controls?.encoder?.patternCycleIds) &&
+    !isDefaultPatternCycle(standaloneController.controls.encoder.patternCycleIds)
+    ? standaloneController.controls.encoder.patternCycleIds
+    : [];
+  const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
+    ? []
+    : standaloneController?.playlist;
+  const playlist = normalizeCardPlaylist(rawPlaylist, {
     savedLooks,
     fallbackPatternIds: [
       visualLook.patternId,
-      ...(Array.isArray(standaloneController?.controls?.encoder?.patternCycleIds)
-        ? standaloneController.controls.encoder.patternCycleIds
-        : []),
+      ...legacyCycleIds,
     ],
   });
   const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
