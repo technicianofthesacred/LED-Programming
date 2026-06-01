@@ -25,6 +25,13 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
     configRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
+  await page.route('http://lightweaver.local/api/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
+    });
+  });
 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -56,6 +63,32 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect.poll(() => configRequests.length).toBe(1);
   expect(configRequests[0]).toMatchObject({ startupPatternId: 'ocean' });
   await expect(page.getByTestId('card-startup-label')).toHaveText('Ocean');
+});
+
+test('v3 patterns refuses to overwrite a larger card with the default layout', async ({ page }) => {
+  const configRequests: unknown[] = [];
+  await page.route('http://lightweaver.local/api/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, led: { pixels: 388 }, wifi: { ip: 'lightweaver.local' } }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Save to card' }).click();
+
+  await expect(page.locator('.lw-chip-status')).toContainText('Stopped before saving');
+  await expect(page.locator('.lw-chip-status')).toContainText('default 44-pixel layout');
+  await expect(page.locator('.lw-chip-status')).toContainText('card is configured for 388 pixels');
+  await expect.poll(() => configRequests.length).toBe(0);
 });
 
 test('patterns only go on the knob after adding them to the playlist', async ({ page }) => {
@@ -210,10 +243,10 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
     blackout: request.blackout,
     brightness: request.brightness,
   }))).toEqual([
-    { zone: 'patch-default-inner-circle', patternId: 'aurora', syncZones: false, blackout: false, brightness: 1 },
     { zone: 'patch-default-outer-circle', patternId: 'ocean', syncZones: false, blackout: false, brightness: 1 },
+    { zone: 'patch-default-inner-circle', patternId: 'aurora', syncZones: false, blackout: false, brightness: 1 },
   ]);
-  expect(controlRequests.at(-1)).toMatchObject({
+  expect(controlRequests[0]).toMatchObject({
     zone: 'patch-default-outer-circle',
     patternId: 'ocean',
     blackout: false,
@@ -720,6 +753,13 @@ test('v3 patterns can apply the split zone config, then live-preview each sectio
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ outputs: [{ pin: 16, pixels: 44 }] }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
     });
   });
   await page.route('http://lightweaver.local/api/reboot', async route => {

@@ -94,6 +94,8 @@ const PATTERN_CATEGORIES = [
 const SMALL_PREVIEW_LED_COUNT = 16;
 const LARGE_PREVIEW_LED_COUNT = 34;
 const RECOVERY_MIN_BRIGHTNESS = 0.65;
+const DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS = 100;
+const PATTERN_PREVIEW_MAX_POINTS = 384;
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -325,6 +327,49 @@ function makeVisibleRecoveryLook(look = {}) {
     brightness: Math.max(normalized.brightness || 0, RECOVERY_MIN_BRIGHTNESS),
     blackout: false,
   };
+}
+
+function runtimePackageLedPixels(runtimePackage = {}) {
+  const config = runtimePackage.config || runtimePackage;
+  const value = Number(config?.led?.pixels);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function shouldBlockDefaultLayoutOverwrite({ strips = [], runtimePackage = {}, cardStatus = null } = {}) {
+  const localPixels = runtimePackageLedPixels(runtimePackage);
+  const cardPixels = Number(cardStatus?.led?.pixels);
+  if (!Number.isFinite(cardPixels) || cardPixels <= 0 || localPixels <= 0) return false;
+  return isDefaultCircleLayout(strips) &&
+    localPixels <= DEFAULT_CIRCLE_TOTAL_PIXELS &&
+    cardPixels >= Math.max(DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS, localPixels * 2);
+}
+
+function downsamplePreviewPixels(pixels = [], budget = PATTERN_PREVIEW_MAX_POINTS) {
+  if (!Array.isArray(pixels) || pixels.length <= budget) return pixels || [];
+  const count = Math.max(1, Math.floor(budget));
+  if (count <= 1) return [pixels[0]].filter(Boolean);
+  const step = (pixels.length - 1) / (count - 1);
+  return Array.from({ length: count }, (_, index) => pixels[Math.min(pixels.length - 1, Math.round(index * step))]);
+}
+
+function downsamplePreviewStrips(strips = [], maxPoints = PATTERN_PREVIEW_MAX_POINTS) {
+  const total = strips.reduce((sum, strip) => sum + (Array.isArray(strip.pixels) ? strip.pixels.length : 0), 0);
+  if (total <= maxPoints) return strips;
+  let used = 0;
+  return strips.map((strip, index) => {
+    const pixels = Array.isArray(strip.pixels) ? strip.pixels : [];
+    if (!pixels.length) return strip;
+    const remaining = Math.max(1, maxPoints - used);
+    const proportionalBudget = Math.floor((pixels.length / total) * maxPoints);
+    const budget = index === strips.length - 1
+      ? remaining
+      : Math.max(1, Math.min(pixels.length, proportionalBudget));
+    used += Math.min(pixels.length, budget);
+    return {
+      ...strip,
+      pixels: downsamplePreviewPixels(pixels, budget),
+    };
+  });
 }
 
 function randomLookTuning() {
@@ -862,7 +907,7 @@ export function PatternsScreen() {
   ]);
 
   const previewStrips = useMemo(() => {
-    return (strips || []).map(strip => {
+    const sourcePreviewStrips = (strips || []).map(strip => {
       const stripTarget = effectiveSectionTargets.find(target => target.kind === 'section' && target.stripId === strip.id);
       const targetLook = selectedTarget?.kind === 'section' && selectedTarget?.stripId === strip.id
         ? look
@@ -875,6 +920,7 @@ export function PatternsScreen() {
         hueShift: targetLook.hueShift,
       };
     });
+    return downsamplePreviewStrips(sourcePreviewStrips);
   }, [draftDefaultLook, effectiveSectionTargets, look, selectedTarget, strips]);
 
   useEffect(() => {
@@ -1130,6 +1176,39 @@ export function PatternsScreen() {
     setStatus(`${saved?.label || 'Compound pattern'} saved to the pattern bank.`);
   };
 
+  const checkCardLayoutWriteSafety = async (runtimePackageForCard, actionLabel = 'saving') => {
+    const localPixels = runtimePackageLedPixels(runtimePackageForCard);
+    if (!isDefaultCircleLayout(strips) || localPixels > DEFAULT_CIRCLE_TOTAL_PIXELS) {
+      return { ok: true, host: cardHost };
+    }
+    const discovered = await discoverCardStatus({
+      preferredHost: cardHost,
+      timeoutMs: 650,
+      persist: true,
+    });
+    if (!discovered.connected) return { ok: true, host: cardHost };
+    if (discovered.host) {
+      setCardHost(discovered.host);
+      writeStoredCardHost(discovered.host);
+    }
+    if (!shouldBlockDefaultLayoutOverwrite({
+      strips,
+      runtimePackage: runtimePackageForCard,
+      cardStatus: discovered.status,
+    })) {
+      return { ok: true, host: discovered.host || cardHost };
+    }
+    const cardPixels = Number(discovered.status?.led?.pixels);
+    setStatusKind('err');
+    setStatus(`Stopped before ${actionLabel}: this project is still the default ${localPixels}-pixel layout, but the card is configured for ${cardPixels} pixels. Load the real project or set the LED counts before saving to the card.`);
+    return {
+      ok: false,
+      host: discovered.host || cardHost,
+      localPixels,
+      cardPixels,
+    };
+  };
+
   const applySplitPreviewToCard = async () => {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
@@ -1144,7 +1223,9 @@ export function PatternsScreen() {
     setStatusKind('');
     setStatus(`Applying split preview to ${cardHostToUrl(cardHost)}...`);
     try {
-      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
+      if (!safety.ok || sequence !== livePreviewSeq.current) return;
+      const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
       setPatchBoard(nextBoard);
       setStandaloneController(nextController);
       setDraftLooks({});
@@ -1155,7 +1236,7 @@ export function PatternsScreen() {
         return;
       }
       const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
-      await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
+      await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
       if (sequence !== livePreviewSeq.current) return;
       setStatusKind('ok');
       setStatus('Split preview is live on the card. Section taps now target Outer and Inner separately.');
@@ -1177,9 +1258,8 @@ export function PatternsScreen() {
       return;
     }
 
-    const { nextLook, nextBoard, nextController: savedController } = commitCurrentLook({});
+    const { nextLook, nextBoard, nextController: savedController } = buildCurrentHardwareState({ saveNamedLook: true });
     const nextController = promotePatternFirst(savedController, nextLook.patternId);
-    setStandaloneController(nextController);
     const nextPackage = buildCardRuntimePackageFromProject({
       projectName,
       strips,
@@ -1190,14 +1270,20 @@ export function PatternsScreen() {
     setStatusKind('');
     setStatus(`Saving ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} to ${cardHostToUrl(cardHost)}...`);
     try {
-      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      const safety = await checkCardLayoutWriteSafety(nextPackage, 'saving');
+      if (!safety.ok) return;
+      setPatchBoard(nextBoard);
+      setStandaloneController(nextController);
+      setDraftLooks({});
+      setLookLabel('');
+      const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
       if (response.rebooting) {
         setStatusKind('ok');
         setStatus('Saved on the card. The card is rebooting now so the LED output layout takes effect.');
         return;
       }
       const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
-      await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
+      await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
       setStatusKind('ok');
       setStatus('Saved on the card. This is now the startup look and playlist config.');
     } catch (error) {
@@ -1327,6 +1413,12 @@ export function PatternsScreen() {
           standaloneController: nextController,
         });
         setStatus('The card was missing section zones. Saving the current card layout, then trying the lights again...');
+        const safety = await checkCardLayoutWriteSafety(nextPackage, 'recovering lights');
+        if (!safety.ok) {
+          setRecoveringLights(false);
+          return;
+        }
+        recoveryHost = safety.host || recoveryHost;
         const configResponse = await pushConfigToCard(nextPackage, { host: recoveryHost, timeoutMs: 6000, reboot: 'if-needed' });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
@@ -1435,15 +1527,17 @@ export function PatternsScreen() {
       patchBoard: nextBoard,
       standaloneController: nextController,
     });
-    setPatchBoard(nextBoard);
-    setStandaloneController(nextController);
-    setDraftLooks({});
-    setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
     setHandoffUrl('');
     setStatusKind('');
     setStatus(`Loading ${savedLook.label} to ${cardHostToUrl(cardHost)}...`);
     try {
-      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      const safety = await checkCardLayoutWriteSafety(nextPackage, 'loading this look');
+      if (!safety.ok) return;
+      setPatchBoard(nextBoard);
+      setStandaloneController(nextController);
+      setDraftLooks({});
+      setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+      const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
       setStatusKind('ok');
       setStatus(response.rebooting
         ? `${savedLook.label} loaded. The card is rebooting so the LED layout takes effect.`
@@ -1611,7 +1705,9 @@ export function PatternsScreen() {
             <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
               <span className="lw-action-group-label">Card</span>
               <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
-              <button type="button" className="btn lw-recover-lights-btn" onClick={recoverLightsOnCard}>Recover lights</button>
+              <button type="button" className="btn lw-recover-lights-btn" onClick={recoverLightsOnCard} disabled={recoveringLights}>
+                {recoveringLights ? 'Recovering...' : 'Recover lights'}
+              </button>
             </div>
             <div className="lw-action-group" aria-label="Section layout">
               <span className="lw-action-group-label">Section layout</span>
@@ -1766,7 +1862,7 @@ export function PatternsScreen() {
                 <LEDPreview
                   patternId={previewPatternId}
                   playing={true}
-                  speed={look.speed}
+                  speed={1}
                   glow={1.1}
                   dotSize={3.2}
                   strips={previewStrips}

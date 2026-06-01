@@ -40,6 +40,42 @@ assert.match(
 
 assert.match(
   main,
+  /handleLightweaverWeb\(\);\s*if \(!recoveryHoldActive\)/,
+  'firmware loop should service web recovery before draining live stream inputs',
+);
+
+assert.match(
+  main,
+  /recoveryHoldUntilMs = millis\(\) \+ 5000;/,
+  'recover-lights should hold internal recovery output long enough to beat stale live streams',
+);
+
+assert.match(
+  main,
+  /recoveryBrightnessBypassUntilMs = millis\(\) \+ 5000;/,
+  'recover-lights should bypass the physical brightness knob briefly during recovery',
+);
+
+assert.match(
+  main,
+  /bool isRecoveryPresetPattern\(const String& id\)/,
+  'recover-lights should explicitly recognize solid recovery presets',
+);
+
+assert.match(
+  main,
+  /renderRecoveryPattern\(id, leds, totalPixels, millis\(\), mods\)/,
+  'recover-lights should render the requested recovery pattern directly instead of relying on sequence mode',
+);
+
+assert.match(
+  main,
+  /if \(isRecoveryPresetPattern\(id\)\) return renderPresetPattern\(id, target, count, mods\);/,
+  'recover-lights should render warm-white and solid test colors as presets before procedural fallback',
+);
+
+assert.match(
+  main,
   /brightnessByte/,
   'recover diagnostics should report the final FastLED brightness byte',
 );

@@ -74,6 +74,9 @@ float manualSpeed = 1.0f;
 int16_t manualHueShift = 0;
 bool identifyActive = false;
 uint32_t identifyStartedAt = 0;
+uint32_t recoveryHoldUntilMs = 0;
+uint32_t recoveryBrightnessBypassUntilMs = 0;
+String recoveryPatternId = "warm-white";
 
 // Custom-color (Color tile) state
 uint8_t customHue = 32;          // 0..255 (FastLED hue space)
@@ -97,6 +100,8 @@ bool renderCurrentLook(bool force = false);
 bool renderSequenceFrame(bool force = false);
 bool renderProceduralFrame(const String& preset);
 bool renderPresetFrame(const String& preset);
+bool isRecoveryPresetPattern(const String& id);
+bool renderRecoveryPattern(const String& id, CRGB* target, uint16_t count, uint32_t now, const PatternModifiers& mods);
 void applyLookToRuntimeZones(const LookConfig& look);
 void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone);
 CRGB colorForPreset(const String& preset);
@@ -172,11 +177,15 @@ void setup() {
 }
 
 void loop() {
-  handleWledRealtime();
-  handleArtnet();
-  handleWledWebSocket();
-  frameSourceTick();
+  uint32_t now = millis();
+  bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
+  if (!recoveryHoldActive) {
+    handleWledRealtime();
+    handleArtnet();
+    handleWledWebSocket();
+  }
+  frameSourceTick();
 
   if (errorCode != ERROR_NONE) {
     FastLED.clear(true);
@@ -217,6 +226,19 @@ void loop() {
   }
 
   if (blackedOut) {
+    delay(10);
+    return;
+  }
+
+  if (recoveryHoldActive) {
+    PatternModifiers mods;
+    mods.speed = 1.0f;
+    mods.customHue = 32;
+    mods.customSaturation = 230;
+    bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
+    if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
+    FastLED.setBrightness(computeBrightnessByte());
+    showLeds();
     delay(10);
     return;
   }
@@ -730,6 +752,27 @@ bool renderPresetFrame(const String& preset) {
   return renderPresetPattern(preset, leds, totalPixels, mods);
 }
 
+bool isRecoveryPresetPattern(const String& id) {
+  return id == "warm-white" ||
+         id == "cool-white" ||
+         id == "photo-white" ||
+         id == "blackout" ||
+         id == "off" ||
+         id == "test-red" ||
+         id == "red" ||
+         id == "test-green" ||
+         id == "green" ||
+         id == "test-blue" ||
+         id == "blue";
+}
+
+bool renderRecoveryPattern(const String& id, CRGB* target, uint16_t count, uint32_t now, const PatternModifiers& mods) {
+  if (isRecoveryPresetPattern(id)) return renderPresetPattern(id, target, count, mods);
+  bool rendered = renderProceduralPattern(id, target, count, now, mods);
+  if (!rendered) rendered = renderPresetPattern(id, target, count, mods);
+  return rendered;
+}
+
 CRGB colorForPreset(const String& preset) {
   if (preset == "blackout" || preset == "off") return CRGB::Black;
   if (preset == "test-red" || preset == "red") return CRGB::Red;
@@ -792,7 +835,8 @@ bool isValidLedColorOrder(const String& order) {
 uint8_t computeBrightnessByte() {
   if (blackedOut) return 0;
   float lookBrightness = lookCount ? looks[currentLookIndex].brightness : 0.35f;
-  float brightness = clampUnit(brightnessLimit) * clampUnit(lookBrightness) * clampUnit(fadeScale) * readBrightnessKnob() * clampUnit(manualBrightness);
+  float knob = int32_t(recoveryBrightnessBypassUntilMs - millis()) > 0 ? 1.0f : readBrightnessKnob();
+  float brightness = clampUnit(brightnessLimit) * clampUnit(lookBrightness) * clampUnit(fadeScale) * knob * clampUnit(manualBrightness);
   return uint8_t(roundf(clampUnit(brightness) * 255.0f));
 }
 
@@ -1134,6 +1178,9 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
   if (visibleBrightness > 1.0f) visibleBrightness = 1.0f;
   if (brightnessLimit < 0.65f) brightnessLimit = 0.65f;
 
+  recoveryPatternId = id;
+  recoveryHoldUntilMs = millis() + 5000;
+  recoveryBrightnessBypassUntilMs = millis() + 5000;
   frameSourceCancelStream();
   blackedOut = false;
   fadeScale = 1.0f;
@@ -1163,7 +1210,11 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     zone.blackout = false;
   }
 
-  bool rendered = renderCurrentLook(true);
+  PatternModifiers mods;
+  mods.speed = 1.0f;
+  mods.customHue = 32;
+  mods.customSaturation = 230;
+  bool rendered = renderRecoveryPattern(id, leds, totalPixels, millis(), mods);
   if (!rendered && totalPixels > 0) {
     fill_solid(leds, totalPixels, CRGB(255, 220, 170));
   }
@@ -1199,6 +1250,8 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
   diagnostics["blackout"] = blackedOut;
   diagnostics["streaming"] = frameSourceIsStreaming();
   diagnostics["syncZones"] = runtimeConfig.syncZones;
+  diagnostics["recoveryHoldMs"] = int32_t(recoveryHoldUntilMs - millis()) > 0 ? recoveryHoldUntilMs - millis() : 0;
+  diagnostics["brightnessBypassMs"] = int32_t(recoveryBrightnessBypassUntilMs - millis()) > 0 ? recoveryBrightnessBypassUntilMs - millis() : 0;
   diagnostics["brightnessKnobPin"] = controls.brightness;
   diagnostics["brightnessKnob"] = readBrightnessKnob();
   JsonObject logical = diagnostics["firstLogicalPixel"].to<JsonObject>();

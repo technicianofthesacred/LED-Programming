@@ -326,6 +326,7 @@ export function LEDPreview({
   const previousPixelsRef = useRef(null);
   const fpsRef    = useRef({ count: 0, last: 0 });
   const staticRenderRef = useRef(0);
+  const lastRenderRef = useRef(0);
   const propsRef  = useRef({});
 
   const paletteNorm = useMemo(
@@ -480,6 +481,12 @@ export function LEDPreview({
     };
   }, []);
 
+  useEffect(() => {
+    previousPixelsRef.current = null;
+    staticRenderRef.current = 0;
+    lastRenderRef.current = 0;
+  }, [patternId, blendPatternId, pixelCount, svgViewBox, motionSmoothing]);
+
   // Single persistent RAF loop — never restarts, reads fresh propsRef each tick
   useEffect(() => {
     let last = performance.now();
@@ -506,13 +513,17 @@ export function LEDPreview({
         ? now - staticRenderRef.current >= minFrameMs
         : now - staticRenderRef.current > 250;
       if (canvas?.width && canvas?.height && shouldRender) {
+        const renderDt = lastRenderRef.current
+          ? Math.min((now - lastRenderRef.current) / 1000, 0.25)
+          : dt;
         const pixels = renderFrame(canvas, tRef.current, {
           ...p,
           previousPixels: previousPixelsRef.current,
-          frameDt: dt,
+          frameDt: renderDt,
         });
         previousPixelsRef.current = pixels;
         staticRenderRef.current = now;
+        lastRenderRef.current = now;
         if (p.playing) p.onFrame?.(pixels);
       }
 

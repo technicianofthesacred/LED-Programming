@@ -60,9 +60,29 @@ assert.match(
   'LEDPreview should throttle expensive canvas redraws when targetFps is lower than RAF',
 );
 assert.match(
+  previewSource,
+  /lastRenderRef/,
+  'LEDPreview should smooth motion with render-to-render delta when redraws are throttled',
+);
+assert.match(
   patternsSource,
   /targetFps=\{30\}/,
   'Patterns screen preview should cap redraws to 30fps so the editor stays responsive',
+);
+assert.match(
+  patternsSource,
+  /PATTERN_PREVIEW_MAX_POINTS = 384/,
+  'Patterns screen preview should cap rendered LED points instead of redrawing the full hardware count',
+);
+assert.match(
+  patternsSource,
+  /downsamplePreviewStrips/,
+  'Patterns screen preview should downsample dense hardware layouts for editor responsiveness',
+);
+assert.match(
+  patternsSource,
+  /speed=\{1\}/,
+  'Patterns screen should not apply the selected look speed twice to the preview renderer',
 );
 
 console.log('preview-animation tests passed');
