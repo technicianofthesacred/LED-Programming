@@ -1102,6 +1102,9 @@ String runtimeFirmwareInfo() {
   doc["controls"]["previous"] = controls.previous;
   doc["controls"]["next"] = controls.next;
   doc["controls"]["blackout"] = controls.blackout;
+  doc["controls"]["previousPressed"] = pinIsPressed(controls.previous);
+  doc["controls"]["nextPressed"] = pinIsPressed(controls.next);
+  doc["controls"]["blackoutPressed"] = pinIsPressed(controls.blackout);
   doc["controls"]["brightnessAnalog"] = controls.brightness;
   doc["controls"]["manualBrightness"] = manualBrightness;
   doc["controls"]["lastEvent"] = controlEventLabel(lastControlEvent);

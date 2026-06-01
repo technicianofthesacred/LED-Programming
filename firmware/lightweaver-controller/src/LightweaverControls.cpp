@@ -2,7 +2,14 @@
 
 namespace {
 constexpr int8_t ENCODER_EVENT_DELTA = 4;
-constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 48;
+constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 18;
+
+#ifndef LIGHTWEAVER_CONTROL_TEST
+volatile int8_t encoderInterruptDelta = 0;
+volatile uint8_t encoderInterruptLastState = 0;
+int encoderInterruptPinA = -1;
+int encoderInterruptPinB = -1;
+#endif
 
 bool validPin(int pin) {
   return pin >= 0;
@@ -40,6 +47,14 @@ uint8_t readEncoderState(const ControlsConfig& controls) {
   return static_cast<uint8_t>((a << 1) | b);
 }
 
+#ifndef LIGHTWEAVER_CONTROL_TEST
+uint8_t readEncoderInterruptState() {
+  uint8_t a = digitalRead(encoderInterruptPinA) == LOW ? 1 : 0;
+  uint8_t b = digitalRead(encoderInterruptPinB) == LOW ? 1 : 0;
+  return static_cast<uint8_t>((a << 1) | b);
+}
+#endif
+
 int8_t quadratureDelta(uint8_t previous, uint8_t current) {
   switch ((previous << 2) | current) {
     case 0b0001:
@@ -56,6 +71,58 @@ int8_t quadratureDelta(uint8_t previous, uint8_t current) {
       return 0;
   }
 }
+
+ControlEventType consumeEncoderDelta(const ControlsConfig& controls, ControlState& state, int8_t delta) {
+  if (delta == 0) return CONTROL_NONE;
+  state.encoderDelta += delta;
+  if (state.encoderDelta >= ENCODER_EVENT_DELTA) {
+    state.encoderDelta -= ENCODER_EVENT_DELTA;
+    return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_BRIGHTER : CONTROL_DIMMER;
+  }
+  if (state.encoderDelta <= -ENCODER_EVENT_DELTA) {
+    state.encoderDelta += ENCODER_EVENT_DELTA;
+    return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_DIMMER : CONTROL_BRIGHTER;
+  }
+  return CONTROL_NONE;
+}
+
+#ifndef LIGHTWEAVER_CONTROL_TEST
+void IRAM_ATTR handleEncoderInterrupt() {
+  if (!validPin(encoderInterruptPinA) || !validPin(encoderInterruptPinB)) return;
+  uint8_t current = readEncoderInterruptState();
+  int8_t delta = quadratureDelta(encoderInterruptLastState, current);
+  encoderInterruptLastState = current;
+  if (delta == 0) return;
+  int16_t nextDelta = int16_t(encoderInterruptDelta) + delta;
+  if (nextDelta > 48) nextDelta = 48;
+  if (nextDelta < -48) nextDelta = -48;
+  encoderInterruptDelta = int8_t(nextDelta);
+}
+
+void setupEncoderInterrupts(const ControlsConfig& controls, ControlState& state) {
+  if (validPin(encoderInterruptPinA)) detachInterrupt(digitalPinToInterrupt(encoderInterruptPinA));
+  if (validPin(encoderInterruptPinB) && encoderInterruptPinB != encoderInterruptPinA) {
+    detachInterrupt(digitalPinToInterrupt(encoderInterruptPinB));
+  }
+  encoderInterruptPinA = controls.encoderA;
+  encoderInterruptPinB = controls.encoderB;
+  encoderInterruptLastState = state.encoderLastState;
+  encoderInterruptDelta = 0;
+  if (!validPin(encoderInterruptPinA) || !validPin(encoderInterruptPinB)) return;
+  attachInterrupt(digitalPinToInterrupt(encoderInterruptPinA), handleEncoderInterrupt, CHANGE);
+  if (encoderInterruptPinB != encoderInterruptPinA) {
+    attachInterrupt(digitalPinToInterrupt(encoderInterruptPinB), handleEncoderInterrupt, CHANGE);
+  }
+}
+
+int8_t takeEncoderInterruptDelta() {
+  noInterrupts();
+  int8_t delta = encoderInterruptDelta;
+  encoderInterruptDelta = 0;
+  interrupts();
+  return delta;
+}
+#endif
 }
 
 int effectiveEncoderPressAltPin(const ControlsConfig& controls) {
@@ -86,10 +153,19 @@ void setupLightweaverControls(const ControlsConfig& controls, ControlState& stat
   state.pressChangedAt = now;
   state.pressAltChangedAt = now;
   state.blackoutChangedAt = now;
+#ifndef LIGHTWEAVER_CONTROL_TEST
+  setupEncoderInterrupts(controls, state);
+#endif
 }
 
 ControlEventType pollLightweaverControls(const ControlsConfig& controls, ControlState& state) {
   int altPress = effectiveEncoderPressAltPin(controls);
+
+#ifndef LIGHTWEAVER_CONTROL_TEST
+  ControlEventType interruptEvent = consumeEncoderDelta(controls, state, takeEncoderInterruptDelta());
+  if (interruptEvent != CONTROL_NONE) return interruptEvent;
+#endif
+
   if (buttonPressed(controls.next, state.nextDown, state.nextRawDown, state.nextChangedAt, state.lastNextAt) ||
       buttonPressed(controls.encoderPress, state.pressDown, state.pressRawDown, state.pressChangedAt, state.lastPressAt) ||
       buttonPressed(altPress, state.pressAltDown, state.pressAltRawDown, state.pressAltChangedAt, state.lastPressAltAt)) {
@@ -109,15 +185,7 @@ ControlEventType pollLightweaverControls(const ControlsConfig& controls, Control
     int8_t delta = quadratureDelta(state.encoderLastState, nextState);
     state.encoderLastState = nextState;
     if (delta != 0) {
-      state.encoderDelta += delta;
-      if (state.encoderDelta >= ENCODER_EVENT_DELTA) {
-        state.encoderDelta = 0;
-        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_BRIGHTER : CONTROL_DIMMER;
-      }
-      if (state.encoderDelta <= -ENCODER_EVENT_DELTA) {
-        state.encoderDelta = 0;
-        return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_DIMMER : CONTROL_BRIGHTER;
-      }
+      return consumeEncoderDelta(controls, state, delta);
     }
   }
 

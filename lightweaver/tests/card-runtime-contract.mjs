@@ -41,14 +41,17 @@ assert.equal(normalized.led.colorOrder, 'RGB');
 assert.equal(normalized.led.brightnessLimit, 0.7);
 assert.equal(normalized.controls.encoder.press, 0);
 assert.deepEqual(normalized.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+assert.equal(normalized.controls.encoder.brightnessStep, 18);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.press, 0);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.alternatePress, 6);
+assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.brightnessStep, 18);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.brightness, -1);
 assert.equal(DEFAULT_STANDALONE_LED.colorOrder, 'RGB');
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
 assert.equal(fallback.piece.name, 'Bench Piece');
+assert.equal(fallback.controls.encoder.brightnessStep, 18);
 assert.deepEqual(fallback.patterns.map(pattern => pattern.id), DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id));
 
 const cleanStudioController = defaultStandaloneController({

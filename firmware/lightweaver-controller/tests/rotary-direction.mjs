@@ -8,9 +8,20 @@ import { fileURLToPath } from 'node:url';
 const repoDir = path.resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const sourceDir = path.join(repoDir, 'firmware/lightweaver-controller/src');
 const controlsSource = path.join(sourceDir, 'LightweaverControls.cpp');
+const storageSource = path.join(sourceDir, 'LightweaverStorage.cpp');
+const typesSource = path.join(sourceDir, 'LightweaverTypes.h');
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-rotary-direction-'));
 const includeDir = path.join(tmpDir, 'include');
 fs.mkdirSync(includeDir);
+
+const controlsText = fs.readFileSync(controlsSource, 'utf8');
+const storageText = fs.readFileSync(storageSource, 'utf8');
+const typesText = fs.readFileSync(typesSource, 'utf8');
+
+assert.match(controlsText, /MIN_VISIBLE_BRIGHTNESS_STEP\s*=\s*18/);
+assert.match(controlsText, /attachInterrupt/);
+assert.match(storageText, /controls\.brightnessStep\s*=\s*18/);
+assert.match(typesText, /uint8_t brightnessStep\s*=\s*18/);
 
 fs.writeFileSync(path.join(includeDir, 'Arduino.h'), `
 #pragma once
@@ -41,6 +52,8 @@ fs.writeFileSync(harness, `
 #include <iostream>
 #include <string>
 #include <vector>
+
+#define LIGHTWEAVER_CONTROL_TEST 1
 
 int pinValues[64];
 uint32_t fakeMillis = 1000;
@@ -198,11 +211,12 @@ int main() {
   assert(runPressSequence(6, 6, 0) == CONTROL_NEXT_LOOK);
   assert(runPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
   assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
-  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) >= 0.58f);
-  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) <= 0.60f);
-  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) <= 0.22f);
-  assert(applyRepeatedBrightness(0.4f, CONTROL_BRIGHTER, 18, 4) == 1.0f);
-  assert(applyRepeatedBrightness(0.4f, CONTROL_DIMMER, 18, 3) <= 0.03f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) >= 0.47f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) <= 0.48f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) >= 0.32f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) <= 0.33f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_BRIGHTER, 18, 9) == 1.0f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_DIMMER, 18, 6) <= 0.03f);
 
   return 0;
 }

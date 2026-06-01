@@ -56,5 +56,10 @@ assert.match(
   /doc\["controls"\]\["manualBrightness"\]\s*=\s*manualBrightness/,
   'firmware info should expose the live manual brightness value changed by the knob',
 );
+assert.match(
+  mainSource,
+  /doc\["controls"\]\["nextPressed"\]\s*=\s*pinIsPressed\(controls\.next\)/,
+  'firmware info should expose the raw next button state for false-trigger diagnostics',
+);
 
 console.log('runtime-color-order tests passed');
