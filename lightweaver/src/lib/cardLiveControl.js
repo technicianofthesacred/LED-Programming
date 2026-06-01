@@ -7,6 +7,7 @@ import {
 } from './cardConnection.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { CardPushError } from './cardPushClient.js';
+import { sendCardBridgeRequest } from './cardBridge.js';
 
 function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
@@ -61,6 +62,9 @@ async function postControlPayloadToHost(host, payload, options = {}) {
 }
 
 async function readCardZones(host, timeoutMs = 1200) {
+  if (isMixedContentBlocked()) {
+    return sendCardBridgeRequest('zones', {}, { host, timeoutMs });
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -82,6 +86,9 @@ function hasCardZones(zonesPayload) {
 }
 
 async function pushLivePreviewToHost(host, look, options = {}) {
+  if (isMixedContentBlocked()) {
+    return pushLivePreviewToBridge(host, look, options);
+  }
   let previewLook = look;
   let previewZoneFallback = null;
   if (options.fallbackMissingZoneToAll && look?.zone) {
@@ -124,6 +131,35 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   }
 }
 
+async function pushLivePreviewToBridge(host, look, options = {}) {
+  let previewLook = look;
+  let previewZoneFallback = null;
+  if (options.fallbackMissingZoneToAll && look?.zone) {
+    try {
+      const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
+      if (hasCardZones(zonesPayload) && !zoneExists(zonesPayload, String(look.zone))) {
+        const { zone: requestedZone, ...fallbackLook } = look;
+        previewLook = fallbackLook;
+        previewZoneFallback = {
+          requestedZone: String(requestedZone),
+          availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
+        };
+      }
+    } catch {
+      // Keep the original request so the bridge error path can report the
+      // actual handoff problem if the card page is not open or not updated.
+    }
+  }
+  const json = await sendCardBridgeRequest(
+    'control',
+    buildLivePreviewControlPayload(previewLook),
+    { host, timeoutMs: options.timeoutMs || 2500 },
+  );
+  return previewZoneFallback
+    ? { ...json, previewZoneFallback: true, ...previewZoneFallback }
+    : json;
+}
+
 function normalizedPreviewTargets(targets = []) {
   return Array.isArray(targets)
     ? targets
@@ -137,6 +173,9 @@ function normalizedPreviewTargets(targets = []) {
 }
 
 async function pushSectionPreviewToHost(host, targets = [], options = {}) {
+  if (isMixedContentBlocked()) {
+    return pushSectionPreviewToBridge(host, targets, options);
+  }
   const normalizedTargets = normalizedPreviewTargets(targets);
   const sectionTargets = normalizedTargets.filter(target => target.kind === 'section' && target.zone);
   const allTarget = normalizedTargets.find(target => target.kind === 'all') || normalizedTargets[0];
@@ -182,12 +221,60 @@ async function pushSectionPreviewToHost(host, targets = [], options = {}) {
   return { ok: true, zonesPreviewed: sectionTargets.length, results };
 }
 
+async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
+  const normalizedTargets = normalizedPreviewTargets(targets);
+  const sectionTargets = normalizedTargets.filter(target => target.kind === 'section' && target.zone);
+  const allTarget = normalizedTargets.find(target => target.kind === 'all') || normalizedTargets[0];
+
+  if (!sectionTargets.length) {
+    return allTarget
+      ? pushLivePreviewToBridge(host, { ...allTarget.look, syncZones: true }, options)
+      : { ok: true, zonesPreviewed: 0 };
+  }
+
+  let zonesPayload = null;
+  try {
+    zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
+  } catch {
+    zonesPayload = null;
+  }
+
+  if (hasCardZones(zonesPayload)) {
+    const missingZones = sectionTargets
+      .map(target => target.zone)
+      .filter(zoneId => !zoneExists(zonesPayload, zoneId));
+    if (missingZones.length) {
+      const fallback = allTarget || sectionTargets[0];
+      const response = await pushLivePreviewToBridge(host, { ...fallback.look, syncZones: true }, options);
+      return {
+        ...response,
+        previewZoneFallback: true,
+        requestedZones: sectionTargets.map(target => target.zone),
+        missingZones,
+        availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
+      };
+    }
+  }
+
+  const results = [];
+  for (const target of sectionTargets) {
+    results.push(await pushLivePreviewToBridge(
+      host,
+      { ...target.look, zone: target.zone, syncZones: false },
+      options,
+    ));
+  }
+  return { ok: true, zonesPreviewed: sectionTargets.length, results };
+}
+
 function normalizePreviewError(host, error) {
   if (error instanceof CardPushError) return error;
   if (isMixedContentBlocked()) {
     return new CardPushError(
       'mixed-content',
-      'Browser blocked the local card connection. Open the Studio from localhost or copy the config to the card page.',
+      error?.reason === 'bridge-missing' || error?.reason === 'bridge-timeout'
+        ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can use the card as a local bridge.'
+        : 'Browser blocked the local card connection. Open the Studio from localhost or copy the config to the card page.',
       error,
     );
   }
@@ -222,6 +309,13 @@ export async function pushLivePreviewToCard(look, options = {}) {
 export async function pushLiveHardwareToCard(settings, options = {}) {
   const host = options.host || readStoredCardHost();
   const payload = buildLiveHardwareControlPayload(settings);
+  if (isMixedContentBlocked()) {
+    try {
+      return await sendCardBridgeRequest('control', payload, { host, timeoutMs: options.timeoutMs || 2500 });
+    } catch (error) {
+      throw normalizePreviewError(host, error);
+    }
+  }
   try {
     return await postControlPayloadToHost(host, payload, options);
   } catch (error) {

@@ -38,6 +38,30 @@ assert.ok(
   web.includes("fetch('/api/config'"),
   'card page handoff should save the Studio package to the card from the card origin',
 );
+assert.match(
+  web,
+  /LightweaverStudioBridge/,
+  'card page should accept Studio bridge messages from the public HTTPS app',
+);
+assert.match(
+  web,
+  /LightweaverCardBridge/,
+  'card page should reply to Studio bridge messages after proxying local card commands',
+);
+assert.match(
+  web,
+  /cardBridge=1/,
+  'card page Open Studio link should hand the browser back with bridge mode enabled',
+);
+assert.ok(
+  (web.match(/Open Lightweaver Studio/g) || []).length >= 2,
+  'both local card pages should expose an Open Lightweaver Studio link',
+);
+assert.doesNotMatch(
+  web,
+  /Open Lightweaver app[^;]+rel='noopener'/,
+  'card page Open Studio link must preserve window.opener so Studio can use the card as a local bridge',
+);
 
 for (const route of ['/json/info', '/json/effects', '/json/palettes', '/json']) {
   assert.ok(

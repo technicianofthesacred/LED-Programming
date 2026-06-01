@@ -1,7 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
-import { canPushDirectlyToCard, cardHostToUrl } from '../lib/cardConnection.js';
+import { canPushDirectlyToCard } from '../lib/cardConnection.js';
+import {
+  bootstrapCardBridgeFromOpener,
+  CARD_BRIDGE_CHANGED_EVENT,
+  getCardBridgeState,
+  openCardBridge,
+} from '../lib/cardBridge.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -202,7 +208,15 @@ export function StatusBar({ screen = 'patterns' }) {
   const { wledConnected, wledIp, strips, lastSaved } = useProject();
   const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const cardStatus = useCardStatus({ enabled: directCardControl });
+  const [bridgeState, setBridgeState] = useState(getCardBridgeState);
   const [cardHint, setCardHint] = useState('');
+  useEffect(() => {
+    bootstrapCardBridgeFromOpener();
+    setBridgeState(getCardBridgeState());
+    const onBridgeChange = () => setBridgeState(getCardBridgeState());
+    window.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+    return () => window.removeEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+  }, []);
   useEffect(() => {
     if (!cardHint) return undefined;
     const timer = setTimeout(() => setCardHint(''), 2500);
@@ -210,27 +224,28 @@ export function StatusBar({ screen = 'patterns' }) {
   }, [cardHint]);
   const savedAgo = lastSaved ? Math.round((Date.now() - lastSaved) / 1000) : null;
   const totalLEDs = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
-  const cardConnected = cardStatus.connected || wledConnected;
-  const cardHost = cardStatus.connected ? cardStatus.host : (wledIp || cardStatus.host);
+  const bridgeConnected = !directCardControl && bridgeState.connected;
+  const cardConnected = cardStatus.connected || wledConnected || bridgeConnected;
+  const cardHost = bridgeConnected ? bridgeState.host : (cardStatus.connected ? cardStatus.host : (wledIp || cardStatus.host || bridgeState.host));
   const cardRecovering = Boolean(cardStatus.reconnecting) && !wledConnected;
   const cardLabel = cardStatus.checking && !cardConnected
     ? '◌ finding'
     : cardRecovering ? '◌ reconnecting'
-      : cardConnected ? '● connected' : '○ disconnected';
+      : bridgeConnected ? '● bridge' : cardConnected ? '● connected' : '○ disconnected';
   const cardStatusClass = cardRecovering ? 'warn' : cardConnected ? 'ok' : 'err';
   const cardActionLabel = cardStatus.checking && !cardConnected
     ? directCardControl ? 'scan' : 'open card'
     : cardRecovering
       ? directCardControl ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3` : 'open card'
-      : cardConnected ? 'recheck' : directCardControl ? 'reconnect' : 'open card';
+      : bridgeConnected ? 'ready' : cardConnected ? 'recheck' : directCardControl ? 'reconnect' : 'open card';
   const cardTitle = directCardControl
     ? 'Click to run a deeper reconnect. Lightweaver remembers working card addresses and keeps retrying in the background.'
     : 'Public HTTPS browsers block direct local-card reconnects. Click to open the card page on your network.';
   const handleCardReconnect = async () => {
     setCardHint('');
     if (!directCardControl) {
-      window.open(cardHostToUrl(cardHost), '_blank', 'noopener');
-      setCardHint('opened');
+      openCardBridge(cardHost);
+      setCardHint('bridge opened');
       return;
     }
     const result = await cardStatus.connect();

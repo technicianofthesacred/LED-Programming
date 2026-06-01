@@ -40,7 +40,6 @@ import {
   playlistLabels,
 } from '../lib/cardPlaylist.js';
 import {
-  canPushDirectlyToCard,
   cardHostToUrl,
   readStoredCardHost,
   writeStoredCardHost,
@@ -474,7 +473,7 @@ export function PatternsScreen() {
   const [patternCategory, setPatternCategory] = useState('all');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
-  const livePreviewAvailable = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
+  const livePreviewAvailable = true;
   const savedComboSeq = useRef(0);
 
   const savedGlobalLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
@@ -706,11 +705,6 @@ export function PatternsScreen() {
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
     if (!livePreviewEnabled) return;
     setHandoffUrl('');
-    if (!livePreviewAvailable) {
-      setStatusKind('err');
-      setStatus('The hosted HTTPS page cannot talk directly to local HTTP hardware. Open this Studio from localhost, or copy the config to the card page.');
-      return;
-    }
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
     const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
@@ -734,7 +728,7 @@ export function PatternsScreen() {
         if (sequence === livePreviewSeq.current) {
           setStatusKind('err');
           setStatus(error?.reason === 'mixed-content'
-            ? 'The hosted HTTPS page cannot talk directly to local HTTP hardware. Open this Studio from localhost, or copy the config to the card page.'
+            ? error.message
             : `Could not preview on the card at ${cardHostToUrl(cardHost)}.`);
         }
       }

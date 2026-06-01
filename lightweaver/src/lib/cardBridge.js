@@ -1,0 +1,203 @@
+import {
+  cardHostToUrl,
+  normalizeCardHost,
+  readStoredCardHost,
+  writeStoredCardHost,
+} from './cardConnection.js';
+
+export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
+export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
+export const CARD_BRIDGE_APP = 'LightweaverCardBridge';
+
+let bridgeWindow = null;
+let bridgeOrigin = '';
+let bridgeHost = '';
+let bridgeConnected = false;
+let bridgeLastSeenAt = 0;
+let bridgeSeq = 0;
+let listenerAttached = false;
+const pending = new Map();
+
+function browserWindow() {
+  return typeof window !== 'undefined' ? window : null;
+}
+
+function dispatchBridgeChange() {
+  const win = browserWindow();
+  if (!win?.dispatchEvent) return;
+  try {
+    win.dispatchEvent(new CustomEvent(CARD_BRIDGE_CHANGED_EVENT, { detail: getCardBridgeState() }));
+  } catch {
+    /* noop */
+  }
+}
+
+function setBridgeState({
+  source = bridgeWindow,
+  origin = bridgeOrigin,
+  host = bridgeHost,
+  connected = bridgeConnected,
+} = {}) {
+  if (source) bridgeWindow = source;
+  if (origin) bridgeOrigin = origin;
+  if (host) {
+    bridgeHost = normalizeCardHost(host);
+    writeStoredCardHost(bridgeHost);
+  }
+  bridgeConnected = Boolean(connected);
+  if (bridgeConnected) bridgeLastSeenAt = Date.now();
+  dispatchBridgeChange();
+}
+
+function hostFromOrigin(origin = '') {
+  try {
+    return normalizeCardHost(new URL(origin).host);
+  } catch {
+    return '';
+  }
+}
+
+function parseBridgeParams() {
+  const win = browserWindow();
+  if (!win?.location) return { enabled: false, host: '' };
+  const params = new URLSearchParams(win.location.search || '');
+  return {
+    enabled: params.get('cardBridge') === '1' || params.get('bridge') === 'card',
+    host: params.get('cardHost') || params.get('host') || '',
+  };
+}
+
+function handleBridgeMessage(event) {
+  const data = event?.data || {};
+  if (data.app !== CARD_BRIDGE_APP) return;
+
+  if (data.type === 'ready') {
+    setBridgeState({
+      source: event.source,
+      origin: event.origin,
+      host: data.host || hostFromOrigin(event.origin),
+      connected: true,
+    });
+    return;
+  }
+
+  const request = pending.get(data.id);
+  if (!request) return;
+  if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
+  if (request.origin && event.origin !== request.origin) return;
+
+  pending.delete(data.id);
+  clearTimeout(request.timer);
+
+  if (data.ok === false) {
+    const error = new Error(data.error || 'Card bridge request failed');
+    error.reason = data.reason || 'bridge';
+    request.reject(error);
+    return;
+  }
+
+  setBridgeState({
+    source: event.source,
+    origin: event.origin,
+    host: data.host || bridgeHost || hostFromOrigin(event.origin),
+    connected: true,
+  });
+  request.resolve(data.response ?? data.status ?? { ok: true });
+}
+
+export function attachCardBridgeListener() {
+  const win = browserWindow();
+  if (!win || listenerAttached) return;
+  win.addEventListener?.('message', handleBridgeMessage);
+  listenerAttached = true;
+}
+
+export function bootstrapCardBridgeFromOpener() {
+  const win = browserWindow();
+  attachCardBridgeListener();
+  if (!win?.opener) return false;
+  const params = parseBridgeParams();
+  if (!params.enabled && bridgeWindow) return true;
+  if (!params.enabled) return false;
+  const host = normalizeCardHost(params.host || readStoredCardHost());
+  setBridgeState({
+    source: win.opener,
+    origin: cardHostToUrl(host),
+    host,
+    connected: bridgeConnected,
+  });
+  return true;
+}
+
+export function openCardBridge(rawHost = '') {
+  const win = browserWindow();
+  if (!win?.open) return null;
+  attachCardBridgeListener();
+  const host = normalizeCardHost(rawHost || readStoredCardHost());
+  const origin = cardHostToUrl(host);
+  const opened = win.open(`${origin}/#studioBridge=1`, 'lightweaver-card-bridge');
+  if (opened) {
+    setBridgeState({ source: opened, origin, host, connected: false });
+  }
+  return opened;
+}
+
+export function getCardBridgeState() {
+  return {
+    connected: bridgeConnected,
+    host: bridgeHost || readStoredCardHost(),
+    origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
+    lastSeenAt: bridgeLastSeenAt,
+    open: Boolean(bridgeWindow),
+  };
+}
+
+export function hasCardBridge() {
+  bootstrapCardBridgeFromOpener();
+  return Boolean(bridgeWindow);
+}
+
+export function sendCardBridgeRequest(type, payload = {}, {
+  host = '',
+  timeoutMs = 3000,
+  reboot = undefined,
+} = {}) {
+  attachCardBridgeListener();
+  bootstrapCardBridgeFromOpener();
+  const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
+  const targetOrigin = cardHostToUrl(resolvedHost);
+  if (!bridgeWindow) {
+    const error = new Error('Open the card page once to let Studio use it as the local hardware bridge.');
+    error.reason = 'bridge-missing';
+    throw error;
+  }
+
+  if (!bridgeOrigin || bridgeOrigin !== targetOrigin) {
+    bridgeOrigin = targetOrigin;
+    bridgeHost = resolvedHost;
+  }
+
+  const id = `lw-bridge-${Date.now()}-${++bridgeSeq}`;
+  const message = {
+    app: STUDIO_BRIDGE_APP,
+    id,
+    type,
+    payload,
+    ...(reboot !== undefined ? { reboot } : {}),
+  };
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      const error = new Error('Timed out waiting for the card bridge.');
+      error.reason = 'bridge-timeout';
+      reject(error);
+    }, timeoutMs);
+    pending.set(id, { resolve, reject, timer, origin: targetOrigin });
+    bridgeWindow.postMessage(message, targetOrigin);
+  });
+}
+
+export function pingCardBridge(options = {}) {
+  return sendCardBridgeRequest('status', {}, options);
+}

@@ -224,4 +224,63 @@ assert.deepEqual(retryRequests.map(item => item.url), [
   'http://192.168.18.70/api/control',
 ]);
 
+const listeners = new Map();
+const bridgeMessages = [];
+const bridgeWindow = {
+  postMessage(message, targetOrigin) {
+    bridgeMessages.push({ message, targetOrigin });
+    setTimeout(() => {
+      listeners.get('message')?.({
+        origin: 'http://lightweaver.local',
+        source: bridgeWindow,
+        data: {
+          app: 'LightweaverCardBridge',
+          id: message.id,
+          ok: true,
+          response: { ok: true, bridged: true, patternId: message.payload?.patternId },
+        },
+      });
+    }, 0);
+  },
+};
+
+globalThis.window = {
+  location: {
+    protocol: 'https:',
+    search: '?cardBridge=1&cardHost=lightweaver.local',
+  },
+  opener: bridgeWindow,
+  localStorage: {
+    getItem: () => 'lightweaver.local',
+    setItem: () => {},
+  },
+  addEventListener(type, listener) {
+    listeners.set(type, listener);
+  },
+  removeEventListener(type, listener) {
+    if (listeners.get(type) === listener) listeners.delete(type);
+  },
+  dispatchEvent: () => {},
+};
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.detail = init.detail;
+  }
+};
+
+const bridgedPreview = await pushLivePreviewToCard({
+  patternId: 'ocean',
+}, {
+  host: 'lightweaver.local',
+  timeoutMs: 1000,
+});
+
+assert.equal(bridgedPreview.bridged, true);
+assert.equal(bridgedPreview.patternId, 'ocean');
+assert.equal(bridgeMessages[0].targetOrigin, 'http://lightweaver.local');
+assert.equal(bridgeMessages[0].message.app, 'LightweaverStudioBridge');
+assert.equal(bridgeMessages[0].message.type, 'control');
+assert.equal(bridgeMessages[0].message.payload.patternId, 'ocean');
+
 console.log('card-live-preview tests passed');

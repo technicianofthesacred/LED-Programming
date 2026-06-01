@@ -86,6 +86,47 @@ String escapeHtml(const String& in) {
   return out;
 }
 
+String cardBridgeHost(const RuntimeConfig& cfg) {
+  if (cfg.activeIp.length() > 0) return cfg.activeIp;
+  if (cfg.activeHostname.length() > 0) return cfg.activeHostname + ".local";
+  if (cfg.wifi.hostname.length() > 0) return cfg.wifi.hostname + ".local";
+  return "lightweaver.local";
+}
+
+String studioBridgeUrl(const RuntimeConfig& cfg) {
+  String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
+  url += cardBridgeHost(cfg);
+  url += "#screen=patterns";
+  return url;
+}
+
+String studioBridgeScript() {
+  String script;
+  script.reserve(2400);
+  script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com'];"
+              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o);"
+              "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge'},msg),ev.origin)}catch(_){}};"
+              "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',href:location.href,host:location.host},'*')}catch(_){}};"
+              "window.addEventListener('message',async ev=>{"
+                "const m=ev.data||{};"
+                "if(m.app!=='LightweaverStudioBridge'||!lwBridgeAllowed(ev.origin))return;"
+                "try{let response=null;"
+                  "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
+                  "else if(m.type==='zones'){response=await get('/api/zones')}"
+                  "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
+                  "else if(m.type==='control'){response=await post('/api/control',m.payload||{})}"
+                  "else if(m.type==='config'){"
+                    "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
+                    "response=await r.json().catch(()=>({ok:r.ok}));"
+                    "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
+                    "if(m.reboot===true||m.reboot==='if-needed'){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
+                  "}else{throw new Error('unknown bridge request')}"
+                  "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response})"
+                "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,error:e.message||String(e)})}"
+              "});");
+  return script;
+}
+
 void handleAdvancedRoot();
 
 void handleRoot() {
@@ -171,7 +212,8 @@ void handleRoot() {
             ".foot{display:flex;justify-content:space-between;align-items:center;padding:4px 4px 0}"
             ".off-btn{background:transparent;border:1px solid #333;color:#f4ede0;padding:8px 18px;border-radius:20px;font-size:12px;letter-spacing:1px;text-transform:uppercase;font-family:inherit;cursor:pointer}"
             ".off-btn.on{background:#c89b5c;color:#0a0a0a;border-color:#c89b5c}"
-            ".set-link{background:transparent;border:0;color:#5a5247;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;padding:8px 0}"
+            ".set-link{background:transparent;border:0;color:#5a5247;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;padding:8px 0;text-decoration:none}"
+            ".studio-link{color:#c89b5c}"
             ".set-link:active{color:#c89b5c}"
             ".handoff{background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:16px 18px;color:#f4ede0;font-size:14px;line-height:1.45}"
             ".handoff.ok{border-color:#7fb069;color:#7fb069}.handoff.err{border-color:#e07856;color:#e07856}"
@@ -258,6 +300,9 @@ void handleRoot() {
             "</div>"
             "<div class='foot'>"
               "<button class='off-btn' id='off-btn'>Off</button>"
+              "<a class='set-link studio-link' href='");
+  page += studioBridgeUrl(cfg);
+  page += F("' target='_blank'>Open Lightweaver Studio</a>"
               "<button class='set-link' id='set-toggle' type='button'>Settings</button>"
             "</div>"
             "<div class='drawer' id='drawer'>"
@@ -294,7 +339,9 @@ void handleRoot() {
             "<script>"
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
-            "const get=p=>fetch(p).then(r=>r.json());"
+            "const get=p=>fetch(p).then(r=>r.json());");
+  page += studioBridgeScript();
+  page += F(
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
@@ -585,7 +632,9 @@ void handleAdvancedRoot() {
               "</p>"
               "</div></details>");
 
-    page += F("<a class='link' href='https://led.mandalacodes.com' target='_blank' rel='noopener'>Open Lightweaver app →</a>");
+    page += F("<a class='link' href='");
+    page += studioBridgeUrl(cfg);
+    page += F("' target='_blank'>Open Lightweaver Studio \xE2\x86\x92</a>");
   }
 
   page += F("<div class='foot' id='foot'>");
@@ -596,7 +645,9 @@ void handleAdvancedRoot() {
   page += F("<script>"
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
-            "const get=p=>fetch(p).then(r=>r.json());"
+            "const get=p=>fetch(p).then(r=>r.json());");
+  page += studioBridgeScript();
+  page += F(
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"

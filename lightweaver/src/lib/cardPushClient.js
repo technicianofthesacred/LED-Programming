@@ -15,6 +15,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
+import { sendCardBridgeRequest } from './cardBridge.js';
 
 export function getCardHostname() {
   return readStoredCardHost();
@@ -172,10 +173,21 @@ function normalizeConfigPushError(host, err) {
 export async function pushConfigToCard(runtimePackage, options = {}) {
   const host = options.host || getCardHostname();
   if (isMixedContentBlocked()) {
-    throw new CardPushError(
-      'mixed-content',
-      'Browser blocked the connection (mixed content). Use the local card installer handoff.',
-    );
+    try {
+      return await sendCardBridgeRequest(
+        'config',
+        runtimePackage.config || runtimePackage,
+        { host, timeoutMs: options.timeoutMs || 6000, reboot: options.reboot },
+      );
+    } catch (err) {
+      throw new CardPushError(
+        'mixed-content',
+        err?.reason === 'bridge-missing' || err?.reason === 'bridge-timeout'
+          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the local bridge.'
+          : 'Browser blocked the connection (mixed content). Use the local card installer handoff.',
+        err,
+      );
+    }
   }
   try {
     return await postConfigToHost(host, runtimePackage, options);
