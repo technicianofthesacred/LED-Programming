@@ -618,6 +618,7 @@ function TargetButton({
 export function PatternsScreen() {
   const {
     projectName,
+    projectRevision,
     strips,
     setStrips,
     viewBox,
@@ -627,6 +628,7 @@ export function PatternsScreen() {
     setPatchBoard,
     standaloneController,
     setStandaloneController,
+    registerProjectSnapshotContributor,
     symSettings,
     setSymSettings,
   } = useProject();
@@ -643,6 +645,7 @@ export function PatternsScreen() {
   const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
+  const draftProjectSnapshotRef = useRef(project => project);
   const bridgeAutoPreviewDone = useRef(false);
   const initialEditPatternId = useRef(readInitialEditPatternId());
   const initialEditLookId = useRef(readInitialEditLookId());
@@ -862,6 +865,12 @@ export function PatternsScreen() {
     setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
   }, [sectionTargets, selectedTargetId]);
 
+  useEffect(() => {
+    setDraftLooks({});
+    setLookLabel('');
+    setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+  }, [projectRevision]);
+
   const updateController = (patch) => {
     setStandaloneController(prev => {
       const current = prev || {};
@@ -1057,6 +1066,27 @@ export function PatternsScreen() {
     });
     return { nextLook, nextBoard, nextController, nextTargets };
   };
+
+  draftProjectSnapshotRef.current = (project) => {
+    if (!Object.keys(draftLooks).length) return project;
+    const { nextBoard, nextController } = buildCurrentHardwareState();
+    return {
+      ...project,
+      layout: {
+        ...(project.layout || {}),
+        patchBoard: nextBoard,
+      },
+      devices: {
+        ...(project.devices || {}),
+        standaloneController: nextController,
+      },
+    };
+  };
+
+  useEffect(() => {
+    if (!registerProjectSnapshotContributor) return undefined;
+    return registerProjectSnapshotContributor((project) => draftProjectSnapshotRef.current(project));
+  }, [registerProjectSnapshotContributor]);
 
   const commitCurrentLook = ({ label = '' } = {}) => {
     const { nextLook, nextBoard, nextController } = buildCurrentHardwareState({ saveNamedLook: true, label });

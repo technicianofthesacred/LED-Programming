@@ -198,6 +198,39 @@ textarea,
 .lw-topbar-actions { display: flex; gap: var(--s-2); align-items: center; }
 .lw-topbar-actions .btn-ghost { padding: 5px 10px; }
 
+.lw-card-tools-menu {
+  position: relative;
+}
+
+.lw-card-tools-menu > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.lw-card-tools-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lw-card-tools-menu > div {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 3px;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: 0 12px 28px oklch(5% 0.01 250 / 0.32);
+}
+
+.lw-card-tools-menu > div .btn {
+  justify-content: flex-start;
+  width: 100%;
+}
+
 /* ── Left rail (mode nav) ───────────────────────────────────────── */
 .lw-main {
   display: grid;
@@ -4166,9 +4199,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     font-size: var(--fs-lg);
   }
 
-  .lw-projbreadcrumbs,
-  .lw-topbar-actions .btn:not(:first-child):not(:last-child) {
+  .lw-projbreadcrumbs {
     display: none;
+  }
+
+  .lw-topbar-actions {
+    gap: 2px;
+    overflow-x: auto;
+  }
+
+  .lw-topbar-actions .btn-ghost {
+    flex: 0 0 auto;
+    padding: 5px 7px;
   }
 
   .lw-main {
@@ -6713,8 +6755,15 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-chip-save-buttons {
   display: flex;
+  align-items: flex-end;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.lw-chip-save-buttons > .btn,
+.lw-chip-save-buttons > .btn-primary,
+.lw-card-tools-menu > summary {
+  white-space: nowrap;
 }
 
 .lw-chip-settings-metrics {

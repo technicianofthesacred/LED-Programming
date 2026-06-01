@@ -554,9 +554,9 @@ export function ChipScreen() {
         <section className="lw-chip-save-panel">
           <div className="lw-chip-save-copy">
             <span>{directPushAvailable ? 'local card write available' : 'copy or download mode'}</span>
-            <h2>Ready to save to card</h2>
+            <h2>Card connection</h2>
             <p>
-              Save this setup when the preview looks right.
+              Write this setup to the card, or keep a backup settings file.
             </p>
           </div>
           <div className="lw-chip-save-controls">
@@ -579,15 +579,20 @@ export function ChipScreen() {
                   Open card installer
                 </a>
               )}
-              <button className={`btn ${directPushAvailable ? '' : 'btn-primary'}`} onClick={copyConfig}>Copy settings</button>
               <button className="btn" onClick={async () => {
                 const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-card-settings.json`, configJson);
                 setStatusKind(ok ? 'ok' : 'err');
                 setStatus(ok ? 'Card settings download started.' : 'Could not start the card settings download.');
-              }}>Download</button>
-              <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card</button>
-              <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=flash'; }}>Flash chip</button>
-              <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=installer'; }}>Installer guide</button>
+              }}>Download backup</button>
+              <details className="lw-card-tools-menu">
+                <summary className="btn btn-ghost">More</summary>
+                <div>
+                  <button className="btn btn-ghost" onClick={copyConfig}>Copy settings</button>
+                  <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card page</button>
+                  <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=flash'; }}>Flash chip</button>
+                  <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=installer'; }}>Installer guide</button>
+                </div>
+              </details>
             </div>
           </div>
         </section>

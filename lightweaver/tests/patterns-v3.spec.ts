@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { createDefaultCircleLayout } from '../src/lib/defaultCircleLayout.js';
 import { createDefaultPatchBoard } from '../src/lib/patchBoard.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 async function setRangeValue(locator, value: string) {
   await locator.evaluate((node: HTMLInputElement, nextValue) => {
@@ -247,6 +250,42 @@ test('v3 patterns keeps separate unsaved section choices before saving the combo
   const zonePatterns = Object.fromEntries(config.zones.map(zone => [zone.id, zone.patternId]));
   expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
   expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
+});
+
+test('project download and open preserve Pattern screen draft section choices', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-pattern-project-'));
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });
+  });
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
+
+  const downloadEvent = page.waitForEvent('download');
+  await page.locator('.lw-topbar-actions').getByRole('button', { name: 'Download' }).click();
+  const download = await downloadEvent;
+  const projectPath = path.join(tmp, await download.suggestedFilename());
+  await download.saveAs(projectPath);
+
+  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  const innerPatch = projectData.layout.patchBoard.patches.find((patch: any) => patch.id === 'patch-default-inner-circle');
+  expect(innerPatch.playback.patternId).toBe('ocean');
+
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Aurora');
+
+  await page.locator('.lw-topbar-actions input[type="file"]').setInputFiles(projectPath);
+
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
 });
 
 test('v3 patterns edits design target names and LED counts inline', async ({ page }) => {

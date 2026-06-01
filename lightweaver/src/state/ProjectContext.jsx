@@ -105,6 +105,7 @@ export function resolveTimelineTargets(playhead, clips, strips = []) {
 
 export function ProjectProvider({ children }) {
   const defaults = createDefaultProject();
+  const projectSnapshotContributorsRef = useRef(new Set());
 
   // ── Layout ──────────────────────────────────────────────────────────────
   const [strips,    setStrips]    = useState(defaults.layout.strips);
@@ -348,6 +349,13 @@ export function ProjectProvider({ children }) {
 
   // ── Auto-save state ───────────────────────────────────────────────────────
   const [lastSaved, setLastSaved] = useState(null);
+  const registerProjectSnapshotContributor = useCallback((contributor) => {
+    if (typeof contributor !== 'function') return () => {};
+    projectSnapshotContributorsRef.current.add(contributor);
+    return () => {
+      projectSnapshotContributorsRef.current.delete(contributor);
+    };
+  }, []);
 
   const applyProject = useCallback((rawProject) => {
     const data = migrateProject(rawProject);
@@ -420,44 +428,57 @@ export function ProjectProvider({ children }) {
 
   // ── Debounced auto-save ───────────────────────────────────────────────────
   const saveTimerRef = useRef(null);
-  const serializeProject = useCallback(() => ({
-    version: PROJECT_VERSION,
-    name: projectName,
-    layout: {
-      strips, viewBox, svgText, hidden,
-      layers: layoutLayers,
-      density: layoutDensity,
-      pxPerMm: layoutPxPerMm,
-      editCounts: layoutEditCounts,
-      layerGroups: layoutLayerGroups,
-      layerOrder: layoutLayerOrder,
-      patchBoard: normalizePatchBoard(patchBoard, strips),
-    },
-    pattern: {
-      activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
-      masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
-      motionSmoothing,
-    },
-    show: {
-      clips: showClips,
-      transitions: showTransitions,
-      cues: showCues,
-      autoLanes,
-      duration: showDuration,
-    },
-    live: {
-      recording: liveRecording,
-      quantize: liveQuantize,
-    },
-    devices: {
-      wledIp,
-      segmentMap: wledSegmentMap,
-      physicalControls,
-      controllerProfiles,
-      activeControllerId,
-      standaloneController,
-    },
-  }), [
+  const serializeProject = useCallback(() => {
+    let project = {
+      version: PROJECT_VERSION,
+      name: projectName,
+      layout: {
+        strips, viewBox, svgText, hidden,
+        layers: layoutLayers,
+        density: layoutDensity,
+        pxPerMm: layoutPxPerMm,
+        editCounts: layoutEditCounts,
+        layerGroups: layoutLayerGroups,
+        layerOrder: layoutLayerOrder,
+        patchBoard: normalizePatchBoard(patchBoard, strips),
+      },
+      pattern: {
+        activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
+        masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
+        motionSmoothing,
+      },
+      show: {
+        clips: showClips,
+        transitions: showTransitions,
+        cues: showCues,
+        autoLanes,
+        duration: showDuration,
+      },
+      live: {
+        recording: liveRecording,
+        quantize: liveQuantize,
+      },
+      devices: {
+        wledIp,
+        segmentMap: wledSegmentMap,
+        physicalControls,
+        controllerProfiles,
+        activeControllerId,
+        standaloneController,
+      },
+    };
+
+    for (const contributor of projectSnapshotContributorsRef.current) {
+      try {
+        const nextProject = contributor(project);
+        if (nextProject && typeof nextProject === 'object') project = nextProject;
+      } catch (error) {
+        console.warn('Lightweaver project snapshot contributor failed', error);
+      }
+    }
+
+    return project;
+  }, [
     projectName, strips, viewBox, svgText, hidden, patchBoard,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
@@ -557,6 +578,7 @@ export function ProjectProvider({ children }) {
       // Project persistence
       serializeProject,
       loadProject,
+      registerProjectSnapshotContributor,
       newProject,
       lastSaved,
     }}>

@@ -34,10 +34,17 @@ export function TopBar() {
   }, [saveState]);
   const commitName = () => { if (nameVal.trim()) setProjectName(nameVal.trim()); setEditingName(false); };
 
+  const handleNewProject = () => {
+    if (window.confirm('Start a new project? Unsaved changes will be lost.')) {
+      writeActiveProjectLibraryRecordId('');
+      newProject();
+    }
+  };
+
   const handleSave = () => {
     try {
       saveCurrentProjectToLibrary(serializeProject());
-      setSaveState('saved');
+      setSaveState('saved in browser');
     } catch {
       setSaveState('save failed');
     }
@@ -46,7 +53,7 @@ export function TopBar() {
   const handleDownload = async () => {
     const data   = serializeProject();
     const ok = await downloadJsonFile(`${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`, data);
-    setSaveState(ok ? 'downloaded' : 'download failed');
+    setSaveState(ok ? 'file downloaded' : 'download failed');
   };
 
   const handleOpen = () => fileInputRef.current?.click();
@@ -91,20 +98,17 @@ export function TopBar() {
           <strong onDoubleClick={() => setEditingName(true)} title="Double-click to rename"
                   style={{ cursor: 'text' }}>{projectName || 'Untitled'}</strong>
         )}
-        <span className={`status-chip ${saveState !== 'ready' ? 'is-save-feedback' : ''} ${saveState.includes('failed') ? 'is-save-error' : ''}`}>
-          <span className="dot"/>{saveState}
-        </span>
+        {saveState !== 'ready' && (
+          <span className={`status-chip is-save-feedback ${saveState.includes('failed') ? 'is-save-error' : ''}`}>
+            <span className="dot"/>{saveState}
+          </span>
+        )}
       </div>
       <div className="lw-topbar-actions">
-        <button className="btn-ghost btn" onClick={() => {
-          if (window.confirm('Start a new project? Unsaved changes will be lost.')) {
-            writeActiveProjectLibraryRecordId('');
-            newProject();
-          }
-        }}>New</button>
-        <button className="btn-ghost btn" onClick={handleOpen}>Open</button>
-        <button className="btn-ghost btn" onClick={handleSave}>Save</button>
-        <button className="btn-ghost btn" onClick={handleDownload}>Download</button>
+        <button className="btn-ghost btn" onClick={handleSave}>Save project</button>
+        <button className="btn-ghost btn" onClick={handleOpen}>Load project</button>
+        <button className="btn-ghost btn" onClick={handleDownload}>Download file</button>
+        <button className="btn-ghost btn" onClick={handleNewProject}>New project</button>
         <input ref={fileInputRef} type="file" accept=".lw.json,.json"
                style={{ display: 'none' }} onChange={handleFileChange}/>
       </div>
