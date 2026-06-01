@@ -190,10 +190,15 @@ void handleRoot() {
             ".tile-edit{position:absolute;top:7px;right:7px;background:#c89b5c;color:#050505;border:0;border-radius:999px;padding:6px 9px;font-size:10px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;font-family:inherit;box-shadow:0 2px 8px rgba(0,0,0,0.35)}"
             ".tile .name{font-size:12px;font-weight:500;letter-spacing:0.2px;color:#f4ede0;text-align:center}"
             ".active-strip{background:#141414;border:1px solid #262626;border-radius:14px;padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}"
+            ".active-copy{flex:1;min-width:0}"
+            ".active-preview{width:64px;height:48px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#262626;border:1px solid #333}"
+            ".active-preview .sw,.active-preview .combo-sw{height:100%;border-radius:0}"
             ".active-strip .kicker{display:block;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:#9a8d75;margin-bottom:2px}"
             ".active-strip strong{font-size:18px;font-weight:600;line-height:1.1}"
             ".active-strip .studio-edit{background:#c89b5c;color:#050505;border:0;border-radius:999px;padding:10px 14px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;font-family:inherit;white-space:nowrap}"
             ".sw{height:54px;border-radius:6px;overflow:hidden;background-color:#262626;-webkit-transform:translateZ(0);transform:translateZ(0);will-change:background-position}"
+            ".combo-sw{height:54px;border-radius:6px;overflow:hidden;background:#262626;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px}"
+            ".combo-sw .sw{height:100%;border-radius:0}"
             ".sw-aurora{background-color:#2a8a9a;background-image:linear-gradient(90deg,#0a3a4a,#2a8a9a,#4ac0d0,#2a8a9a,#0a3a4a);background-size:200% 100%;animation:flow 6s linear infinite}"
             ".sw-plasma{background-color:#5390d9;background-image:linear-gradient(135deg,#7400b8,#5390d9,#06d6a0,#9bf6ff,#7400b8);background-size:200% 200%;animation:flow 6s linear infinite}"
             ".sw-fire{background-color:#cc2200;background-image:linear-gradient(0deg,#330000,#cc2200,#ff6600,#ffcc00,#fff);animation:flicker 1.2s ease-in-out infinite}"
@@ -292,7 +297,8 @@ void handleRoot() {
               "<button class='cancel' id='stream-cancel' type='button'>Cancel stream</button>"
             "</div>"
             "<div class='active-strip'>"
-              "<span><span class='kicker'>Selected pattern</span><strong id='active-name'>—</strong></span>"
+              "<span class='active-preview' id='active-preview'></span>"
+              "<span class='active-copy'><span class='kicker'>Selected pattern</span><strong id='active-name'>—</strong></span>"
               "<button class='studio-edit' id='edit-studio' type='button'>Edit in Studio</button>"
             "</div>"
             "<div class='color-panel' id='color-panel'>"
@@ -411,6 +417,8 @@ void handleRoot() {
             "$('h-slider').oninput=e=>{const v=parseInt(e.target.value,10);$('h-val').textContent=v;sendHueShift(v)};"
             // Hue helpers — FastLED hue 0..255 to CSS HSL deg 0..360
             "const hueToHsl=(h,s)=>{return 'hsl('+(h/255*360)+','+(s/255*100)+'%,50%)'};"
+            "const patternIdsFor=p=>{const z=Array.isArray(p&&p.zones)?p.zones.filter(x=>x&&x.patternId):[];return z.length?z.map(x=>x.patternId):[(p&&p.id)||'aurora']};"
+            "const swatchHtml=p=>{const ids=patternIdsFor(p).slice(0,4);if(ids.length>1)return '<div class=\"combo-sw\">'+ids.map(id=>'<span class=\"sw '+swClass(id)+'\"></span>').join('')+'</div>';const id=ids[0]||'aurora';let h='<div class=\"sw '+swClass(id)+'\"';if(id==='custom-color')h+=' style=\"background:'+hueToHsl(customHue,customSat)+'\"';return h+'></div>'};"
             "const renderColorPanel=()=>{"
               "$('color-swatch').style.background=hueToHsl(customHue,customSat);"
               "$('hue-val').textContent=customHue;"
@@ -433,13 +441,10 @@ void handleRoot() {
             "$('pal-cool').onclick=()=>setPalette(130,200);"
             "$('pal-rainbow').onclick=()=>setPalette(0,255);"
             // Pattern grid
-            "const renderPat=()=>{const g=$('grid');g.innerHTML='';const active=selectedPattern();$('active-name').textContent=active?active.label:'Choose a pattern';patterns.forEach(p=>{"
+            "const renderPat=()=>{const g=$('grid');g.innerHTML='';const active=selectedPattern();$('active-name').textContent=active?active.label:'Choose a pattern';$('active-preview').innerHTML=active?swatchHtml(active):'';patterns.forEach(p=>{"
               "const activeTile=p.id===currentId;"
               "const el=document.createElement('div');el.className='tile'+(activeTile?' active':'');"
-              "let swatchHtml='<div class=\"sw '+swClass(p.id)+'\"';"
-              "if(p.id==='custom-color')swatchHtml+=' style=\"background:'+hueToHsl(customHue,customSat)+'\"';"
-              "swatchHtml+='></div>';"
-              "el.innerHTML=swatchHtml+'<div class=\"name\">'+p.label+'</div>'+(activeTile?'<button class=\"tile-edit\" type=\"button\">Edit</button>':'');"
+              "el.innerHTML=swatchHtml(p)+'<div class=\"name\">'+p.label+'</div>'+(activeTile?'<button class=\"tile-edit\" type=\"button\">Edit</button>':'');"
               "const edit=el.querySelector('.tile-edit');if(edit)edit.onclick=e=>{e.stopPropagation();openPatternStudio(e,p.id)};"
               "el.onclick=async()=>{const wasActive=p.id===currentId;currentId=p.id;renderPat();showColorPanel(p.id==='custom-color');if(!wasActive)await post('/api/control',{patternId:p.id})};"
               "g.appendChild(el)"
@@ -987,6 +992,13 @@ void handlePatterns() {
     p["id"] = cfg.looks[i].id;
     p["label"] = cfg.looks[i].label;
     p["mode"] = cfg.looks[i].mode;
+    JsonArray zones = p["zones"].to<JsonArray>();
+    for (uint8_t zoneIndex = 0; zoneIndex < cfg.looks[i].zoneCount; zoneIndex++) {
+      JsonObject z = zones.add<JsonObject>();
+      z["id"] = cfg.looks[i].zones[zoneIndex].id;
+      z["label"] = cfg.looks[i].zones[zoneIndex].label;
+      z["patternId"] = cfg.looks[i].zones[zoneIndex].patternId;
+    }
   }
   String out;
   serializeJson(doc, out);
