@@ -79,6 +79,11 @@ assert.match(
 );
 assert.match(
   web,
+  /contentWindow\.postMessage\(\{app:'LightweaverCardBridge',type:'ready'/,
+  'card page should send a ready bridge message into the embedded Studio iframe',
+);
+assert.match(
+  web,
   /searchParams\.set\('cardHost',location\.host\)/,
   'simple local card page should rewrite cardHost to the actual local origin before embedding Studio',
 );

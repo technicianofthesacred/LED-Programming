@@ -3,6 +3,7 @@ import {
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
+  getCardBridgeState,
   isCardBridgeLaunch,
   sendCardBridgeRequest,
 } from '../src/lib/cardBridge.js';
@@ -86,6 +87,11 @@ globalThis.window = {
 };
 
 assert.equal(bootstrapCardBridgeFromOpener(), true);
+const parentBridgeState = getCardBridgeState();
+assert.equal(parentBridgeState.open, true);
+assert.equal(parentBridgeState.connected, true);
+assert.equal(parentBridgeState.host, '192.168.18.70');
+
 const parentBridgeResponse = await sendCardBridgeRequest('status', {}, {
   host: '192.168.18.70',
   timeoutMs: 1000,
@@ -93,5 +99,52 @@ const parentBridgeResponse = await sendCardBridgeRequest('status', {}, {
 assert.equal(parentBridgeResponse.fromParentBridge, true);
 assert.equal(messages[0].targetOrigin, 'http://192.168.18.70');
 assert.equal(messages[0].message.app, 'LightweaverStudioBridge');
+
+const retryMessages = [];
+const retryListeners = new Map();
+const retryParentBridge = {
+  postMessage(message, targetOrigin) {
+    retryMessages.push({ message, targetOrigin });
+    if (retryMessages.length === 1) return;
+    setTimeout(() => {
+      retryListeners.get('message')?.({
+        origin: 'http://192.168.18.70',
+        source: retryParentBridge,
+        data: {
+          app: 'LightweaverCardBridge',
+          id: message.id,
+          ok: true,
+          response: { ok: true, recoveredAfterDrop: true },
+        },
+      });
+    }, 0);
+  },
+};
+globalThis.window = {
+  location: {
+    search: '?cardBridge=1&cardHost=192.168.18.70',
+  },
+  opener: null,
+  parent: retryParentBridge,
+  localStorage: {
+    getItem: () => '192.168.18.70',
+    setItem: () => {},
+  },
+  addEventListener(type, listener) {
+    retryListeners.set(type, listener);
+  },
+  removeEventListener(type, listener) {
+    if (retryListeners.get(type) === listener) retryListeners.delete(type);
+  },
+  dispatchEvent: () => {},
+};
+
+assert.equal(bootstrapCardBridgeFromOpener(), true);
+const retryResponse = await sendCardBridgeRequest('status', {}, {
+  host: '192.168.18.70',
+  timeoutMs: 10,
+});
+assert.equal(retryResponse.recoveredAfterDrop, true);
+assert.equal(retryMessages.length, 2);
 
 console.log('card-bridge-handoff tests passed');

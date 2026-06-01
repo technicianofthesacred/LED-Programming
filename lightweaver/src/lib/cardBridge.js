@@ -17,6 +17,7 @@ let bridgeConnected = false;
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let listenerAttached = false;
+let listenerWindow = null;
 const pending = new Map();
 
 function browserWindow() {
@@ -50,6 +51,22 @@ function dispatchBridgeChange() {
   } catch {
     /* noop */
   }
+}
+
+function bridgeTargetClosed(target = bridgeWindow) {
+  try {
+    return Boolean(target?.closed);
+  } catch {
+    return false;
+  }
+}
+
+function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
+  bridgeWindow = null;
+  bridgeOrigin = origin || '';
+  bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
+  bridgeConnected = false;
+  dispatchBridgeChange();
 }
 
 function setBridgeState({
@@ -137,8 +154,17 @@ function handleBridgeMessage(event) {
 
 export function attachCardBridgeListener() {
   const win = browserWindow();
-  if (!win || listenerAttached) return;
+  if (!win) return;
+  if (listenerAttached && listenerWindow === win) return;
+  if (listenerWindow && listenerWindow !== win) {
+    try {
+      listenerWindow.removeEventListener?.('message', handleBridgeMessage);
+    } catch {
+      /* noop */
+    }
+  }
   win.addEventListener?.('message', handleBridgeMessage);
+  listenerWindow = win;
   listenerAttached = true;
 }
 
@@ -155,7 +181,11 @@ export function bootstrapCardBridgeFromOpener() {
     source: bridgeHostWindow,
     origin: cardHostToUrl(host),
     host,
-    connected: bridgeConnected,
+    // In the card handoff flow Studio often runs inside an iframe hosted by
+    // the card page. That parent page is the bridge, but older firmware does
+    // not always send a ready event down into the iframe, so trust the explicit
+    // cardBridge launch params and verify on the next request.
+    connected: true,
   });
   return true;
 }
@@ -212,30 +242,35 @@ export function getCardBridgeState() {
 
 export function hasCardBridge() {
   bootstrapCardBridgeFromOpener();
+  if (bridgeTargetClosed()) {
+    clearBridgeTarget();
+    return false;
+  }
   return Boolean(bridgeWindow);
 }
 
-export function sendCardBridgeRequest(type, payload = {}, {
-  host = '',
-  timeoutMs = 3000,
-  reboot = undefined,
-} = {}) {
-  attachCardBridgeListener();
-  bootstrapCardBridgeFromOpener();
-  const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
-  const targetOrigin = cardHostToUrl(resolvedHost);
-  if (!bridgeWindow) {
-    const error = new Error('Open the card page once to let Studio use it as the local hardware bridge.');
-    error.reason = 'bridge-missing';
-    throw error;
-  }
+function bridgeError(message, reason, cause = null) {
+  const error = new Error(message);
+  error.reason = reason;
+  if (cause instanceof Error) error.cause = cause;
+  return error;
+}
 
-  if (!bridgeOrigin || bridgeOrigin !== targetOrigin) {
-    bridgeOrigin = targetOrigin;
-    bridgeHost = resolvedHost;
+function markBridgeTimeout(startedAt) {
+  if (!startedAt || bridgeLastSeenAt <= startedAt) {
+    bridgeConnected = false;
+    dispatchBridgeChange();
   }
+}
 
+function bridgeRequestAttempt(type, payload, {
+  resolvedHost,
+  targetOrigin,
+  timeoutMs,
+  reboot,
+}) {
   const id = `lw-bridge-${Date.now()}-${++bridgeSeq}`;
+  const startedAt = Date.now();
   const message = {
     app: STUDIO_BRIDGE_APP,
     id,
@@ -247,13 +282,66 @@ export function sendCardBridgeRequest(type, payload = {}, {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      const error = new Error('Timed out waiting for the card bridge.');
-      error.reason = 'bridge-timeout';
-      reject(error);
+      markBridgeTimeout(startedAt);
+      reject(bridgeError('Timed out waiting for the card bridge.', 'bridge-timeout'));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer, origin: targetOrigin });
-    bridgeWindow.postMessage(message, targetOrigin);
+    try {
+      bridgeWindow.postMessage(message, targetOrigin);
+    } catch (cause) {
+      pending.delete(id);
+      clearTimeout(timer);
+      if (bridgeTargetClosed()) clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
+      reject(bridgeError('Could not send a message to the card bridge.', 'bridge-post-failed', cause));
+    }
   });
+}
+
+export function sendCardBridgeRequest(type, payload = {}, {
+  host = '',
+  timeoutMs = 3000,
+  reboot = undefined,
+  retryOnTimeout = undefined,
+} = {}) {
+  attachCardBridgeListener();
+  bootstrapCardBridgeFromOpener();
+  const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
+  const targetOrigin = cardHostToUrl(resolvedHost);
+  if (!bridgeWindow || bridgeTargetClosed()) {
+    clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
+    throw bridgeError(
+      'Open the card page once to let Studio use it as the local hardware bridge.',
+      'bridge-missing',
+    );
+  }
+
+  if (!bridgeOrigin || bridgeOrigin !== targetOrigin) {
+    bridgeOrigin = targetOrigin;
+    bridgeHost = resolvedHost;
+  }
+
+  const shouldRetryTimeout = retryOnTimeout ?? ['status', 'ping', 'config', 'recover-lights'].includes(type);
+  const maxAttempts = shouldRetryTimeout ? 2 : 1;
+  return (async () => {
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await bridgeRequestAttempt(type, payload, {
+          resolvedHost,
+          targetOrigin,
+          timeoutMs,
+          reboot,
+        });
+      } catch (error) {
+        lastError = error;
+        if (error?.reason !== 'bridge-timeout' || attempt >= maxAttempts) throw error;
+        attachCardBridgeListener();
+        bootstrapCardBridgeFromOpener();
+        if (!bridgeWindow || bridgeTargetClosed()) throw error;
+      }
+    }
+    throw lastError || bridgeError('Card bridge request failed.', 'bridge');
+  })();
 }
 
 export function pingCardBridge(options = {}) {
