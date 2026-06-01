@@ -8,6 +8,8 @@ import {
   getCardBridgeState,
   openCardBridge,
 } from '../lib/cardBridge.js';
+import { downloadJsonFile } from '../lib/downloadFile.js';
+import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -23,18 +25,28 @@ export function TopBar() {
   const fileInputRef = useRef(null);
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState(projectName);
+  const [saveState, setSaveState] = useState('ready');
   useEffect(() => { setNameVal(projectName); }, [projectName]);
+  useEffect(() => {
+    if (saveState === 'ready') return undefined;
+    const timer = setTimeout(() => setSaveState('ready'), 2200);
+    return () => clearTimeout(timer);
+  }, [saveState]);
   const commitName = () => { if (nameVal.trim()) setProjectName(nameVal.trim()); setEditingName(false); };
 
   const handleSave = () => {
+    try {
+      saveCurrentProjectToLibrary(serializeProject());
+      setSaveState('saved');
+    } catch {
+      setSaveState('save failed');
+    }
+  };
+
+  const handleDownload = async () => {
     const data   = serializeProject();
-    const blob   = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url    = URL.createObjectURL(blob);
-    const a      = document.createElement('a');
-    a.href       = url;
-    a.download   = `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const ok = await downloadJsonFile(`${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`, data);
+    setSaveState(ok ? 'downloaded' : 'download failed');
   };
 
   const handleOpen = () => fileInputRef.current?.click();
@@ -47,6 +59,7 @@ export function TopBar() {
       try {
         const data = JSON.parse(ev.target.result);
         const ok = loadProject(data);
+        if (ok) writeActiveProjectLibraryRecordId('');
         if (!ok) alert('Invalid project file (version mismatch).');
       } catch {
         alert('Could not parse project file.');
@@ -78,14 +91,20 @@ export function TopBar() {
           <strong onDoubleClick={() => setEditingName(true)} title="Double-click to rename"
                   style={{ cursor: 'text' }}>{projectName || 'Untitled'}</strong>
         )}
-        <span className="status-chip"><span className="dot"/>ready</span>
+        <span className={`status-chip ${saveState !== 'ready' ? 'is-save-feedback' : ''} ${saveState.includes('failed') ? 'is-save-error' : ''}`}>
+          <span className="dot"/>{saveState}
+        </span>
       </div>
       <div className="lw-topbar-actions">
         <button className="btn-ghost btn" onClick={() => {
-          if (window.confirm('Start a new project? Unsaved changes will be lost.')) newProject();
+          if (window.confirm('Start a new project? Unsaved changes will be lost.')) {
+            writeActiveProjectLibraryRecordId('');
+            newProject();
+          }
         }}>New</button>
         <button className="btn-ghost btn" onClick={handleOpen}>Open</button>
         <button className="btn-ghost btn" onClick={handleSave}>Save</button>
+        <button className="btn-ghost btn" onClick={handleDownload}>Download</button>
         <input ref={fileInputRef} type="file" accept=".lw.json,.json"
                style={{ display: 'none' }} onChange={handleFileChange}/>
       </div>

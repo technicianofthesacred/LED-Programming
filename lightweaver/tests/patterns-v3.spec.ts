@@ -135,6 +135,60 @@ test('selected patterns can reset color and motion back to defaults', async ({ p
   ))).toBe(true);
 });
 
+test('v3 patterns can recover dark lights from the Pattern screen', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/zones', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        syncZones: false,
+        zones: [
+          { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
+          { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+        ],
+      }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, blackout: false }),
+    });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await expect.poll(() => controlRequests.length).toBe(1);
+
+  controlRequests.length = 0;
+  await page.getByRole('button', { name: 'Recover lights' }).click();
+
+  await expect.poll(() => controlRequests.length).toBe(3);
+  expect(controlRequests[0]).toMatchObject({
+    cancelStream: true,
+    blackout: false,
+    syncZones: true,
+    patternId: 'aurora',
+  });
+  expect(controlRequests.slice(1).map(request => ({
+    zone: request.zone,
+    patternId: request.patternId,
+    syncZones: request.syncZones,
+    blackout: request.blackout,
+  }))).toEqual([
+    { zone: 'patch-default-outer-circle', patternId: 'aurora', syncZones: false, blackout: false },
+    { zone: 'patch-default-inner-circle', patternId: 'ocean', syncZones: false, blackout: false },
+  ]);
+  await expect(page.locator('.lw-chip-status')).toContainText('Lights reset');
+});
+
 test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });

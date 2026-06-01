@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
   patchBoardToZones,
@@ -31,25 +31,19 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
+import { downloadJsonFile } from '../lib/downloadFile.js';
 import {
   createProjectLibraryRecord,
   deleteProjectLibraryRecord,
   duplicateProjectLibraryRecord,
   listProjectLibraryRecords,
+  PROJECT_LIBRARY_CHANGED_EVENT,
+  readActiveProjectLibraryRecordId,
   saveProjectLibraryRecord,
+  writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
-
-function downloadJson(filename, content) {
-  const blob = new Blob([content], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 function Section({ title, meta, children, className = '' }) {
   return (
@@ -183,7 +177,7 @@ export function ChipScreen() {
   const [statusKind, setStatusKind] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [projectLibrary, setProjectLibrary] = useState(() => listProjectLibraryRecords());
-  const [activeProjectRecordId, setActiveProjectRecordId] = useState('');
+  const [activeProjectRecordId, setActiveProjectRecordId] = useState(() => readActiveProjectLibraryRecordId());
   const liveHardwareSeq = useRef(0);
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -373,15 +367,11 @@ export function ChipScreen() {
     }
   };
 
-  const saveProjectFile = () => {
+  const saveProjectFile = async () => {
     const data = serializeProject();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${safeProjectName || 'lightweaver'}-studio-project.lwproj.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-studio-project.lwproj.json`, data);
+    setStatusKind(ok ? 'ok' : 'err');
+    setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
   };
 
   const importProjectFile = (event) => {
@@ -396,6 +386,7 @@ export function ChipScreen() {
           setStatus('That project file does not look like a Lightweaver Studio project.');
           return;
         }
+        writeActiveProjectLibraryRecordId('');
         setActiveProjectRecordId('');
         setStatusKind('ok');
         setStatus('Project opened in Studio.');
@@ -410,11 +401,13 @@ export function ChipScreen() {
 
   const refreshProjectLibrary = () => {
     setProjectLibrary(listProjectLibraryRecords());
+    setActiveProjectRecordId(readActiveProjectLibraryRecordId());
   };
 
   const saveProjectToLibrary = () => {
     try {
       const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject()));
+      writeActiveProjectLibraryRecordId(record.id);
       setActiveProjectRecordId(record.id);
       refreshProjectLibrary();
       setStatusKind('ok');
@@ -434,6 +427,7 @@ export function ChipScreen() {
       const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject(), {
         id: activeProjectRecordId,
       }));
+      writeActiveProjectLibraryRecordId(record.id);
       refreshProjectLibrary();
       setStatusKind('ok');
       setStatus(`Updated ${record.name} in this browser.`);
@@ -451,6 +445,7 @@ export function ChipScreen() {
       setStatus('That saved project could not be opened.');
       return;
     }
+    writeActiveProjectLibraryRecordId(record.id);
     setActiveProjectRecordId(record.id);
     setStatusKind('ok');
     setStatus(`Opened ${record.name}.`);
@@ -473,7 +468,10 @@ export function ChipScreen() {
     if (!record) return;
     if (!window.confirm(`Delete ${record.name} from this browser?`)) return;
     deleteProjectLibraryRecord(record.id);
-    if (activeProjectRecordId === record.id) setActiveProjectRecordId('');
+    if (activeProjectRecordId === record.id) {
+      writeActiveProjectLibraryRecordId('');
+      setActiveProjectRecordId('');
+    }
     refreshProjectLibrary();
     setStatusKind('ok');
     setStatus(`Deleted ${record.name} from this browser.`);
@@ -481,9 +479,16 @@ export function ChipScreen() {
 
   const startNewProject = () => {
     if (!window.confirm('Discard this Studio project and start over?')) return;
+    writeActiveProjectLibraryRecordId('');
     setActiveProjectRecordId('');
     newProject();
   };
+
+  useEffect(() => {
+    const onLibraryChange = () => refreshProjectLibrary();
+    window.addEventListener?.(PROJECT_LIBRARY_CHANGED_EVENT, onLibraryChange);
+    return () => window.removeEventListener?.(PROJECT_LIBRARY_CHANGED_EVENT, onLibraryChange);
+  }, []);
 
   const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
   const directPushAvailable = loadMethod.directPush;
@@ -575,7 +580,11 @@ export function ChipScreen() {
                 </a>
               )}
               <button className={`btn ${directPushAvailable ? '' : 'btn-primary'}`} onClick={copyConfig}>Copy settings</button>
-              <button className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-card-settings.json`, configJson)}>Download</button>
+              <button className="btn" onClick={async () => {
+                const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-card-settings.json`, configJson);
+                setStatusKind(ok ? 'ok' : 'err');
+                setStatus(ok ? 'Card settings download started.' : 'Could not start the card settings download.');
+              }}>Download</button>
               <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card</button>
               <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=flash'; }}>Flash chip</button>
               <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=installer'; }}>Installer guide</button>

@@ -1,6 +1,8 @@
 import { migrateProject, PROJECT_VERSION } from './projectModel.js';
 
 export const PROJECT_LIBRARY_STORAGE_KEY = 'lw_project_library_v1';
+export const PROJECT_ACTIVE_RECORD_STORAGE_KEY = 'lw_project_active_record_v1';
+export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-changed';
 export const PROJECT_LIBRARY_VERSION = 1;
 export const PROJECT_LIBRARY_LIMIT = 24;
 
@@ -50,6 +52,11 @@ function requireStorage(storage) {
   if (!storage) {
     throw new Error('Project library storage is unavailable in this browser');
   }
+}
+
+function notifyProjectLibraryChanged(detail = {}) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new CustomEvent(PROJECT_LIBRARY_CHANGED_EVENT, { detail }));
 }
 
 function normalizeRecord(record) {
@@ -105,6 +112,26 @@ export function listProjectLibraryRecords(options = {}) {
   return sortedRecords(readEnvelope({ storage }).records);
 }
 
+export function readActiveProjectLibraryRecordId(options = {}) {
+  const storage = storageFromOptions(options);
+  if (!storage) return '';
+  try {
+    return String(storage.getItem(PROJECT_ACTIVE_RECORD_STORAGE_KEY) || '');
+  } catch {
+    return '';
+  }
+}
+
+export function writeActiveProjectLibraryRecordId(id, options = {}) {
+  const storage = storageFromOptions(options);
+  if (!storage) return '';
+  const value = String(id || '');
+  if (value) storage.setItem(PROJECT_ACTIVE_RECORD_STORAGE_KEY, value);
+  else storage.removeItem(PROJECT_ACTIVE_RECORD_STORAGE_KEY);
+  notifyProjectLibraryChanged({ action: 'active', id: value });
+  return value;
+}
+
 export function saveProjectLibraryRecord(record, options = {}) {
   const storage = storageFromOptions(options);
   requireStorage(storage);
@@ -127,6 +154,7 @@ export function saveProjectLibraryRecord(record, options = {}) {
   if (!writeEnvelope(sortedRecords(records), { storage })) {
     throw new Error('Project library storage is unavailable in this browser');
   }
+  notifyProjectLibraryChanged({ action: 'save', id: next.id });
   return next;
 }
 
@@ -135,6 +163,10 @@ export function deleteProjectLibraryRecord(id, options = {}) {
   const target = String(id || '');
   const records = listProjectLibraryRecords({ storage }).filter(record => record.id !== target);
   writeEnvelope(records, { storage });
+  if (readActiveProjectLibraryRecordId({ storage }) === target) {
+    writeActiveProjectLibraryRecordId('', { storage });
+  }
+  notifyProjectLibraryChanged({ action: 'delete', id: target });
   return records;
 }
 
@@ -149,4 +181,20 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
   );
   saveProjectLibraryRecord(duplicate, { storage });
   return duplicate;
+}
+
+export function saveCurrentProjectToLibrary(project, options = {}) {
+  const storage = storageFromOptions(options);
+  requireStorage(storage);
+  const activeId = options.id || readActiveProjectLibraryRecordId({ storage });
+  const existing = activeId
+    ? listProjectLibraryRecords({ storage }).find(record => record.id === activeId)
+    : null;
+  const record = createProjectLibraryRecord(project, {
+    id: existing?.id || options.id || makeId(),
+    now: options.now || Date.now(),
+  });
+  const saved = saveProjectLibraryRecord(record, { storage, now: options.now });
+  writeActiveProjectLibraryRecordId(saved.id, { storage });
+  return saved;
 }

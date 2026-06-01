@@ -1163,6 +1163,82 @@ export function PatternsScreen() {
     }
   };
 
+  const recoverLightsOnCard = async () => {
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    const sequence = ++livePreviewSeq.current;
+    const { nextBoard, nextController, nextTargets } = buildCurrentHardwareState();
+    const recoveryTargets = nextTargets.map(target => ({
+      ...target,
+      look: { ...normalizeSectionVisualLook(target.look), blackout: false },
+    }));
+    const allTarget = recoveryTargets.find(target => target.kind === 'all') || recoveryTargets[0];
+    const wakeLook = normalizeSectionVisualLook(allTarget?.look || nextController.defaultLook || look);
+    const wakeBrightness = Math.max(wakeLook.brightness || 0, 0.65);
+
+    setHandoffUrl('');
+    setStatusKind('');
+    setStatus(`Recovering lights on ${cardHostToUrl(cardHost)}...`);
+    try {
+      await pushLivePreviewToCard({
+        ...wakeLook,
+        brightness: wakeBrightness,
+        syncZones: true,
+        blackout: false,
+      }, {
+        host: cardHost,
+        timeoutMs: 2600,
+        fallbackMissingZoneToAll: true,
+      });
+
+      let response = await pushSectionPreviewToCard(recoveryTargets, {
+        host: cardHost,
+        timeoutMs: 3400,
+      });
+
+      if (sequence !== livePreviewSeq.current) return;
+      if (response?.previewZoneFallback) {
+        const nextPackage = buildCardRuntimePackageFromProject({
+          projectName,
+          strips,
+          patchBoard: nextBoard,
+          standaloneController: nextController,
+        });
+        setStatus('The card was missing section zones. Saving the current card layout, then trying the lights again...');
+        const configResponse = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+        setPatchBoard(nextBoard);
+        setStandaloneController(nextController);
+        setDraftLooks({});
+        if (sequence !== livePreviewSeq.current) return;
+        if (configResponse.rebooting) {
+          setStatusKind('ok');
+          setStatus('Card layout was restored. The card is rebooting; tap Recover lights again if the LEDs do not return after it reconnects.');
+          return;
+        }
+        response = await pushSectionPreviewToCard(recoveryTargets, { host: cardHost, timeoutMs: 3400 });
+      }
+
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('ok');
+      setStatus(response?.previewZoneFallback
+        ? 'Lights reset on the whole card. Save the split layout if you need separate sections again.'
+        : 'Lights reset. Stream cleared, blackout off, and the current pattern setup is live again.');
+    } catch (error) {
+      if (sequence !== livePreviewSeq.current) return;
+      const nextPackage = buildCardRuntimePackageFromProject({
+        projectName,
+        strips,
+        patchBoard: nextBoard,
+        standaloneController: nextController,
+      });
+      if (error?.reason === 'mixed-content') {
+        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access. Open the card installer to restore the current layout on the card.');
+      } else {
+        setStatusKind('err');
+        setStatus(`Could not recover the lights at ${cardHostToUrl(cardHost)}. Check power, WiFi, then try Connect through card.`);
+      }
+    }
+  };
+
   const applySavedLook = async (savedLook) => {
     const nextBoard = applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook });
     const nextTargets = deriveSectionTargets({
@@ -1404,6 +1480,7 @@ export function PatternsScreen() {
           <div className="lw-patterns-actions">
             <button type="button" className="btn btn-primary" onClick={applySplitPreviewToCard}>Apply split to card</button>
             <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
+            <button type="button" className="btn btn-primary lw-recover-lights-btn" onClick={recoverLightsOnCard}>Recover lights</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
             <button

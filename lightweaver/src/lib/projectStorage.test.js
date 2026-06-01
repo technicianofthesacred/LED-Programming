@@ -5,8 +5,11 @@ import {
   createProjectLibraryRecord,
   deleteProjectLibraryRecord,
   duplicateProjectLibraryRecord,
+  readActiveProjectLibraryRecordId,
   listProjectLibraryRecords,
+  saveCurrentProjectToLibrary,
   saveProjectLibraryRecord,
+  writeActiveProjectLibraryRecordId,
 } from './projectStorage.js';
 import { createDefaultProject } from './projectModel.js';
 
@@ -63,4 +66,35 @@ test('fails instead of reporting a save when browser storage is unavailable', ()
     () => saveProjectLibraryRecord(record, { storage: null }),
     /storage is unavailable/,
   );
+});
+
+test('saveCurrentProjectToLibrary updates the active project record', () => {
+  const storage = memoryStorage();
+  const first = saveCurrentProjectToLibrary({ ...createDefaultProject(), name: 'Active' }, {
+    storage,
+    id: 'active-record',
+    now: 1000,
+  });
+
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), 'active-record');
+  assert.equal(first.name, 'Active');
+
+  const updated = saveCurrentProjectToLibrary({ ...createDefaultProject(), name: 'Active revised' }, {
+    storage,
+    now: 2000,
+  });
+
+  assert.equal(updated.id, 'active-record');
+  assert.equal(updated.createdAt, 1000);
+  assert.equal(updated.updatedAt, 2000);
+  assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.name), ['Active revised']);
+
+  writeActiveProjectLibraryRecordId('', { storage });
+  const fresh = saveCurrentProjectToLibrary({ ...createDefaultProject(), name: 'Fresh' }, {
+    storage,
+    id: 'fresh-record',
+    now: 3000,
+  });
+  assert.equal(fresh.id, 'fresh-record');
+  assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.name), ['Fresh', 'Active revised']);
 });

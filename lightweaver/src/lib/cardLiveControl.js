@@ -28,6 +28,7 @@ export function buildLivePreviewControlPayload(look = {}) {
     cancelStream: true,
     ...(look.zone ? { zone: String(look.zone) } : {}),
     ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
+    ...(typeof look.blackout === 'boolean' ? { blackout: look.blackout } : {}),
     patternId: normalized.patternId,
     brightness: normalized.brightness,
     speed: normalized.speed,
@@ -164,11 +165,17 @@ function normalizedPreviewTargets(targets = []) {
   return Array.isArray(targets)
     ? targets
         .filter(Boolean)
-        .map(target => ({
-          kind: target.kind || 'section',
-          zone: target.kind === 'section' ? String(target.zoneId || target.id || '') : '',
-          look: normalizeCardVisualLook(target.look || target),
-        }))
+        .map(target => {
+          const sourceLook = target.look || target;
+          return {
+            kind: target.kind || 'section',
+            zone: target.kind === 'section' ? String(target.zoneId || target.id || '') : '',
+            look: {
+              ...normalizeCardVisualLook(sourceLook),
+              ...(typeof sourceLook.blackout === 'boolean' ? { blackout: sourceLook.blackout } : {}),
+            },
+          };
+        })
     : [];
 }
 
