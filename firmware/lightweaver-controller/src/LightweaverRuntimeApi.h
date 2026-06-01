@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void runtimeSetBrightness(float value01);     // 0.02..1.0
+void runtimeSetBrightnessAnalogPin(int pin);  // -1 disables, otherwise GPIO pin
 void runtimeSetSpeed(float speed);             // 0.25..4.0
 void runtimeSetHueShift(int16_t shift);        // -128..128
 void runtimeSetBlackout(bool on);
@@ -43,6 +44,7 @@ void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi);
 uint8_t runtimeGetDriftHueMin();
 uint8_t runtimeGetDriftHueMax();
 float runtimeGetBrightness();
+int runtimeGetBrightnessAnalogPin();
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();

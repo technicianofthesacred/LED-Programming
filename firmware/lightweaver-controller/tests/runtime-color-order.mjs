@@ -37,6 +37,16 @@ assert.match(
   'control endpoint should accept colorOrder without requiring a config save',
 );
 assert.match(
+  apiHeader,
+  /void runtimeSetBrightnessAnalogPin\(int pin\);/,
+  'runtime API header should expose the analog brightness-pin setter',
+);
+assert.match(
+  webSource,
+  /hasControlField\(doc, "brightnessAnalog"\).*runtimeSetBrightnessAnalogPin/s,
+  'control endpoint should accept brightnessAnalog without requiring a config save',
+);
+assert.match(
   mainSource,
   /FastLED\.addLeds<WS2812B, DATA_PIN, RGB>\(start, count\)/,
   'firmware should keep FastLED output RGB and do live order mapping in software',

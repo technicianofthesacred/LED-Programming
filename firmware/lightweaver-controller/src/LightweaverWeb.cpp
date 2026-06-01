@@ -872,6 +872,7 @@ void handleControlPost() {
   // command sent while the card is in split preview mode updates only zone 0.
   if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
   if (hasControlField(doc, "colorOrder")) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
+  if (hasControlField(doc, "brightnessAnalog")) runtimeSetBrightnessAnalogPin(controlInt(doc, "brightnessAnalog"));
   if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
   if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
   if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
@@ -896,6 +897,7 @@ void handleControlPost() {
   JsonDocument out;
   out["ok"] = true;
   out["brightness"] = runtimeGetBrightness();
+  out["brightnessAnalog"] = runtimeGetBrightnessAnalogPin();
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
   out["blackout"] = runtimeIsBlackedOut();
