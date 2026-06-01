@@ -12,6 +12,15 @@ import {
 } from '../lib/cardVisualLook.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import {
+  clampHardwarePixelCount,
+  countsFromDefaultCircleLayout,
+  createDefaultCircleLayout,
+  DEFAULT_CIRCLE_SECTION_COUNT,
+  DEFAULT_CIRCLE_TOTAL_PIXELS,
+  isDefaultCircleLayout,
+} from '../lib/defaultCircleLayout.js';
+import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
+import {
   ALL_SECTIONS_TARGET_ID,
   applyLookToPatchBoard,
   applySavedLookToPatchBoard,
@@ -58,6 +67,7 @@ const PATTERN_CATEGORIES = [
 ];
 const PREVIEW_LED_COUNT = 34;
 const PREVIEW_LED_INDEXES = Array.from({ length: PREVIEW_LED_COUNT }, (_, index) => index);
+const MAX_COMBO_PREVIEWS = 3;
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -295,25 +305,66 @@ function LookCard({ pattern, look, previewing, saved, inCycle, livePreviewAvaila
   );
 }
 
-function TargetButton({ target, active, onSelect }) {
+function TargetButton({
+  target,
+  active,
+  editable,
+  onSelect,
+  onNameChange,
+  onPixelCountChange,
+}) {
   const pattern = getCardPatternById(target.look?.patternId);
+  const readOnlyName = target.kind === 'all';
+  const onInputClick = event => event.stopPropagation();
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={`lw-section-target ${active ? 'is-active' : ''}`}
       onClick={onSelect}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       data-testid={`section-target-${target.id}`}
     >
-      <span>
-        <strong>{target.label}</strong>
-        <em>{target.kind === 'all' ? 'whole piece' : `${target.pixelCount} LEDs`}</em>
+      <span className="lw-section-target-main">
+        <input
+          className="lw-target-name-input"
+          value={target.label}
+          readOnly={readOnlyName}
+          aria-label={`${target.label} name`}
+          data-testid={`section-target-name-${target.id}`}
+          onClick={onInputClick}
+          onFocus={onSelect}
+          onChange={event => onNameChange?.(target, event.target.value)}
+        />
+        <span className="lw-target-led-row">
+          <input
+            className="lw-target-led-input"
+            type="number"
+            min="1"
+            max="2048"
+            value={target.pixelCount || 1}
+            disabled={!editable}
+            aria-label={`${target.label} LEDs`}
+            data-testid={`section-target-leds-${target.id}`}
+            onClick={onInputClick}
+            onFocus={onSelect}
+            onChange={event => onPixelCountChange?.(target, event.target.value)}
+          />
+          <em>{target.kind === 'all' ? 'LEDs whole piece' : 'LEDs'}</em>
+        </span>
       </span>
       <b>{pattern?.label || target.look?.patternId || 'Pattern'}</b>
-    </button>
+    </div>
   );
 }
 
-function SavedLookCard({ look, active, onApply, targets = [] }) {
+function SavedLookCard({ look, active, onApply, onLoadToCard, targets = [] }) {
   const targetById = new Map(targets.map(target => [target.id, target]));
   const sectionSummaries = Object.entries(look.sectionLooks || {}).map(([targetId, sectionLook]) => ({
     id: targetId,
@@ -321,12 +372,27 @@ function SavedLookCard({ look, active, onApply, targets = [] }) {
     look: normalizeSectionVisualLook(sectionLook),
   }));
   const sectionCount = sectionSummaries.length;
-  const previewSections = sectionSummaries.length
+  const allPreviewSections = sectionSummaries.length
     ? sectionSummaries
     : [{ id: 'all', label: 'All', look: look.defaultLook }];
-  const previewCols = previewSections.length <= 2 ? previewSections.length : previewSections.length <= 4 ? 2 : 3;
+  const previewSections = allPreviewSections.slice(0, MAX_COMBO_PREVIEWS);
+  const hiddenPreviewCount = Math.max(0, allPreviewSections.length - previewSections.length);
+  const previewItemCount = previewSections.length + (hiddenPreviewCount > 0 ? 1 : 0);
+  const previewCols = Math.min(4, Math.max(1, previewItemCount));
   return (
-    <button type="button" className={`lw-saved-look-card ${active ? 'is-active' : ''}`} onClick={onApply}>
+    <article
+      className={`lw-saved-look-card ${active ? 'is-active' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={onApply}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onApply();
+        }
+      }}
+    >
       <span
         className="lw-saved-combo-previews"
         style={{ '--combo-preview-cols': previewCols }}
@@ -335,6 +401,7 @@ function SavedLookCard({ look, active, onApply, targets = [] }) {
         {previewSections.map(section => (
           <LookPreview key={section.id} patternId={section.look?.patternId} look={section.look} tuned/>
         ))}
+        {hiddenPreviewCount > 0 && <span className="lw-saved-combo-overflow">+{hiddenPreviewCount}</span>}
       </span>
       <span className="lw-saved-combo-copy">
         <strong>{look.label}</strong>
@@ -345,7 +412,17 @@ function SavedLookCard({ look, active, onApply, targets = [] }) {
           </span>
         )}
       </span>
-    </button>
+      <button
+        type="button"
+        className="btn btn-primary lw-saved-combo-load"
+        onClick={event => {
+          event.stopPropagation();
+          onLoadToCard?.(look);
+        }}
+      >
+        Load to card
+      </button>
+    </article>
   );
 }
 
@@ -353,7 +430,9 @@ export function PatternsScreen() {
   const {
     projectName,
     strips,
+    setStrips,
     viewBox,
+    setViewBox,
     svgText,
     patchBoard,
     setPatchBoard,
@@ -380,6 +459,9 @@ export function PatternsScreen() {
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
   const activeLookId = standaloneController?.activeLookId || '';
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
+  const defaultLayoutActive = isDefaultCircleLayout(strips);
+  const editableTargetLayout = !svgText && (defaultLayoutActive || strips.length === 0);
+  const defaultSectionCounts = defaultLayoutActive ? countsFromDefaultCircleLayout(strips) : [];
   const sectionTargets = useMemo(
     () => deriveSectionTargets({ strips, patchBoard: board, defaultLook: savedGlobalLook }),
     [
@@ -450,6 +532,104 @@ export function PatternsScreen() {
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const config = runtimePackage.config;
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  const applyDefaultTargetLayout = useCallback(({
+    totalPixels = null,
+    sectionPixelCounts = null,
+  } = {}) => {
+    if (!editableTargetLayout) return;
+    const currentCounts = defaultSectionCounts.length
+      ? defaultSectionCounts
+      : (strips || []).map(strip => strip.pixelCount || strip.pixels?.length || 1);
+    const currentTotal = currentCounts.reduce((sum, count) => sum + count, 0) || config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS;
+    const counts = Array.isArray(sectionPixelCounts) && sectionPixelCounts.length
+      ? sectionPixelCounts.map((count, index) => clampHardwarePixelCount(count, currentCounts[index] || 1))
+      : null;
+    const nextTotal = counts
+      ? counts.reduce((sum, count) => sum + count, 0)
+      : clampHardwarePixelCount(totalPixels ?? currentTotal, currentTotal);
+    const sectionCount = counts?.length || currentCounts.length || DEFAULT_CIRCLE_SECTION_COUNT;
+    const namesById = new Map((strips || []).map(strip => [strip.id, strip.name]));
+    const nextStrips = createDefaultCircleLayout({
+      totalPixels: nextTotal,
+      sectionCount,
+      sectionPixelCounts: counts,
+      viewBox: viewBox || '0 0 640 400',
+    }).map(strip => ({
+      ...strip,
+      name: namesById.get(strip.id) || strip.name,
+    }));
+    const nextBoard = normalizePatchBoard(board, nextStrips);
+
+    setViewBox(viewBox || '0 0 640 400');
+    setStrips(nextStrips);
+    setPatchBoard(nextBoard);
+    setStandaloneController(prev => {
+      const current = prev || {};
+      const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
+        const previous = current.outputs?.[index] || {};
+        return {
+          ...base,
+          ...previous,
+          id: index === 0 ? 'out1' : base.id,
+          name: index === 0 ? 'Output 1' : base.name,
+          pixels: index === 0 ? nextTotal : 0,
+        };
+      });
+      return { ...current, outputs };
+    });
+  }, [
+    board,
+    config.led.pixels,
+    defaultSectionCounts,
+    editableTargetLayout,
+    setPatchBoard,
+    setStandaloneController,
+    setStrips,
+    setViewBox,
+    strips,
+    viewBox,
+  ]);
+
+  const updateTargetName = useCallback((target, value) => {
+    if (!target || target.kind !== 'section') return;
+    const nextName = String(value || '').slice(0, 48);
+    setStrips(prev => (prev || []).map(strip => (
+      strip.id === target.stripId ? { ...strip, name: nextName } : strip
+    )));
+    setPatchBoard(prev => {
+      const nextBoard = normalizePatchBoard(prev, strips);
+      nextBoard.patches = (nextBoard.patches || []).map(patch => (
+        patch.id === target.patchId ? { ...patch, name: nextName } : patch
+      ));
+      return nextBoard;
+    });
+  }, [setPatchBoard, setStrips, strips]);
+
+  const updateTargetPixelCount = useCallback((target, value) => {
+    if (!editableTargetLayout || !target || value === '') return;
+    if (target.kind === 'all') {
+      applyDefaultTargetLayout({ totalPixels: value });
+      return;
+    }
+    const index = (strips || []).findIndex(strip => strip.id === target.stripId);
+    if (index < 0) return;
+    const fallbackCount = Math.max(
+      1,
+      Math.floor((config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS) / Math.max(1, strips.length || DEFAULT_CIRCLE_SECTION_COUNT)),
+    );
+    const counts = defaultSectionCounts.length
+      ? [...defaultSectionCounts]
+      : (strips || []).map(strip => strip.pixelCount || strip.pixels?.length || fallbackCount);
+    counts[index] = clampHardwarePixelCount(value, counts[index] || fallbackCount);
+    applyDefaultTargetLayout({ sectionPixelCounts: counts });
+  }, [
+    applyDefaultTargetLayout,
+    config.led.pixels,
+    defaultSectionCounts,
+    editableTargetLayout,
+    strips,
+  ]);
+
   const previewStrips = useMemo(() => {
     return (strips || []).map(strip => {
       const stripTarget = effectiveSectionTargets.find(target => target.kind === 'section' && target.stripId === strip.id);
@@ -725,6 +905,40 @@ export function PatternsScreen() {
     }
   };
 
+  const loadSavedLookToCard = async (savedLook) => {
+    const nextBoard = applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook });
+    const nextController = {
+      ...(standaloneController || {}),
+      defaultLook: normalizeSectionVisualLook(savedLook.defaultLook),
+      activeLookId: savedLook.id,
+      looks: savedLooks,
+    };
+    const nextPackage = buildCardRuntimePackageFromProject({
+      projectName,
+      strips,
+      patchBoard: nextBoard,
+      standaloneController: nextController,
+    });
+    setPatchBoard(nextBoard);
+    setStandaloneController(nextController);
+    setDraftLooks({});
+    setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+    setStatusKind('');
+    setStatus(`Loading ${savedLook.label} to ${cardHostToUrl(cardHost)}...`);
+    try {
+      const response = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      setStatusKind('ok');
+      setStatus(response.rebooting
+        ? `${savedLook.label} loaded. The card is rebooting so the LED layout takes effect.`
+        : `${savedLook.label} loaded on the card.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? 'The hosted HTTPS page cannot load this combo to the local card. Open this Studio from localhost, or download the chip config.'
+        : `Could not load ${savedLook.label} to the card at ${cardHostToUrl(cardHost)}.`);
+    }
+  };
+
   const setCycleEnabled = (patternId, enabled) => {
     const next = enabled
       ? DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id).filter(id => id === patternId || cycleIds.includes(id))
@@ -827,6 +1041,7 @@ export function PatternsScreen() {
                       targets={sectionTargets}
                       active={savedLook.id === activeLookId}
                       onApply={() => applySavedLook(savedLook)}
+                      onLoadToCard={() => loadSavedLookToCard(savedLook)}
                     />
                   ))}
                 </div>
@@ -845,7 +1060,10 @@ export function PatternsScreen() {
                       ? { ...target, look }
                       : effectiveSectionTargets.find(effectiveTarget => effectiveTarget.id === target.id) || target}
                     active={target.id === selectedTarget?.id}
+                    editable={editableTargetLayout}
                     onSelect={() => setSelectedTargetId(target.id)}
+                    onNameChange={updateTargetName}
+                    onPixelCountChange={updateTargetPixelCount}
                   />
                 ))}
               </div>

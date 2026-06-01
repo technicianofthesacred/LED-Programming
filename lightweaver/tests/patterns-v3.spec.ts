@@ -105,6 +105,32 @@ test('v3 patterns keeps separate unsaved section choices before saving the combo
   expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
 });
 
+test('v3 patterns edits design target names and LED counts inline', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-name-patch-default-outer-circle').fill('Halo ring');
+  await page.getByTestId('section-target-leds-patch-default-outer-circle').fill('30');
+  await page.getByTestId('section-target-leds-patch-default-outer-circle').blur();
+
+  await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toHaveValue('Halo ring');
+  await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toHaveValue('30');
+  await expect(page.getByTestId('section-target-leds-all')).toHaveValue('52');
+
+  await page.getByText('Settings', { exact: true }).click();
+  await page.getByText('Advanced').click();
+  const config = JSON.parse(await page.locator('textarea').inputValue());
+  const editedZone = config.zones.find(zone => zone.id === 'patch-default-outer-circle');
+  expect(editedZone.label).toBe('Halo ring');
+  expect(editedZone.ranges).toEqual([{ start: 0, count: 30 }]);
+  expect(config.led.pixels).toBe(52);
+});
+
 test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/zones', async route => {
@@ -157,6 +183,7 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
 });
 
 test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {
+  const configRequests: Record<string, unknown>[] = [];
   const strips = createDefaultCircleLayout({ totalPixels: 80, sectionCount: 4 });
   const project = {
     version: 3,
@@ -181,6 +208,10 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
+  await page.route('http://lightweaver.local/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 
@@ -201,7 +232,16 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await expect(savedCard).toContainText('4-section combo');
   await expect(savedCard).toContainText('Ring 3: Fire');
   await expect(savedCard).toContainText('Ring 4: Calm');
-  await expect(savedCard.locator('.lw-look-preview')).toHaveCount(4);
+  await expect(savedCard.locator('.lw-look-preview')).toHaveCount(3);
+  await expect(savedCard.locator('.lw-saved-combo-overflow')).toContainText('+1');
+
+  await savedCard.getByRole('button', { name: 'Load to card' }).click();
+  await expect.poll(() => configRequests.length).toBe(1);
+  const zonePatterns = Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]));
+  expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
+  expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
+  expect(zonePatterns['patch-default-ring-3']).toBe('fire');
+  expect(zonePatterns['patch-default-ring-4']).toBe('calm');
 });
 
 test('v3 patterns includes searchable visual pattern browsing', async ({ page }) => {

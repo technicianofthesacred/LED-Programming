@@ -79,9 +79,18 @@ test('patterns target selector stacks downward and footer stays single-line', as
     for (let index = existing.length; index < 10; index += 1) {
       const clone = source.cloneNode(true) as HTMLElement;
       clone.setAttribute('data-testid', `section-target-test-${index + 1}`);
-      clone.querySelector('strong')!.textContent = `Ring ${index + 1}`;
-      clone.querySelector('em')!.textContent = '39 LEDs';
-      clone.querySelector('b')!.textContent = 'Aurora';
+      const nameInput = clone.querySelector('.lw-target-name-input') as HTMLInputElement | null;
+      if (nameInput) {
+        nameInput.value = `Ring ${index + 1}`;
+        nameInput.setAttribute('value', `Ring ${index + 1}`);
+      }
+      const ledInput = clone.querySelector('.lw-target-led-input') as HTMLInputElement | null;
+      if (ledInput) {
+        ledInput.value = '39';
+        ledInput.setAttribute('value', '39');
+      }
+      const patternLabel = clone.querySelector('b');
+      if (patternLabel) patternLabel.textContent = 'Aurora';
       el.appendChild(clone);
     }
   });
