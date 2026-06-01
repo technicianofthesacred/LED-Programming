@@ -37,6 +37,7 @@ void sendCors() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
   server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  server.sendHeader("Access-Control-Allow-Private-Network", "true");
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
@@ -964,6 +965,7 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   }
 
   server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
   server.on("/api/config", HTTP_POST, handleConfigPost);
@@ -982,8 +984,11 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/reset-wifi", HTTP_POST, handleResetWifi);
   server.on("/api/rename", HTTP_OPTIONS, handleOptions);
   server.on("/api/rename", HTTP_POST, handleRenamePost);
+  server.on("/api/firmware-info", HTTP_OPTIONS, handleOptions);
   server.on("/api/firmware-info", HTTP_GET, handleFirmwareInfo);
+  server.on("/api/patterns", HTTP_OPTIONS, handleOptions);
   server.on("/api/patterns", HTTP_GET, handlePatterns);
+  server.on("/api/zones", HTTP_OPTIONS, handleOptions);
   server.on("/api/zones", HTTP_GET, handleZones);
 
   // Pretend-WLED JSON API — lets the existing designer's WLED bar +

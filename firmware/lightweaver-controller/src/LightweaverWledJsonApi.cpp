@@ -28,6 +28,7 @@ void sendCors() {
   serverPtr->sendHeader("Access-Control-Allow-Origin", "*");
   serverPtr->sendHeader("Access-Control-Allow-Headers", "Content-Type");
   serverPtr->sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  serverPtr->sendHeader("Access-Control-Allow-Private-Network", "true");
   serverPtr->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
@@ -303,12 +304,16 @@ void handleStatePost() {
 
 void registerEndpoints(WebServer& server) {
   serverPtr = &server;
+  server.on("/json/info", HTTP_OPTIONS, handleOptions);
   server.on("/json/info", HTTP_GET, handleInfo);
-  server.on("/json/state", HTTP_GET, handleState);
   server.on("/json/state", HTTP_OPTIONS, handleOptions);
+  server.on("/json/state", HTTP_GET, handleState);
   server.on("/json/state", HTTP_POST, handleStatePost);
+  server.on("/json/effects", HTTP_OPTIONS, handleOptions);
   server.on("/json/effects", HTTP_GET, handleEffects);
+  server.on("/json/palettes", HTTP_OPTIONS, handleOptions);
   server.on("/json/palettes", HTTP_GET, handlePalettes);
+  server.on("/json", HTTP_OPTIONS, handleOptions);
   server.on("/json", HTTP_GET, handleJsonGet);
 }
 
