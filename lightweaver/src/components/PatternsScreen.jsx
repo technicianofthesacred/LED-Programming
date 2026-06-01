@@ -49,11 +49,13 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import {
+  buildMirroredLedRepairPackage,
   identifyCardLights,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   recoverCardLights,
+  repairMirroredLedOutputOnCard,
 } from '../lib/cardLiveControl.js';
 import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
 import {
@@ -728,6 +730,7 @@ export function PatternsScreen() {
   const [patternCategory, setPatternCategory] = useState('all');
   const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
   const [recoveringLights, setRecoveringLights] = useState(false);
+  const [repairLedPrompt, setRepairLedPrompt] = useState(null);
   const [stripColorTestPattern, setStripColorTestPattern] = useState('test-red');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
@@ -1379,176 +1382,181 @@ export function PatternsScreen() {
     }
   };
 
-  const recoverLightsOnCard = async () => {
+  const resolveRepairHost = async () => {
+    if (/^\d+\.\d+\.\d+\.\d+(?::\d+)?$/.test(normalizeCardHost(cardHost))) return cardHost;
+    const discovered = await discoverCardStatus({
+      preferredHost: cardHost,
+      timeoutMs: 650,
+      persist: true,
+    });
+    if (discovered.connected && discovered.host) {
+      setCardHost(discovered.host);
+      writeStoredCardHost(discovered.host);
+      return discovered.host;
+    }
+    return cardHost;
+  };
+
+  const repairLedFixed = () => {
+    setRepairLedPrompt(null);
+    setRecoveringLights(false);
+    setStatusKind('ok');
+    setStatus('LED repair stopped. Lights are responding.');
+  };
+
+  const repairLedPhysicalChecks = () => {
+    setRepairLedPrompt(null);
+    setRecoveringLights(false);
+    setStatusKind('err');
+    setStatus('Step 5: The card is alive and outputting white on mirrored pins. Check strip 5V, strip GND, card GND tied to strip GND, data into DIN, and data wire on GPIO 16, 17, 18, 21, 38, 39, 40, or 48.');
+  };
+
+  const startRepairLed = async () => {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
-    const { nextBoard, nextController, nextTargets } = buildCurrentHardwareState();
-    const visibleTargets = nextTargets.map(target => ({
-      ...target,
-      look: makeVisibleRecoveryLook(target.look),
-    }));
-    const selectedRecoveryTarget = visibleTargets.find(target => target.id === selectedTarget?.id) || null;
-    const allTarget = visibleTargets.find(target => target.kind === 'all') || visibleTargets[0];
-    const focusLook = makeVisibleRecoveryLook(selectedRecoveryTarget?.look || allTarget?.look || nextController.defaultLook || look);
-    const recoveryTargets = visibleTargets
-      .map(target => (target.kind === 'all' ? { ...target, look: focusLook } : target))
-      .sort((a, b) => {
-        if (!selectedRecoveryTarget || selectedRecoveryTarget.kind !== 'section') return 0;
-        if (a.id === selectedRecoveryTarget.id) return -1;
-        if (b.id === selectedRecoveryTarget.id) return 1;
-        return 0;
+    const recoveryLabel = targetLabel(selectedTarget || sectionTargets[0]);
+    setHandoffUrl('');
+    setRepairLedPrompt(null);
+    setStatusKind('');
+    setRecoveringLights(true);
+    setStatus(`Step 1: Pulling control to ${recoveryLabel}...`);
+    try {
+      const repairHost = await resolveRepairHost();
+      if (sequence !== livePreviewSeq.current) return;
+      const details = await recoverCardLights({
+        patternId: 'warm-white',
+        brightness: 1,
+        syncZones: true,
+      }, {
+        host: repairHost,
+        timeoutMs: 3200,
+        autoDiscover: false,
       });
-    let recoveryHost = cardHost;
-    const recoveryLabel = targetLabel(selectedRecoveryTarget || selectedTarget || allTarget);
-    const shouldTryLegacyRecovery = (error) => (
-      error?.reason === 'http' &&
-      /(?:404|405|not found|unknown)/i.test(String(error?.message || ''))
-    );
+      if (sequence !== livePreviewSeq.current) return;
+      const brightnessByte = Number(details?.diagnostics?.brightnessByte);
+      const diagnosticText = Number.isFinite(brightnessByte) ? ` Brightness ${brightnessByte}/255.` : '';
+      setStatusKind('ok');
+      setStatus(`Step 1: Warm white recovery sent to ${cardHostToUrl(repairHost)}.${diagnosticText} Do you see light?`);
+      setRepairLedPrompt({ next: 'white', host: repairHost });
+    } catch (error) {
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('err');
+      setStatus(error?.message || `Step 1 could not reach ${cardHostToUrl(cardHost)}. Check power and WiFi, then turn on Use local card.`);
+    } finally {
+      if (sequence === livePreviewSeq.current) setRecoveringLights(false);
+    }
+  };
 
+  const repairLedWhiteTest = async () => {
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    const sequence = ++livePreviewSeq.current;
+    const repairHost = repairLedPrompt?.host || cardHost;
     setHandoffUrl('');
     setStatusKind('');
     setRecoveringLights(true);
-    setStatus(`Pulling control to ${recoveryLabel} at ${cardHostToUrl(cardHost)}...`);
+    setStatus('Step 2: Sending identify blink and full white test...');
     try {
-      if (!/^\d+\.\d+\.\d+\.\d+(?::\d+)?$/.test(normalizeCardHost(cardHost))) {
-        const discovered = await discoverCardStatus({
-          preferredHost: cardHost,
-          timeoutMs: 650,
-          persist: true,
-        });
-        if (discovered.connected && discovered.host) {
-          recoveryHost = discovered.host;
-          setCardHost(discovered.host);
-          writeStoredCardHost(discovered.host);
-        }
-      }
-      if (sequence !== livePreviewSeq.current) return;
-      setStatus(`Testing LED output on ${cardHostToUrl(recoveryHost)}...`);
-      let recoveryDetails = null;
-      try {
-        recoveryDetails = await recoverCardLights({
-          patternId: 'warm-white',
-          brightness: 1,
-          syncZones: true,
-        }, {
-          host: recoveryHost,
-          timeoutMs: 3200,
-          autoDiscover: false,
-        });
-        if (sequence !== livePreviewSeq.current) return;
-        const brightnessByte = Number(recoveryDetails?.diagnostics?.brightnessByte);
-        const diagnosticText = Number.isFinite(brightnessByte)
-          ? ` Card output brightness ${brightnessByte}/255.`
-          : '';
-        setStatusKind('ok');
-        setStatus(`Recovery command accepted on ${recoveryLabel}.${diagnosticText} Restoring section patterns in the background.`);
-        setRecoveringLights(false);
-        void (async () => {
-          try {
-            const response = await pushSectionPreviewToCard(recoveryTargets, {
-              host: recoveryHost,
-              timeoutMs: 1600,
-            });
-            if (sequence !== livePreviewSeq.current) return;
-            setStatusKind('ok');
-            setStatus(response?.previewZoneFallback
-              ? 'Lights reset on the whole card. Save the split layout if you need separate sections again.'
-              : `Recovery commands accepted on ${recoveryLabel}.${diagnosticText} If the LEDs are still dark, check LED power, shared ground, data direction, or output GPIO.`);
-          } catch {
-            if (sequence !== livePreviewSeq.current) return;
-            setStatusKind('ok');
-            setStatus(`Recovery command accepted on ${recoveryLabel}.${diagnosticText} Tap Save to card after the LEDs are visible if sections still need restoring.`);
-          }
-        })();
-        return;
-      } catch (error) {
-        if (!shouldTryLegacyRecovery(error)) throw error;
-        await identifyCardLights({ host: recoveryHost, timeoutMs: 1400, autoDiscover: false }).catch(() => null);
-        await pushLivePreviewToCard({
-          patternId: 'warm-white',
-          brightness: 1,
-          speed: 1,
-          hueShift: 0,
-          customHue: 0,
-          customSaturation: 255,
-          customBreathe: false,
-          customDrift: false,
-          syncZones: true,
-          blackout: false,
-        }, {
-          host: recoveryHost,
-          timeoutMs: 2600,
-          fallbackMissingZoneToAll: true,
-        });
-      }
-
-      let response = await pushSectionPreviewToCard(recoveryTargets, {
-        host: recoveryHost,
-        timeoutMs: 3400,
+      await identifyCardLights({ host: repairHost, timeoutMs: 1400, autoDiscover: false }).catch(() => null);
+      const details = await recoverCardLights({
+        patternId: 'test-white',
+        brightness: 1,
+        syncZones: true,
+      }, {
+        host: repairHost,
+        timeoutMs: 3200,
+        autoDiscover: false,
       });
-
       if (sequence !== livePreviewSeq.current) return;
-      if (response?.previewZoneFallback) {
-        const nextPackage = buildCardRuntimePackageFromProject({
-          projectName,
-          strips,
-          patchBoard: nextBoard,
-          standaloneController: nextController,
-        });
-        setStatus('The card was missing section zones. Saving the current card layout, then trying the lights again...');
-        const safety = await checkCardLayoutWriteSafety(nextPackage, 'recovering lights');
-        if (!safety.ok) {
-          setRecoveringLights(false);
-          return;
-        }
-        recoveryHost = safety.host || recoveryHost;
-        const configResponse = await pushConfigToCard(nextPackage, {
-          host: recoveryHost,
-          timeoutMs: 6000,
-          reboot: 'if-needed',
-          allowLayoutChange: true,
-        });
-        setPatchBoard(nextBoard);
-        setStandaloneController(nextController);
-        setDraftLooks({});
-        if (sequence !== livePreviewSeq.current) return;
-        if (configResponse.rebooting) {
-          setStatusKind('ok');
-          setRecoveringLights(false);
-          setStatus('Card layout was restored. The card is rebooting; tap Recover lights again if the LEDs do not return after it reconnects.');
-          return;
-        }
-        response = await pushSectionPreviewToCard(recoveryTargets, { host: recoveryHost, timeoutMs: 3400 });
-      }
-
-      if (sequence !== livePreviewSeq.current) return;
+      const pixel = details?.diagnostics?.firstPhysicalPixel;
+      const pixelText = pixel ? ` First pixel ${pixel.r},${pixel.g},${pixel.b}.` : '';
       setStatusKind('ok');
-      setRecoveringLights(false);
-      const brightnessByte = Number(recoveryDetails?.diagnostics?.brightnessByte);
-      const diagnosticText = Number.isFinite(brightnessByte)
-        ? ` Card output brightness ${brightnessByte}/255.`
-        : '';
-      setStatus(response?.previewZoneFallback
-        ? 'Lights reset on the whole card. Save the split layout if you need separate sections again.'
-        : `Recovery commands accepted on ${targetLabel(selectedRecoveryTarget || selectedTarget || allTarget)}.${diagnosticText} If the LEDs are still dark, check LED power, shared ground, data direction, or output GPIO.`);
+      setStatus(`Step 2: White test sent.${pixelText} Do you see white light or a blink?`);
+      setRepairLedPrompt({ next: 'mirror', host: repairHost });
     } catch (error) {
       if (sequence !== livePreviewSeq.current) return;
-      const nextPackage = buildCardRuntimePackageFromProject({
+      setStatusKind('err');
+      setStatus(error?.message || `Step 2 could not reach ${cardHostToUrl(repairHost)}.`);
+    } finally {
+      if (sequence === livePreviewSeq.current) setRecoveringLights(false);
+    }
+  };
+
+  const repairLedMirroredOutput = async () => {
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    const sequence = ++livePreviewSeq.current;
+    const repairHost = repairLedPrompt?.host || cardHost;
+    const { nextBoard, nextController } = buildCurrentHardwareState();
+    const nextPackage = buildCardRuntimePackageFromProject({
+      projectName,
+      strips,
+      patchBoard: nextBoard,
+      standaloneController: nextController,
+    });
+    const repairPackage = buildMirroredLedRepairPackage(nextPackage, { projectName });
+    const repairOutput = repairPackage.config.led.outputs[0];
+    setHandoffUrl('');
+    setStatusKind('');
+    setRecoveringLights(true);
+    setStatus('Step 3: Saving safe mirrored LED output and rebooting the card...');
+    try {
+      const response = await repairMirroredLedOutputOnCard(nextPackage, {
+        host: repairHost,
+        timeoutMs: 6000,
         projectName,
-        strips,
-        patchBoard: nextBoard,
-        standaloneController: nextController,
       });
+      if (sequence !== livePreviewSeq.current) return;
+      setPatchBoard(nextBoard);
+      setStandaloneController({
+        ...nextController,
+        outputs: [repairOutput],
+      });
+      setDraftLooks({});
+      setStatusKind('ok');
+      setStatus(response.rebooting
+        ? 'Step 3: Safe mirrored output saved. The card is rebooting; wait a few seconds, then test the repaired output.'
+        : 'Step 3: Safe mirrored output saved. Test the repaired output now.');
+      setRepairLedPrompt({ next: 'post-mirror-test', host: repairHost });
+    } catch (error) {
+      if (sequence !== livePreviewSeq.current) return;
       if (error?.reason === 'mixed-content') {
-        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access. Open the card installer to restore the current layout on the card.');
-      } else if (error?.reason === 'layout-mismatch') {
-        setStatusKind('err');
-        setStatus(error.message);
+        offerCardHandoff(repairPackage, 'The browser blocked direct local-card access. Open the card installer to save the safe mirrored LED output.');
       } else {
         setStatusKind('err');
-        setStatus(`Could not recover the lights at ${cardHostToUrl(recoveryHost)}. Check power and WiFi, then turn on Use local card.`);
+        setStatus(error?.message || `Step 3 could not save the safe LED output to ${cardHostToUrl(repairHost)}.`);
       }
-      setRecoveringLights(false);
+    } finally {
+      if (sequence === livePreviewSeq.current) setRecoveringLights(false);
+    }
+  };
+
+  const repairLedPostMirrorTest = async () => {
+    if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
+    const sequence = ++livePreviewSeq.current;
+    const repairHost = repairLedPrompt?.host || cardHost;
+    setHandoffUrl('');
+    setStatusKind('');
+    setRecoveringLights(true);
+    setStatus('Step 4: Testing the repaired mirrored output...');
+    try {
+      await recoverCardLights({
+        patternId: 'test-white',
+        brightness: 1,
+        syncZones: true,
+      }, {
+        host: repairHost,
+        timeoutMs: 4200,
+        autoDiscover: true,
+      });
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('ok');
+      setStatus('Step 4: White test sent after the output repair. Do you see light now?');
+      setRepairLedPrompt({ next: 'checks', host: repairHost });
+    } catch (error) {
+      if (sequence !== livePreviewSeq.current) return;
+      setStatusKind('err');
+      setStatus(error?.message || `Step 4 could not reach ${cardHostToUrl(repairHost)} after reboot.`);
+    } finally {
+      if (sequence === livePreviewSeq.current) setRecoveringLights(false);
     }
   };
 
@@ -1799,8 +1807,8 @@ export function PatternsScreen() {
             <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
               <span className="lw-action-group-label">Card</span>
               <button type="button" className="btn btn-primary lw-toolbar-primary" onClick={savePreviewToCard}>Save to card</button>
-              <button type="button" className="btn btn-ghost lw-toolbar-action lw-recover-lights-btn" onClick={recoverLightsOnCard} disabled={recoveringLights}>
-                {recoveringLights ? 'Recovering...' : 'Recover lights'}
+              <button type="button" className="btn btn-ghost lw-toolbar-action lw-recover-lights-btn" onClick={startRepairLed} disabled={recoveringLights}>
+                {recoveringLights ? 'Repairing...' : 'Repair LED'}
               </button>
             </div>
             <div className="lw-action-group" aria-label="Section layout">
@@ -1830,6 +1838,35 @@ export function PatternsScreen() {
         {status && (
           <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
             {status}
+            {repairLedPrompt && (
+              <div className="lw-repair-actions" aria-label="LED repair response">
+                {repairLedPrompt.next !== 'post-mirror-test' && (
+                  <button type="button" className="btn btn-primary" onClick={repairLedFixed} disabled={recoveringLights}>
+                    Yes, fixed
+                  </button>
+                )}
+                {repairLedPrompt.next === 'white' && (
+                  <button type="button" className="btn btn-ghost" onClick={repairLedWhiteTest} disabled={recoveringLights}>
+                    No, try white test
+                  </button>
+                )}
+                {repairLedPrompt.next === 'mirror' && (
+                  <button type="button" className="btn btn-ghost" onClick={repairLedMirroredOutput} disabled={recoveringLights}>
+                    No, repair output
+                  </button>
+                )}
+                {repairLedPrompt.next === 'post-mirror-test' && (
+                  <button type="button" className="btn btn-primary" onClick={repairLedPostMirrorTest} disabled={recoveringLights}>
+                    Test repaired output
+                  </button>
+                )}
+                {repairLedPrompt.next === 'checks' && (
+                  <button type="button" className="btn btn-ghost" onClick={repairLedPhysicalChecks} disabled={recoveringLights}>
+                    No, show checks
+                  </button>
+                )}
+              </div>
+            )}
             {handoffUrl && (
               <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
                 Open card installer

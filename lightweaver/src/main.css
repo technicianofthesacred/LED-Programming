@@ -5241,6 +5241,20 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   background: oklch(28% 0.05 35 / 0.28);
 }
 
+.lw-repair-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-left: auto;
+}
+
+.lw-repair-actions .btn {
+  min-height: 32px;
+  padding: 7px 10px;
+  font-size: var(--fs-xs);
+}
+
 .lw-patterns-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 390px);

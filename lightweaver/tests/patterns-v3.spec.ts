@@ -174,7 +174,7 @@ test('selected patterns can reset color and motion back to defaults', async ({ p
   ))).toBe(true);
 });
 
-test('v3 patterns can recover dark lights onto the selected surface', async ({ page }) => {
+test('v3 patterns repairs LEDs in escalating user-confirmed steps', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/zones', async route => {
     await route.fulfill({
@@ -194,6 +194,19 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
+    });
+  });
+  await page.route('http://lightweaver.local/api/firmware-info', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        pixels: 44,
+        outputs: [
+          { id: 'patch-default-outer-circle', pin: 16, pixels: 22 },
+          { id: 'patch-default-inner-circle', pin: 17, pixels: 22 },
+        ],
+      }),
     });
   });
   await page.route('http://lightweaver.local/api/control', async route => {
@@ -220,6 +233,33 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
       }),
     });
   });
+  const identifyRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/identify', async route => {
+    identifyRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    });
+  });
+  const configRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, requiresReboot: true }),
+    });
+  });
+  const rebootRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/reboot', async route => {
+    rebootRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    });
+  });
 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -230,7 +270,7 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
   await expect.poll(() => controlRequests.length).toBe(1);
 
   controlRequests.length = 0;
-  await page.getByRole('button', { name: 'Recover lights' }).click();
+  await page.getByRole('button', { name: 'Repair LED' }).click();
 
   await expect.poll(() => recoveryRequests.length).toBe(1);
   expect(recoveryRequests[0]).toMatchObject({
@@ -238,24 +278,41 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
     patternId: 'warm-white',
     brightness: 1,
   });
-  await expect.poll(() => controlRequests.length).toBe(2);
-  expect(controlRequests.map(request => ({
-    zone: request.zone,
-    patternId: request.patternId,
-    syncZones: request.syncZones,
-    blackout: request.blackout,
-    brightness: request.brightness,
-  }))).toEqual([
-    { zone: 'patch-default-outer-circle', patternId: 'ocean', syncZones: false, blackout: false, brightness: 1 },
-    { zone: 'patch-default-inner-circle', patternId: 'aurora', syncZones: false, blackout: false, brightness: 1 },
-  ]);
-  expect(controlRequests[0]).toMatchObject({
-    zone: 'patch-default-outer-circle',
-    patternId: 'ocean',
-    blackout: false,
+  expect(controlRequests).toHaveLength(0);
+  await expect(page.locator('.lw-chip-status')).toContainText('Step 1');
+  await expect(page.getByRole('button', { name: 'Yes, fixed' })).toBeVisible();
+  await page.getByRole('button', { name: 'No, try white test' }).click();
+
+  await expect.poll(() => identifyRequests.length).toBe(1);
+  await expect.poll(() => recoveryRequests.length).toBe(2);
+  expect(recoveryRequests[1]).toMatchObject({
+    syncZones: true,
+    patternId: 'test-white',
+    brightness: 1,
   });
-  await expect(page.locator('.lw-chip-status')).toContainText('Recovery commands accepted on Outer circle');
-  await expect(page.locator('.lw-chip-status')).toContainText('check LED power');
+  await expect(page.locator('.lw-chip-status')).toContainText('Step 2');
+  await page.getByRole('button', { name: 'No, repair output' }).click();
+
+  await expect.poll(() => configRequests.length).toBe(1);
+  expect(configRequests[0]).toMatchObject({
+    led: {
+      pixels: 44,
+      outputs: [{ id: 'out1', pin: 16, pixels: 44 }],
+    },
+    syncZones: true,
+  });
+  await expect.poll(() => rebootRequests.length).toBe(1);
+  await expect(page.locator('.lw-chip-status')).toContainText('Step 3');
+  await expect(page.getByRole('button', { name: 'Test repaired output' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Test repaired output' }).click();
+  await expect.poll(() => recoveryRequests.length).toBe(3);
+  expect(recoveryRequests[2]).toMatchObject({
+    syncZones: true,
+    patternId: 'test-white',
+    brightness: 1,
+  });
+  await expect(page.locator('.lw-chip-status')).toContainText('Step 4');
 });
 
 test('v3 patterns can test strip colors and toggle RGB order live', async ({ page }) => {

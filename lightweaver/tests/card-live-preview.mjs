@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {
+  buildMirroredLedRepairPackage,
   buildLiveHardwareControlPayload,
   buildLivePreviewControlPayload,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
   recoverCardLights,
+  repairMirroredLedOutputOnCard,
   resetLiveOutputOnCard,
   pushSectionPreviewToCard,
 } from '../src/lib/cardLiveControl.js';
@@ -121,6 +123,77 @@ assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
   brightness: 1,
   syncZones: true,
 });
+
+const repairPackage = buildMirroredLedRepairPackage({
+  app: 'Lightweaver',
+  format: 'lightweaver-card-runtime-package',
+  version: 1,
+  config: {
+    version: 1,
+    mode: 'website-flash',
+    piece: { id: 'piece', name: 'Two output project' },
+    led: {
+      pixels: 44,
+      colorOrder: 'RGB',
+      brightnessLimit: 0.65,
+      outputs: [
+        { id: 'outer', name: 'Outer', pin: 16, pixels: 22 },
+        { id: 'inner', name: 'Inner', pin: 17, pixels: 22 },
+      ],
+    },
+    controls: {},
+    patterns: [{ id: 'fire', label: 'Fire', mode: 'procedural' }],
+    looks: [{ id: 'fire', label: 'Fire', mode: 'procedural', preset: 'fire', brightness: 1 }],
+    startupPatternId: 'fire',
+    zones: [
+      { id: 'outer', label: 'Outer', patternId: 'fire', ranges: [{ start: 0, count: 22 }] },
+      { id: 'inner', label: 'Inner', patternId: 'ripple', ranges: [{ start: 22, count: 22 }] },
+    ],
+    syncZones: false,
+  },
+});
+assert.deepEqual(repairPackage.config.led.outputs, [
+  { id: 'out1', name: 'Output 1 mirrored', pin: 16, pixels: 44 },
+]);
+assert.equal(repairPackage.config.led.pixels, 44);
+assert.equal(repairPackage.config.syncZones, true);
+assert.equal(repairPackage.config.startupPatternId, 'fire');
+
+const repairRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  repairRequests.push({ url, options });
+  if (String(url).endsWith('/api/firmware-info')) {
+    return {
+      ok: true,
+      json: async () => ({
+        pixels: 44,
+        outputs: [
+          { id: 'outer', pin: 16, pixels: 22 },
+          { id: 'inner', pin: 17, pixels: 22 },
+        ],
+      }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true }),
+  };
+};
+
+const repairResponse = await repairMirroredLedOutputOnCard(repairPackage, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+
+assert.equal(repairResponse.rebooting, true);
+assert.deepEqual(repairRequests.map(item => item.url), [
+  'http://192.168.18.70/api/firmware-info',
+  'http://192.168.18.70/api/config',
+  'http://192.168.18.70/api/reboot',
+]);
+assert.deepEqual(JSON.parse(repairRequests[1].options.body).led.outputs, [
+  { id: 'out1', name: 'Output 1 mirrored', pin: 16, pixels: 44 },
+]);
 
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {

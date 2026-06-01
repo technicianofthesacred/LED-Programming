@@ -6,7 +6,8 @@ import {
   readStoredCardHost,
 } from './cardConnection.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
-import { CardPushError } from './cardPushClient.js';
+import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
+import { CardPushError, pushConfigToCard } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
 
 function isMixedContentBlocked() {
@@ -14,6 +15,9 @@ function isMixedContentBlocked() {
 }
 
 const COLOR_ORDER_OPTIONS = new Set(['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR']);
+const MIRRORED_REPAIR_OUTPUT_PIN = 16;
+const MIRRORED_REPAIR_DEFAULT_PIXELS = 44;
+const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'plasma', 'ocean', 'rainbow', 'scanner'];
 
 export function buildLiveHardwareControlPayload(settings = {}) {
   const colorOrder = String(settings.colorOrder || '').toUpperCase();
@@ -46,6 +50,103 @@ function buildRecoverLightsPayload(look = {}) {
     patternId: normalized.patternId,
     brightness: normalized.brightness,
     ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
+  };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+function sumOutputPixels(outputs = []) {
+  return Array.isArray(outputs)
+    ? outputs.reduce((sum, output) => sum + Math.max(0, Math.floor(Number(output?.pixels ?? output?.pixelCount) || 0)), 0)
+    : 0;
+}
+
+function defaultRepairPatterns() {
+  return DEFAULT_CARD_PATTERN_BANK.map(pattern => ({
+    id: pattern.id,
+    label: pattern.label,
+    mode: pattern.mode || (pattern.id === 'warm-white' ? 'preset' : 'procedural'),
+    ...(pattern.preset ? { preset: pattern.preset } : {}),
+  }));
+}
+
+function defaultRepairLooks() {
+  return MIRRORED_REPAIR_LOOK_IDS.map(id => {
+    const pattern = DEFAULT_CARD_PATTERN_BANK.find(item => item.id === id) || { id, label: id };
+    return {
+      id,
+      label: pattern.label || id,
+      mode: id === 'warm-white' ? 'preset' : 'procedural',
+      preset: id,
+      brightness: 1,
+    };
+  });
+}
+
+export function buildMirroredLedRepairPackage(runtimePackage = {}, options = {}) {
+  const sourcePackage = runtimePackage?.config ? runtimePackage : { config: runtimePackage };
+  const sourceConfig = cloneJson(sourcePackage.config || {});
+  const configuredOutputPixels = sumOutputPixels(sourceConfig.led?.outputs || sourceConfig.outputs);
+  const pixelCount = Math.max(
+    1,
+    Math.floor(Number(options.pixels || configuredOutputPixels || sourceConfig.led?.pixels || MIRRORED_REPAIR_DEFAULT_PIXELS) || MIRRORED_REPAIR_DEFAULT_PIXELS),
+  );
+  const patterns = Array.isArray(sourceConfig.patterns) && sourceConfig.patterns.length
+    ? sourceConfig.patterns
+    : defaultRepairPatterns();
+  const looks = Array.isArray(sourceConfig.looks) && sourceConfig.looks.length
+    ? sourceConfig.looks
+    : defaultRepairLooks();
+  const startupPatternId = sourceConfig.startupPatternId || looks[0]?.id || 'fire';
+  const zones = Array.isArray(sourceConfig.zones) && sourceConfig.zones.length
+    ? sourceConfig.zones
+    : [{
+        id: 'full-piece',
+        label: 'Full piece',
+        patternId: startupPatternId,
+        brightness: 1,
+        speed: 1,
+        hueShift: 0,
+        customHue: 32,
+        customSaturation: 230,
+        ranges: [{ start: 0, count: pixelCount }],
+      }];
+
+  return {
+    app: sourcePackage.app || 'Lightweaver',
+    format: sourcePackage.format || 'lightweaver-card-runtime-package',
+    version: sourcePackage.version || 1,
+    config: {
+      ...sourceConfig,
+      version: sourceConfig.version || 1,
+      mode: sourceConfig.mode || 'website-flash',
+      piece: {
+        id: sourceConfig.piece?.id || sourceConfig.projectId || 'lightweaver-repair',
+        name: options.projectName || sourceConfig.piece?.name || sourceConfig.projectName || 'Lightweaver repair',
+      },
+      led: {
+        ...(sourceConfig.led || {}),
+        pixels: pixelCount,
+        colorOrder: sourceConfig.led?.colorOrder || 'RGB',
+        brightnessLimit: Number.isFinite(Number(sourceConfig.led?.brightnessLimit))
+          ? Number(sourceConfig.led.brightnessLimit)
+          : 0.65,
+        outputs: [{
+          id: 'out1',
+          name: 'Output 1 mirrored',
+          pin: MIRRORED_REPAIR_OUTPUT_PIN,
+          pixels: pixelCount,
+        }],
+      },
+      controls: sourceConfig.controls || {},
+      patterns,
+      looks,
+      startupPatternId,
+      zones,
+      syncZones: true,
+    },
   };
 }
 
@@ -550,4 +651,22 @@ export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
     }
     throw normalizePreviewError(host, error);
   }
+}
+
+export async function repairMirroredLedOutputOnCard(runtimePackage = {}, options = {}) {
+  const host = options.host || readStoredCardHost();
+  const repairPackage = buildMirroredLedRepairPackage(runtimePackage, options);
+  const response = await pushConfigToCard(repairPackage, {
+    ...options,
+    host,
+    timeoutMs: options.timeoutMs || 6000,
+    reboot: options.reboot || 'if-needed',
+    allowLayoutChange: true,
+  });
+  return {
+    ...response,
+    repairPackage,
+    outputPin: MIRRORED_REPAIR_OUTPUT_PIN,
+    pixels: repairPackage.config.led.pixels,
+  };
 }
