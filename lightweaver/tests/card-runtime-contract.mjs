@@ -148,15 +148,6 @@ assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 
-const wiredBrightnessPkg = buildCardRuntimePackageFromProject({
-  projectName: 'Wired Brightness',
-  standaloneController: {
-    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 60 }],
-    controls: { brightness: 1, brightnessWire: true },
-  },
-});
-assert.equal(wiredBrightnessPkg.config.controls.brightness, 1);
-
 const visualLookPkg = buildCardRuntimePackageFromProject({
   projectName: 'Visual Look',
   standaloneController: {

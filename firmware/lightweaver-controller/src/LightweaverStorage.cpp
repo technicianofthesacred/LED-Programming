@@ -56,7 +56,7 @@ void resetControls(ControlsConfig& controls) {
   controls.brightness = -1;
   controls.statusLed = DEFAULT_STATUS_LED_PIN;
   controls.rotateDirection = "clockwise-brighter";
-  controls.brightnessStep = 24;
+  controls.brightnessStep = 48;
 }
 
 void resetLookZone(LookZoneConfig& zone) {
@@ -155,7 +155,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.controls.encoderPress = encoder["press"] | 0;
   config.controls.encoderPressAlt = encoder["alternatePress"] | 6;
   config.controls.rotateDirection = String(encoder["rotateDirection"] | "clockwise-brighter");
-  config.controls.brightnessStep = encoder["brightnessStep"] | 24;
+  config.controls.brightnessStep = encoder["brightnessStep"] | 48;
   config.controls.previous = controlsJson["previous"] | 7;
   config.controls.next = controlsJson["next"] | 8;
   config.controls.blackout = controlsJson["blackout"] | 9;

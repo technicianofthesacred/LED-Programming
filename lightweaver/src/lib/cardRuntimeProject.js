@@ -103,9 +103,7 @@ function cardSafeControls(controls = {}, playlist = []) {
   const playlistLookIds = derivePlaylistLookIds(playlist);
   return {
     ...(controls || {}),
-    brightness: controls?.brightnessWire === true && Number.isFinite(Number(controls?.brightness))
-      ? Number(controls.brightness)
-      : DEFAULT_CARD_CONTROLS.brightness,
+    brightness: DEFAULT_CARD_CONTROLS.brightness,
     encoder: {
       ...(controls?.encoder || {}),
       press: DEFAULT_CARD_CONTROLS.encoder.press,

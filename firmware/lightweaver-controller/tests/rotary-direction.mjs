@@ -198,10 +198,11 @@ int main() {
   assert(runPressSequence(6, 6, 0) == CONTROL_NEXT_LOOK);
   assert(runPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
   assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
-  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) <= 0.50f);
-  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) >= 0.30f);
-  assert(applyRepeatedBrightness(0.4f, CONTROL_BRIGHTER, 18, 7) == 1.0f);
-  assert(applyRepeatedBrightness(0.4f, CONTROL_DIMMER, 18, 5) <= 0.03f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) >= 0.58f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) <= 0.60f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) <= 0.22f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_BRIGHTER, 18, 4) == 1.0f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_DIMMER, 18, 3) <= 0.03f);
 
   return 0;
 }

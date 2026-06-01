@@ -2162,25 +2162,6 @@ export function PatternsScreen() {
                   />
                   <b>{controls.encoder.brightnessStep}</b>
                 </label>
-                <div>
-                  <span>Wire</span>
-                  <div className="lw-tweaks-seg">
-                    <button
-                      type="button"
-                      className={controls.brightnessWire !== true ? 'active' : ''}
-                      onClick={() => updateController({ controls: { brightness: -1, brightnessWire: false } })}
-                    >
-                      Off
-                    </button>
-                    <button
-                      type="button"
-                      className={controls.brightnessWire === true && controls.brightness === 1 ? 'active' : ''}
-                      onClick={() => updateController({ controls: { brightness: 1, brightnessWire: true } })}
-                    >
-                      GPIO1
-                    </button>
-                  </div>
-                </div>
               </div>
             </Section>
 

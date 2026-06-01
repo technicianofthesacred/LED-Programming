@@ -970,13 +970,6 @@ void runtimeSetBrightness(float value01) {
   applyToZones("", [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
-void runtimeSetBrightnessAnalogPin(int pin) {
-  if (pin < -1) pin = -1;
-  if (pin > 48) pin = 48;
-  controls.brightness = pin;
-  runtimeConfig.controls.brightness = pin;
-}
-
 void runtimeSetSpeed(float speed) {
   if (speed < 0.05f) speed = 0.05f;
   if (speed > 3.0f) speed = 3.0f;
@@ -1071,7 +1064,6 @@ void runtimeTriggerIdentify() {
 }
 
 float runtimeGetBrightness() { return manualBrightness; }
-int runtimeGetBrightnessAnalogPin() { return controls.brightness; }
 float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
