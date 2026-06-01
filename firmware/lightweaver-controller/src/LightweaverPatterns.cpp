@@ -276,6 +276,10 @@ bool renderPresetPattern(const String& preset, CRGB* leds, uint16_t totalPixels,
     fill_solid(leds, totalPixels, CRGB::Blue);
     return true;
   }
+  if (preset == "test-white" || preset == "white") {
+    fill_solid(leds, totalPixels, CRGB::White);
+    return true;
+  }
   // Hue-shifted whites: warm-white at hue 32, cool-white at hue 160, photo-white at hue 28
   uint8_t baseHue = 32;
   uint8_t saturation = 80;

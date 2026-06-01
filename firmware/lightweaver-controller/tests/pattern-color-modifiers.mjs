@@ -12,5 +12,6 @@ assert.match(source, /int16_t\(mods\.customHue\) - int16_t\(LW_DEFAULT_CUSTOM_HU
 assert.match(source, /hsv\.saturation = uint8_t\(sat > 255 \? 255 : sat\)/);
 assert.match(source, /applyGlobalColorModifiers\(leds, totalPixels, t, mods\);/);
 assert.match(source, /applyGlobalColorModifiers\(leds, totalPixels, millis\(\), mods\);/);
+assert.match(source, /preset == "test-white"/, 'firmware preset renderer should support a white strip test');
 
 console.log('pattern-color-modifiers ok');

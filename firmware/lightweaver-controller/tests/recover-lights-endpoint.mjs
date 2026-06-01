@@ -76,6 +76,12 @@ assert.match(
 
 assert.match(
   main,
+  /id == "test-white"/,
+  'recover-lights should recognize the white strip test preset',
+);
+
+assert.match(
+  main,
   /brightnessByte/,
   'recover diagnostics should report the final FastLED brightness byte',
 );

@@ -774,7 +774,9 @@ bool isRecoveryPresetPattern(const String& id) {
          id == "test-green" ||
          id == "green" ||
          id == "test-blue" ||
-         id == "blue";
+         id == "blue" ||
+         id == "test-white" ||
+         id == "white";
 }
 
 bool renderRecoveryPattern(const String& id, CRGB* target, uint16_t count, uint32_t now, const PatternModifiers& mods) {
@@ -789,6 +791,7 @@ CRGB colorForPreset(const String& preset) {
   if (preset == "test-red" || preset == "red") return CRGB::Red;
   if (preset == "test-green" || preset == "green") return CRGB::Green;
   if (preset == "test-blue" || preset == "blue") return CRGB::Blue;
+  if (preset == "test-white" || preset == "white") return CRGB::White;
   if (preset == "cool-white") return CRGB(190, 210, 255);
   if (preset == "photo-white") return CRGB(255, 238, 210);
   return CRGB(255, 170, 92);

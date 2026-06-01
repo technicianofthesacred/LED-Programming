@@ -19,7 +19,7 @@ import {
   DEFAULT_CIRCLE_TOTAL_PIXELS,
   isDefaultCircleLayout,
 } from '../lib/defaultCircleLayout.js';
-import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
+import { DEFAULT_STANDALONE_LED, DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
 import {
   ALL_SECTIONS_TARGET_ID,
   applyLookToPatchBoard,
@@ -102,7 +102,9 @@ const STRIP_COLOR_TESTS = [
   { id: 'test-red', label: 'Red', shortLabel: 'R' },
   { id: 'test-green', label: 'Green', shortLabel: 'G' },
   { id: 'test-blue', label: 'Blue', shortLabel: 'B' },
+  { id: 'test-white', label: 'White', shortLabel: 'W' },
 ];
+const STRIP_TYPE_OPTIONS = ['WS2815', 'WS2812B', 'SK6812', 'APA102', 'Other'];
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -786,6 +788,9 @@ export function PatternsScreen() {
     },
   };
   const stripColorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
+  const stripLedType = STRIP_TYPE_OPTIONS.includes(standaloneController?.led?.type)
+    ? standaloneController.led.type
+    : DEFAULT_STANDALONE_LED.type;
   const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
     ? []
     : standaloneController?.playlist;
@@ -1021,6 +1026,13 @@ export function PatternsScreen() {
       setStatusKind('err');
       setStatus(error?.message || `${nextOrder} color order could not reach ${cardHostToUrl(cardHost)}.`);
     }
+  };
+
+  const applyStripType = (type) => {
+    const nextType = STRIP_TYPE_OPTIONS.includes(type) ? type : DEFAULT_STANDALONE_LED.type;
+    updateController({ led: { type: nextType } });
+    setStatusKind('');
+    setStatus(`${nextType} selected for this project. Use the color tests and RGB order buttons to verify the live strip.`);
   };
 
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
@@ -1771,31 +1783,31 @@ export function PatternsScreen() {
           <div className="lw-patterns-actions" aria-label="Card controls">
             <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
               <span className="lw-action-group-label">Card</span>
-              <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
-              <button type="button" className="btn lw-recover-lights-btn" onClick={recoverLightsOnCard} disabled={recoveringLights}>
+              <button type="button" className="btn btn-primary lw-toolbar-primary" onClick={savePreviewToCard}>Save to card</button>
+              <button type="button" className="btn btn-ghost lw-toolbar-action lw-recover-lights-btn" onClick={recoverLightsOnCard} disabled={recoveringLights}>
                 {recoveringLights ? 'Recovering...' : 'Recover lights'}
               </button>
             </div>
             <div className="lw-action-group" aria-label="Section layout">
-              <span className="lw-action-group-label">Section layout</span>
-              <button type="button" className="btn" onClick={applySplitPreviewToCard}>Send split preview</button>
+              <span className="lw-action-group-label">Section</span>
+              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={applySplitPreviewToCard}>Send split preview</button>
             </div>
             <div className="lw-action-group" aria-label="Card connection">
               <span className="lw-action-group-label">Connection</span>
               <button
                 type="button"
-                className={`btn ${localChipDefault ? 'btn-primary' : ''}`}
+                className={`btn btn-ghost lw-toolbar-action ${localChipDefault ? 'is-active' : ''}`}
                 aria-pressed={localChipDefault}
                 onClick={toggleLocalChipDefault}
               >
                 {localChipDefault ? 'Using local card' : 'Use local card'}
               </button>
-              <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
+              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
             </div>
             <div className="lw-action-group" aria-label="Manual setup">
-              <span className="lw-action-group-label">Manual setup</span>
-              <button type="button" className="btn" onClick={copyConfig}>Copy setup</button>
-              <button type="button" className="btn btn-ghost" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup</button>
+              <span className="lw-action-group-label">Setup</span>
+              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={copyConfig}>Copy setup</button>
+              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup</button>
             </div>
           </div>
         </header>
@@ -1836,10 +1848,27 @@ export function PatternsScreen() {
             </div>
             <div className="lw-strip-color-test" aria-label="Strip color test">
               <div className="lw-strip-color-copy">
-                <span>Strip color</span>
-                <strong>Order <b data-testid="strip-color-order">{stripColorOrder}</b></strong>
+                <span>Strip finder</span>
+                <strong>
+                  Type <b data-testid="strip-led-type">{stripLedType}</b> / Order <b data-testid="strip-color-order">{stripColorOrder}</b>
+                </strong>
               </div>
               <div className="lw-strip-color-actions">
+                <span className="lw-strip-color-action-row" aria-label="Strip type">
+                  <em>Strip type</em>
+                  {STRIP_TYPE_OPTIONS.map(type => (
+                    <button
+                      key={type}
+                      type="button"
+                      className={`btn btn-ghost ${stripLedType === type ? 'active' : ''}`}
+                      aria-label={`${type} strip`}
+                      aria-pressed={stripLedType === type}
+                      onClick={() => applyStripType(type)}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </span>
                 <span className="lw-strip-color-action-row">
                   <em>Color test</em>
                   {STRIP_COLOR_TESTS.map(test => (

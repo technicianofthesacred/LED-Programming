@@ -5,6 +5,7 @@ const PATTERN_IDS = new Set([
   'test-red',
   'test-green',
   'test-blue',
+  'test-white',
 ]);
 
 export const DEFAULT_CARD_VISUAL_LOOK = Object.freeze({
