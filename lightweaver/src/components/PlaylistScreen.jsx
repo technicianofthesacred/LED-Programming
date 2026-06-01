@@ -7,6 +7,10 @@ import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
 import {
+  buildPatternPlaylistPreview,
+  buildSavedLookPlaylistPreviewTargets,
+} from '../lib/playlistLivePreview.js';
+import {
   derivePlaylistLookIds,
   isImplicitDefaultPatternPlaylist,
   makeComboPlaylistItem,
@@ -22,6 +26,7 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -93,6 +98,7 @@ function PlaylistRow({
   onFirst,
   onDuplicate,
   onRemove,
+  onPreview,
 }) {
   const pattern = item.type === 'pattern' ? getCardPatternById(item.patternId) : null;
   const sectionCount = savedLook ? Object.keys(savedLook.sectionLooks || {}).length || 1 : 1;
@@ -126,6 +132,7 @@ function PlaylistRow({
         </span>
       </div>
       <div className="lw-playlist-row-actions">
+        <button type="button" className="btn btn-ghost" onClick={() => onPreview(item)}>Live</button>
         <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onMove(index, -1)}>Up</button>
         <button type="button" className="btn btn-ghost" disabled={index === count - 1} onClick={() => onMove(index, 1)}>Down</button>
         <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onFirst(index)}>Make first</button>
@@ -230,6 +237,55 @@ export function PlaylistScreen() {
     writePlaylist(next, `${item?.label || 'Look'} removed from the playlist.`);
   };
 
+  const previewPatternOnCard = async (patternId, label = '') => {
+    const previewLabel = label || getCardPatternById(patternId)?.label || patternId;
+    setHandoffUrl('');
+    setStatusKind('');
+    setStatus(`Previewing ${previewLabel} live on ${cardHostToUrl(cardHost)}...`);
+    try {
+      await pushLivePreviewToCard(
+        buildPatternPlaylistPreview(patternId),
+        { host: cardHost, timeoutMs: 2200 },
+      );
+      setStatusKind('ok');
+      setStatus(`${previewLabel} is live on the card. Load playlist to keep this knob order.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? error.message
+        : `Could not preview ${previewLabel} on ${cardHostToUrl(cardHost)}.`);
+    }
+  };
+
+  const previewSavedLookOnCard = async (savedLook) => {
+    if (!savedLook) return;
+    setHandoffUrl('');
+    setStatusKind('');
+    setStatus(`Previewing ${savedLook.label} live on ${cardHostToUrl(cardHost)}...`);
+    try {
+      await pushSectionPreviewToCard(
+        buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board }),
+        { host: cardHost, timeoutMs: 2600 },
+      );
+      setStatusKind('ok');
+      setStatus(`${savedLook.label} is live on the card. Load playlist to keep this knob order.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? error.message
+        : `Could not preview ${savedLook.label} on ${cardHostToUrl(cardHost)}.`);
+    }
+  };
+
+  const previewPlaylistItem = (item) => {
+    if (!item) return;
+    if (item.type === 'combo') {
+      void previewSavedLookOnCard(savedLookById.get(item.lookId));
+      return;
+    }
+    void previewPatternOnCard(item.patternId, item.label);
+  };
+
   const startPlaylistDrag = (event, index) => {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', String(index));
@@ -259,25 +315,26 @@ export function PlaylistScreen() {
   };
 
   const addPattern = (patternId) => {
+    const label = getCardPatternById(patternId)?.label || patternId;
     if (playlistContainsPattern(playlist, patternId)) {
-      setStatusKind('');
-      setStatus(`${getCardPatternById(patternId)?.label || patternId} is already in the playlist. Use Copy on the row if you need it twice.`);
+      void previewPatternOnCard(patternId, label);
       return;
     }
     const item = makePatternPlaylistItem(patternId);
     if (!item) return;
     writePlaylist([...playlist, item], `${item.label} added to the playlist.`);
+    void previewPatternOnCard(patternId, item.label);
   };
 
   const addCombo = (savedLook) => {
     if (playlistContainsCombo(playlist, savedLook.id)) {
-      setStatusKind('');
-      setStatus(`${savedLook.label} is already in the playlist. Use Copy on the row if you need it twice.`);
+      void previewSavedLookOnCard(savedLook);
       return;
     }
     const item = makeComboPlaylistItem(savedLook);
     if (!item) return;
     writePlaylist([...playlist, item], `${item.label} added to the playlist.`);
+    void previewSavedLookOnCard(savedLook);
   };
 
   const persistHost = (value) => {
@@ -379,6 +436,7 @@ export function PlaylistScreen() {
                   onFirst={makeFirst}
                   onDuplicate={duplicateItem}
                   onRemove={removeItem}
+                  onPreview={previewPlaylistItem}
                 />
               ))}
             </div>
