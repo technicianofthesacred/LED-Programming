@@ -5523,6 +5523,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     radial-gradient(circle at 22% 34%, color-mix(in oklch, var(--palette-b) 44%, transparent), transparent 35%),
     radial-gradient(circle at 74% 66%, color-mix(in oklch, var(--palette-c) 36%, transparent), transparent 38%),
     var(--pattern-thumb-bg, oklch(10% 0.012 250));
+  isolation: isolate;
 }
 
 .lw-pattern-thumb::before {
@@ -5545,6 +5546,32 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     linear-gradient(90deg, var(--palette-a), var(--palette-b), var(--palette-c), var(--palette-d));
   filter: blur(10px) saturate(1.12);
   opacity: 0.42;
+}
+
+.lw-pattern-thumb.motion-ring::after,
+.lw-compound-thumb-cell.motion-ring::after,
+.lw-playlist-thumb.motion-ring::after {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  z-index: 1;
+  border-radius: 999px;
+  background:
+    repeating-radial-gradient(
+      circle at 50% 50%,
+      transparent 0 18%,
+      color-mix(in oklch, var(--palette-b, oklch(78% 0.14 220)) 78%, transparent) 19% 22%,
+      transparent 23% 36%
+    );
+  mix-blend-mode: screen;
+  opacity: 0.68;
+  pointer-events: none;
+  transform-origin: 50% 50%;
+  animation: lw-thumb-ripple 1.85s linear infinite;
+}
+
+.lw-pattern-thumb.motion-ring .lw-pattern-thumb-glow {
+  animation: lw-thumb-ripple-glow 1.85s ease-in-out infinite;
 }
 
 .lw-pattern-thumb-swatch-row {
@@ -5586,6 +5613,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     radial-gradient(circle at 28% 28%, color-mix(in oklch, var(--palette-b) 48%, transparent), transparent 42%),
     radial-gradient(circle at 72% 72%, color-mix(in oklch, var(--palette-c) 38%, transparent), transparent 42%),
     var(--pattern-thumb-bg, oklch(10% 0.012 250));
+  isolation: isolate;
 }
 
 .lw-compound-thumb-cell i {
@@ -6033,6 +6061,19 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   animation: lw-led-preview-sweep 4.4s ease-in-out infinite;
 }
 
+.lw-look-preview.motion-ring::after {
+  background:
+    repeating-radial-gradient(
+      circle at 50% 50%,
+      transparent 0 12%,
+      color-mix(in oklch, var(--palette-b) 82%, transparent) 13% 16%,
+      transparent 17% 27%
+    );
+  opacity: 0.32;
+  transform: scale(0.72);
+  animation: lw-thumb-ripple 1.85s linear infinite;
+}
+
 .lw-look-led-field {
   inset: 12px 13px;
   z-index: 3;
@@ -6053,6 +6094,11 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   transform: translate(-50%, -50%) scale(var(--scale, 1));
   animation: lw-led-pixel-breathe 2.8s ease-in-out infinite;
   animation-delay: var(--delay);
+}
+
+.lw-look-preview.motion-ring .lw-look-led-field i {
+  animation-name: lw-led-ripple-pulse;
+  animation-duration: 1.85s;
 }
 
 .lw-look-preview.is-large .lw-look-led-field {
@@ -6647,14 +6693,17 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-playlist-thumb {
+  position: relative;
   min-height: 52px;
   border: 1px solid oklch(100% 0 0 / 0.1);
   border-radius: 5px;
+  overflow: hidden;
   background:
     radial-gradient(circle at 28% 34%, color-mix(in oklch, var(--palette-b) 48%, transparent), transparent 34%),
     radial-gradient(circle at 72% 68%, color-mix(in oklch, var(--palette-c) 40%, transparent), transparent 35%),
     var(--thumb-bg, oklch(10% 0.012 250));
   box-shadow: inset 0 0 24px oklch(0% 0 0 / 0.28);
+  isolation: isolate;
 }
 
 .lw-playlist-thumb-more {
@@ -7754,6 +7803,44 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 @keyframes lw-look-pulse {
   0%, 100% { opacity: 0.62; transform: scale(0.92); }
   50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes lw-thumb-ripple {
+  0% {
+    opacity: 0.14;
+    transform: scale(0.58) rotate(0deg);
+  }
+  38% {
+    opacity: 0.78;
+  }
+  100% {
+    opacity: 0.12;
+    transform: scale(1.34) rotate(12deg);
+  }
+}
+
+@keyframes lw-thumb-ripple-glow {
+  0%, 100% {
+    opacity: 0.28;
+    transform: scale(0.9);
+  }
+  48% {
+    opacity: 0.62;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes lw-led-ripple-pulse {
+  0%, 100% {
+    opacity: 0.18;
+    filter: saturate(0.95) brightness(0.78);
+    transform: translate(-50%, -50%) scale(calc(var(--scale, 1) * 0.72));
+  }
+  44% {
+    opacity: 1;
+    filter: saturate(1.18) brightness(1.54);
+    transform: translate(-50%, -50%) scale(calc(var(--scale, 1) * 1.32));
+  }
 }
 
 @keyframes lw-led-pixel-breathe {
