@@ -26,7 +26,7 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
-import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
+import { pushLivePreviewToCard, pushSectionPreviewToCard, resetLiveOutputOnCard } from '../lib/cardLiveControl.js';
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -237,6 +237,16 @@ export function PlaylistScreen() {
     writePlaylist(next, `${item?.label || 'Look'} removed from the playlist.`);
   };
 
+  const fallbackLiveLook = () => {
+    const firstItem = playlist[0];
+    if (firstItem?.type === 'combo') {
+      const savedLook = savedLookById.get(firstItem.lookId);
+      return savedLook?.defaultLook || standaloneController?.defaultLook || {};
+    }
+    if (firstItem?.patternId) return buildPatternPlaylistPreview(firstItem.patternId);
+    return standaloneController?.defaultLook || {};
+  };
+
   const previewPatternOnCard = async (patternId, label = '') => {
     const previewLabel = label || getCardPatternById(patternId)?.label || patternId;
     setHandoffUrl('');
@@ -284,6 +294,27 @@ export function PlaylistScreen() {
       return;
     }
     void previewPatternOnCard(item.patternId, item.label);
+  };
+
+  const resetLiveOutput = async () => {
+    setHandoffUrl('');
+    setStatusKind('');
+    setStatus(`Resetting live output on ${cardHostToUrl(cardHost)}...`);
+    try {
+      const response = await resetLiveOutputOnCard(fallbackLiveLook(), {
+        host: cardHost,
+        timeoutMs: 3000,
+      });
+      setStatusKind('ok');
+      setStatus(response.source === 'zones'
+        ? `Live output reset from the card's current ${response.zonesPreviewed || 1} zone${response.zonesPreviewed === 1 ? '' : 's'}.`
+        : 'Live output reset from the first saved playlist look.');
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.reason === 'mixed-content'
+        ? error.message
+        : `Could not reset live output on ${cardHostToUrl(cardHost)}.`);
+    }
   };
 
   const startPlaylistDrag = (event, index) => {
@@ -386,6 +417,7 @@ export function PlaylistScreen() {
             <p>Choose exactly what lives on the card. Press the knob button to step through this list from top to bottom.</p>
           </div>
           <div className="lw-patterns-actions">
+            <button type="button" className="btn btn-primary" onClick={resetLiveOutput}>Reset live</button>
             <button type="button" className="btn btn-primary" onClick={loadPlaylistToCard}>Load playlist to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson)}>Download</button>

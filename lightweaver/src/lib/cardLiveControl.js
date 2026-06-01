@@ -138,6 +138,35 @@ function hasCardZones(zonesPayload) {
   return Array.isArray(zonesPayload?.zones) && zonesPayload.zones.length > 0;
 }
 
+function liveLookFromZone(zone = {}, fallbackLook = {}) {
+  return {
+    ...normalizeCardVisualLook({
+      ...fallbackLook,
+      ...(zone.patternId ? { patternId: zone.patternId } : {}),
+      ...(Number.isFinite(Number(zone.brightness)) ? { brightness: Number(zone.brightness) } : {}),
+      ...(Number.isFinite(Number(zone.speed)) ? { speed: Number(zone.speed) } : {}),
+      ...(Number.isFinite(Number(zone.hueShift)) ? { hueShift: Number(zone.hueShift) } : {}),
+      ...(Number.isFinite(Number(zone.customHue)) ? { customHue: Number(zone.customHue) } : {}),
+      ...(Number.isFinite(Number(zone.customSaturation)) ? { customSaturation: Number(zone.customSaturation) } : {}),
+      ...(typeof zone.customBreathe === 'boolean' ? { customBreathe: zone.customBreathe } : {}),
+      ...(typeof zone.customDrift === 'boolean' ? { customDrift: zone.customDrift } : {}),
+    }),
+    blackout: false,
+  };
+}
+
+function liveTargetsFromZones(zonesPayload = {}, fallbackLook = {}) {
+  return hasCardZones(zonesPayload)
+    ? zonesPayload.zones
+        .filter(zone => zone?.id)
+        .map(zone => ({
+          kind: 'section',
+          zone: String(zone.id),
+          look: liveLookFromZone(zone, fallbackLook),
+        }))
+    : [];
+}
+
 async function pushLivePreviewToHost(host, look, options = {}) {
   if (isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
@@ -460,6 +489,60 @@ export async function pushSectionPreviewToCard(targets, options = {}) {
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
           return await pushSectionPreviewToHost(found.host, targets, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
+  }
+}
+
+export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 3000, 1400)).catch(() => null);
+    const targets = liveTargetsFromZones(zonesPayload, fallbackLook);
+    if (targets.length) {
+      const results = [];
+      for (const target of targets) {
+        results.push(await pushLivePreviewToHost(host, {
+          ...target.look,
+          zone: target.zone,
+          syncZones: false,
+          blackout: false,
+        }, options));
+      }
+      return {
+        ok: true,
+        source: 'zones',
+        zonesPreviewed: targets.length,
+        results,
+      };
+    }
+
+    const response = await pushLivePreviewToHost(host, {
+      ...normalizeCardVisualLook(fallbackLook),
+      syncZones: true,
+      blackout: false,
+    }, options);
+    return {
+      ...response,
+      source: 'fallback',
+    };
+  } catch (error) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 3000, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await resetLiveOutputOnCard(fallbackLook, {
+            ...options,
+            host: found.host,
+            autoDiscover: false,
+          });
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
         }
