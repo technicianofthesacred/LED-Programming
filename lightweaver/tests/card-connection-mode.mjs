@@ -8,6 +8,7 @@ import {
   CARD_HOST_STORAGE_KEY,
   discoverCardStatus,
   normalizeCardHost,
+  reduceCardConnectionState,
   writeStoredCardHost,
 } from '../src/lib/cardConnection.js';
 
@@ -67,6 +68,53 @@ assert.deepEqual(probed.slice(0, 2), [
   'http://lightweaver.local/api/status',
   'http://192.168.18.70/api/status',
 ]);
+
+const connectedState = reduceCardConnectionState({
+  connected: false,
+  host: 'lightweaver.local',
+  status: null,
+  missCount: 0,
+  checkedAt: 10,
+}, {
+  connected: true,
+  host: '192.168.18.70',
+  status: { ok: true },
+}, { now: 20 });
+assert.equal(connectedState.connected, true);
+assert.equal(connectedState.reconnecting, false);
+assert.equal(connectedState.missCount, 0);
+assert.equal(connectedState.lastConnectedAt, 20);
+
+const firstMissState = reduceCardConnectionState(connectedState, {
+  connected: false,
+  host: '192.168.18.70',
+  error: new Error('timeout'),
+}, { now: 30, missLimit: 3 });
+assert.equal(firstMissState.connected, true);
+assert.equal(firstMissState.reconnecting, true);
+assert.equal(firstMissState.missCount, 1);
+assert.equal(firstMissState.host, '192.168.18.70');
+assert.deepEqual(firstMissState.status, { ok: true });
+
+const secondMissState = reduceCardConnectionState(firstMissState, {
+  connected: false,
+  host: 'lightweaver.local',
+  error: new Error('timeout'),
+}, { now: 40, missLimit: 3 });
+assert.equal(secondMissState.connected, true);
+assert.equal(secondMissState.reconnecting, true);
+assert.equal(secondMissState.missCount, 2);
+assert.equal(secondMissState.host, '192.168.18.70');
+
+const droppedState = reduceCardConnectionState(secondMissState, {
+  connected: false,
+  host: 'lightweaver.local',
+  error: new Error('timeout'),
+}, { now: 50, missLimit: 3 });
+assert.equal(droppedState.connected, false);
+assert.equal(droppedState.reconnecting, true);
+assert.equal(droppedState.missCount, 3);
+assert.equal(droppedState.host, '192.168.18.70');
 
 const storage = new Map();
 const events = [];

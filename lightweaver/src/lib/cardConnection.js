@@ -1,7 +1,10 @@
 export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
+export const CARD_HOST_HISTORY_STORAGE_KEY = 'lw_chip_card_host_history';
 export const CARD_HOST_CHANGED_EVENT = 'lightweaver-card-host-changed';
 export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.18.70', '192.168.4.1'];
+export const CARD_CONNECTION_MISS_LIMIT = 3;
+export const CARD_HOST_HISTORY_LIMIT = 8;
 
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
@@ -78,10 +81,46 @@ export function writeStoredCardHost(rawHost = '') {
   return host;
 }
 
+export function readStoredCardHostHistory() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CARD_HOST_HISTORY_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map(normalizeCardHost).filter(Boolean))].slice(0, CARD_HOST_HISTORY_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function rememberCardHost(rawHost = '') {
+  const host = normalizeCardHost(rawHost);
+  if (typeof window !== 'undefined') {
+    try {
+      const next = [host, ...readStoredCardHostHistory().filter(item => item !== host)]
+        .slice(0, CARD_HOST_HISTORY_LIMIT);
+      window.localStorage.setItem(CARD_HOST_HISTORY_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      /* quota */
+    }
+  }
+  return host;
+}
+
 export function candidateCardHosts(preferredHost = '') {
   const preferred = normalizeCardHost(preferredHost || readStoredCardHost());
-  const hosts = [preferred, ...CARD_HOST_FALLBACKS.map(normalizeCardHost)];
+  const history = readStoredCardHostHistory();
+  const hosts = [preferred, ...history, ...CARD_HOST_FALLBACKS.map(normalizeCardHost)];
   return [...new Set(hosts.filter(Boolean))];
+}
+
+function hostFromStatus(status, fallbackHost) {
+  return normalizeCardHost(
+    status?.wifi?.ip ||
+    status?.ip ||
+    status?.network?.ip ||
+    fallbackHost,
+  );
 }
 
 export async function discoverCardStatus({
@@ -100,11 +139,14 @@ export async function discoverCardStatus({
       if (!response?.ok) throw new Error(`status ${response?.status || 'failed'}`);
       const status = await response.json().catch(() => ({ ok: true }));
       if (status?.ok === false) throw new Error(status.error || 'card not ok');
-      if (persist) writeStoredCardHost(host);
+      const connectedHost = hostFromStatus(status, host);
+      rememberCardHost(connectedHost);
+      if (host !== connectedHost) rememberCardHost(host);
+      if (persist) writeStoredCardHost(connectedHost);
       return {
         connected: true,
-        host,
-        url: cardHostToUrl(host),
+        host: connectedHost,
+        url: cardHostToUrl(connectedHost),
         status,
       };
     } catch (error) {
@@ -118,6 +160,41 @@ export async function discoverCardStatus({
     host: hosts[0] || DEFAULT_CARD_HOST,
     url: cardHostToUrl(hosts[0] || DEFAULT_CARD_HOST),
     error: lastError,
+  };
+}
+
+export function reduceCardConnectionState(previous = {}, result = {}, {
+  now = Date.now(),
+  missLimit = CARD_CONNECTION_MISS_LIMIT,
+} = {}) {
+  const fallbackHost = normalizeCardHost(previous.host || result.host || DEFAULT_CARD_HOST);
+  if (result.connected) {
+    const host = normalizeCardHost(result.host || fallbackHost);
+    return {
+      checking: false,
+      connected: true,
+      reconnecting: false,
+      host,
+      status: result.status || previous.status || null,
+      error: null,
+      checkedAt: now,
+      missCount: 0,
+      lastConnectedAt: now,
+    };
+  }
+
+  const misses = Math.max(0, Number(previous.missCount || 0)) + 1;
+  const stillInGrace = Boolean(previous.connected) && misses < Math.max(1, missLimit);
+  return {
+    checking: false,
+    connected: stillInGrace,
+    reconnecting: true,
+    host: fallbackHost,
+    status: previous.status || null,
+    error: result.error || previous.error || null,
+    checkedAt: now,
+    missCount: misses,
+    lastConnectedAt: previous.lastConnectedAt || 0,
   };
 }
 

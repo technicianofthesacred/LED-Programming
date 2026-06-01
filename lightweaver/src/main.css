@@ -2500,6 +2500,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
   opacity: 0.4;
 }
 .lw-statusbar .ok { color: var(--mint); }
+.lw-statusbar .warn { color: var(--accent-2); }
 .lw-status-card {
   flex: 0 1 270px;
   display: inline-flex;
@@ -4966,6 +4967,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 /* ── Status bar WLED state ────────────────────────────────────────────── */
 .lw-statusbar .ok  { color: var(--mint); }
+.lw-statusbar .warn { color: var(--accent-2); }
 .lw-statusbar .err { color: var(--text-4); }
 
 /* ── Timeline live preview full LEDs ─────────────────────────────────── */

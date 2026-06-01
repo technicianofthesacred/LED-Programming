@@ -211,22 +211,29 @@ export function StatusBar({ screen = 'patterns' }) {
   const totalLEDs = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const cardConnected = cardStatus.connected || wledConnected;
   const cardHost = cardStatus.connected ? cardStatus.host : (wledIp || cardStatus.host);
+  const cardRecovering = Boolean(cardStatus.reconnecting) && !wledConnected;
   const cardLabel = cardStatus.checking && !cardConnected
-    ? '◌ checking'
-    : cardConnected ? '● connected' : '○ disconnected';
+    ? '◌ finding'
+    : cardRecovering ? '◌ reconnecting'
+      : cardConnected ? '● connected' : '○ disconnected';
+  const cardStatusClass = cardRecovering ? 'warn' : cardConnected ? 'ok' : 'err';
   const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
-  const cardActionLabel = cardStatus.checking && !cardConnected ? 'trying' : cardConnected ? 'recheck' : 'connect';
+  const cardActionLabel = cardStatus.checking && !cardConnected
+    ? 'scan'
+    : cardRecovering
+      ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3`
+      : cardConnected ? 'recheck' : 'reconnect';
   const cardTitle = directCardControl
-    ? 'Click to find and save the card address.'
-    : 'Click to retry card discovery. If it stays disconnected here, use localhost or the card page because public HTTPS can be blocked from local HTTP cards.';
+    ? 'Click to run a deeper reconnect. Lightweaver remembers working card addresses and keeps retrying in the background.'
+    : 'Click to run a deeper reconnect. If it stays disconnected here, open the Studio from localhost or the card page because public HTTPS can be blocked from local HTTP cards.';
   const handleCardReconnect = async () => {
     setCardHint('');
     const result = await cardStatus.connect();
     if (result.connected) {
-      setCardHint('saved');
+      setCardHint('locked');
       return;
     }
-    setCardHint(directCardControl ? 'not found' : 'use local');
+    setCardHint(directCardControl ? 'still scanning' : 'use local');
   };
   return (
     <div className="lw-statusbar">
@@ -238,7 +245,7 @@ export function StatusBar({ screen = 'patterns' }) {
         onClick={handleCardReconnect}
       >
         <span className="k">Card</span>&nbsp;
-        <span className={cardConnected ? 'ok' : 'err'}>
+        <span className={cardStatusClass}>
           {cardLabel}
         </span>
         {cardHost && <>&nbsp;<span className="v">{cardHost}</span></>}
