@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CARD_PATTERN_BANK,
   getCardPatternFingerprint,
+  getCardPatternRuntimeId,
 } from './cardPatternBank.js';
 
 test('builds a useful preview fingerprint for a named chip pattern', () => {
@@ -30,4 +31,17 @@ test('every chip pattern has preview metadata for cards and inspectors', () => {
     assert.ok(fingerprint.palette.length >= 3, `${pattern.id} palette`);
     assert.ok(fingerprint.tags.length >= 2, `${pattern.id} tags`);
   }
+});
+
+test('includes the large v2-style library with explicit runtime presets', () => {
+  assert.ok(CARD_PATTERN_BANK.length >= 120, `expected the large pattern library, got ${CARD_PATTERN_BANK.length}`);
+
+  assert.equal(getCardPatternRuntimeId('deep-sea'), 'ocean');
+  assert.equal(getCardPatternRuntimeId('lightning-storm'), 'lightning');
+  assert.equal(getCardPatternRuntimeId('aurora'), 'aurora');
+
+  const deepSeaFingerprint = getCardPatternFingerprint('deep-sea');
+  assert.equal(deepSeaFingerprint.id, 'deep-sea');
+  assert.equal(deepSeaFingerprint.cssClass, 'motion-wave');
+  assert.ok(deepSeaFingerprint.tags.includes('water'));
 });

@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { CARD_RUNTIME_MAX_ZONES, DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { getCardPatternById, getCardPatternFingerprint } from '../lib/cardPatternBank.js';
+import {
+  CORE_CARD_PATTERN_BANK,
+  getCardPatternById,
+  getCardPatternFingerprint,
+  getCardPatternRuntimeId,
+} from '../lib/cardPatternBank.js';
 import {
   cardColorToHex,
   cardHueDeltaToDegrees,
@@ -97,6 +102,8 @@ const PATTERN_CATEGORIES = [
 ];
 const SMALL_PREVIEW_LED_COUNT = 16;
 const LARGE_PREVIEW_LED_COUNT = 34;
+const INITIAL_PATTERN_VISIBLE_COUNT = CORE_CARD_PATTERN_BANK.length;
+const PATTERN_LOAD_BATCH_SIZE = 24;
 const RECOVERY_MIN_BRIGHTNESS = 0.65;
 const DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS = 100;
 const PATTERN_PREVIEW_MAX_POINTS = 384;
@@ -472,7 +479,7 @@ function compoundSearchText(look = {}, targets = []) {
 function patternMatchesCategory(pattern, categoryId) {
   const category = PATTERN_CATEGORIES.find(item => item.id === categoryId) || PATTERN_CATEGORIES[0];
   if (category.compoundOnly) return false;
-  return !category.ids || category.ids.includes(pattern.id);
+  return !category.ids || category.ids.includes(pattern.id) || category.ids.includes(getCardPatternRuntimeId(pattern));
 }
 
 function readInitialEditPatternId() {
@@ -728,6 +735,7 @@ export function PatternsScreen() {
   const [lookLabel, setLookLabel] = useState('');
   const [patternSearch, setPatternSearch] = useState('');
   const [patternCategory, setPatternCategory] = useState('all');
+  const [visiblePatternLimit, setVisiblePatternLimit] = useState(INITIAL_PATTERN_VISIBLE_COUNT);
   const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
   const [recoveringLights, setRecoveringLights] = useState(false);
   const [repairLedPrompt, setRepairLedPrompt] = useState(null);
@@ -808,26 +816,46 @@ export function PatternsScreen() {
   const currentComboLabel = comboLabelFromTargets(effectiveSectionTargets, draftDefaultLook);
   const colorHex = cardColorToHex(look.customHue, look.customSaturation);
   const geometryType = geometryTypeFromSettings(symSettings);
-  const patternBankItems = useMemo(() => [
-    ...savedLooks.map(savedLook => ({ kind: 'compound', id: `compound-${savedLook.id}`, look: savedLook })),
-    ...DEFAULT_CARD_PATTERN_BANK.map(pattern => ({ kind: 'pattern', id: pattern.id, pattern })),
-  ], [savedLooks]);
-  const filteredPatternItems = useMemo(() => {
-    const query = patternSearch.trim().toLowerCase();
+  const patternSearchQuery = patternSearch.trim().toLowerCase();
+  const patternSearchActive = patternSearchQuery.length > 0;
+  const compoundPatternItems = useMemo(() => (
+    savedLooks.map(savedLook => ({ kind: 'compound', id: `compound-${savedLook.id}`, look: savedLook }))
+  ), [savedLooks]);
+  const patternBankItems = useMemo(() => (
+    DEFAULT_CARD_PATTERN_BANK.map(pattern => ({ kind: 'pattern', id: pattern.id, pattern }))
+  ), []);
+  const filteredCompoundPatternItems = useMemo(() => {
     const category = PATTERN_CATEGORIES.find(item => item.id === patternCategory) || PATTERN_CATEGORIES[0];
+    if (category.id !== 'all' && !category.compoundOnly) return [];
+    return compoundPatternItems.filter(item => (
+      !patternSearchQuery || compoundSearchText(item.look, sectionTargets).includes(patternSearchQuery)
+    ));
+  }, [compoundPatternItems, patternCategory, patternSearchQuery, sectionTargets]);
+  const filteredPatternItems = useMemo(() => {
+    const category = PATTERN_CATEGORIES.find(item => item.id === patternCategory) || PATTERN_CATEGORIES[0];
+    if (category.compoundOnly) return [];
     return patternBankItems.filter(item => {
-      if (item.kind === 'compound') {
-        if (category.id !== 'all' && !category.compoundOnly) return false;
-        if (!query) return true;
-        return compoundSearchText(item.look, sectionTargets).includes(query);
-      }
       const pattern = item.pattern;
-      if (category.compoundOnly || !patternMatchesCategory(pattern, patternCategory)) return false;
-      if (!query) return true;
-      const searchable = `${pattern.label} ${pattern.description || ''} ${pattern.id}`.toLowerCase();
-      return searchable.includes(query);
+      if (!patternMatchesCategory(pattern, patternCategory)) return false;
+      if (!patternSearchQuery) return true;
+      const searchable = `${pattern.label} ${pattern.description || ''} ${pattern.id} ${getCardPatternRuntimeId(pattern)}`.toLowerCase();
+      return searchable.includes(patternSearchQuery);
     });
-  }, [patternBankItems, patternCategory, patternSearch, sectionTargets]);
+  }, [patternBankItems, patternCategory, patternSearchQuery]);
+  const visiblePatternMatches = patternSearchActive
+    ? filteredPatternItems
+    : filteredPatternItems.slice(0, visiblePatternLimit);
+  const visiblePatternItems = [
+    ...filteredCompoundPatternItems,
+    ...visiblePatternMatches,
+  ];
+  const hiddenPatternCount = Math.max(0, filteredPatternItems.length - visiblePatternMatches.length);
+  const nextPatternLoadCount = Math.min(PATTERN_LOAD_BATCH_SIZE, hiddenPatternCount);
+  const shownPatternCount = visiblePatternMatches.length;
+
+  useEffect(() => {
+    setVisiblePatternLimit(INITIAL_PATTERN_VISIBLE_COUNT);
+  }, [patternCategory, patternSearchQuery]);
 
   const runtimePackage = useMemo(
     () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
@@ -1880,7 +1908,7 @@ export function PatternsScreen() {
             <div className="lw-sec-header">
               <span>Tap a pattern to preview</span>
               <span className="meta">
-                {DEFAULT_CARD_PATTERN_BANK.length} chip-ready
+                {shownPatternCount} shown of {DEFAULT_CARD_PATTERN_BANK.length} chip-ready
                 {savedLooks.length ? ` + ${savedLooks.length} compound${savedLooks.length === 1 ? '' : 's'}` : ''}
                 {' / '}
                 {playlist.length} in playlist
@@ -1980,10 +2008,10 @@ export function PatternsScreen() {
                   </button>
                 ))}
               </div>
-              <span>{filteredPatternItems.length} shown</span>
+              <span>{shownPatternCount} of {filteredPatternItems.length} shown</span>
             </div>
             <div className="lw-look-grid" data-preview-mode="compact">
-              {filteredPatternItems.map(item => item.kind === 'compound' ? (
+              {visiblePatternItems.map(item => item.kind === 'compound' ? (
                 <CompoundPatternCard
                   key={item.id}
                   look={item.look}
@@ -2007,10 +2035,23 @@ export function PatternsScreen() {
                   onDragStart={beginPatternDrag}
                 />
               ))}
-              {!filteredPatternItems.length && (
+              {!visiblePatternItems.length && (
                 <p className="lw-pattern-empty">No chip-ready patterns match this search.</p>
               )}
             </div>
+            {hiddenPatternCount > 0 && (
+              <div className="lw-pattern-load-more-row">
+                <button
+                  type="button"
+                  className="btn btn-ghost lw-pattern-load-more"
+                  data-testid="pattern-load-more"
+                  onClick={() => setVisiblePatternLimit(limit => limit + PATTERN_LOAD_BATCH_SIZE)}
+                >
+                  Load {nextPatternLoadCount} more patterns
+                </button>
+                <span>{hiddenPatternCount} more in this view</span>
+              </div>
+            )}
           </section>
 
           <aside className="lw-patterns-aside">

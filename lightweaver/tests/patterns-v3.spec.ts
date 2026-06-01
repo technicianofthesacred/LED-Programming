@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createDefaultCircleLayout } from '../src/lib/defaultCircleLayout.js';
 import { createDefaultPatchBoard } from '../src/lib/patchBoard.js';
+import { DEFAULT_CARD_PATTERN_BANK } from '../src/lib/cardRuntimeContract.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,17 +45,25 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.locator('.lw-look-orbit')).toHaveCount(0);
   await expect(page.locator('.lw-look-led-field i')).not.toHaveCount(0);
   await expect(page.locator('.lw-pattern-led-preview canvas')).toBeVisible();
-  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
+  await expect(page.getByTestId('pattern-load-more')).toContainText('Load 24 more');
   await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
   await expect(page.getByTestId('section-target-range-all')).toHaveText('LED 1-44');
   await expect(page.getByTestId('section-target-range-patch-default-outer-circle')).toHaveText('LED 1-22');
   await expect(page.getByTestId('section-target-range-patch-default-inner-circle')).toHaveText('LED 23-44');
 
+  await page.getByTestId('pattern-load-more').click();
+  await expect(page.locator('.lw-look-card')).toHaveCount(54);
+  await expect(page.locator('.lw-look-card', { hasText: 'Glitch' })).toBeVisible();
+  await page.locator('button[data-pattern-id="glitch"]').click();
+  await expect.poll(() => controlRequests.at(-1)).toMatchObject({ patternId: 'matrix', cancelStream: true });
+  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Glitch');
+
   await page.locator('button[data-pattern-id="ocean"]').click();
 
-  await expect.poll(() => controlRequests.length).toBe(1);
-  expect(controlRequests[0]).toMatchObject({ patternId: 'ocean', cancelStream: true });
+  await expect.poll(() => controlRequests.length).toBe(2);
+  expect(controlRequests[1]).toMatchObject({ patternId: 'ocean', cancelStream: true });
   await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
   await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
@@ -99,13 +108,13 @@ test('patterns only go on the knob after adding them to the playlist', async ({ 
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
   await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
+  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
   await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
 
   await page.locator('.lw-look-card', { hasText: 'Ocean' }).locator('.lw-look-card-toggle input').check();
-  await expect(page.getByText('30 chip-ready / 1 in playlist')).toBeVisible();
+  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 1 in playlist`)).toBeVisible();
 
   await page.getByRole('button', { name: 'Playlist', exact: true }).click();
   await expect(page.locator('.lw-playlist-row')).toHaveCount(1);
@@ -664,9 +673,9 @@ test('playlist rows drag into knob-button order and load that order to the card'
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Aurora' }).click();
-  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Ocean' }).click();
-  await page.locator('.lw-playlist-pattern-pool button', { hasText: 'Plasma' }).click();
+  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="aurora"]').click();
+  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="ocean"]').click();
+  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="plasma"]').click();
 
   await page.getByTestId('playlist-row-ocean').dragTo(page.getByTestId('playlist-row-aurora'));
 
@@ -749,9 +758,10 @@ test('v3 patterns includes searchable visual pattern browsing', async ({ page })
 
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
 
-  await expect(page.locator('.lw-look-card')).toHaveCount(1);
   await expect(page.locator('button[data-pattern-id="ocean"]')).toBeVisible();
-  await expect(page.getByText('1 shown')).toBeVisible();
+  await expect(page.locator('button[data-pattern-id="deep-sea"]')).toBeVisible();
+  expect(await page.locator('.lw-look-card').count()).toBeGreaterThan(1);
+  await expect(page.locator('.lw-pattern-browse-tools > span')).toContainText(/of \d+ shown/);
 });
 
 test('v3 tuning controls show immediate values and send card-ready color modifiers', async ({ page }) => {

@@ -41,4 +41,18 @@ assert.deepEqual(
 );
 assert.equal(selectedPackage.config.startupPatternId, 'fire');
 
+const extendedPackage = buildCardRuntimePackageFromProject({
+  projectName: 'Extended Catalog',
+  standaloneController: {
+    defaultLook: { patternId: 'glitch' },
+    controls: { encoder: { patternCycleIds: ['glitch'] } },
+  },
+});
+
+assert.deepEqual(extendedPackage.config.patterns.map(pattern => pattern.id), ['glitch', 'matrix']);
+assert.equal(extendedPackage.config.patterns[0].preset, 'matrix');
+assert.equal(extendedPackage.config.looks[0].id, 'glitch');
+assert.equal(extendedPackage.config.looks[0].preset, 'matrix');
+assert.equal(extendedPackage.config.zones[0].patternId, 'matrix');
+
 console.log('card-pattern-bank tests passed');

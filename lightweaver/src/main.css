@@ -5276,6 +5276,21 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   gap: 8px;
 }
 
+.lw-pattern-load-more-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.lw-pattern-load-more {
+  min-height: 34px;
+  padding: 8px 12px;
+}
+
 .lw-look-card {
   min-height: 104px;
   display: grid;

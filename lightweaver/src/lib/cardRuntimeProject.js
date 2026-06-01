@@ -1,7 +1,7 @@
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
 import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
-import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
+import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
 import {
   derivePlaylistLookIds,
@@ -49,7 +49,7 @@ export function buildCardRuntimePackageFromProject({
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
     label: 'Full Piece',
-    patternId: visualLook.patternId,
+    patternId: getCardPatternRuntimeId(visualLook.patternId) || visualLook.patternId,
     brightness: visualLook.brightness,
     speed: visualLook.speed,
     hueShift: visualLook.hueShift,
@@ -177,7 +177,7 @@ function buildRuntimeLooksFromPlaylist({
           id: item.id,
           label: item.label || savedLook.label,
           mode: 'combo',
-          preset: comboDefault.patternId,
+          preset: getCardPatternRuntimeId(comboDefault.patternId) || comboDefault.patternId,
           brightness: 1,
           zones: zoneLooksFromZones(effectiveZones),
         };
@@ -186,11 +186,12 @@ function buildRuntimeLooksFromPlaylist({
       const pattern = getCardPatternById(item.patternId);
       if (!pattern) return null;
       const lookDefaults = normalizeCardVisualLook({ ...visualLook, patternId: pattern.id });
+      const runtimePatternId = getCardPatternRuntimeId(pattern);
       return {
         id: item.id || pattern.id,
         label: item.label || pattern.label,
         mode: pattern.mode === 'preset' ? 'preset' : 'procedural',
-        preset: pattern.id,
+        preset: runtimePatternId,
         brightness: 1,
         zones: zoneLooksFromZones(runtimeZones.map(zone => applyLookFieldsToZone(zone, lookDefaults))),
       };
@@ -201,7 +202,7 @@ function buildRuntimeLooksFromPlaylist({
 function applyLookFieldsToZone(zone, look) {
   return {
     ...zone,
-    patternId: look.patternId,
+    patternId: getCardPatternRuntimeId(look.patternId) || look.patternId,
     brightness: look.brightness,
     speed: look.speed,
     hueShift: look.hueShift,
@@ -234,9 +235,10 @@ function applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) {
   ]));
   return zones.map(zone => {
     const playback = playbackByPatchId.get(zone.id) || {};
+    const displayPatternId = hasExplicit(playback.patternId) ? zone.patternId : visualLook.patternId;
     return {
       ...zone,
-      patternId: hasExplicit(playback.patternId) ? zone.patternId : visualLook.patternId,
+      patternId: getCardPatternRuntimeId(displayPatternId) || displayPatternId,
       brightness: hasExplicit(playback.brightness) ? zone.brightness : visualLook.brightness,
       speed: hasExplicit(playback.speed) ? zone.speed : visualLook.speed,
       hueShift: hasExplicit(playback.hueShift) ? zone.hueShift : visualLook.hueShift,

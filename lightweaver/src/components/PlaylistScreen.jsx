@@ -481,6 +481,7 @@ export function PlaylistScreen() {
                   <button
                     key={pattern.id}
                     type="button"
+                    data-pattern-id={pattern.id}
                     className={playlistContainsPattern(playlist, pattern.id) ? 'is-added' : ''}
                     onClick={() => addPattern(pattern.id)}
                   >

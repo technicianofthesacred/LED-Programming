@@ -6,6 +6,7 @@ import {
   readStoredCardHost,
 } from './cardConnection.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
@@ -28,12 +29,13 @@ export function buildLiveHardwareControlPayload(settings = {}) {
 
 export function buildLivePreviewControlPayload(look = {}) {
   const normalized = normalizeCardVisualLook(look);
+  const runtimePatternId = getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
   return {
     cancelStream: true,
     ...(look.zone ? { zone: String(look.zone) } : {}),
     ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
     ...(typeof look.blackout === 'boolean' ? { blackout: look.blackout } : {}),
-    patternId: normalized.patternId,
+    patternId: runtimePatternId,
     brightness: normalized.brightness,
     speed: normalized.speed,
     hueShift: normalized.hueShift,
@@ -46,8 +48,9 @@ export function buildLivePreviewControlPayload(look = {}) {
 
 function buildRecoverLightsPayload(look = {}) {
   const normalized = normalizeCardVisualLook(look);
+  const runtimePatternId = getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
   return {
-    patternId: normalized.patternId,
+    patternId: runtimePatternId,
     brightness: normalized.brightness,
     ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
   };
