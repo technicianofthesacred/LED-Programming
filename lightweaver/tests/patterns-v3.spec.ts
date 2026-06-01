@@ -138,7 +138,7 @@ test('selected patterns can reset color and motion back to defaults', async ({ p
   ))).toBe(true);
 });
 
-test('v3 patterns can recover dark lights from the Pattern screen', async ({ page }) => {
+test('v3 patterns can recover dark lights onto the selected surface', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/zones', async route => {
     await route.fulfill({
@@ -153,6 +153,13 @@ test('v3 patterns can recover dark lights from the Pattern screen', async ({ pag
       }),
     });
   });
+  await page.route('http://lightweaver.local/api/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
+    });
+  });
   await page.route('http://lightweaver.local/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({
@@ -161,35 +168,58 @@ test('v3 patterns can recover dark lights from the Pattern screen', async ({ pag
       body: JSON.stringify({ ok: true, blackout: false }),
     });
   });
+  const recoveryRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/recover-lights', async route => {
+    recoveryRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        recovered: true,
+        diagnostics: {
+          brightnessByte: 220,
+          firstLogicalPixel: { r: 255, g: 244, b: 220 },
+        },
+      }),
+    });
+  });
 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
   await page.locator('button[data-pattern-id="ocean"]').click();
   await expect.poll(() => controlRequests.length).toBe(1);
 
   controlRequests.length = 0;
   await page.getByRole('button', { name: 'Recover lights' }).click();
 
-  await expect.poll(() => controlRequests.length).toBe(3);
-  expect(controlRequests[0]).toMatchObject({
-    cancelStream: true,
-    blackout: false,
+  await expect.poll(() => recoveryRequests.length).toBe(1);
+  expect(recoveryRequests[0]).toMatchObject({
     syncZones: true,
-    patternId: 'aurora',
+    patternId: 'warm-white',
+    brightness: 1,
   });
-  expect(controlRequests.slice(1).map(request => ({
+  await expect.poll(() => controlRequests.length).toBe(2);
+  expect(controlRequests.map(request => ({
     zone: request.zone,
     patternId: request.patternId,
     syncZones: request.syncZones,
     blackout: request.blackout,
+    brightness: request.brightness,
   }))).toEqual([
-    { zone: 'patch-default-outer-circle', patternId: 'aurora', syncZones: false, blackout: false },
-    { zone: 'patch-default-inner-circle', patternId: 'ocean', syncZones: false, blackout: false },
+    { zone: 'patch-default-inner-circle', patternId: 'aurora', syncZones: false, blackout: false, brightness: 1 },
+    { zone: 'patch-default-outer-circle', patternId: 'ocean', syncZones: false, blackout: false, brightness: 1 },
   ]);
-  await expect(page.locator('.lw-chip-status')).toContainText('Lights reset');
+  expect(controlRequests.at(-1)).toMatchObject({
+    zone: 'patch-default-outer-circle',
+    patternId: 'ocean',
+    blackout: false,
+  });
+  await expect(page.locator('.lw-chip-status')).toContainText('Recovery commands accepted on Outer circle');
+  await expect(page.locator('.lw-chip-status')).toContainText('check LED power');
 });
 
 test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
@@ -335,7 +365,7 @@ test('v3 patterns lays out editable section targets in a compact desktop matrix'
   await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toBeEditable();
 });
 
-test('v3 patterns can start the local card bridge handoff from the hosted web interface', async ({ page }) => {
+test('v3 patterns shows visible card page access without a duplicate bridge button', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lw_chip_card_host', '192.168.18.70');
     (window as any).__lwOpened = [];
@@ -346,23 +376,15 @@ test('v3 patterns can start the local card bridge handoff from the hosted web in
   });
 
   await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Connect through card' }).click();
+  await expect(page.getByRole('button', { name: 'Connect through card' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open card page' }).click();
 
   const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
-  expect(opened.name).toBe('lightweaver-card-bridge');
-  const bridgeUrl = new URL(opened.url);
-  expect(bridgeUrl.origin).toBe('http://192.168.18.70');
-  expect(bridgeUrl.searchParams.get('studioAutoOpen')).toBe('1');
-  const studioUrl = new URL(bridgeUrl.searchParams.get('studioUrl') || '');
-  expect(studioUrl.origin).toBe(await page.evaluate(() => window.location.origin));
-  expect(studioUrl.searchParams.get('cardBridge')).toBe('1');
-  expect(studioUrl.searchParams.get('cardHost')).toBe('192.168.18.70');
-  expect(studioUrl.searchParams.get('studioTakeover')).toBe('1');
-  expect(studioUrl.hash).toBe('#screen=patterns');
-  await expect(page.locator('.lw-chip-status')).toContainText('Opening the local card bridge');
+  expect(opened.name).toBe('_blank');
+  expect(new URL(opened.url).origin).toBe('http://192.168.18.70');
 });
 
-test('v3 patterns can make the local chip the default control path', async ({ page }) => {
+test('v3 patterns can make the local card the default control path', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lw_chip_card_host', '192.168.18.70');
     (window as any).__lwOpened = [];
@@ -373,17 +395,17 @@ test('v3 patterns can make the local chip the default control path', async ({ pa
   });
 
   await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
-  const toggle = page.getByRole('button', { name: 'Use local chip by default' });
+  const toggle = page.getByRole('button', { name: 'Use local card' });
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
   await toggle.click();
 
-  await expect(page.getByRole('button', { name: 'Local chip default on' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Using local card' })).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_local_chip_default'))).toBe('1');
   const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
   expect(opened.name).toBe('lightweaver-card-bridge');
   expect(new URL(opened.url).searchParams.get('studioAutoOpen')).toBe('1');
-  await expect(page.locator('.lw-chip-status')).toContainText('Local chip is now the default control path');
+  await expect(page.locator('.lw-chip-status')).toContainText('Local card is now the default control path');
 });
 
 test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
@@ -717,7 +739,7 @@ test('v3 patterns can apply the split zone config, then live-preview each sectio
   await page.getByTestId('section-target-patch-default-inner-circle').click();
   await page.locator('button[data-pattern-id="sparkle"]').click();
 
-  await page.getByRole('button', { name: 'Apply split to card' }).click();
+  await page.getByRole('button', { name: 'Send split preview' }).click();
 
   await expect.poll(() => configRequests.length).toBe(1);
   expect(configRequests[0].syncZones).toBe(false);

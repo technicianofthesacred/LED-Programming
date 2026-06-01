@@ -139,6 +139,7 @@ String studioBridgeScript() {
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
                   "else if(m.type==='control'){response=await post('/api/control',m.payload||{})}"
+                  "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
                   "else if(m.type==='config'){"
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
@@ -910,6 +911,22 @@ void handleControlPost() {
   server.send(200, "application/json", body);
 }
 
+void handleRecoverLights() {
+  sendCors();
+  JsonDocument doc;
+  if (server.hasArg("plain") && server.arg("plain").length()) {
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    if (err) {
+      server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err.c_str() + "\"}");
+      return;
+    }
+  }
+  String patternId = hasControlField(doc, "patternId") ? controlString(doc, "patternId") : String("warm-white");
+  float brightness = hasControlField(doc, "brightness") ? controlFloat(doc, "brightness") : 1.0f;
+  bool syncZones = hasControlField(doc, "syncZones") ? controlBool(doc, "syncZones") : true;
+  server.send(200, "application/json", runtimeRecoverLights(patternId, brightness, syncZones));
+}
+
 void handleIdentify() {
   sendCors();
   runtimeTriggerIdentify();
@@ -1104,6 +1121,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/control", HTTP_OPTIONS, handleOptions);
   server.on("/api/control", HTTP_POST, handleControlPost);
+  server.on("/api/recover-lights", HTTP_OPTIONS, handleOptions);
+  server.on("/api/recover-lights", HTTP_POST, handleRecoverLights);
   server.on("/api/identify", HTTP_OPTIONS, handleOptions);
   server.on("/api/identify", HTTP_POST, handleIdentify);
   server.on("/api/factory-reset", HTTP_OPTIONS, handleOptions);

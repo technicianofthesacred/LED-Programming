@@ -30,8 +30,11 @@ return hsv(fract(h * 0.5 + 0.5), 0.9, 1);`,
 `// @param scale float 3.0 1.0 10.0
 // @param rise  float 1.5 0.2 4.0
 // Noise-based warm glow moving upward
-const n = noise(x * params.scale, y * 4 - time * params.rise);
-const v = clamp(n * 1.5, 0, 1);
+const rise = t * params.rise;
+const sway = sin(t * 1.7 + y * 3.0) * 0.18;
+const n = noise(x * params.scale + sway, y * 4 - rise);
+const flicker = wave(t * 7.0 + index * 0.13) * 0.18;
+const v = clamp(n * 1.45 + flicker, 0, 1);
 return hsv(lerp(0.0, 0.1, n), 1, v);`,
   },
   {

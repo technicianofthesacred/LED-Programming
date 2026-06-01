@@ -4,6 +4,7 @@ import {
   buildLivePreviewControlPayload,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
+  recoverCardLights,
   pushSectionPreviewToCard,
 } from '../src/lib/cardLiveControl.js';
 
@@ -85,6 +86,40 @@ const hardwareResponse = await pushLiveHardwareToCard({
 assert.equal(hardwareResponse.colorOrder, 'GBR');
 assert.equal(hardwareRequests[0].url, 'http://192.168.18.70/api/control');
 assert.deepEqual(JSON.parse(hardwareRequests[0].options.body), { colorOrder: 'GBR' });
+
+const recoveryRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  recoveryRequests.push({ url, options });
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      recovered: true,
+      diagnostics: {
+        brightnessByte: 220,
+        firstLogicalPixel: { r: 255, g: 244, b: 220 },
+      },
+    }),
+  };
+};
+
+const recoveryResponse = await recoverCardLights({
+  patternId: 'warm-white',
+  brightness: 1,
+  syncZones: true,
+}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+
+assert.equal(recoveryResponse.recovered, true);
+assert.equal(recoveryRequests[0].url, 'http://192.168.18.70/api/recover-lights');
+assert.equal(recoveryRequests[0].options.method, 'POST');
+assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
+  patternId: 'warm-white',
+  brightness: 1,
+  syncZones: true,
+});
 
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {

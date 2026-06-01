@@ -40,6 +40,15 @@ export function buildLivePreviewControlPayload(look = {}) {
   };
 }
 
+function buildRecoverLightsPayload(look = {}) {
+  const normalized = normalizeCardVisualLook(look);
+  return {
+    patternId: normalized.patternId,
+    brightness: normalized.brightness,
+    ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
+  };
+}
+
 async function postControlPayloadToHost(host, payload, options = {}) {
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify(payload);
@@ -50,6 +59,49 @@ async function postControlPayloadToHost(host, payload, options = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
+      signal: ctrl.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    }
+    return await response.json().catch(() => ({ ok: true }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function postRecoverLightsToHost(host, payload, options = {}) {
+  const url = `${cardHostToUrl(host)}/api/recover-lights`;
+  const body = JSON.stringify(payload);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 3000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      signal: ctrl.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    }
+    return await response.json().catch(() => ({ ok: true }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function postIdentifyToHost(host, options = {}) {
+  const url = `${cardHostToUrl(host)}/api/identify`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 1200);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
       signal: ctrl.signal,
     });
     if (!response.ok) {
@@ -334,6 +386,58 @@ export async function pushLiveHardwareToCard(settings, options = {}) {
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
           return await postControlPayloadToHost(found.host, payload, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
+  }
+}
+
+export async function identifyCardLights(options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    return await postIdentifyToHost(host, options);
+  } catch (error) {
+    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 1200, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await postIdentifyToHost(found.host, options);
+        } catch (retryError) {
+          throw normalizePreviewError(found.host, retryError);
+        }
+      }
+    }
+    throw normalizePreviewError(host, error);
+  }
+}
+
+export async function recoverCardLights(look = {}, options = {}) {
+  const host = options.host || readStoredCardHost();
+  const payload = buildRecoverLightsPayload(look);
+  if (isMixedContentBlocked()) {
+    try {
+      return await sendCardBridgeRequest('recover-lights', payload, { host, timeoutMs: options.timeoutMs || 3000 });
+    } catch (error) {
+      throw normalizePreviewError(host, error);
+    }
+  }
+  try {
+    return await postRecoverLightsToHost(host, payload, options);
+  } catch (error) {
+    if (options.autoDiscover !== false) {
+      const found = await discoverCardStatus({
+        preferredHost: host,
+        timeoutMs: Math.min(options.timeoutMs || 3000, 900),
+      });
+      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
+        try {
+          return await postRecoverLightsToHost(found.host, payload, options);
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
         }

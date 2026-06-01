@@ -317,6 +317,7 @@ export function LEDPreview({
   symSettings = null, audioBands = null, onFps = null,
   palette: paletteProp = null,
   motionSmoothing = 'soft',
+  targetFps = 60,
   heat = false,
 }) {
   const canvasRef = useRef(null);
@@ -453,7 +454,7 @@ export function LEDPreview({
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, vb, heat,
-    motionSmoothing,
+    motionSmoothing, targetFps,
     onFrame, onFps, onTick,
   };
 
@@ -500,7 +501,10 @@ export function LEDPreview({
       }
 
       const canvas = canvasRef.current;
-      const shouldRender = p.playing || now - staticRenderRef.current > 250;
+      const minFrameMs = p.targetFps > 0 ? 1000 / p.targetFps : 0;
+      const shouldRender = p.playing
+        ? now - staticRenderRef.current >= minFrameMs
+        : now - staticRenderRef.current > 250;
       if (canvas?.width && canvas?.height && shouldRender) {
         const pixels = renderFrame(canvas, tRef.current, {
           ...p,

@@ -35,6 +35,7 @@ String runtimeGetLedColorOrder();
 void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();
+String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones);
 
 // Drift palette (min/max hue bounds for custom-color drift)
 void runtimeSetDriftRange(uint8_t lo, uint8_t hi);

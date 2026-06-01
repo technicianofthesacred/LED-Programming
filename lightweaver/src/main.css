@@ -5142,9 +5142,44 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-patterns-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 10px 12px;
+  align-items: stretch;
+  justify-content: end;
+}
+
+.lw-action-group {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.lw-action-group-label {
+  grid-column: 1 / -1;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.lw-action-group-note {
+  max-width: 170px;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  line-height: 1.25;
+}
+
+.lw-action-group .btn {
+  justify-content: center;
+  white-space: nowrap;
 }
 
 .lw-chip-status {
@@ -7632,6 +7667,24 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
   .lw-patterns-grid {
     grid-template-columns: 1fr;
+  }
+
+  .lw-patterns-actions {
+    width: 100%;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .lw-action-group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lw-action-group .btn {
+    width: 100%;
+  }
+
+  .lw-action-group-note {
+    max-width: none;
   }
 
   .lw-playlist-grid {

@@ -1127,6 +1127,104 @@ bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
 
+String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones) {
+  String id = patternId.length() ? patternId : String("warm-white");
+  float visibleBrightness = brightness;
+  if (visibleBrightness < 0.65f) visibleBrightness = 0.65f;
+  if (visibleBrightness > 1.0f) visibleBrightness = 1.0f;
+  if (brightnessLimit < 0.65f) brightnessLimit = 0.65f;
+
+  frameSourceCancelStream();
+  blackedOut = false;
+  fadeScale = 1.0f;
+  manualBrightness = visibleBrightness;
+  manualSpeed = 1.0f;
+  manualHueShift = 0;
+  customBreathe = false;
+  customDrift = false;
+  runtimeConfig.syncZones = syncZones;
+
+  if (lookCount) {
+    looks[currentLookIndex].brightness = visibleBrightness;
+  }
+
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    ZoneConfig& zone = runtimeConfig.zones[i];
+    zone.patternId = id;
+    zone.brightness = visibleBrightness;
+    zone.speed = 1.0f;
+    zone.hueShift = 0;
+    zone.customHue = 32;
+    zone.customSaturation = 230;
+    zone.customBreathe = false;
+    zone.customDrift = false;
+    zone.driftHueMin = 0;
+    zone.driftHueMax = 255;
+    zone.blackout = false;
+  }
+
+  bool rendered = renderCurrentLook(true);
+  if (!rendered && totalPixels > 0) {
+    fill_solid(leds, totalPixels, CRGB(255, 220, 170));
+  }
+
+  uint8_t brightnessByte = computeBrightnessByte();
+  if (brightnessByte < 140) {
+    brightnessLimit = 0.65f;
+    manualBrightness = 1.0f;
+    if (lookCount) looks[currentLookIndex].brightness = 1.0f;
+    brightnessByte = computeBrightnessByte();
+  }
+  FastLED.setBrightness(brightnessByte);
+  showLeds();
+
+  uint16_t nonBlackPixels = 0;
+  for (uint16_t i = 0; i < totalPixels && i < LW_MAX_PIXELS; i++) {
+    if (leds[i].r || leds[i].g || leds[i].b) nonBlackPixels++;
+  }
+
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["recovered"] = true;
+  doc["patternId"] = id;
+  JsonObject diagnostics = doc["diagnostics"].to<JsonObject>();
+  diagnostics["rendered"] = rendered;
+  diagnostics["pixels"] = totalPixels;
+  diagnostics["nonBlackPixels"] = nonBlackPixels;
+  diagnostics["brightnessByte"] = brightnessByte;
+  diagnostics["brightnessLimit"] = brightnessLimit;
+  diagnostics["lookBrightness"] = lookCount ? looks[currentLookIndex].brightness : 0.0f;
+  diagnostics["manualBrightness"] = manualBrightness;
+  diagnostics["fadeScale"] = fadeScale;
+  diagnostics["blackout"] = blackedOut;
+  diagnostics["streaming"] = frameSourceIsStreaming();
+  diagnostics["syncZones"] = runtimeConfig.syncZones;
+  diagnostics["brightnessKnobPin"] = controls.brightness;
+  diagnostics["brightnessKnob"] = readBrightnessKnob();
+  JsonObject logical = diagnostics["firstLogicalPixel"].to<JsonObject>();
+  logical["r"] = totalPixels ? leds[0].r : 0;
+  logical["g"] = totalPixels ? leds[0].g : 0;
+  logical["b"] = totalPixels ? leds[0].b : 0;
+  JsonObject physical = diagnostics["firstPhysicalPixel"].to<JsonObject>();
+  physical["r"] = totalPixels ? physicalLeds[0].r : 0;
+  physical["g"] = totalPixels ? physicalLeds[0].g : 0;
+  physical["b"] = totalPixels ? physicalLeds[0].b : 0;
+  JsonArray outputArray = diagnostics["outputs"].to<JsonArray>();
+  for (uint8_t i = 0; i < outputCount; i++) {
+    JsonObject output = outputArray.add<JsonObject>();
+    output["id"] = outputs[i].id;
+    output["pin"] = outputs[i].pin;
+    output["pixels"] = outputs[i].pixels;
+  }
+  JsonArray mirrors = diagnostics["mirrorPins"].to<JsonArray>();
+  if (outputCount == 1) {
+    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) mirrors.add(MIRROR_OUTPUT_PINS[i]);
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
 String runtimeZonesJson() {
   JsonDocument doc;
   doc["syncZones"] = runtimeConfig.syncZones;

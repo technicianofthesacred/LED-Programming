@@ -42,12 +42,18 @@ import {
 } from '../lib/cardPlaylist.js';
 import {
   cardHostToUrl,
+  discoverCardStatus,
   normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
-import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
+import {
+  identifyCardLights,
+  pushLivePreviewToCard,
+  pushSectionPreviewToCard,
+  recoverCardLights,
+} from '../lib/cardLiveControl.js';
 import {
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
@@ -87,6 +93,7 @@ const PATTERN_CATEGORIES = [
 ];
 const SMALL_PREVIEW_LED_COUNT = 16;
 const LARGE_PREVIEW_LED_COUNT = 34;
+const RECOVERY_MIN_BRIGHTNESS = 0.65;
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -309,6 +316,15 @@ function clampByte(value) {
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(255, n));
+}
+
+function makeVisibleRecoveryLook(look = {}) {
+  const normalized = normalizeSectionVisualLook(look);
+  return {
+    ...normalized,
+    brightness: Math.max(normalized.brightness || 0, RECOVERY_MIN_BRIGHTNESS),
+    blackout: false,
+  };
 }
 
 function randomLookTuning() {
@@ -643,6 +659,7 @@ export function PatternsScreen() {
   const [patternSearch, setPatternSearch] = useState('');
   const [patternCategory, setPatternCategory] = useState('all');
   const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
+  const [recoveringLights, setRecoveringLights] = useState(false);
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
   const draftProjectSnapshotRef = useRef(project => project);
@@ -1188,7 +1205,7 @@ export function PatternsScreen() {
         offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
       } else {
         setStatusKind('err');
-        setStatus('Saved in the Studio, but could not reach the card. Copy or download the chip config and paste it on the card page.');
+        setStatus('Saved in the Studio, but could not reach the card. Copy or download the setup JSON and paste it on the card page.');
       }
     }
   };
@@ -1197,31 +1214,107 @@ export function PatternsScreen() {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
     const sequence = ++livePreviewSeq.current;
     const { nextBoard, nextController, nextTargets } = buildCurrentHardwareState();
-    const recoveryTargets = nextTargets.map(target => ({
+    const visibleTargets = nextTargets.map(target => ({
       ...target,
-      look: { ...normalizeSectionVisualLook(target.look), blackout: false },
+      look: makeVisibleRecoveryLook(target.look),
     }));
-    const allTarget = recoveryTargets.find(target => target.kind === 'all') || recoveryTargets[0];
-    const wakeLook = normalizeSectionVisualLook(allTarget?.look || nextController.defaultLook || look);
-    const wakeBrightness = Math.max(wakeLook.brightness || 0, 0.65);
+    const selectedRecoveryTarget = visibleTargets.find(target => target.id === selectedTarget?.id) || null;
+    const allTarget = visibleTargets.find(target => target.kind === 'all') || visibleTargets[0];
+    const focusLook = makeVisibleRecoveryLook(selectedRecoveryTarget?.look || allTarget?.look || nextController.defaultLook || look);
+    const recoveryTargets = visibleTargets
+      .map(target => (target.kind === 'all' ? { ...target, look: focusLook } : target))
+      .sort((a, b) => {
+        if (!selectedRecoveryTarget || selectedRecoveryTarget.kind !== 'section') return 0;
+        if (a.id === selectedRecoveryTarget.id) return -1;
+        if (b.id === selectedRecoveryTarget.id) return 1;
+        return 0;
+      });
+    let recoveryHost = cardHost;
+    const recoveryLabel = targetLabel(selectedRecoveryTarget || selectedTarget || allTarget);
+    const shouldTryLegacyRecovery = (error) => (
+      error?.reason === 'http' &&
+      /(?:404|405|not found|unknown)/i.test(String(error?.message || ''))
+    );
 
     setHandoffUrl('');
     setStatusKind('');
-    setStatus(`Recovering lights on ${cardHostToUrl(cardHost)}...`);
+    setRecoveringLights(true);
+    setStatus(`Pulling control to ${recoveryLabel} at ${cardHostToUrl(cardHost)}...`);
     try {
-      await pushLivePreviewToCard({
-        ...wakeLook,
-        brightness: wakeBrightness,
-        syncZones: true,
-        blackout: false,
-      }, {
-        host: cardHost,
-        timeoutMs: 2600,
-        fallbackMissingZoneToAll: true,
-      });
+      if (!/^\d+\.\d+\.\d+\.\d+(?::\d+)?$/.test(normalizeCardHost(cardHost))) {
+        const discovered = await discoverCardStatus({
+          preferredHost: cardHost,
+          timeoutMs: 650,
+          persist: true,
+        });
+        if (discovered.connected && discovered.host) {
+          recoveryHost = discovered.host;
+          setCardHost(discovered.host);
+          writeStoredCardHost(discovered.host);
+        }
+      }
+      if (sequence !== livePreviewSeq.current) return;
+      setStatus(`Testing LED output on ${cardHostToUrl(recoveryHost)}...`);
+      let recoveryDetails = null;
+      try {
+        recoveryDetails = await recoverCardLights({
+          patternId: 'warm-white',
+          brightness: 1,
+          syncZones: true,
+        }, {
+          host: recoveryHost,
+          timeoutMs: 3200,
+          autoDiscover: false,
+        });
+        if (sequence !== livePreviewSeq.current) return;
+        const brightnessByte = Number(recoveryDetails?.diagnostics?.brightnessByte);
+        const diagnosticText = Number.isFinite(brightnessByte)
+          ? ` Card output brightness ${brightnessByte}/255.`
+          : '';
+        setStatusKind('ok');
+        setStatus(`Recovery command accepted on ${recoveryLabel}.${diagnosticText} Restoring section patterns in the background.`);
+        setRecoveringLights(false);
+        void (async () => {
+          try {
+            const response = await pushSectionPreviewToCard(recoveryTargets, {
+              host: recoveryHost,
+              timeoutMs: 1600,
+            });
+            if (sequence !== livePreviewSeq.current) return;
+            setStatusKind('ok');
+            setStatus(response?.previewZoneFallback
+              ? 'Lights reset on the whole card. Save the split layout if you need separate sections again.'
+              : `Recovery commands accepted on ${recoveryLabel}.${diagnosticText} If the LEDs are still dark, check LED power, shared ground, data direction, or output GPIO.`);
+          } catch {
+            if (sequence !== livePreviewSeq.current) return;
+            setStatusKind('ok');
+            setStatus(`Recovery command accepted on ${recoveryLabel}.${diagnosticText} Tap Save to card after the LEDs are visible if sections still need restoring.`);
+          }
+        })();
+        return;
+      } catch (error) {
+        if (!shouldTryLegacyRecovery(error)) throw error;
+        await identifyCardLights({ host: recoveryHost, timeoutMs: 1400, autoDiscover: false }).catch(() => null);
+        await pushLivePreviewToCard({
+          patternId: 'warm-white',
+          brightness: 1,
+          speed: 1,
+          hueShift: 0,
+          customHue: 0,
+          customSaturation: 255,
+          customBreathe: false,
+          customDrift: false,
+          syncZones: true,
+          blackout: false,
+        }, {
+          host: recoveryHost,
+          timeoutMs: 2600,
+          fallbackMissingZoneToAll: true,
+        });
+      }
 
       let response = await pushSectionPreviewToCard(recoveryTargets, {
-        host: cardHost,
+        host: recoveryHost,
         timeoutMs: 3400,
       });
 
@@ -1234,24 +1327,30 @@ export function PatternsScreen() {
           standaloneController: nextController,
         });
         setStatus('The card was missing section zones. Saving the current card layout, then trying the lights again...');
-        const configResponse = await pushConfigToCard(nextPackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+        const configResponse = await pushConfigToCard(nextPackage, { host: recoveryHost, timeoutMs: 6000, reboot: 'if-needed' });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
         if (sequence !== livePreviewSeq.current) return;
         if (configResponse.rebooting) {
           setStatusKind('ok');
+          setRecoveringLights(false);
           setStatus('Card layout was restored. The card is rebooting; tap Recover lights again if the LEDs do not return after it reconnects.');
           return;
         }
-        response = await pushSectionPreviewToCard(recoveryTargets, { host: cardHost, timeoutMs: 3400 });
+        response = await pushSectionPreviewToCard(recoveryTargets, { host: recoveryHost, timeoutMs: 3400 });
       }
 
       if (sequence !== livePreviewSeq.current) return;
       setStatusKind('ok');
+      setRecoveringLights(false);
+      const brightnessByte = Number(recoveryDetails?.diagnostics?.brightnessByte);
+      const diagnosticText = Number.isFinite(brightnessByte)
+        ? ` Card output brightness ${brightnessByte}/255.`
+        : '';
       setStatus(response?.previewZoneFallback
         ? 'Lights reset on the whole card. Save the split layout if you need separate sections again.'
-        : 'Lights reset. Stream cleared, blackout off, and the current pattern setup is live again.');
+        : `Recovery commands accepted on ${targetLabel(selectedRecoveryTarget || selectedTarget || allTarget)}.${diagnosticText} If the LEDs are still dark, check LED power, shared ground, data direction, or output GPIO.`);
     } catch (error) {
       if (sequence !== livePreviewSeq.current) return;
       const nextPackage = buildCardRuntimePackageFromProject({
@@ -1264,8 +1363,9 @@ export function PatternsScreen() {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access. Open the card installer to restore the current layout on the card.');
       } else {
         setStatusKind('err');
-        setStatus(`Could not recover the lights at ${cardHostToUrl(cardHost)}. Check power, WiFi, then try Connect through card.`);
+        setStatus(`Could not recover the lights at ${cardHostToUrl(recoveryHost)}. Check power and WiFi, then turn on Use local card.`);
       }
+      setRecoveringLights(false);
     }
   };
 
@@ -1463,10 +1563,10 @@ export function PatternsScreen() {
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
-      setStatus('Chip config copied. Paste it into the card page on the same WiFi.');
+      setStatus('Setup JSON copied. Paste it into the card page on the same WiFi.');
     } catch {
       setStatusKind('err');
-      setStatus('Clipboard was blocked. Download the chip config instead.');
+      setStatus('Clipboard was blocked. Download the setup JSON instead.');
     }
   };
 
@@ -1479,7 +1579,7 @@ export function PatternsScreen() {
     if (opened) {
       setStatusKind('');
       setStatus(localDefault
-        ? `Local chip is now the default control path. Opening ${cardHostToUrl(cardHost)} so Studio can take over the LEDs there.`
+        ? `Local card is now the default control path. Opening ${cardHostToUrl(cardHost)} so Studio can take over the LEDs there.`
         : `Opening the local card bridge at ${cardHostToUrl(cardHost)}. Studio will take over the LEDs when it loads there.`);
       return;
     }
@@ -1496,7 +1596,7 @@ export function PatternsScreen() {
       return;
     }
     setStatusKind('ok');
-    setStatus('Local chip default is off. Studio will use direct local access when the browser allows it.');
+    setStatus('Local card is off. Studio will use direct local access when the browser allows it.');
   };
 
   return (
@@ -1507,22 +1607,34 @@ export function PatternsScreen() {
             <h1>Patterns & Compounds</h1>
             <p>Choose chip-ready patterns, tune the colors, then save section blends as compound patterns for the card.</p>
           </div>
-          <div className="lw-patterns-actions">
-            <button type="button" className="btn btn-primary" onClick={applySplitPreviewToCard}>Apply split to card</button>
-            <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
-            <button type="button" className="btn btn-primary lw-recover-lights-btn" onClick={recoverLightsOnCard}>Recover lights</button>
-            <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
-            <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download</button>
-            <button
-              type="button"
-              className={`btn ${localChipDefault ? 'btn-primary' : ''}`}
-              aria-pressed={localChipDefault}
-              onClick={toggleLocalChipDefault}
-            >
-              {localChipDefault ? 'Local chip default on' : 'Use local chip by default'}
-            </button>
-            <button type="button" className="btn" onClick={() => beginCardBridgeHandoff()}>Connect through card</button>
-            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
+          <div className="lw-patterns-actions" aria-label="Card controls">
+            <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
+              <span className="lw-action-group-label">Card</span>
+              <button type="button" className="btn btn-primary" onClick={savePreviewToCard}>Save to card</button>
+              <button type="button" className="btn lw-recover-lights-btn" onClick={recoverLightsOnCard}>Recover lights</button>
+            </div>
+            <div className="lw-action-group" aria-label="Section layout">
+              <span className="lw-action-group-label">Section layout</span>
+              <button type="button" className="btn" onClick={applySplitPreviewToCard}>Send split preview</button>
+              <span className="lw-action-group-note">Outer / Inner have separate patterns</span>
+            </div>
+            <div className="lw-action-group" aria-label="Card connection">
+              <span className="lw-action-group-label">Connection</span>
+              <button
+                type="button"
+                className={`btn ${localChipDefault ? 'btn-primary' : ''}`}
+                aria-pressed={localChipDefault}
+                onClick={toggleLocalChipDefault}
+              >
+                {localChipDefault ? 'Using local card' : 'Use local card'}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
+            </div>
+            <div className="lw-action-group" aria-label="Manual setup">
+              <span className="lw-action-group-label">Manual setup</span>
+              <button type="button" className="btn" onClick={copyConfig}>Copy setup JSON</button>
+              <button type="button" className="btn btn-ghost" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup JSON</button>
+            </div>
           </div>
         </header>
 
@@ -1665,6 +1777,7 @@ export function PatternsScreen() {
                   masterHueShift={cardHueDeltaToDegrees(look.hueShift + (look.customHue - 32))}
                   symSettings={symSettings?.enabled ? symSettings : null}
                   motionSmoothing="soft"
+                  targetFps={30}
                 />
               </div>
               <p className="lw-pattern-preview-copy">{selectedPattern?.description}</p>
