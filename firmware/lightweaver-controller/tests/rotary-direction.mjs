@@ -166,6 +166,8 @@ int main() {
   assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
   assert(applyRotaryBrightness(1.0f, CONTROL_DIMMER, 18) <= 0.82f);
   assert(applyRotaryBrightness(0.5f, CONTROL_BRIGHTER, 18) >= 0.68f);
+  assert(applyRotaryBrightness(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18), CONTROL_BRIGHTER, 18) == 1.0f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) <= 0.03f);
 
   return 0;
 }

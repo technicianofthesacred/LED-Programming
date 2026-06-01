@@ -2,7 +2,7 @@
 
 namespace {
 constexpr int8_t ENCODER_EVENT_DELTA = 2;
-constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 48;
+constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 96;
 
 bool validPin(int pin) {
   return pin >= 0;

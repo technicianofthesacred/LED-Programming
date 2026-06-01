@@ -2155,7 +2155,7 @@ export function PatternsScreen() {
                   <input
                     type="range"
                     min="1"
-                    max="64"
+                    max="128"
                     step="1"
                     value={controls.encoder.brightnessStep}
                     onChange={event => updateController({ controls: { encoder: { brightnessStep: +event.target.value } } })}
