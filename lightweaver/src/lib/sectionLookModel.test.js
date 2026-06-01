@@ -106,12 +106,14 @@ test('saveCurrentLookToController preserves named multi-section looks', () => {
 
   assert.equal(controller.activeLookId, 'opening-glow');
   assert.equal(controller.looks.length, 1);
+  assert.equal(controller.looks[0].type, 'compound-pattern');
   assert.equal(controller.looks[0].label, 'Opening glow');
   assert.equal(controller.looks[0].defaultLook.patternId, 'aurora');
   assert.equal(controller.looks[0].sectionLooks['patch-default-inner-circle'].patternId, 'scanner');
 
   const restored = defaultStandaloneController(controller);
   assert.equal(restored.activeLookId, 'opening-glow');
+  assert.equal(restored.looks[0].type, 'compound-pattern');
   assert.equal(restored.looks[0].sectionLooks['patch-default-inner-circle'].speed, 1.6);
 });
 

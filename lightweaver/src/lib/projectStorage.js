@@ -1,0 +1,152 @@
+import { migrateProject, PROJECT_VERSION } from './projectModel.js';
+
+export const PROJECT_LIBRARY_STORAGE_KEY = 'lw_project_library_v1';
+export const PROJECT_LIBRARY_VERSION = 1;
+export const PROJECT_LIBRARY_LIMIT = 24;
+
+function getDefaultStorage() {
+  if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
+  if (typeof localStorage !== 'undefined') return localStorage;
+  return null;
+}
+
+function makeId() {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `project-${Date.now().toString(36)}-${random}`;
+}
+
+function storageFromOptions(options = {}) {
+  return options.storage || getDefaultStorage();
+}
+
+function readEnvelope({ storage = getDefaultStorage() } = {}) {
+  if (!storage) return { version: PROJECT_LIBRARY_VERSION, records: [] };
+  try {
+    const raw = storage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+    if (!raw) return { version: PROJECT_LIBRARY_VERSION, records: [] };
+    const parsed = JSON.parse(raw);
+    const records = Array.isArray(parsed?.records)
+      ? parsed.records
+      : Array.isArray(parsed)
+        ? parsed
+        : [];
+    return { version: PROJECT_LIBRARY_VERSION, records };
+  } catch {
+    return { version: PROJECT_LIBRARY_VERSION, records: [] };
+  }
+}
+
+function writeEnvelope(records, { storage = getDefaultStorage() } = {}) {
+  if (!storage) return false;
+  const payload = {
+    version: PROJECT_LIBRARY_VERSION,
+    records: records.slice(0, PROJECT_LIBRARY_LIMIT),
+  };
+  storage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(payload));
+  return true;
+}
+
+function requireStorage(storage) {
+  if (!storage) {
+    throw new Error('Project library storage is unavailable in this browser');
+  }
+}
+
+function normalizeRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const project = migrateProject(record.project);
+  if (!project) return null;
+  const id = String(record.id || '').trim();
+  if (!id) return null;
+  const name = String(record.name || project.name || 'Untitled Project').trim() || 'Untitled Project';
+  const createdAt = Number(record.createdAt || record.updatedAt || Date.now());
+  const updatedAt = Number(record.updatedAt || createdAt);
+  return {
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    projectVersion: project.version || PROJECT_VERSION,
+    project: {
+      ...project,
+      name,
+    },
+  };
+}
+
+function sortedRecords(records = []) {
+  return records
+    .map(normalizeRecord)
+    .filter(Boolean)
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name));
+}
+
+export function createProjectLibraryRecord(project, { id = makeId(), now = Date.now() } = {}) {
+  const migrated = migrateProject(project);
+  if (!migrated) {
+    throw new Error('Invalid Lightweaver project');
+  }
+  const name = String(migrated.name || 'Untitled Project').trim() || 'Untitled Project';
+  return {
+    id,
+    name,
+    createdAt: now,
+    updatedAt: now,
+    projectVersion: migrated.version || PROJECT_VERSION,
+    project: {
+      ...migrated,
+      name,
+    },
+  };
+}
+
+export function listProjectLibraryRecords(options = {}) {
+  const storage = storageFromOptions(options);
+  return sortedRecords(readEnvelope({ storage }).records);
+}
+
+export function saveProjectLibraryRecord(record, options = {}) {
+  const storage = storageFromOptions(options);
+  requireStorage(storage);
+  const incoming = normalizeRecord(record);
+  if (!incoming) {
+    throw new Error('Invalid Lightweaver project library record');
+  }
+
+  const existingRecords = listProjectLibraryRecords({ storage });
+  const existing = existingRecords.find(item => item.id === incoming.id);
+  const next = {
+    ...incoming,
+    createdAt: existing?.createdAt || incoming.createdAt,
+    updatedAt: Number(options.now || incoming.updatedAt || Date.now()),
+  };
+  const records = [
+    next,
+    ...existingRecords.filter(item => item.id !== incoming.id),
+  ];
+  if (!writeEnvelope(sortedRecords(records), { storage })) {
+    throw new Error('Project library storage is unavailable in this browser');
+  }
+  return next;
+}
+
+export function deleteProjectLibraryRecord(id, options = {}) {
+  const storage = storageFromOptions(options);
+  const target = String(id || '');
+  const records = listProjectLibraryRecords({ storage }).filter(record => record.id !== target);
+  writeEnvelope(records, { storage });
+  return records;
+}
+
+export function duplicateProjectLibraryRecord(id, options = {}) {
+  const storage = storageFromOptions(options);
+  const source = listProjectLibraryRecords({ storage }).find(record => record.id === id);
+  if (!source) return null;
+  const name = `${source.name} copy`;
+  const duplicate = createProjectLibraryRecord(
+    { ...source.project, name },
+    { id: options.id || makeId(), now: options.now || Date.now() },
+  );
+  saveProjectLibraryRecord(duplicate, { storage });
+  return duplicate;
+}

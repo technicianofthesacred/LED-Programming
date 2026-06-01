@@ -87,6 +87,46 @@ assert.match(
   /studioAutoOpen/,
   'card page should support public Studio opening the local card bridge and auto-launching the embedded Studio handoff',
 );
+assert.match(
+  web,
+  /editPattern/,
+  'local card pages should pass the selected pattern id into Studio when editing the active look',
+);
+assert.match(
+  web,
+  /editLook/,
+  'local card pages should pass compound card looks into Studio as editable saved looks',
+);
+assert.ok(
+  (web.match(/id='edit-studio'/g) || []).length >= 2,
+  'both local card pages should expose a selected-pattern Edit in Studio button',
+);
+assert.match(
+  web,
+  /studioUrlForPattern/,
+  'local card pages should build pattern-aware Studio handoff URLs',
+);
+assert.match(
+  web,
+  /tile-edit/,
+  'the main local card page should show a small edit affordance on the selected pattern tile',
+);
+for (const swatchClass of ['sw-plasma', 'sw-fire', 'sw-ocean', 'sw-sparkle']) {
+  assert.match(
+    web,
+    new RegExp(`\\.${swatchClass}`),
+    `main local card page should include a visual swatch for ${swatchClass.replace('sw-', '')}`,
+  );
+}
+{
+  const rootStart = web.indexOf('void handleRoot()');
+  const controlsIndex = web.indexOf("<div class='bright'>", rootStart);
+  const gridIndex = web.indexOf("<div class='grid' id='grid'></div>", rootStart);
+  assert.ok(
+    controlsIndex > -1 && gridIndex > -1 && controlsIndex < gridIndex,
+    'main local card page should keep brightness and speed controls above the long pattern grid',
+  );
+}
 assert.doesNotMatch(
   web,
   /Open Lightweaver app[^;]+rel='noopener'/,

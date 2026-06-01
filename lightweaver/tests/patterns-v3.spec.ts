@@ -73,6 +73,39 @@ test('patterns only go on the knob after adding them to the playlist', async ({ 
   await expect(page.locator('.lw-playlist-row').first()).toContainText('Ocean');
 });
 
+test('chip-ready patterns drag onto design targets', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.lw-look-card', { hasText: 'Ocean' }).dragTo(page.getByTestId('section-target-patch-default-inner-circle'));
+
+  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
+  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
+});
+
+test('patterns opened from the local card select that pattern for editing', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.addInitScript(() => localStorage.clear());
+  await page.route('http://192.168.18.70/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/?cardBridge=1&cardHost=192.168.18.70&studioTakeover=1&editPattern=rainbow#screen=patterns', {
+    waitUntil: 'domcontentloaded',
+  });
+
+  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Rainbow');
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Rainbow');
+  await expect.poll(() => controlRequests.some(request => request.patternId === 'rainbow')).toBe(true);
+});
+
 test('selected patterns can reset color and motion back to defaults', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('http://lightweaver.local/api/control', async route => {
@@ -120,8 +153,10 @@ test('v3 patterns saves section-specific combos that appear in Settings', async 
   await expect(page.locator('.lw-patterns-aside .lw-look-preview.is-large')).toBeVisible();
   await page.getByTestId('save-current-combo').click();
 
-  await expect(page.getByText('Compound patterns')).toBeVisible();
-  await expect(page.locator('.lw-saved-look-card', { hasText: 'Inner circle Ocean' })).toBeVisible();
+  await expect(page.locator('.lw-combo-bench')).toHaveCount(0);
+  await expect(page.locator('.lw-combo-library')).toHaveCount(0);
+  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Inner circle Ocean' })).toBeVisible();
+  await expect(page.locator('.lw-look-card')).toHaveCount(31);
   await page.getByText('Settings', { exact: true }).click();
 
   await expect(page.getByText('What the card will run')).toBeVisible();
@@ -150,7 +185,7 @@ test('v3 patterns keeps separate unsaved section choices before saving the combo
   await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
 
   await page.getByTestId('save-current-combo').click();
-  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
+  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
   await page.getByText('Settings', { exact: true }).click();
   await page.getByText('Advanced').click();
 
@@ -288,7 +323,7 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
   await page.locator('button[data-pattern-id="sparkle"]').click();
   await page.getByTestId('save-current-combo').click();
 
-  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
+  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
 
   await page.getByTestId('section-target-patch-default-outer-circle').click();
   await page.locator('button[data-pattern-id="fire"]').click();
@@ -296,11 +331,11 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
   await page.locator('button[data-pattern-id="ocean"]').click();
   await page.getByTestId('save-current-combo').click();
 
-  await expect(page.locator('.lw-saved-look-card')).toHaveCount(2);
-  await expect(page.locator('.lw-saved-look-card', { hasText: 'Outer circle Fire + Inner circle Ocean' })).toBeVisible();
+  await expect(page.locator('.lw-look-card.is-compound')).toHaveCount(2);
+  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Fire + Inner circle Ocean' })).toBeVisible();
 
   controlRequests.length = 0;
-  await page.locator('.lw-saved-look-card', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
+  await page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).locator('.lw-look-card-main').click();
 
   await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
   await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
@@ -408,7 +443,7 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 
   await expect(page.locator('.lw-section-target')).toHaveCount(5);
-  await expect(page.locator('.lw-combo-targets > span')).toHaveCount(4);
+  await expect(page.locator('.lw-section-target.is-section')).toHaveCount(4);
 
   await page.getByTestId('section-target-patch-default-outer-circle').click();
   await page.locator('button[data-pattern-id="ocean"]').click();
@@ -420,14 +455,13 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await page.locator('button[data-pattern-id="calm"]').click();
   await page.getByTestId('save-current-combo').click();
 
-  const savedCard = page.locator('.lw-saved-look-card').first();
+  const savedCard = page.locator('.lw-look-card.is-compound').first();
   await expect(savedCard).toContainText('4-section combo');
-  await expect(savedCard).toContainText('Ring 3: Fire');
-  await expect(savedCard).toContainText('Ring 4: Calm');
-  await expect(savedCard.locator('.lw-look-preview')).toHaveCount(3);
-  await expect(savedCard.locator('.lw-saved-combo-overflow')).toContainText('+1');
+  await expect(savedCard).toContainText('Compound pattern');
+  await expect(savedCard.locator('.lw-compound-thumb-cell')).toHaveCount(4);
 
-  await savedCard.getByRole('button', { name: 'Load now' }).click();
+  await savedCard.locator('.lw-look-card-main').click();
+  await page.getByRole('button', { name: 'Save to card' }).click();
   await expect.poll(() => configRequests.length).toBe(1);
   const zonePatterns = Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]));
   expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');

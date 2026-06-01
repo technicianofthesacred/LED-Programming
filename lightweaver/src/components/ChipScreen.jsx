@@ -31,6 +31,13 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
+import {
+  createProjectLibraryRecord,
+  deleteProjectLibraryRecord,
+  duplicateProjectLibraryRecord,
+  listProjectLibraryRecords,
+  saveProjectLibraryRecord,
+} from '../lib/projectStorage.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
@@ -143,6 +150,16 @@ function formatSavedTime(lastSaved) {
   return `autosaved ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 }
 
+function formatLibraryTime(updatedAt) {
+  if (!updatedAt) return 'not dated';
+  return new Date(updatedAt).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function ChipScreen() {
   const {
     projectName,
@@ -165,6 +182,8 @@ export function ChipScreen() {
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [projectLibrary, setProjectLibrary] = useState(() => listProjectLibraryRecords());
+  const [activeProjectRecordId, setActiveProjectRecordId] = useState('');
   const liveHardwareSeq = useRef(0);
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -377,6 +396,7 @@ export function ChipScreen() {
           setStatus('That project file does not look like a Lightweaver Studio project.');
           return;
         }
+        setActiveProjectRecordId('');
         setStatusKind('ok');
         setStatus('Project opened in Studio.');
       } catch {
@@ -386,6 +406,83 @@ export function ChipScreen() {
     };
     reader.readAsText(file);
     event.target.value = '';
+  };
+
+  const refreshProjectLibrary = () => {
+    setProjectLibrary(listProjectLibraryRecords());
+  };
+
+  const saveProjectToLibrary = () => {
+    try {
+      const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject()));
+      setActiveProjectRecordId(record.id);
+      refreshProjectLibrary();
+      setStatusKind('ok');
+      setStatus(`Saved ${record.name} in this browser.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error.message || 'Could not save this Studio project.');
+    }
+  };
+
+  const updateProjectInLibrary = () => {
+    if (!activeProjectRecordId) {
+      saveProjectToLibrary();
+      return;
+    }
+    try {
+      const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject(), {
+        id: activeProjectRecordId,
+      }));
+      refreshProjectLibrary();
+      setStatusKind('ok');
+      setStatus(`Updated ${record.name} in this browser.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error.message || 'Could not update this Studio project.');
+    }
+  };
+
+  const openProjectFromLibrary = (record) => {
+    if (!record) return;
+    if (!window.confirm(`Open ${record.name}? The current Studio workspace will be replaced.`)) return;
+    if (!loadProject(record.project)) {
+      setStatusKind('err');
+      setStatus('That saved project could not be opened.');
+      return;
+    }
+    setActiveProjectRecordId(record.id);
+    setStatusKind('ok');
+    setStatus(`Opened ${record.name}.`);
+  };
+
+  const duplicateProjectInLibrary = (record) => {
+    if (!record) return;
+    const copy = duplicateProjectLibraryRecord(record.id);
+    if (!copy) {
+      setStatusKind('err');
+      setStatus('That saved project could not be duplicated.');
+      return;
+    }
+    refreshProjectLibrary();
+    setStatusKind('ok');
+    setStatus(`Duplicated ${record.name}.`);
+  };
+
+  const deleteProjectFromLibrary = (record) => {
+    if (!record) return;
+    if (!window.confirm(`Delete ${record.name} from this browser?`)) return;
+    deleteProjectLibraryRecord(record.id);
+    if (activeProjectRecordId === record.id) setActiveProjectRecordId('');
+    refreshProjectLibrary();
+    setStatusKind('ok');
+    setStatus(`Deleted ${record.name} from this browser.`);
+  };
+
+  const startNewProject = () => {
+    if (!window.confirm('Discard this Studio project and start over?')) return;
+    setActiveProjectRecordId('');
+    newProject();
   };
 
   const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
@@ -652,11 +749,41 @@ export function ChipScreen() {
 
               <div className="lw-chip-project-package">
                 <Section title="Studio project" meta={formatSavedTime(lastSaved)}>
-                  <FieldRow label="Save project" hint="editable Studio file">
+                  <FieldRow label="Browser library" hint="editable Studio projects">
+                    <div className="lw-chip-settings-inline-actions">
+                      <button className="btn btn-primary" onClick={saveProjectToLibrary}>Save current</button>
+                      <button className="btn btn-ghost" onClick={updateProjectInLibrary} disabled={!activeProjectRecordId}>
+                        Update opened
+                      </button>
+                    </div>
+                  </FieldRow>
+                  <div className="lw-project-library-list">
+                    {projectLibrary.length ? projectLibrary.map(record => (
+                      <div
+                        key={record.id}
+                        className={`lw-project-library-row ${record.id === activeProjectRecordId ? 'is-active' : ''}`}
+                      >
+                        <div className="lw-project-library-main">
+                          <strong>{record.name}</strong>
+                          <span>{formatLibraryTime(record.updatedAt)} · project v{record.projectVersion}</span>
+                        </div>
+                        <div className="lw-project-library-actions">
+                          <button className="btn btn-ghost" onClick={() => openProjectFromLibrary(record)}>Open</button>
+                          <button className="btn btn-ghost" onClick={() => duplicateProjectInLibrary(record)}>Duplicate</button>
+                          <button className="btn btn-ghost" onClick={() => deleteProjectFromLibrary(record)}>Delete</button>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="lw-project-library-empty">
+                        No saved Studio projects in this browser yet.
+                      </div>
+                    )}
+                  </div>
+                  <FieldRow label="File backup" hint="portable .lwproj.json">
                     <div className="lw-chip-settings-inline-actions">
                       <button className="btn btn-ghost" onClick={saveProjectFile}>Download</button>
                       <button className="btn btn-ghost" onClick={() => importRef.current?.click()}>Open</button>
-                      <button className="btn btn-ghost" onClick={() => { if (window.confirm('Discard this Studio project and start over?')) newProject(); }}>New</button>
+                      <button className="btn btn-ghost" onClick={startNewProject}>New</button>
                       <input ref={importRef} type="file" accept=".json,.lwproj.json,.lw.json" className="lw-hidden-file-input" onChange={importProjectFile}/>
                     </div>
                   </FieldRow>

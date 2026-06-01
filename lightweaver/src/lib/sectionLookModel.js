@@ -3,6 +3,7 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 
 export const ALL_SECTIONS_TARGET_ID = 'all';
 export const MAX_SAVED_LOOKS = 12;
+export const COMPOUND_PATTERN_TYPE = 'compound-pattern';
 
 export function normalizeSectionVisualLook(look = {}) {
   return normalizeCardVisualLook(look);
@@ -84,6 +85,7 @@ export function normalizeSavedLooks(looks = []) {
     seen.add(id);
     normalized.push({
       id,
+      type: COMPOUND_PATTERN_TYPE,
       label: String(look.label || titleFromId(id)),
       defaultLook: normalizeSectionVisualLook(look.defaultLook || look.look || {}),
       sectionLooks: normalizeSectionLooks(look.sectionLooks || look.zones || {}),
@@ -104,6 +106,7 @@ export function saveCurrentLookToController(controller = {}, {
   const id = sanitizeId(lookId || label || `look-${Date.now()}`) || `look-${Date.now()}`;
   const saved = {
     id,
+    type: COMPOUND_PATTERN_TYPE,
     label: String(label || titleFromId(id)),
     defaultLook: normalizeSectionVisualLook(defaultLook),
     sectionLooks: sectionLooksFromTargets(targets),
