@@ -5793,10 +5793,10 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-target-panel {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   margin-bottom: 12px;
-  padding: 7px;
+  padding: 6px;
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 6px;
   background: oklch(12% 0.012 250 / 0.62);
@@ -5805,14 +5805,13 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-target-compound-bar {
   display: grid;
-  grid-template-columns: minmax(120px, 0.8fr) minmax(160px, 1fr) auto;
-  gap: 8px;
+  grid-template-columns: auto minmax(180px, 0.56fr) auto;
+  gap: 6px;
   align-items: center;
-  padding: 7px;
-  border: 1px solid oklch(76% 0.17 165 / 0.26);
+  padding: 6px;
+  border: 1px solid oklch(76% 0.17 165 / 0.2);
   border-radius: 5px;
-  background:
-    linear-gradient(135deg, oklch(18% 0.024 225 / 0.82), oklch(10% 0.01 250 / 0.8));
+  background: oklch(10% 0.012 250 / 0.82);
 }
 
 .lw-target-compound-copy {
@@ -5839,22 +5838,22 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-target-compound-bar .lw-search-input {
-  height: 32px;
+  height: 30px;
 }
 
 .lw-target-compound-bar .btn {
-  min-height: 32px;
+  min-height: 30px;
   white-space: nowrap;
 }
 
 .lw-target-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
   align-content: start;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   margin: 0;
-  max-height: min(42vh, 318px);
+  max-height: min(36vh, 268px);
   padding: 4px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -5869,11 +5868,11 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target {
   width: 100%;
   min-width: 0;
-  min-height: 62px;
+  min-height: 55px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(86px, 0.26fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: oklch(13% 0.012 250);
@@ -5885,12 +5884,12 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-section-target:not(.is-all) {
-  grid-template-columns: minmax(0, 1fr);
   align-content: center;
 }
 
 .lw-section-target.is-all {
   grid-column: 1 / -1;
+  grid-template-columns: 36px minmax(0, 1fr);
 }
 
 .lw-section-target:hover {
@@ -5904,19 +5903,65 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   box-shadow: 0 0 0 1px oklch(76% 0.17 165 / 0.22);
 }
 
+.lw-section-target-badge {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid oklch(100% 0 0 / 0.12);
+  border-radius: 4px;
+  background: oklch(8% 0.012 250 / 0.74);
+  color: var(--text-2);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.lw-section-target.is-all .lw-section-target-badge {
+  width: 36px;
+}
+
+.lw-section-target.is-active .lw-section-target-badge {
+  border-color: oklch(76% 0.17 165 / 0.5);
+  color: oklch(82% 0.16 165);
+}
+
 .lw-section-target-main {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.24fr);
+  grid-template-columns: minmax(0, 1fr) minmax(86px, auto);
+  grid-template-areas:
+    "head head"
+    "range look";
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.lw-section-target-head {
+  grid-area: head;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 62px;
   gap: 6px;
+  align-items: end;
+}
+
+.lw-section-target.is-all .lw-section-target-head {
+  grid-template-columns: minmax(0, 1fr) 76px;
 }
 
 .lw-section-target-range {
-  grid-column: 1 / -1;
+  grid-area: range;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-4);
   font-family: var(--mono-font);
   font-size: var(--fs-2xs);
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lw-target-edit-field {
@@ -5938,7 +5983,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-target-led-input {
   width: 100%;
   min-width: 0;
-  height: 30px;
+  height: 26px;
   border: 1px solid oklch(100% 0 0 / 0.1);
   border-radius: 4px;
   background: oklch(7% 0.01 255 / 0.55);
@@ -5951,7 +5996,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-target-name-input {
   overflow: hidden;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5972,7 +6017,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-target-led-input {
   color: var(--text-3);
   font-family: var(--mono-font);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   text-align: right;
 }
 
@@ -5981,31 +6026,26 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-section-target-look {
+  grid-area: look;
   min-width: 0;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 6px;
-  align-self: stretch;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 5px;
+  justify-self: end;
   align-items: center;
-  padding-left: 6px;
+  width: min(100%, 104px);
+  padding-left: 7px;
   border-left: 1px solid oklch(100% 0 0 / 0.08);
 }
 
 .lw-section-target:not(.is-all) .lw-section-target-look {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding-top: 5px;
-  padding-left: 0;
-  border-top: 1px solid oklch(100% 0 0 / 0.08);
-  border-left: 0;
+  border-top: 0;
 }
 
 .lw-section-target-look .lw-pattern-thumb {
   width: 100%;
-  min-height: 30px;
-  height: 30px;
+  min-height: 22px;
+  height: 22px;
   border-radius: 4px;
 }
 
@@ -6015,9 +6055,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-section-target-look .lw-pattern-thumb-glow {
-  inset: 7px 5px;
-  filter: blur(7px) saturate(1.08);
-  opacity: 0.52;
+  inset: 5px 4px;
+  filter: blur(5px) saturate(1.08);
+  opacity: 0.46;
 }
 
 .lw-section-target-look .lw-pattern-thumb-swatch-row {
@@ -6027,14 +6067,13 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target-look-copy {
   min-width: 0;
   display: grid;
-  gap: 2px;
 }
 
 .lw-section-target-look-copy b {
   min-width: 0;
   overflow: hidden;
   color: var(--text-2);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;

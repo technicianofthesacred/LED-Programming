@@ -127,7 +127,7 @@ function PlaylistRow({
         <strong>{item.label}</strong>
         <span>
           {item.type === 'combo'
-            ? `${sectionCount} section combo`
+            ? `${sectionCount} section mix`
             : `${pattern?.label || item.patternId} across the piece`}
         </span>
       </div>
@@ -495,7 +495,7 @@ export function PlaylistScreen() {
               </div>
             </Section>
 
-            <Section title="Add combos" meta={`${savedLooks.length} saved`}>
+            <Section title="Add mixes" meta={`${savedLooks.length} saved`}>
               {savedLooks.length ? (
                 <div className="lw-playlist-combo-pool">
                   {savedLooks.map(savedLook => (
@@ -508,13 +508,13 @@ export function PlaylistScreen() {
                       <ComboThumbs savedLook={savedLook}/>
                       <span>
                         <strong>{savedLook.label}</strong>
-                        <em>{playlistContainsCombo(playlist, savedLook.id) ? 'In playlist' : 'Add combo'}</em>
+                        <em>{playlistContainsCombo(playlist, savedLook.id) ? 'In playlist' : 'Add mix'}</em>
                       </span>
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="lw-playlist-empty">Save an Outer and Inner combo on Patterns, then add it here.</p>
+                <p className="lw-playlist-empty">Save an Outer and Inner mix on Patterns, then add it here.</p>
               )}
             </Section>
           </aside>

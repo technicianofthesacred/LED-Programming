@@ -529,6 +529,11 @@ test('v3 patterns lays out editable section targets in a compact desktop matrix'
   expect(Math.abs(innerBox!.y - outerBox!.y)).toBeLessThan(12);
   await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toBeEditable();
   await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toBeEditable();
+  await expect(page.locator('.lw-target-compound-copy')).toContainText('Layer mix');
+  await expect(page.getByTestId('save-current-combo')).toHaveText('Save mix');
+  await expect(page.getByTestId('section-target-all').locator('.lw-section-target-badge')).toHaveText('All');
+  await expect(page.getByTestId('section-target-patch-default-outer-circle').locator('.lw-section-target-badge')).toHaveText('1');
+  await expect(page.getByTestId('section-target-patch-default-inner-circle').locator('.lw-section-target-badge')).toHaveText('2');
 
   const browseMetrics = await page.locator('.lw-pattern-browse-tools').evaluate(node => {
     const tools = node as HTMLElement;
@@ -750,8 +755,8 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await page.getByTestId('save-current-combo').click();
 
   const savedCard = page.locator('.lw-look-card.is-compound').first();
-  await expect(savedCard).toContainText('4-section combo');
-  await expect(savedCard).toContainText('Compound pattern');
+  await expect(savedCard).toContainText('4-layer mix');
+  await expect(savedCard).toContainText('Layer mix');
   await expect(savedCard.locator('.lw-compound-thumb-cell')).toHaveCount(4);
 
   await savedCard.locator('.lw-look-card-main').click();

@@ -92,7 +92,7 @@ const GEOMETRY_PRESETS = [
 ];
 const PATTERN_CATEGORIES = [
   { id: 'all', label: 'All', ids: null },
-  { id: 'compound', label: 'Compounds', ids: null, compoundOnly: true },
+  { id: 'compound', label: 'Layer mixes', ids: null, compoundOnly: true },
   { id: 'calm', label: 'Calm', ids: ['aurora', 'breathe', 'calm', 'drift', 'bloom', 'warm-white'] },
   { id: 'water', label: 'Water', ids: ['ocean', 'ripple', 'wave', 'plasma'] },
   { id: 'warm', label: 'Warm', ids: ['fire', 'lava', 'candle', 'ember', 'sunset', 'warm-white'] },
@@ -436,12 +436,20 @@ function targetRangeLabel(target = {}) {
 function comboLabelFromTargets(targets = [], defaultLook = {}) {
   const sections = (targets || []).filter(target => target?.kind === 'section');
   if (sections.length) {
-    if (sections.length > 2) return `${sections.length}-section combo`;
+    if (sections.length > 2) return `${sections.length}-layer mix`;
     return sections
       .map(target => `${targetLabel(target)} ${patternLabel(target.look?.patternId)}`)
       .join(' + ');
   }
   return `${patternLabel(defaultLook.patternId)} whole piece`;
+}
+
+function targetLayerBadge(target = {}, targets = []) {
+  if (target.kind === 'all') return 'All';
+  const sectionIndex = (targets || [])
+    .filter(item => item?.kind === 'section')
+    .findIndex(item => item.id === target.id);
+  return sectionIndex >= 0 ? String(sectionIndex + 1) : '';
 }
 
 function compoundSectionsForLook(look = {}, targets = []) {
@@ -468,6 +476,8 @@ function compoundSearchText(look = {}, targets = []) {
     look.id,
     look.label,
     'compound pattern',
+    'layer mix',
+    'section mix',
     ...sections.flatMap(section => [
       section.label,
       section.look?.patternId,
@@ -594,13 +604,13 @@ function CompoundPatternCard({
         type="button"
         className="lw-look-card-main"
         data-look-id={look.id}
-        aria-label={`${look.label}. Compound pattern with ${sectionCount} section${sectionCount === 1 ? '' : 's'}.`}
+        aria-label={`${look.label}. Layer mix with ${sectionCount} section${sectionCount === 1 ? '' : 's'}.`}
         onClick={onSelect}
       >
         <CompoundThumbnail look={look} targets={targets}/>
         <span className="lw-look-card-copy">
           <strong>{look.label}</strong>
-          <span>Compound pattern</span>
+          <span>Layer mix</span>
           <span className="lw-compound-card-meta">
             {sectionCount} section{sectionCount === 1 ? '' : 's'}{sectionSummary ? ` / ${sectionSummary}` : ''}
           </span>
@@ -618,6 +628,7 @@ function TargetButton({
   target,
   active,
   editable,
+  badge,
   onSelect,
   onNameChange,
   onPixelCountChange,
@@ -626,6 +637,11 @@ function TargetButton({
   const pattern = getCardPatternById(target.look?.patternId);
   const fingerprint = getCardPatternFingerprint(pattern?.id || target.look?.patternId || 'aurora');
   const readOnlyName = target.kind === 'all';
+  const rangeLabel = targetRangeLabel(target);
+  const patternName = pattern?.label || target.look?.patternId || 'Pattern';
+  const targetLabelText = target.kind === 'all'
+    ? `All sections, ${rangeLabel}, ${patternName}`
+    : `Layer ${badge}, ${target.label}, ${rangeLabel}, ${patternName}`;
   const onInputClick = event => event.stopPropagation();
   const readDraggedPatternId = event => (
     event.dataTransfer?.getData('application/x-lightweaver-pattern') ||
@@ -658,50 +674,55 @@ function TargetButton({
         event.preventDefault();
         onPatternDrop(target, patternId);
       }}
+      aria-label={targetLabelText}
+      title={targetLabelText}
       data-testid={`section-target-${target.id}`}
     >
+      <span className="lw-section-target-badge" aria-hidden="true">{badge}</span>
       <span className="lw-section-target-main">
-        <label className="lw-target-edit-field lw-target-name-field">
-          <span>{readOnlyName ? 'Target' : 'Name'}</span>
-          <input
-            className="lw-target-name-input"
-            value={target.label}
-            readOnly={readOnlyName}
-            aria-label={`${target.label} name`}
-            data-testid={`section-target-name-${target.id}`}
-            onClick={onInputClick}
-            onFocus={onSelect}
-            onChange={event => onNameChange?.(target, event.target.value)}
-          />
-        </label>
-        <label className="lw-target-edit-field lw-target-led-field">
-          <span>{target.kind === 'all' ? 'Total LEDs' : 'LEDs'}</span>
-          <input
-            className="lw-target-led-input"
-            type="number"
-            min="1"
-            max="2048"
-            value={target.pixelCount || 1}
-            disabled={!editable}
-            aria-label={`${target.label} LEDs`}
-            data-testid={`section-target-leds-${target.id}`}
-            onClick={onInputClick}
-            onFocus={onSelect}
-            onChange={event => onPixelCountChange?.(target, event.target.value)}
-          />
-        </label>
+        <span className="lw-section-target-head">
+          <label className="lw-target-edit-field lw-target-name-field">
+            <span>{readOnlyName ? 'Target' : 'Layer'}</span>
+            <input
+              className="lw-target-name-input"
+              value={target.label}
+              readOnly={readOnlyName}
+              aria-label={`${target.label} name`}
+              data-testid={`section-target-name-${target.id}`}
+              onClick={onInputClick}
+              onFocus={onSelect}
+              onChange={event => onNameChange?.(target, event.target.value)}
+            />
+          </label>
+          <label className="lw-target-edit-field lw-target-led-field">
+            <span>{target.kind === 'all' ? 'Total' : 'LEDs'}</span>
+            <input
+              className="lw-target-led-input"
+              type="number"
+              min="1"
+              max="2048"
+              value={target.pixelCount || 1}
+              disabled={!editable}
+              aria-label={`${target.label} LEDs`}
+              data-testid={`section-target-leds-${target.id}`}
+              onClick={onInputClick}
+              onFocus={onSelect}
+              onChange={event => onPixelCountChange?.(target, event.target.value)}
+            />
+          </label>
+        </span>
         <span
           className="lw-section-target-range"
           data-testid={`section-target-range-${target.id}`}
         >
-          {targetRangeLabel(target)}
+          {rangeLabel}
         </span>
-      </span>
-      <span className="lw-section-target-look">
-        {pattern && <PatternThumbnail pattern={pattern} fingerprint={fingerprint}/>}
-        <span className="lw-section-target-look-copy">
-          <span>Pattern</span>
-          <b>{pattern?.label || target.look?.patternId || 'Pattern'}</b>
+        <span className="lw-section-target-look">
+          {pattern && <PatternThumbnail pattern={pattern} fingerprint={fingerprint}/>}
+          <span className="lw-section-target-look-copy">
+            <span>Pattern</span>
+            <b>{patternName}</b>
+          </span>
         </span>
       </span>
     </div>
@@ -1119,7 +1140,7 @@ export function PatternsScreen() {
         setStatusKind('ok');
         setStatus(response?.previewZoneFallback
           ? 'Studio is controlling the whole card. Save Settings to the card once to restore separate section preview.'
-          : 'Studio is controlling the card now. Pattern and combo changes preview live until you save them.');
+          : 'Studio is controlling the card now. Pattern and mix changes preview live until you save them.');
       } catch (error) {
         bridgeAutoPreviewDone.current = false;
         setStatusKind('err');
@@ -1276,7 +1297,7 @@ export function PatternsScreen() {
     setDraftLooks({});
     setLookLabel('');
     setStatusKind('ok');
-    setStatus(`${saved?.label || 'Compound pattern'} saved to the pattern bank.`);
+    setStatus(`${saved?.label || 'Layer mix'} saved to the pattern bank.`);
   };
 
   const checkCardLayoutWriteSafety = async (runtimePackageForCard, actionLabel = 'saving') => {
@@ -1671,7 +1692,7 @@ export function PatternsScreen() {
         : `${savedLook.label} loaded on the card.`);
     } catch (error) {
       if (error?.reason === 'mixed-content') {
-        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to load this combo on the card.');
+        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to load this mix on the card.');
       } else if (error?.reason === 'layout-mismatch') {
         setStatusKind('err');
         setStatus(error.message);
@@ -1828,8 +1849,8 @@ export function PatternsScreen() {
       <div className="lw-patterns-shell">
         <header className="lw-patterns-hero">
           <div>
-            <h1>Patterns & Compounds</h1>
-            <p>Choose chip-ready patterns, tune the colors, then save section blends as compound patterns for the card.</p>
+            <h1>Patterns & Mixes</h1>
+            <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
           </div>
           <div className="lw-patterns-actions" aria-label="Card controls">
             <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
@@ -1909,7 +1930,7 @@ export function PatternsScreen() {
               <span>Tap a pattern to preview</span>
               <span className="meta">
                 {shownPatternCount} shown of {DEFAULT_CARD_PATTERN_BANK.length} chip-ready
-                {savedLooks.length ? ` + ${savedLooks.length} compound${savedLooks.length === 1 ? '' : 's'}` : ''}
+                {savedLooks.length ? ` + ${savedLooks.length} mix${savedLooks.length === 1 ? '' : 'es'}` : ''}
                 {' / '}
                 {playlist.length} in playlist
               </span>
@@ -1960,17 +1981,17 @@ export function PatternsScreen() {
               </div>
               <div className="lw-target-compound-bar">
                 <div className="lw-target-compound-copy">
-                  <span>Compound pattern</span>
+                  <span>Layer mix</span>
                   <strong>{lookLabel.trim() || currentComboLabel}</strong>
                 </div>
                 <input
                   className="lw-search-input"
                   value={lookLabel}
                   onChange={event => setLookLabel(event.target.value)}
-                  placeholder="Name compound pattern (optional)"
-                  aria-label="Compound pattern name"
+                  placeholder="Name this mix (optional)"
+                  aria-label="Layer mix name"
                 />
-                <button type="button" className="btn btn-primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save compound</button>
+                <button type="button" className="btn btn-primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save mix</button>
               </div>
               <div className="lw-target-grid">
                 {sectionTargets.map(target => (
@@ -1981,6 +2002,7 @@ export function PatternsScreen() {
                       : effectiveSectionTargets.find(effectiveTarget => effectiveTarget.id === target.id) || target}
                     active={target.id === selectedTarget?.id}
                     editable={editableTargetLayout}
+                    badge={targetLayerBadge(target, sectionTargets)}
                     onSelect={() => setSelectedTargetId(target.id)}
                     onNameChange={updateTargetName}
                     onPixelCountChange={updateTargetPixelCount}
