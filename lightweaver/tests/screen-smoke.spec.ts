@@ -66,6 +66,42 @@ test('installer screen gives a worker the full chip setup checklist', async ({ p
   await expect(page.getByRole('link', { name: 'Flash chip' })).toHaveAttribute('href', '#screen=flash');
 });
 
+test('status bar card item retries discovery and stores the found card host', async ({ page }) => {
+  const statusRequests: string[] = [];
+  await page.route('http://lightweaver.local/api/status', async route => {
+    statusRequests.push(route.request().url());
+    await route.abort();
+  });
+  await page.route('http://192.168.18.70/api/status', async route => {
+    statusRequests.push(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        wifi: { ip: '192.168.18.70', hostname: 'lightweaver' },
+        led: { pixels: 44 },
+      }),
+    });
+  });
+  await page.route('http://192.168.4.1/api/status', async route => {
+    statusRequests.push(route.request().url());
+    await route.abort();
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const statusButton = page.getByTestId('card-status-reconnect');
+  await expect(statusButton).toBeVisible();
+  await statusButton.click();
+
+  await expect.poll(() => statusRequests.some(url => url.includes('192.168.18.70'))).toBe(true);
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.18.70');
+  await expect(statusButton).toContainText('connected');
+});
+
 test('patterns target selector stacks downward and footer stays single-line', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });

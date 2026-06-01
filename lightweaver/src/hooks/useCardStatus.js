@@ -16,10 +16,29 @@ export function useCardStatus({ intervalMs = 5000, timeoutMs = 900 } = {}) {
   });
 
   const refresh = useCallback(async () => {
+    setState(prev => ({ ...prev, checking: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
       timeoutMs,
       persist: false,
+    });
+    setState({
+      checking: false,
+      connected: result.connected,
+      host: result.host,
+      status: result.status || null,
+      error: result.error || null,
+      checkedAt: Date.now(),
+    });
+    return result;
+  }, [timeoutMs]);
+
+  const connect = useCallback(async () => {
+    setState(prev => ({ ...prev, checking: true, error: null }));
+    const result = await discoverCardStatus({
+      preferredHost: readStoredCardHost(),
+      timeoutMs: Math.max(timeoutMs, 1800),
+      persist: true,
     });
     setState({
       checking: false,
@@ -62,5 +81,5 @@ export function useCardStatus({ intervalMs = 5000, timeoutMs = 900 } = {}) {
     };
   }, [intervalMs, timeoutMs]);
 
-  return { ...state, refresh };
+  return { ...state, refresh, connect };
 }

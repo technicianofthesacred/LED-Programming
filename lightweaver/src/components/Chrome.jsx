@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
+import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -198,22 +199,49 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
 export function StatusBar({ screen = 'patterns' }) {
   const { wledConnected, wledIp, strips, lastSaved } = useProject();
   const cardStatus = useCardStatus();
+  const [cardHint, setCardHint] = useState('');
+  useEffect(() => {
+    if (!cardHint) return undefined;
+    const timer = setTimeout(() => setCardHint(''), 2500);
+    return () => clearTimeout(timer);
+  }, [cardHint]);
   const savedAgo = lastSaved ? Math.round((Date.now() - lastSaved) / 1000) : null;
   const totalLEDs = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const cardConnected = cardStatus.connected || wledConnected;
-  const cardHost = cardStatus.connected ? cardStatus.host : wledIp;
+  const cardHost = cardStatus.connected ? cardStatus.host : (wledIp || cardStatus.host);
   const cardLabel = cardStatus.checking && !cardConnected
     ? '◌ checking'
     : cardConnected ? '● connected' : '○ disconnected';
+  const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
+  const cardActionLabel = cardStatus.checking && !cardConnected ? 'trying' : cardConnected ? 'recheck' : 'connect';
+  const cardTitle = directCardControl
+    ? 'Click to find and save the card address.'
+    : 'Click to retry card discovery. If it stays disconnected here, use localhost or the card page because public HTTPS can be blocked from local HTTP cards.';
+  const handleCardReconnect = async () => {
+    setCardHint('');
+    const result = await cardStatus.connect();
+    if (result.connected) {
+      setCardHint('saved');
+      return;
+    }
+    setCardHint(directCardControl ? 'not found' : 'use local');
+  };
   return (
     <div className="lw-statusbar">
-      <span className="lw-status-item lw-status-card">
+      <button
+        type="button"
+        className="lw-status-item lw-status-card"
+        data-testid="card-status-reconnect"
+        title={cardTitle}
+        onClick={handleCardReconnect}
+      >
         <span className="k">Card</span>&nbsp;
         <span className={cardConnected ? 'ok' : 'err'}>
           {cardLabel}
         </span>
         {cardHost && <>&nbsp;<span className="v">{cardHost}</span></>}
-      </span>
+        <span className="lw-status-action">{cardHint || cardActionLabel}</span>
+      </button>
       <span className="sep">·</span>
       <span className="lw-status-item lw-status-strip"><span className="k">strip</span>&nbsp;<span className="v">WS2812B · 60/m</span></span>
       <span className="sep">·</span>
