@@ -118,21 +118,63 @@ function outputsMatch(a = [], b = []) {
   ));
 }
 
-async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
-  const targetOutputs = normalizeOutputsForCompare((runtimePackage.config || runtimePackage)?.led?.outputs);
+function targetRuntimeOutputs(runtimePackage = {}) {
+  return normalizeOutputsForCompare((runtimePackage.config || runtimePackage)?.led?.outputs);
+}
+
+export function cardConfigNeedsRebootFromInfo(current = {}, runtimePackage = {}) {
+  const targetOutputs = targetRuntimeOutputs(runtimePackage);
   if (!targetOutputs.length) return false;
+  return !outputsMatch(current?.outputs, targetOutputs);
+}
+
+function summarizeOutputs(outputs = []) {
+  const normalized = normalizeOutputsForCompare(outputs);
+  const total = normalized.reduce((sum, output) => sum + output.pixels, 0);
+  return `${total} LEDs / ${normalized.length || 0} output${normalized.length === 1 ? '' : 's'}`;
+}
+
+function layoutMismatchError(current = {}, runtimePackage = {}) {
+  const targetOutputs = targetRuntimeOutputs(runtimePackage);
+  return new CardPushError(
+    'layout-mismatch',
+    `Stopped before saving: this would change the card output layout from ${summarizeOutputs(current?.outputs)} to ${summarizeOutputs(targetOutputs)}. Use Settings or Send split preview when you intentionally want to change LED wiring.`,
+  );
+}
+
+async function readFirmwareInfoToHost(host, timeoutMs = 1200) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const response = await fetch(`${cardHostToUrl(host)}/api/firmware-info`, { signal: ctrl.signal });
-    if (!response.ok) return false;
-    const current = await response.json().catch(() => null);
-    return !outputsMatch(current?.outputs, targetOutputs);
+    if (!response.ok) return null;
+    return await response.json().catch(() => null);
   } catch {
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
+  const current = await readFirmwareInfoToHost(host, Math.min(options.timeoutMs || 6000, 1200));
+  return current ? cardConfigNeedsRebootFromInfo(current, runtimePackage) : false;
+}
+
+async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
+  if (options.reboot !== 'if-needed') {
+    return { reboot: options.reboot === true, current: null, layoutChanged: false };
+  }
+  const timeoutMs = Math.min(options.timeoutMs || 6000, 1200);
+  const current = isMixedContentBlocked()
+    ? await sendCardBridgeRequest('firmware-info', {}, {
+        host,
+        timeoutMs,
+        retryOnTimeout: true,
+      }).catch(() => null)
+    : await readFirmwareInfoToHost(host, timeoutMs);
+  const layoutChanged = current ? cardConfigNeedsRebootFromInfo(current, runtimePackage) : false;
+  return { reboot: layoutChanged, current, layoutChanged };
 }
 
 async function requestCardReboot(host, options = {}) {
@@ -172,14 +214,23 @@ function normalizeConfigPushError(host, err) {
 // success; throws CardPushError on failure with a typed reason.
 export async function pushConfigToCard(runtimePackage, options = {}) {
   const host = options.host || getCardHostname();
+  const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
+  if (rebootPlan.layoutChanged && options.allowLayoutChange !== true) {
+    throw layoutMismatchError(rebootPlan.current, runtimePackage);
+  }
+  const pushOptions = {
+    ...options,
+    reboot: options.reboot === 'if-needed' ? rebootPlan.reboot : options.reboot,
+  };
   if (isMixedContentBlocked()) {
     try {
       return await sendCardBridgeRequest(
         'config',
         runtimePackage.config || runtimePackage,
-        { host, timeoutMs: options.timeoutMs || 6000, reboot: options.reboot },
+        { host, timeoutMs: options.timeoutMs || 6000, reboot: pushOptions.reboot },
       );
     } catch (err) {
+      if (err instanceof CardPushError) throw err;
       throw new CardPushError(
         'mixed-content',
         err?.reason === 'bridge-missing' || err?.reason === 'bridge-timeout'
@@ -190,7 +241,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
     }
   }
   try {
-    return await postConfigToHost(host, runtimePackage, options);
+    return await postConfigToHost(host, runtimePackage, pushOptions);
   } catch (err) {
     if (options.autoDiscover !== false) {
       const found = await discoverCardStatus({
@@ -199,8 +250,17 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       });
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
-          return await postConfigToHost(found.host, runtimePackage, options);
+          const retryRebootPlan = await resolveConfigRebootForCard(found.host, runtimePackage, options);
+          if (retryRebootPlan.layoutChanged && options.allowLayoutChange !== true) {
+            throw layoutMismatchError(retryRebootPlan.current, runtimePackage);
+          }
+          const retryOptions = {
+            ...options,
+            reboot: options.reboot === 'if-needed' ? retryRebootPlan.reboot : options.reboot,
+          };
+          return await postConfigToHost(found.host, runtimePackage, retryOptions);
         } catch (retryErr) {
+          if (retryErr instanceof CardPushError) throw retryErr;
           throw normalizeConfigPushError(found.host, retryErr);
         }
       }

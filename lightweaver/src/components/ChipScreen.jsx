@@ -527,6 +527,7 @@ export function ChipScreen() {
         host: cardHost,
         timeoutMs: 6000,
         reboot: 'if-needed',
+        allowLayoutChange: true,
       });
       setStatusKind('ok');
       setStatus(response.rebooting

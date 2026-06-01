@@ -143,7 +143,7 @@ export function PatchBoardScreen({
       syncZones: zones.length <= 1,
     });
     try {
-      await pushConfigToCard(pkg, { host: getCardHostname() });
+      await pushConfigToCard(pkg, { host: getCardHostname(), allowLayoutChange: true });
       setPushKind('ok');
       setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}`);
       setTimeout(() => { setPushStatus(''); setPushKind(''); }, 4000);

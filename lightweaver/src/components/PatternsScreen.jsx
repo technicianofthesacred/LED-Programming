@@ -1297,7 +1297,12 @@ export function PatternsScreen() {
     try {
       const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
       if (!safety.ok || sequence !== livePreviewSeq.current) return;
-      const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+      const response = await pushConfigToCard(nextPackage, {
+        host: safety.host || cardHost,
+        timeoutMs: 6000,
+        reboot: 'if-needed',
+        allowLayoutChange: true,
+      });
       setPatchBoard(nextBoard);
       setStandaloneController(nextController);
       setDraftLooks({});
@@ -1316,6 +1321,9 @@ export function PatternsScreen() {
       if (sequence !== livePreviewSeq.current) return;
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to apply this split on the card.');
+      } else if (error?.reason === 'layout-mismatch') {
+        setStatusKind('err');
+        setStatus(error.message);
       } else {
         setStatusKind('err');
         setStatus(`Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);
@@ -1361,6 +1369,9 @@ export function PatternsScreen() {
     } catch (error) {
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
+      } else if (error?.reason === 'layout-mismatch') {
+        setStatusKind('err');
+        setStatus(error.message);
       } else {
         setStatusKind('err');
         setStatus('Saved in the Studio, but could not reach the card. Copy or download the setup JSON and paste it on the card page.');
@@ -1491,7 +1502,12 @@ export function PatternsScreen() {
           return;
         }
         recoveryHost = safety.host || recoveryHost;
-        const configResponse = await pushConfigToCard(nextPackage, { host: recoveryHost, timeoutMs: 6000, reboot: 'if-needed' });
+        const configResponse = await pushConfigToCard(nextPackage, {
+          host: recoveryHost,
+          timeoutMs: 6000,
+          reboot: 'if-needed',
+          allowLayoutChange: true,
+        });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
@@ -1525,6 +1541,9 @@ export function PatternsScreen() {
       });
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access. Open the card installer to restore the current layout on the card.');
+      } else if (error?.reason === 'layout-mismatch') {
+        setStatusKind('err');
+        setStatus(error.message);
       } else {
         setStatusKind('err');
         setStatus(`Could not recover the lights at ${cardHostToUrl(recoveryHost)}. Check power and WiFi, then turn on Use local card.`);
@@ -1617,6 +1636,9 @@ export function PatternsScreen() {
     } catch (error) {
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to load this combo on the card.');
+      } else if (error?.reason === 'layout-mismatch') {
+        setStatusKind('err');
+        setStatus(error.message);
       } else {
         setStatusKind('err');
         setStatus(`Could not load ${savedLook.label} to the card at ${cardHostToUrl(cardHost)}.`);

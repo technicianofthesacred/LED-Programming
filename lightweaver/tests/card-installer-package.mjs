@@ -76,17 +76,99 @@ globalThis.fetch = async (url, options = {}) => {
   };
 };
 
-const pushed = await pushConfigToCard(pkg, { host: 'lightweaver.local', timeoutMs: 1000, reboot: 'if-needed' });
+await assert.rejects(
+  pushConfigToCard(pkg, { host: 'lightweaver.local', timeoutMs: 1000, reboot: 'if-needed' }),
+  error => error?.reason === 'layout-mismatch',
+);
+
+requests.length = 0;
+const pushed = await pushConfigToCard(pkg, {
+  host: 'lightweaver.local',
+  timeoutMs: 1000,
+  reboot: 'if-needed',
+  allowLayoutChange: true,
+});
 assert.equal(pushed.saved, true);
 assert.equal(pushed.rebooting, true);
 assert.deepEqual(requests.map(request => request.url), [
+  'http://lightweaver.local/api/firmware-info',
   'http://lightweaver.local/api/config',
   'http://lightweaver.local/api/status',
   'http://192.168.18.70/api/status',
   'http://192.168.4.1/api/status',
-  'http://192.168.18.70/api/config',
   'http://192.168.18.70/api/firmware-info',
+  'http://192.168.18.70/api/config',
   'http://192.168.18.70/api/reboot',
 ]);
+
+const bridgeMessages = [];
+let bridgeCurrentOutputs = [{ id: 'main', pin: 16, pixels: 44 }];
+const listeners = new Map();
+const bridgeWindow = {
+  postMessage(message, targetOrigin) {
+    bridgeMessages.push({ message, targetOrigin });
+    setTimeout(() => {
+      listeners.get('message')?.({
+        origin: 'http://lightweaver.local',
+        source: bridgeWindow,
+        data: {
+          app: 'LightweaverCardBridge',
+          id: message.id,
+          ok: true,
+          response: message.type === 'firmware-info'
+            ? { ok: true, outputs: bridgeCurrentOutputs }
+            : { ok: true, saved: true },
+        },
+      });
+    }, 0);
+  },
+};
+globalThis.window = {
+  location: {
+    protocol: 'https:',
+    search: '?cardBridge=1&cardHost=lightweaver.local',
+  },
+  opener: bridgeWindow,
+  localStorage: {
+    getItem: () => 'lightweaver.local',
+    setItem: () => {},
+  },
+  addEventListener(type, listener) {
+    listeners.set(type, listener);
+  },
+  removeEventListener(type, listener) {
+    if (listeners.get(type) === listener) listeners.delete(type);
+  },
+  dispatchEvent: () => {},
+};
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.detail = init.detail;
+  }
+};
+
+const bridgePushed = await pushConfigToCard(pkg, {
+  host: 'lightweaver.local',
+  timeoutMs: 1000,
+  reboot: 'if-needed',
+});
+assert.equal(bridgePushed.saved, true);
+assert.equal(bridgeMessages[0].message.type, 'firmware-info');
+assert.equal(bridgeMessages[1].message.type, 'config');
+assert.equal(bridgeMessages[1].message.reboot, false);
+
+bridgeMessages.length = 0;
+bridgeCurrentOutputs = [{ id: 'outer', pin: 16, pixels: 22 }, { id: 'inner', pin: 17, pixels: 22 }];
+await assert.rejects(
+  pushConfigToCard(pkg, {
+    host: 'lightweaver.local',
+    timeoutMs: 1000,
+    reboot: 'if-needed',
+  }),
+  error => error?.reason === 'layout-mismatch',
+);
+assert.equal(bridgeMessages.length, 1);
+assert.equal(bridgeMessages[0].message.type, 'firmware-info');
 
 console.log('card-installer-package tests passed');

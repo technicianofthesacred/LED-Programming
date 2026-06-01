@@ -300,6 +300,8 @@ export function PlaylistScreen() {
       if (error?.reason === 'mixed-content') {
         setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
         setStatus('The browser blocked direct local-card access from this public page. Open the card installer to save this playlist on the card.');
+      } else if (error?.reason === 'layout-mismatch') {
+        setStatus(error.message);
       } else {
         setStatus(`Could not load the playlist to the card at ${cardHostToUrl(cardHost)}.`);
       }
