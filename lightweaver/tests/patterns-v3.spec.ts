@@ -255,6 +255,45 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
   await expect(page.locator('.lw-chip-status')).toContainText('check LED power');
 });
 
+test('v3 patterns can test strip colors and cycle color order live', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/status', async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, led: { pixels: 44, colorOrder: 'RGB' }, wifi: { ip: 'lightweaver.local' } }),
+    });
+  });
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, colorOrder: controlRequests.at(-1)?.colorOrder || 'RGB' }),
+    });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByLabel('Strip color test')).toBeVisible();
+  await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
+
+  await page.getByRole('button', { name: 'Test green' }).click();
+  await expect.poll(() => controlRequests.some(request => (
+    request.patternId === 'test-green' &&
+    request.syncZones === true &&
+    request.brightness === 1
+  ))).toBe(true);
+
+  await page.getByRole('button', { name: 'Next color order' }).click();
+
+  await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
+  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
+  await expect.poll(() => controlRequests.at(-1)?.patternId).toBe('test-green');
+});
+
 test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });

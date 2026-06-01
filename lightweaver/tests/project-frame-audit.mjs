@@ -2050,7 +2050,8 @@ const standaloneProfile = buildStandaloneProfile({
 assert.equal(standaloneProfile.piece.id, 'spiral-01');
 assert.equal(standaloneProfile.runtimeMode, 'procedural');
 assert.equal(standaloneProfile.outputs.length, 2);
-assert.equal(standaloneProfile.controls.encoder.press, 6);
+assert.equal(standaloneProfile.controls.encoder.press, 0);
+assert.equal(standaloneProfile.controls.encoder.alternatePress, 6);
 assert.equal(standaloneProfile.startupLook, 'ember');
 assert.equal(standaloneProfile.looks[0].preset, 'ember');
 

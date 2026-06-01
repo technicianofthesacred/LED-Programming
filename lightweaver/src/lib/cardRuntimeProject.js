@@ -106,6 +106,8 @@ function cardSafeControls(controls = {}, playlist = []) {
     brightness: DEFAULT_CARD_CONTROLS.brightness,
     encoder: {
       ...(controls?.encoder || {}),
+      press: DEFAULT_CARD_CONTROLS.encoder.press,
+      alternatePress: DEFAULT_CARD_CONTROLS.encoder.alternatePress,
       patternCycleIds: playlistLookIds.length
         ? playlistLookIds
         : (controls?.encoder?.patternCycleIds || DEFAULT_CARD_CONTROLS.encoder.patternCycleIds),

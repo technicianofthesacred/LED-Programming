@@ -41,6 +41,8 @@ assert.equal(normalized.led.colorOrder, 'RGB');
 assert.equal(normalized.led.brightnessLimit, 0.7);
 assert.equal(normalized.controls.encoder.press, 0);
 assert.deepEqual(normalized.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.press, 0);
+assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.alternatePress, 6);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.brightness, -1);
 assert.equal(DEFAULT_STANDALONE_LED.colorOrder, 'RGB');
 
@@ -134,13 +136,15 @@ const projectPkg = buildCardRuntimePackageFromProject({
   standaloneController: {
     led: { colorOrder: 'GRB', brightnessLimit: 0.55 },
     outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
-    controls: { encoder: { patternCycleIds: ['ember', 'scanner'] } },
+    controls: { encoder: { press: 6, patternCycleIds: ['ember', 'scanner'] } },
   },
 });
 assert.equal(projectPkg.config.piece.name, 'Customer V3');
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
+assert.equal(projectPkg.config.controls.encoder.press, 0);
+assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 

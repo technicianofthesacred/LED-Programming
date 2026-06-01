@@ -50,10 +50,12 @@ import {
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import {
   identifyCardLights,
+  pushLiveHardwareToCard,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   recoverCardLights,
 } from '../lib/cardLiveControl.js';
+import { normalizeUsbLedColorOrder, nextUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
 import {
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
@@ -96,6 +98,11 @@ const LARGE_PREVIEW_LED_COUNT = 34;
 const RECOVERY_MIN_BRIGHTNESS = 0.65;
 const DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS = 100;
 const PATTERN_PREVIEW_MAX_POINTS = 384;
+const STRIP_COLOR_TESTS = [
+  { id: 'test-red', label: 'Red' },
+  { id: 'test-green', label: 'Green' },
+  { id: 'test-blue', label: 'Blue' },
+];
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -705,6 +712,7 @@ export function PatternsScreen() {
   const [patternCategory, setPatternCategory] = useState('all');
   const [localChipDefault, setLocalChipDefault] = useState(readLocalChipDefault);
   const [recoveringLights, setRecoveringLights] = useState(false);
+  const [stripColorTestPattern, setStripColorTestPattern] = useState('test-red');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
   const draftProjectSnapshotRef = useRef(project => project);
@@ -762,6 +770,7 @@ export function PatternsScreen() {
       ...(standaloneController?.controls?.encoder || {}),
     },
   };
+  const stripColorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
   const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
     ? []
     : standaloneController?.playlist;
@@ -940,6 +949,9 @@ export function PatternsScreen() {
       return {
         ...current,
         ...patch,
+        led: patch.led
+          ? { ...(current.led || {}), ...patch.led }
+          : current.led,
         defaultLook: patch.defaultLook
           ? normalizeSectionVisualLook({ ...(current.defaultLook || {}), ...patch.defaultLook })
           : current.defaultLook,
@@ -954,6 +966,46 @@ export function PatternsScreen() {
           : current.controls,
       };
     });
+  };
+
+  const playStripColorTest = async (patternId = stripColorTestPattern, colorOrder = stripColorOrder) => {
+    const test = STRIP_COLOR_TESTS.find(item => item.id === patternId) || STRIP_COLOR_TESTS[0];
+    setStripColorTestPattern(test.id);
+    setStatusKind('');
+    setStatus(`Showing ${test.label} test on ${cardHostToUrl(cardHost)} with ${colorOrder} order...`);
+    try {
+      await pushLivePreviewToCard({
+        patternId: test.id,
+        brightness: 1,
+        speed: 1,
+        customHue: 32,
+        customSaturation: 230,
+        syncZones: true,
+      }, { host: cardHost, timeoutMs: 2200 });
+      setStatusKind('ok');
+      setStatus(`${test.label} test is live. If the strip shows a different color, tap Next color order.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.message || `${test.label} test could not reach ${cardHostToUrl(cardHost)}.`);
+    }
+  };
+
+  const cycleStripColorOrder = async () => {
+    const nextOrder = nextUsbLedColorOrder(stripColorOrder);
+    updateController({ led: { colorOrder: nextOrder } });
+    setStatusKind('');
+    setStatus(`Trying ${nextOrder} color order on ${cardHostToUrl(cardHost)}...`);
+    try {
+      const response = await pushLiveHardwareToCard({ colorOrder: nextOrder }, { host: cardHost, timeoutMs: 2200 });
+      const appliedOrder = normalizeUsbLedColorOrder(response?.colorOrder || nextOrder, nextOrder);
+      if (appliedOrder !== nextOrder) updateController({ led: { colorOrder: appliedOrder } });
+      await playStripColorTest(stripColorTestPattern, appliedOrder);
+      setStatusKind('ok');
+      setStatus(`${appliedOrder} color order is live. Save to card when the test colors match.`);
+    } catch (error) {
+      setStatusKind('err');
+      setStatus(error?.message || `${nextOrder} color order could not reach ${cardHostToUrl(cardHost)}.`);
+    }
   };
 
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
@@ -1708,6 +1760,24 @@ export function PatternsScreen() {
               <button type="button" className="btn lw-recover-lights-btn" onClick={recoverLightsOnCard} disabled={recoveringLights}>
                 {recoveringLights ? 'Recovering...' : 'Recover lights'}
               </button>
+            </div>
+            <div className="lw-action-group" aria-label="Strip color test">
+              <span className="lw-action-group-label">Strip color</span>
+              <span className="lw-action-group-note">Order <strong data-testid="strip-color-order">{stripColorOrder}</strong></span>
+              <div className="lw-inline-actions">
+                {STRIP_COLOR_TESTS.map(test => (
+                  <button
+                    key={test.id}
+                    type="button"
+                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
+                    aria-label={`Test ${test.label.toLowerCase()}`}
+                    onClick={() => playStripColorTest(test.id)}
+                  >
+                    {test.label}
+                  </button>
+                ))}
+                <button type="button" className="btn" aria-label="Next color order" onClick={cycleStripColorOrder}>Next order</button>
+              </div>
             </div>
             <div className="lw-action-group" aria-label="Section layout">
               <span className="lw-action-group-label">Section layout</span>

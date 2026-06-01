@@ -1,6 +1,11 @@
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 
-const PATTERN_IDS = new Set(DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id));
+const PATTERN_IDS = new Set([
+  ...DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id),
+  'test-red',
+  'test-green',
+  'test-blue',
+]);
 
 export const DEFAULT_CARD_VISUAL_LOOK = Object.freeze({
   patternId: DEFAULT_CARD_PATTERN_BANK[0]?.id || 'aurora',
