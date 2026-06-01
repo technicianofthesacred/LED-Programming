@@ -220,6 +220,7 @@ assert.deepEqual(retryRequests.map(item => item.url), [
   'http://lightweaver.local/api/control',
   'http://lightweaver.local/api/status',
   'http://192.168.18.70/api/status',
+  'http://192.168.4.1/api/status',
   'http://192.168.18.70/api/control',
 ]);
 

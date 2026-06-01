@@ -69,6 +69,32 @@ assert.deepEqual(probed.slice(0, 2), [
   'http://192.168.18.70/api/status',
 ]);
 
+const parallelStart = Date.now();
+const parallelDiscovered = await discoverCardStatus({
+  preferredHost: 'lightweaver.local',
+  timeoutMs: 700,
+  persist: false,
+  fetchImpl: async (url) => {
+    if (String(url).startsWith('http://lightweaver.local/')) {
+      await new Promise(resolve => setTimeout(resolve, 650));
+      throw new TypeError('slow mdns');
+    }
+    if (String(url).startsWith('http://192.168.18.70/')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, wifi: { ip: '192.168.18.70' }, led: { pixels: 44 } }),
+      };
+    }
+    throw new TypeError('unreachable');
+  },
+});
+assert.equal(parallelDiscovered.connected, true);
+assert.equal(parallelDiscovered.host, '192.168.18.70');
+assert.ok(
+  Date.now() - parallelStart < 300,
+  'discovery should not wait for a slow .local probe before trying the remembered IP',
+);
+
 const connectedState = reduceCardConnectionState({
   connected: false,
   host: 'lightweaver.local',

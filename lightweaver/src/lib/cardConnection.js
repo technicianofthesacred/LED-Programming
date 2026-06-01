@@ -123,6 +123,30 @@ function hostFromStatus(status, fallbackHost) {
   );
 }
 
+async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, controllers }) {
+  const ctrl = new AbortController();
+  controllers.push(ctrl);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${cardHostToUrl(host)}/api/status`, { signal: ctrl.signal });
+    if (!response?.ok) throw new Error(`status ${response?.status || 'failed'}`);
+    const status = await response.json().catch(() => ({ ok: true }));
+    if (status?.ok === false) throw new Error(status.error || 'card not ok');
+    const connectedHost = hostFromStatus(status, host);
+    rememberCardHost(connectedHost);
+    if (host !== connectedHost) rememberCardHost(host);
+    if (persist) writeStoredCardHost(connectedHost);
+    return {
+      connected: true,
+      host: connectedHost,
+      url: cardHostToUrl(connectedHost),
+      status,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function discoverCardStatus({
   preferredHost = '',
   timeoutMs = 900,
@@ -130,37 +154,27 @@ export async function discoverCardStatus({
   fetchImpl = globalThis.fetch,
 } = {}) {
   const hosts = candidateCardHosts(preferredHost);
-  let lastError = null;
-  for (const host of hosts) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-      const response = await fetchImpl(`${cardHostToUrl(host)}/api/status`, { signal: ctrl.signal });
-      if (!response?.ok) throw new Error(`status ${response?.status || 'failed'}`);
-      const status = await response.json().catch(() => ({ ok: true }));
-      if (status?.ok === false) throw new Error(status.error || 'card not ok');
-      const connectedHost = hostFromStatus(status, host);
-      rememberCardHost(connectedHost);
-      if (host !== connectedHost) rememberCardHost(host);
-      if (persist) writeStoredCardHost(connectedHost);
-      return {
-        connected: true,
-        host: connectedHost,
-        url: cardHostToUrl(connectedHost),
-        status,
-      };
-    } catch (error) {
-      lastError = error;
-    } finally {
-      clearTimeout(timer);
-    }
+  const controllers = [];
+  try {
+    const found = await Promise.any(hosts.map(host => probeCardStatusHost(host, {
+      timeoutMs,
+      persist,
+      fetchImpl,
+      controllers,
+    })));
+    controllers.forEach(ctrl => ctrl.abort());
+    return found;
+  } catch (error) {
+    controllers.forEach(ctrl => ctrl.abort());
+    const errors = Array.isArray(error?.errors) ? error.errors : [error];
+    const lastError = errors.find(Boolean) || error;
+    return {
+      connected: false,
+      host: hosts[0] || DEFAULT_CARD_HOST,
+      url: cardHostToUrl(hosts[0] || DEFAULT_CARD_HOST),
+      error: lastError,
+    };
   }
-  return {
-    connected: false,
-    host: hosts[0] || DEFAULT_CARD_HOST,
-    url: cardHostToUrl(hosts[0] || DEFAULT_CARD_HOST),
-    error: lastError,
-  };
 }
 
 export function reduceCardConnectionState(previous = {}, result = {}, {

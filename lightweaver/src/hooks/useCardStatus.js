@@ -9,8 +9,8 @@ import {
 
 export function useCardStatus({
   intervalMs = 5000,
-  reconnectIntervalMs = 1600,
-  timeoutMs = 900,
+  reconnectIntervalMs = 2500,
+  timeoutMs = 12000,
   missLimit = CARD_CONNECTION_MISS_LIMIT,
 } = {}) {
   const [state, setState] = useState({
@@ -40,7 +40,7 @@ export function useCardStatus({
     setState(prev => ({ ...prev, checking: true, reconnecting: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
-      timeoutMs: Math.max(timeoutMs, 2200),
+      timeoutMs: Math.max(timeoutMs, 12000),
       persist: true,
     });
     setState(prev => reduceCardConnectionState(prev, result, { now: Date.now(), missLimit }));
