@@ -171,10 +171,16 @@ function normalizeConfigPushError(host, err) {
 // success; throws CardPushError on failure with a typed reason.
 export async function pushConfigToCard(runtimePackage, options = {}) {
   const host = options.host || getCardHostname();
+  if (isMixedContentBlocked()) {
+    throw new CardPushError(
+      'mixed-content',
+      'Browser blocked the connection (mixed content). Use the local card installer handoff.',
+    );
+  }
   try {
     return await postConfigToHost(host, runtimePackage, options);
   } catch (err) {
-    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+    if (options.autoDiscover !== false) {
       const found = await discoverCardStatus({
         preferredHost: host,
         timeoutMs: Math.min(options.timeoutMs || 6000, 900),
