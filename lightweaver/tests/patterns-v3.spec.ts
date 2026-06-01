@@ -220,6 +220,30 @@ test('playlist adds saved combos and loads the knob order as card looks', async 
   });
 });
 
+test('playlist rows drag into knob-button order and load that order to the card', async ({ page }) => {
+  const configRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('playlist-row-ocean').dragTo(page.getByTestId('playlist-row-aurora'));
+
+  await expect(page.locator('.lw-playlist-row').first()).toContainText('Ocean');
+
+  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await expect.poll(() => configRequests.length).toBe(1);
+
+  const config = configRequests[0] as any;
+  expect(config.looks.map(look => look.id).slice(0, 3)).toEqual(['ocean', 'aurora', 'plasma']);
+  expect(config.controls.encoder.patternCycleIds.slice(0, 3)).toEqual(['ocean', 'aurora', 'plasma']);
+  expect(config.startupPatternId).toBe('ocean');
+});
+
 test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {
   const configRequests: Record<string, unknown>[] = [];
   const strips = createDefaultCircleLayout({ totalPixels: 80, sectionCount: 4 });

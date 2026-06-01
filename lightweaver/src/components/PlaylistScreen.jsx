@@ -82,6 +82,12 @@ function PlaylistRow({
   index,
   count,
   savedLook,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
   onMove,
   onFirst,
   onDuplicate,
@@ -90,10 +96,20 @@ function PlaylistRow({
   const pattern = item.type === 'pattern' ? getCardPatternById(item.patternId) : null;
   const sectionCount = savedLook ? Object.keys(savedLook.sectionLooks || {}).length || 1 : 1;
   return (
-    <article className="lw-playlist-row" data-testid={`playlist-row-${item.id}`}>
+    <article
+      className={`lw-playlist-row${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+      data-testid={`playlist-row-${item.id}`}
+      draggable
+      aria-grabbed={isDragging}
+      onDragStart={event => onDragStart(event, index)}
+      onDragOver={event => onDragOver(event, index)}
+      onDrop={event => onDrop(event, index)}
+      onDragEnd={onDragEnd}
+    >
       <div className="lw-playlist-index">
+        <span className="lw-playlist-drag-handle" aria-label={`Drag ${item.label}`}>::</span>
         <strong>{String(index + 1).padStart(2, '0')}</strong>
-        <span>{index === 0 ? 'startup' : 'knob'}</span>
+        <span>{index === 0 ? 'startup' : 'press'}</span>
       </div>
       <div className="lw-playlist-art">
         {item.type === 'combo'
@@ -131,6 +147,7 @@ export function PlaylistScreen() {
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
   const [handoffUrl, setHandoffUrl] = useState('');
+  const [dragState, setDragState] = useState({ fromIndex: null, overIndex: null });
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
@@ -187,10 +204,15 @@ export function PlaylistScreen() {
   const moveItem = (index, delta) => {
     const nextIndex = index + delta;
     if (nextIndex < 0 || nextIndex >= playlist.length) return;
+    moveItemToIndex(index, nextIndex);
+  };
+
+  const moveItemToIndex = (fromIndex, toIndex, message = '') => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= playlist.length || toIndex >= playlist.length) return;
     const next = [...playlist];
-    const [item] = next.splice(index, 1);
-    next.splice(nextIndex, 0, item);
-    writePlaylist(next);
+    const [item] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, item);
+    writePlaylist(next, message);
   };
 
   const makeFirst = (index) => {
@@ -215,6 +237,34 @@ export function PlaylistScreen() {
     const item = playlist[index];
     const next = playlist.filter((_, itemIndex) => itemIndex !== index);
     writePlaylist(next, `${item?.label || 'Look'} removed from the playlist.`);
+  };
+
+  const startPlaylistDrag = (event, index) => {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(index));
+    setDragState({ fromIndex: index, overIndex: index });
+  };
+
+  const hoverPlaylistDrop = (event, index) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setDragState(current => (
+      current.overIndex === index ? current : { ...current, overIndex: index }
+    ));
+  };
+
+  const dropPlaylistItem = (event, index) => {
+    event.preventDefault();
+    const transferIndex = Number.parseInt(event.dataTransfer.getData('text/plain'), 10);
+    const fromIndex = Number.isFinite(transferIndex) ? transferIndex : dragState.fromIndex;
+    const item = playlist[fromIndex];
+    setDragState({ fromIndex: null, overIndex: null });
+    if (!item) return;
+    moveItemToIndex(fromIndex, index, `${item.label} moved to button-press position ${index + 1}.`);
+  };
+
+  const endPlaylistDrag = () => {
+    setDragState({ fromIndex: null, overIndex: null });
   };
 
   const addPattern = (patternId) => {
@@ -283,7 +333,7 @@ export function PlaylistScreen() {
         <header className="lw-patterns-hero">
           <div>
             <h1>Playlist</h1>
-            <p>Choose exactly what lives on the card. The knob cycles this list from top to bottom.</p>
+            <p>Choose exactly what lives on the card. Press the knob button to step through this list from top to bottom.</p>
           </div>
           <div className="lw-patterns-actions">
             <button type="button" className="btn btn-primary" onClick={loadPlaylistToCard}>Load playlist to card</button>
@@ -326,6 +376,12 @@ export function PlaylistScreen() {
                   index={index}
                   count={playlist.length}
                   savedLook={item.type === 'combo' ? savedLookById.get(item.lookId) : null}
+                  isDragging={dragState.fromIndex === index}
+                  isDropTarget={dragState.overIndex === index && dragState.fromIndex !== index}
+                  onDragStart={startPlaylistDrag}
+                  onDragOver={hoverPlaylistDrop}
+                  onDrop={dropPlaylistItem}
+                  onDragEnd={endPlaylistDrag}
                   onMove={moveItem}
                   onFirst={makeFirst}
                   onDuplicate={duplicateItem}

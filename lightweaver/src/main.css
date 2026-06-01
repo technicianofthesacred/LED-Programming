@@ -6130,11 +6130,24 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   border-radius: 6px;
   background:
     linear-gradient(180deg, oklch(15% 0.014 250), oklch(10% 0.012 255));
+  cursor: grab;
+  transition: border-color 120ms ease-out, background 120ms ease-out, opacity 120ms ease-out, transform 120ms ease-out;
 }
 
 .lw-playlist-row:first-child {
   border-color: oklch(76% 0.17 165 / 0.72);
   background: oklch(18% 0.025 225);
+}
+
+.lw-playlist-row.is-dragging {
+  opacity: 0.56;
+  cursor: grabbing;
+  transform: scale(0.992);
+}
+
+.lw-playlist-row.is-drop-target {
+  border-color: var(--accent);
+  background: oklch(18% 0.035 230);
 }
 
 .lw-playlist-index {
@@ -6145,6 +6158,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 5px;
   background: oklch(8% 0.01 250 / 0.72);
+}
+
+.lw-playlist-drag-handle {
+  display: grid;
+  width: 100%;
+  min-height: 10px;
+  place-items: center;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  cursor: grab;
 }
 
 .lw-playlist-index strong {
