@@ -8,7 +8,7 @@ export const DEFAULT_STANDALONE_OUTPUTS = [
 ];
 
 export const DEFAULT_STANDALONE_CONTROLS = {
-  encoder: { a: 4, b: 5, press: 0, alternatePress: 6, brightnessStep: 96 },
+  encoder: { a: 4, b: 5, press: 0, alternatePress: 6, brightnessStep: 24 },
   previous: 7,
   next: 8,
   blackout: 9,

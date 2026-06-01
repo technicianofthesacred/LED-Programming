@@ -1,8 +1,8 @@
 #include "LightweaverControls.h"
 
 namespace {
-constexpr int8_t ENCODER_EVENT_DELTA = 2;
-constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 96;
+constexpr int8_t ENCODER_EVENT_DELTA = 4;
+constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 24;
 
 bool validPin(int pin) {
   return pin >= 0;

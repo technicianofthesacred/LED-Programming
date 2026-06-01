@@ -91,6 +91,40 @@ ControlEventType runSequence(const std::vector<uint8_t>& sequence, const String&
   return last;
 }
 
+ControlEventType runSingleSequence(const std::vector<uint8_t>& sequence, const String& rotateDirection) {
+  for (int& pinValue : pinValues) pinValue = HIGH;
+  ControlsConfig controls;
+  controls.encoderA = 4;
+  controls.encoderB = 5;
+  controls.encoderPress = -1;
+  controls.encoderPressAlt = -1;
+  controls.previous = -1;
+  controls.next = -1;
+  controls.blackout = -1;
+  controls.statusLed = -1;
+  controls.rotateDirection = rotateDirection;
+  controls.brightnessStep = 18;
+
+  ControlState state;
+  setEncoderState(sequence.front());
+  setupLightweaverControls(controls, state);
+
+  for (size_t i = 1; i < sequence.size(); i++) {
+    fakeMillis += 5;
+    setEncoderState(sequence[i]);
+    ControlEventType event = pollLightweaverControls(controls, state);
+    if (event != CONTROL_NONE) return event;
+  }
+  return CONTROL_NONE;
+}
+
+float applyRepeatedBrightness(float currentBrightness, ControlEventType event, uint8_t step, uint8_t repeats) {
+  for (uint8_t i = 0; i < repeats; i++) {
+    currentBrightness = applyRotaryBrightness(currentBrightness, event, step);
+  }
+  return currentBrightness;
+}
+
 ControlEventType runPressSequence(int encoderPress, int encoderPressAlt, int pressedPin) {
   for (int& pinValue : pinValues) pinValue = HIGH;
   ControlsConfig controls;
@@ -157,17 +191,17 @@ int main() {
 
   assert(runSequence(physicalClockwise, "clockwise-brighter") == CONTROL_BRIGHTER);
   assert(runSequence(physicalCounterclockwise, "clockwise-brighter") == CONTROL_DIMMER);
-  assert(runSequence(physicalClockwiseDetent, "clockwise-brighter") == CONTROL_BRIGHTER);
-  assert(runSequence(physicalCounterclockwiseDetent, "clockwise-brighter") == CONTROL_DIMMER);
+  assert(runSingleSequence(physicalClockwiseDetent, "clockwise-brighter") == CONTROL_NONE);
+  assert(runSingleSequence(physicalCounterclockwiseDetent, "clockwise-brighter") == CONTROL_NONE);
   assert(runSequence(physicalClockwise, "clockwise-dimmer") == CONTROL_DIMMER);
   assert(runSequence(physicalCounterclockwise, "clockwise-dimmer") == CONTROL_BRIGHTER);
   assert(runPressSequence(6, 6, 0) == CONTROL_NEXT_LOOK);
   assert(runPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
   assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
-  assert(applyRotaryBrightness(1.0f, CONTROL_DIMMER, 18) <= 0.82f);
-  assert(applyRotaryBrightness(0.5f, CONTROL_BRIGHTER, 18) >= 0.68f);
-  assert(applyRotaryBrightness(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18), CONTROL_BRIGHTER, 18) == 1.0f);
-  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) <= 0.03f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_BRIGHTER, 18) <= 0.50f);
+  assert(applyRotaryBrightness(0.4f, CONTROL_DIMMER, 18) >= 0.30f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_BRIGHTER, 18, 7) == 1.0f);
+  assert(applyRepeatedBrightness(0.4f, CONTROL_DIMMER, 18, 5) <= 0.03f);
 
   return 0;
 }
