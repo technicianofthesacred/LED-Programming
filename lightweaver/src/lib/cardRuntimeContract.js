@@ -43,7 +43,7 @@ export function normalizeCardRuntimeConfig(config = {}) {
     version: 1,
     mode,
     piece: {
-      id: sanitizeId(config.piece?.id || config.projectName || 'lightweaver-piece'),
+      id: sanitizeId(config.piece?.id || config.projectId || config.projectName || 'lightweaver-piece'),
       name: String(config.piece?.name || config.projectName || 'Lightweaver Piece'),
     },
     led,
@@ -129,6 +129,7 @@ function clampSpeed(value) {
 }
 
 export function buildCardRuntimeConfig({
+  projectId = '',
   projectName = 'Lightweaver Piece',
   mode = 'factory-flash',
   led = {},
@@ -140,6 +141,7 @@ export function buildCardRuntimeConfig({
   syncZones,
 } = {}) {
   return normalizeCardRuntimeConfig({
+    projectId,
     mode,
     projectName,
     led,

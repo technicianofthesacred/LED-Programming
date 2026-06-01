@@ -47,7 +47,7 @@ const FORMATS = [
 export function ExportDialog({ open, onClose }) {
   const project = useProject();
   const {
-    projectName, showDuration, showClips, showTransitions, autoLanes, strips, patchBoard,
+    projectId, projectName, showDuration, showClips, showTransitions, autoLanes, strips, patchBoard,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     standaloneController, controllerProfiles, activeControllerId, physicalControls,
@@ -251,6 +251,7 @@ export function ExportDialog({ open, onClose }) {
         filename = `${safeName}-lightweaver-card.json`;
         const zones = patchBoardToZones(patchBoard, strips);
         const pkg = makeCardRuntimePackage({
+          projectId,
           projectName,
           mode: 'website-flash',
           led: {

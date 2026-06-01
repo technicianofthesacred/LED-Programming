@@ -143,6 +143,7 @@ struct ZoneConfig {
 struct RuntimeConfig {
   String mode = "factory-flash";
   RuntimeSource source = SOURCE_DEFAULTS;
+  String pieceId;
   String pieceName = "Lightweaver";
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";

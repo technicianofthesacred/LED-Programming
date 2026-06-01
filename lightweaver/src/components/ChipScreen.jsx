@@ -156,6 +156,7 @@ function formatLibraryTime(updatedAt) {
 
 export function ChipScreen() {
   const {
+    projectId,
     projectName,
     strips,
     setStrips,
@@ -183,8 +184,8 @@ export function ChipScreen() {
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const zones = useMemo(() => patchBoardToZones(board, strips), [board, strips]);
   const runtimePackage = useMemo(
-    () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
-    [projectName, strips, board, standaloneController],
+    () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+    [projectId, projectName, strips, board, standaloneController],
   );
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const config = runtimePackage.config;
@@ -535,7 +536,9 @@ export function ChipScreen() {
         : 'Saved on card.');
     } catch (error) {
       setStatusKind('err');
-      setStatus('Could not reach the card. Copy or download the card settings and paste them on the card page.');
+      setStatus(error?.reason === 'project-mismatch'
+        ? error.message
+        : 'Could not reach the card. Copy or download the card settings and paste them on the card page.');
     }
   };
 

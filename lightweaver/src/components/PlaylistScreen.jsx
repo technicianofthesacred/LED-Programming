@@ -145,6 +145,7 @@ function PlaylistRow({
 
 export function PlaylistScreen() {
   const {
+    projectId,
     projectName,
     strips,
     patchBoard,
@@ -168,8 +169,8 @@ export function PlaylistScreen() {
     allowEmpty: true,
   });
   const runtimePackage = useMemo(
-    () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
-    [projectName, strips, board, standaloneController],
+    () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+    [projectId, projectName, strips, board, standaloneController],
   );
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -388,7 +389,7 @@ export function PlaylistScreen() {
       if (error?.reason === 'mixed-content') {
         setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
         setStatus('The browser blocked direct local-card access from this public page. Open the card installer to save this playlist on the card.');
-      } else if (error?.reason === 'layout-mismatch') {
+      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
         setStatus(error.message);
       } else {
         setStatus(`Could not load the playlist to the card at ${cardHostToUrl(cardHost)}.`);

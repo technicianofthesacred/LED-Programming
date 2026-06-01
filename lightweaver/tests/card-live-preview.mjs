@@ -462,6 +462,48 @@ assert.deepEqual(JSON.parse(resetFallbackRequests[1].options.body), {
   drift: false,
 });
 
+delete globalThis.window;
+let releaseFirstPreview;
+const latestPreviewRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  const body = JSON.parse(options.body || '{}');
+  latestPreviewRequests.push(body.patternId);
+  if (body.patternId === 'aurora') {
+    await new Promise(resolve => { releaseFirstPreview = resolve; });
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true, patternId: body.patternId }),
+  };
+};
+
+const firstPreview = pushLivePreviewToCard({ patternId: 'aurora' }, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+await Promise.resolve();
+const secondPreview = pushLivePreviewToCard({ patternId: 'fire' }, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+}).catch(error => error);
+const thirdPreview = pushLivePreviewToCard({ patternId: 'ocean' }, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+await Promise.resolve();
+assert.deepEqual(latestPreviewRequests, ['aurora']);
+releaseFirstPreview();
+
+const [firstPreviewResponse, secondPreviewError, thirdPreviewResponse] = await Promise.all([
+  firstPreview,
+  secondPreview,
+  thirdPreview,
+]);
+assert.equal(firstPreviewResponse.patternId, 'aurora');
+assert.equal(secondPreviewError.reason, 'superseded');
+assert.equal(thirdPreviewResponse.patternId, 'ocean');
+assert.deepEqual(latestPreviewRequests, ['aurora', 'ocean']);
+
 const listeners = new Map();
 const bridgeMessages = [];
 const bridgeWindow = {

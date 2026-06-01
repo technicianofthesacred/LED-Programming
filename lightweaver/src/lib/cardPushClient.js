@@ -88,6 +88,7 @@ async function postConfigToHost(host, runtimePackage, options = {}) {
     }
     const json = await r.json().catch(() => ({ ok: true }));
     const shouldReboot = options.reboot === true ||
+      json?.requiresReboot === true ||
       (options.reboot === 'if-needed' && await cardNeedsConfigReboot(host, runtimePackage, options));
     if (shouldReboot) {
       await requestCardReboot(host, options);
@@ -122,10 +123,24 @@ function targetRuntimeOutputs(runtimePackage = {}) {
   return normalizeOutputsForCompare((runtimePackage.config || runtimePackage)?.led?.outputs);
 }
 
+function targetRuntimePiece(runtimePackage = {}) {
+  return (runtimePackage.config || runtimePackage)?.piece || {};
+}
+
+function normalizePieceId(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
 export function cardConfigNeedsRebootFromInfo(current = {}, runtimePackage = {}) {
   const targetOutputs = targetRuntimeOutputs(runtimePackage);
   if (!targetOutputs.length) return false;
   return !outputsMatch(current?.outputs, targetOutputs);
+}
+
+function cardConfigProjectMismatchFromInfo(current = {}, runtimePackage = {}) {
+  const currentPieceId = normalizePieceId(current?.piece?.id);
+  const targetPieceId = normalizePieceId(targetRuntimePiece(runtimePackage)?.id);
+  return Boolean(currentPieceId && targetPieceId && currentPieceId !== targetPieceId);
 }
 
 function summarizeOutputs(outputs = []) {
@@ -139,6 +154,17 @@ function layoutMismatchError(current = {}, runtimePackage = {}) {
   return new CardPushError(
     'layout-mismatch',
     `Stopped before saving: this would change the card output layout from ${summarizeOutputs(current?.outputs)} to ${summarizeOutputs(targetOutputs)}. Use Settings or Send split preview when you intentionally want to change LED wiring.`,
+  );
+}
+
+function projectMismatchError(current = {}, runtimePackage = {}) {
+  const currentPiece = current?.piece || {};
+  const targetPiece = targetRuntimePiece(runtimePackage);
+  const currentName = currentPiece.name || currentPiece.id || 'another Studio project';
+  const targetName = targetPiece.name || targetPiece.id || 'this Studio project';
+  return new CardPushError(
+    'project-mismatch',
+    `Stopped before saving: this card is paired with ${currentName}, but the open Studio project is ${targetName}. Open the matching project or intentionally recommission the card from Settings.`,
   );
 }
 
@@ -162,9 +188,6 @@ async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
 }
 
 async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
-  if (options.reboot !== 'if-needed') {
-    return { reboot: options.reboot === true, current: null, layoutChanged: false };
-  }
   const timeoutMs = Math.min(options.timeoutMs || 6000, 1200);
   const current = isMixedContentBlocked()
     ? await sendCardBridgeRequest('firmware-info', {}, {
@@ -174,7 +197,10 @@ async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
       }).catch(() => null)
     : await readFirmwareInfoToHost(host, timeoutMs);
   const layoutChanged = current ? cardConfigNeedsRebootFromInfo(current, runtimePackage) : false;
-  return { reboot: layoutChanged, current, layoutChanged };
+  const projectChanged = current ? cardConfigProjectMismatchFromInfo(current, runtimePackage) : false;
+  const reboot = options.reboot === true ||
+    (options.reboot === 'if-needed' && layoutChanged);
+  return { reboot, current, layoutChanged, projectChanged };
 }
 
 async function requestCardReboot(host, options = {}) {
@@ -215,6 +241,9 @@ function normalizeConfigPushError(host, err) {
 export async function pushConfigToCard(runtimePackage, options = {}) {
   const host = options.host || getCardHostname();
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
+  if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
+    throw projectMismatchError(rebootPlan.current, runtimePackage);
+  }
   if (rebootPlan.layoutChanged && options.allowLayoutChange !== true) {
     throw layoutMismatchError(rebootPlan.current, runtimePackage);
   }
@@ -251,6 +280,9 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
           const retryRebootPlan = await resolveConfigRebootForCard(found.host, runtimePackage, options);
+          if (retryRebootPlan.projectChanged && options.allowProjectChange !== true) {
+            throw projectMismatchError(retryRebootPlan.current, runtimePackage);
+          }
           if (retryRebootPlan.layoutChanged && options.allowLayoutChange !== true) {
             throw layoutMismatchError(retryRebootPlan.current, runtimePackage);
           }

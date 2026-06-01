@@ -147,7 +147,8 @@ String studioBridgeScript() {
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
                     "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
-                    "if(m.reboot===true||m.reboot==='if-needed'){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
+                    "const shouldReboot=m.reboot===true||response.requiresReboot===true||(m.reboot==='if-needed'&&response.requiresReboot!==false);"
+                    "if(shouldReboot){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
                   "}else{throw new Error('unknown bridge request')}"
                   "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response})"
                 "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,error:e.message||String(e)})}"
@@ -800,7 +801,7 @@ void handleConfigPost() {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
-  server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\"}");
+  server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
 }
 
 void handleWifiPost() {

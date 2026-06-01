@@ -30,6 +30,20 @@ import {
 
 export const PROJECT_VERSION = 3;
 
+export function createProjectId() {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `lwproj-${Date.now().toString(36)}-${random}`;
+}
+
+function normalizeProjectId(value, fallback = createProjectId()) {
+  const clean = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return clean || fallback;
+}
+
 export const DEFAULT_SYM_SETTINGS = {
   enabled: false,
   type: 'none',
@@ -95,6 +109,7 @@ export function createDefaultProject() {
   const defaultStrips = createDefaultCircleLayout();
   return {
     version: PROJECT_VERSION,
+    id: createProjectId(),
     name: 'Untitled Project',
     layout: {
       strips: defaultStrips,
@@ -155,6 +170,7 @@ export function migrateProject(data) {
     return {
       ...base,
       ...data,
+      id: normalizeProjectId(data.id || data.projectId, base.id),
       layout: { ...base.layout, ...(data.layout || {}) },
       pattern: { ...pattern, symSettings: { ...base.pattern.symSettings, ...(pattern.symSettings || {}) } },
       show: { ...base.show, ...(data.show || {}) },
@@ -172,6 +188,7 @@ export function migrateProject(data) {
     return {
       ...base,
       version: PROJECT_VERSION,
+      id: normalizeProjectId(data.id || data.projectId, base.id),
       name: data.name || data.projectName || base.name,
       layout: {
         ...base.layout,
@@ -263,6 +280,7 @@ export function toLegacyProject(project) {
   if (!p) return null;
   return {
     version: 2,
+    projectId: p.id,
     name: p.name,
     ...p.layout,
     activePatternId: p.pattern.activePatternId,

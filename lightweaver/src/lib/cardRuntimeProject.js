@@ -15,6 +15,7 @@ export function totalProjectPixels(strips = []) {
 }
 
 export function buildCardRuntimePackageFromProject({
+  projectId = '',
   projectName = 'Lightweaver Piece',
   strips = [],
   patchBoard = null,
@@ -75,6 +76,7 @@ export function buildCardRuntimePackageFromProject({
   const patterns = resolvePackagePatterns(standaloneController, requestedPatternIds);
 
   return makeCardRuntimePackage({
+    projectId,
     projectName,
     mode: 'website-flash',
     led: {

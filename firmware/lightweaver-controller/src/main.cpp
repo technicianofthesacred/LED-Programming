@@ -1072,6 +1072,8 @@ String runtimeFirmwareInfo() {
   JsonDocument doc;
   doc["build"] = __DATE__ " " __TIME__;
   doc["pixels"] = totalPixels;
+  doc["piece"]["id"] = runtimeConfig.pieceId;
+  doc["piece"]["name"] = runtimeConfig.pieceName;
   doc["lookCount"] = lookCount;
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();

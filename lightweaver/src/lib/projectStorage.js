@@ -1,6 +1,7 @@
-import { migrateProject, PROJECT_VERSION } from './projectModel.js';
+import { createProjectId, migrateProject, PROJECT_VERSION } from './projectModel.js';
 
 export const PROJECT_LIBRARY_STORAGE_KEY = 'lw_project_library_v1';
+export const PROJECT_LIBRARY_BACKUP_STORAGE_KEY = 'lw_project_library_v1_backup';
 export const PROJECT_ACTIVE_RECORD_STORAGE_KEY = 'lw_project_active_record_v1';
 export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-changed';
 export const PROJECT_LIBRARY_VERSION = 1;
@@ -21,21 +22,56 @@ function storageFromOptions(options = {}) {
   return options.storage || getDefaultStorage();
 }
 
+export function readStorageJsonWithBackup(primaryKey, backupKey, options = {}) {
+  const storage = storageFromOptions(options);
+  if (!storage) return null;
+  const keys = [primaryKey, backupKey].filter(Boolean);
+  for (const key of keys) {
+    try {
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      return JSON.parse(raw);
+    } catch {
+      // Try the next copy.
+    }
+  }
+  return null;
+}
+
+export function writeStorageJsonWithBackup(primaryKey, backupKey, value, options = {}) {
+  const storage = storageFromOptions(options);
+  if (!storage) return false;
+  const text = JSON.stringify(value);
+  storage.setItem(primaryKey, text);
+  if (backupKey) {
+    try {
+      storage.setItem(backupKey, text);
+    } catch {
+      // Primary write succeeded; the backup is best-effort.
+    }
+  }
+  return true;
+}
+
+function parseEnvelopePayload(payload) {
+  if (!payload) return null;
+  const records = Array.isArray(payload?.records)
+    ? payload.records
+    : Array.isArray(payload)
+      ? payload
+      : null;
+  if (!records) return null;
+  return { version: PROJECT_LIBRARY_VERSION, records };
+}
+
 function readEnvelope({ storage = getDefaultStorage() } = {}) {
   if (!storage) return { version: PROJECT_LIBRARY_VERSION, records: [] };
-  try {
-    const raw = storage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
-    if (!raw) return { version: PROJECT_LIBRARY_VERSION, records: [] };
-    const parsed = JSON.parse(raw);
-    const records = Array.isArray(parsed?.records)
-      ? parsed.records
-      : Array.isArray(parsed)
-        ? parsed
-        : [];
-    return { version: PROJECT_LIBRARY_VERSION, records };
-  } catch {
-    return { version: PROJECT_LIBRARY_VERSION, records: [] };
-  }
+  const parsed = readStorageJsonWithBackup(
+    PROJECT_LIBRARY_STORAGE_KEY,
+    PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+    { storage },
+  );
+  return parseEnvelopePayload(parsed) || { version: PROJECT_LIBRARY_VERSION, records: [] };
 }
 
 function writeEnvelope(records, { storage = getDefaultStorage() } = {}) {
@@ -44,8 +80,12 @@ function writeEnvelope(records, { storage = getDefaultStorage() } = {}) {
     version: PROJECT_LIBRARY_VERSION,
     records: records.slice(0, PROJECT_LIBRARY_LIMIT),
   };
-  storage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(payload));
-  return true;
+  return writeStorageJsonWithBackup(
+    PROJECT_LIBRARY_STORAGE_KEY,
+    PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+    payload,
+    { storage },
+  );
 }
 
 function requireStorage(storage) {
@@ -176,7 +216,7 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
   if (!source) return null;
   const name = `${source.name} copy`;
   const duplicate = createProjectLibraryRecord(
-    { ...source.project, name },
+    { ...source.project, id: createProjectId(), name },
     { id: options.id || makeId(), now: options.now || Date.now() },
   );
   saveProjectLibraryRecord(duplicate, { storage });

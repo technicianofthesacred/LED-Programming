@@ -1169,6 +1169,7 @@ for (const pattern of PATTERNS) {
 
 const defaultProject = createDefaultProject();
 assert.equal(defaultProject.version, PROJECT_VERSION);
+assert.match(defaultProject.id, /^lwproj-/);
 assert.equal(defaultProject.devices.wledIp, '');
 assert.deepEqual(defaultProject.devices.segmentMap, {});
 assert.deepEqual(defaultProject.devices.controllerProfiles, []);
@@ -1407,13 +1408,16 @@ const migratedV1 = migrateProject({
   showClips: [{ id: 'c', track: 0, patternId: 'aurora', start: 0, end: 1 }],
 });
 assert.equal(migratedV1.version, PROJECT_VERSION);
+assert.match(migratedV1.id, /^lwproj-/);
 assert.equal(migratedV1.layout.strips.length, 1);
 assert.equal(migratedV1.show.clips.length, 1);
 const migratedV3 = migrateProject({
   version: PROJECT_VERSION,
+  id: 'lwproj-hardware',
   name: 'Hardware',
   devices: { wledIp: '192.168.4.22', segmentMap: { s1: 2 } },
 });
+assert.equal(migratedV3.id, 'lwproj-hardware');
 assert.equal(migratedV3.devices.wledIp, '192.168.4.22');
 assert.deepEqual(migratedV3.devices.segmentMap, { s1: 2 });
 assert.deepEqual(migratedV3.devices.controllerProfiles, []);

@@ -731,6 +731,7 @@ function TargetButton({
 
 export function PatternsScreen() {
   const {
+    projectId,
     projectName,
     projectRevision,
     strips,
@@ -879,8 +880,8 @@ export function PatternsScreen() {
   }, [patternCategory, patternSearchQuery]);
 
   const runtimePackage = useMemo(
-    () => buildCardRuntimePackageFromProject({ projectName, strips, patchBoard: board, standaloneController }),
-    [projectName, strips, board, standaloneController],
+    () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+    [projectId, projectName, strips, board, standaloneController],
   );
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const config = runtimePackage.config;
@@ -1338,6 +1339,7 @@ export function PatternsScreen() {
     const sequence = ++livePreviewSeq.current;
     const { nextLook, nextBoard, nextController } = buildCurrentHardwareState();
     const nextPackage = buildCardRuntimePackageFromProject({
+      projectId,
       projectName,
       strips,
       patchBoard: nextBoard,
@@ -1373,7 +1375,7 @@ export function PatternsScreen() {
       if (sequence !== livePreviewSeq.current) return;
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to apply this split on the card.');
-      } else if (error?.reason === 'layout-mismatch') {
+      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
         setStatusKind('err');
         setStatus(error.message);
       } else {
@@ -1393,6 +1395,7 @@ export function PatternsScreen() {
     const { nextLook, nextBoard, nextController: savedController } = buildCurrentHardwareState({ saveNamedLook: true });
     const nextController = promotePatternFirst(savedController, nextLook.patternId);
     const nextPackage = buildCardRuntimePackageFromProject({
+      projectId,
       projectName,
       strips,
       patchBoard: nextBoard,
@@ -1421,7 +1424,7 @@ export function PatternsScreen() {
     } catch (error) {
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
-      } else if (error?.reason === 'layout-mismatch') {
+      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
         setStatusKind('err');
         setStatus(error.message);
       } else {
@@ -1536,6 +1539,7 @@ export function PatternsScreen() {
     const repairHost = repairLedPrompt?.host || cardHost;
     const { nextBoard, nextController } = buildCurrentHardwareState();
     const nextPackage = buildCardRuntimePackageFromProject({
+      projectId,
       projectName,
       strips,
       patchBoard: nextBoard,
@@ -1551,7 +1555,6 @@ export function PatternsScreen() {
       const response = await repairMirroredLedOutputOnCard(nextPackage, {
         host: repairHost,
         timeoutMs: 6000,
-        projectName,
       });
       if (sequence !== livePreviewSeq.current) return;
       setPatchBoard(nextBoard);
@@ -1569,6 +1572,9 @@ export function PatternsScreen() {
       if (sequence !== livePreviewSeq.current) return;
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(repairPackage, 'The browser blocked direct local-card access. Open the card installer to save the safe mirrored LED output.');
+      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
+        setStatusKind('err');
+        setStatus(error.message);
       } else {
         setStatusKind('err');
         setStatus(error?.message || `Step 3 could not save the safe LED output to ${cardHostToUrl(repairHost)}.`);
@@ -1670,6 +1676,7 @@ export function PatternsScreen() {
       looks: savedLooks,
     }, savedLook);
     const nextPackage = buildCardRuntimePackageFromProject({
+      projectId,
       projectName,
       strips,
       patchBoard: nextBoard,
@@ -1693,7 +1700,7 @@ export function PatternsScreen() {
     } catch (error) {
       if (error?.reason === 'mixed-content') {
         offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to load this mix on the card.');
-      } else if (error?.reason === 'layout-mismatch') {
+      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
         setStatusKind('err');
         setStatus(error.message);
       } else {

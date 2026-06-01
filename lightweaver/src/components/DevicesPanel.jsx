@@ -86,7 +86,7 @@ export function DevicesPanel({ onClose }) {
     wledSegmentMap, setWledSegmentMap,
     controllerProfiles, setControllerProfiles,
     activeControllerId, setActiveControllerId,
-    projectName, activePatternId, showClips, palette,
+    projectId, projectName, activePatternId, showClips, palette,
     standaloneController, patchBoard,
   } = useProject();
   const [cardLoadStatus, setCardLoadStatus] = useState('');
@@ -507,6 +507,7 @@ export function DevicesPanel({ onClose }) {
     // then synthesize its single 'all' default zone covering every pixel.
     const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : undefined;
     return makeCardRuntimePackage({
+      projectId,
       projectName,
       mode: 'website-flash',
       led: {

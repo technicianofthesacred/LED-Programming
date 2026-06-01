@@ -54,7 +54,7 @@ export function PatchBoardScreen({
   onDeleteSelectedCut,
   onClearSelectedCut,
 }) {
-  const { strips, patchBoard, setPatchBoard, projectName, standaloneController } = useProject();
+  const { strips, patchBoard, setPatchBoard, projectId, projectName, standaloneController } = useProject();
   const [pushHost, setPushHost] = useState(() => getCardHostname());
   const [pushStatus, setPushStatus] = useState('');
   const [pushKind, setPushKind] = useState(''); // '' | 'ok' | 'err' | 'pending'
@@ -130,6 +130,7 @@ export function PatchBoardScreen({
     }));
     const totalPixels = strips.reduce((sum, s) => sum + (s.pixelCount ?? s.pixels?.length ?? 0), 0);
     const pkg = makeCardRuntimePackage({
+      projectId,
       projectName,
       mode: 'website-flash',
       led: {

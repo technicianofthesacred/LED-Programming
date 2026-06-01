@@ -12,6 +12,28 @@ uint16_t clampPixels(int value) {
   return static_cast<uint16_t>(value);
 }
 
+uint16_t clampOutputPixelsForRemaining(int value, uint16_t used) {
+  if (value < 1 || used >= LW_MAX_PIXELS) return 0;
+  uint16_t pixels = clampPixels(value);
+  uint16_t remaining = LW_MAX_PIXELS - used;
+  if (pixels > remaining) return remaining;
+  return pixels;
+}
+
+uint16_t clampRangeStart(int value, uint16_t totalPixels) {
+  if (value < 0 || totalPixels == 0) return 0;
+  if (value >= totalPixels) return totalPixels;
+  return static_cast<uint16_t>(value);
+}
+
+uint16_t clampRangeCount(int value, uint16_t start, uint16_t totalPixels) {
+  if (value <= 0 || start >= totalPixels) return 0;
+  uint16_t count = static_cast<uint16_t>(value > LW_MAX_PIXELS ? LW_MAX_PIXELS : value);
+  uint16_t remaining = totalPixels - start;
+  if (count > remaining) return remaining;
+  return count;
+}
+
 float clampUnit(float value) {
   if (value < 0.0f) return 0.0f;
   if (value > 1.0f) return 1.0f;
@@ -119,6 +141,7 @@ void resetZone(ZoneConfig& zone) {
 void resetConfig(RuntimeConfig& config) {
   config.mode = "factory-flash";
   config.source = SOURCE_DEFAULTS;
+  config.pieceId = "";
   config.pieceName = "Lightweaver";
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
@@ -141,6 +164,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   resetConfig(config);
   config.source = source;
   config.mode = String(doc["mode"] | (source == SOURCE_SD ? "sd-sequence" : "website-flash"));
+  config.pieceId = String(doc["piece"]["id"] | "");
   config.pieceName = String(doc["piece"]["name"] | "Lightweaver");
   config.startupLookId = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
 
@@ -175,13 +199,13 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   for (JsonVariant outputValue : outputs) {
     if (config.outputCount >= LW_MAX_OUTPUTS) break;
     JsonObject output = outputValue.as<JsonObject>();
-    int pixels = output["pixels"] | 0;
-    if (pixels <= 0) continue;
+    uint16_t pixels = clampOutputPixelsForRemaining(output["pixels"] | 0, totalPixels);
+    if (pixels == 0) continue;
     OutputConfig& next = config.outputs[config.outputCount];
     next.id = String(output["id"] | "");
     next.name = String(output["name"] | next.id.c_str());
     next.pin = output["pin"] | 16;
-    next.pixels = clampPixels(pixels);
+    next.pixels = pixels;
     next.start = totalPixels;
     next.enabled = true;
     totalPixels += next.pixels;
@@ -257,8 +281,8 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
         for (JsonVariant rangeValue : ranges) {
           if (zone.rangeCount >= LW_MAX_RANGES_PER_ZONE) break;
           JsonObject rangeJson = rangeValue.as<JsonObject>();
-          zone.ranges[zone.rangeCount].start = rangeJson["start"] | 0;
-          zone.ranges[zone.rangeCount].count = rangeJson["count"] | 0;
+          zone.ranges[zone.rangeCount].start = clampRangeStart(rangeJson["start"] | 0, totalPixels);
+          zone.ranges[zone.rangeCount].count = clampRangeCount(rangeJson["count"] | 0, zone.ranges[zone.rangeCount].start, totalPixels);
           if (zone.ranges[zone.rangeCount].count > 0) zone.rangeCount++;
         }
       }

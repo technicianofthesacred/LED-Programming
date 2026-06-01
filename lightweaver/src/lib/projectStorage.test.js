@@ -5,10 +5,14 @@ import {
   createProjectLibraryRecord,
   deleteProjectLibraryRecord,
   duplicateProjectLibraryRecord,
+  PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+  PROJECT_LIBRARY_STORAGE_KEY,
   readActiveProjectLibraryRecordId,
   listProjectLibraryRecords,
+  readStorageJsonWithBackup,
   saveCurrentProjectToLibrary,
   saveProjectLibraryRecord,
+  writeStorageJsonWithBackup,
   writeActiveProjectLibraryRecordId,
 } from './projectStorage.js';
 import { createDefaultProject } from './projectModel.js';
@@ -53,6 +57,8 @@ test('duplicates and deletes saved project records', () => {
 
   const copy = duplicateProjectLibraryRecord('a', { storage, id: 'b', now: 2000 });
   assert.equal(copy.name, 'Original copy');
+  assert.notEqual(copy.project.id, first.project.id);
+  assert.match(copy.project.id, /^lwproj-/);
   assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.id), ['b', 'a']);
 
   deleteProjectLibraryRecord('a', { storage });
@@ -97,4 +103,30 @@ test('saveCurrentProjectToLibrary updates the active project record', () => {
   });
   assert.equal(fresh.id, 'fresh-record');
   assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.name), ['Fresh', 'Active revised']);
+});
+
+test('project library reads the backup copy when the primary entry is corrupt', () => {
+  const storage = memoryStorage();
+  const record = createProjectLibraryRecord({ ...createDefaultProject(), name: 'Recoverable' }, {
+    id: 'recoverable-record',
+    now: 1000,
+  });
+
+  saveProjectLibraryRecord(record, { storage });
+  storage.setItem(PROJECT_LIBRARY_STORAGE_KEY, '{"records":');
+
+  const recovered = listProjectLibraryRecords({ storage });
+  assert.deepEqual(recovered.map(item => item.id), ['recoverable-record']);
+  assert.ok(storage.getItem(PROJECT_LIBRARY_BACKUP_STORAGE_KEY), 'save should maintain a project library backup');
+});
+
+test('generic JSON storage helpers recover from a corrupt primary snapshot', () => {
+  const storage = memoryStorage();
+  writeStorageJsonWithBackup('primary-json', 'backup-json', { ok: true, value: 42 }, { storage });
+  storage.setItem('primary-json', '{broken');
+
+  assert.deepEqual(readStorageJsonWithBackup('primary-json', 'backup-json', { storage }), {
+    ok: true,
+    value: 42,
+  });
 });

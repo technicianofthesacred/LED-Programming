@@ -50,6 +50,7 @@ assert.equal(DEFAULT_STANDALONE_LED.colorOrder, 'RGB');
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
+assert.equal(fallback.piece.id, 'bench-piece');
 assert.equal(fallback.piece.name, 'Bench Piece');
 assert.equal(fallback.controls.encoder.brightnessStep, 18);
 assert.deepEqual(fallback.patterns.map(pattern => pattern.id), DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id));
@@ -69,6 +70,7 @@ assert.deepEqual(cleanStudioController.playlist, []);
 assert.deepEqual(cleanStudioController.controls.encoder.patternCycleIds, []);
 
 const pkg = makeCardRuntimePackage({
+  projectId: 'lwproj-bench-123',
   projectName: 'Bench Piece',
   mode: 'website-flash',
   led: { pixels: 44, colorOrder: 'RGB' },
@@ -79,6 +81,7 @@ assert.equal(pkg.app, 'Lightweaver');
 assert.equal(pkg.format, 'lightweaver-card-runtime-package');
 assert.equal(pkg.version, 1);
 assert.equal(pkg.config.mode, 'website-flash');
+assert.equal(pkg.config.piece.id, 'lwproj-bench-123');
 assert.equal(pkg.config.piece.name, 'Bench Piece');
 assert.equal(pkg.config.led.pixels, 44);
 assert.deepEqual(pkg.config.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
@@ -120,6 +123,7 @@ assert.equal(tenZonePackage.config.zones.length, 10);
 assert.deepEqual(tenZonePackage.config.zones.map(zone => zone.id).slice(-2), ['zone-9', 'zone-10']);
 
 const projectPkg = buildCardRuntimePackageFromProject({
+  projectId: 'lwproj-customer-v3',
   projectName: 'Customer V3',
   strips: [
     { id: 'inner', name: 'Inner', pixelCount: 8 },
@@ -142,6 +146,7 @@ const projectPkg = buildCardRuntimePackageFromProject({
     controls: { encoder: { press: 6, patternCycleIds: ['ember', 'scanner'] } },
   },
 });
+assert.equal(projectPkg.config.piece.id, 'lwproj-customer-v3');
 assert.equal(projectPkg.config.piece.name, 'Customer V3');
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');

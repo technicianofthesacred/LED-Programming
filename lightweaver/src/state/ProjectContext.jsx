@@ -22,8 +22,13 @@ import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { resolveRotaryInputAction, selectFreshUsbRotaryEvents } from '../lib/usbRotaryInput.js';
+import {
+  readStorageJsonWithBackup,
+  writeStorageJsonWithBackup,
+} from '../lib/projectStorage.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
+const LS_AUTOSAVE_BACKUP_KEY = 'lw_autosave_v3_backup';
 const LS_AUTOSAVE_LEGACY_KEY = 'lw_autosave_v1';
 const LS_LAYOUT_LEGACY_KEY = 'lw-layout-autosave';
 
@@ -132,6 +137,7 @@ export function ProjectProvider({ children }) {
   const [masterHueShift,   setMasterHueShift]   = useState(0); // -0.5 to 0.5, added to all hues
   const [patternParams,    setPatternParams]     = useState({});
   const [bpm,              setBpm]              = useState(120);
+  const [projectId,        setProjectId]        = useState(defaults.id);
   const [projectName,      setProjectName]      = useState('Untitled Project');
   const [motionSmoothing,  setMotionSmoothing]  = useState(defaults.pattern.motionSmoothing);
 
@@ -364,6 +370,7 @@ export function ProjectProvider({ children }) {
     const shouldSeedDefaultLayout = !layout.svgText && !(layout.layers || []).length && !(layout.strips || []).length;
     const sourceStrips = shouldSeedDefaultLayout ? defaults.layout.strips : (layout.strips || []);
     const restoredStrips = restoreStripPixels(sourceStrips);
+    setProjectId(data.id || defaults.id);
     setProjectName(data.name || defaults.name);
     setStrips(restoredStrips);
     setViewBox(layout.viewBox || defaults.layout.viewBox);
@@ -416,11 +423,12 @@ export function ProjectProvider({ children }) {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
     try {
-      const saved = localStorage.getItem(LS_AUTOSAVE_KEY) || localStorage.getItem(LS_AUTOSAVE_LEGACY_KEY);
-      const layoutSaved = localStorage.getItem(LS_LAYOUT_LEGACY_KEY);
+      const savedProject = readStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY) ||
+        readStorageJsonWithBackup(LS_AUTOSAVE_LEGACY_KEY, '');
+      const legacyLayoutProject = readStorageJsonWithBackup(LS_LAYOUT_LEGACY_KEY, '');
       const project = resolveStartupProject({
-        savedProject: saved ? JSON.parse(saved) : null,
-        legacyLayoutProject: layoutSaved ? JSON.parse(layoutSaved) : null,
+        savedProject,
+        legacyLayoutProject,
       });
       applyProject(project);
     } catch {}
@@ -431,6 +439,7 @@ export function ProjectProvider({ children }) {
   const serializeProject = useCallback(() => {
     let project = {
       version: PROJECT_VERSION,
+      id: projectId,
       name: projectName,
       layout: {
         strips, viewBox, svgText, hidden,
@@ -479,7 +488,7 @@ export function ProjectProvider({ children }) {
 
     return project;
   }, [
-    projectName, strips, viewBox, svgText, hidden, patchBoard,
+    projectId, projectName, strips, viewBox, svgText, hidden, patchBoard,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
@@ -492,8 +501,9 @@ export function ProjectProvider({ children }) {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       try {
-        localStorage.setItem(LS_AUTOSAVE_KEY, JSON.stringify(serializeProject()));
-        setLastSaved(Date.now());
+        if (writeStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY, serializeProject())) {
+          setLastSaved(Date.now());
+        }
       } catch {}
     }, 500);
     return () => clearTimeout(saveTimerRef.current);
@@ -533,6 +543,7 @@ export function ProjectProvider({ children }) {
       masterHueShift,  setMasterHueShift,
       patternParams,   setPatternParams,
       bpm,             setBpm,
+      projectId,
       projectName,     setProjectName,
       motionSmoothing, setMotionSmoothing,
       // Timeline

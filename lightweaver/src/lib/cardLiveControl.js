@@ -19,6 +19,48 @@ const COLOR_ORDER_OPTIONS = new Set(['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR']);
 const MIRRORED_REPAIR_OUTPUT_PIN = 16;
 const MIRRORED_REPAIR_DEFAULT_PIXELS = 44;
 const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'plasma', 'ocean', 'rainbow', 'scanner'];
+const latestPreviewQueues = new Map();
+
+function supersededPreviewError() {
+  return new CardPushError('superseded', 'Superseded by a newer live preview request.');
+}
+
+function latestPreviewQueueKey(host = '') {
+  return normalizeCardHost(host || readStoredCardHost());
+}
+
+function enqueueLatestPreview(key, task) {
+  let queue = latestPreviewQueues.get(key);
+  if (!queue) {
+    queue = { running: false, pending: null };
+    latestPreviewQueues.set(key, queue);
+  }
+
+  return new Promise((resolve, reject) => {
+    if (queue.pending) {
+      queue.pending.reject(supersededPreviewError());
+    }
+    queue.pending = { task, resolve, reject };
+    void drainLatestPreviewQueue(key, queue);
+  });
+}
+
+async function drainLatestPreviewQueue(key, queue) {
+  if (queue.running) return;
+  while (queue.pending) {
+    const request = queue.pending;
+    queue.pending = null;
+    queue.running = true;
+    try {
+      request.resolve(await request.task());
+    } catch (error) {
+      request.reject(error);
+    } finally {
+      queue.running = false;
+    }
+  }
+  if (!queue.pending) latestPreviewQueues.delete(key);
+}
 
 export function buildLiveHardwareControlPayload(settings = {}) {
   const colorOrder = String(settings.colorOrder || '').toUpperCase();
@@ -476,7 +518,7 @@ function normalizePreviewError(host, error) {
   return new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, error);
 }
 
-export async function pushLivePreviewToCard(look, options = {}) {
+async function sendLivePreviewToCard(look, options = {}) {
   const host = options.host || readStoredCardHost();
   try {
     return await pushLivePreviewToHost(host, look, options);
@@ -496,6 +538,17 @@ export async function pushLivePreviewToCard(look, options = {}) {
     }
     throw normalizePreviewError(host, error);
   }
+}
+
+export async function pushLivePreviewToCard(look, options = {}) {
+  const host = options.host || readStoredCardHost();
+  if (options.latestOnly === false) {
+    return sendLivePreviewToCard(look, options);
+  }
+  return enqueueLatestPreview(
+    latestPreviewQueueKey(host),
+    () => sendLivePreviewToCard(look, options),
+  );
 }
 
 export async function pushLiveHardwareToCard(settings, options = {}) {

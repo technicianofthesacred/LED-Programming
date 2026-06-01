@@ -492,6 +492,7 @@ export function LayoutScreen() {
 // ── Export screen ─────────────────────────────────────────────────────
 export function ExportScreen() {
   const {
+    projectId,
     projectName,
     strips: projectStrips,
     viewBox,
@@ -554,6 +555,7 @@ export function ExportScreen() {
   const cardRuntimeConfigJson = useMemo(() => {
     const zones = !usingDemo && patchBoard ? patchBoardToZones(patchBoard, sourceStrips) : [];
     const pkg = makeCardRuntimePackage({
+      projectId,
       projectName,
       mode: 'website-flash',
       led: {
@@ -574,7 +576,7 @@ export function ExportScreen() {
       syncZones: zones.length <= 1,
     });
     return JSON.stringify(pkg.config, null, 2);
-  }, [projectName, sourceStrips, standaloneController, totalLeds, patchBoard, usingDemo, standaloneOutputs]);
+  }, [projectId, projectName, sourceStrips, standaloneController, totalLeds, patchBoard, usingDemo, standaloneOutputs]);
 
   const artifacts = [
     {

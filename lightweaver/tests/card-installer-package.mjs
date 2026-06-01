@@ -101,6 +101,74 @@ assert.deepEqual(requests.map(request => request.url), [
   'http://192.168.18.70/api/reboot',
 ]);
 
+requests.length = 0;
+globalThis.fetch = async (url, options = {}) => {
+  requests.push({ url, options });
+  if (String(url).endsWith('/api/firmware-info')) {
+    return {
+      ok: true,
+      json: async () => ({ outputs: [{ id: 'main', pin: 16, pixels: 44 }] }),
+    };
+  }
+  if (String(url).endsWith('/api/config')) {
+    return {
+      ok: true,
+      json: async () => ({ ok: true, saved: true, requiresReboot: true }),
+    };
+  }
+  if (String(url).endsWith('/api/reboot')) {
+    return {
+      ok: true,
+      json: async () => ({ ok: true, message: 'rebooting' }),
+    };
+  }
+  throw new Error(`unexpected request ${url}`);
+};
+
+const pushedAfterFirmwareRequestedReboot = await pushConfigToCard(pkg, {
+  host: 'lightweaver.local',
+  timeoutMs: 1000,
+  reboot: 'if-needed',
+  autoDiscover: false,
+});
+assert.equal(pushedAfterFirmwareRequestedReboot.saved, true);
+assert.equal(pushedAfterFirmwareRequestedReboot.rebooting, true);
+assert.deepEqual(requests.map(request => request.url), [
+  'http://lightweaver.local/api/firmware-info',
+  'http://lightweaver.local/api/config',
+  'http://lightweaver.local/api/reboot',
+]);
+
+requests.length = 0;
+globalThis.fetch = async (url, options = {}) => {
+  requests.push({ url, options });
+  if (String(url).endsWith('/api/firmware-info')) {
+    return {
+      ok: true,
+      json: async () => ({
+        piece: { id: 'other-project', name: 'Other Project' },
+        outputs: [{ id: 'main', pin: 16, pixels: 44 }],
+      }),
+    };
+  }
+  throw new Error(`unexpected request ${url}`);
+};
+
+await assert.rejects(
+  pushConfigToCard(pkg, {
+    host: 'lightweaver.local',
+    timeoutMs: 1000,
+    reboot: 'if-needed',
+    autoDiscover: false,
+  }),
+  error => error?.reason === 'project-mismatch' &&
+    /Other Project/.test(error.message) &&
+    /Customer Piece/.test(error.message),
+);
+assert.deepEqual(requests.map(request => request.url), [
+  'http://lightweaver.local/api/firmware-info',
+]);
+
 const bridgeMessages = [];
 let bridgeCurrentOutputs = [{ id: 'main', pin: 16, pixels: 44 }];
 const listeners = new Map();
