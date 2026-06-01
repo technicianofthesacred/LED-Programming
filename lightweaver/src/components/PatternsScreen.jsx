@@ -46,6 +46,12 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
+import {
+  bootstrapCardBridgeFromOpener,
+  cardBridgeAutoPreviewEnabled,
+  CARD_BRIDGE_CHANGED_EVENT,
+  getCardBridgeState,
+} from '../lib/cardBridge.js';
 import { LEDPreview } from './Preview.jsx';
 
 const SWATCHES = [8, 22, 36, 54, 78, 112, 145, 172, 198, 222, 238, 252];
@@ -473,6 +479,7 @@ export function PatternsScreen() {
   const [patternCategory, setPatternCategory] = useState('all');
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
+  const bridgeAutoPreviewDone = useRef(false);
   const livePreviewAvailable = true;
   const savedComboSeq = useRef(0);
 
@@ -738,6 +745,43 @@ export function PatternsScreen() {
   useEffect(() => () => {
     if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (!cardBridgeAutoPreviewEnabled()) return undefined;
+    bootstrapCardBridgeFromOpener();
+
+    const previewFromBridge = async (state = getCardBridgeState()) => {
+      if (bridgeAutoPreviewDone.current || (!state?.connected && !state?.open)) return;
+      bridgeAutoPreviewDone.current = true;
+      const host = state.host || cardHost;
+      if (host) {
+        setCardHost(host);
+        writeStoredCardHost(host);
+      }
+      setHandoffUrl('');
+      setStatusKind('');
+      setStatus(`Studio connected to ${cardHostToUrl(host || cardHost)}. Taking over the LEDs...`);
+      try {
+        const response = await pushSectionPreviewToCard(effectiveSectionTargets, {
+          host: host || cardHost,
+          timeoutMs: 2600,
+        });
+        setStatusKind('ok');
+        setStatus(response?.previewZoneFallback
+          ? 'Studio is controlling the whole card. Save Settings to the card once to restore separate section preview.'
+          : 'Studio is controlling the card now. Pattern and combo changes preview live until you save them.');
+      } catch (error) {
+        bridgeAutoPreviewDone.current = false;
+        setStatusKind('err');
+        setStatus(error?.message || `Studio opened, but could not take over the LEDs at ${cardHostToUrl(host || cardHost)}.`);
+      }
+    };
+
+    previewFromBridge();
+    const onBridgeChange = (event) => previewFromBridge(event.detail || getCardBridgeState());
+    window.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+    return () => window.removeEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+  }, [cardHost, effectiveSectionTargets]);
 
   const updatePreviewLook = (patch, { push = true } = {}) => {
     if (!selectedTarget) return;

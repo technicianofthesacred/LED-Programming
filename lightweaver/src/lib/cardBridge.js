@@ -64,7 +64,17 @@ function parseBridgeParams() {
   return {
     enabled: params.get('cardBridge') === '1' || params.get('bridge') === 'card',
     host: params.get('cardHost') || params.get('host') || '',
+    autoPreview: params.get('studioTakeover') !== '0',
   };
+}
+
+export function isCardBridgeLaunch() {
+  return parseBridgeParams().enabled;
+}
+
+export function cardBridgeAutoPreviewEnabled() {
+  const params = parseBridgeParams();
+  return Boolean(params.enabled && params.autoPreview);
 }
 
 function handleBridgeMessage(event) {
@@ -115,13 +125,14 @@ export function attachCardBridgeListener() {
 export function bootstrapCardBridgeFromOpener() {
   const win = browserWindow();
   attachCardBridgeListener();
-  if (!win?.opener) return false;
+  const bridgeHostWindow = win?.opener || (win?.parent && win.parent !== win ? win.parent : null);
+  if (!bridgeHostWindow) return false;
   const params = parseBridgeParams();
   if (!params.enabled && bridgeWindow) return true;
   if (!params.enabled) return false;
   const host = normalizeCardHost(params.host || readStoredCardHost());
   setBridgeState({
-    source: win.opener,
+    source: bridgeHostWindow,
     origin: cardHostToUrl(host),
     host,
     connected: bridgeConnected,

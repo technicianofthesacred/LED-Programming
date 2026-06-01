@@ -96,8 +96,25 @@ String cardBridgeHost(const RuntimeConfig& cfg) {
 String studioBridgeUrl(const RuntimeConfig& cfg) {
   String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
   url += cardBridgeHost(cfg);
+  url += "&studioTakeover=1";
   url += "#screen=patterns";
   return url;
+}
+
+String studioOpenScript() {
+  return F("function lwOpenStudio(event,url){"
+           "if(event)event.preventDefault();"
+           "try{const u=new URL(url);u.searchParams.set('cardHost',location.host);url=u.href}catch(_){}"
+           "const frame=document.createElement('iframe');"
+           "frame.src=url;"
+           "frame.title='Lightweaver Studio';"
+           "frame.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;border:0;background:#050505;z-index:9999';"
+           "document.documentElement.style.background='#050505';"
+           "document.body.style.margin='0';"
+           "document.body.innerHTML='';"
+           "document.body.appendChild(frame);"
+           "return false"
+           "}");
 }
 
 String studioBridgeScript() {
@@ -300,9 +317,9 @@ void handleRoot() {
             "</div>"
             "<div class='foot'>"
               "<button class='off-btn' id='off-btn'>Off</button>"
-              "<a class='set-link studio-link' href='");
+              "<a class='set-link studio-link' id='studio-link' href='");
   page += studioBridgeUrl(cfg);
-  page += F("' target='_blank'>Open Lightweaver Studio</a>"
+  page += F("' target='_blank' onclick=\"return lwOpenStudio(event,this.href)\">Open Lightweaver Studio</a>"
               "<button class='set-link' id='set-toggle' type='button'>Settings</button>"
             "</div>"
             "<div class='drawer' id='drawer'>"
@@ -340,6 +357,7 @@ void handleRoot() {
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
             "const get=p=>fetch(p).then(r=>r.json());");
+  page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
@@ -632,9 +650,9 @@ void handleAdvancedRoot() {
               "</p>"
               "</div></details>");
 
-    page += F("<a class='link' href='");
+    page += F("<a class='link' id='studio-link' href='");
     page += studioBridgeUrl(cfg);
-    page += F("' target='_blank'>Open Lightweaver Studio \xE2\x86\x92</a>");
+    page += F("' target='_blank' onclick=\"return lwOpenStudio(event,this.href)\">Open Lightweaver Studio \xE2\x86\x92</a>");
   }
 
   page += F("<div class='foot' id='foot'>");
@@ -646,6 +664,7 @@ void handleAdvancedRoot() {
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
             "const get=p=>fetch(p).then(r=>r.json());");
+  page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"

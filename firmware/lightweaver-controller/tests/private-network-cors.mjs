@@ -57,6 +57,31 @@ assert.ok(
   (web.match(/Open Lightweaver Studio/g) || []).length >= 2,
   'both local card pages should expose an Open Lightweaver Studio link',
 );
+assert.match(
+  web,
+  /lwOpenStudio/,
+  'simple local card page should use an explicit Studio click handoff instead of relying only on target=_blank',
+);
+assert.match(
+  web,
+  /function lwOpenStudio\(event,url\)/,
+  'simple local card page should define the Studio click handoff as a global function callable from inline onclick',
+);
+assert.match(
+  web,
+  /document\.createElement\('iframe'\)/,
+  'simple local card page should load Studio in an iframe so the local card page stays available as the bridge',
+);
+assert.match(
+  web,
+  /frame\.src=url/,
+  'simple local card page should point the embedded Studio iframe at the bridge-enabled Studio URL',
+);
+assert.match(
+  web,
+  /searchParams\.set\('cardHost',location\.host\)/,
+  'simple local card page should rewrite cardHost to the actual local origin before embedding Studio',
+);
 assert.doesNotMatch(
   web,
   /Open Lightweaver app[^;]+rel='noopener'/,
