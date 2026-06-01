@@ -529,6 +529,19 @@ test('v3 patterns lays out editable section targets in a compact desktop matrix'
   expect(Math.abs(innerBox!.y - outerBox!.y)).toBeLessThan(12);
   await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toBeEditable();
   await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toBeEditable();
+
+  const browseMetrics = await page.locator('.lw-pattern-browse-tools').evaluate(node => {
+    const tools = node as HTMLElement;
+    const search = tools.querySelector<HTMLInputElement>('input[placeholder="Search chip patterns"]');
+    const filters = tools.querySelector<HTMLElement>('.lw-pattern-filter-row');
+    return {
+      searchTop: search?.offsetTop ?? -1,
+      filtersTop: filters?.offsetTop ?? -1,
+      filtersOverflow: filters ? filters.scrollWidth - filters.clientWidth : 0,
+    };
+  });
+  expect(browseMetrics.searchTop).toBeLessThan(browseMetrics.filtersTop);
+  expect(browseMetrics.filtersOverflow).toBeLessThanOrEqual(1);
 });
 
 test('v3 patterns shows visible card page access without a duplicate bridge button', async ({ page }) => {

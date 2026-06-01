@@ -5481,10 +5481,14 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-pattern-browse-tools {
   display: grid;
-  grid-template-columns: minmax(190px, 0.8fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 12px;
+}
+
+.lw-pattern-browse-tools > .lw-search-input {
+  grid-column: 1 / -1;
 }
 
 .lw-combo-library {
@@ -5505,8 +5509,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-pattern-filter-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  overflow-x: auto;
+  min-width: 0;
   padding-bottom: 1px;
 }
 
@@ -5518,6 +5523,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-pattern-browse-tools > span {
+  align-self: start;
   color: var(--text-4);
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
