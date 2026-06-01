@@ -5142,26 +5142,33 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-patterns-actions {
-  display: grid;
-  grid-template-columns: repeat(2, max-content);
-  gap: 10px 12px;
-  align-items: stretch;
-  justify-content: end;
-}
-
-.lw-action-group {
-  display: grid;
-  grid-template-columns: repeat(2, max-content);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
   align-items: center;
-  gap: 6px;
-  padding: 6px;
+  justify-content: end;
+  padding: 5px 6px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
 }
 
+.lw-action-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+}
+
+.lw-action-group:first-child {
+  padding-left: 0;
+}
+
+.lw-action-group + .lw-action-group {
+  border-left: 1px solid var(--border);
+}
+
 .lw-action-group-label {
-  grid-column: 1 / -1;
   color: var(--text-3);
   font-size: var(--fs-2xs);
   font-weight: 650;
@@ -5170,15 +5177,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   text-transform: uppercase;
 }
 
-.lw-action-group-note {
-  max-width: 170px;
-  color: var(--text-3);
-  font-size: var(--fs-2xs);
-  line-height: 1.25;
-}
-
 .lw-action-group .btn {
   justify-content: center;
+  padding: 4px 8px;
   white-space: nowrap;
 }
 
@@ -5674,22 +5675,44 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-strip-color-actions {
   min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
+  display: grid;
+  gap: 7px;
 }
 
-.lw-strip-color-actions .btn {
+.lw-strip-color-action-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.lw-strip-color-action-row em {
+  flex: 0 0 auto;
+  min-width: 72px;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lw-strip-color-action-row .btn {
   min-height: 32px;
   justify-content: center;
   white-space: nowrap;
 }
 
-.lw-strip-color-actions .btn:not(:last-child) {
+.lw-strip-color-action-row .btn {
   min-width: 38px;
   font-family: var(--mono-font);
   font-weight: 720;
+}
+
+.lw-strip-color-action-row[aria-label="RGB toggle"] .btn {
+  min-width: 46px;
+  padding-inline: 8px;
 }
 
 .lw-target-panel {
@@ -7749,20 +7772,23 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
   .lw-patterns-actions {
     width: 100%;
-    grid-template-columns: 1fr;
     justify-content: stretch;
+    gap: 6px;
   }
 
   .lw-action-group {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1 1 220px;
+    padding: 0;
+    border-left: 0;
+  }
+
+  .lw-action-group + .lw-action-group {
+    border-left: 0;
   }
 
   .lw-action-group .btn {
-    width: 100%;
-  }
-
-  .lw-action-group-note {
-    max-width: none;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .lw-playlist-grid {
@@ -7806,7 +7832,12 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   }
 
   .lw-strip-color-actions {
+    gap: 8px;
+  }
+
+  .lw-strip-color-action-row {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .lw-target-grid {

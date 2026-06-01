@@ -55,7 +55,7 @@ import {
   pushSectionPreviewToCard,
   recoverCardLights,
 } from '../lib/cardLiveControl.js';
-import { normalizeUsbLedColorOrder, nextUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
+import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
 import {
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
@@ -998,15 +998,15 @@ export function PatternsScreen() {
         syncZones: true,
       }, { host: cardHost, timeoutMs: 2200 });
       setStatusKind('ok');
-      setStatus(`${test.label} test is live. If the strip shows a different color, tap Next color order.`);
+      setStatus(`${test.label} test is live. If the strip shows a different color, choose another RGB order.`);
     } catch (error) {
       setStatusKind('err');
       setStatus(error?.message || `${test.label} test could not reach ${cardHostToUrl(cardHost)}.`);
     }
   };
 
-  const cycleStripColorOrder = async () => {
-    const nextOrder = nextUsbLedColorOrder(stripColorOrder);
+  const applyStripColorOrder = async (order) => {
+    const nextOrder = normalizeUsbLedColorOrder(order, stripColorOrder);
     updateController({ led: { colorOrder: nextOrder } });
     setStatusKind('');
     setStatus(`Trying ${nextOrder} color order on ${cardHostToUrl(cardHost)}...`);
@@ -1779,7 +1779,6 @@ export function PatternsScreen() {
             <div className="lw-action-group" aria-label="Section layout">
               <span className="lw-action-group-label">Section layout</span>
               <button type="button" className="btn" onClick={applySplitPreviewToCard}>Send split preview</button>
-              <span className="lw-action-group-note">Outer / Inner have separate patterns</span>
             </div>
             <div className="lw-action-group" aria-label="Card connection">
               <span className="lw-action-group-label">Connection</span>
@@ -1795,8 +1794,8 @@ export function PatternsScreen() {
             </div>
             <div className="lw-action-group" aria-label="Manual setup">
               <span className="lw-action-group-label">Manual setup</span>
-              <button type="button" className="btn" onClick={copyConfig}>Copy setup JSON</button>
-              <button type="button" className="btn btn-ghost" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup JSON</button>
+              <button type="button" className="btn" onClick={copyConfig}>Copy setup</button>
+              <button type="button" className="btn btn-ghost" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup</button>
             </div>
           </div>
         </header>
@@ -1841,18 +1840,35 @@ export function PatternsScreen() {
                 <strong>Order <b data-testid="strip-color-order">{stripColorOrder}</b></strong>
               </div>
               <div className="lw-strip-color-actions">
-                {STRIP_COLOR_TESTS.map(test => (
-                  <button
-                    key={test.id}
-                    type="button"
-                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
-                    aria-label={`Test ${test.label.toLowerCase()}`}
-                    onClick={() => playStripColorTest(test.id)}
-                  >
-                    {test.shortLabel}
-                  </button>
-                ))}
-                <button type="button" className="btn" aria-label="Next color order" onClick={cycleStripColorOrder}>Next order</button>
+                <span className="lw-strip-color-action-row">
+                  <em>Color test</em>
+                  {STRIP_COLOR_TESTS.map(test => (
+                    <button
+                      key={test.id}
+                      type="button"
+                      className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
+                      aria-label={`Test ${test.label.toLowerCase()}`}
+                      onClick={() => playStripColorTest(test.id)}
+                    >
+                      {test.shortLabel}
+                    </button>
+                  ))}
+                </span>
+                <span className="lw-strip-color-action-row" aria-label="RGB toggle">
+                  <em>RGB toggle</em>
+                  {COLOR_ORDERS.map(order => (
+                    <button
+                      key={order}
+                      type="button"
+                      className={`btn btn-ghost ${stripColorOrder === order ? 'active' : ''}`}
+                      aria-label={`${order} order`}
+                      aria-pressed={stripColorOrder === order}
+                      onClick={() => applyStripColorOrder(order)}
+                    >
+                      {order}
+                    </button>
+                  ))}
+                </span>
               </div>
             </div>
             <div className="lw-target-panel">

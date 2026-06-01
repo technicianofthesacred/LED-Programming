@@ -258,7 +258,7 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
   await expect(page.locator('.lw-chip-status')).toContainText('check LED power');
 });
 
-test('v3 patterns can test strip colors and cycle color order live', async ({ page }) => {
+test('v3 patterns can test strip colors and toggle RGB order live', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('**/api/status', async route => {
     await route.fulfill({
@@ -285,6 +285,9 @@ test('v3 patterns can test strip colors and cycle color order live', async ({ pa
   await expect(stripTest.getByRole('button', { name: 'Test red' })).toHaveText('R');
   await expect(stripTest.getByRole('button', { name: 'Test green' })).toHaveText('G');
   await expect(stripTest.getByRole('button', { name: 'Test blue' })).toHaveText('B');
+  await expect(stripTest.getByLabel('RGB toggle')).toBeVisible();
+  await expect(stripTest.getByRole('button', { name: 'RGB order' })).toHaveClass(/active/);
+  await expect(stripTest.getByRole('button', { name: 'GRB order' })).toBeVisible();
   await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
 
   await stripTest.getByRole('button', { name: 'Test green' }).click();
@@ -294,7 +297,7 @@ test('v3 patterns can test strip colors and cycle color order live', async ({ pa
     request.brightness === 1
   ))).toBe(true);
 
-  await stripTest.getByRole('button', { name: 'Next color order' }).click();
+  await stripTest.getByRole('button', { name: 'GRB order' }).click();
 
   await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
