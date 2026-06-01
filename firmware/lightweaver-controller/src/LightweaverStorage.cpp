@@ -18,6 +18,24 @@ float clampUnit(float value) {
   return value;
 }
 
+float clampSpeed(float value) {
+  if (value < 0.05f) return 0.05f;
+  if (value > 3.0f) return 3.0f;
+  return value;
+}
+
+int16_t clampHueShift(int value) {
+  if (value < -128) return -128;
+  if (value > 128) return 128;
+  return static_cast<int16_t>(value);
+}
+
+uint8_t clampByte(int value, uint8_t fallback) {
+  if (value < 0) return 0;
+  if (value > 255) return 255;
+  return static_cast<uint8_t>(value);
+}
+
 void resetOutput(OutputConfig& output) {
   output.id = "";
   output.name = "";
@@ -41,6 +59,20 @@ void resetControls(ControlsConfig& controls) {
   controls.brightnessStep = 18;
 }
 
+void resetLookZone(LookZoneConfig& zone) {
+  zone.id = "";
+  zone.label = "";
+  zone.patternId = "aurora";
+  zone.brightness = 1.0f;
+  zone.speed = 1.0f;
+  zone.hueShift = 0;
+  zone.customHue = 32;
+  zone.customSaturation = 230;
+  zone.customBreathe = false;
+  zone.customDrift = false;
+  zone.blackout = false;
+}
+
 void resetLook(LookConfig& look) {
   look.id = "";
   look.label = "";
@@ -52,6 +84,9 @@ void resetLook(LookConfig& look) {
   look.fadeOutMs = 320;
   look.fadeInMs = 420;
   look.brightness = 0.65f;
+  for (uint8_t i = 0; i < LW_MAX_ZONES; i++) resetLookZone(look.zones[i]);
+  look.zoneCount = 0;
+  look.hasZoneLooks = false;
 }
 
 void resetWifi(WifiConfig& wifi) {
@@ -169,6 +204,27 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
     look.fadeOutMs = lookJson["fadeOutMs"] | 320;
     look.fadeInMs = lookJson["fadeInMs"] | 420;
     look.brightness = clampUnit(lookJson["brightness"] | 0.65f);
+    JsonArray lookZones = lookJson["zones"].as<JsonArray>();
+    if (!lookZones.isNull()) {
+      for (JsonVariant lookZoneValue : lookZones) {
+        if (look.zoneCount >= LW_MAX_ZONES) break;
+        JsonObject zoneJson = lookZoneValue.as<JsonObject>();
+        LookZoneConfig& zone = look.zones[look.zoneCount];
+        zone.id = String(zoneJson["id"] | "");
+        zone.label = String(zoneJson["label"] | zone.id.c_str());
+        zone.patternId = String(zoneJson["patternId"] | "aurora");
+        zone.brightness = clampUnit(zoneJson["brightness"] | 1.0f);
+        zone.speed = clampSpeed(zoneJson["speed"] | 1.0f);
+        zone.hueShift = clampHueShift(zoneJson["hueShift"] | 0);
+        zone.customHue = clampByte(zoneJson["customHue"] | 32, 32);
+        zone.customSaturation = clampByte(zoneJson["customSaturation"] | 230, 230);
+        zone.customBreathe = zoneJson["customBreathe"] | false;
+        zone.customDrift = zoneJson["customDrift"] | false;
+        zone.blackout = zoneJson["blackout"] | false;
+        if (zone.id.length() > 0 && zone.patternId.length() > 0) look.zoneCount++;
+      }
+    }
+    look.hasZoneLooks = look.zoneCount > 0;
     config.lookCount++;
   }
 
@@ -186,12 +242,10 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
       zone.label = String(zoneJson["label"] | zone.id.c_str());
       zone.patternId = String(zoneJson["patternId"] | "aurora");
       zone.brightness = clampUnit(zoneJson["brightness"] | 1.0f);
-      zone.speed = zoneJson["speed"] | 1.0f;
-      if (zone.speed < 0.05f) zone.speed = 0.05f;
-      if (zone.speed > 3.0f) zone.speed = 3.0f;
-      zone.hueShift = zoneJson["hueShift"] | 0;
-      zone.customHue = zoneJson["customHue"] | 32;
-      zone.customSaturation = zoneJson["customSaturation"] | 230;
+      zone.speed = clampSpeed(zoneJson["speed"] | 1.0f);
+      zone.hueShift = clampHueShift(zoneJson["hueShift"] | 0);
+      zone.customHue = clampByte(zoneJson["customHue"] | 32, 32);
+      zone.customSaturation = clampByte(zoneJson["customSaturation"] | 230, 230);
       zone.customBreathe = zoneJson["customBreathe"] | false;
       zone.customDrift = zoneJson["customDrift"] | false;
       zone.driftHueMin = zoneJson["driftHueMin"] | 0;

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const SCREENS = ['Patterns', 'Layout', 'Settings', 'Flash', 'Installer'];
+const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Settings', 'Flash', 'Installer'];
 
 test('layout opens with the default two-circle hardware layout', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });

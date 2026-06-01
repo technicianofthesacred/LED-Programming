@@ -21,6 +21,7 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
 import { createDefaultPatchBoard } from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
+import { deriveLegacyPatternCycleIds, normalizeCardPlaylist } from './cardPlaylist.js';
 
 export const PROJECT_VERSION = 3;
 
@@ -42,24 +43,42 @@ export function defaultStandaloneController(overrides = {}) {
   const runtimeMode = STANDALONE_RUNTIME_MODES.includes(overrides.runtimeMode)
     ? overrides.runtimeMode
     : DEFAULT_STANDALONE_RUNTIME_MODE;
+  const defaultLook = normalizeCardVisualLook(overrides.defaultLook);
+  const looks = normalizeSavedLooks(overrides.looks || []);
+  const controls = {
+    ...DEFAULT_STANDALONE_CONTROLS,
+    ...(overrides.controls || {}),
+    encoder: {
+      ...DEFAULT_STANDALONE_CONTROLS.encoder,
+      ...(overrides.controls?.encoder || {}),
+    },
+  };
+  const hasConfiguredCycle = Array.isArray(overrides.controls?.encoder?.patternCycleIds) &&
+    overrides.controls.encoder.patternCycleIds.length > 0;
+  const playlist = normalizeCardPlaylist(overrides.playlist, {
+    savedLooks: looks,
+    fallbackPatternIds: hasConfiguredCycle
+      ? [defaultLook.patternId, ...overrides.controls.encoder.patternCycleIds]
+      : [],
+  });
   return {
     runtimeMode,
     outputs: overrides.outputs || DEFAULT_STANDALONE_OUTPUTS,
     controls: {
-      ...DEFAULT_STANDALONE_CONTROLS,
-      ...(overrides.controls || {}),
+      ...controls,
       encoder: {
-        ...DEFAULT_STANDALONE_CONTROLS.encoder,
-        ...(overrides.controls?.encoder || {}),
+        ...controls.encoder,
+        patternCycleIds: deriveLegacyPatternCycleIds(playlist),
       },
     },
     led: {
       ...DEFAULT_STANDALONE_LED,
       ...(overrides.led || {}),
     },
-    defaultLook: normalizeCardVisualLook(overrides.defaultLook),
+    defaultLook,
     activeLookId: String(overrides.activeLookId || ''),
-    looks: normalizeSavedLooks(overrides.looks || []),
+    looks,
+    playlist,
   };
 }
 

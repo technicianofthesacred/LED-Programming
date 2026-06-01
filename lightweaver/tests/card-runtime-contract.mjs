@@ -123,7 +123,7 @@ assert.equal(projectPkg.config.piece.name, 'Customer V3');
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
-assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
+assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 
 const visualLookPkg = buildCardRuntimePackageFromProject({
@@ -258,6 +258,63 @@ assert.equal(staleOutputPkg.config.led.pixels, 44);
 assert.equal(staleOutputPkg.config.led.outputs.length, 2);
 assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pin), [16, 17]);
 assert.deepEqual(staleOutputPkg.config.led.outputs.map(output => output.pixels), [22, 22]);
+
+const playlistComboPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Playlist Combo',
+  strips: [
+    { id: 'outer', name: 'Outer circle', pixelCount: 10 },
+    { id: 'inner', name: 'Inner circle', pixelCount: 10 },
+  ],
+  patchBoard: {
+    patches: [
+      {
+        id: 'patch-outer',
+        name: 'Outer circle',
+        source: { type: 'strip', stripId: 'outer', startLed: 0, endLed: 9 },
+        output: { mode: 'normal' },
+        playback: {},
+      },
+      {
+        id: 'patch-inner',
+        name: 'Inner circle',
+        source: { type: 'strip', stripId: 'inner', startLed: 0, endLed: 9 },
+        output: { mode: 'normal' },
+        playback: {},
+      },
+    ],
+  },
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
+    defaultLook: { patternId: 'aurora', brightness: 0.8, speed: 1.1 },
+    playlist: [
+      { type: 'pattern', patternId: 'plasma' },
+      { type: 'combo', lookId: 'outer-fire-inner-ocean' },
+    ],
+    looks: [{
+      id: 'outer-fire-inner-ocean',
+      label: 'Outer Fire + Inner Ocean',
+      defaultLook: { patternId: 'aurora', brightness: 0.7, speed: 1.0 },
+      sectionLooks: {
+        'patch-outer': { patternId: 'fire', brightness: 0.5, speed: 0.75, customHue: 18 },
+        'patch-inner': { patternId: 'ocean', brightness: 0.9, speed: 1.4, customHue: 160 },
+      },
+    }],
+  },
+});
+assert.deepEqual(playlistComboPkg.config.controls.encoder.patternCycleIds, ['plasma', 'combo-outer-fire-inner-ocean']);
+assert.equal(playlistComboPkg.config.startupPatternId, 'plasma');
+assert.deepEqual(playlistComboPkg.config.looks.map(look => look.id), ['plasma', 'combo-outer-fire-inner-ocean']);
+assert.equal(playlistComboPkg.config.looks[0].preset, 'plasma');
+assert.deepEqual(playlistComboPkg.config.looks[0].zones.map(zone => zone.patternId), ['plasma', 'plasma']);
+assert.equal(playlistComboPkg.config.looks[1].mode, 'combo');
+assert.deepEqual(playlistComboPkg.config.looks[1].zones.map(zone => zone.id), ['patch-outer', 'patch-inner']);
+assert.deepEqual(playlistComboPkg.config.looks[1].zones.map(zone => zone.patternId), ['fire', 'ocean']);
+assert.equal(playlistComboPkg.config.looks[1].zones[0].brightness, 0.5);
+assert.equal(playlistComboPkg.config.looks[1].zones[0].speed, 0.75);
+assert.equal(playlistComboPkg.config.looks[1].zones[0].customHue, 18);
+assert.equal(playlistComboPkg.config.looks[1].zones[1].brightness, 0.9);
+assert.equal(playlistComboPkg.config.looks[1].zones[1].speed, 1.4);
+assert.equal(playlistComboPkg.config.looks[1].zones[1].customHue, 160);
 
 const singleOutputPkg = buildCardRuntimePackageFromProject({
   projectName: 'Single Wired Output',

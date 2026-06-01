@@ -72,6 +72,20 @@ struct ControlsConfig {
   uint8_t brightnessStep = 18;
 };
 
+struct LookZoneConfig {
+  String id;
+  String label;
+  String patternId = "aurora";
+  float brightness = 1.0f;
+  float speed = 1.0f;
+  int16_t hueShift = 0;
+  uint8_t customHue = 32;
+  uint8_t customSaturation = 230;
+  bool customBreathe = false;
+  bool customDrift = false;
+  bool blackout = false;
+};
+
 struct LookConfig {
   String id;
   String label;
@@ -83,6 +97,9 @@ struct LookConfig {
   uint16_t fadeOutMs = 320;
   uint16_t fadeInMs = 420;
   float brightness = 0.65f;
+  LookZoneConfig zones[LW_MAX_ZONES];
+  uint8_t zoneCount = 0;
+  bool hasZoneLooks = false;
 };
 
 struct WifiConfig {

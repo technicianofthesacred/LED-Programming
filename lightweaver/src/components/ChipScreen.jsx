@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
-  DEFAULT_CARD_PATTERN_BANK,
   patchBoardToZones,
 } from '../lib/cardRuntimeContract.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -10,6 +9,7 @@ import {
   normalizeSavedLooks,
   normalizeSectionVisualLook,
 } from '../lib/sectionLookModel.js';
+import { normalizeCardPlaylist, playlistLabels } from '../lib/cardPlaylist.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
@@ -180,6 +180,16 @@ export function ChipScreen() {
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
   const activeSavedLook = savedLooks.find(look => look.id === standaloneController?.activeLookId) || savedLooks[0] || null;
   const defaultLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
+  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+    savedLooks,
+    fallbackPatternIds: [
+      defaultLook.patternId,
+      ...(Array.isArray(standaloneController?.controls?.encoder?.patternCycleIds)
+        ? standaloneController.controls.encoder.patternCycleIds
+        : []),
+    ],
+  });
+  const playlistPreview = playlistLabels(playlist, 3).join(', ');
   const sectionTargets = useMemo(
     () => deriveSectionTargets({ strips, patchBoard: board, defaultLook }),
     [
@@ -598,9 +608,9 @@ export function ChipScreen() {
                     detail={`${savedLooks.length} saved combos`}
                   />
                   <Metric
-                    label="Knob cycle"
-                    value={`${config.controls.encoder.patternCycleIds.length} looks`}
-                    detail={config.controls.encoder.patternCycleIds.slice(0, 3).map(id => DEFAULT_CARD_PATTERN_BANK.find(pattern => pattern.id === id)?.label || id).join(', ')}
+                    label="Playlist"
+                    value={`${playlist.length} looks`}
+                    detail={playlistPreview}
                   />
                 </div>
                 {sectionTargets.length <= 1 ? (
@@ -628,6 +638,7 @@ export function ChipScreen() {
                 <FieldRow label="Change setup" hint="patterns and zones">
                   <div className="lw-chip-settings-inline-actions">
                     <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=patterns'; }}>Edit patterns</button>
+                    <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=playlist'; }}>Edit playlist</button>
                     <button className="btn btn-ghost" onClick={() => { window.location.hash = '#screen=layout'; }}>Edit layout</button>
                   </div>
                 </FieldRow>

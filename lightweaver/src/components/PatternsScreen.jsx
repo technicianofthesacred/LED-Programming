@@ -31,6 +31,15 @@ import {
   targetLabel,
 } from '../lib/sectionLookModel.js';
 import {
+  derivePlaylistLookIds,
+  makeComboPlaylistItem,
+  makePatternPlaylistItem,
+  normalizeCardPlaylist,
+  playlistContainsCombo,
+  playlistContainsPattern,
+  playlistLabels,
+} from '../lib/cardPlaylist.js';
+import {
   canPushDirectlyToCard,
   cardHostToUrl,
   readStoredCardHost,
@@ -282,7 +291,7 @@ function patternMatchesCategory(pattern, categoryId) {
   return !category.ids || category.ids.includes(pattern.id);
 }
 
-function LookCard({ pattern, look, previewing, saved, inCycle, livePreviewAvailable, onSelect, onCycleChange }) {
+function LookCard({ pattern, look, previewing, saved, inPlaylist, livePreviewAvailable, onSelect, onPlaylistChange }) {
   const fingerprint = getCardPatternFingerprint(pattern.id);
   const summary = previewing
     ? saved ? 'Previewing and saved here' : livePreviewAvailable ? 'Previewing on LEDs' : 'Previewing in Studio'
@@ -298,8 +307,8 @@ function LookCard({ pattern, look, previewing, saved, inCycle, livePreviewAvaila
         </span>
       </button>
       <label className="lw-look-card-toggle">
-        <input type="checkbox" checked={inCycle} onChange={event => onCycleChange(event.target.checked)}/>
-        <span>On knob</span>
+        <input type="checkbox" checked={inPlaylist} onChange={event => onPlaylistChange(event.target.checked)}/>
+        <span>In playlist</span>
       </label>
     </article>
   );
@@ -364,7 +373,7 @@ function TargetButton({
   );
 }
 
-function SavedLookCard({ look, active, onApply, onLoadToCard, targets = [] }) {
+function SavedLookCard({ look, active, inPlaylist, onApply, onLoadToCard, onAddToPlaylist, targets = [] }) {
   const targetById = new Map(targets.map(target => [target.id, target]));
   const sectionSummaries = Object.entries(look.sectionLooks || {}).map(([targetId, sectionLook]) => ({
     id: targetId,
@@ -412,16 +421,28 @@ function SavedLookCard({ look, active, onApply, onLoadToCard, targets = [] }) {
           </span>
         )}
       </span>
-      <button
-        type="button"
-        className="btn btn-primary lw-saved-combo-load"
-        onClick={event => {
-          event.stopPropagation();
-          onLoadToCard?.(look);
-        }}
-      >
-        Load to card
-      </button>
+      <span className="lw-saved-combo-actions">
+        <button
+          type="button"
+          className="btn btn-primary lw-saved-combo-load"
+          onClick={event => {
+            event.stopPropagation();
+            onAddToPlaylist?.(look);
+          }}
+        >
+          {inPlaylist ? 'In playlist' : 'Add to playlist'}
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost lw-saved-combo-load"
+          onClick={event => {
+            event.stopPropagation();
+            onLoadToCard?.(look);
+          }}
+        >
+          Load now
+        </button>
+      </span>
     </article>
   );
 }
@@ -503,9 +524,15 @@ export function PatternsScreen() {
       ...(standaloneController?.controls?.encoder || {}),
     },
   };
-  const cycleIds = controls.encoder.patternCycleIds?.length
-    ? controls.encoder.patternCycleIds
-    : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+    savedLooks,
+    fallbackPatternIds: [
+      savedGlobalLook.patternId,
+      ...(Array.isArray(controls.encoder.patternCycleIds) ? controls.encoder.patternCycleIds : []),
+    ],
+  });
+  const playlistIds = derivePlaylistLookIds(playlist);
+  const playlistSummary = playlistLabels(playlist, 4).join(', ');
   const selectedPattern = getCardPatternById(look.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
   const selectedFingerprint = getCardPatternFingerprint(selectedPattern.id);
   const previewPatternId = selectedPattern?.previewPatternId || selectedPattern?.id || look.patternId;
@@ -839,7 +866,9 @@ export function PatternsScreen() {
   };
 
   const savePreviewToCard = async () => {
-    const { nextLook, nextBoard, nextController } = commitCurrentLook({});
+    const { nextLook, nextBoard, nextController: savedController } = commitCurrentLook({});
+    const nextController = promotePatternFirst(savedController, nextLook.patternId);
+    setStandaloneController(nextController);
     const nextPackage = buildCardRuntimePackageFromProject({
       projectName,
       strips,
@@ -858,7 +887,7 @@ export function PatternsScreen() {
       const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
       await pushLivePreviewToCard({ ...nextLook, zone }, { host: cardHost, timeoutMs: 2200 }).catch(() => null);
       setStatusKind('ok');
-      setStatus('Saved on the card. This is now the startup Look and knob cycle config.');
+      setStatus('Saved on the card. This is now the startup look and playlist config.');
     } catch (error) {
       setStatusKind('err');
       setStatus(error?.reason === 'mixed-content'
@@ -907,12 +936,12 @@ export function PatternsScreen() {
 
   const loadSavedLookToCard = async (savedLook) => {
     const nextBoard = applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook });
-    const nextController = {
+    const nextController = promoteComboFirst({
       ...(standaloneController || {}),
       defaultLook: normalizeSectionVisualLook(savedLook.defaultLook),
       activeLookId: savedLook.id,
       looks: savedLooks,
-    };
+    }, savedLook);
     const nextPackage = buildCardRuntimePackageFromProject({
       projectName,
       strips,
@@ -939,11 +968,93 @@ export function PatternsScreen() {
     }
   };
 
-  const setCycleEnabled = (patternId, enabled) => {
+  const writePlaylist = (nextItems, message = '') => {
+    const normalized = normalizeCardPlaylist(nextItems, {
+      savedLooks,
+      fallbackPatternIds: [savedGlobalLook.patternId],
+    });
+    updateController({
+      playlist: normalized,
+      controls: { encoder: { patternCycleIds: derivePlaylistLookIds(normalized) } },
+    });
+    if (message) {
+      setStatusKind('ok');
+      setStatus(message);
+    }
+  };
+
+  const setPatternInPlaylist = (patternId, enabled) => {
+    const pattern = getCardPatternById(patternId);
     const next = enabled
-      ? DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id).filter(id => id === patternId || cycleIds.includes(id))
-      : cycleIds.filter(id => id !== patternId);
-    updateController({ controls: { encoder: { patternCycleIds: next.length ? next : [patternId] } } });
+      ? playlistContainsPattern(playlist, patternId)
+        ? playlist
+        : [...playlist, makePatternPlaylistItem(patternId)].filter(Boolean)
+      : playlist.filter(item => !(item.type === 'pattern' && item.patternId === patternId));
+    writePlaylist(next, enabled
+      ? `${pattern?.label || patternId} added to the Playlist.`
+      : `${pattern?.label || patternId} removed from the Playlist.`);
+  };
+
+  const addSavedLookToPlaylist = (savedLook) => {
+    if (playlistContainsCombo(playlist, savedLook.id)) {
+      setStatusKind('');
+      setStatus(`${savedLook.label} is already in the Playlist.`);
+      return;
+    }
+    const item = makeComboPlaylistItem(savedLook);
+    if (!item) return;
+    writePlaylist([...playlist, item], `${savedLook.label} added to the Playlist.`);
+  };
+
+  const promotePatternFirst = (controller, patternId) => {
+    const controllerLooks = normalizeSavedLooks(controller?.looks);
+    const currentPlaylist = normalizeCardPlaylist(controller?.playlist, {
+      savedLooks: controllerLooks,
+      fallbackPatternIds: [
+        patternId,
+        ...(Array.isArray(controller?.controls?.encoder?.patternCycleIds) ? controller.controls.encoder.patternCycleIds : []),
+      ],
+    });
+    const item = makePatternPlaylistItem(patternId);
+    const nextPlaylist = normalizeCardPlaylist([
+      item,
+      ...currentPlaylist.filter(entry => !(entry.type === 'pattern' && entry.patternId === patternId)),
+    ].filter(Boolean), { savedLooks: controllerLooks, fallbackPatternIds: [patternId] });
+    return {
+      ...(controller || {}),
+      playlist: nextPlaylist,
+      controls: {
+        ...(controller?.controls || {}),
+        encoder: {
+          ...(controller?.controls?.encoder || {}),
+          patternCycleIds: derivePlaylistLookIds(nextPlaylist),
+        },
+      },
+    };
+  };
+
+  const promoteComboFirst = (controller, savedLook) => {
+    const controllerLooks = normalizeSavedLooks(controller?.looks);
+    const currentPlaylist = normalizeCardPlaylist(controller?.playlist, {
+      savedLooks: controllerLooks,
+      fallbackPatternIds: [normalizeSectionVisualLook(savedLook?.defaultLook).patternId],
+    });
+    const item = makeComboPlaylistItem(savedLook);
+    const nextPlaylist = normalizeCardPlaylist([
+      item,
+      ...currentPlaylist.filter(entry => !(entry.type === 'combo' && entry.lookId === savedLook.id)),
+    ].filter(Boolean), { savedLooks: controllerLooks, fallbackPatternIds: [normalizeSectionVisualLook(savedLook?.defaultLook).patternId] });
+    return {
+      ...(controller || {}),
+      playlist: nextPlaylist,
+      controls: {
+        ...(controller?.controls || {}),
+        encoder: {
+          ...(controller?.controls?.encoder || {}),
+          patternCycleIds: derivePlaylistLookIds(nextPlaylist),
+        },
+      },
+    };
   };
 
   const persistHost = (value) => {
@@ -989,7 +1100,7 @@ export function PatternsScreen() {
           <section className="lw-look-picker">
             <div className="lw-sec-header">
               <span>Tap a pattern to preview</span>
-              <span className="meta">{DEFAULT_CARD_PATTERN_BANK.length} chip-ready / {cycleIds.length} on knob</span>
+              <span className="meta">{DEFAULT_CARD_PATTERN_BANK.length} chip-ready / {playlist.length} in playlist</span>
             </div>
             <div className="lw-live-preview-bar">
               <label>
@@ -1040,8 +1151,10 @@ export function PatternsScreen() {
                       look={savedLook}
                       targets={sectionTargets}
                       active={savedLook.id === activeLookId}
+                      inPlaylist={playlistContainsCombo(playlist, savedLook.id)}
                       onApply={() => applySavedLook(savedLook)}
                       onLoadToCard={() => loadSavedLookToCard(savedLook)}
+                      onAddToPlaylist={() => addSavedLookToPlaylist(savedLook)}
                     />
                   ))}
                 </div>
@@ -1097,10 +1210,10 @@ export function PatternsScreen() {
                   look={look}
                   previewing={look.patternId === pattern.id}
                   saved={savedTargetLook.patternId === pattern.id}
-                  inCycle={cycleIds.includes(pattern.id)}
-                  livePreviewAvailable={livePreviewAvailable}
-                  onSelect={() => updatePreviewLook({ patternId: pattern.id })}
-                  onCycleChange={enabled => setCycleEnabled(pattern.id, enabled)}
+                      inPlaylist={playlistContainsPattern(playlist, pattern.id)}
+                      livePreviewAvailable={livePreviewAvailable}
+                      onSelect={() => updatePreviewLook({ patternId: pattern.id })}
+                      onPlaylistChange={enabled => setPatternInPlaylist(pattern.id, enabled)}
                 />
               ))}
               {!filteredPatterns.length && (
@@ -1283,7 +1396,7 @@ export function PatternsScreen() {
               )}
             </Section>
 
-            <Section title="Knob" meta={`${cycleIds.length} patterns`}>
+            <Section title="Knob brightness" meta={`${playlist.length} playlist looks`}>
               <div className="lw-knob-control-grid">
                 <div>
                   <span>Rotate</span>
@@ -1324,7 +1437,7 @@ export function PatternsScreen() {
                 <span>Live preview</span><strong data-testid="card-live-preview-label">{selectedPattern?.label || look.patternId}</strong>
                 <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>
                 <span>Starts with</span><strong data-testid="card-startup-label">{savedPattern?.label || savedGlobalLook.patternId}</strong>
-                <span>Knob cycle</span><strong data-testid="card-knob-cycle-label">{cycleIds.map(id => getCardPatternById(id)?.label || id).join(', ')}</strong>
+                <span>Playlist</span><strong data-testid="card-knob-cycle-label">{playlistSummary || playlistIds.join(', ')}</strong>
                 <span>Local page</span>
                 <div className="lw-card-host-row">
                   <input

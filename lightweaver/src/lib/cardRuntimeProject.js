@@ -2,6 +2,8 @@ import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, mak
 import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, orderedCardPatterns } from './cardPatternBank.js';
+import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
+import { derivePlaylistLookIds, normalizeCardPlaylist } from './cardPlaylist.js';
 
 export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
@@ -23,6 +25,16 @@ export function buildCardRuntimePackageFromProject({
     resolvedPixels,
   });
   const visualLook = normalizeCardVisualLook(standaloneController?.defaultLook);
+  const savedLooks = normalizeSavedLooks(standaloneController?.looks);
+  const playlist = normalizeCardPlaylist(standaloneController?.playlist, {
+    savedLooks,
+    fallbackPatternIds: [
+      visualLook.patternId,
+      ...(Array.isArray(standaloneController?.controls?.encoder?.patternCycleIds)
+        ? standaloneController.controls.encoder.patternCycleIds
+        : []),
+    ],
+  });
   const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
@@ -37,11 +49,20 @@ export function buildCardRuntimePackageFromProject({
     customDrift: visualLook.customDrift,
     ranges: [{ start: 0, count: resolvedPixels }],
   }];
-  const patterns = resolvePackagePatterns(
-    standaloneController,
+  const looks = buildRuntimeLooksFromPlaylist({
+    playlist,
+    savedLooks,
+    patchBoard,
+    strips,
+    runtimeZones,
+    visualLook,
+  });
+  const requestedPatternIds = [
     visualLook.patternId,
-    runtimeZones.map(zone => zone.patternId),
-  );
+    ...runtimeZones.map(zone => zone.patternId),
+    ...looks.flatMap(look => [look.preset, ...(look.zones || []).map(zone => zone.patternId)]),
+  ];
+  const patterns = resolvePackagePatterns(standaloneController, requestedPatternIds);
 
   return makeCardRuntimePackage({
     projectName,
@@ -59,18 +80,26 @@ export function buildCardRuntimePackageFromProject({
           }))
         : undefined,
     },
-    controls: cardSafeControls(standaloneController?.controls),
+    controls: cardSafeControls(standaloneController?.controls, playlist),
     patterns,
-    startupPatternId: visualLook.patternId,
+    looks,
+    startupPatternId: looks[0]?.id || visualLook.patternId,
     zones: runtimeZones,
     syncZones: runtimeZones.length <= 1,
   });
 }
 
-function cardSafeControls(controls = {}) {
+function cardSafeControls(controls = {}, playlist = []) {
+  const playlistLookIds = derivePlaylistLookIds(playlist);
   return {
     ...(controls || {}),
     brightness: DEFAULT_CARD_CONTROLS.brightness,
+    encoder: {
+      ...(controls?.encoder || {}),
+      patternCycleIds: playlistLookIds.length
+        ? playlistLookIds
+        : (controls?.encoder?.patternCycleIds || DEFAULT_CARD_CONTROLS.encoder.patternCycleIds),
+    },
   };
 }
 
@@ -99,20 +128,91 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
   }];
 }
 
-function resolvePackagePatterns(standaloneController = {}, startupPatternId = '', zonePatternIds = []) {
+function resolvePackagePatterns(standaloneController = {}, requestedPatternIds = []) {
   const configuredCycle = standaloneController?.controls?.encoder?.patternCycleIds;
   const requested = Array.isArray(configuredCycle) && configuredCycle.length
     ? configuredCycle
     : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
   const ids = [
-    startupPatternId,
-    ...zonePatternIds,
+    ...requestedPatternIds,
     ...requested,
   ].filter(Boolean);
-  const selected = orderedCardPatterns(ids);
-  if (selected.some(pattern => pattern.id === startupPatternId)) return selected;
-  const startupPattern = getCardPatternById(startupPatternId);
-  return startupPattern ? [startupPattern, ...selected] : selected;
+  return orderedCardPatterns(ids);
+}
+
+function buildRuntimeLooksFromPlaylist({
+  playlist = [],
+  savedLooks = [],
+  patchBoard = null,
+  strips = [],
+  runtimeZones = [],
+  visualLook = {},
+} = {}) {
+  const savedLookById = new Map(savedLooks.map(look => [look.id, look]));
+  return (playlist || [])
+    .filter(item => item?.enabled !== false)
+    .map(item => {
+      if (item.type === 'combo') {
+        const savedLook = savedLookById.get(item.lookId);
+        if (!savedLook) return null;
+        const comboDefault = normalizeCardVisualLook(savedLook.defaultLook);
+        const comboBoard = applySavedLookToPatchBoard({ patchBoard, strips, savedLook });
+        const comboZones = patchBoardToZones(comboBoard, strips);
+        const effectiveZones = comboZones.length
+          ? applyVisualLookDefaultsToZones(comboZones, comboBoard, comboDefault)
+          : runtimeZones.map(zone => applyLookFieldsToZone(zone, comboDefault));
+        return {
+          id: item.id,
+          label: item.label || savedLook.label,
+          mode: 'combo',
+          preset: comboDefault.patternId,
+          brightness: 1,
+          zones: zoneLooksFromZones(effectiveZones),
+        };
+      }
+
+      const pattern = getCardPatternById(item.patternId);
+      if (!pattern) return null;
+      const lookDefaults = normalizeCardVisualLook({ ...visualLook, patternId: pattern.id });
+      return {
+        id: item.id || pattern.id,
+        label: item.label || pattern.label,
+        mode: pattern.mode === 'preset' ? 'preset' : 'procedural',
+        preset: pattern.id,
+        brightness: 1,
+        zones: zoneLooksFromZones(runtimeZones.map(zone => applyLookFieldsToZone(zone, lookDefaults))),
+      };
+    })
+    .filter(Boolean);
+}
+
+function applyLookFieldsToZone(zone, look) {
+  return {
+    ...zone,
+    patternId: look.patternId,
+    brightness: look.brightness,
+    speed: look.speed,
+    hueShift: look.hueShift,
+    customHue: look.customHue,
+    customSaturation: look.customSaturation,
+    customBreathe: look.customBreathe,
+    customDrift: look.customDrift,
+  };
+}
+
+function zoneLooksFromZones(zones = []) {
+  return zones.map(zone => ({
+    id: zone.id,
+    label: zone.label,
+    patternId: zone.patternId,
+    brightness: zone.brightness,
+    speed: zone.speed,
+    hueShift: zone.hueShift,
+    customHue: zone.customHue,
+    customSaturation: zone.customSaturation,
+    customBreathe: zone.customBreathe,
+    customDrift: zone.customDrift,
+  }));
 }
 
 function applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) {

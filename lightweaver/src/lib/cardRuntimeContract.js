@@ -31,10 +31,14 @@ export const DEFAULT_CARD_LED = Object.freeze({
 
 export function normalizeCardRuntimeConfig(config = {}) {
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
-  const patternIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
+  const requestedCycleIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
   const led = normalizeLed(config.led);
   const totalPixels = led.pixels;
   const zones = normalizeZones(config.zones, totalPixels);
+  const patterns = normalizePatterns(config.patterns);
+  const looks = normalizeLooks(config.looks, patterns);
+  const lookIds = looks.map(look => look.id);
+  const patternIds = requestedCycleIds.length ? requestedCycleIds : lookIds;
   return {
     version: 1,
     mode,
@@ -50,8 +54,9 @@ export function normalizeCardRuntimeConfig(config = {}) {
         patternCycleIds: patternIds.length ? patternIds : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
       },
     }),
-    patterns: normalizePatterns(config.patterns),
-    startupPatternId: sanitizeId(config.startupPatternId || patternIds[0] || DEFAULT_CARD_PATTERN_BANK[0].id),
+    patterns,
+    looks,
+    startupPatternId: sanitizeId(config.startupPatternId || config.startupLookId || patternIds[0] || DEFAULT_CARD_PATTERN_BANK[0].id),
     zones,
     syncZones: config.syncZones === undefined ? true : Boolean(config.syncZones),
   };
@@ -129,6 +134,7 @@ export function buildCardRuntimeConfig({
   led = {},
   controls = {},
   patterns = DEFAULT_CARD_PATTERN_BANK,
+  looks = [],
   startupPatternId = '',
   zones,
   syncZones,
@@ -139,6 +145,7 @@ export function buildCardRuntimeConfig({
     led,
     controls,
     patterns,
+    looks,
     startupPatternId,
     zones,
     syncZones,
@@ -227,6 +234,58 @@ function normalizePatternIds(ids = []) {
   return [...new Set((Array.isArray(ids) ? ids : [])
     .map(id => sanitizeId(id))
     .filter(Boolean))];
+}
+
+function normalizeLooks(looks = [], patterns = normalizePatterns(DEFAULT_CARD_PATTERN_BANK)) {
+  const input = Array.isArray(looks) && looks.length ? looks : patterns;
+  return input.slice(0, 32).map((look, index) => {
+    const preset = sanitizeId(look.preset || look.patternId || look.id || `look-${index + 1}`);
+    const id = sanitizeId(look.id || preset || `look-${index + 1}`);
+    const zones = normalizeLookZones(look.zones);
+    const pattern = DEFAULT_CARD_PATTERN_BANK.find(item => item.id === preset);
+    const requestedMode = String(look.mode || '').trim().toLowerCase();
+    const mode = zones.length
+      ? 'combo'
+      : requestedMode === 'sequence'
+        ? 'sequence'
+        : requestedMode === 'preset' || pattern?.mode === 'preset'
+          ? 'preset'
+          : 'procedural';
+    const normalized = {
+      id,
+      label: String(look.label || pattern?.label || titleFromId(id)),
+      mode,
+      preset,
+      fps: clampInt(look.fps, 24, 1, 120),
+      loop: look.loop ?? true,
+      fadeOutMs: clampInt(look.fadeOutMs, 320, 0, 8000),
+      fadeInMs: clampInt(look.fadeInMs, 420, 0, 8000),
+      brightness: clampUnit(look.brightness ?? 0.65),
+    };
+    if (mode === 'sequence') {
+      normalized.file = String(look.file || `/sequences/${String(index + 1).padStart(3, '0')}-${id}.lwseq`);
+    }
+    if (zones.length) {
+      normalized.zones = zones;
+    }
+    return normalized;
+  });
+}
+
+function normalizeLookZones(zones = []) {
+  if (!Array.isArray(zones) || !zones.length) return [];
+  return zones.slice(0, CARD_RUNTIME_MAX_ZONES).map((zone, index) => ({
+    id: sanitizeId(zone.id || `zone-${index + 1}`),
+    label: String(zone.label || zone.id || `Zone ${index + 1}`),
+    patternId: sanitizeId(zone.patternId || 'aurora'),
+    brightness: clampUnit(zone.brightness ?? 1.0),
+    speed: clampSpeed(zone.speed),
+    hueShift: clampInt(zone.hueShift, 0, -128, 128),
+    customHue: clampInt(zone.customHue, 32, 0, 255),
+    customSaturation: clampInt(zone.customSaturation, 230, 0, 255),
+    customBreathe: Boolean(zone.customBreathe),
+    customDrift: Boolean(zone.customDrift),
+  })).filter(zone => zone.id && zone.patternId);
 }
 
 function normalizeColorOrder(value = 'RGB') {

@@ -31,7 +31,7 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.locator('.lw-look-orbit')).toHaveCount(0);
   await expect(page.locator('.lw-look-led-field i')).not.toHaveCount(0);
   await expect(page.locator('.lw-pattern-led-preview canvas')).toBeVisible();
-  await expect(page.getByText('30 chip-ready / 30 on knob')).toBeVisible();
+  await expect(page.getByText('30 chip-ready / 30 in playlist')).toBeVisible();
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
 
   await page.locator('button[data-pattern-id="ocean"]').click();
@@ -182,6 +182,44 @@ test('v3 patterns saves multiple outer and inner combos that can be re-applied',
   await expect(page.locator('.lw-chip-status')).toContainText('previewing on the card');
 });
 
+test('playlist adds saved combos and loads the knob order as card looks', async ({ page }) => {
+  const configRequests: Record<string, unknown>[] = [];
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.route('http://lightweaver.local/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByTestId('section-target-patch-default-outer-circle').click();
+  await page.locator('button[data-pattern-id="ocean"]').click();
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.locator('button[data-pattern-id="sparkle"]').click();
+  await page.getByTestId('save-current-combo').click();
+
+  await page.getByRole('button', { name: 'Playlist', exact: true }).click();
+  await expect(page.getByText('Knob order')).toBeVisible();
+  await page.locator('.lw-playlist-combo-pool button', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
+  const comboRow = page.locator('.lw-playlist-row', { hasText: 'Outer circle Ocean + Inner circle Sparkle' });
+  await expect(comboRow).toBeVisible();
+  await comboRow.getByRole('button', { name: 'Make first' }).click();
+
+  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await expect.poll(() => configRequests.length).toBe(1);
+  const config = configRequests[0] as any;
+  expect(config.startupPatternId).toMatch(/^combo-/);
+  expect(config.looks[0]).toMatchObject({ mode: 'combo' });
+  expect(Object.fromEntries(config.looks[0].zones.map(zone => [zone.id, zone.patternId]))).toMatchObject({
+    'patch-default-outer-circle': 'ocean',
+    'patch-default-inner-circle': 'sparkle',
+  });
+});
+
 test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {
   const configRequests: Record<string, unknown>[] = [];
   const strips = createDefaultCircleLayout({ totalPixels: 80, sectionCount: 4 });
@@ -235,7 +273,7 @@ test('v3 patterns scales saved combos to four hardware sections', async ({ page 
   await expect(savedCard.locator('.lw-look-preview')).toHaveCount(3);
   await expect(savedCard.locator('.lw-saved-combo-overflow')).toContainText('+1');
 
-  await savedCard.getByRole('button', { name: 'Load to card' }).click();
+  await savedCard.getByRole('button', { name: 'Load now' }).click();
   await expect.poll(() => configRequests.length).toBe(1);
   const zonePatterns = Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]));
   expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');

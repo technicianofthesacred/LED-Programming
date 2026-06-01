@@ -5992,6 +5992,13 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   white-space: nowrap;
 }
 
+.lw-saved-combo-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .lw-saved-combo-sections {
   overflow: hidden;
   color: var(--text-4);
@@ -6053,6 +6060,254 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+/* Playlist screen */
+.lw-playlist-screen {
+  height: 100%;
+  overflow: auto;
+  background:
+    linear-gradient(90deg, oklch(100% 0 0 / 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, oklch(100% 0 0 / 0.018) 1px, transparent 1px),
+    linear-gradient(180deg, oklch(9% 0.014 255), oklch(6% 0.012 260)),
+    var(--bg);
+  background-size: 42px 42px, 42px 42px, auto, auto;
+}
+
+.lw-playlist-shell {
+  width: min(1280px, calc(100% - 48px));
+}
+
+.lw-playlist-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(310px, 380px);
+  gap: 18px;
+  align-items: start;
+}
+
+.lw-playlist-section {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: oklch(17% 0.012 250 / 0.88);
+  padding: 14px;
+}
+
+.lw-playlist-host-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 6px;
+  background: oklch(10% 0.01 255 / 0.68);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+.lw-playlist-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lw-playlist-row {
+  display: grid;
+  grid-template-columns: 68px 78px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 74px;
+  padding: 8px;
+  border: 1px solid oklch(100% 0 0 / 0.1);
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, oklch(15% 0.014 250), oklch(10% 0.012 255));
+}
+
+.lw-playlist-row:first-child {
+  border-color: oklch(76% 0.17 165 / 0.72);
+  background: oklch(18% 0.025 225);
+}
+
+.lw-playlist-index {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 5px;
+  background: oklch(8% 0.01 250 / 0.72);
+}
+
+.lw-playlist-index strong {
+  color: var(--text);
+  font-family: var(--mono-font);
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.lw-playlist-index span {
+  color: var(--text-4);
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+}
+
+.lw-playlist-art,
+.lw-playlist-combo-thumbs {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.lw-playlist-thumb {
+  min-height: 52px;
+  border: 1px solid oklch(100% 0 0 / 0.1);
+  border-radius: 5px;
+  background:
+    radial-gradient(circle at 28% 34%, color-mix(in oklch, var(--palette-b) 48%, transparent), transparent 34%),
+    radial-gradient(circle at 72% 68%, color-mix(in oklch, var(--palette-c) 40%, transparent), transparent 35%),
+    var(--thumb-bg, oklch(10% 0.012 250));
+  box-shadow: inset 0 0 24px oklch(0% 0 0 / 0.28);
+}
+
+.lw-playlist-thumb-more {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  background: oklch(8% 0.01 250 / 0.78);
+}
+
+.lw-playlist-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.lw-playlist-row-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-playlist-row-copy span {
+  overflow: hidden;
+  color: var(--text-4);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-playlist-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.lw-playlist-row-actions .btn {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: var(--fs-xs);
+}
+
+.lw-playlist-row-actions .btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.lw-playlist-sources {
+  display: grid;
+  gap: 18px;
+  position: sticky;
+  top: 24px;
+}
+
+.lw-playlist-pattern-pool,
+.lw-playlist-combo-pool {
+  display: grid;
+  gap: 6px;
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+.lw-playlist-pattern-pool button,
+.lw-playlist-combo-pool button {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 62px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: oklch(12% 0.012 250);
+  color: var(--text-3);
+  padding: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lw-playlist-pattern-pool button:hover,
+.lw-playlist-combo-pool button:hover {
+  border-color: var(--border-2);
+  background: oklch(17% 0.014 250);
+}
+
+.lw-playlist-pattern-pool button.is-added,
+.lw-playlist-combo-pool button.is-added {
+  border-color: oklch(76% 0.17 165 / 0.68);
+  background: oklch(18% 0.025 225 / 0.82);
+}
+
+.lw-playlist-pattern-pool .lw-playlist-thumb,
+.lw-playlist-combo-pool .lw-playlist-thumb {
+  min-height: 42px;
+}
+
+.lw-playlist-pattern-pool span,
+.lw-playlist-combo-pool span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.lw-playlist-pattern-pool strong,
+.lw-playlist-combo-pool strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lw-playlist-pattern-pool em,
+.lw-playlist-combo-pool em {
+  color: var(--text-4);
+  font-size: var(--fs-xs);
+  font-style: normal;
+}
+
+.lw-playlist-empty {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-4);
+  background: oklch(9% 0.01 250 / 0.62);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
 }
 
 /* Version 3 Settings screen */
@@ -6971,6 +7226,27 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   }
 
   .lw-patterns-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lw-playlist-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lw-playlist-sources {
+    position: static;
+  }
+
+  .lw-playlist-row {
+    grid-template-columns: 54px minmax(64px, 76px) minmax(0, 1fr);
+  }
+
+  .lw-playlist-row-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .lw-playlist-host-row {
     grid-template-columns: 1fr;
   }
 

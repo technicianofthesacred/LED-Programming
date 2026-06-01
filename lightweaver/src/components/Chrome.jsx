@@ -5,6 +5,7 @@ import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
+  playlist:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>,
   chip:    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="10" y="10" width="4" height="4" rx=".5"/></svg>,
   flash:   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L4 14h7l-1 8 10-13h-7l0-7z"/></svg>,
   install: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l2 2 4-5"/><path d="M21 12a9 9 0 11-6.2-8.56"/><path d="M16 3h5v5"/></svg>,
@@ -89,6 +90,7 @@ export function TopBar() {
 export function LeftRail({ screen, onScreen }) {
   const items = [
     { id: 'patterns', label: 'Patterns', icon: Icon.pattern },
+    { id: 'playlist', label: 'Playlist', icon: Icon.playlist },
     { id: 'layout',   label: 'Layout',   icon: Icon.layout },
     { id: 'settings', label: 'Settings', icon: Icon.chip },
     { id: 'flash',    label: 'Flash',    icon: Icon.flash },
@@ -253,7 +255,7 @@ export function StatusBar({ screen = 'patterns' }) {
         </span>
       )}
       <span className="sep">·</span>
-      <span className="lw-status-item lw-status-shortcuts v">1 Patterns · 2 Layout · 3 Settings · 4 Flash · 5 Installer · ? shortcuts</span>
+      <span className="lw-status-item lw-status-shortcuts v">1 Patterns · 2 Playlist · 3 Layout · 4 Settings · 5 Flash · 6 Installer · ? shortcuts</span>
     </div>
   );
 }

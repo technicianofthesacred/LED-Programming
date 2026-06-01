@@ -8,6 +8,7 @@ function buildCommands(ctx, navigate) {
 
   return [
     { id: 'nav-patterns', label: 'Go to: Patterns', category: 'Navigate', action: () => navigate('patterns') },
+    { id: 'nav-playlist', label: 'Go to: Playlist', category: 'Navigate', action: () => navigate('playlist') },
     { id: 'nav-layout', label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
     { id: 'nav-settings', label: 'Go to: Settings', category: 'Navigate', action: () => navigate('settings') },
     { id: 'nav-flash', label: 'Go to: Flash chip', category: 'Navigate', action: () => navigate('flash') },

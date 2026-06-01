@@ -93,10 +93,12 @@ void selectLookInstant(int index);
 bool startLook(uint8_t index);
 void closeSequence();
 bool openSequence(const String& path);
-bool renderCurrentLook();
+bool renderCurrentLook(bool force = false);
 bool renderSequenceFrame(bool force = false);
 bool renderProceduralFrame(const String& preset);
 bool renderPresetFrame(const String& preset);
+void applyLookToRuntimeZones(const LookConfig& look);
+void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone);
 CRGB colorForPreset(const String& preset);
 void showLeds();
 void copyLogicalToPhysicalLeds();
@@ -483,6 +485,8 @@ bool startLook(uint8_t index) {
     Serial.println(")");
   }
 
+  applyLookToRuntimeZones(look);
+
   if (look.mode == "sequence") {
     if (!openSequence(look.file)) {
       fail(ERROR_SEQUENCE, "sequence open failed");
@@ -491,11 +495,7 @@ bool startLook(uint8_t index) {
     return renderSequenceFrame(true);
   }
 
-  if (look.mode == "procedural") {
-    return renderProceduralFrame(look.preset);
-  }
-
-  return renderPresetFrame(look.preset);
+  return renderCurrentLook(true);
 }
 
 void closeSequence() {
@@ -547,19 +547,63 @@ bool openSequence(const String& path) {
   return true;
 }
 
-// Find a look by id in the loaded bank. Falls back to the current index.
+void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone) {
+  zone.patternId = lookZone.patternId;
+  zone.brightness = lookZone.brightness;
+  zone.speed = lookZone.speed;
+  zone.hueShift = lookZone.hueShift;
+  zone.customHue = lookZone.customHue;
+  zone.customSaturation = lookZone.customSaturation;
+  zone.customBreathe = lookZone.customBreathe;
+  zone.customDrift = lookZone.customDrift;
+  zone.blackout = lookZone.blackout;
+}
+
+void applyLookToRuntimeZones(const LookConfig& look) {
+  if (runtimeConfig.zoneCount == 0) return;
+
+  if (look.hasZoneLooks && look.zoneCount > 0) {
+    runtimeConfig.syncZones = false;
+    bool touched[LW_MAX_ZONES] = {};
+    for (uint8_t lookZoneIndex = 0; lookZoneIndex < look.zoneCount; lookZoneIndex++) {
+      const LookZoneConfig& lookZone = look.zones[lookZoneIndex];
+      bool matched = false;
+      for (uint8_t zoneIndex = 0; zoneIndex < runtimeConfig.zoneCount; zoneIndex++) {
+        if (runtimeConfig.zones[zoneIndex].id == lookZone.id) {
+          applyLookZoneToRuntimeZone(runtimeConfig.zones[zoneIndex], lookZone);
+          touched[zoneIndex] = true;
+          matched = true;
+          break;
+        }
+      }
+      if (!matched && lookZoneIndex < runtimeConfig.zoneCount && !touched[lookZoneIndex]) {
+        applyLookZoneToRuntimeZone(runtimeConfig.zones[lookZoneIndex], lookZone);
+        touched[lookZoneIndex] = true;
+      }
+    }
+    return;
+  }
+
+  String patternId = look.preset.length() > 0 ? look.preset : look.id;
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    runtimeConfig.zones[i].patternId = patternId;
+    runtimeConfig.zones[i].blackout = false;
+  }
+}
+
+// Find a look by id or preset in the loaded playlist. Missing ids fall back
+// to the compiled procedural pattern renderer inside renderZone().
 const LookConfig* findLookById(const String& id) {
   if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
   for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id) return &looks[i];
+    if (looks[i].id == id || looks[i].preset == id) return &looks[i];
   }
-  return lookCount ? &looks[currentLookIndex] : nullptr;
+  return nullptr;
 }
 
 bool renderZone(const ZoneConfig& zone, uint32_t now) {
   if (zone.rangeCount == 0) return false;
   const LookConfig* look = findLookById(zone.patternId);
-  if (!look) return false;
 
   // First range only for now — multi-range support is a follow-up.
   const PixelRange& range = zone.ranges[0];
@@ -585,7 +629,10 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   mods.driftHueMax = zone.driftHueMax;
 
   bool rendered = false;
-  if (look->mode == "procedural") {
+  if (!look) {
+    rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
+    if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
+  } else if (look->mode == "procedural") {
     rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
   } else if (look->mode == "preset") {
     rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
@@ -603,7 +650,7 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   return true;
 }
 
-bool renderCurrentLook() {
+bool renderCurrentLook(bool force) {
   // Legacy sequence path: only when zone 0 holds the entire strip and the
   // selected look is a frame sequence. Sequences predate zones; they take
   // over the whole canvas.
@@ -613,7 +660,7 @@ bool renderCurrentLook() {
 
   static uint32_t nextProceduralAt = 0;
   uint32_t now = millis();
-  if (now < nextProceduralAt) return false;
+  if (!force && now < nextProceduralAt) return false;
   nextProceduralAt = now + (1000 / DEFAULT_RENDER_FPS);
 
   if (runtimeConfig.zoneCount == 0) return false;
@@ -913,22 +960,20 @@ void runtimePreviousPattern() {
 
 bool runtimeSelectPatternById(const String& id) {
   for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id) {
+    if (looks[i].id == id || looks[i].preset == id) {
       selectLookInstant(i);
-      applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
       return true;
     }
   }
-  return false;
+  if (id.length() == 0) return false;
+  applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
+  return true;
 }
 
 // Zone-targeted pattern selection. Used by the per-zone designer flow.
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
   if (targetId.length() == 0) return runtimeSelectPatternById(patternId);
-  // Verify the pattern exists in the bank
-  bool exists = false;
-  for (uint8_t i = 0; i < lookCount; i++) if (looks[i].id == patternId) { exists = true; break; }
-  if (!exists) return false;
+  if (patternId.length() == 0) return false;
   uint8_t touched = applyToZones(targetId, [&](ZoneConfig& z) { z.patternId = patternId; });
   return touched > 0;
 }

@@ -10,6 +10,7 @@ const LoadingPane = () => <div className="lw-loading-pane">Loading...</div>;
 const ChipScreen = lazy(() => import('./components/ChipScreen.jsx').then(m => ({ default: m.ChipScreen })));
 const LayoutScreen = lazy(() => import('./components/LayoutScreen.jsx').then(m => ({ default: m.LayoutScreen })));
 const PatternsScreen = lazy(() => import('./components/PatternsScreen.jsx').then(m => ({ default: m.PatternsScreen })));
+const PlaylistScreen = lazy(() => import('./components/PlaylistScreen.jsx').then(m => ({ default: m.PlaylistScreen })));
 const FlashScreen = lazy(() => import('./components/OtherScreens.jsx').then(m => ({ default: m.FlashScreen })));
 const InstallerScreen = lazy(() => import('./components/InstallerScreen.jsx').then(m => ({ default: m.InstallerScreen })));
 
@@ -19,6 +20,7 @@ function normalizeScreen(requested = '') {
   if (screen === 'installer' || screen === 'install' || screen === 'directions' || screen === 'setup') return 'installer';
   if (screen === 'flash') return 'flash';
   if (screen === 'chip' || screen === 'load' || screen === 'export' || screen === 'devices' || screen === 'settings') return 'settings';
+  if (screen === 'playlist' || screen === 'knob' || screen === 'cycle') return 'playlist';
   if (screen === 'pattern' || screen === 'patterns' || screen === 'look' || screen === 'looks') return 'patterns';
   return 'patterns';
 }
@@ -78,10 +80,11 @@ export default function App() {
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey) {
         if (event.key === '1') navigate('patterns');
-        if (event.key === '2') navigate('layout');
-        if (event.key === '3') navigate('settings');
-        if (event.key === '4') navigate('flash');
-        if (event.key === '5') navigate('installer');
+        if (event.key === '2') navigate('playlist');
+        if (event.key === '3') navigate('layout');
+        if (event.key === '4') navigate('settings');
+        if (event.key === '5') navigate('flash');
+        if (event.key === '6') navigate('installer');
       }
     };
     window.addEventListener('keydown', handler);
@@ -96,6 +99,7 @@ export default function App() {
           <LeftRail screen={screen} onScreen={navigate}/>
           <Suspense fallback={<LoadingPane/>}>
             {screen === 'patterns' && <PatternsScreen/>}
+            {screen === 'playlist' && <PlaylistScreen/>}
             {screen === 'layout' && <LayoutScreen/>}
             {screen === 'settings' && <ChipScreen/>}
             {screen === 'flash' && <FlashScreen/>}
