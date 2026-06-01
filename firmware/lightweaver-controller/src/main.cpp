@@ -1234,10 +1234,12 @@ void runtimeCancelStream() { frameSourceCancelStream(); }
 
 String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones) {
   String id = patternId.length() ? patternId : String("warm-white");
+  bool isWhiteTestRecovery = id == "test-white" || id == "white";
   float visibleBrightness = brightness;
-  if (visibleBrightness < 0.65f) visibleBrightness = 0.65f;
+  if (!isWhiteTestRecovery && visibleBrightness < 0.65f) visibleBrightness = 0.65f;
+  if (isWhiteTestRecovery && visibleBrightness < 0.20f) visibleBrightness = 0.20f;
   if (visibleBrightness > 1.0f) visibleBrightness = 1.0f;
-  if (brightnessLimit < 0.65f) brightnessLimit = 0.65f;
+  if (!isWhiteTestRecovery && brightnessLimit < 0.65f) brightnessLimit = 0.65f;
 
   recoveryPatternId = id;
   recoveryHoldUntilMs = millis() + 5000;
@@ -1281,7 +1283,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
   }
 
   uint8_t brightnessByte = computeBrightnessByte();
-  if (brightnessByte < 140) {
+  if (!isWhiteTestRecovery && brightnessByte < 140) {
     brightnessLimit = 0.65f;
     manualBrightness = 1.0f;
     if (lookCount) looks[currentLookIndex].brightness = 1.0f;

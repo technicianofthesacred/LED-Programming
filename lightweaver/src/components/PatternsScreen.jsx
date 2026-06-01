@@ -19,7 +19,7 @@ import {
   DEFAULT_CIRCLE_TOTAL_PIXELS,
   isDefaultCircleLayout,
 } from '../lib/defaultCircleLayout.js';
-import { DEFAULT_STANDALONE_LED, DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
+import { DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
 import {
   ALL_SECTIONS_TARGET_ID,
   applyLookToPatchBoard,
@@ -99,12 +99,11 @@ const RECOVERY_MIN_BRIGHTNESS = 0.65;
 const DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS = 100;
 const PATTERN_PREVIEW_MAX_POINTS = 384;
 const STRIP_COLOR_TESTS = [
-  { id: 'test-red', label: 'Red', shortLabel: 'R' },
-  { id: 'test-green', label: 'Green', shortLabel: 'G' },
-  { id: 'test-blue', label: 'Blue', shortLabel: 'B' },
-  { id: 'test-white', label: 'White', shortLabel: 'W' },
+  { id: 'test-red', label: 'Red', shortLabel: 'R', brightness: 1 },
+  { id: 'test-green', label: 'Green', shortLabel: 'G', brightness: 1 },
+  { id: 'test-blue', label: 'Blue', shortLabel: 'B', brightness: 1 },
+  { id: 'test-white', label: 'White', shortLabel: 'W', brightness: 0.55 },
 ];
-const STRIP_TYPE_OPTIONS = ['WS2815', 'WS2812B', 'SK6812', 'APA102', 'Other'];
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -788,9 +787,6 @@ export function PatternsScreen() {
     },
   };
   const stripColorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
-  const stripLedType = STRIP_TYPE_OPTIONS.includes(standaloneController?.led?.type)
-    ? standaloneController.led.type
-    : DEFAULT_STANDALONE_LED.type;
   const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
     ? []
     : standaloneController?.playlist;
@@ -994,16 +990,13 @@ export function PatternsScreen() {
     setStatusKind('');
     setStatus(`Showing ${test.label} test on ${cardHostToUrl(cardHost)} with ${colorOrder} order...`);
     try {
-      await pushLivePreviewToCard({
+      await recoverCardLights({
         patternId: test.id,
-        brightness: 1,
-        speed: 1,
-        customHue: 32,
-        customSaturation: 230,
+        brightness: test.brightness,
         syncZones: true,
-      }, { host: cardHost, timeoutMs: 2200 });
+      }, { host: cardHost, timeoutMs: 3200 });
       setStatusKind('ok');
-      setStatus(`${test.label} test is live. If the strip shows a different color, choose another RGB order.`);
+      setStatus(`${test.label} test is live. If the strip is not ${test.label.toLowerCase()}, press Try next order.`);
     } catch (error) {
       setStatusKind('err');
       setStatus(error?.message || `${test.label} test could not reach ${cardHostToUrl(cardHost)}.`);
@@ -1021,18 +1014,18 @@ export function PatternsScreen() {
       if (appliedOrder !== nextOrder) updateController({ led: { colorOrder: appliedOrder } });
       await playStripColorTest(stripColorTestPattern, appliedOrder);
       setStatusKind('ok');
-      setStatus(`${appliedOrder} color order is live. Save to card when the test colors match.`);
+      const test = STRIP_COLOR_TESTS.find(item => item.id === stripColorTestPattern) || STRIP_COLOR_TESTS[0];
+      setStatus(`${appliedOrder} order is live. ${test.label} was sent again; stop when the strip shows ${test.label.toLowerCase()}.`);
     } catch (error) {
       setStatusKind('err');
       setStatus(error?.message || `${nextOrder} color order could not reach ${cardHostToUrl(cardHost)}.`);
     }
   };
 
-  const applyStripType = (type) => {
-    const nextType = STRIP_TYPE_OPTIONS.includes(type) ? type : DEFAULT_STANDALONE_LED.type;
-    updateController({ led: { type: nextType } });
-    setStatusKind('');
-    setStatus(`${nextType} selected for this project. Use the color tests and RGB order buttons to verify the live strip.`);
+  const tryNextStripColorOrder = () => {
+    const currentIndex = COLOR_ORDERS.indexOf(stripColorOrder);
+    const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
+    void applyStripColorOrder(nextOrder);
   };
 
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
@@ -1848,34 +1841,6 @@ export function PatternsScreen() {
             </div>
             <div className="lw-strip-color-test" aria-label="Strip color test">
               <span className="lw-strip-color-title">Strip finder</span>
-              <label className="lw-strip-control-field">
-                <span>Type</span>
-                <select
-                  className="lw-strip-select"
-                  aria-label="Strip type"
-                  data-testid="strip-led-type"
-                  value={stripLedType}
-                  onChange={event => applyStripType(event.target.value)}
-                >
-                  {STRIP_TYPE_OPTIONS.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="lw-strip-control-field">
-                <span>Order</span>
-                <select
-                  className="lw-strip-select"
-                  aria-label="RGB order"
-                  data-testid="strip-color-order"
-                  value={stripColorOrder}
-                  onChange={event => applyStripColorOrder(event.target.value)}
-                >
-                  {COLOR_ORDERS.map(order => (
-                    <option key={order} value={order}>{order}</option>
-                  ))}
-                </select>
-              </label>
               <span className="lw-strip-color-buttons" aria-label="Color test">
                 {STRIP_COLOR_TESTS.map(test => (
                   <button
@@ -1889,6 +1854,17 @@ export function PatternsScreen() {
                   </button>
                 ))}
               </span>
+              <span className="lw-strip-order-pill">
+                Order <b data-testid="strip-color-order">{stripColorOrder}</b>
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost lw-strip-next-order"
+                aria-label="Try next color order"
+                onClick={tryNextStripColorOrder}
+              >
+                Try next order
+              </button>
             </div>
             <div className="lw-target-panel">
               <div className="lw-sec-header">

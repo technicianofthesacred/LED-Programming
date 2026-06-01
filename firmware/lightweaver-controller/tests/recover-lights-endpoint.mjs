@@ -82,6 +82,12 @@ assert.match(
 
 assert.match(
   main,
+  /bool isWhiteTestRecovery = id == "test-white" \|\| id == "white";[\s\S]*if \(!isWhiteTestRecovery && visibleBrightness < 0\.65f\) visibleBrightness = 0\.65f;/,
+  'recover-lights should allow the white strip finder test to run below recovery brightness to avoid power spikes',
+);
+
+assert.match(
+  main,
   /brightnessByte/,
   'recover diagnostics should report the final FastLED brightness byte',
 );

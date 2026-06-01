@@ -5659,7 +5659,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-strip-color-test {
   display: grid;
-  grid-template-columns: auto minmax(132px, 0.32fr) minmax(104px, 0.24fr) auto;
+  grid-template-columns: auto minmax(156px, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 10px;
@@ -5669,8 +5669,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   background: oklch(11% 0.012 250 / 0.7);
 }
 
-.lw-strip-color-title,
-.lw-strip-control-field span {
+.lw-strip-color-title {
   color: var(--text-4);
   font-family: var(--mono-font);
   font-size: 9px;
@@ -5682,41 +5681,10 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   white-space: nowrap;
 }
 
-.lw-strip-control-field {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.lw-strip-control-field span {
-  flex: 0 0 auto;
-}
-
-.lw-strip-select {
-  min-width: 0;
-  width: 100%;
-  height: 32px;
-  padding: 0 28px 0 10px;
-  border: 1px solid oklch(100% 0 0 / 0.12);
-  border-radius: 5px;
-  background: oklch(15% 0.014 250);
-  color: var(--text-2);
-  font-family: var(--mono-font);
-  font-size: var(--fs-xs);
-  font-weight: 720;
-  line-height: 32px;
-}
-
-.lw-strip-select:focus-visible {
-  outline: 2px solid oklch(74% 0.17 205);
-  outline-offset: 2px;
-}
-
 .lw-strip-color-buttons {
   min-width: 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 5px;
 }
 
@@ -5727,6 +5695,36 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   justify-content: center;
   font-family: var(--mono-font);
   font-weight: 720;
+  white-space: nowrap;
+}
+
+.lw-strip-order-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  border-radius: 5px;
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lw-strip-order-pill b {
+  color: oklch(79% 0.17 165);
+  font-size: var(--fs-xs);
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.lw-strip-next-order {
+  min-height: 32px;
+  justify-content: center;
   white-space: nowrap;
 }
 
@@ -7848,14 +7846,6 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
   .lw-strip-color-test {
     align-items: stretch;
-  }
-
-  .lw-strip-control-field {
-    justify-content: space-between;
-  }
-
-  .lw-strip-select {
-    max-width: 220px;
   }
 
   .lw-strip-color-buttons {

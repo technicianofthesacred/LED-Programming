@@ -260,6 +260,7 @@ test('v3 patterns can recover dark lights onto the selected surface', async ({ p
 
 test('v3 patterns can test strip colors and toggle RGB order live', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
+  const recoveryRequests: Record<string, unknown>[] = [];
   await page.route('**/api/status', async route => {
     await route.fulfill({
       status: 200,
@@ -275,6 +276,14 @@ test('v3 patterns can test strip colors and toggle RGB order live', async ({ pag
       body: JSON.stringify({ ok: true, colorOrder: controlRequests.at(-1)?.colorOrder || 'RGB' }),
     });
   });
+  await page.route('**/api/recover-lights', async route => {
+    recoveryRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, patternId: recoveryRequests.at(-1)?.patternId || 'warm-white' }),
+    });
+  });
 
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -283,34 +292,34 @@ test('v3 patterns can test strip colors and toggle RGB order live', async ({ pag
   const stripTest = page.locator('.lw-look-picker').getByLabel('Strip color test');
   await expect(stripTest).toBeVisible();
   const stripBox = await stripTest.boundingBox();
-  expect(stripBox?.height || 0).toBeLessThanOrEqual(76);
-  await expect(stripTest.getByLabel('Strip type')).toBeVisible();
-  await expect(stripTest.getByLabel('Strip type')).toHaveValue('WS2815');
+  expect(stripBox?.height || 0).toBeLessThanOrEqual(60);
+  await expect(stripTest.getByLabel('Strip type')).toHaveCount(0);
   await expect(stripTest.getByRole('button', { name: 'Test red' })).toHaveText('R');
   await expect(stripTest.getByRole('button', { name: 'Test green' })).toHaveText('G');
   await expect(stripTest.getByRole('button', { name: 'Test blue' })).toHaveText('B');
   await expect(stripTest.getByRole('button', { name: 'Test white' })).toHaveText('W');
-  await expect(stripTest.getByLabel('RGB order')).toBeVisible();
-  await expect(stripTest.getByLabel('RGB order')).toHaveValue('RGB');
+  await expect(stripTest.getByTestId('strip-color-order')).toHaveText('RGB');
+  await expect(stripTest.getByRole('button', { name: 'Try next color order' })).toBeVisible();
 
   await stripTest.getByRole('button', { name: 'Test green' }).click();
-  await expect.poll(() => controlRequests.some(request => (
+  await expect.poll(() => recoveryRequests.some(request => (
     request.patternId === 'test-green' &&
     request.syncZones === true &&
     request.brightness === 1
   ))).toBe(true);
 
   await stripTest.getByRole('button', { name: 'Test white' }).click();
-  await expect.poll(() => controlRequests.some(request => request.patternId === 'test-white')).toBe(true);
+  await expect.poll(() => recoveryRequests.some(request => (
+    request.patternId === 'test-white' &&
+    typeof request.brightness === 'number' &&
+    request.brightness < 0.7
+  ))).toBe(true);
 
-  await stripTest.getByLabel('Strip type').selectOption('SK6812');
-  await expect(stripTest.getByLabel('Strip type')).toHaveValue('SK6812');
+  await stripTest.getByRole('button', { name: 'Try next color order' }).click();
 
-  await stripTest.getByLabel('RGB order').selectOption('GRB');
-
-  await expect(stripTest.getByLabel('RGB order')).toHaveValue('GRB');
+  await expect(stripTest.getByTestId('strip-color-order')).toHaveText('GRB');
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
-  await expect.poll(() => controlRequests.at(-1)?.patternId).toBe('test-white');
+  await expect.poll(() => recoveryRequests.at(-1)?.patternId).toBe('test-white');
 });
 
 test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
