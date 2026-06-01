@@ -119,6 +119,36 @@ ControlEventType runPressSequence(int encoderPress, int encoderPressAlt, int pre
   return CONTROL_NONE;
 }
 
+ControlEventType runQuickPressSequence(int encoderPress, int encoderPressAlt, int pressedPin) {
+  for (int& pinValue : pinValues) pinValue = HIGH;
+  ControlsConfig controls;
+  controls.encoderA = 4;
+  controls.encoderB = 5;
+  controls.encoderPress = encoderPress;
+  controls.encoderPressAlt = encoderPressAlt;
+  controls.previous = -1;
+  controls.next = -1;
+  controls.blackout = -1;
+  controls.statusLed = -1;
+  controls.rotateDirection = "clockwise-brighter";
+  controls.brightnessStep = 18;
+
+  ControlState state;
+  setEncoderState(0b00);
+  setupLightweaverControls(controls, state);
+
+  fakeMillis += 50;
+  pinValues[pressedPin] = LOW;
+  for (uint8_t i = 0; i < 4; i++) {
+    fakeMillis += 20;
+    ControlEventType event = pollLightweaverControls(controls, state);
+    if (event != CONTROL_NONE) return event;
+  }
+  pinValues[pressedPin] = HIGH;
+  fakeMillis += 20;
+  return pollLightweaverControls(controls, state);
+}
+
 int main() {
   const std::vector<uint8_t> physicalClockwise = {0b00, 0b10, 0b11, 0b01, 0b00};
   const std::vector<uint8_t> physicalCounterclockwise = {0b00, 0b01, 0b11, 0b10, 0b00};
@@ -129,6 +159,7 @@ int main() {
   assert(runSequence(physicalCounterclockwise, "clockwise-dimmer") == CONTROL_BRIGHTER);
   assert(runPressSequence(6, 6, 0) == CONTROL_NEXT_LOOK);
   assert(runPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
+  assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
 
   return 0;
 }

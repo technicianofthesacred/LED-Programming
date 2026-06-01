@@ -26,7 +26,7 @@ struct ArtnetUniverseConfig {
 constexpr uint16_t LWSEQ_HEADER_BYTES = 64;
 constexpr uint8_t DEFAULT_STATUS_LED_PIN = 2;
 constexpr uint16_t DEFAULT_RENDER_FPS = 30;
-constexpr uint16_t BUTTON_DEBOUNCE_MS = 180;
+constexpr uint16_t BUTTON_DEBOUNCE_MS = 45;
 
 enum ErrorCode : uint8_t {
   ERROR_NONE = 0,
