@@ -4,6 +4,20 @@ Bench-to-gallery checklist for taking a Lightweaver installation from a working 
 
 ---
 
+## 0. Code/runtime launch gate
+
+Run this before the controller leaves the bench, and again after any code, firmware, or exported config change.
+
+- [ ] **Runtime lane chosen and written down:** standalone Lightweaver card, WLED + Pi-hosted visitor UI, or advanced Madrix / Art-Net live host.
+- [ ] **Public/local split confirmed:** `led.mandalacodes.com` is the public Studio/setup surface. Actual LED commands must run through the local card page, WLED UI, Pi proxy, or another local bridge.
+- [ ] **Launch check passes:** from `lightweaver/`, run `npm run launch:check`. This runs the core runtime contract tests and production Vite build.
+- [ ] **Launch package identified:** record the git commit SHA, firmware image/version, exported project package, and any microSD package used for this piece.
+- [ ] **Standalone card API sanity** (if using the custom firmware): connect to the card and confirm `GET http://192.168.4.1/api/status`, config apply through `/api/config`, and the low-brightness `/api/recover-lights` path.
+- [ ] **Pi proxy sanity** (if Pi-hosted): on the Pi, confirm `curl http://localhost:3000/api/health` and `curl "http://localhost:3000/api/wled/info?ip=<wled-ip>"`.
+- [ ] **Controller record saved:** MAC address, final IP/hostname, pixel count, GPIO/output mapping, color order, brightness cap, and latest WLED/controller JSON snapshot.
+
+---
+
 ## 1. Pre-deploy WLED config
 
 Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode) before the device leaves the bench.

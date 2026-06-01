@@ -2,9 +2,9 @@
 name: lightweaver
 status: active
 stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
-deploy: web interface (phone/browser, hosted on Raspberry Pi or publicly)
+deploy: public Studio at led.mandalacodes.com; local card/WLED/Pi command path
 family: installation
-last_reviewed: 2026-06-01
+last_reviewed: 2026-06-02
 ---
 
 # Lightweaver — branded LED installation controller
@@ -16,12 +16,15 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 - `research.md` — hardware options (ESP32-S3, WLED firmware, Madrix integration), Art-Net/E1.31 protocols, control architecture, color management
 - `branded-installation-ui.md` — visitor-facing branded UI design spec (captive portal, scene selector)
 - `led-art-mapper/` — Vite app for designing LED strip paths over artwork SVGs; exports `ledmap.json` for WLED
+- `lightweaver/` — React Studio/control app, Pi proxy server, controller package export, and runtime contract tests
+- `firmware/lightweaver-controller/` — standalone ESP32-S3 Lightweaver card firmware for local playback
+- `docs/deployment-checklist.md` — bench-to-gallery checklist, including code/runtime launch gate
 
 ## Key decisions from research
 - **WLED firmware** recommended for quick start (100+ effects, REST/JSON API, Art-Net support)
-- **Architecture**: ESP32-S3 runs WLED → Madrix sends Art-Net → Raspberry Pi 5 as bridge/UI host
-- **Custom UI** will be a React web app communicating with WLED's JSON API, accessible from any browser on phone or desktop
-- **Deployment target**: web interface — Pi-hosted on local network for gallery/installation use, or publicly accessible URL for remote control
+- **Architecture options**: standalone ESP32-S3 card for local playback; WLED on ESP32-S3 with Pi-hosted UI; Madrix sends Art-Net for advanced/live installations
+- **Public UI split**: `led.mandalacodes.com` is the public Studio/setup/support surface. Actual LED commands stay local through the card page, WLED UI, Pi proxy, or another local bridge.
+- **Launch gate**: before deployment, run `npm run launch:check` from `lightweaver/`, then complete the hardware and site smoke tests in `docs/deployment-checklist.md`.
 
 ## Project name
 **Lightweaver** — use this name in UI copy, WiFi SSIDs, and any public-facing branding.
@@ -45,12 +48,14 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 ## Next steps
 - [x] Tooling: led-art-mapper design tool, lightweaver React building blocks, visitor-ui scaffold
 - [x] Operational docs: `docs/deployment-checklist.md`, `docs/hardware-setup.md`, `docs/segments.md`
+- [x] Launch gate: `npm run launch:check` in `lightweaver/` runs core runtime contract tests and production build
 - [ ] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root)
 - [ ] Configure Art-Net output from Madrix; verify WLED reception
 - [ ] Define WLED segments matching laser-cut zones; fill in `docs/segments.md`
 - [ ] Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
 ## Where to look for…
+- **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`
 - **Project roadmap (living source of truth)** → `docs/roadmap.md`
 - **Hardware research** → `research.md`
 - **Visitor UI design plan** → `branded-installation-ui.md`
