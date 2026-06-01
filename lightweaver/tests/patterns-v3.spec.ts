@@ -47,6 +47,9 @@ test('v3 patterns show a chip-ready catalog with live local preview', async ({ p
   await expect(page.getByText('30 chip-ready / 0 in playlist')).toBeVisible();
   await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
   await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
+  await expect(page.getByTestId('section-target-range-all')).toHaveText('LED 1-44');
+  await expect(page.getByTestId('section-target-range-patch-default-outer-circle')).toHaveText('LED 1-22');
+  await expect(page.getByTestId('section-target-range-patch-default-inner-circle')).toHaveText('LED 23-44');
 
   await page.locator('button[data-pattern-id="ocean"]').click();
 
@@ -277,17 +280,21 @@ test('v3 patterns can test strip colors and cycle color order live', async ({ pa
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByLabel('Strip color test')).toBeVisible();
+  const stripTest = page.locator('.lw-look-picker').getByLabel('Strip color test');
+  await expect(stripTest).toBeVisible();
+  await expect(stripTest.getByRole('button', { name: 'Test red' })).toHaveText('R');
+  await expect(stripTest.getByRole('button', { name: 'Test green' })).toHaveText('G');
+  await expect(stripTest.getByRole('button', { name: 'Test blue' })).toHaveText('B');
   await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
 
-  await page.getByRole('button', { name: 'Test green' }).click();
+  await stripTest.getByRole('button', { name: 'Test green' }).click();
   await expect.poll(() => controlRequests.some(request => (
     request.patternId === 'test-green' &&
     request.syncZones === true &&
     request.brightness === 1
   ))).toBe(true);
 
-  await page.getByRole('button', { name: 'Next color order' }).click();
+  await stripTest.getByRole('button', { name: 'Next color order' }).click();
 
   await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);

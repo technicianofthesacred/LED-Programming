@@ -55,12 +55,19 @@ int8_t quadratureDelta(uint8_t previous, uint8_t current) {
 }
 }
 
+int effectiveEncoderPressAltPin(const ControlsConfig& controls) {
+  if (controls.encoderPressAlt >= 0 && controls.encoderPressAlt != controls.encoderPress) return controls.encoderPressAlt;
+  if (controls.encoderPress >= 0 && controls.encoderPress != 0) return 0;
+  return -1;
+}
+
 void setupLightweaverControls(const ControlsConfig& controls, ControlState& state) {
+  int altPress = effectiveEncoderPressAltPin(controls);
   if (validPin(controls.statusLed)) pinMode(controls.statusLed, OUTPUT);
   if (validPin(controls.encoderA)) pinMode(controls.encoderA, INPUT_PULLUP);
   if (validPin(controls.encoderB)) pinMode(controls.encoderB, INPUT_PULLUP);
   if (validPin(controls.encoderPress)) pinMode(controls.encoderPress, INPUT_PULLUP);
-  if (validPin(controls.encoderPressAlt)) pinMode(controls.encoderPressAlt, INPUT_PULLUP);
+  if (validPin(altPress)) pinMode(altPress, INPUT_PULLUP);
   if (validPin(controls.previous)) pinMode(controls.previous, INPUT_PULLUP);
   if (validPin(controls.next)) pinMode(controls.next, INPUT_PULLUP);
   if (validPin(controls.blackout)) pinMode(controls.blackout, INPUT_PULLUP);
@@ -69,7 +76,7 @@ void setupLightweaverControls(const ControlsConfig& controls, ControlState& stat
   state.prevRawDown = state.prevDown = readPressed(controls.previous);
   state.nextRawDown = state.nextDown = readPressed(controls.next);
   state.pressRawDown = state.pressDown = readPressed(controls.encoderPress);
-  state.pressAltRawDown = state.pressAltDown = readPressed(controls.encoderPressAlt);
+  state.pressAltRawDown = state.pressAltDown = readPressed(altPress);
   state.blackoutRawDown = state.blackoutDown = readPressed(controls.blackout);
   state.prevChangedAt = now;
   state.nextChangedAt = now;
@@ -79,9 +86,10 @@ void setupLightweaverControls(const ControlsConfig& controls, ControlState& stat
 }
 
 ControlEventType pollLightweaverControls(const ControlsConfig& controls, ControlState& state) {
+  int altPress = effectiveEncoderPressAltPin(controls);
   if (buttonPressed(controls.next, state.nextDown, state.nextRawDown, state.nextChangedAt, state.lastNextAt) ||
       buttonPressed(controls.encoderPress, state.pressDown, state.pressRawDown, state.pressChangedAt, state.lastPressAt) ||
-      buttonPressed(controls.encoderPressAlt, state.pressAltDown, state.pressAltRawDown, state.pressAltChangedAt, state.lastPressAltAt)) {
+      buttonPressed(altPress, state.pressAltDown, state.pressAltRawDown, state.pressAltChangedAt, state.lastPressAltAt)) {
     return CONTROL_NEXT_LOOK;
   }
 

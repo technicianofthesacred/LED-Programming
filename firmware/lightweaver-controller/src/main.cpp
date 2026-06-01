@@ -69,6 +69,9 @@ uint16_t sequenceFps = 24;
 uint32_t nextSequenceFrameAt = 0;
 
 ControlState controlState;
+uint32_t controlEventCounts[6] = {0, 0, 0, 0, 0, 0};
+ControlEventType lastControlEvent = CONTROL_NONE;
+uint32_t lastControlEventAt = 0;
 float manualBrightness = 1.0f;
 float manualSpeed = 1.0f;
 int16_t manualHueShift = 0;
@@ -112,6 +115,8 @@ bool isValidLedColorOrder(const String& order);
 void fadeTo(float target, uint16_t durationMs);
 uint8_t computeBrightnessByte();
 float readBrightnessKnob();
+bool pinIsPressed(int pin);
+const char* controlEventLabel(ControlEventType event);
 uint8_t findStartupLook();
 void fail(ErrorCode code, const char* message);
 void blinkError();
@@ -452,6 +457,12 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
 }
 
 void handleControlEvent(ControlEventType event) {
+  if (event != CONTROL_NONE) {
+    uint8_t eventIndex = static_cast<uint8_t>(event);
+    if (eventIndex < 6) controlEventCounts[eventIndex]++;
+    lastControlEvent = event;
+    lastControlEventAt = millis();
+  }
   if (event == CONTROL_NEXT_LOOK) {
     selectLook(currentLookIndex + 1);
   } else if (event == CONTROL_PREVIOUS_LOOK) {
@@ -846,6 +857,28 @@ float readBrightnessKnob() {
   return clampUnit(float(raw) / 4095.0f);
 }
 
+bool pinIsPressed(int pin) {
+  return pin >= 0 && digitalRead(pin) == LOW;
+}
+
+const char* controlEventLabel(ControlEventType event) {
+  switch (event) {
+    case CONTROL_NEXT_LOOK:
+      return "next";
+    case CONTROL_PREVIOUS_LOOK:
+      return "previous";
+    case CONTROL_BLACKOUT:
+      return "blackout";
+    case CONTROL_BRIGHTER:
+      return "brighter";
+    case CONTROL_DIMMER:
+      return "dimmer";
+    case CONTROL_NONE:
+    default:
+      return "none";
+  }
+}
+
 uint8_t findStartupLook() {
   if (startupLookId.length() == 0) return 0;
   for (uint8_t i = 0; i < lookCount; i++) {
@@ -1051,6 +1084,31 @@ String runtimeFirmwareInfo() {
   if (outputCount == 1) {
     for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) mirrors.add(MIRROR_OUTPUT_PINS[i]);
   }
+  int altPress = effectiveEncoderPressAltPin(controls);
+  doc["controls"]["encoder"]["a"] = controls.encoderA;
+  doc["controls"]["encoder"]["b"] = controls.encoderB;
+  doc["controls"]["encoder"]["press"] = controls.encoderPress;
+  doc["controls"]["encoder"]["configuredAlternatePress"] = controls.encoderPressAlt;
+  doc["controls"]["encoder"]["effectiveAlternatePress"] = effectiveEncoderPressAltPin(controls);
+  doc["controls"]["encoder"]["rotateDirection"] = controls.rotateDirection;
+  doc["controls"]["encoder"]["brightnessStep"] = controls.brightnessStep;
+  doc["controls"]["encoder"]["aLow"] = pinIsPressed(controls.encoderA);
+  doc["controls"]["encoder"]["bLow"] = pinIsPressed(controls.encoderB);
+  doc["controls"]["encoder"]["pressPressed"] = pinIsPressed(controls.encoderPress);
+  doc["controls"]["encoder"]["alternatePressPressed"] = pinIsPressed(altPress);
+  doc["controls"]["previous"] = controls.previous;
+  doc["controls"]["next"] = controls.next;
+  doc["controls"]["blackout"] = controls.blackout;
+  doc["controls"]["brightnessAnalog"] = controls.brightness;
+  doc["controls"]["manualBrightness"] = manualBrightness;
+  doc["controls"]["lastEvent"] = controlEventLabel(lastControlEvent);
+  doc["controls"]["lastEventAtMs"] = lastControlEventAt;
+  JsonObject counts = doc["controls"]["eventCounts"].to<JsonObject>();
+  counts["next"] = controlEventCounts[CONTROL_NEXT_LOOK];
+  counts["previous"] = controlEventCounts[CONTROL_PREVIOUS_LOOK];
+  counts["blackout"] = controlEventCounts[CONTROL_BLACKOUT];
+  counts["brighter"] = controlEventCounts[CONTROL_BRIGHTER];
+  counts["dimmer"] = controlEventCounts[CONTROL_DIMMER];
   String out;
   serializeJson(doc, out);
   return out;

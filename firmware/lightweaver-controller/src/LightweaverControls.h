@@ -40,3 +40,4 @@ enum ControlEventType : uint8_t {
 void setupLightweaverControls(const ControlsConfig& controls, ControlState& state);
 ControlEventType pollLightweaverControls(const ControlsConfig& controls, ControlState& state);
 float applyRotaryBrightness(float currentBrightness, ControlEventType event, uint8_t step);
+int effectiveEncoderPressAltPin(const ControlsConfig& controls);

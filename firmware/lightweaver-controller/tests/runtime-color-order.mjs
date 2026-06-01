@@ -41,5 +41,20 @@ assert.match(
   /FastLED\.addLeds<WS2812B, DATA_PIN, RGB>\(start, count\)/,
   'firmware should keep FastLED output RGB and do live order mapping in software',
 );
+assert.match(
+  mainSource,
+  /doc\["controls"\]\["encoder"\]\["a"\]\s*=\s*controls\.encoderA/,
+  'firmware info should expose the configured encoder A pin for knob diagnostics',
+);
+assert.match(
+  mainSource,
+  /doc\["controls"\]\["encoder"\]\["effectiveAlternatePress"\]\s*=\s*effectiveEncoderPressAltPin\(controls\)/,
+  'firmware info should expose the effective alternate press fallback pin',
+);
+assert.match(
+  mainSource,
+  /doc\["controls"\]\["manualBrightness"\]\s*=\s*manualBrightness/,
+  'firmware info should expose the live manual brightness value changed by the knob',
+);
 
 console.log('runtime-color-order tests passed');

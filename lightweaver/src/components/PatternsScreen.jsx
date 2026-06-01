@@ -99,9 +99,9 @@ const RECOVERY_MIN_BRIGHTNESS = 0.65;
 const DEFAULT_LAYOUT_OVERWRITE_MIN_PIXELS = 100;
 const PATTERN_PREVIEW_MAX_POINTS = 384;
 const STRIP_COLOR_TESTS = [
-  { id: 'test-red', label: 'Red' },
-  { id: 'test-green', label: 'Green' },
-  { id: 'test-blue', label: 'Blue' },
+  { id: 'test-red', label: 'Red', shortLabel: 'R' },
+  { id: 'test-green', label: 'Green', shortLabel: 'G' },
+  { id: 'test-blue', label: 'Blue', shortLabel: 'B' },
 ];
 
 function downloadJson(filename, content) {
@@ -414,6 +414,15 @@ function titleFromId(value = '') {
     .join(' ');
 }
 
+function targetRangeLabel(target = {}) {
+  const count = Math.max(0, Math.floor(Number(target.pixelCount) || 0));
+  if (!count) return 'LED -';
+  if (target.kind === 'all') return count === 1 ? 'LED 1' : `LED 1-${count}`;
+  const start = Math.max(1, Math.floor(Number(target.start) || 0) + 1);
+  const end = Math.max(start, Math.floor(Number(target.end) || (start - 1)) + 1);
+  return start === end ? `LED ${start}` : `LED ${start}-${end}`;
+}
+
 function comboLabelFromTargets(targets = [], defaultLook = {}) {
   const sections = (targets || []).filter(target => target?.kind === 'section');
   if (sections.length) {
@@ -671,6 +680,12 @@ function TargetButton({
             onChange={event => onPixelCountChange?.(target, event.target.value)}
           />
         </label>
+        <span
+          className="lw-section-target-range"
+          data-testid={`section-target-range-${target.id}`}
+        >
+          {targetRangeLabel(target)}
+        </span>
       </span>
       <span className="lw-section-target-look">
         {pattern && <PatternThumbnail pattern={pattern} fingerprint={fingerprint}/>}
@@ -1761,24 +1776,6 @@ export function PatternsScreen() {
                 {recoveringLights ? 'Recovering...' : 'Recover lights'}
               </button>
             </div>
-            <div className="lw-action-group" aria-label="Strip color test">
-              <span className="lw-action-group-label">Strip color</span>
-              <span className="lw-action-group-note">Order <strong data-testid="strip-color-order">{stripColorOrder}</strong></span>
-              <div className="lw-inline-actions">
-                {STRIP_COLOR_TESTS.map(test => (
-                  <button
-                    key={test.id}
-                    type="button"
-                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
-                    aria-label={`Test ${test.label.toLowerCase()}`}
-                    onClick={() => playStripColorTest(test.id)}
-                  >
-                    {test.label}
-                  </button>
-                ))}
-                <button type="button" className="btn" aria-label="Next color order" onClick={cycleStripColorOrder}>Next order</button>
-              </div>
-            </div>
             <div className="lw-action-group" aria-label="Section layout">
               <span className="lw-action-group-label">Section layout</span>
               <button type="button" className="btn" onClick={applySplitPreviewToCard}>Send split preview</button>
@@ -1837,6 +1834,26 @@ export function PatternsScreen() {
                 {livePreviewAvailable ? 'Preview taps on the LED card' : 'Studio preview only'}
               </label>
               <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
+            </div>
+            <div className="lw-strip-color-test" aria-label="Strip color test">
+              <div className="lw-strip-color-copy">
+                <span>Strip color</span>
+                <strong>Order <b data-testid="strip-color-order">{stripColorOrder}</b></strong>
+              </div>
+              <div className="lw-strip-color-actions">
+                {STRIP_COLOR_TESTS.map(test => (
+                  <button
+                    key={test.id}
+                    type="button"
+                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
+                    aria-label={`Test ${test.label.toLowerCase()}`}
+                    onClick={() => playStripColorTest(test.id)}
+                  >
+                    {test.shortLabel}
+                  </button>
+                ))}
+                <button type="button" className="btn" aria-label="Next color order" onClick={cycleStripColorOrder}>Next order</button>
+              </div>
             </div>
             <div className="lw-target-panel">
               <div className="lw-sec-header">
