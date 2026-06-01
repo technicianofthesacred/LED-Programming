@@ -1847,58 +1847,48 @@ export function PatternsScreen() {
               <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
             </div>
             <div className="lw-strip-color-test" aria-label="Strip color test">
-              <div className="lw-strip-color-copy">
-                <span>Strip finder</span>
-                <strong>
-                  Type <b data-testid="strip-led-type">{stripLedType}</b> / Order <b data-testid="strip-color-order">{stripColorOrder}</b>
-                </strong>
-              </div>
-              <div className="lw-strip-color-actions">
-                <span className="lw-strip-color-action-row" aria-label="Strip type">
-                  <em>Strip type</em>
+              <span className="lw-strip-color-title">Strip finder</span>
+              <label className="lw-strip-control-field">
+                <span>Type</span>
+                <select
+                  className="lw-strip-select"
+                  aria-label="Strip type"
+                  data-testid="strip-led-type"
+                  value={stripLedType}
+                  onChange={event => applyStripType(event.target.value)}
+                >
                   {STRIP_TYPE_OPTIONS.map(type => (
-                    <button
-                      key={type}
-                      type="button"
-                      className={`btn btn-ghost ${stripLedType === type ? 'active' : ''}`}
-                      aria-label={`${type} strip`}
-                      aria-pressed={stripLedType === type}
-                      onClick={() => applyStripType(type)}
-                    >
-                      {type}
-                    </button>
+                    <option key={type} value={type}>{type}</option>
                   ))}
-                </span>
-                <span className="lw-strip-color-action-row">
-                  <em>Color test</em>
-                  {STRIP_COLOR_TESTS.map(test => (
-                    <button
-                      key={test.id}
-                      type="button"
-                      className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
-                      aria-label={`Test ${test.label.toLowerCase()}`}
-                      onClick={() => playStripColorTest(test.id)}
-                    >
-                      {test.shortLabel}
-                    </button>
-                  ))}
-                </span>
-                <span className="lw-strip-color-action-row" aria-label="RGB toggle">
-                  <em>RGB toggle</em>
+                </select>
+              </label>
+              <label className="lw-strip-control-field">
+                <span>Order</span>
+                <select
+                  className="lw-strip-select"
+                  aria-label="RGB order"
+                  data-testid="strip-color-order"
+                  value={stripColorOrder}
+                  onChange={event => applyStripColorOrder(event.target.value)}
+                >
                   {COLOR_ORDERS.map(order => (
-                    <button
-                      key={order}
-                      type="button"
-                      className={`btn btn-ghost ${stripColorOrder === order ? 'active' : ''}`}
-                      aria-label={`${order} order`}
-                      aria-pressed={stripColorOrder === order}
-                      onClick={() => applyStripColorOrder(order)}
-                    >
-                      {order}
-                    </button>
+                    <option key={order} value={order}>{order}</option>
                   ))}
-                </span>
-              </div>
+                </select>
+              </label>
+              <span className="lw-strip-color-buttons" aria-label="Color test">
+                {STRIP_COLOR_TESTS.map(test => (
+                  <button
+                    key={test.id}
+                    type="button"
+                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
+                    aria-label={`Test ${test.label.toLowerCase()}`}
+                    onClick={() => playStripColorTest(test.id)}
+                  >
+                    {test.shortLabel}
+                  </button>
+                ))}
+              </span>
             </div>
             <div className="lw-target-panel">
               <div className="lw-sec-header">

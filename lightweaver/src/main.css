@@ -5659,23 +5659,18 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-strip-color-test {
   display: grid;
-  grid-template-columns: minmax(128px, 0.34fr) minmax(0, 1fr);
+  grid-template-columns: auto minmax(132px, 0.32fr) minmax(104px, 0.24fr) auto;
   gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   padding: 7px;
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 6px;
   background: oklch(11% 0.012 250 / 0.7);
 }
 
-.lw-strip-color-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.lw-strip-color-copy span {
+.lw-strip-color-title,
+.lw-strip-control-field span {
   color: var(--text-4);
   font-family: var(--mono-font);
   font-size: 9px;
@@ -5683,64 +5678,56 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   text-transform: uppercase;
 }
 
-.lw-strip-color-copy strong {
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  font-weight: 560;
-}
-
-.lw-strip-color-copy b {
-  color: oklch(79% 0.17 165);
-  font-family: var(--mono-font);
-  font-weight: 680;
-}
-
-.lw-strip-color-actions {
-  min-width: 0;
-  display: grid;
-  gap: 7px;
-}
-
-.lw-strip-color-action-row {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.lw-strip-color-action-row em {
-  flex: 0 0 auto;
-  min-width: 72px;
-  color: var(--text-4);
-  font-family: var(--mono-font);
-  font-size: 9px;
-  font-style: normal;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.lw-strip-color-action-row .btn {
-  min-height: 32px;
-  justify-content: center;
+.lw-strip-color-title {
   white-space: nowrap;
 }
 
-.lw-strip-color-action-row .btn {
-  min-width: 38px;
+.lw-strip-control-field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lw-strip-control-field span {
+  flex: 0 0 auto;
+}
+
+.lw-strip-select {
+  min-width: 0;
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid oklch(100% 0 0 / 0.12);
+  border-radius: 5px;
+  background: oklch(15% 0.014 250);
+  color: var(--text-2);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-weight: 720;
+  line-height: 32px;
+}
+
+.lw-strip-select:focus-visible {
+  outline: 2px solid oklch(74% 0.17 205);
+  outline-offset: 2px;
+}
+
+.lw-strip-color-buttons {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.lw-strip-color-buttons .btn {
+  min-width: 36px;
+  min-height: 32px;
+  padding-inline: 8px;
+  justify-content: center;
   font-family: var(--mono-font);
   font-weight: 720;
-}
-
-.lw-strip-color-action-row[aria-label="RGB toggle"] .btn {
-  min-width: 46px;
-  padding-inline: 8px;
-}
-
-.lw-strip-color-action-row[aria-label="Strip type"] .btn {
-  min-width: 58px;
-  padding-inline: 8px;
+  white-space: nowrap;
 }
 
 .lw-target-panel {
@@ -7859,11 +7846,19 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
     grid-template-columns: 1fr;
   }
 
-  .lw-strip-color-actions {
-    gap: 8px;
+  .lw-strip-color-test {
+    align-items: stretch;
   }
 
-  .lw-strip-color-action-row {
+  .lw-strip-control-field {
+    justify-content: space-between;
+  }
+
+  .lw-strip-select {
+    max-width: 220px;
+  }
+
+  .lw-strip-color-buttons {
     justify-content: flex-start;
     flex-wrap: wrap;
   }

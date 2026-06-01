@@ -282,18 +282,16 @@ test('v3 patterns can test strip colors and toggle RGB order live', async ({ pag
 
   const stripTest = page.locator('.lw-look-picker').getByLabel('Strip color test');
   await expect(stripTest).toBeVisible();
+  const stripBox = await stripTest.boundingBox();
+  expect(stripBox?.height || 0).toBeLessThanOrEqual(76);
   await expect(stripTest.getByLabel('Strip type')).toBeVisible();
-  await expect(stripTest.getByRole('button', { name: 'WS2815 strip' })).toHaveClass(/active/);
-  await expect(stripTest.getByRole('button', { name: 'SK6812 strip' })).toBeVisible();
+  await expect(stripTest.getByLabel('Strip type')).toHaveValue('WS2815');
   await expect(stripTest.getByRole('button', { name: 'Test red' })).toHaveText('R');
   await expect(stripTest.getByRole('button', { name: 'Test green' })).toHaveText('G');
   await expect(stripTest.getByRole('button', { name: 'Test blue' })).toHaveText('B');
   await expect(stripTest.getByRole('button', { name: 'Test white' })).toHaveText('W');
-  await expect(stripTest.getByLabel('RGB toggle')).toBeVisible();
-  await expect(stripTest.getByRole('button', { name: 'RGB order' })).toHaveClass(/active/);
-  await expect(stripTest.getByRole('button', { name: 'GRB order' })).toBeVisible();
-  await expect(page.getByTestId('strip-led-type')).toHaveText('WS2815');
-  await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
+  await expect(stripTest.getByLabel('RGB order')).toBeVisible();
+  await expect(stripTest.getByLabel('RGB order')).toHaveValue('RGB');
 
   await stripTest.getByRole('button', { name: 'Test green' }).click();
   await expect.poll(() => controlRequests.some(request => (
@@ -305,12 +303,12 @@ test('v3 patterns can test strip colors and toggle RGB order live', async ({ pag
   await stripTest.getByRole('button', { name: 'Test white' }).click();
   await expect.poll(() => controlRequests.some(request => request.patternId === 'test-white')).toBe(true);
 
-  await stripTest.getByRole('button', { name: 'SK6812 strip' }).click();
-  await expect(page.getByTestId('strip-led-type')).toHaveText('SK6812');
+  await stripTest.getByLabel('Strip type').selectOption('SK6812');
+  await expect(stripTest.getByLabel('Strip type')).toHaveValue('SK6812');
 
-  await stripTest.getByRole('button', { name: 'GRB order' }).click();
+  await stripTest.getByLabel('RGB order').selectOption('GRB');
 
-  await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
+  await expect(stripTest.getByLabel('RGB order')).toHaveValue('GRB');
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
   await expect.poll(() => controlRequests.at(-1)?.patternId).toBe('test-white');
 });
