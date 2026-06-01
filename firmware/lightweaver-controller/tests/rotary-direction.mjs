@@ -152,14 +152,20 @@ ControlEventType runQuickPressSequence(int encoderPress, int encoderPressAlt, in
 int main() {
   const std::vector<uint8_t> physicalClockwise = {0b00, 0b10, 0b11, 0b01, 0b00};
   const std::vector<uint8_t> physicalCounterclockwise = {0b00, 0b01, 0b11, 0b10, 0b00};
+  const std::vector<uint8_t> physicalClockwiseDetent = {0b00, 0b10, 0b11};
+  const std::vector<uint8_t> physicalCounterclockwiseDetent = {0b00, 0b01, 0b11};
 
   assert(runSequence(physicalClockwise, "clockwise-brighter") == CONTROL_BRIGHTER);
   assert(runSequence(physicalCounterclockwise, "clockwise-brighter") == CONTROL_DIMMER);
+  assert(runSequence(physicalClockwiseDetent, "clockwise-brighter") == CONTROL_BRIGHTER);
+  assert(runSequence(physicalCounterclockwiseDetent, "clockwise-brighter") == CONTROL_DIMMER);
   assert(runSequence(physicalClockwise, "clockwise-dimmer") == CONTROL_DIMMER);
   assert(runSequence(physicalCounterclockwise, "clockwise-dimmer") == CONTROL_BRIGHTER);
   assert(runPressSequence(6, 6, 0) == CONTROL_NEXT_LOOK);
   assert(runPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
   assert(runQuickPressSequence(0, 6, 6) == CONTROL_NEXT_LOOK);
+  assert(applyRotaryBrightness(1.0f, CONTROL_DIMMER, 18) <= 0.82f);
+  assert(applyRotaryBrightness(0.5f, CONTROL_BRIGHTER, 18) >= 0.68f);
 
   return 0;
 }

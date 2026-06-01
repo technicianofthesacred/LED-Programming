@@ -1,6 +1,9 @@
 #include "LightweaverControls.h"
 
 namespace {
+constexpr int8_t ENCODER_EVENT_DELTA = 2;
+constexpr uint8_t MIN_VISIBLE_BRIGHTNESS_STEP = 48;
+
 bool validPin(int pin) {
   return pin >= 0;
 }
@@ -107,11 +110,11 @@ ControlEventType pollLightweaverControls(const ControlsConfig& controls, Control
     state.encoderLastState = nextState;
     if (delta != 0) {
       state.encoderDelta += delta;
-      if (state.encoderDelta >= 4) {
+      if (state.encoderDelta >= ENCODER_EVENT_DELTA) {
         state.encoderDelta = 0;
         return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_BRIGHTER : CONTROL_DIMMER;
       }
-      if (state.encoderDelta <= -4) {
+      if (state.encoderDelta <= -ENCODER_EVENT_DELTA) {
         state.encoderDelta = 0;
         return controls.rotateDirection == "clockwise-dimmer" ? CONTROL_DIMMER : CONTROL_BRIGHTER;
       }
@@ -122,7 +125,8 @@ ControlEventType pollLightweaverControls(const ControlsConfig& controls, Control
 }
 
 float applyRotaryBrightness(float currentBrightness, ControlEventType event, uint8_t step) {
-  float amount = float(step) / 255.0f;
+  uint8_t visibleStep = step < MIN_VISIBLE_BRIGHTNESS_STEP ? MIN_VISIBLE_BRIGHTNESS_STEP : step;
+  float amount = float(visibleStep) / 255.0f;
   if (event == CONTROL_DIMMER) return max(0.02f, currentBrightness - amount);
   if (event == CONTROL_BRIGHTER) return min(1.0f, currentBrightness + amount);
   return currentBrightness;

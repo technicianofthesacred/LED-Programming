@@ -12,7 +12,7 @@ export const DEFAULT_CARD_CONTROLS = Object.freeze({
     press: 0,
     alternatePress: 6,
     rotateDirection: 'clockwise-brighter',
-    brightnessStep: 18,
+    brightnessStep: 48,
     patternCycleIds: DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id),
   },
   previous: 7,

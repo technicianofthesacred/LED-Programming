@@ -69,7 +69,7 @@ struct ControlsConfig {
   int brightness = -1;
   int statusLed = DEFAULT_STATUS_LED_PIN;
   String rotateDirection = "clockwise-brighter";
-  uint8_t brightnessStep = 18;
+  uint8_t brightnessStep = 48;
 };
 
 struct LookZoneConfig {
