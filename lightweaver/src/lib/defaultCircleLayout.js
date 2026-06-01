@@ -2,7 +2,7 @@ export const DEFAULT_CIRCLE_LAYOUT_ID = 'default-circle-v1';
 export const DEFAULT_CIRCLE_TOTAL_PIXELS = 44;
 export const DEFAULT_CIRCLE_SECTION_COUNT = 2;
 export const DEFAULT_CIRCLE_VIEW_BOX = '0 0 640 400';
-export const DEFAULT_CIRCLE_SECTION_LIMIT = 8;
+export const DEFAULT_CIRCLE_SECTION_LIMIT = 10;
 export const DEFAULT_CIRCLE_PIXEL_LIMIT = 2048;
 
 const DEFAULT_SECTION_NAMES = [
@@ -14,6 +14,8 @@ const DEFAULT_SECTION_NAMES = [
   'Ring 6',
   'Ring 7',
   'Ring 8',
+  'Ring 9',
+  'Ring 10',
 ];
 
 const DEFAULT_SECTION_ROLES = [
@@ -25,6 +27,8 @@ const DEFAULT_SECTION_ROLES = [
   'ring-6',
   'ring-7',
   'ring-8',
+  'ring-9',
+  'ring-10',
 ];
 
 const DEFAULT_SECTION_COLORS = [
@@ -36,6 +40,8 @@ const DEFAULT_SECTION_COLORS = [
   'oklch(74% 0.16 0)',
   'oklch(80% 0.14 270)',
   'oklch(76% 0.16 180)',
+  'oklch(72% 0.13 95)',
+  'oklch(76% 0.13 330)',
 ];
 
 function clampInteger(value, min, max, fallback) {

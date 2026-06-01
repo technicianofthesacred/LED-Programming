@@ -18,6 +18,7 @@ import {
   clampHardwareSectionCount,
   countsFromDefaultCircleLayout,
   createDefaultCircleLayout,
+  DEFAULT_CIRCLE_SECTION_LIMIT,
   DEFAULT_CIRCLE_SECTION_COUNT,
   DEFAULT_CIRCLE_TOTAL_PIXELS,
   isDefaultCircleLayout,
@@ -502,7 +503,7 @@ export function ChipScreen() {
                       className="lw-search-input lw-chip-settings-number"
                       type="number"
                       min="1"
-                      max="8"
+                      max={DEFAULT_CIRCLE_SECTION_LIMIT}
                       value={hardwareSections.length || hardwareSectionCount}
                       disabled={!editableDefaultLayout}
                       onChange={event => applyDefaultHardwareLayout({ sectionCount: event.target.value })}

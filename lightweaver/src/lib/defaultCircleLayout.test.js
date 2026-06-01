@@ -22,6 +22,15 @@ test('default circle layout creates two hardware sections with all pixels assign
   assert.equal(isDefaultCircleLayout(strips), true);
 });
 
+test('default circle layout can create ten switchable hardware sections', () => {
+  const strips = createDefaultCircleLayout({ totalPixels: 100, sectionCount: 10 });
+
+  assert.equal(strips.length, 10);
+  assert.equal(strips[9].name, 'Ring 10');
+  assert.equal(strips.reduce((sum, strip) => sum + strip.pixelCount, 0), 100);
+  assert.equal(strips.every(strip => strip.pixels.length === strip.pixelCount), true);
+});
+
 test('new projects open with the two-ring customer hardware layout', () => {
   const project = createDefaultProject();
 

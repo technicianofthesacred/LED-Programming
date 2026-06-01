@@ -1,6 +1,7 @@
 import { CARD_PATTERN_BANK } from './cardPatternBank.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
+export const CARD_RUNTIME_MAX_ZONES = 10;
 
 export const DEFAULT_CARD_PATTERN_BANK = CARD_PATTERN_BANK;
 
@@ -94,7 +95,7 @@ export function patchBoardToZones(patchBoard, strips = []) {
 function normalizeZones(zones, totalPixels) {
   if (!Array.isArray(zones) || zones.length === 0) return [];
   return zones
-    .slice(0, 8)
+    .slice(0, CARD_RUNTIME_MAX_ZONES)
     .map((z, i) => ({
       id: sanitizeId(z.id || `zone-${i + 1}`),
       label: String(z.label || z.id || `Zone ${i + 1}`),

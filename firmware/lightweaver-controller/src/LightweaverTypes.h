@@ -11,7 +11,7 @@
 constexpr uint8_t LW_MAX_OUTPUTS = 4;
 constexpr uint8_t LW_MAX_LOOKS = 32;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
-constexpr uint8_t LW_MAX_ZONES = 8;
+constexpr uint8_t LW_MAX_ZONES = 10;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
 constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
 

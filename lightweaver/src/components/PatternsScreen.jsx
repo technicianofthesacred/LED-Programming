@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
-import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
+import { CARD_RUNTIME_MAX_ZONES, DEFAULT_CARD_CONTROLS, DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { getCardPatternById, getCardPatternFingerprint } from '../lib/cardPatternBank.js';
 import {
@@ -835,7 +835,7 @@ export function PatternsScreen() {
             <div className="lw-target-panel">
               <div className="lw-sec-header">
                 <span>Design target</span>
-                <span className="meta">{Math.max(0, sectionTargets.length - 1)} sections · card limit 8</span>
+                <span className="meta">{Math.max(0, sectionTargets.length - 1)} sections · card limit {CARD_RUNTIME_MAX_ZONES}</span>
               </div>
               <div className="lw-target-grid">
                 {sectionTargets.map(target => (

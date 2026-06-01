@@ -5366,42 +5366,51 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-target-grid {
-  display: flex;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 6px;
   min-width: 0;
   margin: 0;
-  padding: 2px;
-  overflow: hidden;
+  max-height: min(42vh, 318px);
+  padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: oklch(8% 0.01 250 / 0.46);
+  scrollbar-gutter: stable;
+  scrollbar-color: oklch(58% 0.06 250 / 0.55) transparent;
+  scrollbar-width: thin;
 }
 
 .lw-section-target {
-  flex: 1 1 0;
+  width: 100%;
   min-width: 0;
-  min-height: 40px;
+  min-height: 50px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(48px, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(76px, auto);
   align-items: center;
-  gap: 7px;
-  border: 0;
+  gap: 10px;
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: transparent;
+  background: oklch(13% 0.012 250);
   color: var(--text-3);
-  padding: 6px 8px;
+  padding: 8px 10px;
   text-align: left;
   cursor: pointer;
   transition: border-color 160ms ease-out, background 160ms ease-out, transform 160ms ease-out;
 }
 
 .lw-section-target:hover {
+  border-color: var(--border-2);
   background: oklch(18% 0.014 250);
 }
 
 .lw-section-target.is-active {
+  border-color: oklch(76% 0.17 165);
   background: oklch(18% 0.025 225);
-  box-shadow: inset 0 0 0 1px oklch(76% 0.17 165 / 0.72);
+  box-shadow: 0 0 0 1px oklch(76% 0.17 165 / 0.22);
 }
 
 .lw-section-target span {
@@ -5413,7 +5422,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target strong {
   overflow: hidden;
   color: var(--text);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5432,9 +5441,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-section-target b {
   min-width: 0;
   overflow: hidden;
-  color: var(--text-3);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 560;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;

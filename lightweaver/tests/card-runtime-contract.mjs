@@ -82,6 +82,20 @@ assert.equal(zoned.config.led.outputs[0].pixels, 96);
 assert.deepEqual(zoned.config.zones.map(zone => zone.id), ['outer', 'inner']);
 assert.equal(zoned.config.syncZones, false);
 
+const tenZonePackage = makeCardRuntimePackage({
+  projectName: 'Ten Zone Piece',
+  led: { pixels: 100 },
+  zones: Array.from({ length: 10 }, (_, index) => ({
+    id: `zone-${index + 1}`,
+    label: `Zone ${index + 1}`,
+    patternId: 'aurora',
+    ranges: [{ start: index * 10, count: 10 }],
+  })),
+  syncZones: false,
+});
+assert.equal(tenZonePackage.config.zones.length, 10);
+assert.deepEqual(tenZonePackage.config.zones.map(zone => zone.id).slice(-2), ['zone-9', 'zone-10']);
+
 const projectPkg = buildCardRuntimePackageFromProject({
   projectName: 'Customer V3',
   strips: [

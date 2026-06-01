@@ -66,23 +66,42 @@ test('installer screen gives a worker the full chip setup checklist', async ({ p
   await expect(page.getByRole('link', { name: 'Flash chip' })).toHaveAttribute('href', '#screen=flash');
 });
 
-test('patterns target selector and footer stay single-line controls', async ({ page }) => {
+test('patterns target selector stacks downward and footer stays single-line', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
+  await page.locator('.lw-target-grid').evaluate(el => {
+    const existing = Array.from(el.querySelectorAll('.lw-section-target'));
+    const source = existing[existing.length - 1] || existing[0];
+    if (!source) return;
+    for (let index = existing.length; index < 10; index += 1) {
+      const clone = source.cloneNode(true) as HTMLElement;
+      clone.setAttribute('data-testid', `section-target-test-${index + 1}`);
+      clone.querySelector('strong')!.textContent = `Ring ${index + 1}`;
+      clone.querySelector('em')!.textContent = '39 LEDs';
+      clone.querySelector('b')!.textContent = 'Aurora';
+      el.appendChild(clone);
+    }
+  });
+
   const targetMetrics = await page.locator('.lw-target-grid').evaluate(el => ({
     clientWidth: el.clientWidth,
     scrollWidth: el.scrollWidth,
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
     overflowX: getComputedStyle(el).overflowX,
+    overflowY: getComputedStyle(el).overflowY,
     targetTops: Array.from(el.querySelectorAll('.lw-section-target'), target =>
       Math.round(target.getBoundingClientRect().top),
     ),
   }));
   expect(targetMetrics.overflowX).toBe('hidden');
+  expect(targetMetrics.overflowY).toBe('auto');
   expect(targetMetrics.scrollWidth).toBeLessThanOrEqual(targetMetrics.clientWidth + 1);
-  expect(new Set(targetMetrics.targetTops).size).toBe(1);
+  expect(new Set(targetMetrics.targetTops).size).toBeGreaterThan(3);
+  expect(targetMetrics.scrollHeight).toBeGreaterThan(targetMetrics.clientHeight);
 
   const statusMetrics = await page.locator('.lw-statusbar').evaluate(el => ({
     height: el.getBoundingClientRect().height,
