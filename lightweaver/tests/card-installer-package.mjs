@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { makeCardRuntimePackage } from '../src/lib/cardRuntimeContract.js';
-import { pushConfigToCard } from '../src/lib/cardPushClient.js';
+import {
+  buildCardConfigHandoffUrl,
+  decodeCardConfigHandoffPayload,
+  pushConfigToCard,
+} from '../src/lib/cardPushClient.js';
 
 const pkg = makeCardRuntimePackage({
   projectName: 'Customer Piece',
@@ -29,6 +33,13 @@ assert.match(body, /"mode":"website-flash"/);
 assert.match(body, /"patternCycleIds":\["aurora","ember","scanner"\]/);
 assert.equal(pkg.config.led.outputs[0].pin, 16);
 assert.equal(pkg.config.controls.encoder.press, 0);
+
+const handoffUrl = buildCardConfigHandoffUrl('lightweaver.local', pkg);
+assert.ok(handoffUrl.startsWith('http://lightweaver.local/#lwconfig='));
+const handoffParams = new URL(handoffUrl).hash.slice(1);
+const handoffPayload = new URLSearchParams(handoffParams).get('lwconfig');
+assert.deepEqual(JSON.parse(decodeCardConfigHandoffPayload(handoffPayload)), pkg.config);
+assert.equal(new URLSearchParams(handoffParams).get('reboot'), '1');
 
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {

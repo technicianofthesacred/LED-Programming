@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
-import { canPushDirectlyToCard } from '../lib/cardConnection.js';
+import { canPushDirectlyToCard, cardHostToUrl } from '../lib/cardConnection.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -200,7 +200,8 @@ export function Transport({ playing, onPlay, bpm, setBpm, time, fps }) {
 
 export function StatusBar({ screen = 'patterns' }) {
   const { wledConnected, wledIp, strips, lastSaved } = useProject();
-  const cardStatus = useCardStatus();
+  const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
+  const cardStatus = useCardStatus({ enabled: directCardControl });
   const [cardHint, setCardHint] = useState('');
   useEffect(() => {
     if (!cardHint) return undefined;
@@ -217,17 +218,21 @@ export function StatusBar({ screen = 'patterns' }) {
     : cardRecovering ? '◌ reconnecting'
       : cardConnected ? '● connected' : '○ disconnected';
   const cardStatusClass = cardRecovering ? 'warn' : cardConnected ? 'ok' : 'err';
-  const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const cardActionLabel = cardStatus.checking && !cardConnected
-    ? 'scan'
+    ? directCardControl ? 'scan' : 'open card'
     : cardRecovering
-      ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3`
-      : cardConnected ? 'recheck' : 'reconnect';
+      ? directCardControl ? `auto ${Math.min(cardStatus.missCount || 1, 3)}/3` : 'open card'
+      : cardConnected ? 'recheck' : directCardControl ? 'reconnect' : 'open card';
   const cardTitle = directCardControl
     ? 'Click to run a deeper reconnect. Lightweaver remembers working card addresses and keeps retrying in the background.'
-    : 'Click to run a deeper reconnect. If it stays disconnected here, open the Studio from localhost or the card page because public HTTPS can be blocked from local HTTP cards.';
+    : 'Public HTTPS browsers block direct local-card reconnects. Click to open the card page on your network.';
   const handleCardReconnect = async () => {
     setCardHint('');
+    if (!directCardControl) {
+      window.open(cardHostToUrl(cardHost), '_blank', 'noopener');
+      setCardHint('opened');
+      return;
+    }
     const result = await cardStatus.connect();
     if (result.connected) {
       setCardHint('locked');
@@ -241,6 +246,7 @@ export function StatusBar({ screen = 'patterns' }) {
         type="button"
         className="lw-status-item lw-status-card"
         data-testid="card-status-reconnect"
+        aria-label="Card status"
         title={cardTitle}
         onClick={handleCardReconnect}
       >

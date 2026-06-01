@@ -29,7 +29,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
@@ -176,6 +176,7 @@ export function ChipScreen() {
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const config = runtimePackage.config;
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  const handoffUrl = useMemo(() => buildCardConfigHandoffUrl(cardHost, runtimePackage), [cardHost, runtimePackage]);
 
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
   const activeSavedLook = savedLooks.find(look => look.id === standaloneController?.activeLookId) || savedLooks[0] || null;
@@ -471,6 +472,11 @@ export function ChipScreen() {
             </label>
             <div className="lw-chip-save-buttons">
               {directPushAvailable && <button className="btn btn-primary" onClick={pushDirect}>Save to card</button>}
+              {!directPushAvailable && (
+                <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
+                  Open card installer
+                </a>
+              )}
               <button className={`btn ${directPushAvailable ? '' : 'btn-primary'}`} onClick={copyConfig}>Copy settings</button>
               <button className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-card-settings.json`, configJson)}>Download</button>
               <button className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>Open card</button>

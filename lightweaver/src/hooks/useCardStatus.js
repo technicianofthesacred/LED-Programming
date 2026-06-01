@@ -8,15 +8,16 @@ import {
 } from '../lib/cardConnection.js';
 
 export function useCardStatus({
+  enabled = true,
   intervalMs = 5000,
   reconnectIntervalMs = 2500,
   timeoutMs = 12000,
   missLimit = CARD_CONNECTION_MISS_LIMIT,
 } = {}) {
   const [state, setState] = useState({
-    checking: true,
+    checking: Boolean(enabled),
     connected: false,
-    reconnecting: true,
+    reconnecting: Boolean(enabled),
     host: readStoredCardHost(),
     status: null,
     error: null,
@@ -26,6 +27,7 @@ export function useCardStatus({
   });
 
   const refresh = useCallback(async () => {
+    if (!enabled) return { connected: false, host: readStoredCardHost(), error: new Error('direct card access disabled') };
     setState(prev => ({ ...prev, checking: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
@@ -34,9 +36,10 @@ export function useCardStatus({
     });
     setState(prev => reduceCardConnectionState(prev, result, { now: Date.now(), missLimit }));
     return result;
-  }, [missLimit, timeoutMs]);
+  }, [enabled, missLimit, timeoutMs]);
 
   const connect = useCallback(async () => {
+    if (!enabled) return { connected: false, host: readStoredCardHost(), error: new Error('direct card access disabled') };
     setState(prev => ({ ...prev, checking: true, reconnecting: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
@@ -45,9 +48,19 @@ export function useCardStatus({
     });
     setState(prev => reduceCardConnectionState(prev, result, { now: Date.now(), missLimit }));
     return result;
-  }, [missLimit, timeoutMs]);
+  }, [enabled, missLimit, timeoutMs]);
 
   useEffect(() => {
+    if (!enabled) {
+      setState(prev => ({
+        ...prev,
+        checking: false,
+        connected: false,
+        reconnecting: false,
+        error: null,
+      }));
+      return undefined;
+    }
     let active = true;
     let timer = null;
     let latestState = state;
@@ -105,7 +118,7 @@ export function useCardStatus({
       window.removeEventListener?.('online', onOnline);
       document.removeEventListener?.('visibilitychange', onVisible);
     };
-  }, [intervalMs, missLimit, reconnectIntervalMs, timeoutMs]);
+  }, [enabled, intervalMs, missLimit, reconnectIntervalMs, timeoutMs]);
 
   return { ...state, refresh, connect };
 }

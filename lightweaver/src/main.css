@@ -5096,6 +5096,11 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-chip-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);

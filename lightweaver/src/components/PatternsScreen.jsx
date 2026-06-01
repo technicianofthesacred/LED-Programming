@@ -45,7 +45,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLivePreviewToCard, pushSectionPreviewToCard } from '../lib/cardLiveControl.js';
 import { LEDPreview } from './Preview.jsx';
 
@@ -465,6 +465,7 @@ export function PatternsScreen() {
   const [cardHost, setCardHost] = useState(readStoredCardHost);
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
+  const [handoffUrl, setHandoffUrl] = useState('');
   const [livePreviewEnabled, setLivePreviewEnabled] = useState(true);
   const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
   const [draftLooks, setDraftLooks] = useState({});
@@ -704,6 +705,7 @@ export function PatternsScreen() {
 
   const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
     if (!livePreviewEnabled) return;
+    setHandoffUrl('');
     if (!livePreviewAvailable) {
       setStatusKind('err');
       setStatus('The hosted HTTPS page cannot talk directly to local HTTP hardware. Open this Studio from localhost, or copy the config to the card page.');
@@ -713,6 +715,7 @@ export function PatternsScreen() {
     const sequence = ++livePreviewSeq.current;
     const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
     livePreviewTimer.current = setTimeout(async () => {
+      setHandoffUrl('');
       setStatusKind('');
       setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)} at ${cardHostToUrl(cardHost)}...`);
       try {
@@ -838,6 +841,7 @@ export function PatternsScreen() {
       patchBoard: nextBoard,
       standaloneController: nextController,
     });
+    setHandoffUrl('');
     setStatusKind('');
     setStatus(`Applying split preview to ${cardHostToUrl(cardHost)}...`);
     try {
@@ -858,10 +862,12 @@ export function PatternsScreen() {
       setStatus('Split preview is live on the card. Section taps now target Outer and Inner separately.');
     } catch (error) {
       if (sequence !== livePreviewSeq.current) return;
-      setStatusKind('err');
-      setStatus(error?.reason === 'mixed-content'
-        ? 'The hosted HTTPS page cannot write split preview to the local card. Open this Studio from localhost, or copy the config to the card page.'
-        : `Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);
+      if (error?.reason === 'mixed-content') {
+        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to apply this split on the card.');
+      } else {
+        setStatusKind('err');
+        setStatus(`Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);
+      }
     }
   };
 
@@ -875,6 +881,7 @@ export function PatternsScreen() {
       patchBoard: nextBoard,
       standaloneController: nextController,
     });
+    setHandoffUrl('');
     setStatusKind('');
     setStatus(`Saving ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} to ${cardHostToUrl(cardHost)}...`);
     try {
@@ -889,10 +896,12 @@ export function PatternsScreen() {
       setStatusKind('ok');
       setStatus('Saved on the card. This is now the startup look and playlist config.');
     } catch (error) {
-      setStatusKind('err');
-      setStatus(error?.reason === 'mixed-content'
-        ? 'Saved in the Studio, but the hosted HTTPS page cannot write to the local card. Copy or download the chip config and paste it on the card page.'
-        : 'Saved in the Studio, but could not reach the card. Copy or download the chip config and paste it on the card page.');
+      if (error?.reason === 'mixed-content') {
+        offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
+      } else {
+        setStatusKind('err');
+        setStatus('Saved in the Studio, but could not reach the card. Copy or download the chip config and paste it on the card page.');
+      }
     }
   };
 
@@ -918,6 +927,7 @@ export function PatternsScreen() {
       return;
     }
 
+    setHandoffUrl('');
     setStatusKind('');
     setStatus(`Previewing ${savedLook.label} on ${cardHostToUrl(cardHost)}...`);
     try {
@@ -952,6 +962,7 @@ export function PatternsScreen() {
     setStandaloneController(nextController);
     setDraftLooks({});
     setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+    setHandoffUrl('');
     setStatusKind('');
     setStatus(`Loading ${savedLook.label} to ${cardHostToUrl(cardHost)}...`);
     try {
@@ -961,10 +972,12 @@ export function PatternsScreen() {
         ? `${savedLook.label} loaded. The card is rebooting so the LED layout takes effect.`
         : `${savedLook.label} loaded on the card.`);
     } catch (error) {
-      setStatusKind('err');
-      setStatus(error?.reason === 'mixed-content'
-        ? 'The hosted HTTPS page cannot load this combo to the local card. Open this Studio from localhost, or download the chip config.'
-        : `Could not load ${savedLook.label} to the card at ${cardHostToUrl(cardHost)}.`);
+      if (error?.reason === 'mixed-content') {
+        offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to load this combo on the card.');
+      } else {
+        setStatusKind('err');
+        setStatus(`Could not load ${savedLook.label} to the card at ${cardHostToUrl(cardHost)}.`);
+      }
     }
   };
 
@@ -1062,7 +1075,14 @@ export function PatternsScreen() {
     writeStoredCardHost(value);
   };
 
+  const offerCardHandoff = (runtimePackageForCard, message) => {
+    setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackageForCard));
+    setStatusKind('err');
+    setStatus(message);
+  };
+
   const copyConfig = async () => {
+    setHandoffUrl('');
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
@@ -1093,6 +1113,11 @@ export function PatternsScreen() {
         {status && (
           <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
             {status}
+            {handoffUrl && (
+              <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
+                Open card installer
+              </a>
+            )}
           </div>
         )}
 

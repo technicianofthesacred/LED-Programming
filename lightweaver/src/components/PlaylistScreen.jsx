@@ -20,7 +20,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -130,6 +130,7 @@ export function PlaylistScreen() {
   const [cardHost, setCardHost] = useState(readStoredCardHost);
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
+  const [handoffUrl, setHandoffUrl] = useState('');
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
@@ -244,6 +245,7 @@ export function PlaylistScreen() {
   };
 
   const loadPlaylistToCard = async () => {
+    setHandoffUrl('');
     setStatusKind('');
     setStatus(`Loading playlist to ${cardHostToUrl(cardHost)}...`);
     try {
@@ -254,13 +256,17 @@ export function PlaylistScreen() {
         : 'Playlist loaded. The knob now follows this order.');
     } catch (error) {
       setStatusKind('err');
-      setStatus(error?.reason === 'mixed-content'
-        ? 'The hosted HTTPS page cannot write to the local card. Open Studio from localhost, or download the chip config.'
-        : `Could not load the playlist to the card at ${cardHostToUrl(cardHost)}.`);
+      if (error?.reason === 'mixed-content') {
+        setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
+        setStatus('The browser blocked direct local-card access from this public page. Open the card installer to save this playlist on the card.');
+      } else {
+        setStatus(`Could not load the playlist to the card at ${cardHostToUrl(cardHost)}.`);
+      }
     }
   };
 
   const copyConfig = async () => {
+    setHandoffUrl('');
     try {
       await navigator.clipboard.writeText(configJson);
       setStatusKind('ok');
@@ -290,6 +296,11 @@ export function PlaylistScreen() {
         {status && (
           <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
             {status}
+            {handoffUrl && (
+              <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
+                Open card installer
+              </a>
+            )}
           </div>
         )}
 

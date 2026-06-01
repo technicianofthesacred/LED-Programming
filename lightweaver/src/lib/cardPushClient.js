@@ -24,6 +24,39 @@ export function setCardHostname(host) {
   return writeStoredCardHost(host);
 }
 
+export function encodeCardConfigHandoffPayload(runtimePackage = {}) {
+  const text = JSON.stringify(runtimePackage.config || runtimePackage);
+  if (typeof TextEncoder !== 'undefined' && typeof btoa === 'function') {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+  return Buffer.from(text, 'utf8').toString('base64url');
+}
+
+export function decodeCardConfigHandoffPayload(payload = '') {
+  const normalized = String(payload || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  if (typeof atob === 'function' && typeof TextDecoder !== 'undefined') {
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+  return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+export function buildCardConfigHandoffUrl(host, runtimePackage = {}, { reboot = true } = {}) {
+  const encoded = encodeCardConfigHandoffPayload(runtimePackage);
+  const params = new URLSearchParams({ lwconfig: encoded });
+  if (reboot) params.set('reboot', '1');
+  return `${cardHostToUrl(host)}/#${params.toString()}`;
+}
+
 export class CardPushError extends Error {
   constructor(reason, message, cause) {
     super(message);

@@ -173,6 +173,8 @@ void handleRoot() {
             ".off-btn.on{background:#c89b5c;color:#0a0a0a;border-color:#c89b5c}"
             ".set-link{background:transparent;border:0;color:#5a5247;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;font-family:inherit;padding:8px 0}"
             ".set-link:active{color:#c89b5c}"
+            ".handoff{background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:16px 18px;color:#f4ede0;font-size:14px;line-height:1.45}"
+            ".handoff.ok{border-color:#7fb069;color:#7fb069}.handoff.err{border-color:#e07856;color:#e07856}"
             ".drawer{background:#141414;border:1px solid #262626;border-radius:14px;padding:0;margin-top:12px;display:none;flex-direction:column;overflow:hidden}"
             ".drawer.open{display:flex}"
             ".drawer .field{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#9a8d75;margin:14px 0 6px;padding:0 18px}"
@@ -293,6 +295,10 @@ void handleRoot() {
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
             "const get=p=>fetch(p).then(r=>r.json());"
+            "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
+            "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
+            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
+            "installFromHash();"
             "let patterns=[],currentId='',blackoutOn=false;"
             "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
@@ -460,6 +466,8 @@ void handleAdvancedRoot() {
             ".note{font-size:13px;color:#9a8d75;margin-top:12px;line-height:1.5}"
             ".ok{color:#7fb069}"
             ".err{color:#e07856}"
+            ".handoff{background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:16px 18px;color:#f4ede0;font-size:14px;line-height:1.45;margin-bottom:14px}"
+            ".handoff.ok{border-color:#7fb069;color:#7fb069}.handoff.err{border-color:#e07856;color:#e07856}"
             ".link{display:block;text-align:center;color:#c89b5c;text-decoration:none;font-size:14px;padding:18px;margin-top:8px;border:1px solid #c89b5c;border-radius:10px}"
             ".link:active{background:rgba(200,155,92,0.1)}"
             ".foot{text-align:center;color:#5a5247;font-size:11px;margin-top:32px;font-family:ui-monospace,SF Mono,monospace}"
@@ -588,7 +596,11 @@ void handleAdvancedRoot() {
   page += F("<script>"
             "const $=id=>document.getElementById(id);"
             "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
-            "const get=p=>fetch(p).then(r=>r.json());");
+            "const get=p=>fetch(p).then(r=>r.json());"
+            "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
+            "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
+            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
+            "installFromHash();");
 
   if (needsSetup) {
     page += F("get('/api/wifi/scan').then(d=>{const sel=$('ssid');sel.innerHTML='';"

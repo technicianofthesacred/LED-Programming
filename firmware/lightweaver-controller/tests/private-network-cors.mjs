@@ -29,6 +29,16 @@ for (const route of ['/api/status', '/api/firmware-info', '/api/patterns', '/api
   );
 }
 
+assert.match(
+  web,
+  /lwconfig/,
+  'card page should accept public Studio config handoff fragments after Chrome blocks HTTPS-to-local HTTP writes',
+);
+assert.ok(
+  web.includes("fetch('/api/config'"),
+  'card page handoff should save the Studio package to the card from the card origin',
+);
+
 for (const route of ['/json/info', '/json/effects', '/json/palettes', '/json']) {
   assert.ok(
     wled.includes(`server.on("${route}", HTTP_OPTIONS, handleOptions)`),
