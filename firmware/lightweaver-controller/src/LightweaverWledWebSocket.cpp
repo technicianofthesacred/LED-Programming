@@ -23,6 +23,11 @@ namespace {
 WebSocketsServer ws(81, "*", "");
 bool started = false;
 
+// Cap concurrent WebSocket clients. Live preview is normally a single designer
+// session; this guards against a reconnect storm or a room full of tabs
+// exhausting the server's client slots and wedging the socket.
+constexpr uint8_t LW_WS_MAX_CLIENTS = 3;
+
 // Decode an uppercase or lowercase 6-char hex string into RGB.
 bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
   if (!s || strlen(s) < 6) return false;
@@ -110,6 +115,12 @@ void applyState(uint8_t* payload, size_t length) {
 void onEvent(uint8_t clientId, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
+      // Reject the connection if we're already at the client cap (the just-
+      // connected client is included in the count).
+      if (ws.connectedClients() > LW_WS_MAX_CLIENTS) {
+        ws.disconnect(clientId);
+        break;
+      }
       // Stock WLED sends a {"success":true} or info dump on connect; the
       // designer doesn't strictly require one but a small ack is friendly.
       ws.sendTXT(clientId, "{\"success\":true}");

@@ -63,6 +63,10 @@ uint8_t lookCount = 0;
 uint16_t totalPixels = 0;
 float brightnessLimit = 0.45f;
 uint32_t ledMaxMilliamps = 0;
+// Cached numeric form of ledColorOrder, refreshed once per frame so the
+// per-pixel remap is a switch instead of 5 String compares (0=RGB passthrough,
+// 1=GRB, 2=BRG, 3=BGR, 4=RBG, 5=GBR).
+uint8_t ledColorOrderCode = 1;
 float fadeScale = 1.0f;
 
 uint8_t currentLookIndex = 0;
@@ -121,6 +125,7 @@ void showLeds();
 void copyLogicalToPhysicalLeds();
 CRGB mapLogicalToPhysicalColor(const CRGB& color);
 bool isValidLedColorOrder(const String& order);
+uint8_t computeColorOrderCode(const String& order);
 void fadeTo(float target, uint16_t durationMs);
 uint8_t computeBrightnessByte();
 float readBrightnessKnob();
@@ -473,6 +478,18 @@ bool setupLedOutputs() {
         Serial.println(pin);
       }
     }
+  }
+
+  // ESP32-S3 has 4 RMT TX channels; FastLED drives each WS2812 output on one.
+  // Driving more parallel outputs than channels can silently drop outputs or
+  // fall back to a bit-bang path that disables interrupts during show() (which
+  // can cost encoder edges on long strips). Warn so a bench operator can catch
+  // an over-subscribed config rather than chasing a mystery later.
+  if (Serial && addedPinCount > 4) {
+    Serial.print("WARNING: ");
+    Serial.print(addedPinCount);
+    Serial.println(" LED outputs exceed the 4 RMT channels on ESP32-S3; verify "
+                   "every strip drives and that show() timing stays stable.");
   }
 
   FastLED.setBrightness(0);
@@ -874,19 +891,32 @@ void showLeds() {
 }
 
 void copyLogicalToPhysicalLeds() {
+  // Resolve the color order once per frame, not once per pixel.
+  ledColorOrderCode = computeColorOrderCode(ledColorOrder);
   uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
   for (uint16_t i = 0; i < limit; i++) {
     physicalLeds[i] = mapLogicalToPhysicalColor(leds[i]);
   }
 }
 
+uint8_t computeColorOrderCode(const String& order) {
+  if (order == "GRB") return 1;
+  if (order == "BRG") return 2;
+  if (order == "BGR") return 3;
+  if (order == "RBG") return 4;
+  if (order == "GBR") return 5;
+  return 0;  // RGB / unknown → passthrough
+}
+
 CRGB mapLogicalToPhysicalColor(const CRGB& color) {
-  if (ledColorOrder == "GRB") return CRGB(color.g, color.r, color.b);
-  if (ledColorOrder == "BRG") return CRGB(color.b, color.r, color.g);
-  if (ledColorOrder == "BGR") return CRGB(color.b, color.g, color.r);
-  if (ledColorOrder == "RBG") return CRGB(color.r, color.b, color.g);
-  if (ledColorOrder == "GBR") return CRGB(color.g, color.b, color.r);
-  return color;
+  switch (ledColorOrderCode) {
+    case 1: return CRGB(color.g, color.r, color.b);  // GRB
+    case 2: return CRGB(color.b, color.r, color.g);  // BRG
+    case 3: return CRGB(color.b, color.g, color.r);  // BGR
+    case 4: return CRGB(color.r, color.b, color.g);  // RBG
+    case 5: return CRGB(color.g, color.b, color.r);  // GBR
+    default: return color;                           // RGB
+  }
 }
 
 bool isValidLedColorOrder(const String& order) {

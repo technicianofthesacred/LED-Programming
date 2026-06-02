@@ -1,6 +1,7 @@
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWledJsonApi.h"
+#include "LightweaverWledRealtime.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -1052,11 +1053,30 @@ void handleNotFound() {
   server.send(404, "text/plain", "not found");
 }
 
+// (Re)announce the mDNS responder. Used at join time and again after a WiFi
+// reconnect, since the responder bound to the old association goes stale. Keeps
+// the friendly <hostname>.local plus a unique MAC-suffixed instance label so
+// discovery tools can tell two pieces apart even when hostnames collide.
+void announceMdns(const String& hostname) {
+  static bool mdnsUp = false;
+  if (mdnsUp) MDNS.end();
+  mdnsUp = MDNS.begin(hostname.c_str());
+  if (mdnsUp) {
+    MDNS.setInstanceName(apSsid().c_str());
+    MDNS.addService("http", "tcp", 80);
+    // Advertise the WLED service type so the Pi proxy / Studio discovery
+    // (which browses _wled._tcp) finds the card without extra configuration.
+    MDNS.addService("wled", "tcp", 80);
+    if (Serial) Serial.println("mDNS responder up");
+  }
+}
+
 bool tryStationJoin(RuntimeConfig& config) {
   if (config.wifi.ssid.length() == 0) return false;
   String hostname = sanitizeHostname(config.wifi.hostname);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
   WiFi.setHostname(hostname.c_str());
   WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
   if (Serial) {
@@ -1085,18 +1105,38 @@ bool tryStationJoin(RuntimeConfig& config) {
     Serial.print(hostname);
     Serial.println(".local");
   }
-  if (MDNS.begin(hostname.c_str())) {
-    // Keep the friendly <hostname>.local (default "lightweaver.local") but give
-    // each card a unique, MAC-suffixed instance label so discovery tools can
-    // tell two pieces apart in a browse list even when hostnames collide.
-    MDNS.setInstanceName(apSsid().c_str());
-    MDNS.addService("http", "tcp", 80);
-    // Also advertise the WLED service type so the Pi proxy / Studio discovery
-    // (which browses _wled._tcp) finds the card without extra configuration.
-    MDNS.addService("wled", "tcp", 80);
-    if (Serial) Serial.println("mDNS responder up");
-  }
+  announceMdns(hostname);
   return true;
+}
+
+// Called every loop() (throttled internally). When the STA link drops and
+// re-associates, the mDNS responder and the realtime UDP socket bound to the
+// old association are dead — so lightweaver.local stops resolving even though
+// the card is back online. Detect the (re)connect and refresh IP, re-announce
+// mDNS, and rebind realtime. No effect in AP mode.
+void maintainConnectivity() {
+  if (!runtimeConfigPtr) return;
+  RuntimeConfig& cfg = *runtimeConfigPtr;
+  if (cfg.activeTransport != WIFI_TRANSPORT_STATION) return;
+  static uint32_t lastCheck = 0;
+  static bool wasConnected = true;
+  uint32_t now = millis();
+  if (now - lastCheck < 3000) return;
+  lastCheck = now;
+  bool nowConnected = WiFi.status() == WL_CONNECTED;
+  if (nowConnected) {
+    String ip = WiFi.localIP().toString();
+    if (!wasConnected || (ip != "0.0.0.0" && ip != cfg.activeIp)) {
+      cfg.activeIp = ip;
+      String hostname = cfg.activeHostname.length()
+                          ? cfg.activeHostname
+                          : sanitizeHostname(cfg.wifi.hostname);
+      announceMdns(hostname);
+      wledRealtimeRebind();
+      if (Serial) { Serial.print("WiFi reacquired: "); Serial.println(ip); }
+    }
+  }
+  wasConnected = nowConnected;
 }
 
 void startApMode(RuntimeConfig& config) {
@@ -1183,5 +1223,6 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
 
 void handleLightweaverWeb() {
   if (dnsServerActive) dnsServer.processNextRequest();
+  maintainConnectivity();
   server.handleClient();
 }
