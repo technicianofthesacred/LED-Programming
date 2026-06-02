@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
-import { getCardPatternById, getCardPatternFingerprint } from '../lib/cardPatternBank.js';
+import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
@@ -28,6 +28,18 @@ import {
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLivePreviewToCard, pushSectionPreviewToCard, resetLiveOutputOnCard } from '../lib/cardLiveControl.js';
 
+// Inline icons matching the v3 mockup's shared icon set (lw-shared.jsx I.*).
+// Same SVG paths so the header and sidebar glyphs render identical to the mock.
+const I = {
+  refresh: <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-1.5 5.5"/><path d="M20 5v5h-5"/></svg>,
+  bolt: <svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6z"/></svg>,
+  copy: <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>,
+  download: <svg viewBox="0 0 24 24"><path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 19h14"/></svg>,
+  open: <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>,
+  check: <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 6"/></svg>,
+  plus: <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>,
+};
+
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -38,108 +50,35 @@ function downloadJson(filename, content) {
   URL.revokeObjectURL(url);
 }
 
-function Section({ title, meta, children }) {
-  return (
-    <section className="lw-playlist-section">
-      <div className="lw-sec-header">
-        <span>{title}</span>
-        {meta && <span className="meta">{meta}</span>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function PatternThumb({ patternId, label }) {
+// Pattern thumbnail. The mock's .pl-art is a single 44x30 gradient box; the live
+// engine has a real gradient per pattern (pattern.preview), so we feed that in.
+function PatternArt({ patternId }) {
   const pattern = getCardPatternById(patternId);
-  const fingerprint = getCardPatternFingerprint(patternId);
-  return (
-    <span
-      className={`lw-playlist-thumb ${fingerprint.cssClass}`}
-      style={{
-        '--thumb-bg': pattern?.preview,
-        '--palette-a': fingerprint.palette[0],
-        '--palette-b': fingerprint.palette[1],
-        '--palette-c': fingerprint.palette[2],
-      }}
-      aria-label={label || pattern?.label || patternId}
-    />
-  );
+  return <span className="pl-art" style={{ background: pattern?.preview || 'var(--bg-elev)' }} />;
 }
 
-function ComboThumbs({ savedLook }) {
+// Combos show multiple section thumbnails. The mock has no combo art style, so
+// the slices live in v3-playlist-extra.css (mock idiom) and reuse .pl-art sizing.
+function ComboArt({ savedLook }) {
   const lookIds = Object.values(savedLook?.sectionLooks || {})
     .map(look => normalizeCardVisualLook(look).patternId);
   const patternIds = lookIds.length
     ? lookIds
     : [normalizeCardVisualLook(savedLook?.defaultLook).patternId];
+  const shown = patternIds.slice(0, 4);
   return (
-    <span className="lw-playlist-combo-thumbs" aria-hidden="true">
-      {patternIds.slice(0, 4).map((patternId, index) => (
-        <PatternThumb key={`${patternId}-${index}`} patternId={patternId}/>
-      ))}
-      {patternIds.length > 4 && <span className="lw-playlist-thumb-more">+{patternIds.length - 4}</span>}
+    <span className="pl-art pl-art-combo" aria-hidden="true">
+      {shown.map((patternId, index) => {
+        const pattern = getCardPatternById(patternId);
+        return (
+          <span
+            key={`${patternId}-${index}`}
+            className="pl-art-slice"
+            style={{ background: pattern?.preview || 'var(--bg-elev)' }}
+          />
+        );
+      })}
     </span>
-  );
-}
-
-function PlaylistRow({
-  item,
-  index,
-  count,
-  savedLook,
-  isDragging,
-  isDropTarget,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-  onMove,
-  onFirst,
-  onDuplicate,
-  onRemove,
-  onPreview,
-}) {
-  const pattern = item.type === 'pattern' ? getCardPatternById(item.patternId) : null;
-  const sectionCount = savedLook ? Object.keys(savedLook.sectionLooks || {}).length || 1 : 1;
-  return (
-    <article
-      className={`lw-playlist-row${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
-      data-testid={`playlist-row-${item.id}`}
-      draggable
-      aria-grabbed={isDragging}
-      onDragStart={event => onDragStart(event, index)}
-      onDragOver={event => onDragOver(event, index)}
-      onDrop={event => onDrop(event, index)}
-      onDragEnd={onDragEnd}
-    >
-      <div className="lw-playlist-index">
-        <span className="lw-playlist-drag-handle" aria-label={`Drag ${item.label}`}>::</span>
-        <strong>{String(index + 1).padStart(2, '0')}</strong>
-        <span>{index === 0 ? 'startup' : 'press'}</span>
-      </div>
-      <div className="lw-playlist-art">
-        {item.type === 'combo'
-          ? <ComboThumbs savedLook={savedLook}/>
-          : <PatternThumb patternId={item.patternId} label={item.label}/>}
-      </div>
-      <div className="lw-playlist-row-copy">
-        <strong>{item.label}</strong>
-        <span>
-          {item.type === 'combo'
-            ? `${sectionCount} section mix`
-            : `${pattern?.label || item.patternId} across the piece`}
-        </span>
-      </div>
-      <div className="lw-playlist-row-actions">
-        <button type="button" className="btn btn-ghost" onClick={() => onPreview(item)}>Live</button>
-        <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onMove(index, -1)}>Up</button>
-        <button type="button" className="btn btn-ghost" disabled={index === count - 1} onClick={() => onMove(index, 1)}>Down</button>
-        <button type="button" className="btn btn-ghost" disabled={index === 0} onClick={() => onFirst(index)}>Make first</button>
-        <button type="button" className="btn btn-ghost" onClick={() => onDuplicate(index)}>Copy</button>
-        <button type="button" className="btn btn-ghost" onClick={() => onRemove(index)}>Remove</button>
-      </div>
-    </article>
   );
 }
 
@@ -157,6 +96,9 @@ export function PlaylistScreen() {
   const [statusKind, setStatusKind] = useState('');
   const [handoffUrl, setHandoffUrl] = useState('');
   const [dragState, setDragState] = useState({ fromIndex: null, overIndex: null });
+  // Tracks the row last sent live so the mock's .is-live highlight + "Live on" chip
+  // stay faithful. The real engine still pushes the preview to the card.
+  const [liveId, setLiveId] = useState(null);
 
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
@@ -175,6 +117,8 @@ export function PlaylistScreen() {
   const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
   const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
   const playlistSummary = playlistLabels(playlist, 4).join(', ');
+
+  const patternPool = DEFAULT_CARD_PATTERN_BANK.filter(pattern => !playlistContainsPattern(playlist, pattern.id));
 
   const writePlaylist = (nextItems, message = '') => {
     const normalized = normalizeCardPlaylist(nextItems, {
@@ -290,6 +234,7 @@ export function PlaylistScreen() {
 
   const previewPlaylistItem = (item) => {
     if (!item) return;
+    setLiveId(item.id);
     if (item.type === 'combo') {
       void previewSavedLookOnCard(savedLookById.get(item.lookId));
       return;
@@ -306,6 +251,7 @@ export function PlaylistScreen() {
         host: cardHost,
         timeoutMs: 3000,
       });
+      setLiveId(null);
       setStatusKind('ok');
       setStatus(response.source === 'zones'
         ? `Live output reset from the card's current ${response.zonesPreviewed || 1} zone${response.zonesPreviewed === 1 ? '' : 's'}.`
@@ -409,116 +355,160 @@ export function PlaylistScreen() {
     }
   };
 
+  const downloadConfig = () => {
+    downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson);
+  };
+
+  const openCard = () => {
+    window.open(cardHostToUrl(cardHost), '_blank');
+  };
+
+  const mixesRemaining = savedLooks.some(look => !playlistContainsCombo(playlist, look.id));
+
   return (
-    <div className="lw-playlist-screen">
-      <div className="lw-patterns-shell lw-playlist-shell">
-        <header className="lw-patterns-hero">
-          <div>
-            <h1>Playlist</h1>
-            <p>Choose exactly what lives on the card. Press the knob button to step through this list from top to bottom.</p>
-          </div>
-          <div className="lw-patterns-actions">
-            <button type="button" className="btn btn-primary" onClick={resetLiveOutput}>Reset live</button>
-            <button type="button" className="btn btn-primary" onClick={loadPlaylistToCard}>Load playlist to card</button>
-            <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
-            <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson)}>Download</button>
-            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
-          </div>
-        </header>
-
-        {status && (
-          <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
-            {status}
-            {handoffUrl && (
-              <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
-                Open card installer
-              </a>
-            )}
-          </div>
-        )}
-
-        <div className="lw-playlist-grid">
-          <Section title="Knob order" meta={`${playlist.length} looks · ${playlistSummary || 'empty'}`}>
-            <div className="lw-playlist-host-row">
-              <span>Card address</span>
-              <input
-                className="lw-search-input"
-                value={cardHost}
-                onChange={event => persistHost(event.target.value)}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                placeholder="lightweaver.local"
-              />
+    <div className="screen">
+      <div className="screen-scroll">
+        <div className="pm">
+          <header className="pm-hero">
+            <div className="pm-title">
+              <h1>Playlist</h1>
+              <p>The order the dial press cycles through on the card. The first look starts on boot.</p>
             </div>
-            <div className="lw-playlist-list">
-              {playlist.map((item, index) => (
-                <PlaylistRow
-                  key={item.id}
-                  item={item}
-                  index={index}
-                  count={playlist.length}
-                  savedLook={item.type === 'combo' ? savedLookById.get(item.lookId) : null}
-                  isDragging={dragState.fromIndex === index}
-                  isDropTarget={dragState.overIndex === index && dragState.fromIndex !== index}
-                  onDragStart={startPlaylistDrag}
-                  onDragOver={hoverPlaylistDrop}
-                  onDrop={dropPlaylistItem}
-                  onDragEnd={endPlaylistDrag}
-                  onMove={moveItem}
-                  onFirst={makeFirst}
-                  onDuplicate={duplicateItem}
-                  onRemove={removeItem}
-                  onPreview={previewPlaylistItem}
-                />
-              ))}
-            </div>
-          </Section>
-
-          <aside className="lw-playlist-sources">
-            <Section title="Add patterns" meta={`${DEFAULT_CARD_PATTERN_BANK.length} chip-ready`}>
-              <div className="lw-playlist-pattern-pool">
-                {DEFAULT_CARD_PATTERN_BANK.map(pattern => (
-                  <button
-                    key={pattern.id}
-                    type="button"
-                    data-pattern-id={pattern.id}
-                    className={playlistContainsPattern(playlist, pattern.id) ? 'is-added' : ''}
-                    onClick={() => addPattern(pattern.id)}
-                  >
-                    <PatternThumb patternId={pattern.id}/>
-                    <span>
-                      <strong>{pattern.label}</strong>
-                      <em>{playlistContainsPattern(playlist, pattern.id) ? 'In playlist' : 'Add to playlist'}</em>
-                    </span>
-                  </button>
-                ))}
+            <div className="pm-actions">
+              <button type="button" className="btn" onClick={resetLiveOutput}>{I.refresh}Reset live</button>
+              <button type="button" className="btn primary" onClick={loadPlaylistToCard}>{I.bolt}Load playlist to card</button>
+              <div className="pm-menu">
+                <button type="button" className="btn" onClick={copyConfig}>{I.copy}Copy chip config</button>
               </div>
-            </Section>
+              <button type="button" className="btn" onClick={downloadConfig}>{I.download}Download</button>
+              <button type="button" className="btn" onClick={openCard}>{I.open}Open card</button>
+            </div>
+          </header>
 
-            <Section title="Add mixes" meta={`${savedLooks.length} saved`}>
-              {savedLooks.length ? (
-                <div className="lw-playlist-combo-pool">
-                  {savedLooks.map(savedLook => (
+          {status && (
+            <div className={`pl-status${statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : ''}`}>
+              <span>{status}</span>
+              {handoffUrl && (
+                <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
+                  {I.open}Open card installer
+                </a>
+              )}
+            </div>
+          )}
+
+          <div className="pm-grid">
+            <section className="pm-main">
+              <div className="pl-hostrow">
+                <span className="sf-l">Card address</span>
+                <input
+                  className="pm-input"
+                  value={cardHost}
+                  onChange={event => persistHost(event.target.value)}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  placeholder="lightweaver.local"
+                  style={{ maxWidth: 260 }}
+                />
+                <span className="pl-count">{playlist.length} looks · {playlistSummary || 'empty'}</span>
+              </div>
+
+              <div className="pl-list">
+                {playlist.map((item, index) => {
+                  const isLive = liveId === item.id;
+                  const isDragging = dragState.fromIndex === index;
+                  const isDropTarget = dragState.overIndex === index && dragState.fromIndex !== index;
+                  const savedLook = item.type === 'combo' ? savedLookById.get(item.lookId) : null;
+                  const pattern = item.type === 'pattern' ? getCardPatternById(item.patternId) : null;
+                  const sectionCount = savedLook ? Object.keys(savedLook.sectionLooks || {}).length || 1 : 1;
+                  return (
+                    <article
+                      key={item.id}
+                      className={`pl-row${isLive ? ' is-live' : ''}${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`}
+                      data-testid={`playlist-row-${item.id}`}
+                      draggable
+                      aria-grabbed={isDragging}
+                      onDragStart={event => startPlaylistDrag(event, index)}
+                      onDragOver={event => hoverPlaylistDrop(event, index)}
+                      onDrop={event => dropPlaylistItem(event, index)}
+                      onDragEnd={endPlaylistDrag}
+                    >
+                      <div className="pl-index">
+                        <span className="pl-grip" aria-label={`Drag ${item.label}`}>::</span>
+                        <strong>{String(index + 1).padStart(2, '0')}</strong>
+                        <span>{index === 0 ? 'startup' : 'press'}</span>
+                      </div>
+                      {item.type === 'combo'
+                        ? <ComboArt savedLook={savedLook} />
+                        : <PatternArt patternId={item.patternId} />}
+                      <div className="pl-copy">
+                        <strong>{item.label}{item.type === 'combo' && <span className="mixtag">mix</span>}</strong>
+                        <span>
+                          {item.type === 'combo'
+                            ? `${sectionCount} section mix`
+                            : `${pattern?.label || item.patternId} across the piece`}
+                        </span>
+                      </div>
+                      <div className="pl-actions">
+                        <button type="button" className={`plbtn${isLive ? ' on' : ''}`} onClick={() => previewPlaylistItem(item)}>Live</button>
+                        <button type="button" className="plbtn" disabled={index === 0} onClick={() => moveItem(index, -1)}>Up</button>
+                        <button type="button" className="plbtn" disabled={index === playlist.length - 1} onClick={() => moveItem(index, 1)}>Down</button>
+                        <button type="button" className="plbtn" disabled={index === 0} onClick={() => makeFirst(index)}>Make first</button>
+                        <button type="button" className="plbtn" onClick={() => duplicateItem(index)}>Copy</button>
+                        <button type="button" className="plbtn danger" onClick={() => removeItem(index)}>Remove</button>
+                      </div>
+                    </article>
+                  );
+                })}
+                {!playlist.length && <p className="pl-empty">The playlist is empty. Add patterns or mixes from the right.</p>}
+              </div>
+            </section>
+
+            <aside className="pm-aside">
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Layer mixes</span><span className="m">{savedLooks.length}</span></div>
+                {savedLooks.map(savedLook => {
+                  const added = playlistContainsCombo(playlist, savedLook.id);
+                  return (
                     <button
                       key={savedLook.id}
                       type="button"
-                      className={playlistContainsCombo(playlist, savedLook.id) ? 'is-added' : ''}
+                      className="pl-source"
                       onClick={() => addCombo(savedLook)}
+                      disabled={added}
                     >
-                      <ComboThumbs savedLook={savedLook}/>
-                      <span>
-                        <strong>{savedLook.label}</strong>
-                        <em>{playlistContainsCombo(playlist, savedLook.id) ? 'In playlist' : 'Add mix'}</em>
-                      </span>
+                      <ComboArt savedLook={savedLook} />
+                      <span className="pl-src-nm">{savedLook.label}<span className="mixtag">mix</span></span>
+                      <span className="pl-src-add">{added ? I.check : I.plus}</span>
+                    </button>
+                  );
+                })}
+                {!savedLooks.length && <p className="pl-empty">Save an Outer and Inner mix on Patterns, then add it here.</p>}
+                {savedLooks.length > 0 && !mixesRemaining && <p className="pl-empty">All mixes added. Save more on Patterns.</p>}
+              </div>
+
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Pattern pool</span><span className="m">{patternPool.length} available</span></div>
+                <div className="pl-pool">
+                  {patternPool.map(pattern => (
+                    <button
+                      key={pattern.id}
+                      type="button"
+                      data-pattern-id={pattern.id}
+                      className="pl-chip"
+                      onClick={() => addPattern(pattern.id)}
+                      title={`Add ${pattern.label}`}
+                    >
+                      <span className="pl-chip-art" style={{ background: pattern.preview || 'var(--bg-elev)' }} />
+                      <span className="pl-chip-nm">{pattern.label}</span>
+                      <span className="pl-chip-add">{I.plus}</span>
                     </button>
                   ))}
+                  {!patternPool.length && <p className="pl-empty">Every pattern is in the playlist.</p>}
                 </div>
-              ) : (
-                <p className="lw-playlist-empty">Save an Outer and Inner mix on Patterns, then add it here.</p>
-              )}
-            </Section>
-          </aside>
+              </div>
+            </aside>
+          </div>
         </div>
       </div>
     </div>

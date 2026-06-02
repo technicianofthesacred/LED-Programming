@@ -93,19 +93,19 @@ export default function App() {
 
   return (
     <ProjectProvider>
-      <div className="lw-app">
+      {/* v3 mockup shell: single continuous grid (top / rail+screen+side / status).
+         Each screen renders its own .screen element into the tool+body+side area. */}
+      <div className="app lw-v3">
         <TopBar/>
-        <div className="lw-main">
-          <LeftRail screen={screen} onScreen={navigate}/>
-          <Suspense fallback={<LoadingPane/>}>
-            {screen === 'patterns' && <PatternsScreen/>}
-            {screen === 'playlist' && <PlaylistScreen/>}
-            {screen === 'layout' && <LayoutScreen/>}
-            {screen === 'settings' && <ChipScreen/>}
-            {screen === 'flash' && <FlashScreen/>}
-            {screen === 'installer' && <InstallerScreen/>}
-          </Suspense>
-        </div>
+        <LeftRail screen={screen} onScreen={navigate}/>
+        <Suspense fallback={<LoadingPane/>}>
+          {screen === 'patterns' && <PatternsScreen/>}
+          {screen === 'playlist' && <PlaylistScreen/>}
+          {screen === 'layout' && <LayoutScreen/>}
+          {screen === 'settings' && <ChipScreen/>}
+          {screen === 'flash' && <FlashScreen/>}
+          {screen === 'installer' && <InstallerScreen/>}
+        </Suspense>
         <StatusBar screen={screen}/>
         <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
         <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>

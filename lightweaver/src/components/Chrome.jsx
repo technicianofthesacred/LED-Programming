@@ -77,12 +77,12 @@ export function TopBar() {
   };
 
   return (
-    <div className="lw-topbar">
-      <div className="lw-brand">
-        <span className="lw-brand-dot"/>
-        <span>Lightweaver v3</span>
+    <header className="topbar">
+      <div className="brand">
+        <span className="glyph"/>
+        <span className="name">Light Weaver</span>
       </div>
-      <div className="lw-projbreadcrumbs">
+      <nav className="crumb">
         <span>Projects</span><span className="sep">/</span>
         {editingName ? (
           <input
@@ -92,50 +92,58 @@ export function TopBar() {
             onBlur={commitName}
             onKeyDown={e => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }}
             style={{ background: 'none', border: 'none', borderBottom: '1px solid var(--accent)',
-                     color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 500, outline: 'none', width: 180 }}
+                     color: 'var(--text-hi)', fontSize: '13px', fontWeight: 500, outline: 'none', width: 180 }}
           />
         ) : (
-          <strong onDoubleClick={() => setEditingName(true)} title="Double-click to rename"
-                  style={{ cursor: 'text' }}>{projectName || 'Untitled'}</strong>
+          <span className="proj" onDoubleClick={() => setEditingName(true)} title="Double-click to rename"
+                  style={{ cursor: 'text' }}>{projectName || 'Untitled'}</span>
         )}
         {saveState !== 'ready' && (
-          <span className={`status-chip is-save-feedback ${saveState.includes('failed') ? 'is-save-error' : ''}`}>
+          <span className={`savechip ${saveState.includes('failed') ? 'is-save-error' : ''}`}>
             <span className="dot"/>{saveState}
           </span>
         )}
-      </div>
-      <div className="lw-topbar-actions">
-        <button className="btn-ghost btn" onClick={handleSave}>Save project</button>
-        <button className="btn-ghost btn" onClick={handleOpen}>Load project</button>
-        <button className="btn-ghost btn" onClick={handleDownload}>Download file</button>
-        <button className="btn-ghost btn" onClick={handleNewProject}>New project</button>
+      </nav>
+      <div className="top-right">
+        <button className="link-btn" onClick={handleNewProject} title="Start a new empty project">New project</button>
+        <button className="link-btn" onClick={handleOpen} title="Open a project file from your computer">Load project</button>
+        <span className="top-div"/>
+        <button className="link-btn" onClick={handleDownload} title="Download a keepable project file you can reload anytime">Download file</button>
+        <button className="btn primary" onClick={handleSave} title="Save the project in this browser">Save project</button>
         <input ref={fileInputRef} type="file" accept=".lw.json,.json"
                style={{ display: 'none' }} onChange={handleFileChange}/>
       </div>
-    </div>
+    </header>
   );
 }
 
 export function LeftRail({ screen, onScreen }) {
-  const items = [
+  // Main rail items (Settings is pinned to the foot, matching the v3 mockup).
+  // Show/timeline is intentionally not in the rail yet (framework kept, not live).
+  const main = [
     { id: 'patterns', label: 'Patterns', icon: Icon.pattern },
     { id: 'playlist', label: 'Playlist', icon: Icon.playlist },
     { id: 'layout',   label: 'Layout',   icon: Icon.layout },
-    { id: 'settings', label: 'Settings', icon: Icon.chip },
     { id: 'flash',    label: 'Flash',    icon: Icon.flash },
     { id: 'installer', label: 'Installer', icon: Icon.install },
   ];
+  const foot = [
+    { id: 'settings', label: 'Settings', icon: Icon.chip },
+  ];
+  const item = (it) => (
+    <button key={it.id}
+            className={`rail-item ${screen === it.id ? 'active' : ''}`}
+            onClick={() => onScreen(it.id)}>
+      <span className="ico">{it.icon}</span>
+      <span className="lbl">{it.label}</span>
+    </button>
+  );
   return (
-    <div className="lw-rail">
-      {items.map(it => (
-        <button key={it.id}
-                className={`lw-rail-btn ${screen === it.id ? 'active' : ''}`}
-                onClick={() => onScreen(it.id)}>
-          {it.icon}
-          <span>{it.label}</span>
-        </button>
-      ))}
-    </div>
+    <aside className="rail">
+      {main.map(item)}
+      <div className="spring"/>
+      {foot.map(item)}
+    </aside>
   );
 }
 
@@ -282,34 +290,50 @@ export function StatusBar({ screen = 'patterns' }) {
     setCardHint(directCardControl ? 'still scanning' : 'use local');
   };
   return (
-    <div className="lw-statusbar">
-      <button
-        type="button"
-        className="lw-status-item lw-status-card"
-        data-testid="card-status-reconnect"
-        aria-label="Card status"
-        title={cardTitle}
-        onClick={handleCardReconnect}
-      >
-        <span className="k">Card</span>&nbsp;
-        <span className={cardStatusClass}>
-          {cardLabel}
-        </span>
-        {cardHost && <>&nbsp;<span className="v">{cardHost}</span></>}
-        <span className="lw-status-action">{cardHint || cardActionLabel}</span>
-      </button>
-      <span className="sep">·</span>
-      <span className="lw-status-item lw-status-strip"><span className="k">strip</span>&nbsp;<span className="v">WS2812B · 60/m</span></span>
-      <span className="sep">·</span>
-      <span className="lw-status-item lw-status-total"><span className="k">total</span>&nbsp;<span className="v">{totalLEDs > 0 ? totalLEDs.toLocaleString() : '—'} LEDs · {strips.length} strips</span></span>
-      <div className="lw-status-spacer"/>
-      {lastSaved && (
-        <span className="lw-status-item lw-status-save">
-          autosaved {savedAgo < 5 ? 'just now' : `${savedAgo}s ago`}
-        </span>
-      )}
-      <span className="sep">·</span>
-      <span className="lw-status-item lw-status-shortcuts v">1 Patterns · 2 Playlist · 3 Layout · 4 Settings · 5 Flash · 6 Installer · ? shortcuts</span>
-    </div>
+    <footer className="status-bar">
+      <div className="sb-card">
+        <button
+          type="button"
+          className="lw-status-card-btn"
+          data-testid="card-status-reconnect"
+          aria-label="Card status"
+          title={cardTitle}
+          onClick={handleCardReconnect}
+          style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', padding: 0 }}
+        >
+          <span className={'sb-dot ' + (cardConnected ? 'on' : 'off')}/>
+          <span className="sb-label">Card</span>
+          <span className={cardStatusClass} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{cardLabel}</span>
+        </button>
+        {cardHost && <span className="sb-host" style={{ display: 'inline-flex', alignItems: 'center' }}>{cardHost}</span>}
+        <button
+          type="button"
+          className={'sb-connect' + (cardConnected ? ' is-on' : '')}
+          onClick={handleCardReconnect}
+          title={cardTitle}
+        >{cardHint || cardActionLabel}</button>
+        {cardConnected && <span className="sb-stream"><span className="pulse"/>Art-Net live</span>}
+      </div>
+
+      <div className="sb-div"/>
+
+      <div className="sb-facts">
+        <span className="sb-fact"><span>strip</span><span className="fv">WS2812B · 60/m</span></span>
+        <span className="sb-fact"><span>total</span><span className="fv">{totalLEDs > 0 ? totalLEDs.toLocaleString() : '—'} LEDs · {strips.length} strips</span></span>
+        {lastSaved && <span className="sb-fact"><span>saved</span><span className="fv">{savedAgo < 5 ? 'just now' : `${savedAgo}s ago`}</span></span>}
+      </div>
+
+      <div className="sb-spring"/>
+
+      <div className="sb-right">
+        <span className="sb-fact"><span>1</span><span className="fv">Patterns</span></span>
+        <span className="sb-fact"><span>2</span><span className="fv">Playlist</span></span>
+        <span className="sb-fact"><span>3</span><span className="fv">Layout</span></span>
+        <span className="sb-fact"><span>4</span><span className="fv">Settings</span></span>
+        <span className="sb-fact"><span>5</span><span className="fv">Flash</span></span>
+        <span className="sb-fact"><span>6</span><span className="fv">Installer</span></span>
+        <span className="sb-fact"><span className="kbd">?</span><span className="fv">shortcuts</span></span>
+      </div>
+    </footer>
   );
 }

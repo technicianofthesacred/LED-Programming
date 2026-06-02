@@ -1,0 +1,47 @@
+/* ============================================================
+   PLAYLIST screen. Live-only bits, written in the v3 mock idiom.
+   These cover features the live engine has that the static mock did
+   not draw: the status message bar, combo multi-section thumbnails,
+   and the drag-and-drop reorder feedback. Everything else inherits
+   verbatim from v3-mock-screens.css / v3-mock-styles.css.
+   ============================================================ */
+
+/* Status / handoff bar. Mirrors the mock's bar surfaces (.pl-hostrow idiom). */
+.pl-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  color: var(--text-mid);
+}
+.pl-status > span { flex: 1; min-width: 0; line-height: 1.45; }
+.pl-status.is-ok { border-color: var(--accent-line); color: var(--text-hi); }
+.pl-status.is-err { border-color: var(--danger); color: var(--text-hi); }
+.pl-status .btn { margin-left: auto; flex-shrink: 0; }
+
+/* Combo art. Slices reuse the mock .pl-art / .pl-src-art footprint so the
+   row grid stays identical; a combo just shows up to four pattern slivers. */
+.pl-art-combo {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+  gap: 1px;
+  background: var(--bg-elev);
+}
+.pl-art-combo .pl-art-slice {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+/* Drag-and-drop reorder feedback in the mock idiom (matches .pl-row.is-live). */
+.pl-row { cursor: default; }
+.pl-row.is-dragging { opacity: 0.45; }
+.pl-row.is-drop-target { border-color: var(--accent-line); box-shadow: 0 -2px 0 0 var(--accent-line); }

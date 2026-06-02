@@ -711,6 +711,28 @@ function fmtSize(bytes) {
 const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
 const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 
+// Inline icons copied verbatim from the v3 mockup (window.LW.I). The mockup CSS
+// constrains svgs inside .btn-lg (16px), .fw-file (14px) and .fl-warn (16px),
+// so the large primary button bolt cannot blow up.
+const IconInfo = () => (
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>
+);
+const IconBolt = () => (
+  <svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6z" /></svg>
+);
+const IconDoc = () => (
+  <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" /></svg>
+);
+const IconCheck = () => (
+  <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 6" /></svg>
+);
+
+const BOOT_STEPS = [
+  { n: 1, label: 'Hold BOOT', sub: 'GPIO0 pin', kbd: 'BOOT ↓' },
+  { n: 2, label: 'Press RESET', sub: 'EN pin, then release', kbd: 'RESET ⟳' },
+  { n: 3, label: 'Release BOOT', sub: 'then click Connect', kbd: 'BOOT ↑' },
+];
+
 export function FlashScreen() {
   const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
@@ -846,105 +868,109 @@ export function FlashScreen() {
   const canConnect = hasWebSerial && !connecting && !flashing;
   const canFlash   = connected && !!selectedFile && !flashing;
 
+  const statusClass = statusKind === 'connected' ? ' ok' : statusKind === 'error' ? ' err' : '';
+
   return (
-    <div className="v3fl">
+    <div className="screen">
+      <div className="screen-scroll">
+        <div className="fl">
 
-      <div className={`v3fl-warn ${hasWebSerial ? 'ok' : 'warn'}`}>
-        {hasWebSerial
-          ? 'In-browser flashing is ready. Web Serial is available in this browser.'
-          : 'Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.'}
-      </div>
-
-      <div className="lw-sec-header"><span>Bootloader mode</span><span className="meta">do this before connecting</span></div>
-      <div className="v3fl-boot-steps">
-        {[
-          { step: 1, label: 'Hold BOOT',    sub: 'GPIO0 pin',              kbd: 'BOOT' },
-          { step: 2, label: 'Press RESET',  sub: 'EN pin, then release',   kbd: 'EN' },
-          { step: 3, label: 'Release BOOT', sub: 'then click Connect',     kbd: 'CONNECT' },
-        ].map(({ step, label, sub, kbd }) => (
-          <div key={step} className="v3fl-boot-step">
-            <div className="v3fl-sn">STEP {step}</div>
-            <div className="v3fl-sl">{label}</div>
-            <div className="v3fl-ss">{sub}</div>
-            <span className="v3fl-kbd">{kbd}</span>
+          <div className={'fl-warn ' + (hasWebSerial ? 'ok' : 'warn')}>
+            <IconInfo />
+            <div>
+              {hasWebSerial
+                ? 'The card ships pre-flashed with Lightweaver firmware. Use this only for blank ESP32-S3 boards or a firmware replacement.'
+                : 'Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.'}
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div className="lw-sec-header"><span>Lightweaver firmware</span></div>
-      <div className="v3fl-fw-card">
-        <p className="v3fl-fw-copy">
-          Use the bundled Lightweaver factory firmware for sellable cards and blank ESP32-S3 boards. Only browse for a file if Adrian gave you a specific replacement binary.
-        </p>
-        <div className="v3fl-fw-actions">
-          <button className="btn btn-primary" onClick={handleSelectBundledFirmware} disabled={loadingBundledFirmware}>
-            {loadingBundledFirmware ? 'Loading…' : 'Use Lightweaver firmware'}
-          </button>
-          <span className="v3fl-or">or</span>
-          <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse .bin</button>
-          <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange}/>
+          <div>
+            <div className="sec-h"><span className="t">Bootloader mode</span><span className="m">do this before connecting</span><span className="line" /></div>
+            <div className="boot-steps">
+              {BOOT_STEPS.map((s) => (
+                <div key={s.n} className="boot-step">
+                  <div className="sn">STEP {s.n}</div>
+                  <div className="sl">{s.label}</div>
+                  <div className="ss">{s.sub}</div>
+                  <div className="kbd">{s.kbd}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="sec-h"><span className="t">Lightweaver firmware</span><span className="line" /></div>
+            <div className="card fw-card">
+              <p>Use the bundled Lightweaver factory firmware for sellable cards and blank ESP32-S3 boards. Only browse for a file if you were given a specific replacement binary.</p>
+              <div className="fw-actions">
+                <button className="btn-lg" onClick={handleSelectBundledFirmware} disabled={loadingBundledFirmware}>
+                  <IconBolt />{loadingBundledFirmware ? 'Loading…' : 'Use Lightweaver firmware'}
+                </button>
+                <span className="fw-or">or</span>
+                <button className="btn-lg ghost" onClick={() => fileInputRef.current?.click()}>
+                  <IconDoc />Browse .bin
+                </button>
+                <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange} />
+              </div>
+              {selectedFile && (
+                <div className="fw-file"><IconCheck />{selectedFile.name} ({fmtSize(selectedFile.size)})</div>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="sec-h"><span className="t">Flash options</span><span className="line" /></div>
+            <div className="card opt-grid">
+              <span className="k">Address</span>
+              <input
+                className="num-input"
+                style={{ width: 110, textAlign: 'left' }}
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+              <span className="k">Erase all</span>
+              <label className="ex-check" style={{ margin: 0 }} onClick={() => setEraseAll((x) => !x)}>
+                <span className={'ex-toggle' + (eraseAll ? ' on' : '')} />
+                <span className="hint">
+                  Wipes the chip first — takes ~15 s. Factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS}; app-only replacements usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with this off.
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div className="fl-run">
+            <button
+              className={'btn-lg' + (connected ? ' ghost' : '')}
+              onClick={handleConnect}
+              disabled={!canConnect}
+            >
+              {connecting ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? 'Disconnect' : 'Connect'}
+            </button>
+            <button
+              className="btn-lg"
+              onClick={handleFlash}
+              disabled={!canFlash}
+              title={!connected ? 'Connect device first' : !selectedFile ? 'Select firmware first' : 'Flash firmware'}
+            >
+              Flash firmware
+            </button>
+            {status && <span className={'stat' + statusClass} style={{ color: statusColor }}>{status}</span>}
+          </div>
+
+          <div className="fl-bar"><div className="fill" style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+
+          <div>
+            <div className="sec-h"><span className="t">Log</span><span className="m">{Math.round(progress * 100)}%</span><span className="line" /></div>
+            <textarea
+              ref={logRef}
+              className="fl-log"
+              readOnly
+              value={log}
+              placeholder="Connect the card to begin…"
+            />
+          </div>
         </div>
-
-        {selectedFile && (
-          <div className="v3fl-fw-file">
-            {selectedFile.name} ({fmtSize(selectedFile.size)})
-          </div>
-        )}
       </div>
-
-      <div className="lw-sec-header"><span>Flash options</span></div>
-      <div className="v3fl-opt-grid">
-        <span className="v3fl-k">Address</span>
-        <input
-          type="text" value={address}
-          onChange={e => setAddress(e.target.value)}
-          className="v3fl-input"
-        />
-        <span></span>
-        <span className="v3fl-hint">
-          Bundled Lightweaver factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS} and can erase the chip first. App-only replacement binaries usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with Erase all off.
-        </span>
-        <span className="v3fl-k">Erase all</span>
-        <label className="v3fl-check">
-          <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>
-          <span className="v3fl-hint">takes ~15 s</span>
-        </label>
-      </div>
-
-      <div className="v3fl-run">
-        <button
-          className={`btn ${connected ? '' : 'btn-primary'}`}
-          onClick={handleConnect}
-          disabled={!canConnect}
-        >
-          {connecting ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? 'Disconnect' : 'Connect'}
-        </button>
-        <button
-          className="btn btn-primary"
-          onClick={handleFlash}
-          disabled={!canFlash}
-          title={!connected ? 'Connect device first' : !selectedFile ? 'Select firmware first' : 'Flash firmware'}
-        >
-          Flash firmware
-        </button>
-        {status && (
-          <span className={`v3fl-stat ${statusKind === 'connected' ? 'ok' : statusKind === 'error' ? 'err' : ''}`} style={{ color: statusColor }}>
-            {status}
-          </span>
-        )}
-      </div>
-
-      <div className="v3fl-bar">
-        <div className="v3fl-fill" style={{ width: `${Math.round(progress * 100)}%` }}/>
-      </div>
-
-      <div className="lw-sec-header"><span>Log</span><span className="meta">{Math.round(progress * 100)}%</span></div>
-      <textarea
-        ref={logRef}
-        readOnly
-        value={log}
-        className="v3fl-log"
-      />
     </div>
   );
 }

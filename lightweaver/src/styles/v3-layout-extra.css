@@ -1,0 +1,185 @@
+/* ============================================================
+   Light Weaver v3 — Layout screen live-only controls
+   Minimal scoped additions in the mockup's idiom (tokens only).
+   These exist solely for live controls the static mockup has no
+   slot for: the Light disclosure popover and the per-strip
+   expander body. Everything else uses the mockup's own classes.
+   ============================================================ */
+
+/* Keep the toolbar contained to its grid column — never force page overflow.
+   The mockup toolbar is a single non-wrapping flex row; on narrow widths it
+   scrolls horizontally inside its own area rather than widening the layout. */
+.la .toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.la .toolbar::-webkit-scrollbar { height: 0; }
+.la .toolbar > * { flex-shrink: 0; }
+
+/* Light toolbar button + popover (tucks Directed-glow + glow-mode) */
+.la-light-wrap { position: relative; display: inline-flex; }
+.la-light-pop {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 41;
+  min-width: 184px; padding: 6px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: var(--r-md); box-shadow: 0 12px 30px -8px rgba(0,0,0,.55);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.la-light-pop-backdrop { position: fixed; inset: 0; z-index: 40; }
+.la-light-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  height: 32px; padding: 0 10px; border-radius: var(--r-sm);
+  font-size: 12.5px; font-weight: 500; color: var(--text-mid);
+  text-align: left; white-space: nowrap; transition: background .12s, color .12s;
+}
+.la-light-item:hover { background: var(--bg-elev-2); color: var(--text-hi); }
+.la-light-item.on { color: var(--accent); }
+.la-light-item .st {
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-faint);
+}
+.la-light-item.on .st { color: var(--accent); }
+.la-light-sep { height: 1px; background: var(--border-hair); margin: 4px 2px; }
+
+/* Per-strip expander body — revealed when a .la-strip-row is clicked.
+   Lives directly under the row, indented to the row's content column. */
+.la-strip-detail {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 2px 10px 8px 30px; padding: 10px 12px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+}
+.la-strip-detail .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.la-strip-detail .row > .k { color: var(--text-mid); width: 52px; flex-shrink: 0; }
+.la-strip-detail .move-grid { display: grid; grid-template-columns: 52px 1fr 1fr; align-items: center; gap: 8px; }
+.la-strip-detail .move-grid label { display: flex; align-items: center; gap: 5px; color: var(--text-mid); font-size: 12px; }
+.la-strip-detail .hint { color: var(--text-faint); font-size: 11px; padding-left: 60px; line-height: 1.45; }
+.la-strip-detail .presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-left: 60px; }
+.la-strip-detail input[type=number] {
+  width: 100%; min-width: 0; height: 28px; text-align: right;
+  background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 12px; padding: 0 8px;
+}
+.la-strip-detail input[type=number]:focus { outline: none; border-color: var(--accent); }
+.la-strip-detail input[type=range].lw { flex: 1; min-width: 0; }
+.la-strip-detail .actions { display: flex; gap: 6px; }
+
+/* strip-row expandable affordance */
+.la-strip-row { cursor: pointer; }
+.la-strip-row.sel { background: var(--bg-sel); }
+.la-strip-row .la-strip-eye,
+.la-strip-row .la-strip-dup {
+  width: 20px; height: 20px; display: grid; place-items: center;
+  color: var(--text-faint); border-radius: 4px; opacity: 0;
+  transition: opacity .12s, color .12s; flex-shrink: 0;
+}
+.la-strip-row:hover .la-strip-eye,
+.la-strip-row:hover .la-strip-dup,
+.la-strip-row.sel .la-strip-eye,
+.la-strip-row.sel .la-strip-dup { opacity: 1; }
+.la-strip-row .la-strip-eye:hover,
+.la-strip-row .la-strip-dup:hover { color: var(--text-hi); }
+.la-strip-row .la-strip-eye svg,
+.la-strip-row .la-strip-dup svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.la-strip-rev {
+  font-size: 9px; font-family: var(--font-mono); letter-spacing: .04em;
+  color: var(--accent); border: 1px solid var(--accent-line);
+  border-radius: 3px; padding: 1px 4px; flex-shrink: 0;
+}
+
+/* head tools beside the panel-head meta (show-all / hide-all eyes) */
+.la-head-tools { display: flex; align-items: center; gap: 6px; }
+.la-head-tools button {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  color: var(--text-faint); border-radius: 4px; transition: background .12s, color .12s;
+}
+.la-head-tools button:hover { background: var(--bg-elev); color: var(--text-hi); }
+.la-head-tools button svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+
+/* error banner + draw-hint + pending-draw + batch live in the side panel,
+   styled in the mockup idiom */
+.la-error-banner {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  background: oklch(0.640 0.150 32 / 0.12); color: var(--danger);
+  font-size: 12px; line-height: 1.5;
+}
+.la-error-banner button { color: var(--danger); flex-shrink: 0; line-height: 1; padding: 0 2px; font-size: 14px; }
+
+.la-draw-hint, .la-pending {
+  padding: 10px 14px; border-bottom: 1px solid var(--border-hair); font-size: 12px; line-height: 1.5;
+}
+.la-pending input[type=text] {
+  width: 100%; height: 30px; background: var(--bg-app);
+  border: 1px solid var(--accent); border-radius: var(--r-sm);
+  color: var(--text-hi); font-size: 13px; padding: 0 9px;
+}
+.la-pending input[type=number] {
+  width: 72px; height: 28px; text-align: right; background: var(--bg-app);
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 12px; padding: 0 8px;
+}
+
+/* batch-select strip group/merge bar */
+.la-batch { margin: 0 12px 8px; padding: 10px 12px; background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: var(--r-md); }
+.la-batch-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.la-batch-head span { font-size: 12px; font-weight: 600; color: var(--text-hi); }
+.la-batch-head button { color: var(--text-faint); font-size: 12px; }
+.la-batch-list { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.la-batch-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-mid); background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 100px; padding: 2px 8px; }
+.la-batch-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.la-batch-actions input[type=text] { flex: 1; min-width: 90px; height: 30px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--text-hi); font-size: 12.5px; padding: 0 10px; }
+
+/* empty / drag-drop affordance inside viewport already inline-styled */
+
+/* layer-row eye + delete + drag handle (live-only affordances on the mockup row) */
+.layer-row .la-eye, .layer-row .la-del, .layer-row .la-grip {
+  display: grid; place-items: center; color: var(--text-faint);
+  border-radius: 4px; flex-shrink: 0; transition: opacity .12s, color .12s;
+}
+.layer-row .la-eye, .layer-row .la-del { width: 20px; height: 20px; opacity: 0; }
+.layer-row:hover .la-eye, .layer-row:hover .la-del,
+.layer-row.sel .la-eye, .layer-row.sel .la-del { opacity: 1; }
+.layer-row .la-grip { cursor: grab; }
+.layer-row .la-eye svg, .layer-row .la-del svg, .layer-row .la-grip svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.layer-row .la-del:hover { color: var(--danger); }
+.layer-row .la-eye:hover { color: var(--text-hi); }
+.layer-row.hidden { opacity: 0.45; }
+
+/* sub-path rows under an expanded layer */
+.la-subrow { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 30px; border-radius: var(--r-sm); font-size: 12px; color: var(--text-mid); cursor: pointer; }
+.la-subrow:hover { background: var(--bg-elev); }
+.la-subrow.sel { background: var(--bg-sel); }
+.la-subrow .n { font-family: var(--font-mono); font-size: 10px; color: var(--accent); width: 14px; text-align: center; flex-shrink: 0; }
+.la-subrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-subrow .len { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); flex-shrink: 0; }
+.la-subrow .add { font-family: var(--font-mono); color: var(--accent); padding: 0 5px; flex-shrink: 0; }
+
+/* group row in the layer list */
+.la-group-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-md); }
+.la-group-row:hover { background: var(--bg-elev); }
+.la-group-row .nm { flex: 1; font-size: 13px; color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.la-group-row .ct { font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); flex-shrink: 0; }
+.la-group-row button { display: grid; place-items: center; color: var(--text-faint); flex-shrink: 0; }
+.la-group-row button svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.la-group-row button:hover { color: var(--text-hi); }
+
+/* inspector secondary actions (Reverse / Remove) keep mockup .btn look */
+.la-insp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+.la-insp-actions .btn { justify-content: center; }
+.la-insp-actions .btn.danger:hover { color: var(--danger); border-color: var(--accent-line); }
+
+/* slider row inside inspector (brightness) */
+.la-slider-row { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.la-slider-row .lab { display: flex; justify-content: space-between; font-size: 12px; }
+.la-slider-row .lab .k { color: var(--text-mid); }
+.la-slider-row .lab .v { font-family: var(--font-mono); color: var(--text-hi); }
+
+/* wire-path live editor disclosure (keeps PatchBoardScreen function) */
+.la-wire-editor { margin: 0 12px 12px; }
+.la-wire-editor > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between; padding: 8px 0; color: var(--text-lo); }
+.la-wire-editor > summary::-webkit-details-marker { display: none; }
+.la-wire-editor > summary .ttl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 600; }
+.la-wire-editor > summary .meta { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+
+/* layout empty state in side panel */
+.la-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 40px 24px; color: var(--text-lo); }
+.la-empty svg { color: var(--text-faint); }
+.la-empty .cta { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 20px; border-radius: var(--r-md); background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; }
+.la-empty .cta svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; color: var(--on-accent); }

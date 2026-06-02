@@ -191,7 +191,7 @@ function LedRow({ pal, n = 9, big = false, wave = false }) {
 
 function LedStage({ pal }) {
   return (
-    <div className="lw-cm-stage" aria-hidden="true">
+    <div className="pm-led-stage" aria-hidden="true">
       <LedRow pal={pal} n={22} big wave/>
       <span className="sheen"/>
     </div>
@@ -213,206 +213,24 @@ function Strand({ tint }) {
   );
 }
 
-function Section({ title, meta, children }) {
+// Mockup .slider-row slider, with live data-testid for slider + readout.
+function Slider({ k, v, testId, value, min, max, step, onChange }) {
+  const readoutId = testId ? testId.replace(/-slider$/, '-readout') : undefined;
   return (
-    <section className="lw-patterns-section">
-      <div className="lw-sec-header">
-        <span>{title}</span>
-        {meta && <span className="meta">{meta}</span>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function LookPreview({ patternId, look, large = false, tuned = false }) {
-  const pattern = getCardPatternById(patternId);
-  const fingerprint = getCardPatternFingerprint(patternId);
-  const tunedLedColor = cardColorToHex(look.customHue, look.customSaturation);
-  const ledCount = large ? LARGE_PREVIEW_LED_COUNT : SMALL_PREVIEW_LED_COUNT;
-  const ledIndexes = Array.from({ length: ledCount }, (_, index) => index);
-  return (
-    <div
-      className={`lw-look-preview lw-look-${patternId} ${fingerprint.cssClass} ${large ? 'is-large' : ''}`}
-      style={{
-        '--look-preview-bg': pattern?.preview,
-        '--look-dim': String(0.3 + look.brightness * 0.7),
-        '--palette-a': fingerprint.palette[0],
-        '--palette-b': fingerprint.palette[1],
-        '--palette-c': fingerprint.palette[2],
-        '--palette-d': fingerprint.palette[3] || fingerprint.palette[0],
-      }}
-      aria-hidden="true"
-    >
-      <span className="lw-look-led-field">
-        {ledIndexes.map(index => {
-          const point = previewLedPoint(index, ledCount, fingerprint.cssClass);
-          return (
-            <i
-              key={index}
-              style={{
-                '--x': `${point.x}%`,
-                '--y': `${point.y}%`,
-                '--delay': `${point.delay}s`,
-                '--scale': point.scale,
-                '--led-color': tuned ? tunedLedColor : fingerprint.palette[index % fingerprint.palette.length],
-              }}
-            />
-          );
-        })}
-      </span>
-      <span className="lw-look-scan"/>
-    </div>
-  );
-}
-
-function PatternThumbnail({ pattern, fingerprint }) {
-  return (
-    <span
-      className={`lw-pattern-thumb ${fingerprint.cssClass}`}
-      style={{
-        '--pattern-thumb-bg': pattern?.preview,
-        '--palette-a': fingerprint.palette[0],
-        '--palette-b': fingerprint.palette[1],
-        '--palette-c': fingerprint.palette[2],
-        '--palette-d': fingerprint.palette[3] || fingerprint.palette[0],
-      }}
-      aria-hidden="true"
-    >
-      <span className="lw-pattern-thumb-glow"/>
-      <span className="lw-pattern-thumb-swatch-row">
-        {fingerprint.palette.slice(0, 4).map((color, index) => (
-          <b key={`${color}-${index}`} style={{ '--swatch': color }}/>
-        ))}
-      </span>
-    </span>
-  );
-}
-
-function CompoundThumbnail({ look, targets = [] }) {
-  const sections = compoundSectionsForLook(look, targets);
-  const visibleSections = sections.slice(0, 4);
-  return (
-    <span
-      className="lw-compound-thumb"
-      style={{ '--compound-cols': Math.min(4, Math.max(1, visibleSections.length)) }}
-      aria-hidden="true"
-    >
-      {visibleSections.map(section => {
-        const pattern = getCardPatternById(section.look?.patternId) || DEFAULT_CARD_PATTERN_BANK[0];
-        const fingerprint = getCardPatternFingerprint(pattern.id);
-        return (
-          <span
-            key={section.id}
-            className={`lw-compound-thumb-cell ${fingerprint.cssClass}`}
-            style={{
-              '--pattern-thumb-bg': pattern?.preview,
-              '--palette-a': fingerprint.palette[0],
-              '--palette-b': fingerprint.palette[1],
-              '--palette-c': fingerprint.palette[2],
-              '--palette-d': fingerprint.palette[3] || fingerprint.palette[0],
-            }}
-          >
-            <i/>
-            <b>{pattern.label}</b>
-          </span>
-        );
-      })}
-      {sections.length > visibleSections.length && (
-        <span className="lw-compound-thumb-more">+{sections.length - visibleSections.length}</span>
-      )}
-    </span>
-  );
-}
-
-function PatternFingerprint({ fingerprint, compact = false }) {
-  return (
-    <span className={`lw-pattern-fingerprint ${compact ? 'is-compact' : ''}`}>
-      <span className="lw-pattern-palette" aria-hidden="true">
-        {fingerprint.palette.slice(0, 5).map((color, index) => (
-          <i key={`${color}-${index}`} style={{ '--swatch': color }}/>
-        ))}
-      </span>
-      <span className="lw-pattern-fingerprint-copy">
-        <b>{fingerprint.motionLabel}</b>
-        <em>{fingerprint.tempoLabel} / {fingerprint.intensityLabel}</em>
-      </span>
-    </span>
-  );
-}
-
-function previewLedPoint(index, count, cssClass) {
-  const t = count > 1 ? index / (count - 1) : 0.5;
-  const phase = t * Math.PI * 2;
-  if (cssClass === 'motion-ring' || cssClass === 'motion-pulse' || cssClass === 'motion-pane') {
-    return {
-      x: 50 + Math.cos(phase) * 33,
-      y: 50 + Math.sin(phase) * 22,
-      delay: -t * 2.8,
-      scale: 0.82 + Math.sin(phase + 0.7) * 0.14,
-    };
-  }
-  if (cssClass === 'motion-rain') {
-    const col = index % 7;
-    const row = Math.floor(index / 7);
-    return {
-      x: 15 + col * 11.5 + (row % 2) * 2,
-      y: 16 + row * 15,
-      delay: -(row * 0.22 + col * 0.07),
-      scale: 0.78 + ((index % 3) * 0.1),
-    };
-  }
-  if (cssClass === 'motion-organic' || cssClass === 'motion-liquid' || cssClass === 'motion-breathe') {
-    return {
-      x: 12 + t * 76,
-      y: 50 + Math.sin(phase * 1.25) * 16 + Math.sin(phase * 2.1) * 5,
-      delay: -t * 3.6,
-      scale: 0.76 + Math.sin(phase * 1.8) * 0.2,
-    };
-  }
-  if (cssClass === 'motion-spark' || cssClass === 'motion-strike' || cssClass === 'motion-flicker') {
-    const col = index % 9;
-    const row = Math.floor(index / 9);
-    return {
-      x: 10 + col * 10 + ((row * 7) % 9),
-      y: 19 + row * 18 + ((index * 11) % 7),
-      delay: -((index * 0.13) % 2.4),
-      scale: 0.72 + ((index % 4) * 0.12),
-    };
-  }
-  if (cssClass === 'motion-comet' || cssClass === 'motion-chase' || cssClass === 'motion-scan' || cssClass === 'motion-warp') {
-    return {
-      x: 10 + t * 80,
-      y: 50 + Math.sin(phase) * 9,
-      delay: -t * 2.2,
-      scale: 0.78 + t * 0.22,
-    };
-  }
-  return {
-    x: 10 + t * 80,
-    y: 50 + Math.sin(phase * 1.5) * 13,
-    delay: -t * 3,
-    scale: 0.82 + Math.sin(phase) * 0.1,
-  };
-}
-
-function TuningSlider({ label, testId, min, max, step, value, readout, onChange, rowClassName = '' }) {
-  const readoutId = testId.replace(/-slider$/, '-readout');
-  return (
-    <label className={`lw-look-slider-row ${rowClassName}`.trim()}>
-      <span>{label}</span>
+    <div className="slider-row">
+      <div className="lab"><span className="k">{k}</span><strong className="v" data-testid={readoutId}>{v}</strong></div>
       <input
+        className="lw"
         type="range"
         min={min}
         max={max}
         step={step}
         value={value}
         data-testid={testId}
-        aria-label={label}
-        onChange={event => onChange(Number(event.target.value))}
+        aria-label={k}
+        onChange={event => onChange(parseFloat(event.target.value))}
       />
-      <strong data-testid={readoutId}>{readout}</strong>
-    </label>
+    </div>
   );
 }
 
@@ -646,30 +464,29 @@ function LookCard({
     ? saved ? 'Previewing and saved here' : livePreviewAvailable ? 'Previewing on LEDs' : 'Previewing in Studio'
     : saved ? 'Saved for this target' : pattern.description || 'Tap to preview this look';
   return (
-    <article
-      className={`lw-look-card ${saved ? 'is-selected' : ''} ${previewing ? 'is-previewing' : ''}`}
+    <div
+      className={`pmcard ${previewing ? 'on' : ''}`}
       draggable
+      data-pattern-id={pattern.id}
+      aria-label={`${pattern.label}. ${summary}`}
       onDragStart={event => onDragStart?.(pattern, event)}
+      onClick={onSelect}
     >
+      <div className="pmcard-led"><LedRow pal={pal} n={9}/></div>
+      <div className="pmcard-row">
+        <span className="pmcard-nm">{pattern.label}</span>
+        <span className="pmcard-sp">{fingerprint.tempoLabel}</span>
+      </div>
       <button
         type="button"
-        className="lw-look-card-main"
-        data-pattern-id={pattern.id}
-        draggable={false}
-        aria-label={`${pattern.label}. ${summary}`}
-        onClick={onSelect}
+        className={`pmcard-pl ${inPlaylist ? 'on' : ''}`}
+        aria-pressed={inPlaylist}
+        onClick={event => { event.stopPropagation(); onPlaylistChange(!inPlaylist); }}
       >
-        <span className="lw-pmcard-led"><LedRow pal={pal} n={9}/></span>
-        <span className="lw-look-card-copy">
-          <strong>{pattern.label}</strong>
-          <span>{fingerprint.tempoLabel}</span>
-        </span>
+        <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z"/></svg>
+        {inPlaylist ? 'In playlist' : 'Add to playlist'}
       </button>
-      <label className="lw-look-card-toggle">
-        <input type="checkbox" checked={inPlaylist} onChange={event => onPlaylistChange(event.target.checked)}/>
-        <span>{inPlaylist ? 'In playlist' : 'Add to playlist'}</span>
-      </label>
-    </article>
+    </div>
   );
 }
 
@@ -683,33 +500,31 @@ function CompoundPatternCard({
 }) {
   const sections = compoundSectionsForLook(look, targets);
   const sectionCount = sections.length;
-  const sectionSummary = sections
-    .slice(0, 3)
-    .map(section => `${section.label}: ${patternLabel(section.look?.patternId)}`)
-    .join(' / ');
+  const firstPatternId = sections[0]?.look?.patternId;
+  const pal = paletteForPattern(firstPatternId);
   return (
-    <article className={`lw-look-card is-compound ${active ? 'is-selected' : ''}`}>
+    <div
+      className={`pmcard ${active ? 'on' : ''}`}
+      data-look-id={look.id}
+      aria-label={`${look.label}. Layer mix with ${sectionCount} section${sectionCount === 1 ? '' : 's'}.`}
+      onClick={onSelect}
+    >
+      <div className="pmcard-led"><LedRow pal={pal} n={9}/></div>
+      <div className="pmcard-row">
+        <span className="pmcard-nm">{look.label}</span>
+        <span className="mixtag">mix</span>
+        <span className="pmcard-sp">{sectionCount} sec</span>
+      </div>
       <button
         type="button"
-        className="lw-look-card-main"
-        data-look-id={look.id}
-        aria-label={`${look.label}. Layer mix with ${sectionCount} section${sectionCount === 1 ? '' : 's'}.`}
-        onClick={onSelect}
+        className={`pmcard-pl ${inPlaylist ? 'on' : ''}`}
+        aria-pressed={inPlaylist}
+        onClick={event => { event.stopPropagation(); onPlaylistChange(!inPlaylist); }}
       >
-        <CompoundThumbnail look={look} targets={targets}/>
-        <span className="lw-look-card-copy">
-          <strong>{look.label}</strong>
-          <span>Layer mix</span>
-          <span className="lw-compound-card-meta">
-            {sectionCount} section{sectionCount === 1 ? '' : 's'}{sectionSummary ? ` / ${sectionSummary}` : ''}
-          </span>
-        </span>
+        <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z"/></svg>
+        {inPlaylist ? 'In playlist' : 'Add to playlist'}
       </button>
-      <label className="lw-look-card-toggle">
-        <input type="checkbox" checked={inPlaylist} onChange={event => onPlaylistChange(event.target.checked)}/>
-        <span>In playlist</span>
-      </label>
-    </article>
+    </div>
   );
 }
 
@@ -724,10 +539,10 @@ function TargetButton({
   onPatternDrop,
 }) {
   const pattern = getCardPatternById(target.look?.patternId);
-  const fingerprint = getCardPatternFingerprint(pattern?.id || target.look?.patternId || 'aurora');
   const readOnlyName = target.kind === 'all';
   const rangeLabel = targetRangeLabel(target);
   const patternName = pattern?.label || target.look?.patternId || 'Pattern';
+  const tint = paletteForPattern(target.look?.patternId)[2] || paletteForPattern(target.look?.patternId)[0];
   const targetLabelText = target.kind === 'all'
     ? `All sections, ${rangeLabel}, ${patternName}`
     : `Layer ${badge}, ${target.label}, ${rangeLabel}, ${patternName}`;
@@ -741,7 +556,7 @@ function TargetButton({
     <div
       role="button"
       tabIndex={0}
-      className={`lw-section-target is-${target.kind} ${active ? 'is-active' : ''}`}
+      className={`${readOnlyName ? 'tc-head' : 'tc-layer'} ${active ? 'is-active' : ''}`}
       onClick={onSelect}
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return;
@@ -767,53 +582,46 @@ function TargetButton({
       title={targetLabelText}
       data-testid={`section-target-${target.id}`}
     >
-      <span className="lw-section-target-badge" aria-hidden="true">{badge}</span>
-      <span className="lw-section-target-main">
-        <span className="lw-section-target-head">
-          <label className="lw-target-edit-field lw-target-name-field">
-            <span>{readOnlyName ? 'Target' : 'Layer'}</span>
-            <input
-              className="lw-target-name-input"
-              value={target.label}
-              readOnly={readOnlyName}
-              aria-label={`${target.label} name`}
-              data-testid={`section-target-name-${target.id}`}
-              onClick={onInputClick}
-              onFocus={onSelect}
-              onChange={event => onNameChange?.(target, event.target.value)}
-            />
-          </label>
-          <label className="lw-target-edit-field lw-target-led-field">
-            <span>{target.kind === 'all' ? 'Total' : 'LEDs'}</span>
-            <input
-              className="lw-target-led-input"
-              type="number"
-              min="1"
-              max="2048"
-              value={target.pixelCount || 1}
-              disabled={!editable}
-              aria-label={`${target.label} LEDs`}
-              data-testid={`section-target-leds-${target.id}`}
-              onClick={onInputClick}
-              onFocus={onSelect}
-              onChange={event => onPixelCountChange?.(target, event.target.value)}
-            />
-          </label>
+      {readOnlyName
+        ? <button type="button" className={`tc-all ${active ? 'on' : ''}`} aria-hidden="true">ALL</button>
+        : <span className="tc-num" aria-hidden="true">{badge}</span>}
+      <div className="tc-name">
+        <span className="lab">{readOnlyName ? 'Target' : 'Layer'}</span>
+        <input
+          className="tc-name-input"
+          value={target.label}
+          readOnly={readOnlyName}
+          aria-label={`${target.label} name`}
+          data-testid={`section-target-name-${target.id}`}
+          onClick={onInputClick}
+          onFocus={onSelect}
+          onChange={event => onNameChange?.(target, event.target.value)}
+        />
+      </div>
+      <div className="tc-total">
+        <span className="lab">{readOnlyName ? 'Total' : 'LEDs'}</span>
+        <input
+          className="tc-led-input"
+          type="number"
+          min="1"
+          max="2048"
+          value={target.pixelCount || 1}
+          disabled={!editable}
+          aria-label={`${target.label} LEDs`}
+          data-testid={`section-target-leds-${target.id}`}
+          onClick={onInputClick}
+          onFocus={onSelect}
+          onChange={event => onPixelCountChange?.(target, event.target.value)}
+        />
+      </div>
+      <div className="tc-pat">
+        <span className="lab">Pattern</span>
+        <span className="tc-patval">
+          <span className="sw" style={{ background: tint, boxShadow: `0 0 6px ${tint}` }}/>
+          {patternName}
         </span>
-        <span
-          className="lw-section-target-range"
-          data-testid={`section-target-range-${target.id}`}
-        >
-          {rangeLabel}
-        </span>
-        <span className="lw-section-target-look">
-          {pattern && <PatternThumbnail pattern={pattern} fingerprint={fingerprint}/>}
-          <span className="lw-section-target-look-copy">
-            <span>Pattern</span>
-            <b>{patternName}</b>
-          </span>
-        </span>
-      </span>
+      </div>
+      <span className="lw-sr-only" data-testid={`section-target-range-${target.id}`}>{rangeLabel}</span>
     </div>
   );
 }
@@ -1951,286 +1759,316 @@ export function PatternsScreen() {
     setStatus('Local card is off. Studio will use direct local access when the browser allows it.');
   };
 
+  const huePalettePreview = paletteForPattern(look.patternId);
+  const huePaletteTint = huePalettePreview[2] || huePalettePreview[0] || 'oklch(0.78 0.16 60)';
   return (
-    <div className="lw-patterns-screen">
-      <div className="lw-patterns-shell">
-        <header className="lw-patterns-hero">
-          <div>
-            <h1>Patterns & Mixes</h1>
-            <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
-          </div>
-          <div className="lw-patterns-actions" aria-label="Card controls">
-            <button type="button" className="btn btn-primary lw-toolbar-primary" onClick={savePreviewToCard}>Save to card</button>
-            <div className="ag-conn" aria-label="Card connection">
-              <button
-                type="button"
-                className={`btn ${localChipDefault ? 'is-active' : ''}`}
-                aria-pressed={localChipDefault}
-                onClick={toggleLocalChipDefault}
-              >
-                {localChipDefault ? 'Using local card' : 'Use local card'}
-              </button>
-              <button type="button" className="btn" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
+    <div className="screen">
+      <div className="screen-scroll">
+        <div className="pm">
+          {/* hero */}
+          <header className="pm-hero">
+            <div className="pm-title">
+              <h1>Patterns &amp; Mixes</h1>
+              <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
             </div>
-            <div className="pm-menu">
-              <button
-                type="button"
-                className="btn"
-                aria-expanded={cardToolsOpen}
-                aria-haspopup="menu"
-                onClick={() => setCardToolsOpen(open => !open)}
-              >
-                Card tools
-              </button>
-              {cardToolsOpen && (
-                <>
-                  <div className="pm-menu-backdrop" onClick={() => setCardToolsOpen(false)}/>
-                  <div className="pm-menu-pop" role="menu">
-                    <button
-                      type="button"
-                      className="pm-menu-item"
-                      role="menuitem"
-                      disabled={recoveringLights}
-                      onClick={() => { setCardToolsOpen(false); startRepairLed(); }}
-                    >
-                      {recoveringLights ? 'Repairing...' : 'Repair LED'}
-                    </button>
-                    <button
-                      type="button"
-                      className="pm-menu-item"
-                      role="menuitem"
-                      onClick={() => { setCardToolsOpen(false); applySplitPreviewToCard(); }}
-                    >
-                      Send split preview
-                    </button>
-                    <div className="pm-menu-sep"/>
-                    <button
-                      type="button"
-                      className="pm-menu-item"
-                      role="menuitem"
-                      onClick={() => { setCardToolsOpen(false); copyConfig(); }}
-                    >
-                      Copy setup
-                    </button>
-                    <button
-                      type="button"
-                      className="pm-menu-item"
-                      role="menuitem"
-                      onClick={() => { setCardToolsOpen(false); downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson); }}
-                    >
-                      Download setup
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </header>
-
-        {status && (
-          <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
-            {status}
-            {repairLedPrompt && (
-              <div className="lw-repair-actions" aria-label="LED repair response">
-                {repairLedPrompt.next !== 'post-mirror-test' && (
-                  <button type="button" className="btn btn-primary" onClick={repairLedFixed} disabled={recoveringLights}>
-                    Yes, fixed
-                  </button>
-                )}
-                {repairLedPrompt.next === 'white' && (
-                  <button type="button" className="btn btn-ghost" onClick={repairLedWhiteTest} disabled={recoveringLights}>
-                    No, try white test
-                  </button>
-                )}
-                {repairLedPrompt.next === 'mirror' && (
-                  <button type="button" className="btn btn-ghost" onClick={repairLedMirroredOutput} disabled={recoveringLights}>
-                    No, repair output
-                  </button>
-                )}
-                {repairLedPrompt.next === 'post-mirror-test' && (
-                  <button type="button" className="btn btn-primary" onClick={repairLedPostMirrorTest} disabled={recoveringLights}>
-                    Test repaired output
-                  </button>
-                )}
-                {repairLedPrompt.next === 'checks' && (
-                  <button type="button" className="btn btn-ghost" onClick={repairLedPhysicalChecks} disabled={recoveringLights}>
-                    No, show checks
-                  </button>
-                )}
-              </div>
-            )}
-            {handoffUrl && (
-              <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
-                Open card installer
-              </a>
-            )}
-          </div>
-        )}
-
-        <div className="lw-patterns-grid">
-          <section className="lw-look-picker">
-            <div className="lw-sec-header">
-              <span>Tap a pattern to preview</span>
-              <span className="meta">
-                {shownPatternCount} shown of {DEFAULT_CARD_PATTERN_BANK.length} chip-ready
-                {savedLooks.length ? ` + ${savedLooks.length} mix${savedLooks.length === 1 ? '' : 'es'}` : ''}
-                {' / '}
-                {playlist.length} in playlist
-              </span>
-            </div>
-            <div className="lw-live-preview-bar">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={livePreviewEnabled}
-                  disabled={!livePreviewAvailable}
-                  onChange={event => setLivePreviewEnabled(event.target.checked)}
-                />
-                {livePreviewAvailable ? 'Preview taps on the LED card' : 'Studio preview only'}
-              </label>
-              <span>{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
-            </div>
-            <div className="lw-strip-color-test" aria-label="Strip color test">
-              <span className="lw-strip-color-title">Strip finder</span>
-              <span className="lw-strip-color-buttons" aria-label="Color test">
-                {STRIP_COLOR_TESTS.map(test => (
-                  <button
-                    key={test.id}
-                    type="button"
-                    className={`btn btn-ghost ${stripColorTestPattern === test.id ? 'active' : ''}`}
-                    aria-label={`Test ${test.label.toLowerCase()}`}
-                    onClick={() => playStripColorTest(test.id)}
-                  >
-                    {test.shortLabel}
-                  </button>
-                ))}
-              </span>
-              <span className="lw-strip-order-pill">
-                Order <b data-testid="strip-color-order">{stripColorOrder}</b>
-              </span>
-              <button
-                type="button"
-                className="btn btn-ghost lw-strip-next-order"
-                aria-label="Try next color order"
-                onClick={tryNextStripColorOrder}
-              >
-                Try next order
-              </button>
-            </div>
-            <div className="lw-target-panel">
-              <div className="lw-sec-header">
-                <span>Design target</span>
-                <span className="meta">{Math.max(0, sectionTargets.length - 1)} sections · card limit {CARD_RUNTIME_MAX_ZONES}</span>
-              </div>
-              <div className="lw-target-compound-bar">
-                <div className="lw-target-compound-copy">
-                  <span>Layer mix</span>
-                  <strong>{lookLabel.trim() || currentComboLabel}</strong>
-                </div>
-                <input
-                  className="lw-search-input"
-                  value={lookLabel}
-                  onChange={event => setLookLabel(event.target.value)}
-                  placeholder="Name this mix (optional)"
-                  aria-label="Layer mix name"
-                />
-                <button type="button" className="btn btn-primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save mix</button>
-              </div>
-              <div className="lw-target-grid">
-                {sectionTargets.map(target => (
-                  <TargetButton
-                    key={target.id}
-                    target={target.id === selectedTarget?.id
-                      ? { ...target, look }
-                      : effectiveSectionTargets.find(effectiveTarget => effectiveTarget.id === target.id) || target}
-                    active={target.id === selectedTarget?.id}
-                    editable={editableTargetLayout}
-                    badge={targetLayerBadge(target, sectionTargets)}
-                    onSelect={() => setSelectedTargetId(target.id)}
-                    onNameChange={updateTargetName}
-                    onPixelCountChange={updateTargetPixelCount}
-                    onPatternDrop={dropPatternOnTarget}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="lw-pattern-browse-tools">
-              <input
-                className="lw-search-input"
-                value={patternSearch}
-                onChange={event => setPatternSearch(event.target.value)}
-                placeholder="Search chip patterns"
-              />
-              <div className="lw-pattern-filter-row" aria-label="Pattern filters">
-                {PATTERN_CATEGORIES.map(category => (
-                  <button
-                    key={category.id}
-                    type="button"
-                    className={`btn btn-ghost ${patternCategory === category.id ? 'active' : ''}`}
-                    onClick={() => setPatternCategory(category.id)}
-                  >
-                    {category.label}
-                  </button>
-                ))}
-              </div>
-              <span>{shownPatternCount} of {filteredPatternItems.length} shown</span>
-            </div>
-            <div className="lw-look-grid" data-preview-mode="compact">
-              {visiblePatternItems.map(item => item.kind === 'compound' ? (
-                <CompoundPatternCard
-                  key={item.id}
-                  look={item.look}
-                  targets={sectionTargets}
-                  active={item.look.id === activeLookId}
-                  inPlaylist={playlistContainsCombo(playlist, item.look.id)}
-                  onSelect={() => applySavedLook(item.look)}
-                  onPlaylistChange={enabled => setSavedLookInPlaylist(item.look, enabled)}
-                />
-              ) : (
-                <LookCard
-                  key={item.id}
-                  pattern={item.pattern}
-                  look={look}
-                  previewing={look.patternId === item.pattern.id}
-                  saved={savedTargetLook.patternId === item.pattern.id}
-                  inPlaylist={playlistContainsPattern(playlist, item.pattern.id)}
-                  livePreviewAvailable={livePreviewAvailable}
-                  onSelect={() => updatePreviewLook({ patternId: item.pattern.id })}
-                  onPlaylistChange={enabled => setPatternInPlaylist(item.pattern.id, enabled)}
-                  onDragStart={beginPatternDrag}
-                />
-              ))}
-              {!visiblePatternItems.length && (
-                <p className="lw-pattern-empty">No chip-ready patterns match this search.</p>
-              )}
-            </div>
-            {hiddenPatternCount > 0 && (
-              <div className="lw-pattern-load-more-row">
+            <div className="pm-actions">
+              <button type="button" className="btn primary" onClick={savePreviewToCard}>Save to card</button>
+              <div className="ag-conn" aria-label="Card connection">
                 <button
                   type="button"
-                  className="btn btn-ghost lw-pattern-load-more"
-                  data-testid="pattern-load-more"
-                  onClick={() => setVisiblePatternLimit(limit => limit + PATTERN_LOAD_BATCH_SIZE)}
+                  className={`btn ${localChipDefault ? 'toggled' : ''}`}
+                  aria-pressed={localChipDefault}
+                  onClick={toggleLocalChipDefault}
                 >
-                  Load {nextPatternLoadCount} more patterns
+                  {localChipDefault ? 'Using local card' : 'Use local card'}
                 </button>
-                <span>{hiddenPatternCount} more in this view</span>
+                <button type="button" className="btn" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
               </div>
-            )}
-          </section>
+              <div className="pm-menu">
+                <button
+                  type="button"
+                  className="btn"
+                  aria-expanded={cardToolsOpen}
+                  aria-haspopup="menu"
+                  onClick={() => setCardToolsOpen(open => !open)}
+                >
+                  Card tools
+                </button>
+                {cardToolsOpen && (
+                  <>
+                    <div className="pm-menu-backdrop" onClick={() => setCardToolsOpen(false)}/>
+                    <div className="pm-menu-pop" role="menu">
+                      <button
+                        type="button"
+                        className="pm-menu-item"
+                        role="menuitem"
+                        disabled={recoveringLights}
+                        onClick={() => { setCardToolsOpen(false); startRepairLed(); }}
+                      >
+                        {recoveringLights ? 'Repairing...' : 'Repair LED'}
+                      </button>
+                      <button
+                        type="button"
+                        className="pm-menu-item"
+                        role="menuitem"
+                        onClick={() => { setCardToolsOpen(false); applySplitPreviewToCard(); }}
+                      >
+                        Send split preview
+                      </button>
+                      <div className="pm-menu-sep"/>
+                      <button
+                        type="button"
+                        className="pm-menu-item"
+                        role="menuitem"
+                        onClick={() => { setCardToolsOpen(false); copyConfig(); }}
+                      >
+                        Copy setup
+                      </button>
+                      <button
+                        type="button"
+                        className="pm-menu-item"
+                        role="menuitem"
+                        onClick={() => { setCardToolsOpen(false); downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson); }}
+                      >
+                        Download setup
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </header>
 
-          <aside className="lw-patterns-aside">
-            <Section title="Preview" meta={`${selectedTargetName} · ${selectedPattern?.label || look.patternId}`}>
-              <div className="lw-pattern-led-preview" style={{ '--pattern-preview-bg': selectedPattern?.preview }}>
+          {status && (
+            <div className={`pmx-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
+              {status}
+              {repairLedPrompt && (
+                <div className="pmx-status-actions" aria-label="LED repair response">
+                  {repairLedPrompt.next !== 'post-mirror-test' && (
+                    <button type="button" className="btn primary" onClick={repairLedFixed} disabled={recoveringLights}>
+                      Yes, fixed
+                    </button>
+                  )}
+                  {repairLedPrompt.next === 'white' && (
+                    <button type="button" className="btn ghost-sm" onClick={repairLedWhiteTest} disabled={recoveringLights}>
+                      No, try white test
+                    </button>
+                  )}
+                  {repairLedPrompt.next === 'mirror' && (
+                    <button type="button" className="btn ghost-sm" onClick={repairLedMirroredOutput} disabled={recoveringLights}>
+                      No, repair output
+                    </button>
+                  )}
+                  {repairLedPrompt.next === 'post-mirror-test' && (
+                    <button type="button" className="btn primary" onClick={repairLedPostMirrorTest} disabled={recoveringLights}>
+                      Test repaired output
+                    </button>
+                  )}
+                  {repairLedPrompt.next === 'checks' && (
+                    <button type="button" className="btn ghost-sm" onClick={repairLedPhysicalChecks} disabled={recoveringLights}>
+                      No, show checks
+                    </button>
+                  )}
+                </div>
+              )}
+              {handoffUrl && (
+                <div className="pmx-status-actions">
+                  <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
+                    Open card installer
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="pm-grid">
+            {/* MAIN */}
+            <section className="pm-main">
+              <div className="sec-h">
+                <span className="t">Tap a pattern to preview</span>
+                <span className="m">
+                  {shownPatternCount} shown of {DEFAULT_CARD_PATTERN_BANK.length} chip-ready
+                  {savedLooks.length ? ` + ${savedLooks.length} mix${savedLooks.length === 1 ? '' : 'es'}` : ''}
+                  {' / '}
+                  {playlist.length} in playlist
+                </span>
+                <span className="line"/>
+              </div>
+
+              <div className="pm-livebar">
+                <label className="pm-check">
+                  <input
+                    type="checkbox"
+                    checked={livePreviewEnabled}
+                    disabled={!livePreviewAvailable}
+                    onChange={event => setLivePreviewEnabled(event.target.checked)}
+                  />
+                  <span className={`pm-box ${livePreviewEnabled ? 'on' : ''}`}>
+                    {livePreviewEnabled && (
+                      <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 6"/></svg>
+                    )}
+                  </span>
+                  {livePreviewAvailable ? 'Preview taps on the LED card' : 'Studio preview only'}
+                </label>
+                <span className="pm-saved">{hasUnsavedPreview ? `${selectedTargetName} not saved` : `${selectedTargetName} saved`}</span>
+              </div>
+
+              <div className="pm-stripfinder">
+                <span className="sf-l">Strip finder</span>
+                <div className="sf-btns">
+                  {STRIP_COLOR_TESTS.map(test => (
+                    <button
+                      key={test.id}
+                      type="button"
+                      className={`sf-btn ${stripColorTestPattern === test.id ? 'on' : ''}`}
+                      aria-label={`Test ${test.label.toLowerCase()}`}
+                      onClick={() => playStripColorTest(test.id)}
+                    >
+                      {test.shortLabel}
+                    </button>
+                  ))}
+                </div>
+                <span className="sf-order">Order <b data-testid="strip-color-order">{stripColorOrder}</b></span>
+                <button type="button" className="btn ghost-sm" aria-label="Try next color order" onClick={tryNextStripColorOrder}>
+                  Try next order
+                </button>
+              </div>
+
+              {/* design target */}
+              <div className="pm-target">
+                <div className="sec-h">
+                  <span className="t">Design target</span>
+                  <span className="m">{Math.max(0, sectionTargets.length - 1)} sections · card limit {CARD_RUNTIME_MAX_ZONES}</span>
+                  <span className="line"/>
+                </div>
+                {/* multi-section target tabs (live: All sections / Section 1 / ...) */}
+                {sectionTargets.length > 1 && (
+                  <div className="pmx-target-tabs" aria-label="Target sections">
+                    {sectionTargets.map(target => (
+                      <button
+                        key={target.id}
+                        type="button"
+                        className={`chip ${target.id === selectedTarget?.id ? 'on' : ''}`}
+                        onClick={() => setSelectedTargetId(target.id)}
+                      >
+                        {targetLabel(target)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="pm-mixbar">
+                  <div className="pm-mixlabel">
+                    <span>Layer mix</span>
+                    <strong>{lookLabel.trim() || currentComboLabel}</strong>
+                  </div>
+                  <input
+                    className="pm-input"
+                    value={lookLabel}
+                    onChange={event => setLookLabel(event.target.value)}
+                    placeholder="Name this mix (optional)"
+                    aria-label="Layer mix name"
+                  />
+                  <button type="button" className="btn primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save mix</button>
+                </div>
+                <div className="pm-targetcard">
+                  {sectionTargets.map(target => (
+                    <TargetButton
+                      key={target.id}
+                      target={target.id === selectedTarget?.id
+                        ? { ...target, look }
+                        : effectiveSectionTargets.find(effectiveTarget => effectiveTarget.id === target.id) || target}
+                      active={target.id === selectedTarget?.id}
+                      editable={editableTargetLayout}
+                      badge={targetLayerBadge(target, sectionTargets)}
+                      onSelect={() => setSelectedTargetId(target.id)}
+                      onNameChange={updateTargetName}
+                      onPixelCountChange={updateTargetPixelCount}
+                      onPatternDrop={dropPatternOnTarget}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* browse */}
+              <div className="pm-browse">
+                <div className="search" style={{ maxWidth: 'none', marginBottom: 10 }}>
+                  <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+                  <input
+                    value={patternSearch}
+                    onChange={event => setPatternSearch(event.target.value)}
+                    placeholder="Search chip patterns"
+                  />
+                </div>
+                <div className="pt-tools" style={{ padding: 0, margin: '0 0 10px' }}>
+                  <div className="chips" aria-label="Pattern filters">
+                    {PATTERN_CATEGORIES.map(category => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className={`chip ${patternCategory === category.id ? 'on' : ''}`}
+                        onClick={() => setPatternCategory(category.id)}
+                      >
+                        {category.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="pt-count">{shownPatternCount} of {filteredPatternItems.length} shown</span>
+                </div>
+                <div className="pm-cards">
+                  {visiblePatternItems.map(item => item.kind === 'compound' ? (
+                    <CompoundPatternCard
+                      key={item.id}
+                      look={item.look}
+                      targets={sectionTargets}
+                      active={item.look.id === activeLookId}
+                      inPlaylist={playlistContainsCombo(playlist, item.look.id)}
+                      onSelect={() => applySavedLook(item.look)}
+                      onPlaylistChange={enabled => setSavedLookInPlaylist(item.look, enabled)}
+                    />
+                  ) : (
+                    <LookCard
+                      key={item.id}
+                      pattern={item.pattern}
+                      look={look}
+                      previewing={look.patternId === item.pattern.id}
+                      saved={savedTargetLook.patternId === item.pattern.id}
+                      inPlaylist={playlistContainsPattern(playlist, item.pattern.id)}
+                      livePreviewAvailable={livePreviewAvailable}
+                      onSelect={() => updatePreviewLook({ patternId: item.pattern.id })}
+                      onPlaylistChange={enabled => setPatternInPlaylist(item.pattern.id, enabled)}
+                      onDragStart={beginPatternDrag}
+                    />
+                  ))}
+                  {!visiblePatternItems.length && (
+                    <p className="pmx-empty">No chip-ready patterns match this search.</p>
+                  )}
+                </div>
+                {hiddenPatternCount > 0 && (
+                  <div className="pmx-loadmore">
+                    <button
+                      type="button"
+                      className="btn ghost-sm"
+                      data-testid="pattern-load-more"
+                      onClick={() => setVisiblePatternLimit(limit => limit + PATTERN_LOAD_BATCH_SIZE)}
+                    >
+                      Load {nextPatternLoadCount} more patterns
+                    </button>
+                    <span>{hiddenPatternCount} more in this view</span>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* ASIDE */}
+            <aside className="pm-aside">
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Preview</span><span className="m">{selectedTargetName} · {selectedPattern?.label || look.patternId}</span></div>
                 {/* Visible render: the mockup's warm glowing bead stage, driven by the
                     selected pattern's warm palette. This is the look the user approved. */}
-                <div className="lw-pattern-led-stage" aria-hidden="true">
-                  <LedRow pal={paletteForPattern(look.patternId)} n={22} big wave/>
-                  <span className="sheen"/>
-                </div>
+                <LedStage pal={huePalettePreview}/>
                 {/* The live LEDPreview engine stays mounted (visually hidden) so the
                     live-preview-to-card feature and all its handlers keep working. */}
-                <div className="lw-pattern-led-engine" aria-hidden="true">
+                <div className="lw-pattern-led-engine" aria-hidden="true" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
                   <LEDPreview
                     patternId={previewPatternId}
                     playing={true}
@@ -2248,236 +2086,218 @@ export function PatternsScreen() {
                     targetFps={30}
                   />
                 </div>
+                <p className="pt-desc">{selectedPattern?.description}</p>
               </div>
-              <p className="lw-pattern-preview-copy">{selectedPattern?.description}</p>
-            </Section>
 
-            <Section title="Color & motion" meta={selectedTargetName}>
-              {/* Warm glowing strand, tinted from the selected pattern's warm palette
-                  (tint = pal[2]) exactly as the mockup does. */}
-              <div className="lw-cm-stage">
-                <Strand tint={paletteForPattern(look.patternId)[2] || 'oklch(0.78 0.16 60)'}/>
-                <span className="sheen"/>
-              </div>
-              <div className="lw-cm-palette">
-                <span className="lw-cm-palrow">
-                  {paletteForPattern(look.patternId).map((color, index) => (
-                    <span key={`${color}-${index}`} style={{ background: color }}/>
-                  ))}
-                </span>
-                <div className="lw-cm-palmeta">
-                  <strong>{selectedPattern?.label || look.patternId}</strong>
-                  <span>{selectedFingerprint.tempoLabel} / {selectedFingerprint.motionLabel}</span>
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Color &amp; motion</span><span className="m">{selectedTargetName}</span></div>
+                <div className="pm-motion"><Strand tint={huePaletteTint}/></div>
+                <div className="pm-palette">
+                  <span className="pm-palrow">
+                    {huePalettePreview.map((color, index) => (
+                      <span key={`${color}-${index}`} style={{ background: color }}/>
+                    ))}
+                  </span>
+                  <div className="pm-palmeta">
+                    <strong>{selectedPattern?.label || look.patternId}</strong>
+                    <span>{selectedFingerprint.tempoLabel} / {selectedFingerprint.motionLabel}</span>
+                  </div>
                 </div>
-              </div>
-              <div className="lw-look-color-picker">
-                <label>
-                  <span>Pick color</span>
+
+                {/* color picker (mockup .pm-pickrow idiom) */}
+                <div className="pm-pickrow">
+                  <span className="pm-picklab">Pick color</span>
                   <input
                     type="color"
+                    className="pmx-color-input"
                     value={colorHex}
                     data-testid="look-color-picker"
                     aria-label="Pick color"
                     onChange={event => updatePreviewLook(hexToCardColor(event.target.value, look))}
                   />
-                </label>
-                <span className="lw-look-color-current" style={{ '--swatch': colorHex }}>
-                  <strong>{cardHueToDegrees(look.customHue)} deg</strong>
-                  <em>{Math.round((look.customSaturation / 255) * 100)}%</em>
-                </span>
-              </div>
-              <div className="lw-swatch-grid" aria-label="Color swatches">
-                {SWATCHES.map(hue => (
-                  <button
-                    key={hue}
-                    className={`lw-color-swatch ${Math.abs(hue - look.customHue) <= 2 ? 'is-active' : ''}`}
-                    style={{ '--swatch': `oklch(72% ${cardSaturationToChroma(look.customSaturation)} ${cardHueToDegrees(hue)})` }}
-                    title={`Hue ${hue}`}
-                    aria-label={`Set hue ${hue}`}
-                    onClick={() => updatePreviewLook({ customHue: hue })}
+                  <span className="pm-pickval">{cardHueToDegrees(look.customHue)}&deg; / {Math.round((look.customSaturation / 255) * 100)}%</span>
+                </div>
+
+                {/* round swatch grid (mockup .pm-swatches/.pm-sw) */}
+                <div className="pm-swatches" aria-label="Color swatches">
+                  {SWATCHES.map(hue => (
+                    <button
+                      key={hue}
+                      className={`pm-sw ${Math.abs(hue - look.customHue) <= 2 ? 'on' : ''}`}
+                      style={{ background: `oklch(72% ${cardSaturationToChroma(look.customSaturation)} ${cardHueToDegrees(hue)})` }}
+                      title={`Hue ${hue}`}
+                      aria-label={`Set hue ${hue}`}
+                      onClick={() => updatePreviewLook({ customHue: hue })}
+                    />
+                  ))}
+                </div>
+
+                {/* single hue-spectrum slider (mockup .pm-hue) */}
+                <div className="pm-hue">
+                  <div className="pm-hue-lab"><span>Hue</span><span className="hv" data-testid="look-hue-readout">{cardHueToDegrees(look.customHue)}&deg;</span></div>
+                  <input
+                    className="lw pm-huerange"
+                    type="range"
+                    min="0"
+                    max="255"
+                    step="1"
+                    value={look.customHue}
+                    data-testid="look-hue-slider"
+                    aria-label="Hue"
+                    onChange={event => updatePreviewLook({ customHue: clampByte(Number(event.target.value)) })}
                   />
-                ))}
-              </div>
-              <div className="lw-look-sliders">
-                <TuningSlider
-                  label="Hue"
-                  testId="look-hue-slider"
-                  rowClassName="lw-huerange"
-                  min="0"
-                  max="255"
-                  step="1"
-                  value={look.customHue}
-                  readout={`${cardHueToDegrees(look.customHue)} deg`}
-                  onChange={customHue => updatePreviewLook({ customHue: clampByte(customHue) })}
-                />
-                <TuningSlider
-                  label="Color"
+                </div>
+
+                <Slider
+                  k="Saturation"
+                  v={`${Math.round((look.customSaturation / 255) * 100)}%`}
                   testId="look-saturation-slider"
-                  min="0"
-                  max="255"
-                  step="1"
                   value={look.customSaturation}
-                  readout={`${Math.round((look.customSaturation / 255) * 100)}%`}
+                  min={0}
+                  max={255}
+                  step={1}
                   onChange={customSaturation => updatePreviewLook({ customSaturation: clampByte(customSaturation) })}
                 />
-                <TuningSlider
-                  label="Brightness"
+                <Slider
+                  k="Brightness"
+                  v={`${Math.round(look.brightness * 100)}%`}
                   testId="look-brightness-slider"
-                  min="0.05"
-                  max="1"
-                  step="0.01"
                   value={look.brightness}
-                  readout={`${Math.round(look.brightness * 100)}%`}
+                  min={0.05}
+                  max={1}
+                  step={0.01}
                   onChange={brightness => updatePreviewLook({ brightness })}
                 />
-                <TuningSlider
-                  label="Speed"
+                <Slider
+                  k="Speed"
+                  v={`${look.speed.toFixed(2)}x`}
                   testId="look-speed-slider"
-                  min="0.05"
-                  max="3"
-                  step="0.01"
                   value={look.speed}
-                  readout={`${look.speed.toFixed(2)}x`}
+                  min={0.05}
+                  max={3}
+                  step={0.01}
                   onChange={speed => updatePreviewLook({ speed })}
                 />
-                <TuningSlider
-                  label="Shift"
-                  testId="look-hue-shift-slider"
-                  min="-128"
-                  max="128"
-                  step="1"
-                  value={look.hueShift}
-                  readout={String(look.hueShift)}
-                  onChange={hueShift => updatePreviewLook({ hueShift })}
-                />
-              </div>
-              <div className="lw-look-switches">
-                <label><input type="checkbox" checked={look.customBreathe} onChange={event => updatePreviewLook({ customBreathe: event.target.checked })}/> Breathe</label>
-                <label><input type="checkbox" checked={look.customDrift} onChange={event => updatePreviewLook({ customDrift: event.target.checked })}/> Drift</label>
-              </div>
-              <div className="lw-look-tune-actions">
-                <button type="button" className="btn btn-ghost" onClick={resetPatternDefaults}>Reset pattern defaults</button>
-                <button type="button" className="btn btn-ghost" onClick={() => updatePreviewLook(randomLookTuning())}>Randomize</button>
-              </div>
-            </Section>
 
-            <Section title="Geometry" meta={geometryType}>
-              <div className="lw-geometry-presets">
-                {GEOMETRY_PRESETS.map(preset => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={geometryType === preset.id ? 'active' : ''}
-                    onClick={() => updateGeometry(preset.settings)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+                <div className="pmx-tune-actions">
+                  <button type="button" className="btn ghost-sm" onClick={resetPatternDefaults}>Reset</button>
+                  <button type="button" className="btn ghost-sm" onClick={() => updatePreviewLook(randomLookTuning())}>Randomize</button>
+                </div>
+
+                {/* Advanced: Breathe / Drift toggles + Hue-shift slider (tucked) */}
+                <details className="pmx-advanced">
+                  <summary>Advanced</summary>
+                  <div className="pmx-advanced-body">
+                    <div className="pmx-switches">
+                      <label><input type="checkbox" checked={look.customBreathe} onChange={event => updatePreviewLook({ customBreathe: event.target.checked })}/> Breathe</label>
+                      <label><input type="checkbox" checked={look.customDrift} onChange={event => updatePreviewLook({ customDrift: event.target.checked })}/> Drift</label>
+                    </div>
+                    <Slider
+                      k="Hue shift"
+                      v={String(look.hueShift)}
+                      testId="look-hue-shift-slider"
+                      value={look.hueShift}
+                      min={-128}
+                      max={128}
+                      step={1}
+                      onChange={hueShift => updatePreviewLook({ hueShift })}
+                    />
+                  </div>
+                </details>
               </div>
-              {geometryType.startsWith('mirror') && (
-                <div className="lw-geometry-segmented" aria-label="Mirror axis">
-                  {[
-                    ['mirror-h', 'Top/bottom'],
-                    ['mirror-v', 'Left/right'],
-                    ['mirror-hv', 'Both'],
-                  ].map(([type, label]) => (
+
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Geometry</span><span className="m">{geometryType}</span></div>
+                <div className="geo-seg">
+                  {GEOMETRY_PRESETS.map(preset => (
                     <button
-                      key={type}
+                      key={preset.id}
                       type="button"
-                      className={geometryType === type ? 'active' : ''}
-                      onClick={() => updateGeometry({ enabled: true, type })}
+                      className={geometryType === preset.id ? 'on' : ''}
+                      onClick={() => updateGeometry(preset.settings)}
                     >
-                      {label}
+                      {preset.label}
                     </button>
                   ))}
                 </div>
-              )}
-              {geometryType === 'radial' && (
-                <div className="lw-geometry-counts" aria-label="Mandala repeats">
-                  {[3, 4, 5, 6, 8, 12].map(count => (
-                    <button
-                      key={count}
-                      type="button"
-                      className={(symSettings?.count || 8) === count ? 'active' : ''}
-                      onClick={() => updateGeometry({ enabled: true, type: 'radial', count })}
-                    >
-                      {count}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {geometryType === 'kaleido' && (
-                <TuningSlider
-                  label="Slices"
-                  testId="look-kaleido-slices-slider"
-                  min="2"
-                  max="16"
-                  step="1"
-                  value={symSettings?.slices || 6}
-                  readout={String(symSettings?.slices || 6)}
-                  onChange={slices => updateGeometry({ enabled: true, type: 'kaleido', slices })}
-                />
-              )}
-            </Section>
+                {geometryType.startsWith('mirror') && (
+                  <div className="geo-seg" aria-label="Mirror axis" style={{ marginTop: 8 }}>
+                    {[
+                      ['mirror-h', 'Top/bottom'],
+                      ['mirror-v', 'Left/right'],
+                      ['mirror-hv', 'Both'],
+                    ].map(([type, label]) => (
+                      <button
+                        key={type}
+                        type="button"
+                        className={geometryType === type ? 'on' : ''}
+                        onClick={() => updateGeometry({ enabled: true, type })}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* Advanced geometry params: Mandala count, Kaleido slices (tucked) */}
+                {(geometryType === 'radial' || geometryType === 'kaleido') && (
+                  <details className="pmx-advanced">
+                    <summary>Advanced</summary>
+                    <div className="pmx-advanced-body">
+                      {geometryType === 'radial' && (
+                        <div className="pmx-counts" aria-label="Mandala repeats">
+                          {[3, 4, 5, 6, 8, 12].map(count => (
+                            <button
+                              key={count}
+                              type="button"
+                              className={(symSettings?.count || 8) === count ? 'on' : ''}
+                              onClick={() => updateGeometry({ enabled: true, type: 'radial', count })}
+                            >
+                              {count}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {geometryType === 'kaleido' && (
+                        <Slider
+                          k="Slices"
+                          v={String(symSettings?.slices || 6)}
+                          testId="look-kaleido-slices-slider"
+                          value={symSettings?.slices || 6}
+                          min={2}
+                          max={16}
+                          step={1}
+                          onChange={slices => updateGeometry({ enabled: true, type: 'kaleido', slices })}
+                        />
+                      )}
+                    </div>
+                  </details>
+                )}
+              </div>
 
-            <Section title="Knob brightness" meta={`${playlist.length} playlist looks`}>
-              <div className="lw-knob-control-grid">
-                <div>
-                  <span>Rotate</span>
-                  <div className="lw-tweaks-seg">
-                    <button
-                      type="button"
-                      className={controls.encoder.rotateDirection === 'clockwise-brighter' ? 'active' : ''}
-                      onClick={() => updateController({ controls: { encoder: { rotateDirection: 'clockwise-brighter' } } })}
-                    >
-                      Brighter
-                    </button>
-                    <button
-                      type="button"
-                      className={controls.encoder.rotateDirection === 'clockwise-dimmer' ? 'active' : ''}
-                      onClick={() => updateController({ controls: { encoder: { rotateDirection: 'clockwise-dimmer' } } })}
-                    >
-                      Dimmer
-                    </button>
+              <div className="card pm-pane">
+                <div className="sec-h"><span className="t">Card</span><span className="m">{config.led.pixels} pixels</span></div>
+                <div className="pmx-cardsummary">
+                  <span>Live preview</span><strong data-testid="card-live-preview-label">{selectedPattern?.label || look.patternId}</strong>
+                  <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>
+                  <span>Starts with</span><strong data-testid="card-startup-label">{savedPattern?.label || savedGlobalLook.patternId}</strong>
+                  <span>Playlist</span><strong data-testid="card-knob-cycle-label">{playlistSummary || playlistIds.join(', ')}</strong>
+                  <div className="pmx-cardhost">
+                    <input
+                      className="pm-input"
+                      value={cardHost}
+                      onChange={event => persistHost(event.target.value)}
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      placeholder="lightweaver.local"
+                      aria-label="Card local page host"
+                    />
+                    <button type="button" className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open</button>
                   </div>
                 </div>
-                <label>
-                  <span>Step</span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="64"
-                    step="1"
-                    value={controls.encoder.brightnessStep}
-                    onChange={event => updateController({ controls: { encoder: { brightnessStep: +event.target.value } } })}
-                  />
-                  <b>{controls.encoder.brightnessStep}</b>
-                </label>
               </div>
-            </Section>
-
-            <Section title="Card" meta={`${config.led.pixels} pixels`}>
-              <div className="lw-card-load-summary">
-                <span>Live preview</span><strong data-testid="card-live-preview-label">{selectedPattern?.label || look.patternId}</strong>
-                <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>
-                <span>Starts with</span><strong data-testid="card-startup-label">{savedPattern?.label || savedGlobalLook.patternId}</strong>
-                <span>Playlist</span><strong data-testid="card-knob-cycle-label">{playlistSummary || playlistIds.join(', ')}</strong>
-                <span>Local page</span>
-                <div className="lw-card-host-row">
-                  <input
-                    className="lw-search-input"
-                    value={cardHost}
-                    onChange={event => persistHost(event.target.value)}
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    placeholder="lightweaver.local"
-                  />
-                  <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open</button>
-                </div>
-              </div>
-            </Section>
-          </aside>
+            </aside>
+          </div>
         </div>
       </div>
     </div>
