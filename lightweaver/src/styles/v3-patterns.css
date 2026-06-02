@@ -1,657 +1,452 @@
 /* ============================================================
    v3 restyle — PATTERNS & MIXES (the hero)
    ------------------------------------------------------------
-   Presentation-only override of main.css. Loaded after main.css.
-   Maps the Claude Design v3 look onto the LIVE classNames.
-   Tokens only (no hardcoded blue, no raw hex except the hue
-   spectrum gradient, which is a literal rainbow scale).
-   Every handler, testid, slider, swatch, toggle and drag target
-   is untouched: this file changes appearance, never structure.
+   Visual transplant of the approved Claude Design v3 mockup
+   (_design_v3/project/lw-pattern.jsx + screens.css + styles.css)
+   onto the LIVE PatternsScreen markup. Presentation only.
+
+   The live component was rebuilt to the mockup's structure and
+   classNames, so the rules below are the mockup's exact rules.
+   Token aliases below bridge the mockup token names to the live
+   main.css tokens (which use different names) so no main.css edit
+   is needed. Clay accent, black-on-clay buttons, warm canvas.
    ============================================================ */
 
-/* ---- Screen + shell: warm canvas, no cool-blue grid ---- */
+/* ---- Token bridge: mockup names -> live main.css tokens ----
+   Scoped to the screen so it never leaks to other views.       */
 .lw-patterns-screen {
-  background:
-    linear-gradient(90deg, oklch(100% 0 0 / 0.018) 1px, transparent 1px),
-    linear-gradient(180deg, oklch(100% 0 0 / 0.012) 1px, transparent 1px),
-    radial-gradient(120% 90% at 50% -10%, oklch(0.185 0.012 52), oklch(0.13 0.006 60) 62%),
-    var(--bg);
-  background-size: 46px 46px, 46px 46px, auto, auto;
+  --bg-app: var(--bg);
+  --bg-panel: oklch(0.205 0.007 75);
+  --bg-elev: oklch(0.242 0.008 75);
+  --bg-elev-2: oklch(0.285 0.010 75);
+
+  --border-soft: oklch(0.255 0.007 75);
+
+  --text-hi: var(--text);
+  --text-mid: var(--text-2);
+  --text-lo: var(--text-3);
+  --text-faint: var(--text-4);
+
+  --ok-dim: oklch(0.745 0.095 150 / 0.18);
+
+  --font-ui: var(--ui-font);
+  --font-mono: var(--mono-font);
+
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+
+  --lw-star: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z'/%3E%3C/svg%3E");
 }
 
+/* ============================================================
+   Screen frame (the live screen owns scrolling already)
+   ============================================================ */
+.lw-patterns-screen {
+  min-height: 100%;
+  overflow-y: auto;
+  background: var(--bg-app);
+}
+
+/* mockup .pm wrapper -> .lw-patterns-shell */
 .lw-patterns-shell {
-  width: min(1400px, calc(100% - 52px));
-  padding: 30px 0 48px;
-  gap: 20px;
+  padding: 26px 32px 40px;
+  max-width: 1400px;
+  margin: 0 auto;
+  display: block;
 }
 
-/* ---- Hero: title + calm action grouping ---- */
-.lw-patterns-hero {
-  align-items: flex-start;
-  margin-bottom: 2px;
-}
-
-.lw-patterns-hero h1 {
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.lw-patterns-hero p {
-  margin-top: 6px;
-  max-width: 540px;
-  font-size: 13.5px;
-  line-height: 1.5;
-  color: var(--text-3);
-}
-
-/* Action bar reads as one calm cluster, grouped by label.
-   Save to card stays the single clay primary; everything else
-   is a quiet ghost tucked under its group label. Nothing removed. */
-.lw-patterns-actions {
-  margin-left: auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.lw-action-group {
-  gap: 4px;
-  padding: 3px 4px 3px 10px;
-  min-height: 34px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-}
-
-.lw-action-group:first-child { padding-left: 10px; }
-
-/* drop the divider line — groups now read as separate pills */
-.lw-action-group + .lw-action-group { border-left: 1px solid var(--border-2); }
-
-/* the main group (Save to card + Repair) gets a faint clay wash */
-.lw-action-group-main {
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-}
-
-.lw-action-group-label {
-  color: var(--text-4);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.lw-action-group .btn {
-  min-height: 28px;
-  padding: 0 11px;
-  border-radius: var(--r-sm);
-}
-
-/* Save to card — the one primary, clay fill with black text */
-.lw-toolbar-primary {
-  min-width: 96px;
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: transparent;
-  font-weight: 600;
-}
-.lw-toolbar-primary:hover { background: var(--accent-hi); }
-
-/* secondary ghosts read quiet until hovered */
-.lw-toolbar-action {
-  color: var(--text-2);
-  background: transparent;
-  border-color: transparent;
-}
-.lw-toolbar-action:hover {
-  color: var(--text);
-  background: var(--surface-3);
-  border-color: transparent;
-}
-.lw-action-group-main .lw-toolbar-action:hover {
-  background: color-mix(in oklch, var(--accent) 16%, transparent);
-}
-.lw-toolbar-action.is-active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-}
-
-/* ---- Status banner ---- */
-.lw-chip-status {
-  padding: 11px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-.lw-chip-status.is-ok { border-color: color-mix(in oklch, var(--ok) 45%, var(--border-2)); }
-.lw-chip-status.is-err { border-color: color-mix(in oklch, var(--danger) 50%, var(--border-2)); }
-.lw-repair-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
-
-/* ---- Grid: main + 372px aside ---- */
-.lw-patterns-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 372px;
-  gap: 22px;
-  align-items: start;
-}
-
-/* ============================================================
-   Live preview bar
-   ============================================================ */
-.lw-live-preview-bar {
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 11px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-}
-.lw-live-preview-bar label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-.lw-live-preview-bar span {
-  font-size: 11.5px;
-  font-family: var(--mono-font);
-  color: var(--ok);
-}
-
-/* ============================================================
-   Strip finder
-   ============================================================ */
-.lw-strip-color-test {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  flex-wrap: wrap;
-}
-.lw-strip-color-title {
-  font-size: 10px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-4);
-  font-weight: 600;
+/* ---- shared button + icon sizing ---- */
+.lw-patterns-screen .btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 13px; border-radius: var(--r-sm);
+  font-size: 12.5px; font-weight: 500; letter-spacing: 0.005em;
+  background: var(--bg-elev); color: var(--text-hi);
+  border: 1px solid var(--border-soft);
+  transition: background .12s, border-color .12s;
   white-space: nowrap;
 }
+.lw-patterns-screen .btn:hover { background: var(--bg-elev-2); border-color: var(--border); }
+.lw-patterns-screen .btn.primary,
+.lw-patterns-screen .btn.btn-primary {
+  background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600;
+}
+.lw-patterns-screen .btn.primary:hover,
+.lw-patterns-screen .btn.btn-primary:hover { background: var(--accent-hi); }
+.lw-patterns-screen .btn:disabled { opacity: 0.4; cursor: default; }
+.lw-patterns-screen .btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; flex-shrink: 0; }
+
+/* ---- section header (mockup .sec-h) ---- */
+.lw-sec-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.lw-sec-header > span:first-child,
+.lw-sec-header .t { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-lo); font-weight: 600; white-space: nowrap; }
+.lw-sec-header .meta,
+.lw-sec-header .m { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); white-space: nowrap; }
+.lw-sec-header .line { flex: 1; height: 1px; background: var(--border-hair); }
+
+/* ============================================================
+   Hero (mockup .pm-hero)
+   ============================================================ */
+.lw-patterns-hero { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; margin-bottom: 22px; }
+.lw-patterns-hero h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }
+.lw-patterns-hero p { font-size: 13.5px; color: var(--text-lo); margin-top: 6px; max-width: 540px; line-height: 1.5; }
+.lw-patterns-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* connection group (mockup .ag-conn) */
+.ag-conn { display: flex; align-items: center; gap: 4px; padding: 3px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-md); }
+.ag-conn .btn { border: none; background: transparent; height: 28px; }
+.ag-conn .btn:hover { background: var(--bg-elev-2); }
+.ag-conn .btn.toggled,
+.ag-conn .btn.is-active { background: var(--accent-soft); color: var(--accent); }
+
+/* card tools menu (mockup .pm-menu) */
+.pm-menu { position: relative; }
+.pm-menu > .btn svg:last-child { opacity: 0.6; }
+.pm-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.pm-menu-pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 41; min-width: 210px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: 0 12px 30px -8px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 1px; }
+.pm-menu-item { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: var(--r-sm); font-size: 12.5px; font-weight: 500; color: var(--text-mid); text-align: left; white-space: nowrap; transition: background .12s, color .12s; background: transparent; border: none; width: 100%; }
+.pm-menu-item:hover { background: var(--bg-elev-2); color: var(--text-hi); }
+.pm-menu-item.is-danger:hover { color: var(--danger); }
+.pm-menu-item:disabled { opacity: 0.4; cursor: default; }
+.pm-menu-sep { height: 1px; background: var(--border-hair); margin: 5px 2px; }
+
+.lw-patterns-screen .btn.toggled { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+
+/* ---- chip status banner ---- */
+.lw-chip-status { margin-bottom: 16px; padding: 11px 14px; border-radius: var(--r-md); font-size: 12.5px; line-height: 1.5; color: var(--text-mid); background: var(--bg-panel); border: 1px solid var(--border-soft); display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.lw-chip-status.is-ok { color: var(--ok); border-color: var(--accent-line); }
+.lw-chip-status.is-err { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 45%, var(--border)); }
+.lw-repair-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+
+/* ============================================================
+   Grid (mockup .pm-grid)
+   ============================================================ */
+.lw-patterns-grid { display: grid; grid-template-columns: minmax(0, 1fr) 372px; gap: 22px; align-items: start; }
+.lw-look-picker { min-width: 0; }
+
+/* ---- live preview bar (mockup .pm-livebar) ---- */
+.lw-live-preview-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); margin-bottom: 10px; }
+.lw-live-preview-bar label { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-mid); cursor: pointer; white-space: nowrap; }
+.lw-live-preview-bar label input { accent-color: var(--accent); width: 16px; height: 16px; }
+.lw-live-preview-bar > span { font-size: 11.5px; font-family: var(--font-mono); color: var(--ok); white-space: nowrap; }
+
+/* ---- strip finder (mockup .pm-stripfinder) ---- */
+.lw-strip-color-test { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); margin-bottom: 16px; flex-wrap: wrap; }
+.lw-strip-color-title { font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; white-space: nowrap; }
 .lw-strip-color-buttons { display: flex; gap: 4px; }
-.lw-strip-color-buttons .btn {
-  width: 34px;
-  min-width: 34px;
-  height: 30px;
-  padding: 0;
-  justify-content: center;
-  font-family: var(--mono-font);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-}
-.lw-strip-color-buttons .btn:hover { color: var(--text); }
-.lw-strip-color-buttons .btn.active {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: transparent;
-}
-.lw-strip-order-pill {
-  font-size: 12px;
-  color: var(--text-3);
-  font-family: var(--mono-font);
-}
-.lw-strip-order-pill b {
-  color: var(--accent);
-  font-weight: 700;
-  margin-left: 3px;
-}
-.lw-strip-next-order { margin-left: auto; }
+.lw-strip-color-buttons .btn { width: 34px; height: 30px; padding: 0; justify-content: center; border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--text-mid); background: var(--bg-elev); border: 1px solid var(--border-soft); }
+.lw-strip-color-buttons .btn:hover { color: var(--text-hi); }
+.lw-strip-color-buttons .btn.active { color: var(--on-accent); background: var(--accent); border-color: transparent; }
+.lw-strip-order-pill { font-size: 12px; color: var(--text-lo); font-family: var(--font-mono); }
+.lw-strip-order-pill b { color: var(--accent); font-weight: 700; margin-left: 3px; }
+.lw-strip-next-order { margin-left: auto; height: 30px; padding: 0 11px; font-size: 12px; }
 
 /* ============================================================
-   Design target / Layer mix
+   Design target (mockup .pm-target / .pm-targetcard / .tc-*)
    ============================================================ */
-.lw-target-panel {
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-lg);
-  padding: 14px 16px 16px;
-}
-
-.lw-target-compound-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
+.lw-target-panel { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-lg); padding: 14px 16px 16px; margin-bottom: 18px; }
+.lw-target-compound-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .lw-target-compound-copy { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
-.lw-target-compound-copy span {
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-4);
-  font-weight: 600;
-}
-.lw-target-compound-copy strong { font-size: 13.5px; font-weight: 600; color: var(--text); }
-.lw-target-compound-bar .lw-search-input { flex: 1; height: 34px; }
-.lw-target-compound-bar .btn {
-  background: var(--accent);
-  color: var(--on-accent);
-  border-color: transparent;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.lw-target-compound-bar .btn:hover { background: var(--accent-hi); }
+.lw-target-compound-copy span { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
+.lw-target-compound-copy strong { font-size: 13.5px; font-weight: 600; color: var(--text-hi); }
+.lw-target-compound-bar .lw-search-input { flex: 1; }
 
-.lw-target-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-md);
-  overflow: hidden;
+.lw-patterns-screen .lw-search-input {
+  height: 34px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-ui); font-size: 13px; padding: 0 12px; width: 100%;
 }
+.lw-patterns-screen .lw-search-input::placeholder { color: var(--text-faint); }
+.lw-patterns-screen .lw-search-input:focus { outline: none; border-color: var(--accent); }
 
-/* the target rows — All sections header gets the clay wash */
+/* target rows -> mockup .pm-targetcard with .tc-head / .tc-layer */
+.lw-target-grid { border: 1px solid var(--accent-line); border-radius: var(--r-md); overflow: hidden; display: flex; flex-direction: column; }
 .lw-section-target {
-  border-radius: 0;
-  border: none;
-  border-top: 1px solid var(--border-hair);
-  background: var(--surface);
+  display: grid; grid-template-columns: 48px 1fr 70px 180px; align-items: center; gap: 14px;
+  padding: 12px 14px; cursor: pointer; border: none; text-align: left;
+  background: var(--bg-panel); transition: background .12s;
 }
-.lw-section-target:first-child { border-top: none; }
 .lw-section-target.is-all { background: var(--accent-soft); }
-.lw-section-target:hover { background: var(--surface-2); }
-.lw-section-target.is-all:hover { background: color-mix(in oklch, var(--accent) 22%, transparent); }
-.lw-section-target.is-active {
-  box-shadow: inset 2px 0 0 var(--accent);
-  background: var(--bg-sel);
-}
-.lw-section-target.is-all.is-active { background: color-mix(in oklch, var(--accent) 24%, transparent); }
+.lw-section-target.is-section { border-top: 1px solid var(--border-hair); }
+.lw-section-target.is-active { box-shadow: 0 0 0 1px var(--accent) inset; }
+.lw-section-target:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 .lw-section-target-badge {
-  font-family: var(--mono-font);
-  font-weight: 700;
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
+  width: 44px; height: 30px; border-radius: var(--r-sm); display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
+  color: var(--on-accent); background: var(--accent);
 }
-.lw-section-target.is-all .lw-section-target-badge {
-  color: var(--on-accent);
-  background: var(--accent);
-  border-color: transparent;
+.lw-section-target.is-section .lw-section-target-badge {
+  width: 30px; font-weight: 600; font-size: 13px; color: var(--text-mid);
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
 }
-.lw-section-target.is-active .lw-section-target-badge {
-  border-color: var(--accent-line);
-}
+.lw-section-target-main { display: contents; }
+.lw-section-target-head { display: contents; }
 
-.lw-section-target-range {
-  font-family: var(--mono-font);
-  color: var(--text);
+.lw-target-edit-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lw-target-edit-field > span { font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
+.lw-target-name-field { grid-column: 2; }
+.lw-target-led-field { grid-column: 3; }
+.lw-target-name-input {
+  background: none; border: none; outline: none; color: var(--text-hi);
+  font-family: var(--font-ui); font-size: 13.5px; font-weight: 500; padding: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%;
 }
-
-/* inputs inside target rows */
-.lw-target-name-input,
+.lw-target-name-input:focus { border-bottom: 1px solid var(--accent-line); }
 .lw-target-led-input {
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  color: var(--text);
-  font-family: var(--ui-font);
+  background: none; border: none; outline: none; color: var(--text-hi);
+  font-family: var(--font-mono); font-size: 13.5px; padding: 0; width: 60px;
 }
-.lw-target-led-input { font-family: var(--mono-font); }
-.lw-target-name-input:read-only { background: transparent; border-color: transparent; }
-.lw-target-name-input:not(:read-only):focus,
-.lw-target-led-input:focus { outline: none; border-color: var(--accent); }
-.lw-target-led-input:disabled { opacity: 0.55; }
+.lw-target-led-input:focus { border-bottom: 1px solid var(--accent-line); }
+.lw-target-led-input:disabled { color: var(--text-mid); }
+
+.lw-section-target-range { display: none; }
+.lw-section-target-look { grid-column: 4; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.lw-section-target-look .lw-pattern-thumb { width: 13px; height: 13px; border-radius: 3px; flex: none; }
+.lw-section-target-look-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lw-section-target-look-copy > span { font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
+.lw-section-target-look-copy b { font-size: 13px; color: var(--text-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ============================================================
-   Browse tools: search + filter chips
+   Browse tools + pattern cards (mockup .pm-browse / .pmcard)
    ============================================================ */
-.lw-pattern-browse-tools > .lw-search-input { height: 36px; }
-
-.lw-pattern-filter-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.lw-pattern-browse-tools { display: flex; flex-direction: column; gap: 10px; margin: 5px 0 12px; }
+.lw-pattern-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .lw-pattern-filter-row .btn {
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12px;
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
+  height: 28px; padding: 0 12px; border-radius: 100px; font-size: 12px; font-weight: 500;
+  color: var(--text-lo); background: var(--bg-elev); border: 1px solid var(--border-soft);
 }
-.lw-pattern-filter-row .btn:hover { color: var(--text); background: var(--surface-3); }
-.lw-pattern-filter-row .btn.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-}
-.lw-pattern-browse-tools > span {
-  font-size: 11px;
-  font-family: var(--mono-font);
-  color: var(--text-4);
-}
+.lw-pattern-filter-row .btn:hover { color: var(--text-hi); }
+.lw-pattern-filter-row .btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
+.lw-pattern-browse-tools > span { font-size: 11px; font-family: var(--font-mono); color: var(--text-faint); }
 
-/* search inputs across the screen */
-.lw-search-input {
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  color: var(--text);
-  font-size: 13px;
-}
-.lw-search-input::placeholder { color: var(--text-4); }
-.lw-search-input:focus { outline: none; border-color: var(--accent); }
+.lw-look-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 10px; }
 
-/* ============================================================
-   Browse grid — each card a little glowing LED strip
-   ============================================================ */
-.lw-look-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 10px;
-}
-
+/* each pattern card -> mockup .pmcard */
 .lw-look-card {
-  padding: 9px;
-  border-radius: var(--r-md);
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  transition: border-color 0.12s, box-shadow 0.12s;
+  text-align: left; padding: 9px; border-radius: var(--r-md);
+  background: var(--bg-panel); border: 1px solid var(--border-soft);
+  transition: border-color .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 9px;
+  cursor: pointer;
 }
 .lw-look-card:hover { border-color: var(--border); }
-.lw-look-card.is-previewing { border-color: var(--accent-line); }
-.lw-look-card.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent) inset;
+.lw-look-card.is-selected,
+.lw-look-card.is-previewing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+.lw-look-card-main {
+  display: flex; flex-direction: column; gap: 9px; padding: 0; border: none; background: none;
+  text-align: left; cursor: pointer; width: 100%;
 }
 
-.lw-look-card-main { gap: 9px; }
-.lw-look-card-copy strong { font-size: 13px; font-weight: 500; color: var(--text); }
-.lw-look-card-copy > span:not(.lw-pattern-fingerprint) {
-  font-size: 11.5px;
-  color: var(--text-4);
+/* the glowing LED strip thumb at the top of each card -> mockup .pmcard-led */
+.lw-pmcard-led {
+  height: 48px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; padding: 0 8px;
+  background: radial-gradient(110% 130% at 50% 135%, oklch(0.2 0.018 50), oklch(0.095 0.006 45));
 }
+.lw-pmcard-led .ledrow { gap: 6px; }
+.lw-pmcard-led .led { width: 8px; height: 8px; }
 
-/* the thumbnail becomes a warm glowing LED stage strip */
-.lw-pattern-thumb,
-.lw-compound-thumb {
-  border-radius: var(--r-sm);
-  background:
-    radial-gradient(110% 130% at 50% 135%, oklch(0.20 0.018 50), oklch(0.095 0.006 45));
-  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.05);
-}
-.lw-pattern-thumb-glow {
-  background:
-    radial-gradient(circle at 50% 60%, color-mix(in oklch, var(--palette-a) 70%, transparent), transparent 62%);
-}
-.lw-pattern-thumb-swatch-row b { box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08); }
+.lw-look-card-copy { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.lw-look-card-copy strong { font-size: 13px; font-weight: 500; color: var(--text-hi); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lw-look-card-copy > span:not(.mixtag) { font-size: 9px; font-family: var(--font-mono); letter-spacing: 0.06em; color: var(--text-faint); width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mixtag { font-size: 8.5px; font-family: var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--accent); border: 1px solid var(--accent-line); border-radius: 100px; padding: 1px 6px; width: auto !important; }
 
-/* in-playlist toggle reads as a calm star-style chip */
-.lw-look-card-toggle {
-  font-size: 11px;
-  color: var(--text-4);
+/* hide the dense fingerprint chip inside the card body — the LED strip carries the look now */
+.lw-look-card .lw-pattern-fingerprint { display: none; }
+
+/* playlist toggle -> mockup .pmcard-pl with star */
+.lw-look-card-toggle { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-faint); cursor: pointer; transition: color .12s; }
+.lw-look-card-toggle:hover { color: var(--text-mid); }
+.lw-look-card-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.lw-look-card-toggle::before {
+  content: ""; width: 13px; height: 13px; flex-shrink: 0;
+  background: currentColor;
+  -webkit-mask: var(--lw-star) center / contain no-repeat;
+          mask: var(--lw-star) center / contain no-repeat;
+  opacity: 0.55;
 }
-.lw-look-card-toggle:hover { color: var(--text-2); }
-.lw-look-card-toggle input:checked + span,
 .lw-look-card-toggle:has(input:checked) { color: var(--accent); }
+.lw-look-card-toggle:has(input:checked)::before { opacity: 1; }
 
-/* ---- Load more ---- */
-.lw-pattern-load-more {
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
+.lw-pattern-empty { color: var(--text-faint); font-size: 13px; grid-column: 1 / -1; padding: 20px; }
+
+/* compound (layer-mix) card keeps the same shell */
+.lw-look-card.is-compound .lw-compound-thumb {
+  height: 48px; border-radius: var(--r-sm); overflow: hidden;
+  display: grid; grid-template-columns: repeat(var(--compound-cols, 2), 1fr); gap: 2px;
+  background: var(--bg-canvas);
 }
-.lw-pattern-load-more:hover { color: var(--text); background: var(--surface-3); }
-.lw-pattern-load-more-row span {
-  font-size: 11px;
-  font-family: var(--mono-font);
-  color: var(--text-4);
-}
+.lw-compound-thumb-cell { position: relative; display: grid; place-items: center; }
+.lw-compound-thumb-cell i { position: absolute; inset: 0; background: var(--palette-c, var(--accent)); opacity: 0.85; }
+.lw-compound-thumb-cell b { position: relative; z-index: 1; font-size: 8px; color: var(--text-hi); text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; }
+.lw-compound-thumb-more { position: absolute; right: 4px; bottom: 2px; font-size: 9px; font-family: var(--font-mono); color: var(--text-hi); }
+.lw-compound-card-meta { font-size: 9px !important; font-family: var(--font-mono); color: var(--text-faint); width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* load more */
+.lw-pattern-load-more-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.lw-pattern-load-more { height: 30px; }
+.lw-pattern-load-more-row > span { font-size: 11px; font-family: var(--font-mono); color: var(--text-faint); }
 
 /* ============================================================
-   Aside
+   ASIDE (mockup .pm-aside)
    ============================================================ */
-.lw-patterns-aside {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  position: sticky;
-  top: 14px;
-}
+.lw-patterns-aside { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 14px; }
+.lw-patterns-section { padding: 14px 16px 16px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); }
+.lw-patterns-section .lw-sec-header { margin-bottom: 12px; }
 
-/* ---- Preview: glowing LED stage (warm clay glow) ---- */
+/* ---- LED stage Preview (mockup .pm-led-stage) ----
+   Visible render is the warm glowing bead stage; the real LEDPreview engine
+   stays mounted but visually hidden so the live-preview-to-card feature keeps
+   working without painting its cool/blue colors over the warm look. */
 .lw-pattern-led-preview {
-  position: relative;
-  height: clamp(220px, 29vh, 340px);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  overflow: hidden;
-  background:
-    radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%),
-    var(--pattern-preview-bg, var(--preview-bg));
+  position: relative; height: 134px; border-radius: var(--r-md); overflow: hidden;
+  background: radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%);
+  border: 1px solid var(--border-soft);
 }
-.lw-pattern-led-preview::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  box-shadow: inset 0 0 64px 16px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-  z-index: 2;
+.lw-pattern-led-preview::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 64px 16px rgba(0,0,0,.5); pointer-events: none; z-index: 2; }
+
+/* visible warm bead stage (mockup LedStage) sits on top */
+.lw-pattern-led-stage {
+  position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 0 14px;
 }
-/* a slow sheen sweep — the signature v3 stage touch */
-.lw-pattern-led-preview::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 38%;
-  z-index: 2;
-  pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.045), transparent);
-  animation: lw-pm-sheen 5s ease-in-out infinite;
-}
-@keyframes lw-pm-sheen {
-  0% { transform: translateX(-130%); }
-  60%, 100% { transform: translateX(360%); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lw-pattern-led-preview::before { display: none; }
+.lw-pattern-led-stage .sheen {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 38%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.045), transparent);
+  animation: pmsheen 5s ease-in-out infinite;
 }
 
-.lw-pattern-preview-copy {
-  margin-top: 10px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--text-3);
-}
+/* the live engine is mounted but invisible (keeps rendering for the card handlers) */
+.lw-pattern-led-engine { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; }
+.lw-pattern-led-engine svg,
+.lw-pattern-led-engine canvas { width: 100%; height: 100%; display: block; }
 
-/* ---- Color & motion: warm LED preview stage ---- */
-.lw-look-preview {
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  background:
-    radial-gradient(130% 100% at 50% 125%, oklch(0.21 0.02 50), oklch(0.10 0.007 45) 74%),
-    radial-gradient(circle at 24% 34%, color-mix(in oklch, var(--palette-b) 40%, transparent), transparent 30%),
-    radial-gradient(circle at 74% 66%, color-mix(in oklch, var(--palette-c) 36%, transparent), transparent 32%);
-}
-.lw-look-preview.is-large { min-height: 200px; }
-.lw-look-led-field i {
-  box-shadow:
-    0 0 0 1px oklch(100% 0 0 / 0.18),
-    0 0 12px color-mix(in oklch, var(--led-color) 78%, transparent);
-}
+.lw-pattern-preview-copy { font-size: 12.5px; color: var(--text-mid); line-height: 1.5; margin-top: 12px; }
 
-/* ---- Color picker row ---- */
-.lw-look-color-picker {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+/* ---- Color & motion: the warm glowing LedStage strand (mockup LedStage) ---- */
+.lw-cm-stage {
+  position: relative; height: 134px; border-radius: var(--r-md); overflow: hidden; display: grid; place-items: center; padding: 0 14px;
+  background: radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%); border: 1px solid var(--border-soft);
 }
-.lw-look-color-picker label { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-2); }
-.lw-look-color-picker input[type="color"] {
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-}
-.lw-look-color-current {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--mono-font);
-  color: var(--accent);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-sm);
-  padding: 4px 9px;
-}
-.lw-look-color-current::before {
-  content: "";
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  background: var(--swatch);
-  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.12);
-}
-.lw-look-color-current strong { font-size: 12px; color: var(--text); font-weight: 600; }
-.lw-look-color-current em { font-size: 11px; font-style: normal; color: var(--text-3); }
+.lw-cm-stage::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 64px 16px rgba(0,0,0,.5); pointer-events: none; }
+.lw-cm-stage .sheen { position: absolute; top: 0; bottom: 0; left: 0; width: 38%; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.045), transparent); animation: pmsheen 5s ease-in-out infinite; }
+/* the warm sine strand fills the stage (mockup Strand) */
+.lw-cm-stage > svg { position: relative; z-index: 1; width: 100%; height: 100%; }
 
-/* ---- Swatch row: round chips, clay ring when active ---- */
-.lw-swatch-grid {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: 6px;
-}
-.lw-color-swatch {
-  aspect-ratio: 1;
-  width: auto;
-  height: auto;
-  border-radius: 50%;
-  border: none;
-  background: var(--swatch);
-  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08);
-  transition: transform 0.08s;
-}
+/* palette row under the strand (mockup .pm-palette) */
+.lw-cm-palette { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.lw-cm-palrow { display: flex; gap: 4px; }
+.lw-cm-palrow span { width: 18px; height: 18px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
+.lw-cm-palmeta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lw-cm-palmeta strong { font-size: 12.5px; font-weight: 500; color: var(--text-hi); white-space: nowrap; }
+.lw-cm-palmeta span { font-size: 10px; font-family: var(--font-mono); letter-spacing: 0.05em; color: var(--text-faint); white-space: nowrap; }
+
+/* the old DOM-LED look preview is replaced by .lw-cm-stage */
+.lw-look-preview { display: none; }
+/* standalone fingerprint chip in Color & motion is redundant with palette row */
+.lw-patterns-section > .lw-pattern-fingerprint { display: none; }
+
+/* ---- color picker (mockup row) ---- */
+.lw-look-color-picker { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.lw-look-color-picker label { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-mid); }
+.lw-look-color-picker input[type=color] { width: 34px; height: 30px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-elev); cursor: pointer; padding: 2px; }
+.lw-look-color-current { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); background: color-mix(in oklch, var(--swatch, var(--accent)) 22%, var(--bg-elev)); }
+.lw-look-color-current strong { font-family: var(--font-mono); font-size: 11px; color: var(--text-hi); }
+.lw-look-color-current em { font-family: var(--font-mono); font-size: 10px; color: var(--text-mid); font-style: normal; }
+
+/* ---- swatch grid (mockup .pm-swatches) ---- */
+.lw-swatch-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; margin-top: 12px; }
+.lw-color-swatch { aspect-ratio: 1; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); transition: transform .08s; background: var(--swatch); border: none; }
 .lw-color-swatch:hover { transform: scale(1.12); }
-.lw-color-swatch.is-active {
-  box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--surface);
+.lw-color-swatch.is-active { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--bg-panel); }
+
+/* ---- sliders + the single hue spectrum (mockup .slider-row + .pm-hue/.pm-huerange) ---- */
+.lw-look-sliders { margin-top: 14px; }
+.lw-look-slider-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.lw-look-slider-row > span { font-size: 12px; color: var(--text-mid); }
+.lw-look-slider-row strong { align-self: flex-end; margin-top: -22px; font-family: var(--font-mono); font-size: 12px; color: var(--text-hi); font-variant-numeric: tabular-nums; }
+.lw-look-slider-row input[type=range] {
+  -webkit-appearance: none; appearance: none; accent-color: var(--accent);
+  height: 4px; border-radius: 99px; background: var(--bg-elev-2); outline: none; width: 100%;
 }
+.lw-look-slider-row input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg-panel); }
+.lw-look-slider-row input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg-panel); }
+
+/* Hue slider gets the rainbow spectrum track */
+.lw-look-slider-row.lw-huerange input[type=range] {
+  height: 12px; border-radius: 99px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+  background: linear-gradient(90deg, #d8503a, #d8a83a, #c8c83a, #6ab86a, #3aa8b8, #5a6ac8, #9a5ac8, #c84a9a, #d8503a);
+}
+.lw-look-slider-row.lw-huerange input[type=range]::-webkit-slider-thumb { width: 16px; height: 16px; background: oklch(0.97 0.005 80); border: 2px solid rgba(0,0,0,.35); box-shadow: 0 1px 5px rgba(0,0,0,.5); }
+.lw-look-slider-row.lw-huerange input[type=range]::-moz-range-thumb { width: 16px; height: 16px; background: oklch(0.97 0.005 80); border: 2px solid rgba(0,0,0,.35); }
+
+.lw-look-switches { display: flex; gap: 16px; margin: 4px 0 14px; }
+.lw-look-switches label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-mid); }
+.lw-look-switches input { accent-color: var(--accent); width: 15px; height: 15px; }
+.lw-look-tune-actions { display: flex; gap: 8px; }
+.lw-look-tune-actions .btn { flex: 1; justify-content: center; }
 
 /* ============================================================
-   Hue spectrum — the hue slider becomes a rainbow scale
-   (replaces the rainbow wheel). Targets the live Hue slider
-   only; other sliders keep the standard track.
+   Geometry (mockup .geo-seg)
    ============================================================ */
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"] {
-  height: 12px;
-  border-radius: 99px;
-  background:
-    linear-gradient(90deg,
-      #d8503a, #d8a83a, #c8c83a, #6ab86a, #3aa8b8,
-      #5a6ac8, #9a5ac8, #c84a9a, #d8503a);
-  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08);
-}
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-webkit-slider-runnable-track {
-  background: transparent;
-  height: 12px;
-}
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-moz-range-track {
-  background: transparent;
-  height: 12px;
-}
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -2px;
-  border-radius: 50%;
-  background: oklch(0.97 0.005 80);
-  border: 2px solid rgba(0, 0, 0, 0.35);
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.5);
-  cursor: pointer;
-}
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]:hover::-webkit-slider-thumb {
-  transform: none;
-  background: oklch(0.99 0.005 80);
-}
-.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: oklch(0.97 0.005 80);
-  border: 2px solid rgba(0, 0, 0, 0.35);
-  cursor: pointer;
-}
+.lw-geometry-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 3px; }
+.lw-geometry-presets button { height: 28px; border-radius: 4px; font-size: 11.5px; font-weight: 500; color: var(--text-lo); display: flex; align-items: center; justify-content: center; gap: 5px; transition: background .12s, color .12s; background: transparent; border: none; }
+.lw-geometry-presets button:hover { color: var(--text-hi); }
+.lw-geometry-presets button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
 
-/* ---- Sliders + readouts ---- */
-.lw-look-slider-row { gap: 11px; }
-.lw-look-slider-row > span { font-size: 12.5px; color: var(--text-2); }
-.lw-look-slider-row strong {
-  font-family: var(--mono-font);
-  font-size: 12px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
+.lw-geometry-segmented, .lw-geometry-counts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
+.lw-geometry-segmented button, .lw-geometry-counts button {
+  height: 28px; padding: 0 12px; border-radius: var(--r-sm); font-size: 11.5px; font-weight: 500;
+  color: var(--text-lo); background: var(--bg-elev); border: 1px solid var(--border-soft);
 }
-
-.lw-look-switches label { font-size: 12.5px; color: var(--text-2); }
-.lw-look-tune-actions .btn {
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-}
-.lw-look-tune-actions .btn:hover { color: var(--text); background: var(--surface-3); }
-
-/* ---- Geometry segmented + presets ---- */
-.lw-geometry-presets button,
-.lw-geometry-segmented button,
-.lw-geometry-counts button {
-  color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-sm);
-}
-.lw-geometry-presets button:hover,
-.lw-geometry-segmented button:hover,
-.lw-geometry-counts button:hover { color: var(--text); background: var(--surface-3); }
-.lw-geometry-presets button.active,
-.lw-geometry-segmented button.active,
-.lw-geometry-counts button.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
-}
-
-/* ---- Knob brightness ---- */
-.lw-knob-control-grid b { font-family: var(--mono-font); color: var(--text); }
-.lw-tweaks-seg button.active,
-.lw-knob-control-grid .lw-tweaks-seg button.active {
-  color: var(--accent);
-}
-
-/* ---- Card summary ---- */
-.lw-card-load-summary > span { color: var(--text-4); font-size: 11px; }
-.lw-card-load-summary strong { color: var(--text); font-size: 12.5px; }
-.lw-card-host-row .lw-search-input { height: 34px; }
-
-/* ---- Section headers across panels ---- */
-.lw-patterns-aside .lw-sec-header,
-.lw-look-picker .lw-sec-header {
-  color: var(--text);
-}
-.lw-sec-header .meta { color: var(--text-4); font-family: var(--mono-font); }
+.lw-geometry-segmented button.active, .lw-geometry-counts button.active { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
 
 /* ============================================================
-   Responsive — collapse aside under the main column
+   Knob brightness + Card summary panels
    ============================================================ */
+.lw-knob-control-grid { display: flex; flex-direction: column; gap: 12px; }
+.lw-knob-control-grid > div > span,
+.lw-knob-control-grid label > span { display: block; font-size: 12px; color: var(--text-mid); margin-bottom: 6px; }
+.lw-tweaks-seg { display: flex; gap: 4px; }
+.lw-tweaks-seg button { flex: 1; height: 28px; border-radius: var(--r-sm); font-size: 12px; font-weight: 500; color: var(--text-lo); background: var(--bg-elev); border: 1px solid var(--border-soft); }
+.lw-tweaks-seg button.active { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
+.lw-knob-control-grid label { display: block; }
+.lw-knob-control-grid label input[type=range] { width: 100%; accent-color: var(--accent); }
+.lw-knob-control-grid label b { font-family: var(--font-mono); font-size: 12px; color: var(--text-hi); margin-left: 8px; }
+
+.lw-card-load-summary { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; }
+.lw-card-load-summary > span { font-size: 12px; color: var(--text-lo); }
+.lw-card-load-summary > strong { font-size: 12.5px; color: var(--text-hi); font-weight: 500; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lw-card-host-row { display: flex; gap: 8px; align-items: center; grid-column: 1 / -1; }
+.lw-card-host-row .lw-search-input { flex: 1; }
+
+/* ============================================================
+   LED display rendering (the signature glowing beads)
+   verbatim from the mockup
+   ============================================================ */
+.ledrow { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.ledrow.big { gap: 9px; flex-wrap: nowrap; }
+.led { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.ledrow.big .led { width: 11px; height: 11px; }
+.led.wave { animation: ledwave 2.6s ease-in-out infinite; }
+@keyframes ledwave { 0%, 100% { opacity: 0.62; transform: scale(0.9); } 46% { opacity: 1; transform: scale(1.08); } }
+@keyframes pmsheen { 0% { transform: translateX(-130%); } 60%, 100% { transform: translateX(360%); } }
+@media (prefers-reduced-motion: reduce) {
+  .led.wave { animation: none; }
+  .lw-cm-stage .sheen { display: none; }
+}
+
+/* small pattern thumb (used in target rows) — warm glowing dot from the palette */
+.lw-pattern-thumb { display: inline-block; width: 13px; height: 13px; border-radius: 3px; background: var(--palette-c, var(--accent)); box-shadow: 0 0 6px var(--palette-c, var(--accent)); }
+.lw-pattern-thumb .lw-pattern-thumb-glow,
+.lw-pattern-thumb .lw-pattern-thumb-swatch-row { display: none; }
+
+/* fingerprint palette (only used where shown) */
+.lw-pattern-fingerprint { display: flex; align-items: center; gap: 8px; }
+.lw-pattern-palette { display: flex; gap: 3px; }
+.lw-pattern-palette i { width: 12px; height: 12px; border-radius: 3px; background: var(--swatch); }
+.lw-pattern-fingerprint-copy b { font-size: 11px; color: var(--text-hi); }
+.lw-pattern-fingerprint-copy em { font-size: 10px; color: var(--text-faint); font-style: normal; margin-left: 5px; }
+
 @media (max-width: 1180px) {
   .lw-patterns-grid { grid-template-columns: 1fr; }
   .lw-patterns-aside { position: static; }

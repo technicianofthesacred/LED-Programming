@@ -102,6 +102,31 @@ const PATTERN_CATEGORIES = [
 ];
 const SMALL_PREVIEW_LED_COUNT = 16;
 const LARGE_PREVIEW_LED_COUNT = 34;
+// On first load (nothing saved yet), the aside should read WARM like the mockup,
+// not green. Prefer a "Lava Lamp"/warm pattern as the default selected pattern.
+const WARM_DEFAULT_PATTERN_IDS = ['lava', 'lava-lamp', 'fire', 'lava-flow', 'ember', 'candle', 'sunset'];
+function isWarmPalette(pal = []) {
+  const hexes = (pal || []).filter(value => typeof value === 'string' && /^#?[0-9a-fA-F]{6}$/.test(value));
+  if (!hexes.length) return false;
+  let warm = 0;
+  for (const value of hexes) {
+    const h = value.replace('#', '');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    if (r >= b + 24 && r >= g - 8) warm += 1;
+  }
+  return warm >= Math.ceil(hexes.length / 2);
+}
+function resolveWarmDefaultPatternId() {
+  for (const id of WARM_DEFAULT_PATTERN_IDS) {
+    if (getCardPatternById(id)) return id;
+  }
+  const warm = DEFAULT_CARD_PATTERN_BANK.find(
+    pattern => isWarmPalette(getCardPatternFingerprint(pattern.id)?.palette),
+  );
+  return warm?.id || DEFAULT_CARD_PATTERN_BANK[0]?.id || 'aurora';
+}
 const INITIAL_PATTERN_VISIBLE_COUNT = CORE_CARD_PATTERN_BANK.length;
 const PATTERN_LOAD_BATCH_SIZE = 24;
 const RECOVERY_MIN_BRIGHTNESS = 0.65;
@@ -122,6 +147,70 @@ function downloadJson(filename, content) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ---- v3 mockup LED rendering: glowing warm beads driven by the real palette ----
+// Adapter: a live pattern id -> the hex palette array the mockup helpers expect.
+function paletteForPattern(patternId) {
+  const fingerprint = getCardPatternFingerprint(patternId);
+  const pal = (fingerprint?.palette || []).filter(value => typeof value === 'string' && /^#?[0-9a-fA-F]{6}$/.test(value));
+  if (pal.length >= 2) return pal.map(value => (value.startsWith('#') ? value : `#${value}`));
+  return ['#2f2113', '#b98644', '#f4e4c7', '#fff6dd'];
+}
+
+// colors interpolated across a palette -> glowing LED beads (verbatim from the mockup)
+function ledColors(pal, n) {
+  const rgb = (h) => { h = h.replace('#', ''); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)); };
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const p = (i / (n - 1)) * (pal.length - 1), s = Math.floor(p), t = p - s;
+    const a = rgb(pal[s]), b = rgb(pal[Math.min(s + 1, pal.length - 1)]);
+    const c = a.map((v, k) => Math.round(v + (b[k] - v) * t));
+    out.push(`rgb(${c[0]},${c[1]},${c[2]})`);
+  }
+  return out;
+}
+
+function LedRow({ pal, n = 9, big = false, wave = false }) {
+  return (
+    <div className={'ledrow' + (big ? ' big' : '')} aria-hidden="true">
+      {ledColors(pal, n).map((c, i) => (
+        <span
+          key={i}
+          className={'led' + (wave ? ' wave' : '')}
+          style={{
+            background: c,
+            boxShadow: `0 0 ${big ? 9 : 5}px ${c}, 0 0 ${big ? 20 : 11}px ${c}`,
+            animationDelay: wave ? `${i * 0.11}s` : undefined,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function LedStage({ pal }) {
+  return (
+    <div className="lw-cm-stage" aria-hidden="true">
+      <LedRow pal={pal} n={22} big wave/>
+      <span className="sheen"/>
+    </div>
+  );
+}
+
+// small glowing warm sine strand (the mockup's Color & motion visual; tinted from pal[2])
+function Strand({ tint }) {
+  return (
+    <svg viewBox="0 0 320 96" preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: '100%' }} aria-hidden="true">
+      <defs>
+        <filter id="pm-glow" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="3.4"/></filter>
+      </defs>
+      <path d="M14 58 C 70 22, 110 22, 160 50 C 210 78, 250 78, 306 42" fill="none" stroke={tint} strokeWidth="6"
+        strokeLinecap="round" strokeDasharray="0.1 9.2" opacity="0.9" filter="url(#pm-glow)"/>
+      <path d="M14 58 C 70 22, 110 22, 160 50 C 210 78, 250 78, 306 42" fill="none" stroke="oklch(0.99 0.02 90)" strokeWidth="2"
+        strokeLinecap="round" strokeDasharray="0.1 9.2"/>
+    </svg>
+  );
 }
 
 function Section({ title, meta, children }) {
@@ -307,10 +396,10 @@ function previewLedPoint(index, count, cssClass) {
   };
 }
 
-function TuningSlider({ label, testId, min, max, step, value, readout, onChange }) {
+function TuningSlider({ label, testId, min, max, step, value, readout, onChange, rowClassName = '' }) {
   const readoutId = testId.replace(/-slider$/, '-readout');
   return (
-    <label className="lw-look-slider-row">
+    <label className={`lw-look-slider-row ${rowClassName}`.trim()}>
       <span>{label}</span>
       <input
         type="range"
@@ -552,6 +641,7 @@ function LookCard({
   onDragStart,
 }) {
   const fingerprint = getCardPatternFingerprint(pattern.id);
+  const pal = paletteForPattern(pattern.id);
   const summary = previewing
     ? saved ? 'Previewing and saved here' : livePreviewAvailable ? 'Previewing on LEDs' : 'Previewing in Studio'
     : saved ? 'Saved for this target' : pattern.description || 'Tap to preview this look';
@@ -569,16 +659,15 @@ function LookCard({
         aria-label={`${pattern.label}. ${summary}`}
         onClick={onSelect}
       >
-        <PatternThumbnail pattern={pattern} fingerprint={fingerprint}/>
+        <span className="lw-pmcard-led"><LedRow pal={pal} n={9}/></span>
         <span className="lw-look-card-copy">
           <strong>{pattern.label}</strong>
-          <span>{summary}</span>
-          <PatternFingerprint fingerprint={fingerprint} compact/>
+          <span>{fingerprint.tempoLabel}</span>
         </span>
       </button>
       <label className="lw-look-card-toggle">
         <input type="checkbox" checked={inPlaylist} onChange={event => onPlaylistChange(event.target.checked)}/>
-        <span>In playlist</span>
+        <span>{inPlaylist ? 'In playlist' : 'Add to playlist'}</span>
       </label>
     </article>
   );
@@ -762,6 +851,7 @@ export function PatternsScreen() {
   const [recoveringLights, setRecoveringLights] = useState(false);
   const [repairLedPrompt, setRepairLedPrompt] = useState(null);
   const [stripColorTestPattern, setStripColorTestPattern] = useState('test-red');
+  const [cardToolsOpen, setCardToolsOpen] = useState(false);
   const livePreviewTimer = useRef(null);
   const livePreviewSeq = useRef(0);
   const draftProjectSnapshotRef = useRef(project => project);
@@ -771,7 +861,17 @@ export function PatternsScreen() {
   const livePreviewAvailable = true;
   const savedComboSeq = useRef(0);
 
-  const savedGlobalLook = normalizeSectionVisualLook(standaloneController?.defaultLook);
+  // Default the selected pattern to a warm one on first load (no saved look yet),
+  // so the Preview + Color & motion read WARM like the mockup instead of green.
+  const warmDefaultPatternId = useMemo(() => resolveWarmDefaultPatternId(), []);
+  const hasSavedDefaultPattern = Boolean(
+    standaloneController?.defaultLook && getCardPatternById(standaloneController.defaultLook.patternId),
+  );
+  const savedGlobalLook = normalizeSectionVisualLook(
+    hasSavedDefaultPattern
+      ? standaloneController?.defaultLook
+      : { ...(standaloneController?.defaultLook || {}), patternId: warmDefaultPatternId },
+  );
   const savedLooks = normalizeSavedLooks(standaloneController?.looks);
   const activeLookId = standaloneController?.activeLookId || '';
   const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -1860,33 +1960,69 @@ export function PatternsScreen() {
             <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
           </div>
           <div className="lw-patterns-actions" aria-label="Card controls">
-            <div className="lw-action-group lw-action-group-main" aria-label="Card actions">
-              <span className="lw-action-group-label">Card</span>
-              <button type="button" className="btn btn-primary lw-toolbar-primary" onClick={savePreviewToCard}>Save to card</button>
-              <button type="button" className="btn btn-ghost lw-toolbar-action lw-recover-lights-btn" onClick={startRepairLed} disabled={recoveringLights}>
-                {recoveringLights ? 'Repairing...' : 'Repair LED'}
-              </button>
-            </div>
-            <div className="lw-action-group" aria-label="Section layout">
-              <span className="lw-action-group-label">Section</span>
-              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={applySplitPreviewToCard}>Send split preview</button>
-            </div>
-            <div className="lw-action-group" aria-label="Card connection">
-              <span className="lw-action-group-label">Connection</span>
+            <button type="button" className="btn btn-primary lw-toolbar-primary" onClick={savePreviewToCard}>Save to card</button>
+            <div className="ag-conn" aria-label="Card connection">
               <button
                 type="button"
-                className={`btn btn-ghost lw-toolbar-action ${localChipDefault ? 'is-active' : ''}`}
+                className={`btn ${localChipDefault ? 'is-active' : ''}`}
                 aria-pressed={localChipDefault}
                 onClick={toggleLocalChipDefault}
               >
                 {localChipDefault ? 'Using local card' : 'Use local card'}
               </button>
-              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
+              <button type="button" className="btn" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
             </div>
-            <div className="lw-action-group" aria-label="Manual setup">
-              <span className="lw-action-group-label">Setup</span>
-              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={copyConfig}>Copy setup</button>
-              <button type="button" className="btn btn-ghost lw-toolbar-action" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson)}>Download setup</button>
+            <div className="pm-menu">
+              <button
+                type="button"
+                className="btn"
+                aria-expanded={cardToolsOpen}
+                aria-haspopup="menu"
+                onClick={() => setCardToolsOpen(open => !open)}
+              >
+                Card tools
+              </button>
+              {cardToolsOpen && (
+                <>
+                  <div className="pm-menu-backdrop" onClick={() => setCardToolsOpen(false)}/>
+                  <div className="pm-menu-pop" role="menu">
+                    <button
+                      type="button"
+                      className="pm-menu-item"
+                      role="menuitem"
+                      disabled={recoveringLights}
+                      onClick={() => { setCardToolsOpen(false); startRepairLed(); }}
+                    >
+                      {recoveringLights ? 'Repairing...' : 'Repair LED'}
+                    </button>
+                    <button
+                      type="button"
+                      className="pm-menu-item"
+                      role="menuitem"
+                      onClick={() => { setCardToolsOpen(false); applySplitPreviewToCard(); }}
+                    >
+                      Send split preview
+                    </button>
+                    <div className="pm-menu-sep"/>
+                    <button
+                      type="button"
+                      className="pm-menu-item"
+                      role="menuitem"
+                      onClick={() => { setCardToolsOpen(false); copyConfig(); }}
+                    >
+                      Copy setup
+                    </button>
+                    <button
+                      type="button"
+                      className="pm-menu-item"
+                      role="menuitem"
+                      onClick={() => { setCardToolsOpen(false); downloadJson(`${safeProjectName || 'lightweaver'}-chip-config.json`, configJson); }}
+                    >
+                      Download setup
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </header>
@@ -2086,29 +2222,54 @@ export function PatternsScreen() {
           <aside className="lw-patterns-aside">
             <Section title="Preview" meta={`${selectedTargetName} · ${selectedPattern?.label || look.patternId}`}>
               <div className="lw-pattern-led-preview" style={{ '--pattern-preview-bg': selectedPattern?.preview }}>
-                <LEDPreview
-                  patternId={previewPatternId}
-                  playing={true}
-                  speed={1}
-                  glow={1.1}
-                  dotSize={3.2}
-                  strips={previewStrips}
-                  viewBox={viewBox}
-                  svgText={svgText}
-                  masterBrightness={look.brightness}
-                  masterSaturation={look.customSaturation / 255}
-                  masterHueShift={cardHueDeltaToDegrees(look.hueShift + (look.customHue - 32))}
-                  symSettings={symSettings?.enabled ? symSettings : null}
-                  motionSmoothing="soft"
-                  targetFps={30}
-                />
+                {/* Visible render: the mockup's warm glowing bead stage, driven by the
+                    selected pattern's warm palette. This is the look the user approved. */}
+                <div className="lw-pattern-led-stage" aria-hidden="true">
+                  <LedRow pal={paletteForPattern(look.patternId)} n={22} big wave/>
+                  <span className="sheen"/>
+                </div>
+                {/* The live LEDPreview engine stays mounted (visually hidden) so the
+                    live-preview-to-card feature and all its handlers keep working. */}
+                <div className="lw-pattern-led-engine" aria-hidden="true">
+                  <LEDPreview
+                    patternId={previewPatternId}
+                    playing={true}
+                    speed={1}
+                    glow={1.1}
+                    dotSize={3.2}
+                    strips={previewStrips}
+                    viewBox={viewBox}
+                    svgText={svgText}
+                    masterBrightness={look.brightness}
+                    masterSaturation={look.customSaturation / 255}
+                    masterHueShift={cardHueDeltaToDegrees(look.hueShift + (look.customHue - 32))}
+                    symSettings={symSettings?.enabled ? symSettings : null}
+                    motionSmoothing="soft"
+                    targetFps={30}
+                  />
+                </div>
               </div>
               <p className="lw-pattern-preview-copy">{selectedPattern?.description}</p>
             </Section>
 
             <Section title="Color & motion" meta={selectedTargetName}>
-              <LookPreview patternId={look.patternId} look={look} large tuned/>
-              <PatternFingerprint fingerprint={selectedFingerprint}/>
+              {/* Warm glowing strand, tinted from the selected pattern's warm palette
+                  (tint = pal[2]) exactly as the mockup does. */}
+              <div className="lw-cm-stage">
+                <Strand tint={paletteForPattern(look.patternId)[2] || 'oklch(0.78 0.16 60)'}/>
+                <span className="sheen"/>
+              </div>
+              <div className="lw-cm-palette">
+                <span className="lw-cm-palrow">
+                  {paletteForPattern(look.patternId).map((color, index) => (
+                    <span key={`${color}-${index}`} style={{ background: color }}/>
+                  ))}
+                </span>
+                <div className="lw-cm-palmeta">
+                  <strong>{selectedPattern?.label || look.patternId}</strong>
+                  <span>{selectedFingerprint.tempoLabel} / {selectedFingerprint.motionLabel}</span>
+                </div>
+              </div>
               <div className="lw-look-color-picker">
                 <label>
                   <span>Pick color</span>
@@ -2141,6 +2302,7 @@ export function PatternsScreen() {
                 <TuningSlider
                   label="Hue"
                   testId="look-hue-slider"
+                  rowClassName="lw-huerange"
                   min="0"
                   max="255"
                   step="1"

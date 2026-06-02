@@ -428,6 +428,53 @@ const GroupIcon = () => (
   </svg>
 );
 
+// ── Mockup (v3) stroked icon set — warm toolbar / inspector glyphs ─────────
+const TbIcon = {
+  import: <svg viewBox="0 0 24 24"><path d="M12 4v12M8 12l4 4 4-4"/><path d="M5 20h14"/></svg>,
+  draw: <svg viewBox="0 0 24 24"><path d="m15 5 4 4L8 20l-5 1 1-5z"/><path d="M13 7l4 4"/></svg>,
+  undo: <svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10"/></svg>,
+  redo: <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10"/></svg>,
+  load: <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>,
+  save: <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 14h8v7H8z"/></svg>,
+  bulb: <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10c1 1 1.5 2 1.5 3h5c0-1 .5-2 1.5-3a6 6 0 0 0-4-10z"/></svg>,
+  grid: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+  heat: <svg viewBox="0 0 24 24"><path d="M12 3c-2 3-4 4-4 7a4 4 0 0 0 8 0c0-3-2-4-4-7z"/></svg>,
+  strip: <svg viewBox="0 0 24 24"><rect x="3" y="9" width="18" height="6" rx="2"/><path d="M7 9v6M11 9v6M15 9v6"/></svg>,
+  check: <svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 6"/></svg>,
+  eye: <svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>,
+  eyeOff: <svg viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3 3.6M6.6 6.6A18 18 0 0 0 2 12s3.5 7 10 7a10 10 0 0 0 4-.8"/></svg>,
+};
+
+// ── Compass — directed/omni emit angle dial (mockup .la-compass) ──────────
+function EmitCompass({ angle, setAngle, omni }) {
+  const cx = 34, cy = 34, r = 26;
+  const a = (angle - 90) * Math.PI / 180;
+  const nx = cx + Math.cos(a) * r, ny = cy + Math.sin(a) * r;
+  return (
+    <div className="lw-la-compass-wrap">
+      <svg className="lw-la-compass" viewBox="0 0 68 68" style={{ opacity: omni ? 0.4 : 1 }}>
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border)" strokeWidth="1"/>
+        <circle cx={cx} cy={cy} r="2.5" fill="var(--accent)"/>
+        {[0, 90, 180, 270].map(d => {
+          const t = (d - 90) * Math.PI / 180;
+          return <line key={d} x1={cx + Math.cos(t) * (r - 4)} y1={cy + Math.sin(t) * (r - 4)}
+                       x2={cx + Math.cos(t) * r} y2={cy + Math.sin(t) * r}
+                       stroke="var(--text-4)" strokeWidth="1"/>;
+        })}
+        {omni
+          ? <circle cx={cx} cy={cy} r={r - 7} fill="var(--accent-soft)" stroke="var(--accent-line)" strokeDasharray="2 3"/>
+          : <><line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--accent)" strokeWidth="2" strokeLinecap="round"/><circle cx={nx} cy={ny} r="3.5" fill="var(--accent)"/></>}
+      </svg>
+      <div className="lw-la-compass-ctrl">
+        <span className="lw-la-offset-lab">Offset</span>
+        <input type="range" min="0" max="360" step="1" value={angle} disabled={omni}
+               onChange={e => setAngle(parseInt(e.target.value, 10))}/>
+        <span className="lw-la-offset-v">{angle}°</span>
+      </div>
+    </div>
+  );
+}
+
 function InlineRename({ value, onCommit, className, style }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState(value);
@@ -2330,35 +2377,29 @@ export function LayoutScreen() {
       {/* ── Canvas column ──────────────────────────────────────────── */}
       <div className="lw-canvas-col">
         <div className="lw-canvas-toolbar">
-          <button className="btn btn-primary" onClick={() => fileRef.current?.click()}>
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <path d="M6 1v8M3 5l3-4 3 4M1 10h10"/>
-            </svg>
-            Import SVG
+          <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
+                  title="Import an SVG to map LED strips">
+            {TbIcon.import}Import SVG
           </button>
 
           {layers.length > 0 && (
-            <button className="btn btn-ghost" onClick={addAllStrips}
+            <button className="tb-btn" onClick={addAllStrips}
                     title={`Add all ${layers.length} layers as strips (A)`}>
               + All ({layers.length})
             </button>
           )}
 
-          <span className="tbar-divider"/>
+          <div className="tb-div"/>
 
-          {/* Draw tool */}
+          {/* Draw / Chop / Link tools */}
           <button
-            className={`btn ${drawMode ? 'btn-primary' : 'btn-ghost'}`}
-            title={drawMode ? 'Cancel draw (Esc / right-click)' : 'Draw strip (D) — click waypoints, double-click to finish, backspace to undo point'}
+            className={`tb-btn${drawMode ? ' active' : ''}`}
+            title={drawMode ? 'Cancel draw (Esc / right-click)' : 'Draw strip (D) — click waypoints, double-click to finish'}
             onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <path d="M2 10 L8 2 M8 2 L10 4 M5 8 L10 4" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            {drawMode ? 'Drawing…' : 'Draw'}
+            {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
           </button>
-
           <button
-            className={`btn ${wireOverlayMode === 'chop' ? 'btn-primary' : 'btn-ghost'}`}
+            className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
             title="Chop wire path segments on the artwork"
             onClick={() => {
               setDrawMode(false);
@@ -2369,7 +2410,7 @@ export function LayoutScreen() {
             Chop
           </button>
           <button
-            className={`btn ${wireOverlayMode === 'link' ? 'btn-primary' : 'btn-ghost'}`}
+            className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
             title="Link chopped segments into physical order"
             onClick={() => {
               setDrawMode(false);
@@ -2391,102 +2432,71 @@ export function LayoutScreen() {
             }}>
             Link
           </button>
-          {wireOverlayMode !== 'idle' && (
-            <span className="lw-route-mode-chip">
-              {wireOverlayMode === 'chop' ? 'Chop' : 'Link'}
-            </span>
-          )}
-
-          <span className="tbar-divider"/>
 
           {/* Undo / Redo */}
-          <button className="btn btn-ghost" onClick={doUndo} disabled={histLen === 0}
+          <button className="tb-btn icon" onClick={doUndo} disabled={histLen === 0}
                   title={`Undo (⌘Z) · ${histLen} step${histLen !== 1 ? 's' : ''}`}>
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <path d="M2 5 L5 2 M2 5 L5 8 M2 5 Q6 2 10 6" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            {histLen > 0 && <span style={{ fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{histLen}</span>}
+            {TbIcon.undo}{histLen > 0 && <span className="cnt">{histLen}</span>}
           </button>
-          <button className="btn btn-ghost" onClick={doRedo} disabled={futLen === 0}
+          <button className="tb-btn icon" onClick={doRedo} disabled={futLen === 0}
                   title={`Redo (⌘⇧Z) · ${futLen} step${futLen !== 1 ? 's' : ''}`}>
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <path d="M10 5 L7 2 M10 5 L7 8 M10 5 Q6 2 2 6" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-            {futLen > 0 && <span style={{ fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', opacity: 0.7 }}>{futLen}</span>}
+            {TbIcon.redo}{futLen > 0 && <span className="cnt">{futLen}</span>}
           </button>
 
-          <span className="tbar-divider"/>
-          <span className="tbar-label">Density</span>
-          <div style={{ display: 'flex', gap: 2 }}>
+          <div className="tb-div"/>
+
+          {/* Density segmented control */}
+          <div className="seg">
+            <span className="seg-label" title="Project default LED density">Density</span>
             {DENSITY_OPTIONS.map(d => (
-              <button key={d} className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
-                      style={{ padding: '3px 8px', fontSize: 'var(--fs-sm)' }}
-                      onClick={() => handleDensityChange(d)}>{d}/m</button>
+              <button key={d} className={density === d ? 'on' : ''}
+                      onClick={() => handleDensityChange(d)}>{d}<span className="u">/m</span></button>
             ))}
           </div>
 
-          <div style={{ flex: 1 }}/>
+          <div className="tb-spring"/>
 
-          {/* Zoom controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 'var(--fs-sm)' }}
-                    onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
-            <button className="btn btn-ghost" style={{ padding: '3px 5px', fontSize: 'var(--fs-2xs)', fontFamily: 'var(--mono-font)', minWidth: 38, textAlign: 'center' }}
-                    onClick={resetView} title="Reset view (F)">
-              {Math.round(zoom * 100)}%
-            </button>
-            <button className="btn btn-ghost" style={{ padding: '3px 7px', fontSize: 'var(--fs-sm)' }}
-                    onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
+          {/* Zoom cluster */}
+          <div className="la-zoom">
+            <button onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
+            <button className="zv" onClick={resetView} title="Reset view (F)">{Math.round(zoom * 100)}%</button>
+            <button onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
           </div>
 
-          <span className="tbar-divider"/>
+          <div className="tb-div"/>
 
           {/* Save / Load */}
-          <button className="btn btn-ghost" onClick={saveProject} title="Save project JSON">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <rect x="2" y="2" width="8" height="8" rx="1"/>
-              <path d="M4 2v3h4V2M4 7h4"/>
-            </svg>
-            Save
+          <button className="tb-btn" onClick={saveProject} title="Save project file">
+            {TbIcon.save}Save
           </button>
-          <button className="btn btn-ghost" onClick={() => loadRef.current?.click()} title="Load project JSON">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4">
-              <path d="M2 9V5l4-3 4 3v4H2M5 9V6h2v3"/>
-            </svg>
-            Load
+          <button className="tb-btn" onClick={() => loadRef.current?.click()} title="Load project file">
+            {TbIcon.load}Load
           </button>
 
-          <span className="tbar-divider"/>
+          <div className="tb-div"/>
 
-          <button className={`btn ${showLight ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setShowLight(v => !v)}
-                  title="Toggle ambient light preview (pauses while dragging for speed)">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <circle cx="6" cy="6" r="2"/>
-              <path d="M6 1v1.5M6 9.5V11M1 6h1.5M9.5 6H11M2.5 2.5l1 1M8.5 8.5l1 1M2.5 9.5l1-1M8.5 3.5l1-1"/>
-            </svg>
-            Light
+          {/* Render toggles */}
+          <button className={`tb-btn${showLight ? ' active' : ''}`} onClick={() => setShowLight(v => !v)}
+                  title="Toggle ambient light preview">
+            {TbIcon.bulb}Light
           </button>
-          <button className={`btn ${showLeds ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setShowLeds(v => !v)}
+          <button className={`tb-btn${showLeds ? ' active' : ''}`} onClick={() => setShowLeds(v => !v)}
                   title="Toggle LED dots">
-            LEDs
+            {TbIcon.grid}LEDs
           </button>
-          <button className={`btn ${showHeat ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => setShowHeat(v => !v)} title="Coverage heatmap">
-            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2"><path d="M6 1c-2 2-3 3-3 5a3 3 0 006 0c0-2-1-3-3-5z"/></svg>
-            Heat
+          <button className={`tb-btn${showHeat ? ' active' : ''}`} onClick={() => setShowHeat(v => !v)}
+                  title="Coverage heatmap">
+            {TbIcon.heat}Heat
           </button>
-          <button className={`btn ${directedGlow ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => {
-                    setDirectedGlow(v => !v);
-                    enableLightPreview();
-                  }}
+          <button className={`tb-btn${directedGlow ? ' active' : ''}`}
+                  onClick={() => { setDirectedGlow(v => !v); enableLightPreview(); }}
                   title="Directed glow — elongate bloom along strip direction">
-            ◈
+            Directed
           </button>
-          <button className="btn btn-ghost"
+          <button className="tb-btn"
                   onClick={() => setGlowMode(m => GLOW_MODES[(GLOW_MODES.indexOf(m) + 1) % GLOW_MODES.length])}
                   title="Cycle glow mode (dots is fastest for editing)">
-            ◉ {glowMode}
+            Glow: {glowMode}
           </button>
         </div>
 
@@ -2696,7 +2706,9 @@ export function LayoutScreen() {
               const isHid = !!hidden[s.id];
               const isMoving = movingStripIds.includes(s.id);
               const stripFrame = layoutPatternFrame.get(s.id);
-              const stripColor = rgbCss(stripFrame, s.color);
+              // Schematic at rest = warm identity color; only let the (possibly
+              // cool) pattern frame tint the strand when light preview is on.
+              const stripColor = effectiveShowLight ? rgbCss(stripFrame, s.color) : (s.color || 'var(--accent)');
               return (
                 <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
                   <path d={s.pathData}
@@ -2727,13 +2739,13 @@ export function LayoutScreen() {
                           else selectStrip(s.id);
                         }}/>
                   <path d={s.pathData}
-                        stroke={isHid ? 'oklch(40% 0.01 260)' : stripColor}
+                        stroke={isHid ? 'oklch(40% 0.01 75)' : stripColor}
                         strokeWidth={isSel ? 8 : 4.5} fill="none"
                         strokeOpacity={isHid ? 0 : isSel ? 0.22 : 0.1}
                         strokeLinecap="round"
                         pointerEvents="none"/>
                   <path d={s.pathData}
-                        stroke={isHid ? 'oklch(40% 0.01 260)' : stripColor}
+                        stroke={isHid ? 'oklch(40% 0.01 75)' : stripColor}
                         strokeWidth={isSel ? 3.5 : 1.8} fill="none"
                         pointerEvents="none"
                         opacity={isHid ? 0.25 : isMoving ? 1 : isSel ? 1 : 0.7}
@@ -2821,7 +2833,8 @@ export function LayoutScreen() {
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
-                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    // Warm identity color at rest; pattern-driven tint only when lit.
+                    const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const shellOpacity = restingLedAlpha(ledFrame, { selected });
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
@@ -2843,7 +2856,8 @@ export function LayoutScreen() {
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
-                    const ledColor = ledCssColor(ledFrame, 'oklch(58% 0.035 240)');
+                    // Warm identity color at rest; pattern-driven tint only when lit.
+                    const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     const restOpacity = restingLedAlpha(ledFrame, { selected }) * 0.45;
                     return (
@@ -2924,22 +2938,33 @@ export function LayoutScreen() {
             {!svgText && strips.length === 0 && (
               <>
                 <rect x="1" y="1" width="638" height="398" rx="4" fill="none"
-                      stroke="oklch(30% 0.01 260)" strokeDasharray="6 4"/>
-                <text x="320" y="185" textAnchor="middle" fill="oklch(45% 0.02 260)"
+                      stroke="oklch(30% 0.01 75)" strokeDasharray="6 4"/>
+                <text x="320" y="185" textAnchor="middle" fill="oklch(55% 0.04 70)"
                       fontSize="14" fontFamily="var(--ui-font)">
                   Drop an SVG or click Import SVG
                 </text>
-                <text x="320" y="205" textAnchor="middle" fill="oklch(38% 0.02 260)"
+                <text x="320" y="205" textAnchor="middle" fill="oklch(48% 0.03 70)"
                       fontSize="11" fontFamily="var(--ui-font)">
                   Illustrator: File → Export As → SVG (layers preserved)
                 </text>
-                <text x="320" y="222" textAnchor="middle" fill="oklch(32% 0.02 260)"
+                <text x="320" y="222" textAnchor="middle" fill="oklch(42% 0.025 70)"
                       fontSize="10" fontFamily="var(--ui-font)">
                   Drag and drop supported
                 </text>
               </>
             )}
           </svg>
+
+          {/* ── Canvas corner readouts (mockup .la-overlay) ── */}
+          <div className="la-overlay tl">
+            <div><span className="k">artwork</span><span className="v">{parsedVb(viewBox).w} × {parsedVb(viewBox).h}</span></div>
+            <div><span className="k">layers</span><span className="v">{layers.length} · {strips.length} strips</span></div>
+            <div><span className="k">leds</span><span className="v">{totalLeds.toLocaleString()}</span></div>
+          </div>
+          <div className="la-overlay br">
+            <div><span className="k">emit</span><span className="v">{existingStrip ? (existingStrip.emit === 'omni' ? 'omni' : `dir ${existingStrip.angle || 0}°`) : '—'}</span></div>
+            <div><span className="k">zoom</span><span className="v">{Math.round(zoom * 100)}%</span></div>
+          </div>
 
           {/* ── Rubber-band lasso overlay (absolute inside viewport — position:fixed breaks with backdrop-filter ancestors) ── */}
           {rubberBand && (
@@ -2984,7 +3009,7 @@ export function LayoutScreen() {
       />
 
       {/* ── Right panel ────────────────────────────────────────────── */}
-      <div className="lw-layout-panel" style={{ borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+      <div className="lw-layout-panel" style={{ borderLeft: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden', minHeight: 0 }}>
 
         {error && (
           <div className="lw-la-error-banner" style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -3061,22 +3086,22 @@ export function LayoutScreen() {
         {/* ── Layer list ── */}
         {layers.length > 0 && (
           <>
-            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <span>Artwork layers</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="meta">{layers.length} · {layers.reduce((n, l) => n + (l.subPaths?.length || 0), 0)} paths</span>
-                <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }} title="Show all"
+            <div className="panel-head">
+              <span className="ttl">Artwork layers</span>
+              <div className="head-tools">
+                <span className="meta">{layers.length} · {totalLeds.toLocaleString()} LEDs</span>
+                <button title="Show all layers"
                         onClick={() => setHidden(h => { const n={...h}; layers.forEach(l=>{n[l.layerId]=false;}); return n; })}>
                   <EyeIcon/>
                 </button>
-                <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }} title="Hide all"
+                <button title="Hide all layers"
                         onClick={() => setHidden(h => { const n={...h}; layers.forEach(l=>{n[l.layerId]=true;}); return n; })}>
                   <EyeOffIcon/>
                 </button>
               </div>
             </div>
 
-            <div style={{ overflow: 'auto', flex: '0 0 auto', maxHeight: '42%' }}>
+            <div className="layers" style={{ overflow: 'auto', flex: '0 0 auto', maxHeight: '42%' }}>
               {/* Build ordered list: groups + layers in layerOrder, fallback to layers */}
               {(() => {
                 const ordered = layerOrder.length > 0
@@ -3315,15 +3340,12 @@ export function LayoutScreen() {
 
         {/* ── Path selection panel ── */}
         {pathSel.length > 0 && (
-          <div className="lw-la-pathsel" style={{ borderBottom: '1px solid var(--border)', padding: '10px 14px', flex: '0 0 auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text-2)' }}>
-                {pathSel.length} path{pathSel.length > 1 ? 's' : ''} selected
-              </span>
-              <button style={{ color: 'var(--text-4)', padding: '0 4px', fontSize: 'var(--fs-md)' }}
-                      onClick={() => { setPathSel([]); setPathSelName(''); }}>✕</button>
+          <div className="lw-la-pathsel">
+            <div className="la-sub-h">
+              <span className="lbl">{pathSel.length} path{pathSel.length > 1 ? 's' : ''} selected</span>
+              <button className="x" onClick={() => { setPathSel([]); setPathSelName(''); }}>✕</button>
             </div>
-            <div style={{ maxHeight: 80, overflow: 'auto', marginBottom: 8 }}>
+            <div className="pathsel-list" style={{ maxHeight: 80, overflow: 'auto', marginBottom: 8 }}>
               {pathSel.map((p, i) => (
                 <div key={p.pathId} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 'var(--fs-sm)',
                                               color: 'var(--text-3)', padding: '2px 0' }}>
@@ -3348,12 +3370,10 @@ export function LayoutScreen() {
                 </div>
               ))}
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input type="text" value={pathSelName} onChange={e => setPathSelName(e.target.value)}
-                     placeholder="Name…"
-                     style={{ flex: 1, fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)',
-                              borderRadius: 4, padding: '4px 8px', color: 'var(--text)' }}/>
-              <button className="btn btn-primary" style={{ fontSize: 'var(--fs-sm)' }}
+            <input type="text" className="pm-input" value={pathSelName} onChange={e => setPathSelName(e.target.value)}
+                   placeholder="Name…"/>
+            <div className="lw-la-merge">
+              <button className="btn btn-primary" style={{ flex: 1 }}
                       title="Create one composite strip from the selected paths"
                       onClick={() => addSelectedPathsAsStrips('merged')}>
                 Merge Strip
@@ -3385,58 +3405,60 @@ export function LayoutScreen() {
           </div>
         )}
 
-        {/* ── Layer inspector ── */}
-        {selLayer && (
-          <>
-            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selLayer.name}</span>
-              <span className="meta">inspector</span>
+        {/* ── Layer inspector (mockup .inspector) ── */}
+        {selLayer && (() => {
+          const isOmni = existingStrip?.emit === 'omni';
+          const ledVal = editCounts[selLayer.layerId] ?? getLedCount(selLayer);
+          const pitch = (selLayer.svgLength > 0 && ledVal > 1)
+            ? ((selLayer.svgLength / pxPerMm) / ledVal).toFixed(1) : '—';
+          return (
+          <div className="inspector">
+            <div className="insp-head">
+              <span className="sw" style={{ background: selLayer._color }}/>
+              <span className="nm">{selLayer.name}</span>
+              <span className="tag">Inspector</span>
             </div>
-            <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 9, flex: '0 0 auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
-                <span style={{ color: 'var(--text-3)' }}>Length</span>
-                <span style={{ fontFamily: 'var(--mono-font)' }}>
-                  {selLayer.svgLength > 0 ? `${Math.round(selLayer.svgLength / pxPerMm)} mm` : '—'}
-                </span>
+            <div className="insp-body">
+              <div className="field">
+                <span className="k">Length</span>
+                <span className="v"><span className="inspector-value">{selLayer.svgLength > 0 ? Math.round(selLayer.svgLength / pxPerMm) : '—'}<span className="u">mm</span></span></span>
               </div>
               {selLayer.subPaths?.length > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
-                  <span style={{ color: 'var(--text-3)' }}>Sub-paths</span>
-                  <span style={{ fontFamily: 'var(--mono-font)' }}>{selLayer.subPaths.length}</span>
+                <div className="field">
+                  <span className="k">Sub-paths</span>
+                  <span className="v"><span className="inspector-value">{selLayer.subPaths.length}</span></span>
                 </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
-                <span style={{ color: 'var(--text-3)' }}>Density</span>
-                <div style={{ display: 'flex', gap: 2 }}>
-                  {DENSITY_OPTIONS.map(d => (
-                    <button key={d}
-                            className={`btn ${density === d ? 'btn-primary' : 'btn-ghost'}`}
-                            style={{ padding: '2px 6px', fontSize: 'var(--fs-xs)' }}
-                            onClick={() => handleDensityChange(d)}>{d}</button>
-                  ))}
-                </div>
+              <div className="field">
+                <span className="k">Density</span>
+                <span className="v">
+                  <div className="mini-seg">
+                    {DENSITY_OPTIONS.map(d => (
+                      <button key={d} className={density === d ? 'on' : ''} onClick={() => handleDensityChange(d)}>{d}</button>
+                    ))}
+                  </div>
+                </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
-                <span style={{ color: 'var(--text-3)' }}>LED count</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', justifyContent: 'flex-end', minWidth: 0, marginLeft: 12 }}>
+              <div className="field-sep"/>
+
+              {/* LED count — slider + number (live resample) */}
+              <div className="lw-la-ledrow">
+                <span className="k">LED count</span>
+                <div className="lw-la-ledctrl">
                   {editCounts[selLayer.layerId] != null && (
-                    <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', padding: '0 4px' }}
-                            title="Reset to calculated"
-                            onClick={() => setEditCounts(c => { const next = { ...c }; delete next[selLayer.layerId]; return next; })}>
-                      ↺
-                    </button>
+                    <button className="reset" title="Reset to calculated"
+                            onClick={() => setEditCounts(c => { const next = { ...c }; delete next[selLayer.layerId]; return next; })}>↺</button>
                   )}
                   <input type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
-                         value={ledCountToSliderValue(editCounts[selLayer.layerId] ?? getLedCount(selLayer))}
+                         value={ledCountToSliderValue(ledVal)}
                          aria-label="Layer LED count slider"
                          onChange={e => {
                            const val = sliderValueToLedCount(e.target.value);
                            setEditCounts(c => ({ ...c, [selLayer.layerId]: val }));
                            if (existingStrip) resampleStrip(existingStrip.id, val);
-                         }}
-                         style={{ flex: '1 1 auto', minWidth: 80, maxWidth: 180 }}/>
-                  <input type="number" min="1" max={LED_COUNT_MAX}
-                         value={editCounts[selLayer.layerId] ?? getLedCount(selLayer)}
+                         }}/>
+                  <input className="num-input" type="number" min="1" max={LED_COUNT_MAX}
+                         value={ledVal}
                          aria-label="Layer LED count"
                          inputMode="numeric"
                          onFocus={e => e.target.select()}
@@ -3445,112 +3467,110 @@ export function LayoutScreen() {
                            setEditCounts(c => ({ ...c, [selLayer.layerId]: val }));
                            if (existingStrip) resampleStrip(existingStrip.id, val);
                          }}
-                         onBlur={() => {
-                           if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer));
-                         }}
+                         onBlur={() => { if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer)); }}
                          onKeyDown={e => {
                            if (e.key === 'Enter') {
                              if (existingStrip) resampleStrip(existingStrip.id, getLedCount(selLayer));
                              else addStrip();
                            }
                          }}
-                         style={{ width: 72, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)', textAlign: 'right',
-                                  background: 'var(--bg)', border: `1px solid ${editCounts[selLayer.layerId] != null ? 'var(--accent)' : 'var(--border)'}`,
-                                  borderRadius: 4, padding: '3px 8px', color: 'var(--text)' }}/>
+                         style={{ borderColor: editCounts[selLayer.layerId] != null ? 'var(--accent)' : undefined }}/>
                 </div>
               </div>
-              {selLayer.svgLength > 0 && getLedCount(selLayer) > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--fs-md)' }}>
-                  <span style={{ color: 'var(--text-3)' }}>Pitch</span>
-                  <span style={{ fontFamily: 'var(--mono-font)' }}>
-                    {((selLayer.svgLength / pxPerMm) / getLedCount(selLayer)).toFixed(1)} mm/LED
-                  </span>
-                </div>
-              )}
+              <div className="field">
+                <span className="k">Pitch</span>
+                <span className="v"><span className="inspector-value">{pitch}<span className="u">mm/LED</span></span></span>
+              </div>
+              <div className="field-sep"/>
 
-              {/* Emit controls */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--fs-md)' }}>
-                <span style={{ color: 'var(--text-3)' }}>Emit</span>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', opacity: existingStrip ? 1 : 0.4 }}>
-                  <button
-                    className={`btn ${existingStrip?.emit === 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '2px 8px', fontSize: 'var(--fs-xs)' }}
-                    disabled={!existingStrip}
-                    title={existingStrip ? 'Omnidirectional glow' : 'Add strip first'}
-                    onClick={() => {
-                      if (!existingStrip) return;
-                      updateStrip(existingStrip.id, { emit: 'omni', angle: 0 });
-                    }}>Omni</button>
-                  <button
-                    className={`btn ${existingStrip && existingStrip.emit !== 'omni' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ padding: '2px 8px', fontSize: 'var(--fs-xs)' }}
-                    disabled={!existingStrip}
-                    title={existingStrip ? 'Directed emission' : 'Add strip first'}
-	                    onClick={() => {
-	                      if (!existingStrip) return;
-	                      setDirectedGlow(true);
-	                      enableLightPreview();
-	                      updateStrip(existingStrip.id, { emit: 'dir' });
-	                    }}>Dir</button>
-                </div>
+              {/* Emit — Omni / Directed */}
+              <div className="field" style={{ opacity: existingStrip ? 1 : 0.5 }}>
+                <span className="k">Emit</span>
+                <span className="v">
+                  <div className="mini-seg">
+                    <button className={isOmni ? 'on' : ''} disabled={!existingStrip}
+                            title={existingStrip ? 'Omnidirectional glow' : 'Add strip first'}
+                            onClick={() => { if (existingStrip) updateStrip(existingStrip.id, { emit: 'omni', angle: 0 }); }}>Omni</button>
+                    <button className={existingStrip && !isOmni ? 'on' : ''} disabled={!existingStrip}
+                            title={existingStrip ? 'Directed emission' : 'Add strip first'}
+                            onClick={() => {
+                              if (!existingStrip) return;
+                              setDirectedGlow(true); enableLightPreview();
+                              updateStrip(existingStrip.id, { emit: 'dir' });
+                            }}>Directed</button>
+                  </div>
+                </span>
               </div>
 
-              {/* Angle slider — only when directed */}
-              {existingStrip?.emit !== 'omni' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', opacity: existingStrip ? 1 : 0.4 }}>
-                  <span style={{ color: 'var(--text-3)', width: 52, flexShrink: 0 }}>Angle</span>
-                  <input type="range" min="0" max="360" step="1"
-                         value={existingStrip?.angle || 0}
-                         style={{ flex: 1 }}
-                         disabled={!existingStrip}
-	                         onChange={e => {
-	                           if (!existingStrip) return;
-	                           setDirectedGlow(true);
-	                           enableLightPreview();
-	                           updateStrip(existingStrip.id, { angle: +e.target.value });
-	                         }}/>
-                  <input type="number" min="0" max="360" value={existingStrip?.angle || 0}
-                         disabled={!existingStrip}
-                         style={{ width: 48, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', textAlign: 'right',
-                                  background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 5px', color: 'var(--text)' }}
-	                         onChange={e => {
-	                           if (!existingStrip) return;
-	                           setDirectedGlow(true);
-	                           enableLightPreview();
-	                           updateStrip(existingStrip.id, { angle: +e.target.value });
-	                         }}/>
-                  <span style={{ color: 'var(--text-3)', fontSize: 'var(--fs-xs)', flexShrink: 0 }}>°</span>
-                </div>
-              )}
+              {/* Compass — directed angle dial */}
+              <EmitCompass
+                angle={existingStrip?.angle || 0}
+                omni={isOmni || !existingStrip}
+                setAngle={a => {
+                  if (!existingStrip) return;
+                  setDirectedGlow(true); enableLightPreview();
+                  updateStrip(existingStrip.id, { angle: a });
+                }}/>
 
-              <button className="btn btn-primary" style={{ width: '100%', marginTop: 2 }} onClick={addStrip}>
-                {existingStrip ? '↺  Update Strip' : '+  Add as Strip'}
-              </button>
+              <div className="field-sep"/>
+
+              {/* Color tag */}
+              <div className="field">
+                <span className="k">Color tag</span>
+                <span className="v">
+                  <div className="lw-la-tags">
+                    {STRIP_COLORS.slice(0, 5).map(c => (
+                      <button key={c} className={`lw-la-tag${selLayer._color === c ? ' on' : ''}`}
+                              style={{ background: c }}
+                              title="Set layer color"
+                              onClick={() => {
+                                setLayers(prev => prev.map(l => l.layerId === selLayer.layerId ? { ...l, _color: c } : l));
+                                if (existingStrip) updateStrip(existingStrip.id, { color: c });
+                              }}/>
+                    ))}
+                  </div>
+                </span>
+              </div>
+
+              {/* Brightness */}
               {existingStrip && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn btn-ghost" style={{ flex: 1 }}
-                          onClick={() => reverseStrip(selLayer.layerId)}
-                          title="Flip pixel 0 from start to end">
-                    ↔ Reverse
-                  </button>
-                  <button className="btn btn-ghost lw-btn-danger" style={{ flex: 1 }}
-                          onClick={() => removeStrip(selLayer.layerId)}>
-                    Remove
-                  </button>
+                <div className="lw-la-slider-row">
+                  <div className="lab">
+                    <span className="k">Brightness</span>
+                    <span className="v">{Math.round((existingStrip.brightness ?? 1) * 100)}%</span>
+                  </div>
+                  <input type="range" min="0" max="100"
+                         value={Math.round((existingStrip.brightness ?? 1) * 100)}
+                         aria-label="Strip brightness"
+                         onChange={e => updateStrip(existingStrip.id, { brightness: parseInt(e.target.value, 10) / 100 })}/>
+                </div>
+              )}
+
+              {/* Add / Update CTA */}
+              {existingStrip
+                ? <button className="lw-insp-cta added" onClick={addStrip} title="Re-sample this strip with current settings">{TbIcon.check}Strip added · update</button>
+                : <button className="lw-insp-cta" onClick={addStrip}>{TbIcon.strip}Add as strip</button>}
+
+              {existingStrip && (
+                <div className="lw-insp-actions">
+                  <button className="btn" onClick={() => reverseStrip(selLayer.layerId)} title="Flip pixel 0 from start to end">↔ Reverse</button>
+                  <button className="btn lw-btn-danger" onClick={() => removeStrip(selLayer.layerId)}>Remove</button>
                 </div>
               )}
             </div>
-          </>
-        )}
+          </div>
+          );
+        })()}
 
         {/* ── Strips list ── */}
         {strips.length > 0 && (
 	          <>
-	            <div className="lw-sec-header" style={{ margin: 0, padding: '7px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-	              <span>LED strips</span>
+	            <div className="panel-divider"/>
+	            <div className="panel-head">
+	              <span className="ttl">LED strips</span>
 	              <span className="meta">
-	                {selectedStrips.length > 1 ? `${selectedStrips.length} selected · ` : ''}
-	                {strips.length} strips · {totalLeds.toLocaleString()} LEDs
+	                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
+	                {strips.length} · {totalLeds.toLocaleString()} LEDs
 	              </span>
 	            </div>
 	            {selectedStrips.length > 1 && (
@@ -3583,7 +3603,7 @@ export function LayoutScreen() {
 	                </div>
 	              </div>
 	            )}
-	            <div ref={stripListRef} style={{ flex: '0 0 auto', overflow: 'auto', minHeight: 0, maxHeight: 220 }}>
+	            <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', overflow: 'auto', minHeight: 0, maxHeight: 220, padding: '0 6px 4px' }}>
 	              {strips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
@@ -3787,9 +3807,8 @@ export function LayoutScreen() {
 
         {/* ── Empty state ── */}
         {!svgText && !error && !defaultCircleLayoutActive && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
-                        justifyContent: 'center', gap: 14, padding: 32, color: 'var(--text-3)', textAlign: 'center' }}>
-            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.35">
+          <div className="lw-la-empty">
+            <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.4">
               <rect x="6" y="4" width="32" height="36" rx="3"/>
               <path d="M14 14h16M14 22h16M14 30h10"/>
               <path d="M28 28l8 8M32 28h4v4" strokeLinecap="round"/>
@@ -3798,8 +3817,8 @@ export function LayoutScreen() {
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)', lineHeight: 1.5 }}>
               Works with Illustrator CC, Inkscape,<br/>and any SVG with layer groups.<br/>Drag and drop onto the canvas.
             </div>
-            <button className="btn btn-primary" onClick={() => fileRef.current?.click()}>
-              Import SVG
+            <button className="lw-insp-cta" style={{ width: 'auto', padding: '0 20px', color: 'var(--on-accent)', background: 'var(--accent)', borderColor: 'transparent', fontWeight: 600 }} onClick={() => fileRef.current?.click()}>
+              {TbIcon.import}Import SVG
             </button>
           </div>
         )}

@@ -31,17 +31,19 @@ const DEFAULT_SECTION_ROLES = [
   'ring-10',
 ];
 
+// Warm earthy default palette (amber / terracotta / sage range) so the
+// default rings glow warm like the v3 Layout mockup — no cold blue/magenta.
 const DEFAULT_SECTION_COLORS = [
-  'oklch(72% 0.15 210)',
-  'oklch(78% 0.14 300)',
-  'oklch(78% 0.14 60)',
-  'oklch(80% 0.15 155)',
-  'oklch(78% 0.17 30)',
-  'oklch(74% 0.16 0)',
-  'oklch(80% 0.14 270)',
-  'oklch(76% 0.16 180)',
-  'oklch(72% 0.13 95)',
-  'oklch(76% 0.13 330)',
+  'oklch(80% 0.130 72)',
+  'oklch(78% 0.140 40)',
+  'oklch(74% 0.075 168)',
+  'oklch(80% 0.110 95)',
+  'oklch(78% 0.150 30)',
+  'oklch(72% 0.090 150)',
+  'oklch(80% 0.120 130)',
+  'oklch(76% 0.140 12)',
+  'oklch(80% 0.130 60)',
+  'oklch(74% 0.095 110)',
 ];
 
 function clampInteger(value, min, max, fallback) {
