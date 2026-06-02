@@ -510,6 +510,25 @@ test('v3 patterns edits design target names and LED counts inline', async ({ pag
   expect(config.led.pixels).toBe(52);
 });
 
+test('v3 pattern target number fields select their full value on click', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const outerLedCount = page.getByTestId('section-target-leds-patch-default-outer-circle');
+  await outerLedCount.fill('30');
+  await page.getByRole('heading', { name: 'Patterns & Mixes' }).click();
+
+  await outerLedCount.click();
+  await page.keyboard.press('7');
+
+  await expect(outerLedCount).toHaveValue('7');
+});
+
 test('v3 patterns lays out editable section targets in a compact desktop matrix', async ({ page }) => {
   await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });

@@ -37,6 +37,21 @@ function replaceScreenHash(screen) {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`);
 }
 
+function isEditableNumberInput(target) {
+  return target instanceof HTMLInputElement
+    && target.type === 'number'
+    && !target.disabled
+    && !target.readOnly;
+}
+
+function selectNumberInputValue(input) {
+  try {
+    input.select();
+  } catch {
+    // Some browsers can refuse selection APIs on specialized inputs.
+  }
+}
+
 export default function App() {
   const [screen, setScreen] = useState(screenFromHash);
   const [kbdOpen, setKbdOpen] = useState(false);
@@ -81,6 +96,31 @@ export default function App() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [navigate]);
+
+  useEffect(() => {
+    const handleNumberFocus = (event) => {
+      if (!isEditableNumberInput(event.target)) return;
+      window.setTimeout(() => selectNumberInputValue(event.target), 0);
+    };
+    const handleNumberClick = (event) => {
+      if (!isEditableNumberInput(event.target)) return;
+      selectNumberInputValue(event.target);
+    };
+    const handleNumberMouseUp = (event) => {
+      if (!isEditableNumberInput(event.target)) return;
+      event.preventDefault();
+      selectNumberInputValue(event.target);
+    };
+
+    document.addEventListener('focusin', handleNumberFocus, true);
+    document.addEventListener('mouseup', handleNumberMouseUp, true);
+    document.addEventListener('click', handleNumberClick, true);
+    return () => {
+      document.removeEventListener('focusin', handleNumberFocus, true);
+      document.removeEventListener('mouseup', handleNumberMouseUp, true);
+      document.removeEventListener('click', handleNumberClick, true);
+    };
+  }, []);
 
   return (
     <ProjectProvider>

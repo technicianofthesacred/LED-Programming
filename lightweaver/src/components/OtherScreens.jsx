@@ -6,6 +6,7 @@ import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeCon
 import { deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
 import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
 import { DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS, DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
+import { FLASH_COMPLETE_RELEASED_LOG, FLASH_COMPLETE_RELEASED_STATUS, flashFirmwareAndRelease } from '../lib/flashWorkflow.js';
 import { DEMO_STRIPS } from '../data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 
@@ -836,13 +837,25 @@ export function FlashScreen() {
     if (eraseAll) appendLog('Erasing flash — this takes ~15 s…');
 
     try {
-      await flashFirmware(loaderRef.current, selectedFile, addr, eraseAll, (pct) => {
-        setProgress(pct);
-        setStatusMsg(`Flashing… ${Math.round(pct * 100)}%`);
+      await flashFirmwareAndRelease({
+        loader: loaderRef.current,
+        transport: transportRef.current,
+        file: selectedFile,
+        address: addr,
+        eraseAll,
+        flashFirmware,
+        disconnectESP,
+        onProgress: (pct) => {
+          setProgress(pct);
+          setStatusMsg(`Flashing… ${Math.round(pct * 100)}%`);
+        },
       });
+      loaderRef.current = null;
+      transportRef.current = null;
+      setConnected(false);
       setProgress(1);
-      setStatusMsg('● Flash complete — Lightweaver is booting', 'connected');
-      appendLog('Flash complete. Lightweaver should start in a few seconds.');
+      setStatusMsg(FLASH_COMPLETE_RELEASED_STATUS, 'connected');
+      appendLog(FLASH_COMPLETE_RELEASED_LOG);
     } catch (err) {
       setStatusMsg(`✕ Flash failed: ${err.message ?? err}`, 'error');
       appendLog(`Error: ${err.message ?? err}`);

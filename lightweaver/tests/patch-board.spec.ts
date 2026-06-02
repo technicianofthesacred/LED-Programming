@@ -73,6 +73,33 @@ test('wire path chops a visible source path into saved physical segments', async
   expect(ledmapData.map).toHaveLength(ledmapData.n);
 });
 
+test('numeric patch board fields replace the full value when clicked and typed', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-patch-board-number-input-'));
+  const fixture = writeFixture(tmp);
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.lw-rail-btn', { hasText: 'Layout' }).click();
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+  await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
+  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+
+  const mappingPanel = page.locator('.lw-patch-details');
+  if (!(await mappingPanel.evaluate((el: HTMLDetailsElement) => el.open))) {
+    await page.locator('.lw-patch-details > summary').click();
+  }
+
+  const offLedCount = page.getByLabel('Off LED count');
+  await offLedCount.fill('12');
+  await page.getByRole('heading', { name: 'Wire Path' }).click();
+
+  await offLedCount.click();
+  await page.keyboard.press('3');
+
+  await expect(offLedCount).toHaveValue('3');
+});
+
 test('canvas chop mode creates a cut marker on the artwork path', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-chop-'));
   const fixture = writeFixture(tmp);
