@@ -46,43 +46,32 @@ assert.ok(
   `fire preview should visibly animate within half a second; color delta was ${delta}`,
 );
 
-const previewSource = readFileSync(resolve(import.meta.dirname, '../src/components/Preview.jsx'), 'utf8');
-const patternsSource = readFileSync(resolve(import.meta.dirname, '../src/components/PatternsScreen.jsx'), 'utf8');
+// The shipped Patterns screen is the verbatim v3 mockup (src/v3/lw-pattern.jsx).
+// Its preview is DOM/SVG-based (a bounded LedRow + a glowing Strand) with live
+// state pushed to the card, not a canvas/RAF redraw loop — so the v3 perf
+// contract is about throttling card pushes and bounding the on-screen render,
+// not capping canvas FPS. Assert that real contract.
+const patternsSource = readFileSync(resolve(import.meta.dirname, '../src/v3/lw-pattern.jsx'), 'utf8');
 
 assert.match(
-  previewSource,
-  /targetFps = 60/,
-  'LEDPreview should support a targetFps cap with a fast default for live tools',
-);
-assert.match(
-  previewSource,
-  /minFrameMs/,
-  'LEDPreview should throttle expensive canvas redraws when targetFps is lower than RAF',
-);
-assert.match(
-  previewSource,
-  /lastRenderRef/,
-  'LEDPreview should smooth motion with render-to-render delta when redraws are throttled',
+  patternsSource,
+  /clearTimeout\(livePreviewTimer\.current\)/,
+  'Patterns live preview should debounce by cancelling a pending card push before scheduling the next',
 );
 assert.match(
   patternsSource,
-  /targetFps=\{30\}/,
-  'Patterns screen preview should cap redraws to 30fps so the editor stays responsive',
+  /livePreviewTimer\.current = setTimeout\(/,
+  'Patterns live preview should debounce card pushes through a timer rather than pushing on every change',
 );
 assert.match(
   patternsSource,
-  /PATTERN_PREVIEW_MAX_POINTS = 384/,
-  'Patterns screen preview should cap rendered LED points instead of redrawing the full hardware count',
+  /sequence === livePreviewSeq\.current/,
+  'Patterns live preview should guard against stale async responses with a sequence counter',
 );
 assert.match(
   patternsSource,
-  /downsamplePreviewStrips/,
-  'Patterns screen preview should downsample dense hardware layouts for editor responsiveness',
-);
-assert.match(
-  patternsSource,
-  /speed=\{1\}/,
-  'Patterns screen should not apply the selected look speed twice to the preview renderer',
+  /function LedRow\(/,
+  'Patterns screen should render a bounded DOM LedRow preview rather than one node per hardware pixel',
 );
 
 console.log('preview-animation tests passed');
