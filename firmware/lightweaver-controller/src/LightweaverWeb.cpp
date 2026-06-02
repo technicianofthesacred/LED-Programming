@@ -457,7 +457,7 @@ void handleRoot() {
             "$('off-btn').onclick=async()=>{blackoutOn=!blackoutOn;$('off-btn').classList.toggle('on',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
             // Settings drawer (inline, no separate page)
             "$('set-toggle').onclick=()=>{const open=$('drawer').classList.toggle('open');if(open){"
-              "fetch('/api/firmware-info').then(r=>r.json()).then(d=>{$('fw-info').textContent='build '+d.build+' \xE2\x80\xA2 '+(d.freeHeap/1024|0)+'KB free \xE2\x80\xA2 '+d.rssi+' dBm'}).catch(()=>{});"
+              "fetch('/api/firmware-info').then(r=>r.json()).then(d=>{var net=d.wifi&&d.wifi.transport==='station'?(' \xE2\x80\xA2 '+(d.wifi.ip||(d.wifi.hostname+'.local'))):'';$('fw-info').textContent='build '+d.build+' \xE2\x80\xA2 '+(d.freeHeap/1024|0)+'KB free \xE2\x80\xA2 '+d.rssi+' dBm'+net}).catch(()=>{});"
             "}};"
             "const setMsg=(text,kind)=>{const m=$('set-msg');m.textContent=text;m.className='drawer-msg'+(kind?' '+kind:'')};"
             "$('rn-save').onclick=async()=>{setMsg('Saving\xE2\x80\xA6');try{const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});if(r.ok){setMsg('Saved. Reboot to use new hostname.','ok')}else{setMsg(r.error||'Failed','err')}}catch(e){setMsg(e.message,'err')}};"
@@ -1031,6 +1031,18 @@ void handleCaptiveProbe() {
   server.send(302, "text/plain", "");
 }
 
+// Apple's Captive Network Assistant (iOS/macOS) suppresses the captive portal
+// only when the probe returns exactly 200 + the "Success" body. To reliably
+// POP the portal we must return a NON-Success response; a plain 200 page that
+// bounces to root is the most dependable across iOS versions (redirects are
+// sometimes treated as "online"). Returning "Success" here would hide the UI.
+void handleCaptiveProbeApple() {
+  sendCors();
+  server.send(200, "text/html",
+              "<!DOCTYPE html><html><head><meta http-equiv='refresh' "
+              "content='0; url=/'></head><body>Lightweaver setup</body></html>");
+}
+
 void handleNotFound() {
   if (dnsServerActive) {
     server.sendHeader("Location", "/", true);
@@ -1074,7 +1086,14 @@ bool tryStationJoin(RuntimeConfig& config) {
     Serial.println(".local");
   }
   if (MDNS.begin(hostname.c_str())) {
+    // Keep the friendly <hostname>.local (default "lightweaver.local") but give
+    // each card a unique, MAC-suffixed instance label so discovery tools can
+    // tell two pieces apart in a browse list even when hostnames collide.
+    MDNS.setInstanceName(apSsid().c_str());
     MDNS.addService("http", "tcp", 80);
+    // Also advertise the WLED service type so the Pi proxy / Studio discovery
+    // (which browses _wled._tcp) finds the card without extra configuration.
+    MDNS.addService("wled", "tcp", 80);
     if (Serial) Serial.println("mDNS responder up");
   }
   return true;
@@ -1149,8 +1168,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   // Captive-portal probes from iOS / Android / Windows — redirect to root
   server.on("/generate_204", HTTP_GET, handleCaptiveProbe);
   server.on("/gen_204", HTTP_GET, handleCaptiveProbe);
-  server.on("/hotspot-detect.html", HTTP_GET, handleCaptiveProbe);
-  server.on("/library/test/success.html", HTTP_GET, handleCaptiveProbe);
+  server.on("/hotspot-detect.html", HTTP_GET, handleCaptiveProbeApple);
+  server.on("/library/test/success.html", HTTP_GET, handleCaptiveProbeApple);
   server.on("/ncsi.txt", HTTP_GET, handleCaptiveProbe);
   server.on("/connecttest.txt", HTTP_GET, handleCaptiveProbe);
   server.on("/redirect", HTTP_GET, handleCaptiveProbe);

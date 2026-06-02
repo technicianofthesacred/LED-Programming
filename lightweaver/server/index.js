@@ -469,7 +469,12 @@ export function attachWledWebSocketProxy(server, { env = process.env } = {}) {
       return;
     }
 
-    const upstream = new WebSocket(`ws://${host}/ws`);
+    const wsPort = url.searchParams.get('wsPort') || '80';
+    const wsPath = url.searchParams.get('wsPath') || '/ws';
+    const upstreamUrl = wsPort === '81'
+      ? `ws://${host}:81/`
+      : `ws://${host}:${wsPort}${wsPath}`;
+    const upstream = new WebSocket(upstreamUrl);
     const upstreamTimer = setTimeout(() => {
       if (upstream.readyState === WebSocket.CONNECTING) {
         upstream.terminate();

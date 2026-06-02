@@ -93,7 +93,10 @@ String buildStateJson() {
   doc["on"] = !runtimeIsBlackedOut();
   doc["bri"] = uint8_t(runtimeGetBrightness() * 255.0f);
   doc["transition"] = 7;
-  doc["ps"] = -1;
+  // Report the active look index so WLED-style clients (designer bar, visitor
+  // UI) can reflect the current selection. Was hardcoded -1, which left the
+  // active-scene highlight permanently blank after a refresh.
+  doc["ps"] = lookCount ? int(currentLookIndex) : -1;
   doc["pl"] = -1;
   JsonArray segs = doc["seg"].to<JsonArray>();
   if (runtimeConfig.zoneCount == 0) {

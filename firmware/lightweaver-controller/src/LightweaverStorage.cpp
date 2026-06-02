@@ -171,6 +171,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   JsonObject led = doc["led"].as<JsonObject>();
   config.ledColorOrder = String(led["colorOrder"] | "RGB");
   config.brightnessLimit = clampUnit(led["brightnessLimit"] | 0.65f);
+  config.maxMilliamps = led["maxMilliamps"] | 0;
 
   JsonObject controlsJson = doc["controls"].as<JsonObject>();
   JsonObject encoder = controlsJson["encoder"].as<JsonObject>();
@@ -532,6 +533,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["piece"]["name"] = config.pieceName;
   doc["led"]["pixels"] = totalPixels;
   doc["led"]["colorOrder"] = config.ledColorOrder;
+  doc["led"]["maxMilliamps"] = config.maxMilliamps;
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
   doc["piece"]["hostname"] = config.activeHostname;

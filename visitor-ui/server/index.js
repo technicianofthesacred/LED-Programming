@@ -92,12 +92,20 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, wledIp: WLED_IP });
 });
 
+// Captive-portal probes. To make iOS/macOS POP the portal we must NOT return
+// Apple's expected "Success" body — any non-Success 200 (or redirect) flags the
+// network as captive and opens the setup/scene UI. Android/Windows treat a
+// non-204 / redirect as captive, so those stay as 302s.
+const applePortalPage =
+  "<!DOCTYPE html><html><head><meta http-equiv='refresh' content='0; url=/'>" +
+  "</head><body>Lightweaver</body></html>";
 app.get('/generate_204', (_req, res) => res.redirect(302, '/'));
 app.get('/gen_204', (_req, res) => res.redirect(302, '/'));
-app.get('/hotspot-detect.html', (_req, res) => res.redirect(302, '/'));
-app.get('/library/test/success.html', (_req, res) => res.redirect(302, '/'));
+app.get('/hotspot-detect.html', (_req, res) => res.status(200).type('html').send(applePortalPage));
+app.get('/library/test/success.html', (_req, res) => res.status(200).type('html').send(applePortalPage));
 app.get('/ncsi.txt', (_req, res) => res.redirect(302, '/'));
 app.get('/connecttest.txt', (_req, res) => res.redirect(302, '/'));
+app.get('/redirect', (_req, res) => res.redirect(302, '/'));
 
 app.get('*', (_req, res) => {
   res.sendFile(path.join(distDir, 'index.html'), (err) => {

@@ -52,7 +52,7 @@ export function makeWledWsUrl(ip, { preferProxy = true, locationObj = globalThis
   if (!preferProxy) return `ws://${host}:81/`;
   const protocol = locationObj?.protocol === 'https:' ? 'wss:' : 'ws:';
   const originHost = locationObj?.host || 'localhost';
-  return `${protocol}//${originHost}/api/wled/ws?ip=${encodeURIComponent(host)}`;
+  return `${protocol}//${originHost}/api/wled/ws?ip=${encodeURIComponent(host)}&wsPort=81`;
 }
 
 export async function requestWledJson(ip, route, {

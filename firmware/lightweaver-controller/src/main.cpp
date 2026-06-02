@@ -15,6 +15,14 @@
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
 #include <Preferences.h>
+#include <esp_task_wdt.h>
+#include <esp_system.h>
+
+// Task watchdog timeout. Must exceed the longest blocking call in the loop
+// task — the look-change fade (fadeOutMs + fadeInMs, ~2s default) and SD reads.
+#ifndef LW_WDT_TIMEOUT_S
+#define LW_WDT_TIMEOUT_S 8
+#endif
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -54,6 +62,7 @@ uint8_t outputCount = 0;
 uint8_t lookCount = 0;
 uint16_t totalPixels = 0;
 float brightnessLimit = 0.45f;
+uint32_t ledMaxMilliamps = 0;
 float fadeScale = 1.0f;
 
 uint8_t currentLookIndex = 0;
@@ -172,6 +181,35 @@ void setup() {
   setupArtnet(leds, totalPixels);
   setupWledWebSocket();
 
+  // If the previous boot ended in a crash/brownout/watchdog reset, come up in
+  // the visible low-brightness known-good state instead of silently re-entering
+  // whatever failed — a homeowner sees the piece is alive and can recover it.
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  if (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
+      resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT ||
+      resetReason == ESP_RST_WDT) {
+    if (Serial) {
+      Serial.print("Recovering after abnormal reset (reason ");
+      Serial.print((int)resetReason);
+      Serial.println(")");
+    }
+    runtimeRecoverLights("warm-white", 0.65f, true);
+  }
+
+  // Task watchdog: reboot if the loop task ever wedges (hung handler, blocked
+  // SD read). The Arduino-ESP32 core pre-initializes the TWDT, so reconfigure
+  // the timeout on IDF 5.x rather than re-initializing.
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = LW_WDT_TIMEOUT_S * 1000;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtConfig);
+#else
+  esp_task_wdt_init(LW_WDT_TIMEOUT_S, true);
+#endif
+  esp_task_wdt_add(NULL);
+
   if (Serial) {
     Serial.print("Ready: ");
     Serial.print(pieceName);
@@ -183,6 +221,7 @@ void setup() {
 
 void loop() {
   uint32_t now = millis();
+  esp_task_wdt_reset();  // pet the watchdog every iteration, before any early return
   bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
   if (!recoveryHoldActive) {
@@ -270,6 +309,7 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   startupLookId = config.startupLookId;
   ledColorOrder = config.ledColorOrder;
   brightnessLimit = config.brightnessLimit;
+  ledMaxMilliamps = config.maxMilliamps;
   outputCount = config.outputCount;
   totalPixels = 0;
   for (uint8_t i = 0; i < outputCount; i++) {
@@ -380,6 +420,13 @@ bool loadProfile() {
 bool setupLedOutputs() {
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
+  // Automatic brightness limiter: when a current ceiling is configured, FastLED
+  // scales all pixels down uniformly to keep total draw under budget, which
+  // prevents full-white inrush from sagging the rail into a brownout reset.
+  // 0 = disabled, preserving existing behavior for installs that haven't set it.
+  if (ledMaxMilliamps > 0) {
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, ledMaxMilliamps);
+  }
   uint8_t addedPins[LW_MAX_OUTPUTS + MIRROR_OUTPUT_PIN_COUNT] = {};
   uint8_t addedPinCount = 0;
   auto wasAdded = [&](uint8_t pin) {
@@ -812,6 +859,7 @@ void fadeTo(float target, uint16_t durationMs) {
     fadeScale = start + ((target - start) * t);
     FastLED.setBrightness(computeBrightnessByte());
     showLeds();
+    esp_task_wdt_reset();  // fades block the loop task; keep the WDT fed
     delay(16);
   }
 
@@ -1078,6 +1126,10 @@ String runtimeFirmwareInfo() {
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
+  doc["wifi"]["ip"] = runtimeConfig.activeIp;
+  doc["wifi"]["hostname"] = runtimeConfig.activeHostname;
+  doc["wifi"]["transport"] =
+      runtimeConfig.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   JsonArray outputArray = doc["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = outputArray.add<JsonObject>();
