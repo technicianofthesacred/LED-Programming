@@ -1,5 +1,5 @@
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
-import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
+import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
@@ -24,7 +24,10 @@ export function buildCardRuntimePackageFromProject({
   const totalPixels = totalProjectPixels(strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
-  const resolvedPixels = totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels;
+  const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
+  const resolvedPixels = explicitOutputLayout
+    ? configuredOutputPixels
+    : (totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels);
   const outputs = resolveCardOutputs({
     strips,
     configuredOutputs,

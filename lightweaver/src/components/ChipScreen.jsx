@@ -313,6 +313,7 @@ export function ChipScreen() {
       const current = prev || {};
       const outputs = DEFAULT_STANDALONE_OUTPUTS.map((output, i) => ({
         ...output,
+        ...(controllerOutputs[i] || {}),
         ...((current.outputs || [])[i] || {}),
       }));
       outputs[index] = { ...(outputs[index] || DEFAULT_STANDALONE_OUTPUTS[index]), ...patch };
