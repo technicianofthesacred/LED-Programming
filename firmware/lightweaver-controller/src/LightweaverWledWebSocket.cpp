@@ -128,10 +128,9 @@ void onEvent(uint8_t clientId, WStype_t type, uint8_t* payload, size_t length) {
 
 void setupWledWebSocket() {
   if (started) return;
-  // The WebSocketsServer manages its own listener on port 80; the HTTP
-  // WebServer also listens on 80. On ESP32 they coexist because the
-  // library handles HTTP upgrade requests before falling through to the
-  // WebServer. ws.begin() binds the listener and starts accepting.
+  // The WebSocketsServer has its own listener on port 81 (see the ws(81,...)
+  // constructor above), kept separate from the HTTP WebServer on port 80 so
+  // the two listeners don't collide. ws.begin() binds and starts accepting.
   ws.begin();
   ws.onEvent(onEvent);
   started = true;
