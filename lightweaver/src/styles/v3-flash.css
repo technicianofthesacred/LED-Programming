@@ -1,0 +1,214 @@
+/* v3 restyle - flash screen. Overrides main.css; tokens only, all function preserved. */
+
+/* Centered narrow column. */
+.v3fl {
+  max-width: 720px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 32px 40px;
+  height: 100%;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Section header spacing reset inside the flow column (main.css gives top margin). */
+.v3fl .lw-sec-header { margin-top: 0; margin-bottom: 0; }
+
+/* Support banner - ok (clay/green) vs warn (non-Chromium amber). */
+.v3fl-warn {
+  padding: 11px 14px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.v3fl-warn.ok {
+  background: var(--accent-soft);
+  color: var(--ok);
+  border: 1px solid var(--accent-line);
+}
+.v3fl-warn.warn {
+  background: oklch(0.30 0.05 60 / 0.4);
+  color: var(--warn);
+  border: 1px solid oklch(0.5 0.1 60 / 0.4);
+}
+
+/* Bootloader steps - 3-up grid of step cards. */
+.v3fl-boot-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.v3fl-boot-step {
+  padding: 14px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.v3fl-sn {
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  color: var(--text-4);
+}
+.v3fl-sl {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-top: 5px;
+}
+.v3fl-ss {
+  font-size: var(--fs-sm);
+  color: var(--text-4);
+  margin-top: 3px;
+}
+.v3fl-kbd {
+  display: inline-block;
+  white-space: nowrap;
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  margin-top: 8px;
+}
+
+/* Firmware card - bundled vs browse, with mono file row. */
+.v3fl-fw-card {
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.v3fl-fw-copy {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+.v3fl-fw-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.v3fl-or {
+  font-size: var(--fs-sm);
+  color: var(--text-4);
+}
+.v3fl-fw-file {
+  margin-top: 12px;
+  font-family: var(--mono-font);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+/* Flash options - 2-col grid card. */
+.v3fl-opt-grid {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.v3fl-k {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.v3fl-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-4);
+  line-height: 1.5;
+}
+.v3fl-input {
+  font-family: var(--mono-font);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 4px 8px;
+  width: 110px;
+}
+.v3fl-input:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.v3fl-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* Run row - Connect + Flash buttons + status. */
+.v3fl-run {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.v3fl-stat {
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  flex: 1;
+}
+.v3fl-stat.ok { color: var(--ok); }
+.v3fl-stat.err { color: var(--danger); }
+
+/* Progress bar - clay fill. */
+.v3fl-bar {
+  height: 7px;
+  border-radius: 99px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.v3fl-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width .2s;
+}
+
+/* Log box - mono on canvas. */
+.v3fl-log {
+  width: 100%;
+  height: 180px;
+  resize: vertical;
+  box-sizing: border-box;
+  font-family: var(--mono-font);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  background: var(--bg-canvas);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 11px 13px;
+}
+.v3fl-log:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+
+/* Primary action = clay with dark text; constrain any icon inside flash-screen
+   buttons to a fixed 16px so a bolt or arrow glyph can never blow up. */
+.v3fl .btn-primary { color: var(--on-accent); }
+.v3fl .btn svg,
+.v3fl .btn-primary svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}

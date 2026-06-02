@@ -373,9 +373,9 @@ function download(filename, text) {
 }
 
 const STRIP_COLORS = [
-  'oklch(72% 0.15 210)', 'oklch(78% 0.14 300)', 'oklch(78% 0.14 60)',
-  'oklch(80% 0.15 155)', 'oklch(78% 0.17 30)',  'oklch(74% 0.16 0)',
-  'oklch(80% 0.14 270)', 'oklch(76% 0.16 180)',
+  'oklch(80% 0.130 72)',  'oklch(78% 0.140 40)',  'oklch(74% 0.075 168)',
+  'oklch(80% 0.110 95)',  'oklch(78% 0.150 30)',  'oklch(72% 0.090 200)',
+  'oklch(80% 0.120 130)', 'oklch(76% 0.140 12)',
 ];
 
 const DENSITY_OPTIONS = [30, 60, 96, 144];
@@ -2504,7 +2504,7 @@ export function LayoutScreen() {
               position: 'absolute', inset: 12, border: '2px dashed var(--accent)',
               borderRadius: 8, pointerEvents: 'none', zIndex: 10,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'oklch(16% 0.02 210 / 0.4)',
+              background: 'var(--accent-soft)',
             }}>
               <span style={{ color: 'var(--accent)', fontSize: 'var(--fs-md)', fontWeight: 500 }}>Drop SVG here</span>
             </div>
@@ -2576,8 +2576,8 @@ export function LayoutScreen() {
               return glowPaths.filter(p => p.d).map(p => (
                 <g key={p.id} style={{ pointerEvents: 'none' }}>
                   <path d={p.d} stroke={selLayer._color} strokeWidth="2" strokeOpacity={0.5} fill="none" strokeLinecap="round"/>
-                  <path d={p.d} stroke="#4cc9f0" strokeWidth="7" strokeOpacity={0.12} fill="none" strokeLinecap="round"/>
-                  <path d={p.d} stroke="#4cc9f0" strokeWidth="3" strokeOpacity={0.55} fill="none" strokeLinecap="round"/>
+                  <path d={p.d} stroke="oklch(0.553 0.109 56)" strokeWidth="7" strokeOpacity={0.14} fill="none" strokeLinecap="round"/>
+                  <path d={p.d} stroke="oklch(0.615 0.112 57)" strokeWidth="3" strokeOpacity={0.6} fill="none" strokeLinecap="round"/>
                   <path d={p.d} stroke="white"   strokeWidth="1"  strokeOpacity={0.85} fill="none" strokeLinecap="round"/>
                 </g>
               ));
@@ -2636,7 +2636,7 @@ export function LayoutScreen() {
                        ?? (l.layerId === hoveredSubPathId ? { pathData: l.pathData } : null);
                 if (t?.pathData) return (
                   <path key="hover-sp" d={t.pathData} fill="none"
-                        stroke="oklch(76% 0.18 290)" strokeWidth="3" strokeOpacity={0.55}
+                        stroke="oklch(0.615 0.112 57)" strokeWidth="3" strokeOpacity={0.55}
                         strokeLinecap="round" pointerEvents="none"/>
                 );
               }
@@ -2652,12 +2652,12 @@ export function LayoutScreen() {
               const midPt = midEl.getPointAtLength ? midEl.getPointAtLength(len * 0.5) : { x: 0, y: 0 };
               return (
                 <g key={'sel-' + p.pathId} style={{ pointerEvents: 'none' }}>
-                  <path d={p.pathData} stroke="oklch(84% 0.28 138)" strokeWidth="8" fill="none" opacity={0.14} strokeLinecap="round"/>
-                  <path d={p.pathData} stroke="oklch(84% 0.28 138)" strokeWidth="2.5" fill="none" opacity={0.9}
+                  <path d={p.pathData} stroke="oklch(0.615 0.112 57)" strokeWidth="8" fill="none" opacity={0.16} strokeLinecap="round"/>
+                  <path d={p.pathData} stroke="oklch(0.615 0.112 57)" strokeWidth="2.5" fill="none" opacity={0.95}
                         strokeDasharray="10 5" strokeLinecap="round"
                         style={{ animation: 'lw-march 0.5s linear infinite' }}/>
-                  <circle cx={midPt.x} cy={midPt.y} r={vbScale * 9} fill="oklch(84% 0.28 138)" opacity={0.9}/>
-                  <text x={midPt.x} y={midPt.y + vbScale * 4} textAnchor="middle" fill="oklch(12% 0.04 138)" fontSize={vbScale * 9}
+                  <circle cx={midPt.x} cy={midPt.y} r={vbScale * 9} fill="oklch(0.615 0.112 57)" opacity={0.95}/>
+                  <text x={midPt.x} y={midPt.y + vbScale * 4} textAnchor="middle" fill="oklch(0.190 0.018 52)" fontSize={vbScale * 9}
                         fontWeight="bold" style={{ userSelect: 'none' }}>{idx + 1}</text>
                 </g>
               );
@@ -2884,7 +2884,7 @@ export function LayoutScreen() {
                   <polygon
                     points={`${arrow.tip.x},${arrow.tip.y} ${arrow.left.x},${arrow.left.y} ${arrow.right.x},${arrow.right.y}`}
                     fill={s.color} opacity={0.9}/>
-                  <circle cx={arrow.start.x} cy={arrow.start.y} r={vbScale * 4} fill="#06d6a0" opacity={0.9}/>
+                  <circle cx={arrow.start.x} cy={arrow.start.y} r={vbScale * 4} fill="oklch(0.745 0.095 150)" opacity={0.9}/>
                 </g>
               );
             })}
@@ -2897,27 +2897,27 @@ export function LayoutScreen() {
               const last  = s.pixels[s.pixels.length - 1];
               return (
                 <g key="strip-connectors" style={{ pointerEvents: 'none' }}>
-                  <circle cx={first.x} cy={first.y} r={vbScale * 5}  fill="#06d6a0" opacity={0.95}/>
-                  <circle cx={first.x} cy={first.y} r={vbScale * 9}  fill="none" stroke="#06d6a0" strokeWidth={1.5} opacity={0.35}/>
-                  <circle cx={last.x}  cy={last.y}  r={vbScale * 7}  fill="none" stroke="#ff9f1c" strokeWidth={2} opacity={0.9}/>
-                  <circle cx={last.x}  cy={last.y}  r={vbScale * 11} fill="none" stroke="#ff9f1c" strokeWidth={1} opacity={0.3}/>
+                  <circle cx={first.x} cy={first.y} r={vbScale * 5}  fill="oklch(0.745 0.095 150)" opacity={0.95}/>
+                  <circle cx={first.x} cy={first.y} r={vbScale * 9}  fill="none" stroke="oklch(0.745 0.095 150)" strokeWidth={1.5} opacity={0.35}/>
+                  <circle cx={last.x}  cy={last.y}  r={vbScale * 7}  fill="none" stroke="oklch(0.800 0.130 72)" strokeWidth={2} opacity={0.9}/>
+                  <circle cx={last.x}  cy={last.y}  r={vbScale * 11} fill="none" stroke="oklch(0.800 0.130 72)" strokeWidth={1} opacity={0.3}/>
                 </g>
               );
             })()}
 
             {/* ── Draw mode ghost ── */}
             {drawMode && ghostD && (
-              <path d={ghostD} stroke="oklch(80% 0.12 210)" strokeWidth="1.5" fill="none"
+              <path d={ghostD} stroke="oklch(0.615 0.112 57)" strokeWidth="1.5" fill="none"
                     strokeDasharray="5 3" strokeLinecap="round" pointerEvents="none"/>
             )}
             {drawMode && waypoints.map((pt, i) => (
-              <circle key={i} cx={pt.x} cy={pt.y} r={vbScale * 4} fill="oklch(72% 0.15 210)"
+              <circle key={i} cx={pt.x} cy={pt.y} r={vbScale * 4} fill="oklch(0.615 0.112 57)"
                       opacity={0.9} pointerEvents="none"/>
             ))}
             {/* Draw cursor dot before first waypoint */}
             {drawMode && ghostPt && waypoints.length === 0 && (
               <circle cx={ghostPt.x} cy={ghostPt.y} r={vbScale * 3}
-                      fill="oklch(72% 0.15 210)" opacity={0.5} pointerEvents="none"/>
+                      fill="oklch(0.615 0.112 57)" opacity={0.5} pointerEvents="none"/>
             )}
 
             {/* ── Empty state ── */}
@@ -2949,8 +2949,8 @@ export function LayoutScreen() {
               top:    Math.min(rubberBand.y1, rubberBand.y2),
               width:  Math.abs(rubberBand.x2 - rubberBand.x1),
               height: Math.abs(rubberBand.y2 - rubberBand.y1),
-              border: '1px dashed oklch(84% 0.28 138)',
-              background: 'oklch(84% 0.28 138 / 0.07)',
+              border: '1px dashed var(--accent)',
+              background: 'var(--accent-soft)',
               pointerEvents: 'none',
               zIndex: 9999,
               userSelect: 'none',
@@ -2987,19 +2987,19 @@ export function LayoutScreen() {
       <div className="lw-layout-panel" style={{ borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
 
         {error && (
-          <div style={{ padding: '10px 14px', background: 'oklch(25% 0.08 30)', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.12 30)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <div className="lw-la-error-banner" style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', lineHeight: 1.5, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <span style={{ flex: 1 }}>{error}</span>
-            <button style={{ color: 'oklch(60% 0.10 30)', fontSize: 'var(--fs-lg)', lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+            <button style={{ fontSize: 'var(--fs-lg)', lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
                     onClick={() => setError(null)}>✕</button>
           </div>
         )}
 
         {/* Draw mode hint */}
         {drawMode && (
-          <div style={{ padding: '8px 14px', background: 'oklch(22% 0.06 210)', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', color: 'oklch(78% 0.12 210)', lineHeight: 1.6 }}>
+          <div className="lw-la-draw-hint" style={{ padding: '8px 14px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)', lineHeight: 1.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <strong>Drawing mode</strong>
-              <button style={{ fontSize: 'var(--fs-xs)', color: 'oklch(60% 0.10 210)', padding: '0 4px' }}
+              <button style={{ fontSize: 'var(--fs-xs)', color: 'var(--accent)', padding: '0 4px' }}
                       onClick={() => { setDrawMode(false); setWaypoints([]); setGhostPt(null); }}>
                 Cancel (Esc)
               </button>
@@ -3014,7 +3014,7 @@ export function LayoutScreen() {
 
         {/* Pending draw naming panel */}
         {pendingDraw && (
-          <div style={{ padding: '12px 14px', background: 'oklch(20% 0.06 210)', borderBottom: '1px solid var(--border)', flex: '0 0 auto' }}>
+          <div className="lw-la-pending-draw" style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', flex: '0 0 auto' }}>
             <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--accent)', marginBottom: 8 }}>
               Name your new strip
             </div>
@@ -3122,9 +3122,8 @@ export function LayoutScreen() {
                            }}
                            onDragLeave={() => setStripGroupDragOver(null)}
                            onDragEnd={() => { setLayerDragging(null); setLayerDragOver(null); setStripGroupDragOver(null); }}>
-	                        <div className={`lw-layer-row${isStripGroup ? ' lw-layer-row--strip-group' : ''}`}
-	                             style={{ background: stripGroupDragOver === group.groupId ? 'oklch(74% 0.13 210 / 0.14)' : isDragTarget ? 'oklch(74% 0.13 210 / 0.08)' : undefined,
-	                                      borderLeft: `3px solid oklch(80% 0.14 270 / 0.6)`,
+	                        <div className={`lw-layer-row lw-la-group-row${isStripGroup ? ' lw-layer-row--strip-group' : ''}`}
+	                             style={{ background: stripGroupDragOver === group.groupId ? 'color-mix(in oklab, var(--accent) 16%, transparent)' : isDragTarget ? 'var(--accent-soft)' : undefined,
 	                                      opacity: isGroupHidden ? 0.45 : 1 }}>
                           <span data-drag-handle="true" style={{ cursor: 'grab', color: 'var(--text-4)', display:'flex', alignItems:'center', paddingRight: 2 }}>
                             <DragHandleIcon/>
@@ -3135,7 +3134,7 @@ export function LayoutScreen() {
                           <button className="lw-layer-expand" onClick={e => { e.stopPropagation(); toggleGroupExpanded(group.groupId); }}>
                             {group._expanded ? <ChevronDownIcon/> : <ChevronRightIcon/>}
                           </button>
-                          <span style={{ color: 'oklch(80% 0.14 270)', display:'flex', alignItems:'center' }}><GroupIcon/></span>
+                          <span style={{ color: 'var(--accent)', display:'flex', alignItems:'center' }}><GroupIcon/></span>
 	                          <InlineRename value={group.name} onCommit={n => renameGroup(group.groupId, n)}
 	                                        className="lw-layer-name" style={{ fontSize: 'var(--fs-md)', flex: 1 }}/>
 	                          <span style={{ fontSize: 'var(--fs-2xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)', flexShrink: 0 }}>
@@ -3150,9 +3149,9 @@ export function LayoutScreen() {
 	                          const memberHidden = !!hidden[memberId];
 	                          return (
 	                          <div key={memberId} className="lw-subpath-row"
-	                               style={{ paddingLeft: 32, background: 'oklch(80% 0.14 270 / 0.04)', cursor: isStripGroup ? 'pointer' : undefined }}
+	                               style={{ paddingLeft: 32, background: 'color-mix(in oklab, var(--accent) 4%, transparent)', cursor: isStripGroup ? 'pointer' : undefined }}
 	                               onClick={() => { if (isStripGroup) selectStrip(memberId); }}>
-	                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-2xs)', color:'oklch(80% 0.14 270)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
+	                            <span style={{ fontFamily:'var(--mono-font)', fontSize:'var(--fs-2xs)', color:'var(--accent)', fontWeight:'bold', width:14, flexShrink:0, textAlign:'center' }}>{mi+1}</span>
 	                            <button className="lw-layer-eye" style={{ marginLeft:2 }}
 	                                    onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [memberId]: !h[memberId] })); }}>
 	                              {memberHidden ? <EyeOffIcon/> : <EyeIcon/>}
@@ -3316,7 +3315,7 @@ export function LayoutScreen() {
 
         {/* ── Path selection panel ── */}
         {pathSel.length > 0 && (
-          <div style={{ borderBottom: '1px solid var(--border)', padding: '10px 14px', background: 'oklch(18% 0.04 270)', flex: '0 0 auto' }}>
+          <div className="lw-la-pathsel" style={{ borderBottom: '1px solid var(--border)', padding: '10px 14px', flex: '0 0 auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text-2)' }}>
                 {pathSel.length} path{pathSel.length > 1 ? 's' : ''} selected
@@ -3328,7 +3327,7 @@ export function LayoutScreen() {
               {pathSel.map((p, i) => (
                 <div key={p.pathId} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 'var(--fs-sm)',
                                               color: 'var(--text-3)', padding: '2px 0' }}>
-                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-2xs)', color: '#4cc9f0',
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-2xs)', color: 'var(--accent)',
                                  fontWeight: 'bold', width: 14, flexShrink: 0, textAlign: 'center' }}>{i + 1}</span>
                   <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                   {p.svgLength > 0 && (
@@ -3366,7 +3365,7 @@ export function LayoutScreen() {
                           onClick={() => addSelectedPathsAsStrips('separate')}>
                     Separate
                   </button>
-                  <button className="btn" style={{ fontSize: 'var(--fs-sm)', color: 'oklch(80% 0.14 270)', borderColor: 'oklch(80% 0.14 270 / 0.4)', background: 'oklch(80% 0.14 270 / 0.08)' }}
+                  <button className="btn lw-la-group-btn" style={{ fontSize: 'var(--fs-sm)' }}
                           title="Create separate LED strips and place them in one strip group"
                           onClick={() => addSelectedPathsAsStrips('grouped')}>
                     <GroupIcon/> Strip Group
@@ -3736,9 +3735,9 @@ export function LayoutScreen() {
                   style={{
                     margin: '8px 12px 10px',
                     padding: 12,
-                    border: '1px solid oklch(70% 0.12 210 / 0.38)',
+                    border: '1px solid var(--accent-line)',
                     borderRadius: 6,
-                    background: 'linear-gradient(135deg, oklch(24% 0.04 220 / 0.72), oklch(18% 0.02 280 / 0.58))',
+                    background: 'var(--accent-soft)',
                     boxShadow: 'inset 0 1px 0 oklch(100% 0 0 / 0.06)',
                   }}
                 >

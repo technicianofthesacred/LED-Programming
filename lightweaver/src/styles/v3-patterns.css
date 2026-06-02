@@ -1,0 +1,658 @@
+/* ============================================================
+   v3 restyle — PATTERNS & MIXES (the hero)
+   ------------------------------------------------------------
+   Presentation-only override of main.css. Loaded after main.css.
+   Maps the Claude Design v3 look onto the LIVE classNames.
+   Tokens only (no hardcoded blue, no raw hex except the hue
+   spectrum gradient, which is a literal rainbow scale).
+   Every handler, testid, slider, swatch, toggle and drag target
+   is untouched: this file changes appearance, never structure.
+   ============================================================ */
+
+/* ---- Screen + shell: warm canvas, no cool-blue grid ---- */
+.lw-patterns-screen {
+  background:
+    linear-gradient(90deg, oklch(100% 0 0 / 0.018) 1px, transparent 1px),
+    linear-gradient(180deg, oklch(100% 0 0 / 0.012) 1px, transparent 1px),
+    radial-gradient(120% 90% at 50% -10%, oklch(0.185 0.012 52), oklch(0.13 0.006 60) 62%),
+    var(--bg);
+  background-size: 46px 46px, 46px 46px, auto, auto;
+}
+
+.lw-patterns-shell {
+  width: min(1400px, calc(100% - 52px));
+  padding: 30px 0 48px;
+  gap: 20px;
+}
+
+/* ---- Hero: title + calm action grouping ---- */
+.lw-patterns-hero {
+  align-items: flex-start;
+  margin-bottom: 2px;
+}
+
+.lw-patterns-hero h1 {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.lw-patterns-hero p {
+  margin-top: 6px;
+  max-width: 540px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* Action bar reads as one calm cluster, grouped by label.
+   Save to card stays the single clay primary; everything else
+   is a quiet ghost tucked under its group label. Nothing removed. */
+.lw-patterns-actions {
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.lw-action-group {
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  min-height: 34px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+}
+
+.lw-action-group:first-child { padding-left: 10px; }
+
+/* drop the divider line — groups now read as separate pills */
+.lw-action-group + .lw-action-group { border-left: 1px solid var(--border-2); }
+
+/* the main group (Save to card + Repair) gets a faint clay wash */
+.lw-action-group-main {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.lw-action-group-label {
+  color: var(--text-4);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lw-action-group .btn {
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: var(--r-sm);
+}
+
+/* Save to card — the one primary, clay fill with black text */
+.lw-toolbar-primary {
+  min-width: 96px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.lw-toolbar-primary:hover { background: var(--accent-hi); }
+
+/* secondary ghosts read quiet until hovered */
+.lw-toolbar-action {
+  color: var(--text-2);
+  background: transparent;
+  border-color: transparent;
+}
+.lw-toolbar-action:hover {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: transparent;
+}
+.lw-action-group-main .lw-toolbar-action:hover {
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+}
+.lw-toolbar-action.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* ---- Status banner ---- */
+.lw-chip-status {
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.lw-chip-status.is-ok { border-color: color-mix(in oklch, var(--ok) 45%, var(--border-2)); }
+.lw-chip-status.is-err { border-color: color-mix(in oklch, var(--danger) 50%, var(--border-2)); }
+.lw-repair-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+
+/* ---- Grid: main + 372px aside ---- */
+.lw-patterns-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 372px;
+  gap: 22px;
+  align-items: start;
+}
+
+/* ============================================================
+   Live preview bar
+   ============================================================ */
+.lw-live-preview-bar {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+}
+.lw-live-preview-bar label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.lw-live-preview-bar span {
+  font-size: 11.5px;
+  font-family: var(--mono-font);
+  color: var(--ok);
+}
+
+/* ============================================================
+   Strip finder
+   ============================================================ */
+.lw-strip-color-test {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  flex-wrap: wrap;
+}
+.lw-strip-color-title {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lw-strip-color-buttons { display: flex; gap: 4px; }
+.lw-strip-color-buttons .btn {
+  width: 34px;
+  min-width: 34px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+.lw-strip-color-buttons .btn:hover { color: var(--text); }
+.lw-strip-color-buttons .btn.active {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+.lw-strip-order-pill {
+  font-size: 12px;
+  color: var(--text-3);
+  font-family: var(--mono-font);
+}
+.lw-strip-order-pill b {
+  color: var(--accent);
+  font-weight: 700;
+  margin-left: 3px;
+}
+.lw-strip-next-order { margin-left: auto; }
+
+/* ============================================================
+   Design target / Layer mix
+   ============================================================ */
+.lw-target-panel {
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  padding: 14px 16px 16px;
+}
+
+.lw-target-compound-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.lw-target-compound-copy { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
+.lw-target-compound-copy span {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  font-weight: 600;
+}
+.lw-target-compound-copy strong { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.lw-target-compound-bar .lw-search-input { flex: 1; height: 34px; }
+.lw-target-compound-bar .btn {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lw-target-compound-bar .btn:hover { background: var(--accent-hi); }
+
+.lw-target-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/* the target rows — All sections header gets the clay wash */
+.lw-section-target {
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border-hair);
+  background: var(--surface);
+}
+.lw-section-target:first-child { border-top: none; }
+.lw-section-target.is-all { background: var(--accent-soft); }
+.lw-section-target:hover { background: var(--surface-2); }
+.lw-section-target.is-all:hover { background: color-mix(in oklch, var(--accent) 22%, transparent); }
+.lw-section-target.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-sel);
+}
+.lw-section-target.is-all.is-active { background: color-mix(in oklch, var(--accent) 24%, transparent); }
+
+.lw-section-target-badge {
+  font-family: var(--mono-font);
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+.lw-section-target.is-all .lw-section-target-badge {
+  color: var(--on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+.lw-section-target.is-active .lw-section-target-badge {
+  border-color: var(--accent-line);
+}
+
+.lw-section-target-range {
+  font-family: var(--mono-font);
+  color: var(--text);
+}
+
+/* inputs inside target rows */
+.lw-target-name-input,
+.lw-target-led-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--ui-font);
+}
+.lw-target-led-input { font-family: var(--mono-font); }
+.lw-target-name-input:read-only { background: transparent; border-color: transparent; }
+.lw-target-name-input:not(:read-only):focus,
+.lw-target-led-input:focus { outline: none; border-color: var(--accent); }
+.lw-target-led-input:disabled { opacity: 0.55; }
+
+/* ============================================================
+   Browse tools: search + filter chips
+   ============================================================ */
+.lw-pattern-browse-tools > .lw-search-input { height: 36px; }
+
+.lw-pattern-filter-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.lw-pattern-filter-row .btn {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+.lw-pattern-filter-row .btn:hover { color: var(--text); background: var(--surface-3); }
+.lw-pattern-filter-row .btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.lw-pattern-browse-tools > span {
+  font-size: 11px;
+  font-family: var(--mono-font);
+  color: var(--text-4);
+}
+
+/* search inputs across the screen */
+.lw-search-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 13px;
+}
+.lw-search-input::placeholder { color: var(--text-4); }
+.lw-search-input:focus { outline: none; border-color: var(--accent); }
+
+/* ============================================================
+   Browse grid — each card a little glowing LED strip
+   ============================================================ */
+.lw-look-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.lw-look-card {
+  padding: 9px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.lw-look-card:hover { border-color: var(--border); }
+.lw-look-card.is-previewing { border-color: var(--accent-line); }
+.lw-look-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.lw-look-card-main { gap: 9px; }
+.lw-look-card-copy strong { font-size: 13px; font-weight: 500; color: var(--text); }
+.lw-look-card-copy > span:not(.lw-pattern-fingerprint) {
+  font-size: 11.5px;
+  color: var(--text-4);
+}
+
+/* the thumbnail becomes a warm glowing LED stage strip */
+.lw-pattern-thumb,
+.lw-compound-thumb {
+  border-radius: var(--r-sm);
+  background:
+    radial-gradient(110% 130% at 50% 135%, oklch(0.20 0.018 50), oklch(0.095 0.006 45));
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.05);
+}
+.lw-pattern-thumb-glow {
+  background:
+    radial-gradient(circle at 50% 60%, color-mix(in oklch, var(--palette-a) 70%, transparent), transparent 62%);
+}
+.lw-pattern-thumb-swatch-row b { box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08); }
+
+/* in-playlist toggle reads as a calm star-style chip */
+.lw-look-card-toggle {
+  font-size: 11px;
+  color: var(--text-4);
+}
+.lw-look-card-toggle:hover { color: var(--text-2); }
+.lw-look-card-toggle input:checked + span,
+.lw-look-card-toggle:has(input:checked) { color: var(--accent); }
+
+/* ---- Load more ---- */
+.lw-pattern-load-more {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+.lw-pattern-load-more:hover { color: var(--text); background: var(--surface-3); }
+.lw-pattern-load-more-row span {
+  font-size: 11px;
+  font-family: var(--mono-font);
+  color: var(--text-4);
+}
+
+/* ============================================================
+   Aside
+   ============================================================ */
+.lw-patterns-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 14px;
+}
+
+/* ---- Preview: glowing LED stage (warm clay glow) ---- */
+.lw-pattern-led-preview {
+  position: relative;
+  height: clamp(220px, 29vh, 340px);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background:
+    radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%),
+    var(--pattern-preview-bg, var(--preview-bg));
+}
+.lw-pattern-led-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 64px 16px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 2;
+}
+/* a slow sheen sweep — the signature v3 stage touch */
+.lw-pattern-led-preview::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.045), transparent);
+  animation: lw-pm-sheen 5s ease-in-out infinite;
+}
+@keyframes lw-pm-sheen {
+  0% { transform: translateX(-130%); }
+  60%, 100% { transform: translateX(360%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lw-pattern-led-preview::before { display: none; }
+}
+
+.lw-pattern-preview-copy {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ---- Color & motion: warm LED preview stage ---- */
+.lw-look-preview {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  background:
+    radial-gradient(130% 100% at 50% 125%, oklch(0.21 0.02 50), oklch(0.10 0.007 45) 74%),
+    radial-gradient(circle at 24% 34%, color-mix(in oklch, var(--palette-b) 40%, transparent), transparent 30%),
+    radial-gradient(circle at 74% 66%, color-mix(in oklch, var(--palette-c) 36%, transparent), transparent 32%);
+}
+.lw-look-preview.is-large { min-height: 200px; }
+.lw-look-led-field i {
+  box-shadow:
+    0 0 0 1px oklch(100% 0 0 / 0.18),
+    0 0 12px color-mix(in oklch, var(--led-color) 78%, transparent);
+}
+
+/* ---- Color picker row ---- */
+.lw-look-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.lw-look-color-picker label { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: var(--text-2); }
+.lw-look-color-picker input[type="color"] {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.lw-look-color-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono-font);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  padding: 4px 9px;
+}
+.lw-look-color-current::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.12);
+}
+.lw-look-color-current strong { font-size: 12px; color: var(--text); font-weight: 600; }
+.lw-look-color-current em { font-size: 11px; font-style: normal; color: var(--text-3); }
+
+/* ---- Swatch row: round chips, clay ring when active ---- */
+.lw-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 6px;
+}
+.lw-color-swatch {
+  aspect-ratio: 1;
+  width: auto;
+  height: auto;
+  border-radius: 50%;
+  border: none;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08);
+  transition: transform 0.08s;
+}
+.lw-color-swatch:hover { transform: scale(1.12); }
+.lw-color-swatch.is-active {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--surface);
+}
+
+/* ============================================================
+   Hue spectrum — the hue slider becomes a rainbow scale
+   (replaces the rainbow wheel). Targets the live Hue slider
+   only; other sliders keep the standard track.
+   ============================================================ */
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"] {
+  height: 12px;
+  border-radius: 99px;
+  background:
+    linear-gradient(90deg,
+      #d8503a, #d8a83a, #c8c83a, #6ab86a, #3aa8b8,
+      #5a6ac8, #9a5ac8, #c84a9a, #d8503a);
+  box-shadow: inset 0 0 0 1px oklch(100% 0 0 / 0.08);
+}
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 12px;
+}
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-moz-range-track {
+  background: transparent;
+  height: 12px;
+}
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -2px;
+  border-radius: 50%;
+  background: oklch(0.97 0.005 80);
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]:hover::-webkit-slider-thumb {
+  transform: none;
+  background: oklch(0.99 0.005 80);
+}
+.lw-look-sliders .lw-look-slider-row:first-child input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: oklch(0.97 0.005 80);
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+/* ---- Sliders + readouts ---- */
+.lw-look-slider-row { gap: 11px; }
+.lw-look-slider-row > span { font-size: 12.5px; color: var(--text-2); }
+.lw-look-slider-row strong {
+  font-family: var(--mono-font);
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.lw-look-switches label { font-size: 12.5px; color: var(--text-2); }
+.lw-look-tune-actions .btn {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+}
+.lw-look-tune-actions .btn:hover { color: var(--text); background: var(--surface-3); }
+
+/* ---- Geometry segmented + presets ---- */
+.lw-geometry-presets button,
+.lw-geometry-segmented button,
+.lw-geometry-counts button {
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+}
+.lw-geometry-presets button:hover,
+.lw-geometry-segmented button:hover,
+.lw-geometry-counts button:hover { color: var(--text); background: var(--surface-3); }
+.lw-geometry-presets button.active,
+.lw-geometry-segmented button.active,
+.lw-geometry-counts button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* ---- Knob brightness ---- */
+.lw-knob-control-grid b { font-family: var(--mono-font); color: var(--text); }
+.lw-tweaks-seg button.active,
+.lw-knob-control-grid .lw-tweaks-seg button.active {
+  color: var(--accent);
+}
+
+/* ---- Card summary ---- */
+.lw-card-load-summary > span { color: var(--text-4); font-size: 11px; }
+.lw-card-load-summary strong { color: var(--text); font-size: 12.5px; }
+.lw-card-host-row .lw-search-input { height: 34px; }
+
+/* ---- Section headers across panels ---- */
+.lw-patterns-aside .lw-sec-header,
+.lw-look-picker .lw-sec-header {
+  color: var(--text);
+}
+.lw-sec-header .meta { color: var(--text-4); font-family: var(--mono-font); }
+
+/* ============================================================
+   Responsive — collapse aside under the main column
+   ============================================================ */
+@media (max-width: 1180px) {
+  .lw-patterns-grid { grid-template-columns: 1fr; }
+  .lw-patterns-aside { position: static; }
+}

@@ -847,72 +847,71 @@ export function FlashScreen() {
   const canFlash   = connected && !!selectedFile && !flashing;
 
   return (
-    <div style={{ padding: 40, maxWidth: 680, margin: '0 auto', height: '100%', overflow: 'auto' }}>
+    <div className="v3fl">
 
-      {!hasWebSerial && (
-        <div style={{ padding: '10px 14px', marginBottom: 20, background: 'oklch(28% 0.04 30)', border: '1px solid oklch(45% 0.12 30)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)', color: 'oklch(72% 0.15 30)' }}>
-          Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.
-        </div>
-      )}
+      <div className={`v3fl-warn ${hasWebSerial ? 'ok' : 'warn'}`}>
+        {hasWebSerial
+          ? 'In-browser flashing is ready. Web Serial is available in this browser.'
+          : 'Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.'}
+      </div>
 
       <div className="lw-sec-header"><span>Bootloader mode</span><span className="meta">do this before connecting</span></div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+      <div className="v3fl-boot-steps">
         {[
-          { step: 1, label: 'Hold BOOT',    sub: 'GPIO0 pin' },
-          { step: 2, label: 'Press RESET',  sub: 'EN pin — then release' },
-          { step: 3, label: 'Release BOOT', sub: 'then click Connect' },
-        ].map(({ step, label, sub }) => (
-          <div key={step} style={{ flex: 1, padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)' }}>
-            <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>STEP {step}</div>
-            <div style={{ fontSize: 'var(--fs-md)', marginTop: 4, fontWeight: 500 }}>{label}</div>
-            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', marginTop: 3 }}>{sub}</div>
+          { step: 1, label: 'Hold BOOT',    sub: 'GPIO0 pin',              kbd: 'BOOT' },
+          { step: 2, label: 'Press RESET',  sub: 'EN pin, then release',   kbd: 'EN' },
+          { step: 3, label: 'Release BOOT', sub: 'then click Connect',     kbd: 'CONNECT' },
+        ].map(({ step, label, sub, kbd }) => (
+          <div key={step} className="v3fl-boot-step">
+            <div className="v3fl-sn">STEP {step}</div>
+            <div className="v3fl-sl">{label}</div>
+            <div className="v3fl-ss">{sub}</div>
+            <span className="v3fl-kbd">{kbd}</span>
           </div>
         ))}
       </div>
 
       <div className="lw-sec-header"><span>Lightweaver firmware</span></div>
-      <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
-        <p style={{ margin: '0 0 12px', color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 }}>
+      <div className="v3fl-fw-card">
+        <p className="v3fl-fw-copy">
           Use the bundled Lightweaver factory firmware for sellable cards and blank ESP32-S3 boards. Only browse for a file if Adrian gave you a specific replacement binary.
         </p>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div className="v3fl-fw-actions">
           <button className="btn btn-primary" onClick={handleSelectBundledFirmware} disabled={loadingBundledFirmware}>
             {loadingBundledFirmware ? 'Loading…' : 'Use Lightweaver firmware'}
           </button>
-          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>or</span>
+          <span className="v3fl-or">or</span>
           <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse .bin</button>
           <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange}/>
         </div>
 
         {selectedFile && (
-          <div style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: 'var(--text-2)', padding: '6px 0' }}>
+          <div className="v3fl-fw-file">
             {selectedFile.name} ({fmtSize(selectedFile.size)})
           </div>
         )}
       </div>
 
       <div className="lw-sec-header"><span>Flash options</span></div>
-      <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 'var(--fs-sm)' }}>
-          <span style={{ color: 'var(--text-3)' }}>Address</span>
-          <input
-            type="text" value={address}
-            onChange={e => setAddress(e.target.value)}
-            style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', width: 90 }}
-          />
-          <span></span>
-          <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
-            Bundled Lightweaver factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS} and can erase the chip first. App-only replacement binaries usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with Erase all off.
-          </span>
-          <span style={{ color: 'var(--text-3)' }}>Erase all</span>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-            <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>
-            <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>takes ~15 s</span>
-          </label>
-        </div>
+      <div className="v3fl-opt-grid">
+        <span className="v3fl-k">Address</span>
+        <input
+          type="text" value={address}
+          onChange={e => setAddress(e.target.value)}
+          className="v3fl-input"
+        />
+        <span></span>
+        <span className="v3fl-hint">
+          Bundled Lightweaver factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS} and can erase the chip first. App-only replacement binaries usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with Erase all off.
+        </span>
+        <span className="v3fl-k">Erase all</span>
+        <label className="v3fl-check">
+          <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>
+          <span className="v3fl-hint">takes ~15 s</span>
+        </label>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+      <div className="v3fl-run">
         <button
           className={`btn ${connected ? '' : 'btn-primary'}`}
           onClick={handleConnect}
@@ -929,14 +928,14 @@ export function FlashScreen() {
           Flash firmware
         </button>
         {status && (
-          <span style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: statusColor, flex: 1 }}>
+          <span className={`v3fl-stat ${statusKind === 'connected' ? 'ok' : statusKind === 'error' ? 'err' : ''}`} style={{ color: statusColor }}>
             {status}
           </span>
         )}
       </div>
 
-      <div style={{ marginBottom: 16, height: 6, background: 'var(--surface)', borderRadius: 99, overflow: 'hidden', border: '1px solid var(--border)' }}>
-        <div style={{ height: '100%', width: `${Math.round(progress * 100)}%`, background: 'var(--accent)', borderRadius: 99, transition: 'width 0.15s' }}/>
+      <div className="v3fl-bar">
+        <div className="v3fl-fill" style={{ width: `${Math.round(progress * 100)}%` }}/>
       </div>
 
       <div className="lw-sec-header"><span>Log</span><span className="meta">{Math.round(progress * 100)}%</span></div>
@@ -944,12 +943,7 @@ export function FlashScreen() {
         ref={logRef}
         readOnly
         value={log}
-        style={{
-          width: '100%', height: 180, resize: 'vertical', boxSizing: 'border-box',
-          fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', lineHeight: 1.6,
-          background: 'var(--bg)', color: 'var(--text-2)',
-          border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px',
-        }}
+        className="v3fl-log"
       />
     </div>
   );

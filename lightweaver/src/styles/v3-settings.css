@@ -1,0 +1,501 @@
+/* v3 restyle - settings screen (ChipScreen). Overrides main.css; tokens only, all function preserved.
+   Maps the Claude Design v3 grouped-card settings look onto the live Lightweaver classNames.
+   Loaded after main.css so these rules win. No hardcoded blue/hex, no icons, warm clay accent. */
+
+/* ----------------------------------------------------------------
+   Screen + shell: centered column, warm base
+   ---------------------------------------------------------------- */
+.lw-chip-settings-screen {
+  background: var(--bg);
+}
+
+.lw-chip-settings-shell {
+  width: min(1100px, calc(100% - 40px));
+  padding: 28px 0 48px;
+  gap: 20px;
+}
+
+/* Hero title (matches .set-title) */
+.lw-chip-settings-hero h1 {
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.lw-chip-settings-kicker {
+  color: var(--accent);
+  font-family: var(--mono-font);
+  letter-spacing: 0.09em;
+}
+
+.lw-chip-settings-hero p {
+  color: var(--text-3);
+}
+
+/* ----------------------------------------------------------------
+   Card connection panel: warm clay-edged panel (no blue gradient)
+   ---------------------------------------------------------------- */
+.lw-chip-save-panel {
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(135deg, var(--accent-soft), transparent 70%),
+    var(--surface-2);
+  padding: 16px 18px;
+}
+
+.lw-chip-save-copy span,
+.lw-chip-save-controls label span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  letter-spacing: 0.04em;
+}
+
+.lw-chip-save-copy h2 {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lw-chip-save-copy p {
+  color: var(--text-3);
+}
+
+/* ----------------------------------------------------------------
+   Status banner
+   ---------------------------------------------------------------- */
+.lw-chip-settings-status {
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.lw-chip-settings-status.is-ok {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.lw-chip-settings-status.is-err {
+  border-color: color-mix(in oklab, var(--danger) 55%, var(--border));
+  background: color-mix(in oklab, var(--danger) 14%, var(--surface-2));
+  color: var(--text);
+}
+
+/* ----------------------------------------------------------------
+   Cards: the grouped-card look (.card + .set-card)
+   ---------------------------------------------------------------- */
+.lw-chip-settings-section {
+  min-width: 0;
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 16px 18px 10px;
+}
+
+.lw-chip-settings-section.is-hardware {
+  padding: 0;
+}
+
+.lw-chip-settings-section.is-hardware > .lw-sec-header {
+  padding: 16px 18px 10px;
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.lw-card-setup-controls {
+  padding: 0 18px;
+}
+
+/* Section header (matches .sec-h) */
+.lw-sec-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.lw-chip-settings-section .lw-sec-header > span:first-child,
+.lw-ring-summary .lw-sec-header > span:first-child {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.lw-sec-header .meta {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------
+   Field rows: label+hint left, control right (matches .set-row)
+   ---------------------------------------------------------------- */
+.lw-chip-settings-field {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 11px 0;
+  border-top: none;
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.lw-chip-settings-field:last-child {
+  border-bottom: none;
+}
+
+.lw-chip-settings-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.lw-chip-settings-hint {
+  color: var(--text-4);
+  font-size: 11px;
+}
+
+/* Numeric inputs sit compact on the right */
+.lw-chip-settings-number {
+  width: 92px;
+  text-align: right;
+  font-family: var(--mono-font);
+}
+
+/* ----------------------------------------------------------------
+   Inputs (.lw-search-input) - warm wells, clay focus
+   ---------------------------------------------------------------- */
+.lw-chip-settings-screen .lw-search-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+}
+
+.lw-chip-settings-screen .lw-search-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.lw-chip-settings-screen .lw-search-input::placeholder {
+  color: var(--text-4);
+}
+
+/* ----------------------------------------------------------------
+   Segmented controls (.lw-tweaks-seg) - amber/clay active
+   matches v3 .seg
+   ---------------------------------------------------------------- */
+.lw-chip-settings-screen .lw-tweaks-seg {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--r-sm);
+  padding: 2px;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.lw-chip-settings-screen .lw-tweaks-seg button {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+}
+
+.lw-chip-settings-screen .lw-tweaks-seg button:hover {
+  color: var(--text);
+}
+
+.lw-chip-settings-screen .lw-tweaks-seg button.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------
+   Sliders (.lw-chip-settings-slider) - clay thumb (matches .set-range)
+   ---------------------------------------------------------------- */
+.lw-chip-settings-slider {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.lw-chip-settings-slider span {
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  color: var(--text);
+  min-width: 46px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.lw-chip-settings-screen input[type=range] {
+  accent-color: var(--accent);
+}
+
+.lw-chip-settings-screen input[type=range]::-webkit-slider-thumb {
+  background: var(--accent);
+}
+
+.lw-chip-settings-screen input[type=range]:hover::-webkit-slider-thumb {
+  background: var(--accent-hi);
+}
+
+.lw-chip-settings-screen input[type=range]::-moz-range-thumb {
+  background: var(--accent);
+}
+
+/* ----------------------------------------------------------------
+   Section LED count + small field labels
+   ---------------------------------------------------------------- */
+.lw-chip-section-count > span,
+.lw-chip-output-row label > span,
+.lw-chip-save-controls label > span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 10px;
+}
+
+/* ----------------------------------------------------------------
+   Output editor rows
+   ---------------------------------------------------------------- */
+.lw-chip-output-editor {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.lw-chip-output-toolbar {
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.lw-chip-output-toolbar strong {
+  color: var(--text);
+}
+
+.lw-chip-output-toolbar span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+}
+
+.lw-chip-output-row {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.lw-chip-output-row-head strong {
+  color: var(--text);
+}
+
+.lw-chip-output-row-head span,
+.lw-chip-output-row-head em {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-style: normal;
+}
+
+/* ----------------------------------------------------------------
+   Ring summary card
+   ---------------------------------------------------------------- */
+.lw-ring-summary {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.lw-ring-summary .lw-ring-orbit {
+  border-color: var(--accent-line);
+}
+
+.lw-ring-summary .lw-ring-orbit.center {
+  color: var(--accent);
+}
+
+.lw-ring-summary-copy strong {
+  color: var(--text);
+}
+
+.lw-ring-summary-copy span {
+  color: var(--text-3);
+}
+
+/* ----------------------------------------------------------------
+   Metrics + run summary
+   ---------------------------------------------------------------- */
+.lw-chip-run-summary .lw-chip-settings-metric {
+  background: var(--surface-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+}
+
+.lw-chip-settings-metric span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.lw-chip-settings-metric strong {
+  color: var(--text);
+}
+
+.lw-chip-settings-metric em {
+  color: var(--text-3);
+  font-style: normal;
+}
+
+/* ----------------------------------------------------------------
+   What-the-card-runs section list
+   ---------------------------------------------------------------- */
+.lw-chip-section-row {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.lw-chip-section-row strong {
+  color: var(--text);
+}
+
+.lw-chip-section-row span {
+  color: var(--text-3);
+}
+
+.lw-chip-section-row code {
+  color: var(--accent);
+  font-family: var(--mono-font);
+}
+
+.lw-chip-settings-note {
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+/* ----------------------------------------------------------------
+   Project library list (grouped rows)
+   ---------------------------------------------------------------- */
+.lw-project-library-row {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.lw-project-library-row.is-active {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.lw-project-library-main strong {
+  color: var(--text);
+}
+
+.lw-project-library-main span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+}
+
+.lw-project-library-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-4);
+  background: var(--surface-2);
+}
+
+/* ----------------------------------------------------------------
+   Card package summary
+   ---------------------------------------------------------------- */
+.lw-card-load-summary span {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+}
+
+.lw-card-load-summary strong {
+  color: var(--text);
+}
+
+/* ----------------------------------------------------------------
+   Advanced / designer config
+   ---------------------------------------------------------------- */
+.lw-chip-settings-json {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-family: var(--mono-font);
+}
+
+/* ----------------------------------------------------------------
+   Buttons - warm ghost, black-on-clay primary (matches .btn/.btn.primary)
+   ---------------------------------------------------------------- */
+.lw-chip-settings-screen .btn,
+.lw-chip-settings-screen .lw-card-tools-menu > summary.btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-soft, var(--border));
+  border-radius: var(--r-sm);
+}
+
+.lw-chip-settings-screen .btn:hover {
+  background: var(--surface-3);
+  border-color: var(--border);
+}
+
+.lw-chip-settings-screen .btn-ghost {
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+
+.lw-chip-settings-screen .btn-ghost:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.lw-chip-settings-screen .btn-ghost.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.lw-chip-settings-screen .btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+}
+
+.lw-chip-settings-screen .btn-primary:hover {
+  background: var(--accent-hi);
+}
+
+.lw-chip-settings-screen .btn:disabled,
+.lw-chip-settings-screen .btn-primary:disabled,
+.lw-chip-settings-screen .btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Card tools dropdown menu */
+.lw-card-tools-menu > div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+/* ----------------------------------------------------------------
+   Responsive: collapse two-column grids on narrow screens
+   ---------------------------------------------------------------- */
+@media (max-width: 1000px) {
+  .lw-chip-settings-grid,
+  .lw-chip-lower-grid {
+    grid-template-columns: 1fr;
+  }
+}
