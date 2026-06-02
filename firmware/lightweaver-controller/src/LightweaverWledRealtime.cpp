@@ -128,6 +128,9 @@ void handleWledRealtime() {
     // dimmer knob is set.
     uint8_t brightScale = uint8_t(constrain(int(manualBrightness * 255.0f), 0, 255));
 
+    // Skip this frame if a different live source (e.g. Art-Net) owns the canvas.
+    if (!frameSourceClaim(FRAME_WLED_REALTIME)) continue;
+
     const uint8_t* p = buf + 2;
     for (int i = 0; i < pixels; i++) {
       g_leds[i].r = p[0];

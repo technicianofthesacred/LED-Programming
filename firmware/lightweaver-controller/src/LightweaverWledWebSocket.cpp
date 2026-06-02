@@ -54,11 +54,13 @@ void applyState(uint8_t* payload, size_t length) {
       JsonArray pixels = s["i"].as<JsonArray>();
       if (!pixels.isNull() && pixels.size() > 0) {
         framePushed = true;
+        // Only write if no other live source (e.g. Art-Net) owns the canvas.
+        bool frameAllowed = frameSourceClaim(FRAME_WLED_REALTIME);
         int writeIdx = s["start"] | 0;
         if (writeIdx < 0) writeIdx = 0;
         uint8_t scale = uint8_t(manualBrightness * 255.0f);
         for (JsonVariant v : pixels) {
-          if (writeIdx >= int(totalPixels)) break;
+          if (!frameAllowed || writeIdx >= int(totalPixels)) break;
           if (v.is<const char*>()) {
             uint8_t r, g, b;
             if (hexToRgb(v.as<const char*>(), r, g, b)) {
@@ -87,9 +89,9 @@ void applyState(uint8_t* payload, size_t length) {
     }
   }
 
-  if (framePushed) {
-    frameSourceMarkExternal(FRAME_WLED_REALTIME);
-  } else {
+  // Frame writes already claimed the canvas above; only apply plain state
+  // controls when this wasn't a frame push.
+  if (!framePushed) {
     if (!doc["bri"].isNull()) {
       runtimeSetBrightness(float(doc["bri"].as<int>()) / 255.0f);
     }
