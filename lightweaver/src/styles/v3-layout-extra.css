@@ -183,3 +183,344 @@
 .la-empty svg { color: var(--text-faint); }
 .la-empty .cta { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 20px; border-radius: var(--r-md); background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; }
 .la-empty .cta svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; color: var(--on-accent); }
+
+/* ── Canvas wire-path overlay (chop/link route drawn on the artwork) ──────
+   Ported from main.css into the v3 token idiom — warm accent strands, no blue.
+   --wire-color is set inline per segment from the strip's own color. */
+.lw-wire-canvas-segment {
+  fill: none;
+  stroke: var(--wire-color, var(--accent));
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.42;
+  filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
+  pointer-events: none;
+}
+.lw-wire-canvas-segment-hit {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.001;
+  stroke-width: 18;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  cursor: pointer;
+  pointer-events: visibleStroke;
+}
+.lw-route-badge { pointer-events: none; }
+.lw-route-badge circle { fill: var(--accent); stroke: var(--bg-canvas); stroke-width: 1.5; }
+.lw-route-badge text { fill: var(--bg-canvas); font-family: var(--font-mono); font-weight: 800; text-anchor: middle; pointer-events: none; }
+.lw-wire-route-jump {
+  stroke: var(--accent-hi);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.lw-wire-cut-marker-notch {
+  fill: none;
+  stroke: var(--wire-color, var(--accent));
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px var(--wire-color, var(--accent)));
+}
+.lw-wire-cut-marker.selected .lw-wire-cut-marker-notch {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+
+/* marching-ants animation for canvas path-selection highlight */
+@keyframes lw-march { to { stroke-dashoffset: -24; } }
+
+/* canvas viewport — layout comes from inline style + .stage/.dotgrid (warm grid);
+   here we only carry the drop-target highlight so dragging an SVG over reads clearly. */
+.lw-viewport { transition: box-shadow .16s ease-out; }
+.lw-viewport--drop { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* undo/redo step-count badge on the toolbar icon buttons */
+.la .tb-btn.icon { position: relative; }
+.la .tb-btn .cnt {
+  position: absolute; top: -3px; right: -3px;
+  min-width: 13px; height: 13px; padding: 0 3px;
+  display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 9px; line-height: 1;
+  color: var(--on-accent, var(--bg-canvas)); background: var(--accent);
+  border-radius: 7px;
+}
+
+/* ── Embedded PatchBoard wire editor (inside .la-wire-editor disclosure) ──────
+   The PatchBoardScreen markup uses the legacy app's token names. Rather than
+   fork its 250-line stylesheet, we alias those token names to v3 warm tokens
+   for the editor subtree only, then carry its rules verbatim. Result: the wire
+   editor reads in the same warm clay idiom as the rest of the v3 Layout screen,
+   no blue, no legacy palette leaking in. */
+.la-wire-editor {
+  --surface:    var(--bg-panel);
+  --surface-2:  var(--bg-elev);
+  --bg:         var(--bg-canvas);
+  --border-2:   var(--border);
+  --text:       var(--text-hi);
+  --text-2:     var(--text-mid);
+  --text-3:     var(--text-lo);
+  --text-4:     var(--text-faint);
+  --mono-font:  var(--font-mono);
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;  --s-4: 16px;
+  --fs-xs: 11px;  --fs-sm: 12.5px;  --fs-lg: 15px;
+}
+.lw-wire-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+
+.lw-wire-head h1 {
+  margin: 0 0 3px;
+  font-size: var(--fs-lg);
+  line-height: 1.1;
+}
+
+.lw-wire-head p {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.lw-wire-head-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+.lw-wire-source,
+.lw-wire-cut-summary,
+.lw-wire-order,
+.lw-wire-tools,
+.lw-wire-advanced {
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.lw-wire-source,
+.lw-wire-cut-summary,
+.lw-wire-order,
+.lw-wire-tools,
+.lw-wire-advanced {
+  padding: var(--s-3);
+}
+
+.lw-wire-selected-detail {
+  min-width: 0;
+  padding: var(--s-3);
+  background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+  border: 1px solid color-mix(in oklab, var(--accent) 38%, var(--border));
+  border-radius: var(--r-md);
+}
+
+.lw-wire-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+
+.lw-wire-section-title span,
+.lw-wire-kicker {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.lw-wire-section-title strong {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.lw-wire-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lw-wire-source-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 28px;
+  padding: 4px 7px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+
+.lw-wire-source-row:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.lw-wire-source-row.active {
+  color: var(--text);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+}
+
+.lw-wire-source-row span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+
+.lw-wire-source-row strong {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.lw-wire-source-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.lw-wire-cut-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
+.lw-wire-cut-summary-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.lw-wire-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.lw-wire-segment-chip {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 145px;
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.lw-wire-segment-chip:hover {
+  border-color: var(--border-2);
+}
+
+.lw-wire-segment-chip.active {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface));
+}
+
+.lw-wire-segment-chip span,
+.lw-wire-segment-chip em {
+  color: var(--text-4);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  font-style: normal;
+}
+
+.lw-wire-segment-chip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.lw-wire-off-chip {
+  background: color-mix(in oklab, var(--danger) 10%, var(--surface));
+  border-color: color-mix(in oklab, var(--danger) 35%, var(--border));
+}
+
+.lw-wire-tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.lw-wire-tool-row + .lw-wire-tool-row {
+  margin-top: var(--s-2);
+}
+
+.lw-wire-off-input {
+  width: 54px;
+  padding: 5px 7px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+
+.lw-wire-advanced {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s-2);
+}
+
+.lw-wire-advanced .lw-wire-section-title {
+  grid-column: 1 / -1;
+}
+
+.lw-wire-advanced label {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.lw-wire-advanced input,
+.lw-wire-advanced select {
+  display: block;
+  width: 100%;
+  margin-top: var(--s-1);
+  padding: 5px 7px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  font-family: var(--mono-font);
+  font-size: var(--fs-xs);
+}
+
+
+/* PatchBoard button variants (warm, scoped to the wire editor) */
+.la-wire-editor .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--text-mid); }
+.la-wire-editor .btn-ghost:hover { color: var(--text-hi); background: var(--bg-elev); }
+.la-wire-editor .lw-btn-danger:hover { color: var(--danger) \!important; border-color: var(--accent-line) \!important; }

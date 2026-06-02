@@ -5,6 +5,10 @@ import { createRoot } from 'react-dom/client';
 // on top of these exact components, not a rebuild of them.
 import './v3/v3-styles.css';
 import './v3/v3-screens.css';
+// Live-only Layout controls (Light disclosure, per-strip expander, wire editor,
+// canvas wire overlay, marching-ants) in the v3 token idiom. The real-engine
+// Layout screen renders the exact mockup markup + these classes.
+import './styles/v3-layout-extra.css';
 import App from './v3/app.jsx';
 
 createRoot(document.getElementById('root')).render(<App />);
