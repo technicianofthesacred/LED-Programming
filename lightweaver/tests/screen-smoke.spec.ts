@@ -41,12 +41,37 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   await expect(page.locator('.lw-chip-settings-json')).toBeVisible();
 });
 
+test('number keys do not navigate away from LED count fields', async ({ page }) => {
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByText('Card setup')).toBeVisible();
+  for (const key of ['1', '2', '3', '4', '5', '6']) {
+    await page.keyboard.press(key);
+    await expect(page).toHaveURL(/#screen=settings$/);
+    await expect(page.getByText('Card setup')).toBeVisible();
+  }
+});
+
+test('command palette does not offer panel navigation commands', async ({ page }) => {
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('heading', { name: 'Card settings' }).click();
+  await page.keyboard.press('Control+K');
+  await expect(page.getByPlaceholder('Type a command...')).toBeVisible();
+  await expect(page.getByText(/^Go to:/)).toHaveCount(0);
+  await expect(page.locator('.lw-modal-overlay').getByText('New project')).toBeVisible();
+});
+
 test('flash screen is reachable for public chip setup', async ({ page }) => {
   await page.goto('/#screen=flash', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByText('Bootloader mode')).toBeVisible();
+  await expect(page.getByText('Connection mode')).toBeVisible();
   await expect(page.getByText('Lightweaver firmware', { exact: true })).toBeVisible();
   await expect(page.getByText('Fetch latest WLED')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible();

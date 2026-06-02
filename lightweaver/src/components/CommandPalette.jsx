@@ -1,29 +1,23 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 
-function buildCommands(ctx, navigate) {
+function buildCommands(ctx) {
   const {
     newProject,
   } = ctx;
 
   return [
-    { id: 'nav-patterns', label: 'Go to: Patterns', category: 'Navigate', action: () => navigate('patterns') },
-    { id: 'nav-playlist', label: 'Go to: Playlist', category: 'Navigate', action: () => navigate('playlist') },
-    { id: 'nav-layout', label: 'Go to: Layout', category: 'Navigate', action: () => navigate('layout') },
-    { id: 'nav-settings', label: 'Go to: Settings', category: 'Navigate', action: () => navigate('settings') },
-    { id: 'nav-flash', label: 'Go to: Flash chip', category: 'Navigate', action: () => navigate('flash') },
-    { id: 'nav-installer', label: 'Go to: Installer', category: 'Navigate', action: () => navigate('installer') },
     { id: 'proj-new',    label: 'New project', category: 'Project', action: () => { if (window.confirm('Start a new project?')) newProject(); } },
   ];
 }
 
-export function CommandPalette({ open, onClose, navigate }) {
+export function CommandPalette({ open, onClose }) {
   const ctx = useProject();
   const [query, setQuery] = useState('');
   const [idx, setIdx]     = useState(0);
   const inputRef          = useRef(null);
 
-  const commands = useMemo(() => buildCommands(ctx, navigate), [ctx, navigate]);
+  const commands = useMemo(() => buildCommands(ctx), [ctx]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

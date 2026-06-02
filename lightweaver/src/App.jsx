@@ -76,15 +76,6 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setCmdOpen(open => !open);
-        return;
-      }
-      if (!event.metaKey && !event.ctrlKey && !event.altKey) {
-        if (event.key === '1') navigate('patterns');
-        if (event.key === '2') navigate('playlist');
-        if (event.key === '3') navigate('layout');
-        if (event.key === '4') navigate('settings');
-        if (event.key === '5') navigate('flash');
-        if (event.key === '6') navigate('installer');
       }
     };
     window.addEventListener('keydown', handler);
@@ -109,7 +100,7 @@ export default function App() {
         <StatusBar screen={screen}/>
         <TweaksPanel tweaks={tweaks} visible={visible} set={set}/>
         <KeyboardHelp open={kbdOpen} onClose={() => setKbdOpen(false)}/>
-        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} navigate={navigate}/>
+        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)}/>
       </div>
     </ProjectProvider>
   );

@@ -309,7 +309,7 @@ export function StatusBar({ screen = 'patterns' }) {
         </span>
       )}
       <span className="sep">·</span>
-      <span className="lw-status-item lw-status-shortcuts v">1 Patterns · 2 Playlist · 3 Layout · 4 Settings · 5 Flash · 6 Installer · ? shortcuts</span>
+      <span className="lw-status-item lw-status-shortcuts v">⌘K commands · ? shortcuts</span>
     </div>
   );
 }
