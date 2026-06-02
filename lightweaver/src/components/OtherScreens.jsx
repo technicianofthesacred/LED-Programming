@@ -711,6 +711,13 @@ function fmtSize(bytes) {
 const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
 const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 
+function formatFlashResetMode(mode) {
+  if (mode === 'default_reset') return 'auto reset';
+  if (mode === 'usb_reset') return 'USB reset';
+  if (mode === 'no_reset') return 'manual BOOT mode';
+  return mode;
+}
+
 export function FlashScreen() {
   const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
@@ -757,18 +764,25 @@ export function FlashScreen() {
     setConnecting(true);
     setStatusMsg('Select serial port…');
     try {
-      const { loader, transport, chip } = await connectESP();
+      const { loader, transport, chip, resetMode } = await connectESP({
+        onAttempt: ({ mode }) => {
+          const label = formatFlashResetMode(mode);
+          setStatusMsg(`Trying ${label}…`);
+          appendLog(`Trying ${label} (${mode})…`);
+        },
+      });
       loaderRef.current    = loader;
       transportRef.current = transport;
       setConnected(true);
       setStatusMsg(`● ${chip}`, 'connected');
-      appendLog(`Connected: ${chip}`);
+      appendLog(`Connected: ${chip} via ${formatFlashResetMode(resetMode)}`);
     } catch (err) {
       const msg = err.message ?? String(err);
       setStatusMsg(`✕ ${msg}`, 'error');
       appendLog(`Connection failed: ${msg}`);
       if (msg.includes('Failed to connect') || msg.includes('sync')) {
-        appendLog('→ Hold BOOT → press+release RESET → release BOOT → then Connect');
+        appendLog('→ Close other serial monitors/flasher tabs, unplug/replug USB, then try again.');
+        appendLog('→ If it still fails: hold BOOT, press+release RESET, release BOOT, then Connect.');
       }
       loaderRef.current = null;
       transportRef.current = null;
@@ -855,12 +869,12 @@ export function FlashScreen() {
         </div>
       )}
 
-      <div className="lw-sec-header"><span>Bootloader mode</span><span className="meta">do this before connecting</span></div>
+      <div className="lw-sec-header"><span>Connection mode</span><span className="meta">auto first, manual fallback</span></div>
       <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
         {[
-          { step: 1, label: 'Hold BOOT',    sub: 'GPIO0 pin' },
-          { step: 2, label: 'Press RESET',  sub: 'EN pin — then release' },
-          { step: 3, label: 'Release BOOT', sub: 'then click Connect' },
+          { step: 1, label: 'Click Connect', sub: 'the installer tries auto reset first' },
+          { step: 2, label: 'Pick the USB port', sub: 'close other serial tabs first' },
+          { step: 3, label: 'Manual fallback', sub: 'hold BOOT, tap RESET, retry' },
         ].map(({ step, label, sub }) => (
           <div key={step} style={{ flex: 1, padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)' }}>
             <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>STEP {step}</div>
