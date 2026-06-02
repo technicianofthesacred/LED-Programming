@@ -1,3 +1,5 @@
+import { DEFAULT_LWUSB_MAX_PIXELS } from './usbLedFrame.js';
+
 export const COLOR_ORDERS = ['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR'];
 
 export function normalizeUsbLedColorOrder(value, fallback = 'RGB') {
@@ -16,7 +18,7 @@ export function nextUsbLedColorOrder(value) {
 }
 
 export function makeUsbLedCalibrationPixels(pixelCount = 30) {
-  const count = Math.max(1, Math.min(300, Number.parseInt(pixelCount, 10) || 30));
+  const count = Math.max(1, Math.min(DEFAULT_LWUSB_MAX_PIXELS, Number.parseInt(pixelCount, 10) || 30));
   return Array.from({ length: count }, (_, index) => {
     const section = Math.floor((index * 3) / count);
     if (section === 0) return { r: 255, g: 0, b: 0 };

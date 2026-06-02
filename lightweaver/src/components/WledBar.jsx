@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import { COLOR_ORDERS } from '../lib/usbLedColorOrder.js';
+import { DEFAULT_LWUSB_MAX_PIXELS } from '../lib/usbLedFrame.js';
 
 /**
  * WledBar — compact WLED connection bar.
@@ -33,7 +34,7 @@ export function WledBar() {
   const totalLEDs = useMemo(() => strips.reduce((sum, strip) => (
     sum + (strip.pixels?.length || strip.pixelCount || 0)
   ), 0), [strips]);
-  const usbPixelCount = Math.max(1, Math.min(300, totalLEDs || 30));
+  const usbPixelCount = Math.max(1, Math.min(usbLedStatus?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS, totalLEDs || 30));
 
   // Track whether a connection attempt is in flight (between connect() call and
   // the WebSocket open/error event).

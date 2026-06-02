@@ -21,6 +21,7 @@ try {
 }
 
 const firmwareConfig = readFileSync('../firmware/lightweaver-usb-led-test/platformio.ini', 'utf8');
+assert.match(firmwareConfig, /-DLW_MAX_PIXELS=600\b/);
 assert.match(firmwareConfig, /-DLW_ENCODER_REVERSED=1\b/);
 assert.match(firmwareConfig, /-DLW_ENCODER_PRESS_ALT_PIN=6\b/);
 
