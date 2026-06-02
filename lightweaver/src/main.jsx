@@ -14,6 +14,13 @@ import './styles/v3-layout-extra.css';
 // advanced JSON disclosure) in the v3 token idiom. The six mockup cards still
 // use the mockup's own .set-* classes; these only style genuinely live-only UI.
 import './styles/v3-settings-extra.css';
+// Live-only Patterns controls (connection/repair status strip, multi-section
+// target tabs, Advanced disclosure, live card summary, load-more / empty state)
+// — the .pmx-*/.tc-* classes lw-pattern.jsx emits that the static mockup has no
+// slot for. Without this import those controls render unstyled.
+import './styles/v3-patterns-extra.css';
+// Live-only Playlist controls (.pl-* status / row extras) in the v3 token idiom.
+import './styles/v3-playlist-extra.css';
 import App from './v3/app.jsx';
 
 createRoot(document.getElementById('root')).render(<App />);
