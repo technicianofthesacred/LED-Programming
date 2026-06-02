@@ -164,6 +164,17 @@ function makeRuntime({ env = process.env, rootDir = defaultRootDir, usbLedContro
   };
 }
 
+// In-flight guard for the full-subnet scan: at most one sweep runs at a time.
+// Concurrent scan=1 requests await the same promise and share the result.
+let _activeScanPromise = null;
+
+async function runBoundedScan(tasks, batchSize = 32) {
+  // Process tasks in batches to cap concurrent open sockets.
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    await Promise.all(tasks.slice(i, i + batchSize).map(fn => fn()));
+  }
+}
+
 export function createLightweaverApiMiddleware({
   env = process.env,
   client = null,
@@ -264,13 +275,20 @@ export function createLightweaverApiMiddleware({
     mdnsProbed.forEach(device => runtime.mergeDevice(results, device));
 
     if (req.query.scan === '1') {
-      const tasks = [];
-      for (const subnet of runtime.localSubnets()) {
-        for (let i = 1; i <= 254; i++) {
-          tasks.push(runtime.probeWled(`${subnet}.${i}`, 350).then(device => runtime.mergeDevice(results, device)));
-        }
+      if (!_activeScanPromise) {
+        const scanResults = results;
+        _activeScanPromise = (async () => {
+          const tasks = [];
+          for (const subnet of runtime.localSubnets()) {
+            for (let i = 1; i <= 254; i++) {
+              const ip = `${subnet}.${i}`;
+              tasks.push(() => runtime.probeWled(ip, 350).then(device => runtime.mergeDevice(scanResults, device)));
+            }
+          }
+          await runBoundedScan(tasks, 32);
+        })().finally(() => { _activeScanPromise = null; });
       }
-      await Promise.all(tasks);
+      await _activeScanPromise;
     }
 
     const devices = sortWledDevices(results, req.query.ip || runtime.defaultWled);
