@@ -74,11 +74,11 @@ import {
     return 'none';
   }
 
-  function Slider({ k, v, value, min, max, step, onChange }) {
+  function Slider({ k, v, value, min, max, step, onChange, testId }) {
     return (
       <div className="slider-row">
-        <div className="lab"><span className="k">{k}</span><span className="v">{v}</span></div>
-        <input className="lw" type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} />
+        <div className="lab"><span className="k">{k}</span><span className="v" data-testid={testId ? `${testId}-readout` : undefined}>{v}</span></div>
+        <input className="lw" type="range" min={min} max={max} step={step} value={value} data-testid={testId ? `${testId}-slider` : undefined} onChange={(e) => onChange(parseFloat(e.target.value))} />
       </div>);
 
   }
@@ -167,9 +167,28 @@ import {
 
     // Warm default so first load reads warm (Lava Lamp-like) like the mockup,
     // unless a real saved default look exists.
+    //
+    // Distinguishing factory aurora from a user-picked pattern: a fresh project
+    // is always seeded with a defaultLook of patternId 'aurora' (the factory
+    // default), so the presence of a defaultLook alone does not prove the user
+    // chose anything. We treat the saved pattern as a real, deliberate choice
+    // only when at least one of these is true:
+    //   - the resolved patternId is something other than the factory 'aurora'
+    //   - the user named the project (name is not the default 'Untitled Project')
+    //   - the project already has saved looks (the user has saved at least once)
+    // When none hold, this looks like an untouched factory project, so we prefer
+    // the warm default for the INITIAL preview only and never mutate saved state.
     const warmDefaultPatternId = useMemo(() => defaultWarmPatternId(), []);
+    const FACTORY_DEFAULT_PATTERN_ID = 'aurora';
+    const savedDefaultPatternId = standaloneController?.defaultLook?.patternId;
+    const hasNamedProject = Boolean(projectName) && projectName !== 'Untitled Project';
+    const hasSavedLooks = Array.isArray(standaloneController?.looks) && standaloneController.looks.length > 0;
+    const looksLikeFactoryProject =
+      savedDefaultPatternId === FACTORY_DEFAULT_PATTERN_ID && !hasNamedProject && !hasSavedLooks;
     const hasSavedDefaultPattern = Boolean(
-      standaloneController?.defaultLook && getCardPatternById(standaloneController.defaultLook.patternId),
+      standaloneController?.defaultLook &&
+      getCardPatternById(savedDefaultPatternId) &&
+      !looksLikeFactoryProject,
     );
     const savedGlobalLook = normalizeSectionVisualLook(
       hasSavedDefaultPattern
@@ -857,9 +876,9 @@ import {
                     <input className="lw pm-huerange" type="range" min="0" max="255" step="1" value={look.customHue} data-testid="look-hue-slider" aria-label="Hue" onChange={(e) => updatePreviewLook({ customHue: parseInt(e.target.value) })} />
                     <input type="color" value={colorHex} data-testid="look-color-picker" aria-label="Pick color" onChange={(e) => updatePreviewLook(hexToCardColor(e.target.value, look))} style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
                   </div>
-                  <Slider k="Saturation" v={`${satPct}%`} value={look.customSaturation} min={0} max={255} step={1} onChange={(customSaturation) => updatePreviewLook({ customSaturation })} />
-                  <Slider k="Brightness" v={`${briPct}%`} value={look.brightness} min={0.05} max={1} step={0.01} onChange={(brightness) => updatePreviewLook({ brightness })} />
-                  <Slider k="Speed" v={`${spd.toFixed(2)}×`} value={spd} min={0.05} max={3} step={0.01} onChange={(speed) => updatePreviewLook({ speed })} />
+                  <Slider k="Saturation" v={`${satPct}%`} value={look.customSaturation} min={0} max={255} step={1} testId="look-saturation" onChange={(customSaturation) => updatePreviewLook({ customSaturation })} />
+                  <Slider k="Brightness" v={`${briPct}%`} value={look.brightness} min={0.05} max={1} step={0.01} testId="look-brightness" onChange={(brightness) => updatePreviewLook({ brightness })} />
+                  <Slider k="Speed" v={`${spd.toFixed(2)}×`} value={spd} min={0.05} max={3} step={0.01} testId="look-speed" onChange={(speed) => updatePreviewLook({ speed })} />
 
                   {/* Advanced: Breathe / Drift + Hue-shift, tucked in the mockup idiom */}
                   <details className="pmx-advanced">
@@ -869,7 +888,7 @@ import {
                         <label><input type="checkbox" checked={look.customBreathe} onChange={(e) => updatePreviewLook({ customBreathe: e.target.checked })} /> Breathe</label>
                         <label><input type="checkbox" checked={look.customDrift} onChange={(e) => updatePreviewLook({ customDrift: e.target.checked })} /> Drift</label>
                       </div>
-                      <Slider k="Hue shift" v={String(look.hueShift)} value={look.hueShift} min={-128} max={128} step={1} onChange={(hueShift) => updatePreviewLook({ hueShift })} />
+                      <Slider k="Hue shift" v={String(look.hueShift)} value={look.hueShift} min={-128} max={128} step={1} testId="look-hue-shift" onChange={(hueShift) => updatePreviewLook({ hueShift })} />
                     </div>
                   </details>
                 </div>

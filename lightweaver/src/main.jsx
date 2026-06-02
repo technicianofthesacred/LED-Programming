@@ -9,6 +9,11 @@ import './v3/v3-screens.css';
 // canvas wire overlay, marching-ants) in the v3 token idiom. The real-engine
 // Layout screen renders the exact mockup markup + these classes.
 import './styles/v3-layout-extra.css';
+// Live-only Settings widgets (card connection actions + status banner, ring
+// hardware summary, project library rows, hardware layout editor lists,
+// advanced JSON disclosure) in the v3 token idiom. The six mockup cards still
+// use the mockup's own .set-* classes; these only style genuinely live-only UI.
+import './styles/v3-settings-extra.css';
 import App from './v3/app.jsx';
 
 createRoot(document.getElementById('root')).render(<App />);

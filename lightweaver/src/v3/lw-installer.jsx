@@ -23,8 +23,8 @@ import { I } from './lw-shared.jsx';
     { t: "Flash the card", b: "Use Chrome or Edge on a laptop. Plug the ESP32-S3 in by USB, enter bootloader mode, then flash the Lightweaver firmware.", a: "Open flash", go: "flash" },
     { t: "Wire one output first", b: "Connect LED data to GPIO 16 through the level shifter. Power LEDs from the final supply, not USB. Confirm shared ground before lighting anything." },
     { t: "Join setup WiFi", b: "After flashing, look for Lightweaver-XXXX WiFi. Join it, open 192.168.4.1, then add the shop or customer WiFi and set the hostname." },
-    { t: "Load the project", b: "Open the Studio, choose patterns, layout, and settings. Save the card package through the card page so it survives reboot.", a: "Open settings", go: "settings" },
-    { t: "Prove it survives", b: "Reboot the card. Confirm the right pattern starts, the dial dims and brightens, dial press changes looks, and zones match the project." },
+    { t: "Load the project", b: "Open the public Studio, choose patterns, layout, and settings. Save the card package through the card page so it survives reboot.", a: "Open settings", go: "settings" },
+    { t: "Prove it survives", b: "Reboot the card. Confirm the right pattern starts, the dial dims and brightens, dial press changes looks, and the inner and outer zones match the project." },
   ];
   const STOPS = [
     ["Power", "LEDs use the final power supply. USB is only for flashing and debugging."],
@@ -38,7 +38,7 @@ import { I } from './lw-shared.jsx';
     ["No LEDs", "Check LED supply, shared ground, data direction arrow, and GPIO 16."],
     ["Wrong colors", "Change Color order in Settings, then save to card."],
     ["Dial backwards", "Swap Dial A and Dial B, or change rotation direction before saving."],
-    ["Cannot find card later", "Join Lightweaver-XXXX again or open 192.168.4.1."],
+    ["Cannot find card later", "Join Lightweaver-XXXX again or open 192.168.4.1. Reset WiFi only if the saved network is wrong."],
   ];
   const SIGNOFF = [
     "Firmware flashes from this site.",
