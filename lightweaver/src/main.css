@@ -34,34 +34,52 @@
 }
 
 :root {
-  /* Studio Dark — refined current */
-  --bg:        oklch(16% 0.008 260);
-  --surface:   oklch(20% 0.010 260);
-  --surface-2: oklch(24% 0.012 260);
-  --surface-3: oklch(28% 0.014 260);
-  --border:    oklch(30% 0.012 260);
-  --border-2:  oklch(36% 0.014 260);
-  --text:      oklch(96% 0.004 260);
-  --text-2:    oklch(78% 0.006 260);
-  --text-3:    oklch(66% 0.008 260);
-  --text-4:    oklch(54% 0.008 260);
+  /* Light Weaver v3 — warm-neutral base (hue ~70) + single clay accent (#a2612c).
+     Values pasted from the Claude Design v3 token system (styles.css), mapped
+     onto this app's existing token names so every screen inherits the look. */
+  --bg:        oklch(0.165 0.006 75);   /* was bg-app  — app frame */
+  --surface:   oklch(0.205 0.007 75);   /* was bg-panel — side panels, bars */
+  --surface-2: oklch(0.242 0.008 75);   /* was bg-elev  — inputs, hover wells */
+  --surface-3: oklch(0.285 0.010 75);   /* was bg-elev-2 — raised chips, pressed */
+  --border:    oklch(0.305 0.008 75);
+  --border-2:  oklch(0.255 0.007 75);   /* softer hairline */
+  --text:      oklch(0.945 0.006 80);   /* was text-hi  */
+  --text-2:    oklch(0.715 0.009 78);   /* was text-mid */
+  --text-3:    oklch(0.560 0.009 75);   /* was text-lo  */
+  --text-4:    oklch(0.450 0.008 75);   /* was text-faint */
 
-  --accent:    oklch(74% 0.13 210);
-  --accent-2:  oklch(80% 0.13 70);
-  --danger:    oklch(64% 0.20 25);
-  --mint:      oklch(78% 0.15 155);
+  /* warm-neutral extras (design surfaces this app didn't name before) */
+  --bg-canvas: oklch(0.142 0.006 70);   /* darkest — drawing canvas */
+  --bg-sel:    oklch(0.255 0.012 72);   /* selected row well */
+  --border-hair: oklch(0.225 0.006 75);
 
-  --ui-font:   'Geist', system-ui, sans-serif;
-  --mono-font: 'Geist Mono', ui-monospace, monospace;
-  --display-font: 'Geist', system-ui, sans-serif;
+  /* single accent: clay #a2612c */
+  --accent:      oklch(0.553 0.109 56);
+  --accent-hi:   oklch(0.615 0.112 57);
+  --accent-soft: oklch(0.553 0.109 56 / 0.18);
+  --accent-line: oklch(0.553 0.109 56 / 0.45);
+  --accent-2:  oklch(0.800 0.130 72);   /* warm amber — secondary identity */
+  --danger:    oklch(0.640 0.150 32);
+  --warn:      oklch(0.730 0.095 58);
+  --mint:      oklch(0.745 0.095 150);
+  --ok:        oklch(0.745 0.095 150);
+
+  /* layer identity colors (earthy, distinct) */
+  --layer-1: oklch(0.800 0.130 72);   /* amber */
+  --layer-2: oklch(0.685 0.140 28);   /* terracotta */
+  --layer-3: oklch(0.730 0.075 168);  /* sage */
+
+  --ui-font:   'General Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono-font: 'Spline Sans Mono', ui-monospace, 'SF Mono', monospace;
+  --display-font: 'General Sans', system-ui, sans-serif;
 
   --scrim:       oklch(0% 0 0 / 0.8);
   --scrim-soft:  oklch(0% 0 0 / 0.5);
   --scrim-strong: oklch(0% 0 0 / 0.65);
   --shadow-color: oklch(0% 0 0 / 0.4);
   --shadow-strong: oklch(0% 0 0 / 0.6);
-  --on-accent:   oklch(98% 0.004 260);
-  --preview-bg:  oklch(8% 0.006 260);
+  --on-accent:   oklch(0.190 0.018 52);   /* dark/black text on clay — per user */
+  --preview-bg:  oklch(0.105 0.008 45);
   --hairline:    oklch(100% 0 0 / 0.08);
   --hairline-strong: oklch(100% 0 0 / 0.15);
 
@@ -77,9 +95,9 @@
   --fs-2xl: 28px;
 
   --density: 1;
-  --r-sm: 3px;
-  --r-md: 5px;
-  --r-lg: 8px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
 
   --dur-fast: 120ms;
   --dur: 200ms;
@@ -157,9 +175,9 @@ textarea,
   letter-spacing: -0.01em;
 }
 .lw-brand-dot {
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 8px oklch(74% 0.13 210 / 0.6);
+  width: 14px; height: 14px; border-radius: 50%;
+  background: conic-gradient(from 220deg, var(--accent), oklch(0.30 0.01 75) 55%, var(--accent));
+  box-shadow: 0 0 10px var(--accent-soft);
   animation: pulse 2.8s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -176,17 +194,17 @@ textarea,
 .lw-projbreadcrumbs .sep { opacity: 0.4; }
 .lw-projbreadcrumbs .status-chip {
   display: inline-flex; align-items: center; gap: var(--s-2);
-  padding: 2px 7px;
-  background: oklch(78% 0.15 155 / 0.1);
-  border: 1px solid oklch(78% 0.15 155 / 0.25);
-  color: var(--mint);
-  border-radius: 2px;
-  font-size: var(--fs-xs);
+  padding: 2px 9px;
+  background: oklch(0.745 0.095 150 / 0.18);
+  border: 1px solid transparent;
+  color: var(--ok);
+  border-radius: 100px;
+  font-size: var(--fs-xs); font-weight: 500;
 }
 .lw-projbreadcrumbs .status-chip.is-save-feedback {
-  border-color: oklch(74% 0.13 190 / 0.42);
-  background: oklch(22% 0.034 205 / 0.54);
-  color: oklch(78% 0.14 190);
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .lw-projbreadcrumbs .status-chip.is-save-error {
   border-color: oklch(62% 0.18 35 / 0.58);
@@ -440,7 +458,7 @@ textarea,
 }
 .lw-layer-row:hover { background: var(--surface-2); }
 .lw-layer-row--sel {
-  background: oklch(74% 0.13 210 / 0.12);
+  background: oklch(0.553 0.109 56/ 0.12);
   border-left-color: var(--accent);
 }
 .lw-layer-row--strip-group {
@@ -484,7 +502,7 @@ textarea,
 }
 .lw-subpath-row--hover { background: var(--surface-2); }
 .lw-subpath-row--sel {
-  background: oklch(74% 0.13 210 / 0.10);
+  background: oklch(0.553 0.109 56/ 0.10);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -528,7 +546,7 @@ textarea,
 .lw-strip-row:hover { background: var(--surface-2); }
 .lw-strip-row--sel { background: var(--surface-2); }
 .lw-strip-row--batch-sel {
-  background: oklch(74% 0.13 210 / 0.10);
+  background: oklch(0.553 0.109 56/ 0.10);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .lw-strip-batch {
@@ -603,7 +621,7 @@ textarea,
   display: flex; align-items: center; justify-content: center;
 }
 
-.lw-preview-svg { max-width: 90%; max-height: 90%; filter: drop-shadow(0 0 40px oklch(74% 0.13 210 / 0.08)); }
+.lw-preview-svg { max-width: 90%; max-height: 90%; filter: drop-shadow(0 0 40px oklch(0.553 0.109 56/ 0.08)); }
 
 .lw-viewport-overlay {
   position: absolute; pointer-events: none;
@@ -918,8 +936,8 @@ textarea,
 }
 .lw-ai-message.user {
   justify-self: end;
-  border-color: oklch(74% 0.13 210 / 0.34);
-  background: oklch(74% 0.13 210 / 0.12);
+  border-color: oklch(0.553 0.109 56/ 0.34);
+  background: oklch(0.553 0.109 56/ 0.12);
   color: var(--text);
 }
 .lw-ai-message.assistant {
@@ -1328,7 +1346,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 .lw-effect-target:hover { background: var(--surface-2); }
 .lw-effect-target.active {
   border-color: var(--accent);
-  background: oklch(74% 0.13 210 / 0.10);
+  background: oklch(0.553 0.109 56/ 0.10);
   box-shadow: inset 3px 0 0 var(--accent);
 }
 .lw-effect-target-dot {
@@ -1805,7 +1823,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 .lw-pattern-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
 .lw-pattern-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 20px oklch(74% 0.13 210 / 0.25);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 20px oklch(0.553 0.109 56/ 0.25);
 }
 .lw-pattern-card .bg { position: absolute; inset: 0; }
 .lw-pattern-card .scrim {
@@ -1928,7 +1946,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 .lw-code-content .fn      { color: oklch(80% 0.13 70); }
 .lw-code-content .num     { color: oklch(78% 0.15 155); }
 .lw-code-content .str     { color: oklch(74% 0.13 40); }
-.lw-code-content .var     { color: oklch(74% 0.10 210); }
+.lw-code-content .var     { color: oklch(0.553 0.109 56); }
 .lw-code-content .op      { color: var(--text-2); }
 .lw-code-content .param   { color: oklch(76% 0.14 340); text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
 
@@ -2464,16 +2482,17 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 
 }
 .btn-ghost:hover { color: var(--text); background: var(--surface-2); }
 .btn-ghost.active {
-  background: oklch(74% 0.13 210 / 0.12);
+  background: var(--accent-soft);
   color: var(--accent);
-  border-color: oklch(74% 0.13 210 / 0.3);
+  border-color: var(--accent-line);
 }
 .btn-primary {
   background: var(--accent);
-  color: oklch(18% 0.04 210);
-  border-color: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
 }
-.btn-primary:hover { background: oklch(80% 0.14 210); }
+.btn-primary:hover { background: var(--accent-hi); }
 
 /* Disabled — applies to .btn, .btn-ghost, .btn-primary, .btn-danger */
 .btn:disabled,
@@ -2639,9 +2658,16 @@ body.theme-lab {
   --text-2:    oklch(35% 0.008 85);
   --text-3:    oklch(44% 0.008 85);
   --text-4:    oklch(55% 0.008 85);
-  --accent:    oklch(52% 0.19 28);
+  --accent:      oklch(52% 0.19 28);
+  --accent-hi:   oklch(58% 0.19 28);
+  --accent-soft: oklch(52% 0.19 28 / 0.16);
+  --accent-line: oklch(52% 0.19 28 / 0.40);
   --accent-2:  oklch(52% 0.19 28);
   --mint:      oklch(48% 0.14 155);
+  --ok:        oklch(48% 0.14 155);
+  --bg-canvas: oklch(95% 0.006 85);
+  --bg-sel:    oklch(92% 0.010 85);
+  --border-hair: oklch(90% 0.008 85);
 }
 body.theme-lab .lw-viewport {
   background:
@@ -2665,9 +2691,16 @@ body.theme-neon {
   --text-2:    oklch(78% 0.015 300);
   --text-3:    oklch(66% 0.020 300);
   --text-4:    oklch(54% 0.020 300);
-  --accent:    oklch(68% 0.22 340);
+  --accent:      oklch(68% 0.22 340);
+  --accent-hi:   oklch(74% 0.22 340);
+  --accent-soft: oklch(68% 0.22 340 / 0.18);
+  --accent-line: oklch(68% 0.22 340 / 0.45);
   --accent-2:  oklch(85% 0.18 155);
-  --ui-font:   'Geist Mono', ui-monospace, monospace;
+  --ok:        oklch(85% 0.18 155);
+  --bg-canvas: oklch(10% 0.015 300);
+  --bg-sel:    oklch(23% 0.022 300);
+  --border-hair: oklch(24% 0.020 300);
+  --ui-font:   'Spline Sans Mono', ui-monospace, monospace;
 }
 body.theme-neon .lw-brand {
   font-family: 'Geist Mono', monospace;
@@ -3515,7 +3548,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   flex: 0 0 auto;
 }
 .lw-geo-guide-map .dot.line { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-.lw-geo-guide-map .dot.distance { background: oklch(72% 0.12 190 / 0.55); }
+.lw-geo-guide-map .dot.distance { background: oklch(0.553 0.109 56/ 0.55); }
 .lw-geo-guide-map .dot.arrows { background: var(--mint); }
 .lw-geo-choice-row,
 .lw-geo-row {
@@ -4757,7 +4790,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-live-card:active { transform: scale(0.96); }
 .lw-live-card.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 18px oklch(74% 0.13 210 / 0.38), inset 0 1px 0 oklch(100% 0 0 / 0.14);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 18px oklch(0.553 0.109 56/ 0.38), inset 0 1px 0 oklch(100% 0 0 / 0.14);
 }
 .lw-live-card.next-up {
   border-color: var(--accent-2);
@@ -5066,9 +5099,9 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 /* ── TopBar active state for audio/midi toggles ──────────────────────── */
 .lw-topbar-actions .btn-ghost.active {
-  background: oklch(74% 0.13 210 / 0.12);
+  background: oklch(0.553 0.109 56/ 0.12);
   color: var(--accent);
-  border-color: oklch(74% 0.13 210 / 0.3);
+  border-color: oklch(0.553 0.109 56/ 0.3);
 }
 
 /* ── Pattern card favorite button ─────────────────────────────────────── */
@@ -5201,8 +5234,8 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 
 .lw-toolbar-action.is-active {
   color: var(--accent);
-  background: oklch(74% 0.13 210 / 0.1);
-  border-color: oklch(74% 0.13 210 / 0.24);
+  background: oklch(0.553 0.109 56/ 0.1);
+  border-color: oklch(0.553 0.109 56/ 0.24);
 }
 
 .lw-inline-actions {
@@ -5314,7 +5347,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-look-card.is-selected {
   border-color: var(--accent);
   background: oklch(18% 0.025 225);
-  box-shadow: 0 0 0 1px oklch(68% 0.17 185 / 0.25), 0 18px 48px oklch(7% 0.01 250 / 0.45);
+  box-shadow: 0 0 0 1px oklch(0.553 0.109 56/ 0.25), 0 18px 48px oklch(7% 0.01 250 / 0.45);
 }
 
 .lw-look-card.is-previewing {
@@ -6978,7 +7011,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   gap: 12px;
   align-items: center;
   padding: 11px 12px;
-  border: 1px solid oklch(74% 0.13 190 / 0.34);
+  border: 1px solid oklch(0.553 0.109 56/ 0.34);
   border-radius: var(--r-sm);
   background:
     linear-gradient(135deg, oklch(19% 0.024 220 / 0.82), oklch(13% 0.012 250 / 0.94));
@@ -7155,7 +7188,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 }
 
 .lw-project-library-row.is-active {
-  border-color: oklch(74% 0.13 190 / 0.52);
+  border-color: oklch(0.553 0.109 56/ 0.52);
   background: oklch(17% 0.022 220 / 0.76);
 }
 
@@ -7451,7 +7484,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   display: inline-grid;
   place-items: center;
   padding: 0 8px;
-  border: 1px solid oklch(74% 0.13 190 / 0.28);
+  border: 1px solid oklch(0.553 0.109 56/ 0.28);
   border-radius: 999px;
   background: oklch(18% 0.024 220 / 0.62);
   color: oklch(81% 0.14 165);
@@ -7516,7 +7549,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: 6px;
   background:
-    radial-gradient(circle at 50% 52%, oklch(72% 0.13 185 / 0.16), transparent 24%),
+    radial-gradient(circle at 50% 52%, oklch(0.553 0.109 56/ 0.16), transparent 24%),
     radial-gradient(circle at 50% 50%, oklch(9% 0.014 250), oklch(6% 0.012 250));
   overflow: hidden;
 }
@@ -7524,10 +7557,10 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
 .lw-ring-orbit {
   position: absolute;
   border-radius: 50%;
-  border: 2px solid oklch(76% 0.15 185 / 0.58);
+  border: 2px solid oklch(0.553 0.109 56/ 0.58);
   box-shadow:
-    inset 0 0 24px oklch(72% 0.14 185 / 0.11),
-    0 0 28px oklch(72% 0.14 185 / 0.12);
+    inset 0 0 24px oklch(0.553 0.109 56/ 0.11),
+    0 0 28px oklch(0.553 0.109 56/ 0.12);
 }
 
 .lw-ring-orbit.outer {
@@ -7729,7 +7762,7 @@ body.font-mono .lw-brand { font-family: 'Geist Mono', monospace; font-size: var(
   aspect-ratio: 1;
   display: grid;
   place-items: center;
-  border: 1px solid oklch(74% 0.13 190 / 0.38);
+  border: 1px solid oklch(0.553 0.109 56/ 0.38);
   border-radius: 999px;
   background: oklch(18% 0.024 220 / 0.82);
   color: var(--accent);
