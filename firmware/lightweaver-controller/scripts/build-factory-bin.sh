@@ -36,8 +36,10 @@ OUT="$REPO_ROOT/lightweaver/public/firmware/lightweaver-controller-esp32s3-facto
 echo "==> Building firmware ($ENV)"
 pio run -d "$FW_DIR" -e "$ENV"
 
-# boot_app0.bin ships inside the Arduino-ESP32 framework package.
-BOOT_APP0="$(find "${HOME}/.platformio/packages" -name boot_app0.bin -path '*esp32*' 2>/dev/null | head -1 || true)"
+# boot_app0.bin ships inside the Arduino-ESP32 framework package (the only place
+# this filename appears), so match by name alone — note the framework dir is
+# "framework-arduinoespressif32", which does NOT contain the literal "esp32".
+BOOT_APP0="$(find "${HOME}/.platformio/packages" -name boot_app0.bin 2>/dev/null | head -1 || true)"
 if [ -z "${BOOT_APP0}" ]; then
   echo "!! boot_app0.bin not found under ~/.platformio/packages" >&2
   exit 1
