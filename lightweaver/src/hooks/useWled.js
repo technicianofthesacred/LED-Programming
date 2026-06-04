@@ -3,7 +3,8 @@ import { DEFAULT_WLED_PUSH_FPS, makeWledFrameMessage, makeWledWsUrl, requestWled
 
 const STORAGE_KEY = 'lw_wled_ip';
 const PUSH_FPS_KEY = 'lw_wled_push_fps';
-const RECONNECT_DELAY   = 3000;
+const RECONNECT_DELAY    = 3000;  // base for exponential backoff
+const RECONNECT_CAP_MS   = 15000; // maximum backoff ceiling
 const CONNECT_TIMEOUT_MS = 5000;
 
 export function useWled() {
@@ -11,10 +12,11 @@ export function useWled() {
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState('offline');
 
-  const wsRef          = useRef(null);
-  const reconnTimerRef = useRef(null);
-  const lastPushRef    = useRef(0);
+  const wsRef               = useRef(null);
+  const reconnTimerRef      = useRef(null);
+  const lastPushRef         = useRef(0);
   const intentionalCloseRef = useRef(false);
+  const reconnAttemptRef    = useRef(0);
 
   // Persist IP to localStorage whenever it changes
   const setIp = useCallback((value) => {
@@ -32,6 +34,7 @@ export function useWled() {
   const disconnect = useCallback(() => {
     clearReconnect();
     intentionalCloseRef.current = true;
+    reconnAttemptRef.current = 0;
     if (wsRef.current) {
       try { wsRef.current.close(); } catch { /* ignore */ }
       wsRef.current = null;
@@ -74,6 +77,7 @@ export function useWled() {
       clearTimeout(connectTimer);
       opened = true;
       wsRef.current = ws;
+      reconnAttemptRef.current = 0;
       setConnected(true);
       setTransport(mode);
     };
@@ -98,10 +102,16 @@ export function useWled() {
       }
 
       if (wsRef.current === null) {
-        // Auto-reconnect if an IP is set
+        // Auto-reconnect if an IP is set, using jittered exponential backoff
+        // to avoid thundering-herd when multiple tabs reconnect simultaneously.
+        // delay = random in [0, min(cap, base * 2^attempt)]
         const storedIp = localStorage.getItem(STORAGE_KEY) ?? '';
         if (storedIp) {
-          reconnTimerRef.current = setTimeout(() => connect(storedIp), RECONNECT_DELAY);
+          const attempt = reconnAttemptRef.current;
+          reconnAttemptRef.current = attempt + 1;
+          const ceiling = Math.min(RECONNECT_CAP_MS, RECONNECT_DELAY * Math.pow(2, attempt));
+          const delay = Math.random() * ceiling;
+          reconnTimerRef.current = setTimeout(() => connect(storedIp), delay);
         }
       }
     };

@@ -82,6 +82,47 @@ pio device monitor
 
 The firmware assumes the four default LED output pins: 16, 17, 18, and 21. The profile may use one to four of those outputs. Unsupported profile pins intentionally fail with a status blink instead of silently driving the wrong connector.
 
+### Rebuild the website's flashed binary
+
+The public Studio (led.mandalacodes.com) flashes a prebuilt factory image —
+`lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin` — to the
+card at `0x0`. **This binary does not rebuild itself**, so after any firmware
+source change you must regenerate it or every flashed card runs old firmware:
+
+```bash
+firmware/lightweaver-controller/scripts/build-factory-bin.sh
+git add lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+git commit -m "Rebuild Lightweaver factory firmware binary"
+cd lightweaver && npm run deploy:pages   # publish so the site serves it
+```
+
+The `factory-bin-freshness` test (in `npm run launch:check`, or `npm run
+firmware:check-bin`) fails until the committed binary is at least as new as the
+firmware source, so this can't silently go stale again.
+
+## Stability & Power
+
+The firmware includes runtime-safety behavior aimed at gallery uptime and
+brownout resilience:
+
+- **Power cap (opt-in):** set `led.maxMilliamps` in the chip config to the LED
+  power supply's rating (e.g. `4000` for a 5 V / 4 A supply). FastLED then
+  scales all pixels down uniformly to stay under that current budget, which
+  stops a full-white frame from sagging the rail into a brownout reset. Default
+  is `0` (disabled), so existing pieces are unchanged until you set it. This is
+  the recommended fix if a piece resets under bright patterns.
+- **Crash auto-recovery:** if the previous boot ended in a brownout, panic, or
+  watchdog reset, the card comes up in the visible low-brightness warm-white
+  recovery state instead of silently re-entering whatever failed.
+- **Task watchdog:** the loop task is watched with an 8 s timeout
+  (`LW_WDT_TIMEOUT_S` build flag) and reboots the card if a handler ever wedges.
+- **Discovery:** the card advertises both `_http._tcp` and `_wled._tcp` over
+  mDNS, with a MAC-suffixed instance label (`Lightweaver-XXXX`) so two pieces on
+  one LAN are distinguishable in a browse list even though both answer to
+  `lightweaver.local`.
+- **iOS captive portal:** Apple probe paths return a non-Success page so the
+  setup UI reliably pops when a phone joins the `Lightweaver-XXXX` AP.
+
 ## Launch Bench Checklist
 
 1. Format the microSD card as FAT32.

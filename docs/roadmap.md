@@ -4,7 +4,14 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-05-29
+Last updated: 2026-06-02
+
+> **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
+> serves its own branded page (the visitor UI) and the WLED API; the public
+> Studio (`led.mandalacodes.com`) handles design/export. **No Raspberry Pi in
+> the runtime path.** The Pi proxy (`lightweaver/server/`), `visitor-ui/`, and
+> `docs/pi-hosted-deployment.md` are deferred for a planned future Pi
+> integration — kept, not deleted, but out of the current plan.
 
 ## Done
 

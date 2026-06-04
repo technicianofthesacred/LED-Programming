@@ -93,7 +93,10 @@ String buildStateJson() {
   doc["on"] = !runtimeIsBlackedOut();
   doc["bri"] = uint8_t(runtimeGetBrightness() * 255.0f);
   doc["transition"] = 7;
-  doc["ps"] = -1;
+  // Report the active look index so WLED-style clients (designer bar, visitor
+  // UI) can reflect the current selection. Was hardcoded -1, which left the
+  // active-scene highlight permanently blank after a refresh.
+  doc["ps"] = lookCount ? int(currentLookIndex) : -1;
   doc["pl"] = -1;
   JsonArray segs = doc["seg"].to<JsonArray>();
   if (runtimeConfig.zoneCount == 0) {
@@ -230,6 +233,8 @@ void handleStatePost() {
       JsonArray pixels = s["i"].as<JsonArray>();
       if (!pixels.isNull() && pixels.size() > 0) {
         framePushed = true;
+        // Only write if no other live source (e.g. Art-Net) owns the canvas.
+        bool frameAllowed = frameSourceClaim(FRAME_WLED_REALTIME);
         // Optional starting index — WLED accepts [i, "RRGGBB", ...] where the
         // first element is the start LED. Designer just sends color strings
         // so we default to start=segment start (or 0).
@@ -237,7 +242,7 @@ void handleStatePost() {
         if (writeIdx < 0) writeIdx = 0;
         uint8_t brightnessScale = uint8_t(manualBrightness * 255.0f);
         for (JsonVariant v : pixels) {
-          if (writeIdx >= int(totalPixels)) break;
+          if (!frameAllowed || writeIdx >= int(totalPixels)) break;
           if (v.is<const char*>()) {
             const char* hex = v.as<const char*>();
             uint8_t r, g, b;
@@ -279,9 +284,9 @@ void handleStatePost() {
     }
   }
 
-  if (framePushed) {
-    frameSourceMarkExternal(FRAME_WLED_REALTIME);
-  } else {
+  // Frame writes already claimed the canvas above; only apply plain state
+  // controls when this wasn't a frame push.
+  if (!framePushed) {
     // Plain state controls
     if (!doc["bri"].isNull()) {
       runtimeSetBrightness(float(doc["bri"].as<int>()) / 255.0f);

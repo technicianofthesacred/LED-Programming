@@ -1,5 +1,10 @@
 # Lightweaver Pi-hosted deployment
 
+> **Status (2026-06): future, not current.** The current plan is **ESP32-only**
+> with no Raspberry Pi in the runtime path — the card serves its own page and
+> the WLED API directly. This document (and `lightweaver/server/`, `visitor-ui/`)
+> is retained for a **planned future Pi integration**, not the live deployment.
+
 Practical Raspberry Pi 5 deployment path for gallery use. This serves the Lightweaver Vite build and keeps WLED control behind the Pi service so phones and browsers do not need direct cross-origin access to the ESP32 controller.
 
 ## Build and run

@@ -17,3 +17,9 @@
 
 void setupWledRealtime(CRGB* leds, uint16_t totalPixels);
 void handleWledRealtime();
+
+// Re-open the UDP socket after a WiFi reconnect. The socket bound at setup can
+// go stale when the STA interface drops and re-associates; call this from the
+// connectivity maintenance path so realtime streaming recovers (Art-Net self-
+// heals via its own lazy rebind).
+void wledRealtimeRebind();

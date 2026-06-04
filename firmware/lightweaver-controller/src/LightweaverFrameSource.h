@@ -21,6 +21,15 @@ static constexpr uint32_t LW_STREAM_TIMEOUT_MS = 2000;
 // the active source and the last-seen timestamp.
 void frameSourceMarkExternal(FrameSource src);
 
+// Called by a frame producer BEFORE it writes into leds[]. Returns true if the
+// caller may take/keep the canvas this tick, false if a *different* external
+// source is currently live (delivered a frame within STREAM_TIMEOUT_MS). This
+// gives the canvas to whichever external source claimed it first and locks the
+// others out until the owner goes quiet — without it, Art-Net and a designer
+// preview stream would each overwrite leds[] every tick and the strip would
+// tear. A producer that is denied should skip its write (and drain its packet).
+bool frameSourceClaim(FrameSource src);
+
 // Call once per loop(). If the streaming watchdog has expired and we're not
 // already on INTERNAL, fall back to INTERNAL so the pattern renderer takes
 // over again.

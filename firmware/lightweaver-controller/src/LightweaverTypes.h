@@ -148,6 +148,10 @@ struct RuntimeConfig {
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;
+  // Optional total current ceiling (5V rail, milliamps) for FastLED's automatic
+  // power limiter. 0 = disabled (no cap). Set to the PSU rating to prevent
+  // full-white brownout resets.
+  uint32_t maxMilliamps = 0;
   OutputConfig outputs[LW_MAX_OUTPUTS];
   uint8_t outputCount = 0;
   LookConfig looks[LW_MAX_LOOKS];

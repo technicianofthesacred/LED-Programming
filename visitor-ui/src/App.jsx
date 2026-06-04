@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const BRAND = {
   artist: 'Adrian Rasmussen',
@@ -15,6 +15,9 @@ const SCENES = [
 ];
 
 const STATE_POLL_MS = 5000;
+// How long after a local user action to suppress poll results from overwriting
+// the optimistic local state (prevents "tap then visual revert" flapping).
+const LOCAL_ACTION_SUPPRESS_MS = 6000;
 
 async function postJSON(url, body) {
   const res = await fetch(url, {
@@ -40,9 +43,19 @@ export default function App() {
   const [pressedId, setPressedId] = useState(null);
   const [error, setError] = useState('');
 
+  // Timestamp of the last local user action; poll results are suppressed for
+  // LOCAL_ACTION_SUPPRESS_MS after a tap/slider/power change to avoid the
+  // polled state overwriting an optimistic local update before the device
+  // reflects the change ("tap then visual revert" flapping).
+  const lastLocalActionRef = useRef(0);
+
+  const markLocalAction = () => { lastLocalActionRef.current = Date.now(); };
+  const isSuppressed = () => Date.now() - lastLocalActionRef.current < LOCAL_ACTION_SUPPRESS_MS;
+
   const refreshState = useCallback(async () => {
     try {
       const s = await getJSON('/api/state');
+      if (isSuppressed()) return;
       if (typeof s.on === 'boolean') setPower(s.on);
       if (typeof s.bri === 'number') setBrightness(s.bri);
       if (typeof s.ps === 'number' && s.ps > 0) setActivePreset(s.ps);
@@ -62,9 +75,10 @@ export default function App() {
     if (busy) return;
     setBusy(true);
     setPressedId(id);
+    markLocalAction();
+    setActivePreset(id);
     try {
       await postJSON(`/api/preset/${id}`);
-      setActivePreset(id);
       setError('');
     } catch {
       setError('Could not change scene');
@@ -76,6 +90,7 @@ export default function App() {
 
   const togglePower = async () => {
     const next = !power;
+    markLocalAction();
     setPower(next);
     try {
       await postJSON('/api/power', { on: next });
@@ -92,6 +107,7 @@ export default function App() {
   };
 
   const commitBrightness = async () => {
+    markLocalAction();
     try {
       await postJSON('/api/brightness', { bri: brightness });
       setError('');

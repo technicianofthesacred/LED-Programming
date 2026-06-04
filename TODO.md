@@ -10,14 +10,14 @@ Living list of outstanding work on the LED installation controller. Project is b
 - [ ] Rename the controller and reserve its install IP, then back up the existing presets before installing Lightweaver presets _(band: you-required)_ _(effort: quick)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
 - [ ] Configure and test Madrix Art-Net output into WLED, then define the WLED segments matching the laser-cut zones _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
 
-### Pi-hosted visitor UI
-
-- [ ] Set up the Pi: hostname, autostart the visitor-ui server, AP-mode SSID, and a phone captive-portal end-to-end test _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
-- [ ] Customize the visitor-ui brand constant and match the scenes list to the real saved WLED presets _(band: agent-runnable)_ _(effort: quick)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
-
 ## Future
 
 - [ ] Build the Live Host runtime for laptop, Pi, Madrix, and sound-reactive streaming _(band: agent-runnable)_ _(effort: deep)_ → Plan: [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
+
+### Pi-hosted visitor UI _(deferred — not in the current ESP-only plan; the firmware card page is today's visitor UI)_
+
+- [ ] Set up the Pi: hostname, autostart the visitor-ui server, AP-mode SSID, and a phone captive-portal end-to-end test _(band: you-required)_ _(effort: moderate)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
+- [ ] Customize the visitor-ui brand constant and match the scenes list to the real saved WLED presets _(band: agent-runnable)_ _(effort: quick)_ → Plan: [docs/roadmap.md](docs/roadmap.md)
 
 ### Mapper and firmware follow-ups
 

@@ -164,6 +164,17 @@ function makeRuntime({ env = process.env, rootDir = defaultRootDir, usbLedContro
   };
 }
 
+// In-flight guard for the full-subnet scan: at most one sweep runs at a time.
+// Concurrent scan=1 requests await the same promise and share the result.
+let _activeScanPromise = null;
+
+async function runBoundedScan(tasks, batchSize = 32) {
+  // Process tasks in batches to cap concurrent open sockets.
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    await Promise.all(tasks.slice(i, i + batchSize).map(fn => fn()));
+  }
+}
+
 export function createLightweaverApiMiddleware({
   env = process.env,
   client = null,
@@ -264,13 +275,20 @@ export function createLightweaverApiMiddleware({
     mdnsProbed.forEach(device => runtime.mergeDevice(results, device));
 
     if (req.query.scan === '1') {
-      const tasks = [];
-      for (const subnet of runtime.localSubnets()) {
-        for (let i = 1; i <= 254; i++) {
-          tasks.push(runtime.probeWled(`${subnet}.${i}`, 350).then(device => runtime.mergeDevice(results, device)));
-        }
+      if (!_activeScanPromise) {
+        const scanResults = results;
+        _activeScanPromise = (async () => {
+          const tasks = [];
+          for (const subnet of runtime.localSubnets()) {
+            for (let i = 1; i <= 254; i++) {
+              const ip = `${subnet}.${i}`;
+              tasks.push(() => runtime.probeWled(ip, 350).then(device => runtime.mergeDevice(scanResults, device)));
+            }
+          }
+          await runBoundedScan(tasks, 32);
+        })().finally(() => { _activeScanPromise = null; });
       }
-      await Promise.all(tasks);
+      await _activeScanPromise;
     }
 
     const devices = sortWledDevices(results, req.query.ip || runtime.defaultWled);
@@ -469,49 +487,71 @@ export function attachWledWebSocketProxy(server, { env = process.env } = {}) {
       return;
     }
 
-    const upstream = new WebSocket(`ws://${host}/ws`);
-    const upstreamTimer = setTimeout(() => {
-      if (upstream.readyState === WebSocket.CONNECTING) {
-        upstream.terminate();
-        if (client.readyState === WebSocket.OPEN) {
-          client.close(1011, 'WLED upstream timeout');
-        }
-      }
-    }, timeoutMs);
+    const wsPort = url.searchParams.get('wsPort') || '80';
+    const wsPath = url.searchParams.get('wsPath') || '/ws';
+    // The Lightweaver card serves its WebSocket on :81/, stock WLED on :80/ws.
+    // Try the hinted endpoint first, then fall back to the other so one proxy
+    // works for either firmware without the client having to know which it is.
+    const primary = wsPort === '81' ? `ws://${host}:81/` : `ws://${host}:${wsPort}${wsPath}`;
+    const fallback = wsPort === '81' ? `ws://${host}:80/ws` : `ws://${host}:81/`;
+    const candidates = [primary, fallback];
 
-    upstream.on('open', () => {
-      clearTimeout(upstreamTimer);
-      while (client._queuedMessages?.length) upstream.send(client._queuedMessages.shift());
-    });
+    let upstream = null;
+    let opened = false;
+    let closedByClient = false;
+
+    const connect = index => {
+      let settled = false;
+      upstream = new WebSocket(candidates[index]);
+      const upstreamTimer = setTimeout(() => {
+        if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
+      }, timeoutMs);
+
+      // Fires once per attempt on connect failure / close. Before the socket
+      // has opened, a failure re-dials the alternate endpoint; after it has
+      // opened, it just tears down the client.
+      const settle = (code, reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(upstreamTimer);
+        if (closedByClient) return;
+        if (!opened && index + 1 < candidates.length) {
+          connect(index + 1);
+          return;
+        }
+        if (client.readyState === WebSocket.OPEN) {
+          client.close(opened ? (code || 1011) : 1011, opened ? reason : 'WLED upstream unreachable');
+        }
+      };
+
+      upstream.on('open', () => {
+        opened = true;
+        clearTimeout(upstreamTimer);
+        while (client._queuedMessages?.length) upstream.send(client._queuedMessages.shift());
+      });
+      upstream.on('message', data => {
+        if (client.readyState === WebSocket.OPEN) client.send(data);
+      });
+      upstream.on('close', (code, reason) => settle(code, reason));
+      upstream.on('error', error => settle(1011, error.message));
+    };
 
     client.on('message', data => {
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(data);
+      if (upstream && upstream.readyState === WebSocket.OPEN) upstream.send(data);
       else {
         client._queuedMessages ||= [];
         if (client._queuedMessages.length < 4) client._queuedMessages.push(data);
       }
     });
 
-    upstream.on('message', data => {
-      if (client.readyState === WebSocket.OPEN) client.send(data);
-    });
-
-    upstream.on('close', (code, reason) => {
-      clearTimeout(upstreamTimer);
-      if (client.readyState === WebSocket.OPEN) client.close(code || 1011, reason);
-    });
-
-    upstream.on('error', error => {
-      clearTimeout(upstreamTimer);
-      if (client.readyState === WebSocket.OPEN) client.close(1011, error.message);
-    });
-
     client.on('close', () => {
-      clearTimeout(upstreamTimer);
-      if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+      closedByClient = true;
+      if (upstream && (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING)) {
         upstream.close();
       }
     });
+
+    connect(0);
   });
 
   return wss;
