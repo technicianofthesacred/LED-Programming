@@ -1,17 +1,32 @@
-name: Deploy site (manual)
+name: Deploy site
 
-# Publishes the Studio to Cloudflare Pages (led.mandalacodes.com). Manual only —
-# you press "Run workflow" when you want to go live, after the firmware binary is
-# current (see the Build firmware binary workflow). Requires two repo secrets:
+# Publishes the Studio to Cloudflare Pages (led.mandalacodes.com).
+#
+# Runs automatically on every push to main that touches the deployable surface
+# (the lightweaver/ app, including the firmware binary it serves), and manually
+# via "Run workflow". Requires two repo secrets:
 #   CLOUDFLARE_API_TOKEN   - a Cloudflare API token with Pages: Edit
 #   CLOUDFLARE_ACCOUNT_ID  - your Cloudflare account id
 # Add them under Settings -> Secrets and variables -> Actions.
+#
+# Until those secrets exist, a push-triggered run SKIPS cleanly (green, with a
+# notice) so it never reddens main; a manual run fails loudly so you know why.
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lightweaver/**'
+      - '.github/workflows/deploy-site.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -23,21 +38,30 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Require Cloudflare credentials
+      - name: Check Cloudflare credentials
+        id: creds
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "::error::Add repo secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable deploy."
-            exit 1
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Cloudflare secrets not set — skipping deploy. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable automatic publishing."
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "::error::Manual deploy requested but Cloudflare secrets are missing."
+              exit 1
+            fi
           fi
 
       - name: Install dependencies
+        if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
-        run: npm ci
+        run: npm install
 
       - name: Build and deploy to Cloudflare Pages
+        if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
