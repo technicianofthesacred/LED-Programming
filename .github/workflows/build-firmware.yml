@@ -1,0 +1,72 @@
+name: Build firmware binary
+
+# Rebuilds the factory firmware image that led.mandalacodes.com flashes to cards,
+# and commits it back so the website never ships stale firmware. Runs in CI
+# because the ESP32 toolchain host is reachable here (it is blocked inside the
+# Claude agent sandbox). The trigger watches firmware SOURCE only, so the bot's
+# binary-only commit does not re-trigger this workflow (no loop).
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+    paths:
+      - 'firmware/lightweaver-controller/src/**'
+      - 'firmware/lightweaver-controller/platformio.ini'
+      - 'firmware/lightweaver-controller/scripts/build-factory-bin.sh'
+      - '.github/workflows/build-firmware.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache PlatformIO toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Rebuild merged factory binary
+        run: firmware/lightweaver-controller/scripts/build-factory-bin.sh
+
+      - name: Commit updated binary if it changed
+        run: |
+          BIN=lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+          if git diff --quiet -- "$BIN"; then
+            echo "Firmware binary already matches current source — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$BIN"
+          git commit -m "CI: rebuild Lightweaver factory firmware binary from current source"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightweaver-controller-esp32s3-factory
+          path: lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+          if-no-files-found: error
