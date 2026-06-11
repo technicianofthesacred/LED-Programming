@@ -2,7 +2,7 @@ export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
 export const CARD_HOST_HISTORY_STORAGE_KEY = 'lw_chip_card_host_history';
 export const CARD_HOST_CHANGED_EVENT = 'lightweaver-card-host-changed';
-export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.18.70', '192.168.4.1'];
+export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.4.1'];
 export const CARD_CONNECTION_MISS_LIMIT = 3;
 export const CARD_HOST_HISTORY_LIMIT = 8;
 

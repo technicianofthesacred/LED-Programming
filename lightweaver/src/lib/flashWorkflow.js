@@ -21,6 +21,11 @@ export async function flashFirmwareAndRelease({
     throw new Error('flashFirmware dependency missing');
   }
 
-  await flashFirmware(loader, file, address, eraseAll, onProgress);
-  await disconnectESP(loader, transport);
+  try {
+    await flashFirmware(loader, file, address, eraseAll, onProgress);
+  } finally {
+    // Always release the serial transport, even if the write fails partway
+    // through, so the port isn't left held open after an error.
+    await disconnectESP(loader, transport);
+  }
 }

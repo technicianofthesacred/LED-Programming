@@ -94,11 +94,10 @@ assert.deepEqual(requests.map(request => request.url), [
   'http://lightweaver.local/api/firmware-info',
   'http://lightweaver.local/api/config',
   'http://lightweaver.local/api/status',
-  'http://192.168.18.70/api/status',
   'http://192.168.4.1/api/status',
-  'http://192.168.18.70/api/firmware-info',
-  'http://192.168.18.70/api/config',
-  'http://192.168.18.70/api/reboot',
+  'http://192.168.4.1/api/firmware-info',
+  'http://192.168.4.1/api/config',
+  'http://192.168.4.1/api/reboot',
 ]);
 
 requests.length = 0;

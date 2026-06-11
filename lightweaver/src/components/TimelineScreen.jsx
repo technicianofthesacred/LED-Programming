@@ -455,7 +455,7 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, strip
       </div>
       <div className="lw-tl-inspector-body">
         {selectedClip && (
-          <>
+          <div key={selectedClip.id} style={{ display: 'contents' }}>
             <div className="lw-insp-header">
               <span className="dot" style={{ background: CLIP_COLORS[selectedClip.patternId] || '#888' }}/>
               <input
@@ -569,10 +569,10 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, strip
                 onUpdate={patch => setShowClips(cs => cs.map(c => c.id === selectedClip.id ? { ...c, ...patch } : c))}
               />
             </div>
-          </>
+          </div>
         )}
         {selectedTrans && !selectedClip && (
-          <>
+          <div key={selectedTrans.id} style={{ display: 'contents' }}>
             <div className="lw-insp-header">
               <span className="dot" style={{ background: 'var(--accent)' }}/>
               <h3>{selectedTrans.type.replace('-', ' ')}</h3>
@@ -608,7 +608,7 @@ function TimelineInspector({ selectedClip, selectedTrans, onExport, clips, strip
                 </button>
               ))}
             </div>
-          </>
+          </div>
         )}
         {activeTab === 'show' && (
           <div style={{ padding: '4px 0' }}>

@@ -17,6 +17,26 @@ import {
 const USB_PUSH_FPS_KEY = 'lw_usb_push_fps';
 const USB_COLOR_ORDER_KEY = 'lw_usb_color_order';
 
+// Marker error thrown when the /api/usb-led/* endpoint does not exist (the dev
+// server route is absent in production). Callers use this to stop polling.
+export const USB_LED_UNAVAILABLE = 'usb-led-endpoint-unavailable';
+
+function readLocalStorage(key) {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalStorage(key, value) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
+  } catch {
+    /* storage blocked / quota */
+  }
+}
+
 async function requestUsbLed(path, {
   method = 'GET',
   body,
@@ -31,6 +51,16 @@ async function requestUsbLed(path, {
       body: body == null ? undefined : JSON.stringify(body),
       signal: controller.signal,
     });
+    const contentType = response.headers?.get?.('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    // The /api/usb-led/* routes only exist on the dev server. In production a
+    // 404/405 (or a non-JSON SPA fallback page) means the endpoint isn't there;
+    // signal that so the hook can stop polling for the rest of the session.
+    if (response.status === 404 || response.status === 405 || !isJson) {
+      const err = new Error(USB_LED_UNAVAILABLE);
+      err.usbLedUnavailable = true;
+      throw err;
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || `USB LED HTTP ${response.status}`);
     return data;
@@ -44,19 +74,23 @@ export function useUsbLed() {
   const [connecting, setConnecting] = useState(false);
   const [status, setStatus] = useState(null);
   const [lastError, setLastError] = useState('');
-  const [colorOrder, setColorOrderState] = useState(() => normalizeUsbLedColorOrder(localStorage.getItem(USB_COLOR_ORDER_KEY)));
+  const [colorOrder, setColorOrderState] = useState(() => normalizeUsbLedColorOrder(readLocalStorage(USB_COLOR_ORDER_KEY)));
   const lastPushRef = useRef(0);
   const pushInFlightRef = useRef(false);
   const holdUntilRef = useRef(0);
+  // Once the dev-only /api/usb-led endpoint is found missing, stop polling it
+  // for the rest of the session (it never reappears in production).
+  const unavailableRef = useRef(false);
 
   const setColorOrder = useCallback((value) => {
     const next = normalizeUsbLedColorOrder(value);
     setColorOrderState(next);
-    localStorage.setItem(USB_COLOR_ORDER_KEY, next);
+    writeLocalStorage(USB_COLOR_ORDER_KEY, next);
     return next;
   }, []);
 
   const refreshStatus = useCallback(async () => {
+    if (unavailableRef.current) return null;
     try {
       const next = await requestUsbLed('status', { timeoutMs: 1200 });
       setStatus(next);
@@ -65,8 +99,9 @@ export function useUsbLed() {
       setLastError(next.lastError || '');
       return next;
     } catch (error) {
+      if (error?.usbLedUnavailable) unavailableRef.current = true;
       setConnected(false);
-      setLastError(error.message);
+      if (!error?.usbLedUnavailable) setLastError(error.message);
       return null;
     }
   }, [setColorOrder]);
@@ -80,9 +115,14 @@ export function useUsbLed() {
   }, [refreshStatus]);
 
   useEffect(() => {
+    if (unavailableRef.current) return undefined;
     const intervalMs = getUsbLedStatusPollInterval({ connected, connecting });
     if (!intervalMs) return undefined;
     const timer = setInterval(() => {
+      if (unavailableRef.current) {
+        clearInterval(timer);
+        return;
+      }
       refreshStatus();
     }, intervalMs);
     return () => clearInterval(timer);
@@ -185,7 +225,7 @@ export function useUsbLed() {
     const hex = pixelsToLwUsbFrameHex(pixels, { maxPixels: status?.maxPixels || DEFAULT_LWUSB_MAX_PIXELS });
     if (!hex) return;
 
-    const configuredFps = Number(localStorage.getItem(USB_PUSH_FPS_KEY)) || DEFAULT_LWUSB_PUSH_FPS;
+    const configuredFps = Number(readLocalStorage(USB_PUSH_FPS_KEY)) || DEFAULT_LWUSB_PUSH_FPS;
     const framePixels = hex.length / 6;
     const safeFps = getLwUsbSerialSafeFps(framePixels, {
       baudRate: status?.baudRate,
