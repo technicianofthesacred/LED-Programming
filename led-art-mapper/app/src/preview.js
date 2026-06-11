@@ -247,7 +247,11 @@ export class PreviewRenderer {
     const B = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
       const px = pixels[i];
-      const c  = colorFn(px.index, px.nx, px.ny, px.stripId);
+      // Pass the position WITHIN this (visible-only) pixel array, not the
+      // global px.index. The colorFn indexes state.normalisedPixels and
+      // lastFrame by this argument, and both are built from visible strips in
+      // the same order — so `i` keeps them aligned even when a strip is hidden.
+      const c  = colorFn(i, px.nx, px.ny, px.stripId);
       R[i] = c.r; G[i] = c.g; B[i] = c.b;
     }
 

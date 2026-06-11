@@ -35,9 +35,15 @@ return hsv(fract(index / 60 + t * 0.2), 1, 1);
 
 | File | Use |
 |---|---|
-| `ledmap.json` | WLED MoonModules — upload via web UI → LED Preferences → 2D layout |
+| `ledmap.json` | **Stock WLED ledmap** — `{ "width", "height", "map": [...] }` index map (value = physical LED index per grid cell, `-1` = gap). Upload via WLED web UI → Config → LED Preferences → 2D matrix → Custom ledmap (or place at `/ledmap.json` on the controller). |
+| `coords.json` | **Coordinate map (Lightweaver / Pixelblaze)** — `{ "n", "map": [[x,y], ...] }` normalized [x,y] pairs in draw order. This is *not* a stock WLED ledmap. |
 | `ledmap.h` | FastLED — `#include` in your Arduino sketch |
 | `ledmap.csv` | Raw coordinates for any other tool |
+
+The WLED export quantizes your LED coordinates onto a W×H grid (larger
+dimension fit to ~64 cells, other side derived from aspect ratio), fills empty
+cells with `-1`, and resolves any cell collisions by nudging the LED to the
+nearest free cell so no pixel is dropped.
 
 ## Hardware target
 
@@ -62,3 +68,5 @@ app/
 
 reference-repos/        cloned for reading only — see README inside
 ```
+
+> **Note:** `controller/` and `pi-server/` in this directory are **not part of the current ESP32-only plan**. They are kept for historical reference only. The canonical server for the deferred Pi lane is `lightweaver/server/`. See `pi-server/README.md` for details.

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pkill -f 'vite' 2>/dev/null; sleep 0.3 && vite --port 9999",
+    "dev": "vite --port 9999",
     "build": "vite build",
     "preview": "vite preview"
   },
