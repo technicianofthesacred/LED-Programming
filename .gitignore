@@ -8,3 +8,5 @@ backups/
 lightweaver/.lightweaver-usb.json
 .superpowers/
 .worktrees/
+playwright-report/
+test-results/
