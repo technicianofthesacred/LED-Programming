@@ -10,3 +10,10 @@ lightweaver/.lightweaver-usb.json
 .worktrees/
 playwright-report/
 test-results/
+# reference-repos gitlinks have no .gitmodules — ignore cloned dirs but keep
+# README.md tracked (it documents the clone URLs).
+led-art-mapper/reference-repos/PixelTeleporter/
+led-art-mapper/reference-repos/PixelblazePatterns/
+led-art-mapper/reference-repos/WLED-Ledmap-Generator/
+led-art-mapper/reference-repos/led-mapper/
+led-art-mapper/reference-repos/pixelblaze/

@@ -28,7 +28,11 @@ git pull --ff-only origin main
 
 echo "==> 2/4  Install web dependencies"
 cd lightweaver
-npm install                              # 'install' (not 'ci') dodges a known npm rollup optional-dep bug
+# NOTE: `npm install` does NOT reliably install platform-specific optional deps
+# (npm/cli#4828). The ensure-rollup-native step below detects and recovers from
+# the missing @rollup/rollup-<platform>-<arch>[-gnu] package automatically.
+npm install
+node scripts/ensure-rollup-native.mjs
 
 echo "==> 3/4  Build the static site (also runs the launch gate's build)"
 npm run build

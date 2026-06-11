@@ -64,6 +64,24 @@ jobs:
           git commit -m "CI: rebuild Lightweaver factory firmware binary from current source"
           git push origin "HEAD:${{ github.ref_name }}"
 
+      - name: Trigger site deploy
+        # GITHUB_TOKEN pushes do not fire workflow `push` triggers (GitHub
+        # intentionally blocks recursive webhook loops). We must dispatch
+        # deploy-site.yml explicitly so the site always ships the freshly
+        # rebuilt binary rather than the stale one from the previous deploy.
+        # This step only runs when we actually committed a new binary above
+        # (exit 0 = no change → no dispatch needed).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BIN=lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+          if git diff HEAD~1 --quiet -- "$BIN" 2>/dev/null; then
+            echo "Binary unchanged — skipping deploy-site dispatch."
+          else
+            echo "Binary updated — dispatching deploy-site.yml…"
+            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}"
+          fi
+
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:

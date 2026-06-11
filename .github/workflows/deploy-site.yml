@@ -58,7 +58,16 @@ jobs:
       - name: Install dependencies
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
-        run: npm install
+        run: |
+          npm install
+          # Workaround for npm/cli#4828: npm may skip the platform-specific
+          # Rollup native binding on fresh installs, breaking `vite build`.
+          node scripts/ensure-rollup-native.mjs
+
+      - name: Run core tests
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        run: npm run test:core
 
       - name: Build and deploy to Cloudflare Pages
         if: steps.creds.outputs.enabled == 'true'

@@ -52,7 +52,7 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - [x] Tooling: led-art-mapper design tool, lightweaver React building blocks, visitor-ui scaffold
 - [x] Operational docs: `docs/deployment-checklist.md`, `docs/hardware-setup.md`, `docs/segments.md`
 - [x] Launch gate: `npm run launch:check` in `lightweaver/` runs core runtime contract tests and production build
-- [ ] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root)
+- [x] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root) — flashed and verified on bench 2026-05-24 (see docs/roadmap.md)
 - [ ] Configure Art-Net output from Madrix; verify WLED reception
 - [ ] Define WLED segments matching laser-cut zones; fill in `docs/segments.md`
 - [ ] _(deferred — future Pi integration, not current plan)_ Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
