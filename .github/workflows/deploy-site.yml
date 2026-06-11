@@ -20,10 +20,18 @@ name: Deploy site
 # Add them under Settings -> Secrets and variables -> Actions.
 #
 # Until those secrets exist, a push-triggered run SKIPS cleanly (green, with a
-# notice) so it never reddens main; a manual run fails loudly so you know why.
+# notice) so it never reddens main; a HUMAN manual run fails loudly so you know
+# why. Dispatches from build-firmware.yml pass source=ci and skip cleanly like
+# push runs — otherwise every firmware rebuild would redden CI until the
+# Cloudflare secrets are configured.
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: Set to "ci" by build-firmware.yml; leave as "manual" for human runs
+        required: false
+        default: manual
   push:
     branches:
       - main
@@ -59,7 +67,9 @@ jobs:
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Cloudflare secrets not set — skipping deploy. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable automatic publishing."
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Fail loudly only for a HUMAN manual run; CI dispatches
+            # (build-firmware passes source=ci) skip cleanly like push runs.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.source || 'manual' }}" != "ci" ]; then
               echo "::error::Manual deploy requested but Cloudflare secrets are missing."
               exit 1
             fi

@@ -86,7 +86,7 @@ jobs:
             # dispatch failure must not redden a build that shipped its
             # artifact. launch:check's factory-bin-freshness still guards
             # against a stale site.
-            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}" \
+            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}" -f source=ci \
               || echo "::warning::deploy-site dispatch failed — run it manually from the Actions tab so the site serves the fresh binary."
           fi
 
