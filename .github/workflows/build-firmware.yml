@@ -20,6 +20,9 @@ on:
 
 permissions:
   contents: write
+  # Needed by the "Trigger site deploy" step: `gh workflow run` is a workflow
+  # dispatch, which the default GITHUB_TOKEN cannot create without this.
+  actions: write
 
 concurrency:
   group: build-firmware-${{ github.ref }}
@@ -79,7 +82,12 @@ jobs:
             echo "Binary unchanged — skipping deploy-site dispatch."
           else
             echo "Binary updated — dispatching deploy-site.yml…"
-            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}"
+            # Non-fatal: the binary is already committed at this point, so a
+            # dispatch failure must not redden a build that shipped its
+            # artifact. launch:check's factory-bin-freshness still guards
+            # against a stale site.
+            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}" \
+              || echo "::warning::deploy-site dispatch failed — run it manually from the Actions tab so the site serves the fresh binary."
           fi
 
       - name: Upload binary as artifact

@@ -34,25 +34,10 @@ String sanitizeHostname(const String& raw) {
   return out;
 }
 
-// The control endpoints are unauthenticated, so never echo "*": with the old
-// wildcard (plus Allow-Private-Network) any public website the homeowner
-// visited could pass Chrome's private-network preflight and command the card,
-// including credential wipe. Mirrors the postMessage bridge allowlist
-// (LW_STUDIO_ORIGINS + localhost) plus the studio preview deployment. Native
-// apps and curl send no Origin header and are unaffected; the card's own
-// pages are same-origin and need no CORS at all.
-bool corsOriginAllowed(const String& origin) {
-  if (!origin.length()) return false;
-  if (origin == "http://localhost" || origin.startsWith("http://localhost:")) return true;
-  if (origin == "https://localhost" || origin.startsWith("https://localhost:")) return true;
-  if (origin.startsWith("http://127.0.0.1")) return true;
-  if (origin == "https://led.mandalacodes.com") return true;
-  if (origin.startsWith("https://") && origin.endsWith(".mandalacodes.com")) return true;
-  if (origin == "https://lightweaver-edw.pages.dev") return true;
-  if (origin.startsWith("https://") && origin.endsWith(".lightweaver-edw.pages.dev")) return true;
-  return false;
-}
-
+// corsOriginAllowed is declared in LightweaverWeb.h and defined at the bottom
+// of this file, OUTSIDE this anonymous namespace — the WLED-compat JSON API
+// shares it, and a definition in here would shadow the global declaration and
+// make every call ambiguous.
 void sendCors() {
   String origin = server.header("Origin");
   if (corsOriginAllowed(origin)) {
@@ -1294,6 +1279,26 @@ void startApMode(RuntimeConfig& config) {
     if (Serial) Serial.println("Captive DNS up");
   }
 }
+}
+
+// The control endpoints are unauthenticated, so never echo "*": with the old
+// wildcard (plus Allow-Private-Network) any public website the homeowner
+// visited could pass Chrome's private-network preflight and command the card,
+// including credential wipe. Mirrors the postMessage bridge allowlist
+// (LW_STUDIO_ORIGINS + localhost) plus the studio preview deployment. Native
+// apps and curl send no Origin header and are unaffected; the card's own
+// pages are same-origin and need no CORS at all.
+// Global (declared in LightweaverWeb.h): the WLED-compat JSON API shares it.
+bool corsOriginAllowed(const String& origin) {
+  if (!origin.length()) return false;
+  if (origin == "http://localhost" || origin.startsWith("http://localhost:")) return true;
+  if (origin == "https://localhost" || origin.startsWith("https://localhost:")) return true;
+  if (origin.startsWith("http://127.0.0.1")) return true;
+  if (origin == "https://led.mandalacodes.com") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".mandalacodes.com")) return true;
+  if (origin == "https://lightweaver-edw.pages.dev") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".lightweaver-edw.pages.dev")) return true;
+  return false;
 }
 
 void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& totalPixels, uint8_t& currentLookIndex) {

@@ -8,6 +8,7 @@ backups/
 lightweaver/.lightweaver-usb.json
 .superpowers/
 .worktrees/
+.claude/worktrees/
 playwright-report/
 test-results/
 # reference-repos gitlinks have no .gitmodules — ignore cloned dirs but keep
