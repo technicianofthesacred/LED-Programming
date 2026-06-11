@@ -222,6 +222,7 @@ export function ProjectProvider({ children }) {
     setIp: setWledIp,
     connected: wledConnected,
     transport: wledTransport,
+    error: wledError,
     connect: wledConnect,
     disconnect: wledDisconnect,
     push: wledPush,
@@ -568,6 +569,7 @@ export function ProjectProvider({ children }) {
       // WLED
       wledIp,          setWledIp,
       wledConnected,   wledTransport,
+      wledError,
       wledConnect,     wledDisconnect,
       wledPush,        wledGetInfo,
       wledGetState,

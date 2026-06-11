@@ -20,6 +20,9 @@ on:
 
 permissions:
   contents: write
+  # Needed by the "Trigger site deploy" step: `gh workflow run` is a workflow
+  # dispatch, which the default GITHUB_TOKEN cannot create without this.
+  actions: write
 
 concurrency:
   group: build-firmware-${{ github.ref }}
@@ -63,6 +66,29 @@ jobs:
           git add "$BIN"
           git commit -m "CI: rebuild Lightweaver factory firmware binary from current source"
           git push origin "HEAD:${{ github.ref_name }}"
+
+      - name: Trigger site deploy
+        # GITHUB_TOKEN pushes do not fire workflow `push` triggers (GitHub
+        # intentionally blocks recursive webhook loops). We must dispatch
+        # deploy-site.yml explicitly so the site always ships the freshly
+        # rebuilt binary rather than the stale one from the previous deploy.
+        # This step only runs when we actually committed a new binary above
+        # (exit 0 = no change → no dispatch needed).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BIN=lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+          if git diff HEAD~1 --quiet -- "$BIN" 2>/dev/null; then
+            echo "Binary unchanged — skipping deploy-site dispatch."
+          else
+            echo "Binary updated — dispatching deploy-site.yml…"
+            # Non-fatal: the binary is already committed at this point, so a
+            # dispatch failure must not redden a build that shipped its
+            # artifact. launch:check's factory-bin-freshness still guards
+            # against a stale site.
+            gh workflow run deploy-site.yml --ref "${{ github.ref_name }}" -f source=ci \
+              || echo "::warning::deploy-site dispatch failed — run it manually from the Actions tab so the site serves the fresh binary."
+          fi
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4

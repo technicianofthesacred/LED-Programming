@@ -712,6 +712,23 @@ function fmtSize(bytes) {
 const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
 const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 
+// ESP32 firmware images begin with the magic byte 0xE9. A factory image is also
+// far larger than ~100KB. Cloudflare Pages serves the SPA index.html (HTTP 200)
+// for missing asset paths, so a "successful" fetch can quietly return HTML —
+// flashing that to an erased chip bricks it. Validate before accepting a binary.
+const ESP_IMAGE_MAGIC = 0xe9;
+const MIN_FIRMWARE_BYTES = 100 * 1024;
+
+async function assertPlausibleEspImage(blob) {
+  if (!blob || blob.size < MIN_FIRMWARE_BYTES) {
+    throw new Error(`firmware download looks invalid (only ${fmtSize(blob?.size || 0)}; expected a multi-MB ESP32 image)`);
+  }
+  const firstByte = new Uint8Array(await blob.slice(0, 1).arrayBuffer())[0];
+  if (firstByte !== ESP_IMAGE_MAGIC) {
+    throw new Error('firmware download looks invalid (not an ESP32 image — the server may have returned an error page)');
+  }
+}
+
 function formatFlashResetMode(mode) {
   if (mode === 'default_reset') return 'auto reset';
   if (mode === 'usb_reset') return 'USB reset';
@@ -751,15 +768,54 @@ export function FlashScreen() {
     setStatusKind(kind);
   };
 
-  const handleConnect = async () => {
-    if (connected) {
-      setConnecting(true);
-      await disconnectESP(loaderRef.current, transportRef.current);
+  // Serial lifecycle: reflect physical USB unplug in the UI, and release the
+  // port if the component unmounts while still connected.
+  useEffect(() => {
+    if (!hasWebSerial || !navigator.serial?.addEventListener) return undefined;
+    const handleSerialDisconnect = (event) => {
+      // Only react to the port we're actually using (if we can tell).
+      const ourPort = transportRef.current?.device || transportRef.current?.port;
+      if (ourPort && event?.target && event.target !== ourPort) return;
       loaderRef.current = null;
       transportRef.current = null;
       setConnected(false);
       setConnecting(false);
-      setStatusMsg('Disconnected');
+      setStatusMsg('✕ USB device disconnected', 'error');
+      appendLog('USB device unplugged — reconnect and press Connect.');
+    };
+    navigator.serial.addEventListener('disconnect', handleSerialDisconnect);
+    return () => {
+      navigator.serial.removeEventListener?.('disconnect', handleSerialDisconnect);
+    };
+  }, [hasWebSerial]);
+
+  // Release the serial port on unmount so it isn't left held open.
+  useEffect(() => {
+    return () => {
+      const loader = loaderRef.current;
+      const transport = transportRef.current;
+      loaderRef.current = null;
+      transportRef.current = null;
+      if (transport) {
+        Promise.resolve(disconnectESP(loader, transport)).catch(() => {});
+      }
+    };
+  }, []);
+
+  const handleConnect = async () => {
+    if (connected) {
+      setConnecting(true);
+      try {
+        await disconnectESP(loaderRef.current, transportRef.current);
+      } finally {
+        // Even if disconnectESP rejects, drop the refs and clear the spinner so
+        // the UI can't get stuck in a permanent "connecting" state.
+        loaderRef.current = null;
+        transportRef.current = null;
+        setConnected(false);
+        setConnecting(false);
+        setStatusMsg('Disconnected');
+      }
       return;
     }
     setConnecting(true);
@@ -792,9 +848,17 @@ export function FlashScreen() {
     }
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    try {
+      await assertPlausibleEspImage(file);
+    } catch (err) {
+      setSelectedFile(null);
+      setStatusMsg(`✕ ${err.message}`, 'error');
+      appendLog(`Rejected ${file.name}: ${err.message}`);
+      return;
+    }
     setSelectedFile(file);
   };
 
@@ -805,6 +869,7 @@ export function FlashScreen() {
       const response = await fetch(LIGHTWEAVER_FIRMWARE_URL, { cache: 'no-store' });
       if (!response.ok) throw new Error(`firmware file ${response.status}`);
       const blob = await response.blob();
+      await assertPlausibleEspImage(blob);
       const file = new File([blob], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
       setSelectedFile(file);
       setAddress(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);

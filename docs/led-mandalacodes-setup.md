@@ -4,6 +4,15 @@ Goal: the Lightweaver browser UI lives at `led.mandalacodes.com`.
 
 Current product rule: the public site is a Studio, installer, and support surface. It is not a Cloudflare relay and it does not provide pairing-code remote control. The ESP32 card owns runtime playback.
 
+## Deploy ownership (decided 2026-06-11)
+
+Two artifacts used to race for the same Pages project; this is now settled:
+
+- **Production** (`led.mandalacodes.com`, Pages production branch `main`): the **mandalacodes repo's bundle** — customer landing at `/`, Studio embedded at `/design/`. Deployed from the mandalacodes checkout (build commands below). It must include this repo's Studio dist and the factory firmware binary at `/firmware/`.
+- **Preview** (Pages branch `studio`, `https://studio.lightweaver-edw.pages.dev`): **this repo's** `lightweaver/dist`, deployed by `scripts/go-live.sh`, `npm run deploy:pages`, and `.github/workflows/deploy-site.yml`. All three pass `--branch studio` so they can never clobber the production landing page.
+
+After Studio or firmware changes land here, redeploy the mandalacodes bundle to ship them to production.
+
 ## Current recommended setup
 
 Use a separate Cloudflare Pages project named `lightweaver`, then attach `led.mandalacodes.com` as the custom domain. The artifact currently deployed to that project is the Mandala Codes public bundle from `mandalacodes/dist`, with Lightweaver Studio v3 embedded under `/design/`.

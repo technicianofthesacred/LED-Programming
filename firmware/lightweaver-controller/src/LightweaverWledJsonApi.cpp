@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
 #include "LightweaverTypes.h"
+#include "LightweaverWeb.h"  // corsOriginAllowed — shared CORS allowlist
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -24,11 +25,18 @@ namespace {
 
 WebServer* serverPtr = nullptr;
 
+// Same allowlisted-origin policy as the Lightweaver API (see
+// corsOriginAllowed in LightweaverWeb.cpp): these endpoints control the
+// lights unauthenticated, so they must not echo "*" to arbitrary sites.
 void sendCors() {
-  serverPtr->sendHeader("Access-Control-Allow-Origin", "*");
-  serverPtr->sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  serverPtr->sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  serverPtr->sendHeader("Access-Control-Allow-Private-Network", "true");
+  String origin = serverPtr->header("Origin");
+  if (corsOriginAllowed(origin)) {
+    serverPtr->sendHeader("Access-Control-Allow-Origin", origin);
+    serverPtr->sendHeader("Vary", "Origin");
+    serverPtr->sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    serverPtr->sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    serverPtr->sendHeader("Access-Control-Allow-Private-Network", "true");
+  }
   serverPtr->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
@@ -49,7 +57,12 @@ String buildInfoJson() {
   doc["core"] = "Arduino-2";
   doc["product"] = "Lightweaver";
   doc["brand"] = "Lightweaver";
-  doc["mac"] = WiFi.macAddress();
+  // WLED convention: 12 lowercase hex chars, no separators. Clients key
+  // device identity on this exact shape.
+  String mac = WiFi.macAddress();
+  mac.replace(":", "");
+  mac.toLowerCase();
+  doc["mac"] = mac;
   doc["ip"] = runtimeConfig.activeIp;
   doc["name"] = runtimeConfig.pieceName;
   doc["udpport"] = 21324;
@@ -98,6 +111,23 @@ String buildStateJson() {
   // active-scene highlight permanently blank after a refresh.
   doc["ps"] = lookCount ? int(currentLookIndex) : -1;
   doc["pl"] = -1;
+  // Many WLED clients (including the WLED app) index seg[].col[0] and read
+  // sx/ix/pal unguarded — emit the standard fields with neutral values so
+  // they don't crash on us. Values are static; we don't expose pattern
+  // params over this API yet (see FUTURE_WLED_COMPAT.md).
+  auto addStandardSegFields = [](JsonObject& s) {
+    JsonArray col = s["col"].to<JsonArray>();
+    for (uint8_t c = 0; c < 3; c++) {
+      JsonArray rgb = col.add<JsonArray>();
+      rgb.add(0); rgb.add(0); rgb.add(0);
+    }
+    s["sx"] = 128;
+    s["ix"] = 128;
+    s["pal"] = 0;
+    s["sel"] = true;
+    s["rev"] = false;
+    s["mi"] = false;
+  };
   JsonArray segs = doc["seg"].to<JsonArray>();
   if (runtimeConfig.zoneCount == 0) {
     JsonObject s = segs.add<JsonObject>();
@@ -108,6 +138,7 @@ String buildStateJson() {
     s["on"] = true;
     s["bri"] = 255;
     s["fx"] = 0;
+    addStandardSegFields(s);
   } else {
     for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
       const ZoneConfig& z = runtimeConfig.zones[i];
@@ -124,6 +155,7 @@ String buildStateJson() {
         if (looks[j].id == z.patternId) { fx = j; break; }
       }
       s["fx"] = fx;
+      addStandardSegFields(s);
     }
   }
   doc["lwLive"]["streaming"] = frameSourceIsStreaming();
@@ -231,7 +263,8 @@ void handleStatePost() {
     for (JsonObject s : segs) {
       // Raw pixel array — the live frame stream path.
       JsonArray pixels = s["i"].as<JsonArray>();
-      if (!pixels.isNull() && pixels.size() > 0) {
+      bool segFramePushed = !pixels.isNull() && pixels.size() > 0;
+      if (segFramePushed) {
         framePushed = true;
         // Only write if no other live source (e.g. Art-Net) owns the canvas.
         bool frameAllowed = frameSourceClaim(FRAME_WLED_REALTIME);
@@ -274,7 +307,9 @@ void handleStatePost() {
         }
       }
       // Per-segment brightness — apply to the matching zone if id resolves.
-      if (!s["bri"].isNull() && !framePushed) {
+      // Skip only when THIS segment carried a frame (framePushed is
+      // loop-global and would wrongly mute bri on every later segment).
+      if (!s["bri"].isNull() && !segFramePushed) {
         int segId = s["id"] | 0;
         float br = float(s["bri"].as<int>()) / 255.0f;
         if (segId >= 0 && segId < int(runtimeConfig.zoneCount)) {

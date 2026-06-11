@@ -4,6 +4,21 @@ Lightweaver speaks just enough WLED for the in-house designer to talk to it. Thi
 
 The canonical Wave-2 decisions live in `lightweaver/DESIGNER_CLEANUP_PLAN.md` §6 (the audit-failure surface). Anything below that contradicts the cleanup plan, trust the plan.
 
+## Known divergences from this doc (audited 2026-06-11)
+
+The "Implemented" sections below were written slightly ahead of the code.
+Current actual behaviour:
+
+- `mac` — fixed: now 12 lowercase hex chars, no separators, per WLED convention.
+- `seg[]` entries in `/json/state` — fixed: now emit `col` (three zeroed RGB
+  triples), `sx`/`ix` (128), `pal` (0), `sel`/`rev`/`mi` with neutral values so
+  clients that index `seg[].col[0]` unguarded don't crash. Values are static —
+  pattern params are still not exposed.
+- `lm` — **not emitted.** Use the non-standard `lwLive.source` instead.
+- `leds.pwr` — **hardcoded 0**, not an estimated draw. `maxpwr` is also 0.
+- `POST /json/state` with `v:true` — **ignored**; we always return
+  `{"success":true}` instead of the verbose full state WLED returns.
+
 ---
 
 ## Implemented (this pass)

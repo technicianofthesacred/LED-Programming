@@ -1,6 +1,16 @@
 name: Deploy site
 
-# Publishes the Studio to Cloudflare Pages (led.mandalacodes.com).
+# Publishes the Studio bundle to the `studio` PREVIEW branch of the
+# `lightweaver` Cloudflare Pages project.
+#
+# Deploy ownership (decided 2026-06-11, see docs/led-mandalacodes-setup.md):
+# PRODUCTION at led.mandalacodes.com is the mandalacodes repo's bundle
+# (customer landing at /, Studio embedded at /design/), deployed from the
+# mandalacodes checkout. This workflow must therefore never deploy to the
+# production branch — deploy:pages targets `--branch studio`, which serves at
+# https://studio.lightweaver-edw.pages.dev for verification. To ship to
+# production, redeploy the mandalacodes bundle (it embeds this repo's Studio
+# dist and the factory firmware binary).
 #
 # Runs automatically on every push to main that touches the deployable surface
 # (the lightweaver/ app, including the firmware binary it serves), and manually
@@ -10,10 +20,18 @@ name: Deploy site
 # Add them under Settings -> Secrets and variables -> Actions.
 #
 # Until those secrets exist, a push-triggered run SKIPS cleanly (green, with a
-# notice) so it never reddens main; a manual run fails loudly so you know why.
+# notice) so it never reddens main; a HUMAN manual run fails loudly so you know
+# why. Dispatches from build-firmware.yml pass source=ci and skip cleanly like
+# push runs — otherwise every firmware rebuild would redden CI until the
+# Cloudflare secrets are configured.
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: Set to "ci" by build-firmware.yml; leave as "manual" for human runs
+        required: false
+        default: manual
   push:
     branches:
       - main
@@ -49,7 +67,9 @@ jobs:
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Cloudflare secrets not set — skipping deploy. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable automatic publishing."
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Fail loudly only for a HUMAN manual run; CI dispatches
+            # (build-firmware passes source=ci) skip cleanly like push runs.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.source || 'manual' }}" != "ci" ]; then
               echo "::error::Manual deploy requested but Cloudflare secrets are missing."
               exit 1
             fi
@@ -58,7 +78,16 @@ jobs:
       - name: Install dependencies
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
-        run: npm install
+        run: |
+          npm install
+          # Workaround for npm/cli#4828: npm may skip the platform-specific
+          # Rollup native binding on fresh installs, breaking `vite build`.
+          node scripts/ensure-rollup-native.mjs
+
+      - name: Run core tests
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        run: npm run test:core
 
       - name: Build and deploy to Cloudflare Pages
         if: steps.creds.outputs.enabled == 'true'

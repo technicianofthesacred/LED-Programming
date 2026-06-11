@@ -309,10 +309,12 @@ export function sendCardBridgeRequest(type, payload = {}, {
   const targetOrigin = cardHostToUrl(resolvedHost);
   if (!bridgeWindow || bridgeTargetClosed()) {
     clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
-    throw bridgeError(
+    // Return a rejected promise (rather than throwing synchronously) so callers
+    // that attach `.catch()` for friendly error wrapping reach their handler.
+    return Promise.reject(bridgeError(
       'Open the card page once to let Studio use it as the local hardware bridge.',
       'bridge-missing',
-    );
+    ));
   }
 
   if (!bridgeOrigin || bridgeOrigin !== targetOrigin) {

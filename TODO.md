@@ -4,6 +4,13 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Soon
 
+### Bench verification of the 2026-06-11 firmware batch (needs a card in hand)
+
+- [ ] **Bench-test WiFi recovery firmware** — flash the rebuilt factory binary to a bench card and verify the new WiFi recovery chain end-to-end _(you · moderate)_
+  The 2026-06-11 batch (WiFi auto-rejoin, Change-WiFi/factory-reset buttons, scan polling, CORS allowlist, multi-range zones) was written and reviewed without hardware. Done when: wrong-password setup shows the "WiFi isn't connecting" banner and Re-enter WiFi works; power-cycling the router while the card runs makes the card rejoin within ~2 minutes on its own; the captive portal stays usable during retry attempts (watch for AP hiccups from STA channel switching); Studio push and mapper live push still work from localhost and led.mandalacodes.com. → Changes: `firmware/lightweaver-controller/src/`, review at [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **Redeploy the mandalacodes production bundle** — rebuild and deploy the landing+/design bundle so production picks up the new Studio dist and firmware binary _(you · quick)_
+  Deploy ownership was settled 2026-06-11: this repo deploys only to the `studio` Pages preview branch; production at led.mandalacodes.com ships from the mandalacodes repo. Done when led.mandalacodes.com/design and /firmware/…factory.bin serve the new builds. → Plan: [docs/led-mandalacodes-setup.md](docs/led-mandalacodes-setup.md)
+
 ### Hardware and install setup (Adrian, at the artwork)
 
 - [ ] **WLED hardware config** — set the final LED count, data pin, LED type, color order, and brightness limit for the real artwork _(you · moderate)_
@@ -46,6 +53,19 @@ Living list of outstanding work on the LED installation controller. Project is b
   These give patterns shared color and rhythm so scenes can move in time and be saved for reuse. Done when palettes, BPM-tapped beat variables, scene presets, and per-pattern sliders all work in the mapper. → Plan: [led-art-mapper/ROADMAP.md](led-art-mapper/ROADMAP.md)
 - [ ] **Show tooling** — build scene crossfades, the timeline sequencer, and the spatial effect bus _(agent · deep)_
   This is the sequencing layer that turns individual scenes into a timed, blended show across the installation. Done when scenes crossfade, the timeline sequencer plays an ordered show, and the spatial effect bus is functional. → Plan: [led-art-mapper/ROADMAP.md](led-art-mapper/ROADMAP.md)
+
+### Remaining review findings (deferred from the 2026-06-11 fix pass)
+
+- [ ] **Non-blocking fades** — convert the firmware's blocking fadeTo into a loop() state machine so pattern taps stay responsive during transitions _(agent · moderate)_
+  fadeTo spins up to ~2s without servicing the web server or captive DNS, so taps feel laggy exactly when the customer is interacting. Done when fades render incrementally from loop() and the page stays responsive during a transition. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **OTA firmware updates** — add an OTA path so shipped cards can be updated without USB reflash _(agent · deep)_
+  Today a fielded card can only be fixed by mailing it back or a house call; the recovery/WDT machinery assumes firmware can be fixed in the field. Done when a card can safely self-update from a signed/validated image with rollback on failure. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **Touch support for both editors** — convert Studio Layout/Timeline drags and the mapper canvas to Pointer Events with coarse-pointer-visible controls _(agent · deep)_
+  The stated target is "web interface accessible from phone" but the editing surfaces are mouse-only today. Done when strip drawing, clip dragging, and hover-only buttons work on a tablet. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **Studio connection-story convergence** — collapse WledBar/DevicesPanel/ChipScreen/StatusBar into one protocol-aware card widget _(agent · moderate)_
+  DevicesPanel still uses the broken legacy http push/scan path with guessed diagnoses; ChipScreen does it right. Done when there is one card-connection surface that leads with the bridge on HTTPS. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **Mapper SVG fidelity** — handle transform attributes, relative compound paths, and viewBox offsets on import _(agent · moderate)_
+  Illustrator/Inkscape exports with transforms land offset/scaled and mm-based LED counts come out wrong. Done when transformed and relative-path SVGs measure and render correctly. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
 
 ### Deeper WLED protocol compatibility (deferred by design)
 

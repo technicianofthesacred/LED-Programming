@@ -1,5 +1,7 @@
 # Lightweaver — Deployment Checklist
 
+> **Current runtime: ESP32-only.** The Lightweaver card is the sole runtime component — it serves the visitor UI, runs patterns, and exposes the local config page. There is no Raspberry Pi in the live runtime path. Sections 4 (Pi setup), 5 (Network topology), and the Pi-specific rows in Section 7 are **deferred — future Pi integration**. They are kept here for reference and will become active when Pi work resumes.
+
 Bench-to-gallery checklist for taking a Lightweaver installation from a working dev rig to a stable on-site deployment. Walk this top-to-bottom for each piece.
 
 ---
@@ -33,7 +35,7 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 
 ## 2. AP mode setup
 
-- [ ] **SSID convention:** `Lightweaver — Adrian Rasmussen` (em dash, single space either side). Append a piece suffix if multiple devices on site, e.g. `Lightweaver — Adrian Rasmussen 02`.
+- [ ] **SSID convention (ESP32 card lane):** `Lightweaver-XXXX` where `XXXX` is the last 4 hex digits of the card's MAC address (set automatically by the Lightweaver firmware). _(WLED stock lane: if using stock WLED firmware instead of the Lightweaver card firmware, set the SSID manually — suggested format `Lightweaver-<MAC4>` to stay consistent.)_
 - [ ] **Password:** open for public installations, or a simple shared password (e.g. `lightweaver`) if you want to gate access.
 - [ ] **Captive portal enabled** — WLED ships this on by default. Verify on iOS and Android: connecting to the SSID should auto-open a browser to `http://4.3.2.1`.
 - [ ] **AP mode = Always** — Config > WiFi Setup > "AP opens" > Always. Hotspot stays up regardless of STA link.
@@ -53,7 +55,9 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 
 ---
 
-## 4. Pi setup
+## 4. Pi setup _(Deferred — future Pi integration)_
+
+> Skip this section for the current ESP32-only plan. Resume when Pi integration is explicitly started.
 
 - [ ] **Hostname:** `lightweaver.local` (mDNS) so the visitor-ui server is discoverable without an IP.
 - [ ] **Autostart Lightweaver Pi server** — build `lightweaver/dist/`, run `npm run serve:pi`, restart on failure, start after network-online.target. See `docs/pi-hosted-deployment.md`.
@@ -63,7 +67,9 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 
 ---
 
-## 5. Network topology
+## 5. Network topology _(Deferred — future Pi integration)_
+
+> This diagram reflects the Pi-hosted future plan. Current ESP32-only topology is in Section 6.
 
 ```
   [ Visitor phone ]
@@ -86,27 +92,55 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 
 ---
 
-## 6. On-site smoke test (5 steps)
+## 6. ESP32 card smoke test — current plan
 
-Run through this end-to-end before opening the gallery.
+This is the actual customer flow for the ESP32-only runtime. Run through end-to-end before the piece leaves the bench.
 
-1. **Power on** the Pi and the WLED controller. Wait ~30 s for both to come up.
-2. **Connect a phone** to the `Lightweaver — Adrian Rasmussen` SSID. Confirm captive portal opens, or browse to `http://lightweaver.local`.
-3. **Tap the first scene button** in the visitor UI.
-4. **Look at the strip** — the corresponding preset should be visible within ~500 ms.
-5. **Cycle through every scene button** — each one must produce a visibly different look on the strip. No dark frames, no stuck pixels.
+1. **Power on** the card. The status LED pulses once on boot; the LEDs start playing the default pattern within ~2 s.
+2. **Turn the rotary control** — confirm brightness changes. Press it — confirm pattern cycles.
+3. **Join the card's AP** — on a phone, open WiFi settings and connect to `Lightweaver-XXXX` (XXXX = last 4 MAC digits printed on the card label or read from `GET /api/status`).
+4. **Captive portal** — on iOS/Android the setup page should open automatically. If not, open a browser to `http://192.168.4.1`. Confirm the card's branded scene-selector page loads.
+5. **Pick a scene** — tap a scene button. Confirm the strip changes within ~500 ms.
+6. **Cycle all scenes** — each button must produce a visibly different look. No dark frames, no stuck pixels.
+7. **Optional home-WiFi setup** — in the card page's settings, enter the customer's home WiFi credentials. After reboot the card joins that network and becomes reachable at `lightweaver.local` from any device on the same network.
 
 If any step fails, see Section 7.
 
 ---
 
-## 7. Failure modes & recovery
+## 7. On-site smoke test (Pi-hosted) _(Deferred — future Pi integration)_
+
+> For the current ESP32-only plan, use Section 6 above.
+
+Run through this end-to-end before opening the gallery.
+
+1. **Power on** the Pi and the WLED controller. Wait ~30 s for both to come up.
+2. **Connect a phone** to the `Lightweaver-XXXX` AP (XXXX = last 4 MAC digits). Confirm captive portal opens, or browse to `http://192.168.4.1`.
+3. **Tap the first scene button** in the visitor UI.
+4. **Look at the strip** — the corresponding preset should be visible within ~500 ms.
+5. **Cycle through every scene button** — each one must produce a visibly different look on the strip. No dark frames, no stuck pixels.
+
+If any step fails, see Section 8.
+
+---
+
+## 8. Failure modes & recovery
+
+### ESP32 card lane (current plan)
+
+| Symptom | Likely cause | Recovery |
+|---|---|---|
+| No LED output on power-on | Firmware not flashed or bad GPIO config | Check `/api/status` returns correct LED count and GPIO. Reflash firmware. |
+| Captive portal doesn't trigger on iOS | Known iOS quirk | Tell visitor to open Safari and browse to `http://192.168.4.1`. Add a printed sign as fallback. |
+| Card page loads but lights don't change | Scene bank not loaded or LED count mismatch | Check `GET /api/status`. Use Studio to re-push config. Confirm LED count matches hardware. |
+| `lightweaver.local` not reachable after home-WiFi setup | mDNS blocked by router, or card not yet joined | Try the card's IP directly. Check that the card is on the same WiFi subnet. |
+| Strip frozen mid-effect | Art-Net stream stalled (if Madrix in use) | Disable Art-Net input on the card briefly, then re-enable. Restart Madrix output. |
+| Visible stutter / dropped frames | WiFi sleep re-enabled, or interference | Re-check Config > WiFi > Disable WiFi sleep. Move the card off congested 2.4 GHz channels. |
+| Strip section dark | Loose data line, dead pixel, or PSU droop | Inspect physical connection. Check segment config didn't truncate the strip. Measure 5V/12V at the far end of the run. |
+
+### Pi-hosted lane _(Deferred — future Pi integration)_
 
 | Symptom | Likely cause | Recovery |
 |---|---|---|
 | Visitor UI loads but lights don't change | WLED unreachable from Pi | SSH the Pi: `curl http://<wled-ip>/json`. If timeout, check WLED is on the AP and STA link is up. Power-cycle WLED if STA dropped. |
-| Strip frozen mid-effect | Madrix lost link / Art-Net stream stopped | In WLED, disable Art-Net input briefly to release the lock, then re-enable. Restart Madrix output. |
 | Pi reboot after power blip | Power glitch, SD card issue | systemd brings visitor-ui back up automatically. If not, SSH and `systemctl status visitor-ui`. Check SD card health if recurring. |
-| Captive portal doesn't trigger on iOS | Known iOS quirk | Tell visitor to manually open Safari and browse to `lightweaver.local` or `4.3.2.1`. Add a printed sign as fallback. |
-| Visible stutter / dropped frames | WiFi sleep re-enabled, or interference | Re-check Config > WiFi > Disable WiFi sleep. Move WLED off congested 2.4 GHz channels. |
-| Strip section dark | Loose data line, dead pixel, or PSU droop | Inspect physical connection. Check segment config didn't truncate the strip. Measure 5V/12V at the far end of the run. |

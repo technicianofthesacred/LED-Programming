@@ -34,11 +34,19 @@ String sanitizeHostname(const String& raw) {
   return out;
 }
 
+// corsOriginAllowed is declared in LightweaverWeb.h and defined at the bottom
+// of this file, OUTSIDE this anonymous namespace — the WLED-compat JSON API
+// shares it, and a definition in here would shadow the global declaration and
+// make every call ambiguous.
 void sendCors() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  server.sendHeader("Access-Control-Allow-Private-Network", "true");
+  String origin = server.header("Origin");
+  if (corsOriginAllowed(origin)) {
+    server.sendHeader("Access-Control-Allow-Origin", origin);
+    server.sendHeader("Vary", "Origin");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    server.sendHeader("Access-Control-Allow-Private-Network", "true");
+  }
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
@@ -82,6 +90,7 @@ String escapeHtml(const String& in) {
     else if (c == '>') out += "&gt;";
     else if (c == '&') out += "&amp;";
     else if (c == '"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";  // values are injected into single-quoted attributes
     else out += c;
   }
   return out;
@@ -131,8 +140,10 @@ String studioOpenScript() {
 String studioBridgeScript() {
   String script;
   script.reserve(2400);
-  script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com'];"
-              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o);"
+  // Keep in sync with corsOriginAllowed(): production Studio, the studio
+  // preview deployment (Pages branch subdomains), and local dev.
+  script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
+              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge'},msg),ev.origin)}catch(_){}};"
               "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',href:location.href,host:location.host},'*')}catch(_){}};"
               "window.addEventListener('message',async ev=>{"
@@ -296,8 +307,21 @@ void handleRoot() {
     page += escapeHtml(cfg.pieceName);
     page += F("</span>");
   }
-  page += F("</div>"
-            "<div class='stream-banner' id='stream-banner'>"
+  page += F("</div>");
+  // AP-fallback with saved credentials: the card has a home network configured
+  // but couldn't join it (wrong password, network down, out of range). Surface
+  // that clearly instead of leaving the visitor on a dead end — offer a way to
+  // re-enter WiFi credentials (reset-wifi reboots into the setup form).
+  if (!stationActive && wifiConfigured) {
+    page += F("<div class='handoff err' id='wifi-warn'>"
+              "<strong>WiFi isn&#39;t connecting.</strong> This card couldn&#39;t join \"");
+    page += escapeHtml(cfg.wifi.ssid);
+    page += F("\" — the password may be wrong, or the network is out of range. "
+              "It keeps retrying about once a minute. If the password changed, re-enter it:"
+              "<button class='off-btn' id='wifi-retry-btn' type='button' style='display:block;margin-top:10px'>Re-enter WiFi details</button>"
+              "</div>");
+  }
+  page += F("<div class='stream-banner' id='stream-banner'>"
               "<span class='dot'></span>"
               "<span class='msg'>Streaming from <b id='stream-src'>external source</b></span>"
               "<button class='cancel' id='stream-cancel' type='button'>Cancel stream</button>"
@@ -350,7 +374,7 @@ void handleRoot() {
             "<div class='foot'>"
               "<button class='off-btn' id='off-btn'>Off</button>"
               "<a class='set-link studio-link' id='studio-link' href='");
-  page += studioBridgeUrl(cfg);
+  page += escapeHtml(studioBridgeUrl(cfg));  // hostname/IP are user-settable; keep them inside the quoted attribute
   page += F("' target='_blank' onclick=\"return lwOpenStudio(event,this.href)\">Open Lightweaver Studio</a>"
               "<button class='set-link' id='set-toggle' type='button'>Settings</button>"
             "</div>"
@@ -450,7 +474,10 @@ void handleRoot() {
             "const renderPat=()=>{const g=$('grid');g.innerHTML='';const active=selectedPattern();$('active-name').textContent=active?active.label:'Choose a pattern';$('active-preview').innerHTML=active?swatchHtml(active):'';patterns.forEach(p=>{"
               "const activeTile=p.id===currentId;"
               "const el=document.createElement('div');el.className='tile'+(activeTile?' active':'');"
-              "el.innerHTML=swatchHtml(p)+'<div class=\"name\">'+p.label+'</div>'+(activeTile?'<button class=\"tile-edit\" type=\"button\">Edit</button>':'');"
+              // Label set via textContent (not innerHTML concat) — pattern labels
+              // come from stored config and must not be interpreted as HTML.
+              "el.innerHTML=swatchHtml(p)+'<div class=\"name\"></div>'+(activeTile?'<button class=\"tile-edit\" type=\"button\">Edit</button>':'');"
+              "el.querySelector('.name').textContent=p.label;"
               "const edit=el.querySelector('.tile-edit');if(edit)edit.onclick=e=>{e.stopPropagation();openPatternStudio(e,p.id)};"
               "el.onclick=async()=>{const wasActive=p.id===currentId;currentId=p.id;renderPat();showColorPanel(p.id==='custom-color');if(!wasActive)await post('/api/control',{patternId:p.id})};"
               "g.appendChild(el)"
@@ -464,8 +491,14 @@ void handleRoot() {
             "$('rn-save').onclick=async()=>{setMsg('Saving\xE2\x80\xA6');try{const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});if(r.ok){setMsg('Saved. Reboot to use new hostname.','ok')}else{setMsg(r.error||'Failed','err')}}catch(e){setMsg(e.message,'err')}};"
             "$('identify').onclick=async()=>{setMsg('Identifying\xE2\x80\xA6','ok');try{await post('/api/identify',{});setTimeout(()=>setMsg(''),2200)}catch(_){setMsg('Could not reach card','err')}};"
             "$('reboot').onclick=async()=>{if(!confirm('Reboot the card?'))return;setMsg('Rebooting\xE2\x80\xA6');try{await post('/api/reboot',{})}catch(_){}};"
-            "$('change-wifi').onclick=()=>{if(!confirm('Wipe WiFi credentials and restart in setup mode?'))return;post('/api/factory-reset',{})};"
-            "$('factory').onclick=()=>{if(!confirm('Erase ALL settings (patterns, WiFi, names) and restart? This cannot be undone.'))return;post('/api/factory-reset',{})};"
+            // WiFi reset is shared between the settings drawer button and the
+            // AP-fallback warning banner; the banner reports through showHandoff
+            // (the drawer is closed in that flow), the drawer through setMsg.
+            "const resetWifiFlow=async report=>{report('Clearing WiFi\xE2\x80\xA6');try{const r=await post('/api/reset-wifi',{});if(r&&r.ok){report('WiFi cleared. The card is rebooting into setup mode \xE2\x80\x94 join its Lightweaver-XXXX network from a phone to enter new WiFi details.','ok')}else{report((r&&r.error)||'Reset failed','err')}}catch(e){report('Could not reach the card: '+e.message,'err')}};"
+            "$('change-wifi').onclick=()=>{if(!confirm('Clear the saved WiFi and restart in setup mode? Patterns and names are kept.'))return;resetWifiFlow(setMsg)};"
+            "const wifiRetryBtn=$('wifi-retry-btn');"
+            "if(wifiRetryBtn)wifiRetryBtn.onclick=()=>{if(!confirm('Clear the saved WiFi and restart in setup mode? Patterns and names are kept.'))return;resetWifiFlow(showHandoff)};"
+            "$('factory').onclick=async()=>{if(!confirm('Erase ALL settings (patterns, WiFi, names) and restart? This cannot be undone.'))return;setMsg('Erasing everything\xE2\x80\xA6');try{const r=await post('/api/factory-reset',{confirm:'RESET'});if(r&&r.ok){setMsg('All settings erased. The card is rebooting into setup mode \xE2\x80\x94 join its Lightweaver-XXXX network from a phone to set it up again.','ok')}else{setMsg((r&&r.error)||'Factory reset failed','err')}}catch(e){setMsg('Could not reach the card: '+e.message,'err')}};"
             // Apply pasted designer config (the mixed-content fallback path)
             "$('cfg-apply').onclick=async()=>{const raw=$('cfg-paste').value.trim();if(!raw){setMsg('Paste a config JSON first','err');return}let json;try{json=JSON.parse(raw)}catch(e){setMsg('Not valid JSON: '+e.message,'err');return}"
               "const cfg=json.config?json.config:json;setMsg('Applying\xE2\x80\xA6');"
@@ -503,7 +536,9 @@ void handleRoot() {
                 "_streamWasOn=false"
               "}};"
             "$('stream-cancel').onclick=async()=>{try{await post('/api/control',{cancelStream:true});applyStream({streaming:false})}catch(_){}};"
-            "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s)}catch(_){}};"
+            // The same 1Hz status poll also clears the AP-fallback WiFi warning
+            // banner if the background rejoin succeeds while the page is open.
+            "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s);const ww=$('wifi-warn');if(ww&&s.wifi&&s.wifi.transport==='station')ww.remove()}catch(_){}};"
             "pollStream();setInterval(pollStream,1000);"
             "</script></body></html>");
 
@@ -589,6 +624,9 @@ void handleAdvancedRoot() {
               "<p class='note'>Join the card to your home WiFi to control it from anywhere on your network.</p>"
               "<label class='field'>Network</label>"
               "<select id='ssid'><option value=''>Scanning…</option></select>"
+              "<div class='row'><button class='ghost' id='rescan' type='button'>Rescan</button></div>"
+              "<label class='field'>Hidden network name (optional)</label>"
+              "<input type='text' id='ssid-manual' autocomplete='off' placeholder='Type a network name if it is not listed'>"
               "<label class='field'>Password</label>"
               "<input type='password' id='pw' autocomplete='off'>"
               "<label class='field'>Hostname</label>"
@@ -691,7 +729,7 @@ void handleAdvancedRoot() {
               "</div></details>");
 
     page += F("<a class='link' id='studio-link' href='");
-    page += studioBridgeUrl(cfg);
+    page += escapeHtml(studioBridgeUrl(cfg));  // hostname/IP are user-settable; keep them inside the quoted attribute
     page += F("' target='_blank' onclick=\"return lwOpenStudio(event,this.href)\">Open Lightweaver Studio \xE2\x86\x92</a>");
   }
 
@@ -714,11 +752,21 @@ void handleAdvancedRoot() {
             "installFromHash();");
 
   if (needsSetup) {
-    page += F("get('/api/wifi/scan').then(d=>{const sel=$('ssid');sel.innerHTML='';"
-              "(d.networks||[]).forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});"
-              "if(!d.networks||!d.networks.length)sel.innerHTML='<option>No networks found</option>'});"
-              "$('join').onclick=async()=>{const btn=$('join'),m=$('msg');btn.disabled=true;m.textContent='Saving…';m.className='note';"
-              "try{const r=await post('/api/wifi',{ssid:$('ssid').value,password:$('pw').value,hostname:$('hn').value});"
+    // /api/wifi/scan answers {scanning:true} while the async scan is still
+    // running, so a single fetch lands on "No networks found" forever. Poll
+    // until scanning:false (capped at ~30s), show a Scanning placeholder
+    // meanwhile, and offer Rescan + a manual SSID field for hidden networks.
+    page += F("const setScanPlaceholder=text=>{const sel=$('ssid');sel.innerHTML='';const o=document.createElement('option');o.value='';o.textContent=text;sel.appendChild(o)};"
+              "const renderNets=nets=>{const sel=$('ssid');sel.innerHTML='';nets.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});if(!nets.length)setScanPlaceholder('No networks found — rescan or type the name below')};"
+              "let scanPolls=0,scanTimer=null;"
+              "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan');if(d.scanning){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
+              "const startScan=()=>{scanPolls=0;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"
+              "$('rescan').onclick=startScan;"
+              "startScan();"
+              "$('join').onclick=async()=>{const btn=$('join'),m=$('msg');const manual=$('ssid-manual').value.trim();const ssid=manual||$('ssid').value;"
+              "if(!ssid){m.textContent='Choose a network or type its name first.';m.className='note err';return}"
+              "btn.disabled=true;m.textContent='Saving…';m.className='note';"
+              "try{const r=await post('/api/wifi',{ssid:ssid,password:$('pw').value,hostname:$('hn').value});"
               "if(r.ok){m.textContent='Saved. Rebooting — reconnect to your home WiFi and open '+($('hn').value||'lightweaver')+'.local';m.className='note ok'}"
               "else{m.textContent=r.error||'Save failed';m.className='note err';btn.disabled=false}}catch(e){m.textContent=e.message;m.className='note err';btn.disabled=false}};");
   } else {
@@ -729,7 +777,7 @@ void handleAdvancedRoot() {
               "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.searchParams.set('studioTakeover','1');u.hash='#screen=patterns';return u.href}catch(_){return url}};"
               "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
-              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\">'+p.label+'</span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.onclick=async()=>{currentId=p.id;renderGrid();setNow(p);await post('/api/control',{patternId:p.id})};g.appendChild(b)})};"
+              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.onclick=async()=>{currentId=p.id;renderGrid();setNow(p);await post('/api/control',{patternId:p.id})};g.appendChild(b)})};"
               "const loadOnce=async()=>{try{"
                 "const s=await get('/api/status');"
                 "const p=await get('/api/patterns');"
@@ -1109,15 +1157,86 @@ bool tryStationJoin(RuntimeConfig& config) {
   return true;
 }
 
+// While in AP fallback with saved credentials (wrong password, router was
+// down, out of range at boot), periodically retry the home network so the
+// card heals itself when the router comes back. Non-blocking state machine:
+// WiFi.begin() once in WIFI_AP_STA (the setup AP + captive portal stay up
+// during the attempt), then poll WiFi.status() across loop() iterations with
+// a deadline — never freezes rendering the way the boot-time 15s wait would.
+// All time comparisons are wrap-safe signed differences, matching the
+// recoveryHoldUntilMs pattern in main.cpp.
+void maintainApFallbackRejoin(RuntimeConfig& cfg, uint32_t now) {
+  static uint32_t nextAttemptAtMs = 60000;   // first retry ~60s after boot
+  static uint32_t attemptDeadlineMs = 0;
+  static uint32_t lastPollMs = 0;
+  static bool attemptActive = false;
+
+  if (cfg.wifi.ssid.length() == 0) return;
+  if (int32_t(now - lastPollMs) < 500) return;
+  lastPollMs = now;
+
+  if (!attemptActive) {
+    if (int32_t(now - nextAttemptAtMs) < 0) return;
+    String hostname = sanitizeHostname(cfg.wifi.hostname);
+    WiFi.mode(WIFI_AP_STA);  // keep the setup AP alive while we try
+    WiFi.setSleep(false);
+    WiFi.setHostname(hostname.c_str());
+    WiFi.begin(cfg.wifi.ssid.c_str(), cfg.wifi.password.c_str());
+    attemptActive = true;
+    attemptDeadlineMs = now + 15000;
+    if (Serial) Serial.println("AP fallback: retrying saved WiFi");
+    return;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    attemptActive = false;
+    String hostname = sanitizeHostname(cfg.wifi.hostname);
+    // Joined the home network — tear down the setup AP + captive DNS and run
+    // as a plain station, the same end state as a successful boot-time join.
+    if (dnsServerActive) {
+      dnsServer.stop();
+      dnsServerActive = false;
+    }
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+    cfg.activeTransport = WIFI_TRANSPORT_STATION;
+    cfg.activeIp = WiFi.localIP().toString();
+    cfg.activeHostname = hostname;
+    announceMdns(hostname);
+    wledRealtimeRebind();
+    if (Serial) {
+      Serial.print("AP fallback: joined ");
+      Serial.print(cfg.wifi.ssid);
+      Serial.print(" at ");
+      Serial.println(cfg.activeIp);
+    }
+    return;
+  }
+
+  if (int32_t(now - attemptDeadlineMs) >= 0) {
+    attemptActive = false;
+    WiFi.disconnect(false, false);  // stop this STA attempt; AP stays up
+    nextAttemptAtMs = now + 60000;  // try again in ~60s
+    if (Serial) Serial.println("AP fallback: retry failed, next attempt in 60s");
+  }
+}
+
 // Called every loop() (throttled internally). When the STA link drops and
 // re-associates, the mDNS responder and the realtime UDP socket bound to the
 // old association are dead — so lightweaver.local stops resolving even though
 // the card is back online. Detect the (re)connect and refresh IP, re-announce
-// mDNS, and rebind realtime. No effect in AP mode.
+// mDNS, and rebind realtime. In AP fallback mode, periodically retry the
+// saved home network instead.
 void maintainConnectivity() {
   if (!runtimeConfigPtr) return;
   RuntimeConfig& cfg = *runtimeConfigPtr;
-  if (cfg.activeTransport != WIFI_TRANSPORT_STATION) return;
+  if (cfg.activeTransport != WIFI_TRANSPORT_STATION) {
+    if (cfg.activeTransport == WIFI_TRANSPORT_AP) {
+      maintainApFallbackRejoin(cfg, millis());
+    }
+    return;
+  }
   static uint32_t lastCheck = 0;
   static bool wasConnected = true;
   uint32_t now = millis();
@@ -1160,6 +1279,26 @@ void startApMode(RuntimeConfig& config) {
     if (Serial) Serial.println("Captive DNS up");
   }
 }
+}
+
+// The control endpoints are unauthenticated, so never echo "*": with the old
+// wildcard (plus Allow-Private-Network) any public website the homeowner
+// visited could pass Chrome's private-network preflight and command the card,
+// including credential wipe. Mirrors the postMessage bridge allowlist
+// (LW_STUDIO_ORIGINS + localhost) plus the studio preview deployment. Native
+// apps and curl send no Origin header and are unaffected; the card's own
+// pages are same-origin and need no CORS at all.
+// Global (declared in LightweaverWeb.h): the WLED-compat JSON API shares it.
+bool corsOriginAllowed(const String& origin) {
+  if (!origin.length()) return false;
+  if (origin == "http://localhost" || origin.startsWith("http://localhost:")) return true;
+  if (origin == "https://localhost" || origin.startsWith("https://localhost:")) return true;
+  if (origin.startsWith("http://127.0.0.1")) return true;
+  if (origin == "https://led.mandalacodes.com") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".mandalacodes.com")) return true;
+  if (origin == "https://lightweaver-edw.pages.dev") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".lightweaver-edw.pages.dev")) return true;
+  return false;
 }
 
 void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& totalPixels, uint8_t& currentLookIndex) {
@@ -1214,6 +1353,11 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/connecttest.txt", HTTP_GET, handleCaptiveProbe);
   server.on("/redirect", HTTP_GET, handleCaptiveProbe);
   server.onNotFound(handleNotFound);
+
+  // WebServer only exposes request headers registered here; sendCors() needs
+  // Origin to echo the allowlisted caller instead of a wildcard.
+  static const char* kCollectedHeaders[] = {"Origin"};
+  server.collectHeaders(kCollectedHeaders, 1);
 
   server.begin();
   if (config.activeTransport == WIFI_TRANSPORT_AP) {
