@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 #
 # GO LIVE — publish the Lightweaver Studio (and the current firmware binary it
-# flashes) to led.mandalacodes.com.
+# flashes) to the `studio` PREVIEW branch of the lightweaver Pages project.
 #
-# Run this ON YOUR DESKTOP, once PR #4 is merged to main. It is the only manual
-# step left: CI already rebuilt the firmware binary from current source, so this
-# just builds and deploys the website (which serves that binary).
+# DEPLOY OWNERSHIP (decided 2026-06-11, see docs/led-mandalacodes-setup.md):
+# production at led.mandalacodes.com is the mandalacodes repo's bundle (landing
+# at /, Studio at /design/). This script deploys this repo's Studio dist to the
+# preview branch (https://studio.lightweaver-edw.pages.dev) so it can NEVER
+# clobber the customer landing page. To ship production, rebuild and deploy the
+# mandalacodes bundle per docs/led-mandalacodes-setup.md.
+#
+# Run this ON YOUR DESKTOP. CI already rebuilt the firmware binary from current
+# source, so this just builds and deploys the preview site (which serves that
+# binary for verification).
 #
 # PREREQUISITES (one-time on the desktop):
 #   - Node.js 20+ and npm
@@ -37,7 +44,7 @@ node scripts/ensure-rollup-native.mjs
 echo "==> 3/4  Build the static site (also runs the launch gate's build)"
 npm run build
 
-echo "==> 4/4  Deploy to Cloudflare Pages (led.mandalacodes.com)"
+echo "==> 4/4  Deploy to Cloudflare Pages (studio preview branch)"
 if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
   if ! npx --yes wrangler whoami >/dev/null 2>&1; then
     echo
@@ -47,14 +54,18 @@ if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
     exit 1
   fi
 fi
-npx --yes wrangler pages deploy dist --project-name lightweaver
+npx --yes wrangler pages deploy dist --project-name lightweaver --branch studio
 
 echo
 echo "================================================================"
-echo "LIVE. Verify in a browser (hard-refresh):"
-echo "  https://led.mandalacodes.com"
-echo "  https://led.mandalacodes.com/firmware/lightweaver-controller-esp32s3-factory.bin"
+echo "PREVIEW DEPLOYED. Verify in a browser (hard-refresh):"
+echo "  https://studio.lightweaver-edw.pages.dev"
+echo "  https://studio.lightweaver-edw.pages.dev/firmware/lightweaver-controller-esp32s3-factory.bin"
+echo
+echo "PRODUCTION (led.mandalacodes.com = landing + /design) deploys from the"
+echo "mandalacodes repo — see docs/led-mandalacodes-setup.md. Redeploy it after"
+echo "Studio changes so /design and the served firmware binary pick them up."
 echo
 echo "Then have the worker flash, following:  docs/worker-flash-runbook.md"
-echo "(Deploy first, THEN flash — otherwise the card just gets old firmware.)"
+echo "(Deploy production first, THEN flash — otherwise the card gets old firmware.)"
 echo "================================================================"

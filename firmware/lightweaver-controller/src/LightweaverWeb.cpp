@@ -34,11 +34,34 @@ String sanitizeHostname(const String& raw) {
   return out;
 }
 
+// The control endpoints are unauthenticated, so never echo "*": with the old
+// wildcard (plus Allow-Private-Network) any public website the homeowner
+// visited could pass Chrome's private-network preflight and command the card,
+// including credential wipe. Mirrors the postMessage bridge allowlist
+// (LW_STUDIO_ORIGINS + localhost) plus the studio preview deployment. Native
+// apps and curl send no Origin header and are unaffected; the card's own
+// pages are same-origin and need no CORS at all.
+bool corsOriginAllowed(const String& origin) {
+  if (!origin.length()) return false;
+  if (origin == "http://localhost" || origin.startsWith("http://localhost:")) return true;
+  if (origin == "https://localhost" || origin.startsWith("https://localhost:")) return true;
+  if (origin.startsWith("http://127.0.0.1")) return true;
+  if (origin == "https://led.mandalacodes.com") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".mandalacodes.com")) return true;
+  if (origin == "https://lightweaver-edw.pages.dev") return true;
+  if (origin.startsWith("https://") && origin.endsWith(".lightweaver-edw.pages.dev")) return true;
+  return false;
+}
+
 void sendCors() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  server.sendHeader("Access-Control-Allow-Private-Network", "true");
+  String origin = server.header("Origin");
+  if (corsOriginAllowed(origin)) {
+    server.sendHeader("Access-Control-Allow-Origin", origin);
+    server.sendHeader("Vary", "Origin");
+    server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+    server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    server.sendHeader("Access-Control-Allow-Private-Network", "true");
+  }
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
 }
 
@@ -132,8 +155,10 @@ String studioOpenScript() {
 String studioBridgeScript() {
   String script;
   script.reserve(2400);
-  script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com'];"
-              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o);"
+  // Keep in sync with corsOriginAllowed(): production Studio, the studio
+  // preview deployment (Pages branch subdomains), and local dev.
+  script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
+              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge'},msg),ev.origin)}catch(_){}};"
               "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',href:location.href,host:location.host},'*')}catch(_){}};"
               "window.addEventListener('message',async ev=>{"
@@ -1323,6 +1348,11 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/connecttest.txt", HTTP_GET, handleCaptiveProbe);
   server.on("/redirect", HTTP_GET, handleCaptiveProbe);
   server.onNotFound(handleNotFound);
+
+  // WebServer only exposes request headers registered here; sendCors() needs
+  // Origin to echo the allowlisted caller instead of a wildcard.
+  static const char* kCollectedHeaders[] = {"Origin"};
+  server.collectHeaders(kCollectedHeaders, 1);
 
   server.begin();
   if (config.activeTransport == WIFI_TRANSPORT_AP) {

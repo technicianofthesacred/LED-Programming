@@ -1,6 +1,16 @@
 name: Deploy site
 
-# Publishes the Studio to Cloudflare Pages (led.mandalacodes.com).
+# Publishes the Studio bundle to the `studio` PREVIEW branch of the
+# `lightweaver` Cloudflare Pages project.
+#
+# Deploy ownership (decided 2026-06-11, see docs/led-mandalacodes-setup.md):
+# PRODUCTION at led.mandalacodes.com is the mandalacodes repo's bundle
+# (customer landing at /, Studio embedded at /design/), deployed from the
+# mandalacodes checkout. This workflow must therefore never deploy to the
+# production branch — deploy:pages targets `--branch studio`, which serves at
+# https://studio.lightweaver-edw.pages.dev for verification. To ship to
+# production, redeploy the mandalacodes bundle (it embeds this repo's Studio
+# dist and the factory firmware binary).
 #
 # Runs automatically on every push to main that touches the deployable surface
 # (the lightweaver/ app, including the firmware binary it serves), and manually

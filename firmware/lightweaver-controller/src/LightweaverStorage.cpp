@@ -459,6 +459,16 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     delete parsed;
     return false;
   }
+  // ESP-IDF NVS caps a single string entry at ~4000 bytes. A large playlist
+  // pushed from the Studio would otherwise fail deep in putString with an
+  // opaque "nvs write failed" — reject it up front with an actionable error.
+  constexpr size_t NVS_STRING_LIMIT = 3968;
+  if (json.length() > NVS_STRING_LIMIT) {
+    delete parsed;
+    message = String("config too large for card storage (") + json.length() +
+              " bytes, max " + NVS_STRING_LIMIT + ") — remove some looks or zones";
+    return false;
+  }
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) {
     delete parsed;

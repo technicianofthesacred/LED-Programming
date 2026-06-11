@@ -702,19 +702,6 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   if (zone.rangeCount == 0) return false;
   const LookConfig* look = findLookById(zone.patternId);
 
-  // First range only for now — multi-range support is a follow-up.
-  const PixelRange& range = zone.ranges[0];
-  if (range.count == 0) return false;
-  if (range.start + range.count > totalPixels) return false;
-
-  CRGB* zoneLeds = leds + range.start;
-  uint16_t zonePixels = range.count;
-
-  if (zone.blackout) {
-    fill_solid(zoneLeds, zonePixels, CRGB::Black);
-    return true;
-  }
-
   PatternModifiers mods;
   mods.speed = zone.speed;
   mods.hueShift = zone.hueShift;
@@ -725,26 +712,48 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   mods.driftHueMin = zone.driftHueMin;
   mods.driftHueMax = zone.driftHueMax;
 
-  bool rendered = false;
-  if (!look) {
-    rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
-    if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
-  } else if (look->mode == "procedural") {
-    rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
-  } else if (look->mode == "preset") {
-    rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
-  }
-  if (!rendered) return false;
+  // Render every range the zone declares. Storage parses up to
+  // LW_MAX_RANGES_PER_ZONE ranges and /api/zones reports them all, so split
+  // zones must not silently leave their later ranges dark. Each range runs
+  // the pattern from its own pixel 0 — visually each segment of a split zone
+  // breathes/waves in step rather than continuing one long strip.
+  bool any = false;
+  for (uint8_t r = 0; r < zone.rangeCount; r++) {
+    const PixelRange& range = zone.ranges[r];
+    if (range.count == 0) continue;
+    if (range.start + range.count > totalPixels) continue;
 
-  // Per-zone brightness scaling. The global FastLED.setBrightness() still
-  // applies on top of this — it represents the legacy "master" knob plus
-  // the brightnessLimit safety ceiling — so per-zone brightness multiplies
-  // into the final value.
-  uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
-  if (scale < 255) {
-    for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
+    CRGB* zoneLeds = leds + range.start;
+    uint16_t zonePixels = range.count;
+
+    if (zone.blackout) {
+      fill_solid(zoneLeds, zonePixels, CRGB::Black);
+      any = true;
+      continue;
+    }
+
+    bool rendered = false;
+    if (!look) {
+      rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
+      if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
+    } else if (look->mode == "procedural") {
+      rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
+    } else if (look->mode == "preset") {
+      rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
+    }
+    if (!rendered) continue;
+
+    // Per-zone brightness scaling. The global FastLED.setBrightness() still
+    // applies on top of this — it represents the legacy "master" knob plus
+    // the brightnessLimit safety ceiling — so per-zone brightness multiplies
+    // into the final value.
+    uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
+    if (scale < 255) {
+      for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
+    }
+    any = true;
   }
-  return true;
+  return any;
 }
 
 bool renderCurrentLook(bool force) {
