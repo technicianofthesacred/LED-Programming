@@ -2,7 +2,26 @@
 
 static inline uint32_t scaleTime(uint32_t now, float speed) {
   if (speed <= 0.0f) return now;
-  return static_cast<uint32_t>(static_cast<float>(now) * speed);
+  // Fixed-point Q10 scaling. The previous float path (`float(now) * speed`)
+  // degraded with uptime: a 24-bit mantissa quantizes animation time into
+  // visible steps after days of millis(), and float->uint32 conversion
+  // overflows (UB) at speed > 1 once now * speed exceeds 2^32. The 64-bit
+  // integer multiply is exact and truncating to 32 bits wraps modularly,
+  // which is safe because callers only use t in modulo / phase arithmetic.
+  uint32_t speedQ10 = static_cast<uint32_t>(speed * 1024.0f + 0.5f);
+  if (speedQ10 == 0) speedQ10 = 1;
+  return static_cast<uint32_t>((static_cast<uint64_t>(now) * speedQ10) >> 10);
+}
+
+// Breathe-style patterns derive a beatsin8 BPM from the speed modifier.
+// uint8_t truncation makes anything below 1 BPM freeze the animation (the UI
+// speed floor is 0.05x, so e.g. 8 * 0.05 = 0.4 truncated to 0). Clamp to at
+// least 1 BPM so slow speeds stay visibly alive.
+static inline uint8_t speedBpm(uint8_t baseBpm, float speed) {
+  float bpm = float(baseBpm) * speed;
+  if (bpm < 1.0f) return 1;
+  if (bpm > 255.0f) return 255;
+  return static_cast<uint8_t>(bpm);
 }
 
 static inline uint8_t shiftHue(uint8_t base, int16_t shift) {
@@ -98,7 +117,7 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
     }
     uint8_t value = 220;
     if (mods.customBreathe) {
-      uint8_t b = beatsin8(uint8_t(8 * mods.speed > 0 ? 8 * mods.speed : 8), 60, 230);
+      uint8_t b = beatsin8(speedBpm(8, mods.speed), 60, 230);
       value = b;
     }
     CHSV color(hue, mods.customSaturation, value);
@@ -144,7 +163,7 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
       if (spark > 242) leds[i] = CRGB::White;
       else leds[i] = CHSV(shiftHue(160, mods.hueShift), 150, 18 + inoise8(i * 12, t / 30) / 10);
     } else if (preset == "breathe") {
-      uint8_t level = beatsin8(uint8_t(12 * mods.speed > 0 ? 12 * mods.speed : 12), 45, 190);
+      uint8_t level = beatsin8(speedBpm(12, mods.speed), 45, 190);
       leds[i] = CHSV(shiftHue(32, mods.hueShift), 90, level);
     } else if (preset == "meteor") {
       uint16_t head = (t / 18) % count;
