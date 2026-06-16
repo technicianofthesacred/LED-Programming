@@ -10,6 +10,83 @@ catalogs, or other scaling infrastructure for Lightweaver. The rejections are
 
 ---
 
+## 2026-06-16 — Security hardening pass; three deliberate non-fixes
+
+**Topic:** End-to-end security audit of the Lightweaver codebase (firmware,
+Studio, Pi/Node server, mapper) followed by a full remediation pass in PR #8.
+Fifteen findings, all addressed except three that require owner decisions or
+are architectural rewrites.
+
+**What shipped (commit 441650b):**
+- C1: WiFi password stripped from `/api/firmware-info` (was readable by any
+  device on the open AP in fallback mode)
+- H1: `maxMilliamps` clamped at `LW_MAX_MILLIAMPS=20000` before FastLED
+- H2: CORS allowlist tightened to exact origins; dropped the `*.mandalacodes.com`
+  and `*.pages.dev` suffix wildcards
+- M1: WebSocket (:81) handshake Origin validated
+- M4: NVS size gate moved before parse/alloc
+- C2: `new Function()` pattern eval hardened — globals shadowed as `undefined`
+  params + compile-time denylist; covers AI drafts
+- H3: CSP + X-Frame-Options added to `public/_headers`
+- M3: `cardHost` URL param validated; bridge requires verified-local origin
+  before privileged sends
+- M5: `npm ci` in CI/go-live
+- M6: dead unsanitized-SVG `dangerouslySetInnerHTML` path deleted
+- H4 (Pi): `isAllowedWledHost` guards every `/api/wled/*` handler; WS Origin
+  check; `wsPort` clamped to {80, 81}; RFC1918-only subnet scan
+- M2 (Pi): rate-limit map bounded; startup warning when AI endpoint is
+  unauthenticated beyond loopback
+- Low: mapper innerHTML escaping; mapper pattern compiler global-shadowing
+
+**Three deliberate non-fixes (reasoned, not missed):**
+
+**1. Pattern execution is NOT sandboxed in a Web Worker (C2).** The
+`new Function()` path keeps running synchronously in the page. The hardening
+(global-shadowing + denylist + CSP `connect-src 'self'`) blocks the realistic
+exfil vectors (token theft, outbound fetch). A true Worker sandbox was
+evaluated and rejected because the per-pixel `evalPixel` API is synchronous —
+moving to a Worker requires a full async rewrite of the preview engine and a
+messaging protocol for frame-by-frame results. That's a multi-day architectural
+change. Future Claude: do not re-propose the Worker sandbox without first
+reworking the preview contract. The trigger for revisiting is either (a) a
+report of actual exploit in the wild or (b) a decision to rewrite the pattern
+preview pipeline anyway for another reason.
+
+**2. AI endpoint auth remains default-open (M2).** `hasValidAuthToken` returns
+`true` when `AI_PATTERN_AUTH_TOKEN` is unset. The fix adds a startup warning
+but does not flip the default. Forcing it to default-required would break the
+documented local single-user flow (Adrian runs the Pi server locally; there's
+no deploy-time secret management) and would break all existing tests. The
+correct unlock is: set the env var when/if the Pi server is ever exposed beyond
+localhost (e.g., a public-facing Pi). Future Claude: don't re-flip the
+default without knowing how the server is deployed.
+
+**3. Firmware postMessage bridge still trusts `*.lightweaver-edw.pages.dev`
+(H2 follow-up).** The HTTP CORS allowlist (H2) was tightened to exact origins,
+but `lwBridgeAllowed` in `LightweaverWeb.cpp` — the card-side postMessage
+receiver — still uses a regex matching any `lightweaver-edw.pages.dev`
+subdomain. This was deliberately left to stay surgical (separate trust surface,
+different code path, its own test coverage). It means any Pages preview branch
+can send postMessage commands to a connected card. Low real-world risk today
+because the attacker would need to (a) push a Pages branch on the
+`lightweaver-edw` project and (b) socially engineer the owner to open it while
+on the card's WiFi. Future Claude: the fix is to replace the subdomain regex in
+`lwBridgeAllowed` with the same exact-origin list used by `corsOriginAllowed`.
+
+**Open tensions:**
+- The "trust model is whoever is on the WiFi" is a deliberate product decision
+  for a gallery art piece, not an oversight. Authentication on the firmware HTTP
+  API would require session tokens or a PIN, which breaks the captive-portal
+  zero-friction UX. That tradeoff stands.
+- The audit could not probe live deployed endpoints (`led.mandalacodes.com` or
+  real cards) — all findings are from source. Production header values (H3 CSP)
+  and C1/H2 card behavior should be confirmed on hardware.
+
+**Full report:** `docs/security-audit-2026-06-16.md`
+**Follow-up TODOs:** "Security hardening" block in `TODO.md` (under ## Soon)
+
+---
+
 ## 2026-05-28 — Defer accounts, Stripe, and cloud catalog while sales are one-on-one
 
 **Topic:** Mid-session, after shipping zones + drift palette + push-to-card + a
