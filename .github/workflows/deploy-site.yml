@@ -79,7 +79,9 @@ jobs:
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         run: |
-          npm install
+          # `npm ci` installs exactly what lightweaver/package-lock.json pins,
+          # for reproducible builds (vs `npm install`, which can drift the tree).
+          npm ci
           # Workaround for npm/cli#4828: npm may skip the platform-specific
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs

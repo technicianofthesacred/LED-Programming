@@ -58,6 +58,12 @@ uint8_t clampByte(int value, uint8_t fallback) {
   return static_cast<uint8_t>(value);
 }
 
+uint32_t clampMilliamps(long value) {
+  if (value < 0) return 0;
+  if (value > static_cast<long>(LW_MAX_MILLIAMPS)) return LW_MAX_MILLIAMPS;
+  return static_cast<uint32_t>(value);
+}
+
 void resetOutput(OutputConfig& output) {
   output.id = "";
   output.name = "";
@@ -171,7 +177,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   JsonObject led = doc["led"].as<JsonObject>();
   config.ledColorOrder = String(led["colorOrder"] | "RGB");
   config.brightnessLimit = clampUnit(led["brightnessLimit"] | 0.65f);
-  config.maxMilliamps = led["maxMilliamps"] | 0;
+  config.maxMilliamps = clampMilliamps(led["maxMilliamps"] | 0L);
 
   JsonObject controlsJson = doc["controls"].as<JsonObject>();
   JsonObject encoder = controlsJson["encoder"].as<JsonObject>();
@@ -450,6 +456,16 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 }
 
 bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& message) {
+  // ESP-IDF NVS caps a single string entry at ~4000 bytes. A large playlist
+  // pushed from the Studio would otherwise fail deep in putString with an
+  // opaque "nvs write failed" — reject it up front, before any deserialize or
+  // heap allocation, with an actionable error.
+  constexpr size_t NVS_STRING_LIMIT = 3968;
+  if (json.length() > NVS_STRING_LIMIT) {
+    message = String("config too large for card storage (") + json.length() +
+              " bytes, max " + NVS_STRING_LIMIT + ") — remove some looks or zones";
+    return false;
+  }
   RuntimeConfig* parsed = new (std::nothrow) RuntimeConfig();
   if (!parsed) {
     message = "runtime config allocation failed";
@@ -457,16 +473,6 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   }
   if (!loadJsonString(json, *parsed, SOURCE_NVS, message)) {
     delete parsed;
-    return false;
-  }
-  // ESP-IDF NVS caps a single string entry at ~4000 bytes. A large playlist
-  // pushed from the Studio would otherwise fail deep in putString with an
-  // opaque "nvs write failed" — reject it up front with an actionable error.
-  constexpr size_t NVS_STRING_LIMIT = 3968;
-  if (json.length() > NVS_STRING_LIMIT) {
-    delete parsed;
-    message = String("config too large for card storage (") + json.length() +
-              " bytes, max " + NVS_STRING_LIMIT + ") — remove some looks or zones";
     return false;
   }
   Preferences prefs;

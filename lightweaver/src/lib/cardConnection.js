@@ -57,6 +57,34 @@ export function cardHostToUrl(rawHost = '') {
   return `http://${normalizeCardHost(rawHost)}`;
 }
 
+// A card lives on the local network: an RFC1918 / loopback IPv4 address, or a
+// `.local` mDNS name. We refuse to treat anything else (e.g. a public hostname
+// supplied via the `cardHost` URL param) as a card origin, so the bridge can
+// never be steered into sending privileged control/config/reboot messages to an
+// attacker-controlled origin.
+function isPrivateIpv4(bare = '') {
+  const parts = bare.split('.');
+  if (parts.length !== 4 || !parts.every(p => /^\d{1,3}$/.test(p) && Number(p) <= 255)) {
+    return false;
+  }
+  const [a, b] = parts.map(Number);
+  if (a === 10) return true;                       // 10.0.0.0/8
+  if (a === 127) return true;                      // loopback
+  if (a === 192 && b === 168) return true;         // 192.168.0.0/16
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 169 && b === 254) return true;         // link-local 169.254.0.0/16
+  return false;
+}
+
+export function isLocalCardHost(rawHost = '') {
+  const host = stripProtocolAndPath(rawHost);
+  if (!host) return false;
+  const bare = host.replace(/:\d+$/, '');
+  if (bare === 'localhost') return true;
+  if (isIpv4(bare)) return isPrivateIpv4(bare);
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.local$/i.test(bare);
+}
+
 export function readStoredCardHost() {
   if (typeof window === 'undefined') return DEFAULT_CARD_HOST;
   try {
