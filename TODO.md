@@ -11,6 +11,19 @@ Living list of outstanding work on the LED installation controller. Project is b
 - [ ] **Redeploy the mandalacodes production bundle** — rebuild and deploy the landing+/design bundle so production picks up the new Studio dist and firmware binary _(you · quick)_
   Deploy ownership was settled 2026-06-11: this repo deploys only to the `studio` Pages preview branch; production at led.mandalacodes.com ships from the mandalacodes repo. Done when led.mandalacodes.com/design and /firmware/…factory.bin serve the new builds. → Plan: [docs/led-mandalacodes-setup.md](docs/led-mandalacodes-setup.md)
 
+### Security hardening (2026-06-16 audit)
+
+The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/mapper H4/M2) landed on `claude/sharp-allen-7atzz2` and pass all gates. These are the remaining owner-decision and verification items. → Full report: [docs/security-audit-2026-06-16.md](docs/security-audit-2026-06-16.md)
+
+- [ ] **Bench-verify the security fixes on hardware** — confirm C1 (no WiFi password in `/api/firmware-info`), H1 (`maxMilliamps` clamp), H2 (exact-origin CORS), and M1 (WS Origin check) on a real card _(you · moderate)_
+  These firmware changes were written and reviewed without hardware. Done when `/api/firmware-info` shows `wifi.configured` and no password, a full-white pattern can't exceed the clamped current draw, and Studio/mapper push still work from localhost and led.mandalacodes.com while a foreign Origin is rejected. → Findings: [docs/security-audit-2026-06-16.md](docs/security-audit-2026-06-16.md)
+- [ ] **Decide AI-endpoint auth posture** — choose whether `AI_PATTERN_AUTH_TOKEN` should be required by default if the Pi/AI server is ever exposed beyond localhost _(you · quick)_
+  The audit kept the endpoint default-open to preserve the documented local single-user flow (only the memory leak + an exposure warning were fixed). Done when the token policy is decided and, if required, set in the deploy environment. → Findings: [docs/security-audit-2026-06-16.md](docs/security-audit-2026-06-16.md)
+- [ ] **Tighten the postMessage bridge preview-subdomain trust** — drop or pin the `*.lightweaver-edw.pages.dev` wildcard in the firmware `lwBridgeAllowed` check _(agent · quick)_
+  This is a separate trust surface from the H2 HTTP-CORS fix and was left untouched to stay surgical; any pushed Pages preview currently matches. Done when the bridge allowlist trusts only exact, known origins. → Findings: [docs/security-audit-2026-06-16.md](docs/security-audit-2026-06-16.md)
+- [ ] **Sandbox pattern execution properly** — move `new Function()` pattern eval into a Web Worker / wasm interpreter for true isolation _(agent · deep)_
+  The audit's shadowing + denylist + CSP hardening (C2) blocks the realistic exfil vectors but is not a real sandbox; a Worker would require reworking the synchronous per-pixel preview contract. Done when pattern code runs with no DOM/`fetch`/`window` reach and the preview still renders. → Findings: [docs/security-audit-2026-06-16.md](docs/security-audit-2026-06-16.md)
+
 ### Hardware and install setup (Adrian, at the artwork)
 
 - [ ] **WLED hardware config** — set the final LED count, data pin, LED type, color order, and brightness limit for the real artwork _(you · moderate)_
