@@ -34,9 +34,18 @@ function noise(x,y){y=y||0;const xi=Math.floor(x),yi=Math.floor(y),xf=x-xi,yf=y-
 function randomF(seed){const n=Math.sin(seed*127.1)*43758.5453;return n-Math.floor(n);}
 `;
 
+// Names shadowed to `undefined` inside compiled pattern bodies so pattern code
+// can't reach network/storage/eval globals. Excludes reserved words (import) and
+// strict-mode-restricted names (eval, arguments) that are illegal as params.
+const SHADOWED_GLOBALS = [
+  'window', 'document', 'globalThis', 'self', 'fetch', 'XMLHttpRequest',
+  'WebSocket', 'localStorage', 'sessionStorage', 'indexedDB', 'Function',
+  'setTimeout', 'setInterval', 'requestAnimationFrame', 'process',
+];
+
 export function compile(code) {
   try {
-    const fn = new Function('index','x','y','t','time','pixelCount', BUILTINS + '\n' + code);
+    const fn = new Function('index','x','y','t','time','pixelCount', ...SHADOWED_GLOBALS, BUILTINS + '\n' + code);
     return { fn, error: null };
   } catch (e) {
     return { fn: null, error: e.message };
@@ -55,6 +64,10 @@ function _c255(v) { return Math.round(v < 0 ? 0 : v > 255 ? 255 : v); }
 
 // ── Pixelblaze adapter ────────────────────────────────────────────────────────
 
+// Strict-mode-safe subset of SHADOWED_GLOBALS (the Pixelblaze factory body is
+// 'use strict', where eval/Function/arguments are illegal as parameter names).
+const STRICT_SHADOWED_GLOBALS = SHADOWED_GLOBALS.filter(name => name !== 'Function');
+
 function compilePixelblaze(code) {
   // Strip 'export' keywords (we don't need ES module syntax in Function())
   const normalized = code
@@ -62,7 +75,7 @@ function compilePixelblaze(code) {
     .replace(/\bexport\s+function\b/g, 'function');
 
   // Build a factory function that creates an isolated module with its own state
-  const factory = new Function(`
+  const factory = new Function(...STRICT_SHADOWED_GLOBALS, `
     'use strict';
     // Color capture — Pixelblaze patterns call rgb()/hsv() as side effects
     var __R=0,__G=0,__B=0;

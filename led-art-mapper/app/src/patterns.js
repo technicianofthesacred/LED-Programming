@@ -183,11 +183,21 @@ function samplePalette(t) {
  *                        palette, beat, beatSin, params + builtins
  * @returns {{ fn: Function|null, error: string|null }}
  */
+// Names shadowed to `undefined` inside compiled pattern bodies. Passing these as
+// trailing parameters (with no matching argument) blocks pattern code from
+// reaching network/storage/eval globals even though this is a local design tool.
+const SHADOWED_GLOBALS = [
+  'window', 'document', 'globalThis', 'self', 'fetch', 'XMLHttpRequest',
+  'WebSocket', 'localStorage', 'sessionStorage', 'indexedDB', 'eval', 'Function',
+  'setTimeout', 'setInterval', 'requestAnimationFrame', 'process',
+];
+
 export function compile(code) {
   try {
     const fn = new Function(
       'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
       'stripId', 'stripProgress',
+      ...SHADOWED_GLOBALS,
       BUILTINS + '\n' + code,
     );
     return { fn, error: null };

@@ -15,6 +15,13 @@ constexpr uint8_t LW_MAX_ZONES = 10;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
 constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
 
+// Upper clamp for the FastLED power limiter ceiling (5V rail, milliamps). A
+// single ESP32-S3 LED card runs off a modest PSU; 20A / 100W is a generous
+// ceiling for one card. Clamping a config-supplied value here stops a bad
+// (or hostile) maxMilliamps from disabling the brownout-protection limiter
+// or implying a draw the wiring can't carry.
+constexpr uint32_t LW_MAX_MILLIAMPS = 20000;
+
 // One Art-Net universe → contiguous pixel range mapping. A single Madrix
 // patch typically streams several universes back-to-back; the card decodes
 // each into the global leds[] buffer at the configured offset.

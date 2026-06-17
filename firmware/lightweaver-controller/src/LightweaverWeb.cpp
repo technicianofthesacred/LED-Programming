@@ -1291,13 +1291,16 @@ void startApMode(RuntimeConfig& config) {
 // Global (declared in LightweaverWeb.h): the WLED-compat JSON API shares it.
 bool corsOriginAllowed(const String& origin) {
   if (!origin.length()) return false;
+  // EXACT origins only. Suffix matching (".mandalacodes.com",
+  // ".lightweaver-edw.pages.dev") previously trusted any subdomain — including
+  // attacker-controlled Pages preview deployments — to drive the
+  // unauthenticated control endpoints. The card legitimately needs only the
+  // production Studio and local dev origins.
+  if (origin == "https://led.mandalacodes.com") return true;
+  if (origin == "https://lightweaver-edw.pages.dev") return true;
   if (origin == "http://localhost" || origin.startsWith("http://localhost:")) return true;
   if (origin == "https://localhost" || origin.startsWith("https://localhost:")) return true;
-  if (origin.startsWith("http://127.0.0.1")) return true;
-  if (origin == "https://led.mandalacodes.com") return true;
-  if (origin.startsWith("https://") && origin.endsWith(".mandalacodes.com")) return true;
-  if (origin == "https://lightweaver-edw.pages.dev") return true;
-  if (origin.startsWith("https://") && origin.endsWith(".lightweaver-edw.pages.dev")) return true;
+  if (origin == "http://127.0.0.1" || origin.startsWith("http://127.0.0.1:")) return true;
   return false;
 }
 

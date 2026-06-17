@@ -1169,6 +1169,9 @@ String runtimeFirmwareInfo() {
   doc["wifi"]["hostname"] = runtimeConfig.activeHostname;
   doc["wifi"]["transport"] =
       runtimeConfig.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
+  // Never serialize the WiFi password into this (unauthenticated) response —
+  // only a boolean hint that credentials exist.
+  doc["wifi"]["configured"] = runtimeConfig.wifi.ssid.length() > 0;
   JsonArray outputArray = doc["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = outputArray.add<JsonObject>();

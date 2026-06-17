@@ -35,10 +35,12 @@ git pull --ff-only origin main
 
 echo "==> 2/4  Install web dependencies"
 cd lightweaver
-# NOTE: `npm install` does NOT reliably install platform-specific optional deps
+# `npm ci` installs exactly what lightweaver/package-lock.json pins, for a
+# reproducible deploy (vs `npm install`, which can drift the dependency tree).
+# NOTE: npm still does NOT reliably install platform-specific optional deps
 # (npm/cli#4828). The ensure-rollup-native step below detects and recovers from
 # the missing @rollup/rollup-<platform>-<arch>[-gnu] package automatically.
-npm install
+npm ci
 node scripts/ensure-rollup-native.mjs
 
 echo "==> 3/4  Build the static site (also runs the launch gate's build)"
