@@ -49,6 +49,16 @@ void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
   }
 }
 
+void wledRealtimeRebind() {
+  // Drop any stale socket and re-bind. Safe to call repeatedly.
+  g_udp.stop();
+  g_started = g_udp.begin(WLED_REALTIME_PORT);
+  if (Serial) {
+    Serial.println(g_started ? "WLED realtime: rebound after reconnect"
+                             : "WLED realtime: rebind failed");
+  }
+}
+
 void handleWledRealtime() {
   if (!g_started || g_leds == nullptr || g_totalPixels == 0) return;
 
@@ -127,6 +137,9 @@ void handleWledRealtime() {
     // here keeps the streaming preview perceptually matched to where the
     // dimmer knob is set.
     uint8_t brightScale = uint8_t(constrain(int(manualBrightness * 255.0f), 0, 255));
+
+    // Skip this frame if a different live source (e.g. Art-Net) owns the canvas.
+    if (!frameSourceClaim(FRAME_WLED_REALTIME)) continue;
 
     const uint8_t* p = buf + 2;
     for (int i = 0; i < pixels; i++) {

@@ -3,18 +3,40 @@ import { DEFAULT_WLED_PUSH_FPS, makeWledFrameMessage, makeWledWsUrl, requestWled
 
 const STORAGE_KEY = 'lw_wled_ip';
 const PUSH_FPS_KEY = 'lw_wled_push_fps';
-const RECONNECT_DELAY   = 3000;
+const RECONNECT_DELAY    = 3000;  // base for exponential backoff
+const RECONNECT_CAP_MS   = 15000; // maximum backoff ceiling
 const CONNECT_TIMEOUT_MS = 5000;
 
+const HTTPS_BLOCKED_MESSAGE =
+  "Can't reach the card directly from the secure site — open your card's page to link Studio, or use the local dev server.";
+
+// True when the page is served over https and the WLED target can't be reached
+// over ws:// from it. Browsers block ws:// (mixed content) from an https origin
+// for every host except secure-context locals (localhost / loopback), and the
+// failure is silent — the WebSocket constructor throws or the socket errors
+// with no detail. Surface a worded explanation instead of a wordless red dot.
+function httpsMixedContentBlocked(addr, locationObj = globalThis.location) {
+  if (locationObj?.protocol !== 'https:') return false;
+  const host = String(addr || '').trim().toLowerCase().replace(/^wss?:\/\//, '').replace(/[:/].*$/, '');
+  if (!host) return false;
+  // localhost / loopback are treated as secure contexts, so ws:// to them works.
+  const isSecureLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return !isSecureLocal;
+}
+
 export function useWled() {
-  const [ip, setIpState]     = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
+  const [ip, setIpState]     = useState(() => {
+    try { return localStorage.getItem(STORAGE_KEY) ?? ''; } catch { return ''; }
+  });
   const [connected, setConnected] = useState(false);
   const [transport, setTransport] = useState('offline');
+  const [error, setError]         = useState('');
 
-  const wsRef          = useRef(null);
-  const reconnTimerRef = useRef(null);
-  const lastPushRef    = useRef(0);
+  const wsRef               = useRef(null);
+  const reconnTimerRef      = useRef(null);
+  const lastPushRef         = useRef(0);
   const intentionalCloseRef = useRef(false);
+  const reconnAttemptRef    = useRef(0);
 
   // Persist IP to localStorage whenever it changes
   const setIp = useCallback((value) => {
@@ -32,12 +54,14 @@ export function useWled() {
   const disconnect = useCallback(() => {
     clearReconnect();
     intentionalCloseRef.current = true;
+    reconnAttemptRef.current = 0;
     if (wsRef.current) {
       try { wsRef.current.close(); } catch { /* ignore */ }
       wsRef.current = null;
     }
     setConnected(false);
     setTransport('offline');
+    setError('');
   }, []);
 
   const connect = useCallback((targetIp, mode = defaultWledMode()) => {
@@ -47,6 +71,17 @@ export function useWled() {
 
     clearReconnect();
     intentionalCloseRef.current = false;
+
+    // On an https page, ws:// to a (non-secure) local card is blocked by the
+    // browser as mixed content and fails silently. Surface guidance instead of
+    // spinning forever and showing a wordless red dot.
+    if (httpsMixedContentBlocked(addr)) {
+      setError(HTTPS_BLOCKED_MESSAGE);
+      setConnected(false);
+      setTransport('offline');
+      return;
+    }
+    setError('');
 
     // Close any existing socket first
     if (wsRef.current) {
@@ -74,8 +109,10 @@ export function useWled() {
       clearTimeout(connectTimer);
       opened = true;
       wsRef.current = ws;
+      reconnAttemptRef.current = 0;
       setConnected(true);
       setTransport(mode);
+      setError('');
     };
 
     ws.onerror = () => {
@@ -98,10 +135,16 @@ export function useWled() {
       }
 
       if (wsRef.current === null) {
-        // Auto-reconnect if an IP is set
+        // Auto-reconnect if an IP is set, using jittered exponential backoff
+        // to avoid thundering-herd when multiple tabs reconnect simultaneously.
+        // delay = random in [0, min(cap, base * 2^attempt)]
         const storedIp = localStorage.getItem(STORAGE_KEY) ?? '';
         if (storedIp) {
-          reconnTimerRef.current = setTimeout(() => connect(storedIp), RECONNECT_DELAY);
+          const attempt = reconnAttemptRef.current;
+          reconnAttemptRef.current = attempt + 1;
+          const ceiling = Math.min(RECONNECT_CAP_MS, RECONNECT_DELAY * Math.pow(2, attempt));
+          const delay = Math.random() * ceiling;
+          reconnTimerRef.current = setTimeout(() => connect(storedIp), delay);
         }
       }
     };
@@ -177,7 +220,7 @@ export function useWled() {
   }, []);
 
   return {
-    ip, setIp, connected, transport, connect, disconnect, push,
+    ip, setIp, connected, transport, error, connect, disconnect, push,
     setPreset, setPower, setBrightness, getState, getInfo,
   };
 }

@@ -2,7 +2,7 @@
 #include <FastLED.h>
 
 #ifndef LW_MAX_PIXELS
-#define LW_MAX_PIXELS 300
+#define LW_MAX_PIXELS 600
 #endif
 
 #ifndef LW_ENCODER_A_PIN

@@ -28,5 +28,6 @@ assert.deepEqual(makeUsbLedCalibrationPixels(2), [
   { r: 255, g: 0, b: 0 },
   { r: 0, g: 255, b: 0 },
 ]);
+assert.equal(makeUsbLedCalibrationPixels(395).length, 395);
 
 console.log('usb-led-color-order tests passed');

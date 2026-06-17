@@ -5,6 +5,11 @@ const writes = [];
 const preferred = new LwUsbController({ colorOrder: 'grb' });
 assert.equal(preferred.status().colorOrder, 'GRB');
 
+const firmwareReported = new LwUsbController();
+assert.equal(firmwareReported.status().maxPixels, 600);
+firmwareReported.handleLine('LWUSB CONFIG pixels=60 brightness=40 colorOrder=RGB maxPixels=300');
+assert.equal(firmwareReported.status().maxPixels, 300);
+
 const controller = new LwUsbController({ maxPixels: 300 });
 controller.portPath = '/dev/mock-lightweaver';
 controller.port = {

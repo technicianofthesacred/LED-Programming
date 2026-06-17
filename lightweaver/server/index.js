@@ -27,6 +27,58 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultRootDir = join(__dirname, '..');
 
+// Captive-portal IPs the Lightweaver card / WLED AP serve on.
+const CAPTIVE_PORTAL_IPS = new Set(['192.168.4.1', '4.3.2.1']);
+// Allowed upstream WebSocket ports: stock WLED (:80) and the Lightweaver card (:81).
+const ALLOWED_WLED_WS_PORTS = new Set(['80', '81']);
+
+function ipv4Octets(host) {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!match) return null;
+  const octets = match.slice(1).map(Number);
+  if (octets.some(n => n > 255)) return null;
+  return octets;
+}
+
+/**
+ * SSRF guard for the WLED proxy: only permit hosts that live on the local
+ * gallery LAN. Accepts RFC1918 / loopback IPv4 ranges, the captive-portal IPs,
+ * and *.local mDNS hostnames. Public IPs and cloud metadata addresses
+ * (e.g. 169.254.169.254 — link-local is excluded entirely) are rejected.
+ */
+function isAllowedWledHost(host) {
+  const value = normalizeHost(host);
+  if (!value) return false;
+  if (CAPTIVE_PORTAL_IPS.has(value)) return true;
+
+  const octets = ipv4Octets(value);
+  if (octets) {
+    const [a, b] = octets;
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 127) return true; // 127.0.0.0/8 loopback
+    // 169.254.0.0/16 link-local (incl. cloud metadata 169.254.169.254) excluded.
+    return false;
+  }
+
+  // Hostnames: only mDNS .local names and bare localhost are LAN-local.
+  const lower = value.toLowerCase();
+  if (lower === 'localhost') return true;
+  if (/^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.local$/.test(lower)) return true;
+  return false;
+}
+
+// True only for the RFC1918 private IPv4 /24 subnets we are allowed to sweep.
+function isRfc1918Subnet(subnet) {
+  const octets = ipv4Octets(`${subnet}.0`);
+  if (!octets) return false;
+  const [a, b] = octets;
+  return a === 10
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168);
+}
+
 function makeRuntime({ env = process.env, rootDir = defaultRootDir, usbLedController = null } = {}) {
   const defaultWled = env.WLED_HOST || '';
   const httpTimeoutMs = Number.parseInt(env.WLED_TIMEOUT_MS || '3000', 10);
@@ -164,6 +216,17 @@ function makeRuntime({ env = process.env, rootDir = defaultRootDir, usbLedContro
   };
 }
 
+// In-flight guard for the full-subnet scan: at most one sweep runs at a time.
+// Concurrent scan=1 requests await the same promise and share the result.
+let _activeScanPromise = null;
+
+async function runBoundedScan(tasks, batchSize = 32) {
+  // Process tasks in batches to cap concurrent open sockets.
+  for (let i = 0; i < tasks.length; i += batchSize) {
+    await Promise.all(tasks.slice(i, i + batchSize).map(fn => fn()));
+  }
+}
+
 export function createLightweaverApiMiddleware({
   env = process.env,
   client = null,
@@ -253,7 +316,8 @@ export function createLightweaverApiMiddleware({
     ].filter(Boolean);
 
     const probed = await Promise.all(quickHosts
-      .filter(item => item.host)
+      // Only probe hosts on the local LAN — never an attacker-supplied public host.
+      .filter(item => item.host && isAllowedWledHost(item.host))
       .map(item => runtime.probeWled(item.host).then(device => device ? { ...device, source: item.source } : null)));
     probed.forEach(device => runtime.mergeDevice(results, device));
     const mdnsProbed = await Promise.all(results
@@ -264,13 +328,22 @@ export function createLightweaverApiMiddleware({
     mdnsProbed.forEach(device => runtime.mergeDevice(results, device));
 
     if (req.query.scan === '1') {
-      const tasks = [];
-      for (const subnet of runtime.localSubnets()) {
-        for (let i = 1; i <= 254; i++) {
-          tasks.push(runtime.probeWled(`${subnet}.${i}`, 350).then(device => runtime.mergeDevice(results, device)));
-        }
+      if (!_activeScanPromise) {
+        const scanResults = results;
+        _activeScanPromise = (async () => {
+          const tasks = [];
+          for (const subnet of runtime.localSubnets()) {
+            // Only sweep private LAN ranges, never a public subnet a host happens to be on.
+            if (!isRfc1918Subnet(subnet)) continue;
+            for (let i = 1; i <= 254; i++) {
+              const ip = `${subnet}.${i}`;
+              tasks.push(() => runtime.probeWled(ip, 350).then(device => runtime.mergeDevice(scanResults, device)));
+            }
+          }
+          await runBoundedScan(tasks, 32);
+        })().finally(() => { _activeScanPromise = null; });
       }
-      await Promise.all(tasks);
+      await _activeScanPromise;
     }
 
     const devices = sortWledDevices(results, req.query.ip || runtime.defaultWled);
@@ -280,6 +353,7 @@ export function createLightweaverApiMiddleware({
   api.get('/wled/info', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/info')));
     } catch (error) {
@@ -290,6 +364,7 @@ export function createLightweaverApiMiddleware({
   api.get('/wled/state', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/state')));
     } catch (error) {
@@ -300,6 +375,7 @@ export function createLightweaverApiMiddleware({
   api.get('/wled/cfg', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/cfg')));
     } catch (error) {
@@ -310,6 +386,7 @@ export function createLightweaverApiMiddleware({
   api.post('/wled/cfg', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/cfg'), {
         method: 'POST',
@@ -324,6 +401,7 @@ export function createLightweaverApiMiddleware({
   api.get('/wled/raw', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     const path = String(req.query.path || '');
     const allowed = new Set(['/json/info', '/json/state', '/cfg.json', '/presets.json', '/ledmap.json']);
     if (!allowed.has(path)) return res.status(400).json({ error: 'Unsupported WLED resource path.' });
@@ -337,6 +415,7 @@ export function createLightweaverApiMiddleware({
   api.post('/wled/state', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/state'), {
         method: 'POST',
@@ -351,6 +430,7 @@ export function createLightweaverApiMiddleware({
   api.post('/wled/test', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/state'), {
         method: 'POST',
@@ -365,6 +445,7 @@ export function createLightweaverApiMiddleware({
   api.get('/wled/snapshot', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       const snapshot = await runtime.fetchJson(runtime.wledUrl(host, '/json'));
       res.json({ success: true, ...snapshot });
@@ -376,6 +457,7 @@ export function createLightweaverApiMiddleware({
   api.post('/wled/recover', async (req, res) => {
     const host = runtime.normalizeRequestHost(req.query.ip);
     if (!host) return res.status(400).json({ error: 'Missing WLED IP. Pass ?ip=<host> or set WLED_HOST.' });
+    if (!isAllowedWledHost(host)) return res.status(400).json({ error: 'WLED host is not on an allowed local network.' });
     try {
       res.json(await runtime.fetchJson(runtime.wledUrl(host, '/json/state'), {
         method: 'POST',
@@ -448,15 +530,47 @@ export function createLightweaverServer({
   return app;
 }
 
+// CSWSH guard: only browser pages served from these origins may open the proxy.
+// Mirrors the local dev origins and the deployed Studio origin.
+function getAllowedWsOrigins(env) {
+  const origins = new Set([
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'https://led.mandalacodes.com',
+  ]);
+  for (const extra of String(env.WLED_WS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)) {
+    origins.add(extra);
+  }
+  return origins;
+}
+
+function isAllowedWsOrigin(origin, allowedOrigins) {
+  // Same-origin / non-browser clients send no Origin header — allow those
+  // (curl, the card itself); reject only cross-site browser origins.
+  if (!origin) return true;
+  return allowedOrigins.has(origin);
+}
+
 export function attachWledWebSocketProxy(server, { env = process.env } = {}) {
   const defaultWled = env.WLED_HOST || '';
   const timeoutMs = Number.parseInt(env.WLED_WS_TIMEOUT_MS || '5000', 10);
   const normalizeRequestHost = raw => normalizeHost(raw || defaultWled);
+  const allowedOrigins = getAllowedWsOrigins(env);
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname !== '/api/wled/ws') return;
+    if (!isAllowedWsOrigin(req.headers.origin, allowedOrigins)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, ws => {
       wss.emit('connection', ws, req, url);
     });
@@ -468,50 +582,78 @@ export function attachWledWebSocketProxy(server, { env = process.env } = {}) {
       client.close(1008, 'Missing WLED IP');
       return;
     }
+    if (!isAllowedWledHost(host)) {
+      client.close(1008, 'WLED host is not on an allowed local network');
+      return;
+    }
 
-    const upstream = new WebSocket(`ws://${host}/ws`);
-    const upstreamTimer = setTimeout(() => {
-      if (upstream.readyState === WebSocket.CONNECTING) {
-        upstream.terminate();
-        if (client.readyState === WebSocket.OPEN) {
-          client.close(1011, 'WLED upstream timeout');
+    const requestedPort = url.searchParams.get('wsPort') || '80';
+    // Clamp to known WLED WebSocket ports so the proxy can't be aimed at arbitrary ports.
+    const wsPort = ALLOWED_WLED_WS_PORTS.has(requestedPort) ? requestedPort : '80';
+    const wsPath = url.searchParams.get('wsPath') || '/ws';
+    // The Lightweaver card serves its WebSocket on :81/, stock WLED on :80/ws.
+    // Try the hinted endpoint first, then fall back to the other so one proxy
+    // works for either firmware without the client having to know which it is.
+    const primary = wsPort === '81' ? `ws://${host}:81/` : `ws://${host}:${wsPort}${wsPath}`;
+    const fallback = wsPort === '81' ? `ws://${host}:80/ws` : `ws://${host}:81/`;
+    const candidates = [primary, fallback];
+
+    let upstream = null;
+    let opened = false;
+    let closedByClient = false;
+
+    const connect = index => {
+      let settled = false;
+      upstream = new WebSocket(candidates[index]);
+      const upstreamTimer = setTimeout(() => {
+        if (upstream.readyState === WebSocket.CONNECTING) upstream.terminate();
+      }, timeoutMs);
+
+      // Fires once per attempt on connect failure / close. Before the socket
+      // has opened, a failure re-dials the alternate endpoint; after it has
+      // opened, it just tears down the client.
+      const settle = (code, reason) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(upstreamTimer);
+        if (closedByClient) return;
+        if (!opened && index + 1 < candidates.length) {
+          connect(index + 1);
+          return;
         }
-      }
-    }, timeoutMs);
+        if (client.readyState === WebSocket.OPEN) {
+          client.close(opened ? (code || 1011) : 1011, opened ? reason : 'WLED upstream unreachable');
+        }
+      };
 
-    upstream.on('open', () => {
-      clearTimeout(upstreamTimer);
-      while (client._queuedMessages?.length) upstream.send(client._queuedMessages.shift());
-    });
+      upstream.on('open', () => {
+        opened = true;
+        clearTimeout(upstreamTimer);
+        while (client._queuedMessages?.length) upstream.send(client._queuedMessages.shift());
+      });
+      upstream.on('message', data => {
+        if (client.readyState === WebSocket.OPEN) client.send(data);
+      });
+      upstream.on('close', (code, reason) => settle(code, reason));
+      upstream.on('error', error => settle(1011, error.message));
+    };
 
     client.on('message', data => {
-      if (upstream.readyState === WebSocket.OPEN) upstream.send(data);
+      if (upstream && upstream.readyState === WebSocket.OPEN) upstream.send(data);
       else {
         client._queuedMessages ||= [];
         if (client._queuedMessages.length < 4) client._queuedMessages.push(data);
       }
     });
 
-    upstream.on('message', data => {
-      if (client.readyState === WebSocket.OPEN) client.send(data);
-    });
-
-    upstream.on('close', (code, reason) => {
-      clearTimeout(upstreamTimer);
-      if (client.readyState === WebSocket.OPEN) client.close(code || 1011, reason);
-    });
-
-    upstream.on('error', error => {
-      clearTimeout(upstreamTimer);
-      if (client.readyState === WebSocket.OPEN) client.close(1011, error.message);
-    });
-
     client.on('close', () => {
-      clearTimeout(upstreamTimer);
-      if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+      closedByClient = true;
+      if (upstream && (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING)) {
         upstream.close();
       }
     });
+
+    connect(0);
   });
 
   return wss;
@@ -522,6 +664,15 @@ export function startLightweaverServer({ env = process.env } = {}) {
   const server = http.createServer(app);
   attachWledWebSocketProxy(server, { env });
   const port = Number.parseInt(env.PORT || '3000', 10);
+
+  // listen(port) binds to all interfaces, so the AI endpoint is reachable beyond
+  // localhost. Warn the operator if it has no auth token configured.
+  if (!env.AI_PATTERN_AUTH_TOKEN) {
+    console.warn(
+      '[lightweaver] WARNING: AI pattern endpoint is unauthenticated and reachable beyond localhost. '
+      + 'Set AI_PATTERN_AUTH_TOKEN to require a token for /api/ai requests.'
+    );
+  }
 
   return server.listen(port, () => {
     console.log(`Lightweaver Pi server listening on http://localhost:${port}`);

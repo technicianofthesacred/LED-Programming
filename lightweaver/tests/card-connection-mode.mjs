@@ -23,8 +23,8 @@ assert.equal(cardHostToUrl('http://lightweaver.local/settings'), 'http://lightwe
 assert.equal(cardHostToUrl('192.168.4.1'), 'http://192.168.4.1');
 
 assert.deepEqual(
-  candidateCardHosts('lightweaver.local').slice(0, 3),
-  ['lightweaver.local', '192.168.18.70', '192.168.4.1'],
+  candidateCardHosts('lightweaver.local').slice(0, 2),
+  ['lightweaver.local', '192.168.4.1'],
 );
 assert.deepEqual(
   candidateCardHosts('192.168.18.70').slice(0, 3),
@@ -53,20 +53,20 @@ const discovered = await discoverCardStatus({
   persist: false,
   fetchImpl: async (url) => {
     probed.push(url);
-    if (String(url).startsWith('http://192.168.18.70/')) {
+    if (String(url).startsWith('http://192.168.4.1/')) {
       return {
         ok: true,
-        json: async () => ({ ok: true, wifi: { ip: '192.168.18.70' }, led: { pixels: 44 } }),
+        json: async () => ({ ok: true, wifi: { ip: '192.168.4.1' }, led: { pixels: 44 } }),
       };
     }
     throw new TypeError('unreachable');
   },
 });
 assert.equal(discovered.connected, true);
-assert.equal(discovered.host, '192.168.18.70');
+assert.equal(discovered.host, '192.168.4.1');
 assert.deepEqual(probed.slice(0, 2), [
   'http://lightweaver.local/api/status',
-  'http://192.168.18.70/api/status',
+  'http://192.168.4.1/api/status',
 ]);
 
 const parallelStart = Date.now();
@@ -79,17 +79,17 @@ const parallelDiscovered = await discoverCardStatus({
       await new Promise(resolve => setTimeout(resolve, 650));
       throw new TypeError('slow mdns');
     }
-    if (String(url).startsWith('http://192.168.18.70/')) {
+    if (String(url).startsWith('http://192.168.4.1/')) {
       return {
         ok: true,
-        json: async () => ({ ok: true, wifi: { ip: '192.168.18.70' }, led: { pixels: 44 } }),
+        json: async () => ({ ok: true, wifi: { ip: '192.168.4.1' }, led: { pixels: 44 } }),
       };
     }
     throw new TypeError('unreachable');
   },
 });
 assert.equal(parallelDiscovered.connected, true);
-assert.equal(parallelDiscovered.host, '192.168.18.70');
+assert.equal(parallelDiscovered.host, '192.168.4.1');
 assert.ok(
   Date.now() - parallelStart < 300,
   'discovery should not wait for a slow .local probe before trying the remembered IP',

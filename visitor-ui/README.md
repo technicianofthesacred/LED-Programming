@@ -1,5 +1,11 @@
 # Lightweaver Visitor UI
 
+> **Status (2026-06): not in the current plan.** The current runtime is
+> **ESP32-only** and the **firmware card page is the visitor UI** — this
+> separate Pi-hosted app has no host today. It's kept for a planned future
+> Raspberry Pi integration. Don't ship or invest in it unless that Pi work is
+> resumed; put visitor-facing changes in the firmware (`firmware/lightweaver-controller/`) instead.
+
 Pi-hosted, branded touchscreen UI for the Lightweaver LED installation by Adrian Rasmussen. Visitors connect to the installation WiFi and tap large scene tiles; the Pi proxies preset / power / brightness commands to a WLED-flashed ESP32-S3 over the local network.
 
 ## Local development

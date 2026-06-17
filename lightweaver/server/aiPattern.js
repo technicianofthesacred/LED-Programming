@@ -13,6 +13,9 @@ export const AI_PATTERN_PARAM_KEY_MAX_LENGTH = 48;
 export const AI_PATTERN_PARAM_STRING_MAX_LENGTH = 120;
 export const AI_PATTERN_RATE_LIMIT = 20;
 export const AI_PATTERN_RATE_WINDOW_MS = 10 * 60 * 1000;
+// Cap the per-IP rate-limit map so it can't grow without bound; sweep expired
+// entries when the store exceeds this size.
+export const AI_PATTERN_RATE_LIMIT_STORE_CAP = 10000;
 
 export const AI_PATTERN_PROVIDERS = ['openai', 'anthropic', 'openrouter'];
 export const AI_PATTERN_PROVIDER_DETAILS = [
@@ -174,10 +177,23 @@ function hasValidAuthToken(req, env) {
   return bearerToken === expectedToken || headerToken === expectedToken;
 }
 
+function sweepExpiredRateLimits(rateLimitStore, now) {
+  for (const [key, value] of rateLimitStore) {
+    if (now >= value.resetAt) rateLimitStore.delete(key);
+  }
+}
+
 function isRateLimited(req, rateLimitStore, env, now = Date.now()) {
   const { limit, windowMs } = getRateLimitConfig(env);
   const ip = getClientIp(req);
   const entry = rateLimitStore.get(ip);
+
+  // Bound memory: when the store grows past the cap, evict everything that has
+  // already expired before inserting another entry. Behavior for live entries
+  // is unchanged.
+  if (!rateLimitStore.has(ip) && rateLimitStore.size >= AI_PATTERN_RATE_LIMIT_STORE_CAP) {
+    sweepExpiredRateLimits(rateLimitStore, now);
+  }
 
   if (!entry || now >= entry.resetAt) {
     rateLimitStore.set(ip, { count: 1, resetAt: now + windowMs });

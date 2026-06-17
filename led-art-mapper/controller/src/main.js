@@ -18,6 +18,17 @@ import { Visualizer }          from './visualizer.js';
 import { WLEDClient }          from './wled.js';
 import { SCENES, evalPixel }   from './patterns.js';
 
+// Escape network-discovered strings before interpolating into innerHTML so a
+// hostile device name/host on the LAN can't inject markup.
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
 
 const state = {
@@ -353,10 +364,10 @@ async function scanForWLED() {
 
   // Multiple devices — show a pick list
   scanResults.innerHTML = devices.map(d => `
-    <div class="scan-result-item" data-host="${d.host}">
+    <div class="scan-result-item" data-host="${escapeHtml(d.host)}">
       <span class="scan-result-dot"></span>
-      <span class="scan-result-name">${d.name}${d.leds ? ` · ${d.leds} LEDs` : ''}</span>
-      <span class="scan-result-ip">${d.host}</span>
+      <span class="scan-result-name">${escapeHtml(d.name)}${d.leds ? ` · ${escapeHtml(d.leds)} LEDs` : ''}</span>
+      <span class="scan-result-ip">${escapeHtml(d.host)}</span>
     </div>
   `).join('');
 

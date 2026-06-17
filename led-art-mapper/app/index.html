@@ -436,7 +436,7 @@
           <span id="wled-status" class="wled-status"></span>
           <span class="wled-push-count" id="wled-push-count"></span>
         </div>
-        <p class="wled-note">Streams live pixel data to WLED at 25 fps. Requires CORS enabled on WLED or a local proxy.</p>
+        <p class="wled-note">Streams live pixel data to WLED via HTTP JSON (~12 fps). Requires CORS enabled on WLED or a local proxy.</p>
         <fieldset>
           <legend>Coordinate options</legend>
           <label><input type="checkbox" id="export-normalize" checked /> Normalize 0–1</label>
@@ -450,7 +450,8 @@
           </div>
         </fieldset>
         <div class="export-buttons">
-          <button id="btn-export-wled" title="WLED web UI → Config → LED Preferences → 2D layout"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>WLED ledmap.json</button>
+          <button id="btn-export-wled" title="Stock WLED ledmap.json (width/height + index map) → Config → LED Preferences → 2D matrix → Custom ledmap"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>WLED ledmap.json (index map)</button>
+          <button id="btn-export-coords" title="Normalized [x,y] coordinate map for Lightweaver firmware / Pixelblaze"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>Coordinate map (Lightweaver/Pixelblaze)</button>
           <button id="btn-export-fastled" title="PROGMEM C++ array for Arduino/ESP32"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>FastLED ledmap.h</button>
           <button id="btn-export-csv"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:5px;vertical-align:-1px"><path d="M8 11.5L3.5 7H6V2h4v5h2.5z"/><rect x="2" y="13" width="12" height="1.5" rx="0.75"/></svg>CSV</button>
         </div>

@@ -1758,7 +1758,7 @@ assert.equal(makeWledProxyUrl('http://192.168.1.50/json', 'state'), '/api/wled/s
 assert.equal(makeWledWsUrl('192.168.1.50', { preferProxy: false }), 'ws://192.168.1.50:81/');
 assert.equal(
   makeWledWsUrl('192.168.1.50', { locationObj: { protocol: 'https:', host: 'lightweaver.local' } }),
-  'wss://lightweaver.local/api/wled/ws?ip=192.168.1.50',
+  'wss://lightweaver.local/api/wled/ws?ip=192.168.1.50&wsPort=81',
 );
 assert.equal(DEFAULT_WLED_APP_FLASH_ADDRESS, '0x10000');
 assert.equal(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS, '0x0');

@@ -20,7 +20,7 @@ import { CanvasManager }                             from './canvas.js';
 import { samplePath, assignIndices }                 from './mapper.js';
 import { compile, evalPixel, _evalErrorState }       from './patterns.js';
 import { PreviewRenderer }                           from './preview.js';
-import { toWLEDLedmap, toFastLED, toCSV, download } from './export.js';
+import { toWLEDIndexMap, toCoordinateMap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
 
@@ -89,8 +89,7 @@ const state = {
   // C2: WLED live push
   wledIp:          '',
   wledConnected:   false,
-  wledPushHandle:  null,
-  wledWs:          null,   // WebSocket connection to WLED
+  wledPushHandle:  null,   // setInterval handle for the live HTTP push loop
   lastFrame:       new Uint8Array(0),
 
   // C3: Section groups
@@ -2180,11 +2179,8 @@ function startAnim() {
   const brp = document.getElementById('btn-run-pattern');
   brp.textContent = '↺ Running'; brp.classList.add('running');
   previewRenderer._animating = true;
-  // C2: start WLED push if connected
-  if (state.wledConnected) {
-    clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLED, 33); // ~30 fps throttle
-  }
+  // C2: start WLED live HTTP push if connected
+  if (state.wledConnected) _startWledPush();
   // Sync toolbar play/stop buttons
   const pb = document.getElementById('btn-play-toolbar');
   if (pb) { pb.textContent = '■ Stop'; pb.classList.add('running'); pb.title = 'Stop pattern (Space)'; }
@@ -2374,28 +2370,23 @@ function _tick(ts) {
 }
 
 // ── C2: WLED live push ────────────────────────────────────────────────────
+//
+// The live transport is HTTP JSON (`seg.i`) — the path stock WLED and the
+// Lightweaver firmware both actually accept. Each push is one HTTP request, so
+// we rate-limit and coalesce: the interval timer fires at PUSH_FPS, but only
+// sends if no request is in flight (latest-frame-wins — the next tick picks up
+// whatever lastFrame holds then). The binary WebSocket path was removed: stock
+// WLED does not accept binary RGB on /ws and the Lightweaver firmware ignores
+// binary WS frames (and serves WS on :81, not :80), so it was a silent no-op.
 
-function _pushToWLED() {
-  if (!state.wledConnected || !state.lastFrame.length) return;
-  if (!state.wledWs || state.wledWs.readyState !== WebSocket.OPEN) return;
-  const rgbLen = state.lastFrame.length;
-  // WLED native WS protocol: byte 0x02 then RGB triples for each pixel
-  const wsLen = rgbLen + 1;
-  if (_wledBuf.length !== wsLen) _wledBuf = new Uint8Array(wsLen);
-  _wledBuf[0] = 0x02;
-  _wledBuf.set(state.lastFrame, 1);
-  try {
-    state.wledWs.send(_wledBuf);
-    state.wledPushCount++;
-    const el = document.getElementById('wled-push-count');
-    if (el) el.textContent = `${state.wledPushCount} sent`;
-  } catch { /* websocket busy or closing */ }
-}
+const PUSH_FPS = 12;              // HTTP pushes/sec — sane ceiling for one request/frame
+let _wledInFlight = false;        // true while an HTTP push is awaiting response
 
+/** One HTTP JSON push. No-op (no counter bump) on failure; errors surface to UI. */
 function _pushToWLEDHttp() {
   if (!state.wledConnected || !state.lastFrame.length) return;
+  if (_wledInFlight) return; // coalesce: skip until the in-flight request resolves
   const rgbLen = state.lastFrame.length;
-  // HTTP path uses JSON; build hex strings into seg.i — buffer holds RGB bytes (no opcode).
   if (_wledBuf.length !== rgbLen) _wledBuf = new Uint8Array(rgbLen);
   _wledBuf.set(state.lastFrame);
   const pixelCount = (rgbLen / 3) | 0;
@@ -2404,48 +2395,40 @@ function _pushToWLEDHttp() {
     const o = i * 3;
     colors[i] = ((_wledBuf[o] << 16) | (_wledBuf[o + 1] << 8) | _wledBuf[o + 2]).toString(16).padStart(6, '0');
   }
+  _wledInFlight = true;
   fetch(`http://${state.wledIp}/json`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ on: true, seg: [{ i: colors }] }),
+    signal:  AbortSignal.timeout(2000),
   })
-  .then(() => {
+  .then(res => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // Count only successful pushes.
     state.wledPushCount++;
     const el = document.getElementById('wled-push-count');
     if (el) el.textContent = `${state.wledPushCount} sent`;
   })
-  .catch(() => {});
+  .catch(err => {
+    // Surface the failure instead of cheerfully counting.
+    _setWledStatus('reconnecting', 'WLED push failing…');
+    const el = document.getElementById('wled-push-count');
+    if (el) el.textContent = 'push failed';
+    if (!_wledPushErrShown) {
+      _wledPushErrShown = true;
+      showToast(`WLED push failing — ${err.message || 'unreachable'}`, 'warn');
+    }
+  })
+  .finally(() => { _wledInFlight = false; });
 }
 
-let _wledReconnectTimer = null;
-let _wledReconnectDelay = 1000;
+let _wledPushErrShown = false; // rate-limit the push-failure toast to once per run
 
-function _openWledWs(ip) {
-  if (state.wledWs) { try { state.wledWs.close(); } catch {} state.wledWs = null; }
-  const ws = new WebSocket(`ws://${ip}/ws`);
-  ws.onopen = () => {
-    state.wledWs = ws;
-    _wledReconnectDelay = 1000; // reset backoff on successful open
-    _setWledStatus('connected', 'WLED Connected');
-    showToast('WLED WebSocket open', 'success');
-  };
-  ws.onerror = () => {
-    showToast('WLED WS unavailable — using HTTP fallback', '');
-    state.wledWs = null;
-    // Switch back to HTTP push mode
-    clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLEDHttp, 33); // ~30 fps
-  };
-  ws.onclose = () => {
-    state.wledWs = null;
-    if (!state.wledConnected) return; // user-initiated disconnect
-    _setWledStatus('reconnecting', 'WLED Reconnecting…');
-    clearTimeout(_wledReconnectTimer);
-    _wledReconnectTimer = setTimeout(() => {
-      if (state.wledConnected && state.wledIp) _openWledWs(state.wledIp);
-    }, _wledReconnectDelay);
-    _wledReconnectDelay = Math.min(_wledReconnectDelay * 2, 15000);
-  };
+/** Start the live-push interval (HTTP JSON, coalesced). */
+function _startWledPush() {
+  clearInterval(state.wledPushHandle);
+  _wledPushErrShown = false;
+  state.wledPushHandle = setInterval(_pushToWLEDHttp, Math.round(1000 / PUSH_FPS));
 }
 
 function _setWledStatus(cls, label) {
@@ -2469,10 +2452,7 @@ async function _wledConnect() {
   if (state.wledConnected) {
     clearInterval(state.wledPushHandle);
     state.wledPushHandle = null;
-    clearTimeout(_wledReconnectTimer);
-    _wledReconnectTimer = null;
-    state.wledConnected  = false;             // set BEFORE close so onclose skips reconnect
-    if (state.wledWs) { try { state.wledWs.close(); } catch {} state.wledWs = null; }
+    state.wledConnected  = false;
     btn.textContent      = 'Connect';
     btn.classList.remove('wled-btn-connected', 'wled-btn-reconnecting');
     status.textContent   = '';
@@ -2501,8 +2481,6 @@ async function _wledConnect() {
       showToast(`Warning: ${totalLEDs} LEDs exceeds WLED default limit (1500). Check your WLED LED count setting.`, 'warn');
     }
 
-    // Open WebSocket for low-latency push (falls back to HTTP if unavailable)
-    _openWledWs(ip);
   } catch {
     state.wledConnected = false;
     status.textContent  = '✕ Unreachable';
@@ -2511,10 +2489,8 @@ async function _wledConnect() {
     return;
   }
 
-  if (state.animating) {
-    clearInterval(state.wledPushHandle);
-    state.wledPushHandle = setInterval(_pushToWLED, 33); // ~30 fps throttle
-  }
+  // Start live HTTP push if a pattern is already running.
+  if (state.animating) _startWledPush();
 }
 
 // ── MIDI ─────────────────────────────────────────────────────────────────
@@ -2628,7 +2604,8 @@ function refreshExportPreview() {
   const pixels = _allWorldPixels();
   const el     = document.getElementById('export-preview');
   if (!pixels.length) { el.textContent = '(no sections defined)'; return; }
-  const full  = toWLEDLedmap(pixels, _exportOpts());
+  // Preview the true WLED index-based ledmap (the primary WLED export).
+  const full  = toWLEDIndexMap(pixels, _exportOpts());
   // Feature 10: show full export preview without truncation
   el.textContent = full;
 }
@@ -2878,26 +2855,53 @@ function _getTooltip() {
 
 // ── Project save / load ───────────────────────────────────────────────────
 
-function saveProject() {
-  _isDirty = false;
+/**
+ * Single source of truth for project serialisation. Both the explicit
+ * "Save project" download and the localStorage autosave build their payload
+ * here so the two formats never drift apart.
+ *
+ * @param {{ fullPatterns?: boolean }} [opts]
+ *   fullPatterns: true → embed every pattern (project file, portable).
+ *                 false → only custom (non-library) patterns (autosave; the
+ *                         library is re-seeded from code on load).
+ */
+function _serializeProject({ fullPatterns = true } = {}) {
   _saveEditorToPattern();
   const data = {
-    version: 3,
+    version:           3,
+    svgSource:         state._svgSource ?? null,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
-    patterns:          state.patterns,
     activePatternId:   state.activePatternId,
     palette:           state.palette,
     bpm:               state.bpm,
     scenes:            state.scenes,
+    activeSceneId:     state.activeSceneId,
     patternParams:     state.patternParams,
     groups:            state.groups,  // C3
     connections:       state.connections,
+    masterSpeed:       state.masterSpeed,
+    masterBrightness:  state.masterBrightness,
     masterSaturation:  state.masterSaturation,
     gammaEnabled:      state.gammaEnabled,
     gammaValue:        state.gammaValue,
     ledTypeId:         state.ledTypeId,
-    artworkLayerState: state.artworkLayers.map(l => ({ layerId: l.layerId, _hidden: l._hidden || false, _color: l._color })),
+    wledIp:            state.wledIp,
+    crossfadeDuration: state.crossfadeDuration,
+    artworkLayerState: state.artworkLayers.map(l => ({
+      layerId: l.layerId, _hidden: l._hidden || false, _color: l._color,
+    })),
   };
+  if (fullPatterns) {
+    data.patterns = state.patterns;
+  } else {
+    data.customPatterns = state.patterns.filter(p => !_LIBRARY_IDS.has(p.id));
+  }
+  return data;
+}
+
+function saveProject() {
+  _isDirty = false;
+  const data = _serializeProject({ fullPatterns: true });
   download(JSON.stringify(data, null, 2), 'led-project.json');
 }
 
@@ -2908,6 +2912,23 @@ async function loadProject(file) {
 
   canvasManager.clearCanvas();
   state.strips = [];
+  state.artworkLayers = [];
+
+  // Restore persisted layer visibility/colour BEFORE re-importing the SVG so
+  // onImportRequest can reapply it as the layers are parsed.
+  state.artworkLayerState = Array.isArray(data.artworkLayerState) ? data.artworkLayerState : [];
+
+  // Re-import the artwork SVG first so strip paths measure against live SVG
+  // elements. Backward-compatible: old project files without svgSource simply
+  // load without artwork.
+  if (data.svgSource) {
+    state._svgSource = data.svgSource;
+    canvasManager.importSVG(data.svgSource, true);
+    const vb = svgEl.viewBox.baseVal;
+    if (vb && vb.width > 0) previewRenderer.setViewBox(vb.x, vb.y, vb.width, vb.height);
+  } else {
+    state._svgSource = null;
+  }
 
   state.stripTimes.clear();
   (data.strips || []).forEach(strip => {
@@ -2980,6 +3001,32 @@ async function loadProject(file) {
     _updateInspectorDensities();
   }
 
+  // Restore the settings the autosave already persists, so a saved project file
+  // round-trips the same fields.
+  const _setSlider = (id, valId, raw, fmt) => {
+    const el = document.getElementById(id), valEl = document.getElementById(valId);
+    if (el)    /** @type {HTMLInputElement} */ (el).value = String(raw);
+    if (valEl) valEl.textContent = fmt(raw);
+  };
+  if (data.masterSpeed != null) {
+    state.masterSpeed = data.masterSpeed;
+    _setSlider('master-speed', 'master-speed-val', Math.round(state.masterSpeed * 100), v => (v / 100).toFixed(2) + '×');
+  }
+  if (data.masterBrightness != null) {
+    state.masterBrightness = data.masterBrightness;
+    _setSlider('master-brightness', 'master-brightness-val', Math.round(state.masterBrightness * 100), v => v + '%');
+  }
+  if (data.activeSceneId) state.activeSceneId = data.activeSceneId;
+  if (data.wledIp) {
+    state.wledIp = data.wledIp;
+    const el = document.getElementById('wled-ip');
+    if (el) /** @type {HTMLInputElement} */ (el).value = state.wledIp;
+  }
+  if (data.crossfadeDuration != null) {
+    state.crossfadeDuration = data.crossfadeDuration;
+    _setSlider('crossfade-duration', 'crossfade-duration-val', state.crossfadeDuration, v => (v / 1000).toFixed(1) + 's');
+  }
+
   _rebuildNorm();
   state.strips.forEach(s => canvasManager.setStripDots(s.id, s.pixels));
   if (Array.isArray(data.connections)) {
@@ -2987,10 +3034,8 @@ async function loadProject(file) {
     _buildChainMap();
     canvasManager.renderConnections(state.connections);
   }
-  // Restore layer visibility state — applied in onImportRequest when SVG is next loaded
-  if (Array.isArray(data.artworkLayerState)) {
-    state.artworkLayerState = data.artworkLayerState;
-  }
+  // (artworkLayerState was applied before the SVG re-import above so layer
+  //  visibility/colour is reapplied as onImportRequest parses the layers.)
   renderStripsList();
   renderPatternSelect();
   renderPatternCards();
@@ -3005,35 +3050,22 @@ async function loadProject(file) {
 
 const _LS_KEY = 'lw-autosave';
 
+let _lsQuotaWarned = false; // rate-limit the quota-failure toast to once until a save succeeds
+
 function _lsSave() {
-  _saveEditorToPattern();
-  const customs = state.patterns.filter(p => !_LIBRARY_IDS.has(p.id));
-  const data = {
-    version:           3,
-    svgSource:         state._svgSource,
-    strips:            state.strips.map(({ pixels: _px, ...s }) => s),
-    customPatterns:    customs,
-    activePatternId:   state.activePatternId,
-    palette:           state.palette,
-    bpm:               state.bpm,
-    scenes:            state.scenes,
-    activeSceneId:     state.activeSceneId,
-    patternParams:     state.patternParams,
-    groups:            state.groups,
-    connections:       state.connections,
-    masterSpeed:       state.masterSpeed,
-    masterBrightness:  state.masterBrightness,
-    masterSaturation:  state.masterSaturation,
-    gammaEnabled:      state.gammaEnabled,
-    gammaValue:        state.gammaValue,
-    ledTypeId:         state.ledTypeId,
-    wledIp:            state.wledIp,
-    crossfadeDuration: state.crossfadeDuration,
-    artworkLayerState: state.artworkLayers.map(l => ({
-      layerId: l.layerId, _hidden: l._hidden || false, _color: l._color,
-    })),
-  };
-  try { localStorage.setItem(_LS_KEY, JSON.stringify(data)); } catch {}
+  // Autosave: only custom patterns (library is re-seeded from code on restore).
+  const data = _serializeProject({ fullPatterns: false });
+  try {
+    localStorage.setItem(_LS_KEY, JSON.stringify(data));
+    _lsQuotaWarned = false; // a successful save re-arms the warning
+  } catch (err) {
+    // Quota exceeded (or storage disabled) — surface it once instead of silently
+    // dropping the autosave. Re-armed only after the next successful save.
+    if (!_lsQuotaWarned) {
+      _lsQuotaWarned = true;
+      showToast('Autosave failed — browser storage is full. Use "Save project" to keep a copy.', 'warn');
+    }
+  }
 }
 
 function _lsRestore() {
@@ -4330,7 +4362,14 @@ document.getElementById('btn-play-toolbar').addEventListener('click', () => {
 document.getElementById('btn-export-wled').addEventListener('click', () => {
   const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
-  download(toWLEDLedmap(pixels, _exportOpts()), 'ledmap.json');
+  // True stock-WLED ledmap: width/height + flat index map.
+  download(toWLEDIndexMap(pixels, _exportOpts()), 'ledmap.json');
+});
+document.getElementById('btn-export-coords')?.addEventListener('click', () => {
+  const pixels = _allWorldPixels();
+  if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
+  // Normalized [x,y] coordinate map for Lightweaver / Pixelblaze.
+  download(toCoordinateMap(pixels, _exportOpts()), 'coords.json');
 });
 document.getElementById('btn-export-fastled').addEventListener('click', () => {
   const pixels = _allWorldPixels();

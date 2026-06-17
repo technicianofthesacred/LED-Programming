@@ -832,6 +832,7 @@ export function LayoutScreen() {
     const parsed = measureLayers(doc);
     if (!parsed.length) {
       setError('No layers found. In Illustrator use File → Export As → SVG (not Save As).');
+      return;
     }
     const newLayers = parsed.map(l => ({ ...l, _color: nextColor(), _emit: 'dir', _angle: 0 }));
     const newLayerOrder = parsed.map(l => ({ type: 'layer', id: l.layerId }));
@@ -1176,6 +1177,11 @@ export function LayoutScreen() {
   }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushHistory, lsSave]);
 
   const addAllStrips = useCallback(() => {
+    if (strips.length > 0 &&
+        typeof window !== 'undefined' &&
+        !window.confirm(`Replace all ${strips.length} drawn strip(s) with auto-generated strips from every layer? This cannot be undone except via Undo.`)) {
+      return;
+    }
     const newStrips = layers.filter(l => l.pathData).map(l => makeStrip(l, getLedCount(l)));
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);

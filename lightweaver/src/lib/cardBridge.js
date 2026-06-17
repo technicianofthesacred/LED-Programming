@@ -1,9 +1,15 @@
 import {
   cardHostToUrl,
+  isLocalCardHost,
   normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
+
+// Message types that command the hardware (write state, push config, reboot,
+// repair the LED output). These require a card origin we've verified is on the
+// local network before we'll postMessage them — see assertPrivilegedTarget.
+const PRIVILEGED_BRIDGE_TYPES = new Set(['config', 'control', 'reboot', 'recover-lights']);
 
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
@@ -14,6 +20,10 @@ let bridgeWindow = null;
 let bridgeOrigin = '';
 let bridgeHost = '';
 let bridgeConnected = false;
+// True only once we've seen a verified handshake from the card origin: either a
+// `ready` event or a successful request response whose event.origin matched the
+// derived local card origin. Privileged sends require this to be true.
+let bridgeReady = false;
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let listenerAttached = false;
@@ -66,6 +76,7 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
   bridgeConnected = false;
+  bridgeReady = false;
   dispatchBridgeChange();
 }
 
@@ -74,6 +85,7 @@ function setBridgeState({
   origin = bridgeOrigin,
   host = bridgeHost,
   connected = bridgeConnected,
+  ready = undefined,
 } = {}) {
   if (source) bridgeWindow = source;
   if (origin) bridgeOrigin = origin;
@@ -82,6 +94,10 @@ function setBridgeState({
     writeStoredCardHost(bridgeHost);
   }
   bridgeConnected = Boolean(connected);
+  // `ready` only flips to true on a verified handshake; once true it sticks for
+  // the life of this bridge target (cleared by clearBridgeTarget).
+  if (ready === true) bridgeReady = true;
+  else if (ready === false) bridgeReady = false;
   if (bridgeConnected) bridgeLastSeenAt = Date.now();
   dispatchBridgeChange();
 }
@@ -98,9 +114,15 @@ function parseBridgeParams() {
   const win = browserWindow();
   if (!win?.location) return { enabled: false, host: '' };
   const params = new URLSearchParams(win.location.search || '');
+  const rawHost = params.get('cardHost') || params.get('host') || '';
+  // Only trust a host supplied via URL params if it resolves to a local card
+  // address (RFC1918 IPv4 / .local). A public hostname here would let a crafted
+  // link point the bridge's target origin at an attacker — drop it and fall
+  // back to the stored host instead.
+  const host = rawHost && isLocalCardHost(rawHost) ? rawHost : '';
   return {
     enabled: params.get('cardBridge') === '1' || params.get('bridge') === 'card',
-    host: params.get('cardHost') || params.get('host') || '',
+    host,
     autoPreview: params.get('studioTakeover') !== '0',
   };
 }
@@ -119,11 +141,18 @@ function handleBridgeMessage(event) {
   if (data.app !== CARD_BRIDGE_APP) return;
 
   if (data.type === 'ready') {
+    // Verify the handshake comes from a local card origin before trusting it.
+    // event.origin must match the derived card origin (and be a local card
+    // host) — otherwise an arbitrary frame could announce itself as the bridge.
+    const claimedHost = normalizeCardHost(data.host || hostFromOrigin(event.origin));
+    const derivedOrigin = cardHostToUrl(claimedHost);
+    if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
     setBridgeState({
       source: event.source,
       origin: event.origin,
-      host: data.host || hostFromOrigin(event.origin),
+      host: claimedHost,
       connected: true,
+      ready: true,
     });
     return;
   }
@@ -143,11 +172,17 @@ function handleBridgeMessage(event) {
     return;
   }
 
+  // A response whose origin matches a local card origin is a verified handshake
+  // (the request's targetOrigin was already enforced on postMessage), so mark
+  // the bridge ready for subsequent privileged sends.
+  const verifiedReady = isLocalCardHost(hostFromOrigin(event.origin))
+    && (!request.origin || event.origin === request.origin);
   setBridgeState({
     source: event.source,
     origin: event.origin,
     host: data.host || bridgeHost || hostFromOrigin(event.origin),
     connected: true,
+    ready: verifiedReady ? true : undefined,
   });
   request.resolve(data.response ?? data.status ?? { ok: true });
 }
@@ -233,6 +268,9 @@ export function openCardBridge(rawHost = '', {
 export function getCardBridgeState() {
   return {
     connected: bridgeConnected,
+    // True once a handshake (ready event or verified response) confirmed the
+    // bridge speaks from the local card origin.
+    verified: bridgeReady,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
@@ -307,12 +345,30 @@ export function sendCardBridgeRequest(type, payload = {}, {
   bootstrapCardBridgeFromOpener();
   const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
   const targetOrigin = cardHostToUrl(resolvedHost);
+
+  // Privileged messages (write hardware state / push config / reboot / repair)
+  // must target a verified local card origin. This blocks the core threat: a
+  // crafted page steering Studio into posting control commands to an
+  // attacker-controlled origin. The target origin is derived from the resolved
+  // host, which only comes from a URL param after isLocalCardHost validation
+  // (parseBridgeParams) or from the stored/verified card host — so a public
+  // origin can never be the target here. Status/ping/info reads stay
+  // unrestricted so the handshake can complete and so discovery still works.
+  if (PRIVILEGED_BRIDGE_TYPES.has(type) && !isLocalCardHost(resolvedHost)) {
+    return Promise.reject(bridgeError(
+      'Refused to send a privileged card command to a non-local origin.',
+      'bridge-untrusted-origin',
+    ));
+  }
+
   if (!bridgeWindow || bridgeTargetClosed()) {
     clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
-    throw bridgeError(
+    // Return a rejected promise (rather than throwing synchronously) so callers
+    // that attach `.catch()` for friendly error wrapping reach their handler.
+    return Promise.reject(bridgeError(
       'Open the card page once to let Studio use it as the local hardware bridge.',
       'bridge-missing',
-    );
+    ));
   }
 
   if (!bridgeOrigin || bridgeOrigin !== targetOrigin) {

@@ -1,28 +1,24 @@
 import { ESPLoader, Transport } from 'esptool-js';
+import {
+  connectEspWithResetSequence,
+  makeEspConnectTerminal,
+} from './flashConnection.js';
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
-export async function connectESP() {
+export async function connectESP({ onAttempt, onLog } = {}) {
   const port = await navigator.serial.requestPort();
-  const transport = new Transport(port, false);
-
-  let logLines = [];
-  const loader = new ESPLoader({
-    transport,
-    baudrate: 921600,
-    debugLogging: false,
-    terminal: {
-      clean: () => { logLines = []; },
-      writeLine: line => { logLines.push(line); },
-      write: chunk => {
-        if (logLines.length === 0) logLines.push('');
-        logLines[logLines.length - 1] += chunk;
-      },
-    },
+  return connectEspWithResetSequence({
+    port,
+    onAttempt,
+    createTransport: selectedPort => new Transport(selectedPort, false),
+    createLoader: ({ transport }) => new ESPLoader({
+      transport,
+      baudrate: 921600,
+      debugLogging: false,
+      terminal: makeEspConnectTerminal(onLog),
+    }),
   });
-
-  const chip = await loader.main('no_reset');
-  return { loader, transport, chip };
 }
 
 export async function disconnectESP(loader, transport) {

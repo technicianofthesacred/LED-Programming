@@ -191,6 +191,54 @@ function samplePalette(t) {
 }
 `;
 
+// ── Sandbox hardening ──────────────────────────────────────────────────────
+//
+// Pattern bodies are compiled with `new Function`, which is eval-equivalent.
+// The Studio is deployed publicly (led.mandalacodes.com) and holds an AI token
+// in localStorage, so a hostile pattern body must NOT be able to reach the page
+// environment. We apply defense-in-depth while keeping the synchronous
+// per-pixel API:
+//
+//   1. GLOBAL SHADOWING — extra trailing parameters shadow the dangerous
+//      globals so the body sees them as `undefined` (we always pass undefined).
+//   2. IDENTIFIER DENYLIST — tokens that param-shadowing cannot cover
+//      (`import`, `constructor`, prototype walking, dynamic import, async/await)
+//      are rejected at compile time before `new Function` ever runs.
+
+// Globals neutralised by shadowing them as function parameters. The body can
+// still *reference* these names, but they resolve to the `undefined` arguments
+// we pass — never the real page globals.
+const SHADOWED_GLOBALS = [
+  'window', 'self', 'globalThis', 'document', 'fetch', 'XMLHttpRequest',
+  'WebSocket', 'localStorage', 'sessionStorage', 'indexedDB', 'eval', 'Function',
+  'importScripts', 'postMessage', 'parent', 'top', 'navigator',
+];
+
+// Tokens that shadowing can't neutralise (keywords / prototype reach / dynamic
+// import). `import` and `constructor` are not bindable as parameter names, and
+// `__proto__` / `prototype` enable prototype-chain escapes out of the sandbox.
+// async/await would let a body suspend and smuggle work past the synchronous
+// guard rails. Each is matched on word boundaries so legitimate builtins
+// (e.g. `prototype` never appears in real pattern math) are unaffected.
+const DENYLIST_PATTERNS = [
+  { re: /\bimport\b/, label: 'import' },
+  { re: /\bconstructor\b/, label: 'constructor' },
+  { re: /\b__proto__\b/, label: '__proto__' },
+  { re: /\bprototype\b/, label: 'prototype' },
+  { re: /import\s*\(/, label: 'dynamic import()' },
+  { re: /\bawait\b/, label: 'await' },
+  { re: /\basync\b/, label: 'async' },
+];
+
+function assertSafePatternSource(code) {
+  const source = String(code ?? '');
+  for (const { re, label } of DENYLIST_PATTERNS) {
+    if (re.test(source)) {
+      throw new Error(`unsafe pattern code: blocked token "${label}"`);
+    }
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────
 
 /**
@@ -202,11 +250,18 @@ function samplePalette(t) {
  */
 export function compile(code) {
   try {
-    const fn = new Function(
+    assertSafePatternSource(code);
+    const rawFn = new Function(
       'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
       'stripId', 'stripProgress', 'bass', 'mid', 'hi',
+      // Trailing shadow params: the body sees these names as the `undefined`
+      // arguments we forward in the wrapper below, not the page globals.
+      ...SHADOWED_GLOBALS,
       `${BUILTINS}\n{\n${code}\n}`,
     );
+    // Call the compiled function with `undefined` for every shadow param so the
+    // dangerous globals are unreachable from inside the pattern body.
+    const fn = (...args) => rawFn(...args.slice(0, 15), ...SHADOWED_GLOBALS.map(() => undefined));
     return { fn, error: null };
   } catch (e) {
     return { fn: null, error: e.message };

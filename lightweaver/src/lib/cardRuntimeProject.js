@@ -1,5 +1,5 @@
 import { DEFAULT_CARD_CONTROLS, DEFAULT_CARD_LED, DEFAULT_CARD_PATTERN_BANK, makeCardRuntimePackage, patchBoardToZones } from './cardRuntimeContract.js';
-import { deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
+import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips, normalizeStandaloneOutputs, totalStandalonePixels } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
@@ -24,7 +24,10 @@ export function buildCardRuntimePackageFromProject({
   const totalPixels = totalProjectPixels(strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
-  const resolvedPixels = totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels;
+  const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
+  const resolvedPixels = explicitOutputLayout
+    ? configuredOutputPixels
+    : (totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels);
   const outputs = resolveCardOutputs({
     strips,
     configuredOutputs,
@@ -144,9 +147,11 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
 
 function resolvePackagePatterns(standaloneController = {}, requestedPatternIds = []) {
   const configuredCycle = standaloneController?.controls?.encoder?.patternCycleIds;
-  const requested = Array.isArray(configuredCycle) && configuredCycle.length
+  const requested = Array.isArray(configuredCycle) &&
+    configuredCycle.length &&
+    !isDefaultPatternCycle(configuredCycle)
     ? configuredCycle
-    : DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id);
+    : [];
   const ids = [
     ...requestedPatternIds,
     ...requested,
@@ -187,7 +192,6 @@ function buildRuntimeLooksFromPlaylist({
 
       const pattern = getCardPatternById(item.patternId);
       if (!pattern) return null;
-      const lookDefaults = normalizeCardVisualLook({ ...visualLook, patternId: pattern.id });
       const runtimePatternId = getCardPatternRuntimeId(pattern);
       return {
         id: item.id || pattern.id,
@@ -195,7 +199,6 @@ function buildRuntimeLooksFromPlaylist({
         mode: pattern.mode === 'preset' ? 'preset' : 'procedural',
         preset: runtimePatternId,
         brightness: 1,
-        zones: zoneLooksFromZones(runtimeZones.map(zone => applyLookFieldsToZone(zone, lookDefaults))),
       };
     })
     .filter(Boolean);

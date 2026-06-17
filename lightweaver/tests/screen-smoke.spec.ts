@@ -41,12 +41,68 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   await expect(page.locator('.lw-chip-settings-json')).toBeVisible();
 });
 
+test('number keys do not navigate away from LED count fields', async ({ page }) => {
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByText('Card setup')).toBeVisible();
+  for (const key of ['1', '2', '3', '4', '5', '6']) {
+    await page.keyboard.press(key);
+    await expect(page).toHaveURL(/#screen=settings$/);
+    await expect(page.getByText('Card setup')).toBeVisible();
+  }
+});
+
+test('command palette does not offer panel navigation commands', async ({ page }) => {
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('heading', { name: 'Card settings' }).click();
+  await page.keyboard.press('Control+K');
+  await expect(page.getByPlaceholder('Type a command...')).toBeVisible();
+  await expect(page.getByText(/^Go to:/)).toHaveCount(0);
+  await expect(page.locator('.lw-modal-overlay').getByText('New project')).toBeVisible();
+});
+
+test('settings text and number boxes accept direct typing', async ({ page }) => {
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const cardAddress = page.getByLabel('Card address');
+  await cardAddress.fill('192.168.4.1');
+  await expect(cardAddress).toHaveValue('192.168.4.1');
+
+  const totalLeds = page.getByRole('spinbutton').first();
+  await totalLeds.fill('123');
+  await expect(totalLeds).toHaveValue('123');
+
+  const sectionLeds = page.locator('.lw-chip-section-count input').first();
+  await sectionLeds.fill('61');
+  await expect(sectionLeds).toHaveValue('61');
+
+  const outputName = page.getByLabel('Output 1 name');
+  await outputName.fill('Front halo');
+  await expect(outputName).toHaveValue('Front halo');
+
+  const firstOutput = page.locator('.lw-chip-output-row').first();
+  const gpioInput = firstOutput.locator('label', { hasText: 'GPIO' }).locator('input');
+  await gpioInput.fill('18');
+  await expect(gpioInput).toHaveValue('18');
+
+  const outputLedInput = firstOutput.locator('label', { hasText: 'LEDs' }).locator('input');
+  await outputLedInput.fill('123');
+  await expect(outputLedInput).toHaveValue('123');
+});
+
 test('flash screen is reachable for public chip setup', async ({ page }) => {
   await page.goto('/#screen=flash', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByText('Bootloader mode')).toBeVisible();
+  await expect(page.getByText('Connection mode')).toBeVisible();
   await expect(page.getByText('Lightweaver firmware', { exact: true })).toBeVisible();
   await expect(page.getByText('Fetch latest WLED')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible();

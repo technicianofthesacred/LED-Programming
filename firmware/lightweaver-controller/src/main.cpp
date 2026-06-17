@@ -15,6 +15,14 @@
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
 #include <Preferences.h>
+#include <esp_task_wdt.h>
+#include <esp_system.h>
+
+// Task watchdog timeout. Must exceed the longest blocking call in the loop
+// task — the look-change fade (fadeOutMs + fadeInMs, ~2s default) and SD reads.
+#ifndef LW_WDT_TIMEOUT_S
+#define LW_WDT_TIMEOUT_S 8
+#endif
 
 #ifndef LW_SD_CS
 #define LW_SD_CS 10
@@ -54,6 +62,11 @@ uint8_t outputCount = 0;
 uint8_t lookCount = 0;
 uint16_t totalPixels = 0;
 float brightnessLimit = 0.45f;
+uint32_t ledMaxMilliamps = 0;
+// Cached numeric form of ledColorOrder, refreshed once per frame so the
+// per-pixel remap is a switch instead of 5 String compares (0=RGB passthrough,
+// 1=GRB, 2=BRG, 3=BGR, 4=RBG, 5=GBR).
+uint8_t ledColorOrderCode = 1;
 float fadeScale = 1.0f;
 
 uint8_t currentLookIndex = 0;
@@ -112,6 +125,7 @@ void showLeds();
 void copyLogicalToPhysicalLeds();
 CRGB mapLogicalToPhysicalColor(const CRGB& color);
 bool isValidLedColorOrder(const String& order);
+uint8_t computeColorOrderCode(const String& order);
 void fadeTo(float target, uint16_t durationMs);
 uint8_t computeBrightnessByte();
 float readBrightnessKnob();
@@ -172,6 +186,35 @@ void setup() {
   setupArtnet(leds, totalPixels);
   setupWledWebSocket();
 
+  // If the previous boot ended in a crash/brownout/watchdog reset, come up in
+  // the visible low-brightness known-good state instead of silently re-entering
+  // whatever failed — a homeowner sees the piece is alive and can recover it.
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  if (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
+      resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT ||
+      resetReason == ESP_RST_WDT) {
+    if (Serial) {
+      Serial.print("Recovering after abnormal reset (reason ");
+      Serial.print((int)resetReason);
+      Serial.println(")");
+    }
+    runtimeRecoverLights("warm-white", 0.65f, true);
+  }
+
+  // Task watchdog: reboot if the loop task ever wedges (hung handler, blocked
+  // SD read). The Arduino-ESP32 core pre-initializes the TWDT, so reconfigure
+  // the timeout on IDF 5.x rather than re-initializing.
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = LW_WDT_TIMEOUT_S * 1000;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtConfig);
+#else
+  esp_task_wdt_init(LW_WDT_TIMEOUT_S, true);
+#endif
+  esp_task_wdt_add(NULL);
+
   if (Serial) {
     Serial.print("Ready: ");
     Serial.print(pieceName);
@@ -183,6 +226,7 @@ void setup() {
 
 void loop() {
   uint32_t now = millis();
+  esp_task_wdt_reset();  // pet the watchdog every iteration, before any early return
   bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
   if (!recoveryHoldActive) {
@@ -270,6 +314,7 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   startupLookId = config.startupLookId;
   ledColorOrder = config.ledColorOrder;
   brightnessLimit = config.brightnessLimit;
+  ledMaxMilliamps = config.maxMilliamps;
   outputCount = config.outputCount;
   totalPixels = 0;
   for (uint8_t i = 0; i < outputCount; i++) {
@@ -380,6 +425,13 @@ bool loadProfile() {
 bool setupLedOutputs() {
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
+  // Automatic brightness limiter: when a current ceiling is configured, FastLED
+  // scales all pixels down uniformly to keep total draw under budget, which
+  // prevents full-white inrush from sagging the rail into a brownout reset.
+  // 0 = disabled, preserving existing behavior for installs that haven't set it.
+  if (ledMaxMilliamps > 0) {
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, ledMaxMilliamps);
+  }
   uint8_t addedPins[LW_MAX_OUTPUTS + MIRROR_OUTPUT_PIN_COUNT] = {};
   uint8_t addedPinCount = 0;
   auto wasAdded = [&](uint8_t pin) {
@@ -426,6 +478,18 @@ bool setupLedOutputs() {
         Serial.println(pin);
       }
     }
+  }
+
+  // ESP32-S3 has 4 RMT TX channels; FastLED drives each WS2812 output on one.
+  // Driving more parallel outputs than channels can silently drop outputs or
+  // fall back to a bit-bang path that disables interrupts during show() (which
+  // can cost encoder edges on long strips). Warn so a bench operator can catch
+  // an over-subscribed config rather than chasing a mystery later.
+  if (Serial && addedPinCount > 4) {
+    Serial.print("WARNING: ");
+    Serial.print(addedPinCount);
+    Serial.println(" LED outputs exceed the 4 RMT channels on ESP32-S3; verify "
+                   "every strip drives and that show() timing stays stable.");
   }
 
   FastLED.setBrightness(0);
@@ -638,19 +702,6 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   if (zone.rangeCount == 0) return false;
   const LookConfig* look = findLookById(zone.patternId);
 
-  // First range only for now — multi-range support is a follow-up.
-  const PixelRange& range = zone.ranges[0];
-  if (range.count == 0) return false;
-  if (range.start + range.count > totalPixels) return false;
-
-  CRGB* zoneLeds = leds + range.start;
-  uint16_t zonePixels = range.count;
-
-  if (zone.blackout) {
-    fill_solid(zoneLeds, zonePixels, CRGB::Black);
-    return true;
-  }
-
   PatternModifiers mods;
   mods.speed = zone.speed;
   mods.hueShift = zone.hueShift;
@@ -661,26 +712,48 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   mods.driftHueMin = zone.driftHueMin;
   mods.driftHueMax = zone.driftHueMax;
 
-  bool rendered = false;
-  if (!look) {
-    rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
-    if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
-  } else if (look->mode == "procedural") {
-    rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
-  } else if (look->mode == "preset") {
-    rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
-  }
-  if (!rendered) return false;
+  // Render every range the zone declares. Storage parses up to
+  // LW_MAX_RANGES_PER_ZONE ranges and /api/zones reports them all, so split
+  // zones must not silently leave their later ranges dark. Each range runs
+  // the pattern from its own pixel 0 — visually each segment of a split zone
+  // breathes/waves in step rather than continuing one long strip.
+  bool any = false;
+  for (uint8_t r = 0; r < zone.rangeCount; r++) {
+    const PixelRange& range = zone.ranges[r];
+    if (range.count == 0) continue;
+    if (range.start + range.count > totalPixels) continue;
 
-  // Per-zone brightness scaling. The global FastLED.setBrightness() still
-  // applies on top of this — it represents the legacy "master" knob plus
-  // the brightnessLimit safety ceiling — so per-zone brightness multiplies
-  // into the final value.
-  uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
-  if (scale < 255) {
-    for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
+    CRGB* zoneLeds = leds + range.start;
+    uint16_t zonePixels = range.count;
+
+    if (zone.blackout) {
+      fill_solid(zoneLeds, zonePixels, CRGB::Black);
+      any = true;
+      continue;
+    }
+
+    bool rendered = false;
+    if (!look) {
+      rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
+      if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
+    } else if (look->mode == "procedural") {
+      rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
+    } else if (look->mode == "preset") {
+      rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
+    }
+    if (!rendered) continue;
+
+    // Per-zone brightness scaling. The global FastLED.setBrightness() still
+    // applies on top of this — it represents the legacy "master" knob plus
+    // the brightnessLimit safety ceiling — so per-zone brightness multiplies
+    // into the final value.
+    uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
+    if (scale < 255) {
+      for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
+    }
+    any = true;
   }
-  return true;
+  return any;
 }
 
 bool renderCurrentLook(bool force) {
@@ -812,6 +885,7 @@ void fadeTo(float target, uint16_t durationMs) {
     fadeScale = start + ((target - start) * t);
     FastLED.setBrightness(computeBrightnessByte());
     showLeds();
+    esp_task_wdt_reset();  // fades block the loop task; keep the WDT fed
     delay(16);
   }
 
@@ -826,19 +900,32 @@ void showLeds() {
 }
 
 void copyLogicalToPhysicalLeds() {
+  // Resolve the color order once per frame, not once per pixel.
+  ledColorOrderCode = computeColorOrderCode(ledColorOrder);
   uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
   for (uint16_t i = 0; i < limit; i++) {
     physicalLeds[i] = mapLogicalToPhysicalColor(leds[i]);
   }
 }
 
+uint8_t computeColorOrderCode(const String& order) {
+  if (order == "GRB") return 1;
+  if (order == "BRG") return 2;
+  if (order == "BGR") return 3;
+  if (order == "RBG") return 4;
+  if (order == "GBR") return 5;
+  return 0;  // RGB / unknown → passthrough
+}
+
 CRGB mapLogicalToPhysicalColor(const CRGB& color) {
-  if (ledColorOrder == "GRB") return CRGB(color.g, color.r, color.b);
-  if (ledColorOrder == "BRG") return CRGB(color.b, color.r, color.g);
-  if (ledColorOrder == "BGR") return CRGB(color.b, color.g, color.r);
-  if (ledColorOrder == "RBG") return CRGB(color.r, color.b, color.g);
-  if (ledColorOrder == "GBR") return CRGB(color.g, color.b, color.r);
-  return color;
+  switch (ledColorOrderCode) {
+    case 1: return CRGB(color.g, color.r, color.b);  // GRB
+    case 2: return CRGB(color.b, color.r, color.g);  // BRG
+    case 3: return CRGB(color.b, color.g, color.r);  // BGR
+    case 4: return CRGB(color.r, color.b, color.g);  // RBG
+    case 5: return CRGB(color.g, color.b, color.r);  // GBR
+    default: return color;                           // RGB
+  }
 }
 
 bool isValidLedColorOrder(const String& order) {
@@ -1078,6 +1165,13 @@ String runtimeFirmwareInfo() {
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
+  doc["wifi"]["ip"] = runtimeConfig.activeIp;
+  doc["wifi"]["hostname"] = runtimeConfig.activeHostname;
+  doc["wifi"]["transport"] =
+      runtimeConfig.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
+  // Never serialize the WiFi password into this (unauthenticated) response —
+  // only a boolean hint that credentials exist.
+  doc["wifi"]["configured"] = runtimeConfig.wifi.ssid.length() > 0;
   JsonArray outputArray = doc["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = outputArray.add<JsonObject>();

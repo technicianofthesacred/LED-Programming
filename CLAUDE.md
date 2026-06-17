@@ -10,7 +10,10 @@ last_reviewed: 2026-06-02
 # Lightweaver — branded LED installation controller
 
 ## What this is
-Custom LED lighting control platform for laser-cut art installations. **Project name: Lightweaver.** Hardware: ESP32-S3 N16R8 controller + Raspberry Pi 5. Lighting software: Madrix (Art-Net output). Target: a web interface accessible from phone or browser — either served from the Pi on the local network or deployed publicly.
+Custom LED lighting control platform for laser-cut art installations. **Project name: Lightweaver.** Lighting software: Madrix (Art-Net output). Target: a web interface accessible from phone or browser.
+
+## Current plan — ESP32-only (Pi deferred)
+As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver firmware and **serves its own branded scene-selector page (this is the visitor UI)** plus the WLED-compat JSON/WS API at `lightweaver.local` / `192.168.4.1`. The public Studio at `led.mandalacodes.com` is the design/export surface and reaches the card directly on the LAN / via the card-page postMessage bridge. **There is no Raspberry Pi in the runtime path.** A Pi integration is planned for *later* — `lightweaver/server/` (the WLED proxy), `visitor-ui/`, and `docs/pi-hosted-deployment.md` are **kept for that future** but are **not part of the current plan**; don't treat them as the live runtime or invest in them unless the Pi work is explicitly resumed.
 
 ## Current contents
 - `research.md` — hardware options (ESP32-S3, WLED firmware, Madrix integration), Art-Net/E1.31 protocols, control architecture, color management
@@ -39,7 +42,7 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 ## Architectural decisions
 - `led-art-mapper/` is the **canonical design tool** (vanilla JS Vite app): pattern editor, LED layout over artwork SVGs, `ledmap.json` export. All zone definitions originate here.
 - `lightweaver/` (React) provides **reusable building blocks** — WLED WebSocket hook, ESP32 Web Serial flasher. To be repurposed / borrowed-from for the visitor UI rather than shipped as-is.
-- `visitor-ui/` is the new **Pi-hosted branded React UI** — a small, separate app implementing the captive-portal scene selector per `branded-installation-ui.md`.
+- `visitor-ui/` is a **future Pi-hosted** branded React UI (captive-portal scene selector per `branded-installation-ui.md`). **Not in the current ESP-only plan** — the firmware card page is today's visitor UI. Retained for a future Pi integration; visitor-facing polish goes into the firmware page for now.
 - **Tests** live under `/e2e/` using `@playwright/test`. **Diagnostic scripts** are archived in `/scripts/debug/`.
 
 ## Tools already built
@@ -49,10 +52,10 @@ Custom LED lighting control platform for laser-cut art installations. **Project 
 - [x] Tooling: led-art-mapper design tool, lightweaver React building blocks, visitor-ui scaffold
 - [x] Operational docs: `docs/deployment-checklist.md`, `docs/hardware-setup.md`, `docs/segments.md`
 - [x] Launch gate: `npm run launch:check` in `lightweaver/` runs core runtime contract tests and production build
-- [ ] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root)
+- [x] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root) — flashed and verified on bench 2026-05-24 (see docs/roadmap.md)
 - [ ] Configure Art-Net output from Madrix; verify WLED reception
 - [ ] Define WLED segments matching laser-cut zones; fill in `docs/segments.md`
-- [ ] Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
+- [ ] _(deferred — future Pi integration, not current plan)_ Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
 ## Where to look for…
 - **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`

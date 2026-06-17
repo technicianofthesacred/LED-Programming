@@ -98,6 +98,10 @@ void decodePacket(const uint8_t* buffer, size_t length) {
   }
   if (pixelsInPacket == 0) return;
 
+  // Don't fight a different live source (e.g. a designer preview stream) for
+  // the canvas; whoever claimed it first holds it until they go quiet.
+  if (!frameSourceClaim(FRAME_ARTNET)) return;
+
   const uint8_t* dmx = buffer + 18;
   CRGB* dst = gLeds + cfg->pixelStart;
 
@@ -116,6 +120,7 @@ void decodePacket(const uint8_t* buffer, size_t length) {
 
   gUniverseFramesRx[cfgIndex]++;
   gTotalFramesRx++;
+  // Canvas already claimed above; refresh the last-frame timestamp.
   frameSourceMarkExternal(FRAME_ARTNET);
 }
 

@@ -26,6 +26,7 @@ assert.equal(pixelsToLwUsbFrameHex(null), '');
 
 assert.equal(normalizeLwUsbPixelCount(60), 60);
 assert.equal(normalizeLwUsbPixelCount('120'), 120);
+assert.equal(normalizeLwUsbPixelCount(395), 395);
 assert.equal(normalizeLwUsbPixelCount(0), 1);
 assert.equal(normalizeLwUsbPixelCount(999, { maxPixels: 300 }), 300);
 

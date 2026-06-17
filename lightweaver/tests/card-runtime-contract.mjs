@@ -156,6 +156,26 @@ assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 
+const fullPiece395Pkg = buildCardRuntimePackageFromProject({
+  projectId: 'lwproj-395',
+  projectName: '395 LED Piece',
+  strips: [{ id: 'main', name: 'Main', pixelCount: 395 }],
+  standaloneController: {
+    outputs: [
+      { id: 'out1', name: 'Output 1', pin: 16, pixels: 395 },
+      { id: 'out2', name: 'Output 2', pin: 17, pixels: 0 },
+      { id: 'out3', name: 'Output 3', pin: 18, pixels: 0 },
+      { id: 'out4', name: 'Output 4', pin: 21, pixels: 0 },
+    ],
+  },
+});
+assert.equal(fullPiece395Pkg.config.led.pixels, 395);
+assert.deepEqual(
+  fullPiece395Pkg.config.led.outputs.map(output => ({ pin: output.pin, pixels: output.pixels })),
+  [{ pin: 16, pixels: 395 }],
+);
+assert.deepEqual(fullPiece395Pkg.config.zones[0].ranges, [{ start: 0, count: 395 }]);
+
 const visualLookPkg = buildCardRuntimePackageFromProject({
   projectName: 'Visual Look',
   standaloneController: {
@@ -335,7 +355,7 @@ assert.deepEqual(playlistComboPkg.config.controls.encoder.patternCycleIds, ['pla
 assert.equal(playlistComboPkg.config.startupPatternId, 'plasma');
 assert.deepEqual(playlistComboPkg.config.looks.map(look => look.id), ['plasma', 'combo-outer-fire-inner-ocean']);
 assert.equal(playlistComboPkg.config.looks[0].preset, 'plasma');
-assert.deepEqual(playlistComboPkg.config.looks[0].zones.map(zone => zone.patternId), ['plasma', 'plasma']);
+assert.equal(playlistComboPkg.config.looks[0].zones, undefined);
 assert.equal(playlistComboPkg.config.looks[1].mode, 'combo');
 assert.deepEqual(playlistComboPkg.config.looks[1].zones.map(zone => zone.id), ['patch-outer', 'patch-inner']);
 assert.deepEqual(playlistComboPkg.config.looks[1].zones.map(zone => zone.patternId), ['fire', 'ocean']);
@@ -368,5 +388,43 @@ const staleAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
   },
 });
 assert.equal(staleAnalogBrightnessPkg.config.controls.brightness, -1);
+
+const gallerySectionCounts = [46, 46, 46, 45, 45, 45, 45, 45, 45, 45];
+const galleryStrips = gallerySectionCounts.map((pixelCount, index) => ({
+  id: `section-${index + 1}`,
+  name: `Section ${index + 1}`,
+  pixelCount,
+}));
+const galleryPatchBoard = {
+  patches: gallerySectionCounts.map((pixelCount, index) => ({
+    id: `section-${index + 1}`,
+    name: `Section ${index + 1}`,
+    source: {
+      type: 'strip',
+      stripId: `section-${index + 1}`,
+      startLed: 0,
+      endLed: pixelCount - 1,
+    },
+    output: { mode: 'on' },
+    playback: { patternId: 'aurora' },
+  })),
+};
+const compactGalleryPackage = buildCardRuntimePackageFromProject({
+  projectId: 'lwproj-gallery-453',
+  projectName: 'Gallery 453',
+  strips: galleryStrips,
+  patchBoard: galleryPatchBoard,
+  standaloneController: {
+    outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 453 }],
+    defaultLook: { patternId: 'aurora' },
+  },
+});
+assert.equal(compactGalleryPackage.config.led.pixels, 453);
+assert.equal(compactGalleryPackage.config.zones.length, 10);
+assert.deepEqual(compactGalleryPackage.config.patterns.map(pattern => pattern.id), ['aurora']);
+assert.ok(
+  Buffer.byteLength(JSON.stringify(compactGalleryPackage.config), 'utf8') < 3800,
+  '453-pixel gallery card config should stay below the firmware NVS string budget',
+);
 
 console.log('card-runtime-contract tests passed');

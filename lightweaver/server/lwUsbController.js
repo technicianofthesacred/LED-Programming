@@ -266,6 +266,10 @@ export class LwUsbController {
     if (this.recentLines.length > MAX_RECENT_LINES) this.recentLines.shift();
     const orderMatch = line.match(/\bcolorOrder=(RGB|GRB|BRG|BGR|RBG|GBR)\b/i);
     if (orderMatch) this.colorOrder = orderMatch[1].toUpperCase();
+    const maxPixelsMatch = line.match(/\bmaxPixels=(\d+)\b/i);
+    if (maxPixelsMatch) {
+      this.maxPixels = normalizePositiveInt(maxPixelsMatch[1], this.maxPixels, 1, DEFAULT_LWUSB_MAX_PIXELS);
+    }
     const inputEvent = parseUsbRotaryInputLine(line);
     if (inputEvent) this.pushInputEvent(inputEvent, line);
 

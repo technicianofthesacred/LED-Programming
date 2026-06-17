@@ -32,6 +32,17 @@ import { EditorView, basicSetup }                          from 'codemirror';
 import { javascript }                                      from '@codemirror/lang-javascript';
 import { oneDark }                                         from '@codemirror/theme-one-dark';
 
+// Escape network-discovered strings before interpolating into innerHTML so a
+// hostile device name/ip on the LAN can't inject markup.
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const state = {
@@ -542,13 +553,13 @@ function renderDeviceList(devices) {
     return;
   }
   deviceList.innerHTML = devices.map(d => `
-    <div class="device-item" data-ip="${d.ip}">
+    <div class="device-item" data-ip="${escapeHtml(d.ip)}">
       <span class="device-dot"></span>
       <div class="device-info">
-        <div class="device-name">${d.name}</div>
-        <div class="device-ip">${d.ip}</div>
+        <div class="device-name">${escapeHtml(d.name)}</div>
+        <div class="device-ip">${escapeHtml(d.ip)}</div>
       </div>
-      <div class="device-meta">${d.leds != null ? d.leds + ' LEDs' : ''}${d.ver ? '<br>v' + d.ver : ''}</div>
+      <div class="device-meta">${d.leds != null ? escapeHtml(d.leds) + ' LEDs' : ''}${d.ver ? '<br>v' + escapeHtml(d.ver) : ''}</div>
     </div>
   `).join('');
 

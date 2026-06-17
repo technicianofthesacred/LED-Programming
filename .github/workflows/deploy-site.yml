@@ -1,0 +1,100 @@
+name: Deploy site
+
+# Publishes the Studio bundle to the `studio` PREVIEW branch of the
+# `lightweaver` Cloudflare Pages project.
+#
+# Deploy ownership (decided 2026-06-11, see docs/led-mandalacodes-setup.md):
+# PRODUCTION at led.mandalacodes.com is the mandalacodes repo's bundle
+# (customer landing at /, Studio embedded at /design/), deployed from the
+# mandalacodes checkout. This workflow must therefore never deploy to the
+# production branch — deploy:pages targets `--branch studio`, which serves at
+# https://studio.lightweaver-edw.pages.dev for verification. To ship to
+# production, redeploy the mandalacodes bundle (it embeds this repo's Studio
+# dist and the factory firmware binary).
+#
+# Runs automatically on every push to main that touches the deployable surface
+# (the lightweaver/ app, including the firmware binary it serves), and manually
+# via "Run workflow". Requires two repo secrets:
+#   CLOUDFLARE_API_TOKEN   - a Cloudflare API token with Pages: Edit
+#   CLOUDFLARE_ACCOUNT_ID  - your Cloudflare account id
+# Add them under Settings -> Secrets and variables -> Actions.
+#
+# Until those secrets exist, a push-triggered run SKIPS cleanly (green, with a
+# notice) so it never reddens main; a HUMAN manual run fails loudly so you know
+# why. Dispatches from build-firmware.yml pass source=ci and skip cleanly like
+# push runs — otherwise every firmware rebuild would redden CI until the
+# Cloudflare secrets are configured.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Set to "ci" by build-firmware.yml; leave as "manual" for human runs
+        required: false
+        default: manual
+  push:
+    branches:
+      - main
+    paths:
+      - 'lightweaver/**'
+      - '.github/workflows/deploy-site.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-site
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check Cloudflare credentials
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Cloudflare secrets not set — skipping deploy. Add CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID to enable automatic publishing."
+            # Fail loudly only for a HUMAN manual run; CI dispatches
+            # (build-firmware passes source=ci) skip cleanly like push runs.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.source || 'manual' }}" != "ci" ]; then
+              echo "::error::Manual deploy requested but Cloudflare secrets are missing."
+              exit 1
+            fi
+          fi
+
+      - name: Install dependencies
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        run: |
+          # `npm ci` installs exactly what lightweaver/package-lock.json pins,
+          # for reproducible builds (vs `npm install`, which can drift the tree).
+          npm ci
+          # Workaround for npm/cli#4828: npm may skip the platform-specific
+          # Rollup native binding on fresh installs, breaking `vite build`.
+          node scripts/ensure-rollup-native.mjs
+
+      - name: Run core tests
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        run: npm run test:core
+
+      - name: Build and deploy to Cloudflare Pages
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run deploy:pages

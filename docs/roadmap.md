@@ -4,7 +4,14 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-05-29
+Last updated: 2026-06-02
+
+> **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
+> serves its own branded page (the visitor UI) and the WLED API; the public
+> Studio (`led.mandalacodes.com`) handles design/export. **No Raspberry Pi in
+> the runtime path.** The Pi proxy (`lightweaver/server/`), `visitor-ui/`, and
+> `docs/pi-hosted-deployment.md` are deferred for a planned future Pi
+> integration — kept, not deleted, but out of the current plan.
 
 ## Done
 
@@ -61,7 +68,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 - [x] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
 - [x] Keep actual card control local to the ESP32 page unless a local bridge is intentionally added
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
-- [ ] AP mode SSID convention: "Lightweaver — Adrian Rasmussen — Piece 01"
+- [ ] AP mode SSID convention: `Lightweaver-XXXX` (MAC-suffix, set by firmware automatically; see ESP32 card smoke test in `docs/deployment-checklist.md`)
 - [ ] Captive portal end-to-end test from a phone on the AP
 - [ ] Customize `BRAND` constant in `visitor-ui/src/App.jsx` (artist, piece, accent color)
 - [ ] Match `SCENES` array in `visitor-ui/src/App.jsx` to actual saved WLED presets
