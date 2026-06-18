@@ -188,7 +188,7 @@ export function PatchBoardScreen({
             Saved into the Chip package
           </span>
           <button
-            className={`btn ${board.physicalLocked ? 'btn-primary' : 'btn-ghost'}`}
+            className={`btn ${board.physicalLocked ? 'primary' : 'btn-ghost'}`}
             onClick={() => updateBoard(next => { next.physicalLocked = !next.physicalLocked; })}
           >
             {board.physicalLocked ? 'Locked' : 'Unlocked'}

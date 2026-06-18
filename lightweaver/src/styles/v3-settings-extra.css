@@ -1,0 +1,103 @@
+/* ============================================================
+   Light Weaver v3 — Settings screen live-only widgets
+   Minimal scoped additions in the mockup's idiom (tokens only).
+   These exist solely for live-only function the static mockup has
+   no slot for: card-connection actions, the card status banner,
+   the ring hardware summary, the project library rows, the hardware
+   layout editor lists, and the advanced JSON disclosure.
+   Everything else uses the mockup's own .set-* classes verbatim.
+   Tokens (--bg-app/--text-hi/--accent/--surface/--bg-elev/--border)
+   are defined in v3-styles.css.
+   ============================================================ */
+
+/* Single-column wrapper for full-width live-only sections (card connection),
+   so a lone card does not sit in a half-width grid cell. Mockup six-card grid
+   keeps its exact 1fr 1fr .set-cols. */
+.set-cols.set-cols-1 { grid-template-columns: 1fr; margin-bottom: 20px; }
+
+/* Action button clusters inside a stacked row */
+.set-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.set-actions .btn { white-space: nowrap; }
+
+/* Card connection / hardware status banner */
+.set-status {
+  margin: 4px 0 10px; padding: 9px 12px; border-radius: var(--r-sm);
+  font-size: 12px; line-height: 1.4; color: var(--text-mid);
+  background: var(--bg-elev); border: 1px solid var(--border-hair);
+}
+.set-status.is-ok  { color: var(--text-hi); border-color: var(--accent-line); background: var(--accent-soft); }
+.set-status.is-err { color: var(--text-hi); border-color: oklch(0.62 0.18 25 / 0.5); background: oklch(0.62 0.18 25 / 0.16); }
+
+/* Hidden file input (mockup has no slot) */
+.set-file-input { display: none; }
+
+/* ── Ring hardware summary ──────────────────────────────────── */
+.set-ring {
+  margin-top: 6px; padding: 12px 0 4px;
+  border-top: 1px solid var(--border-hair);
+}
+.set-ring .sec-h { margin-bottom: 10px; }
+.set-ring-stage {
+  position: relative; width: 92px; height: 92px; margin: 2px auto 12px;
+}
+.set-ring-orbit {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  border-radius: 50%; border: 1.5px solid var(--accent-line);
+}
+.set-ring-orbit.outer  { width: 92px; height: 92px; opacity: 0.9; }
+.set-ring-orbit.inner  { width: 58px; height: 58px; opacity: 0.6; }
+.set-ring-orbit.center {
+  width: 26px; height: 26px; border-style: dashed; border-color: var(--border-soft);
+  display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-mid);
+}
+.set-ring-copy { display: flex; flex-direction: column; gap: 7px; }
+.set-ring-copy > div { display: flex; flex-direction: column; gap: 1px; }
+.set-ring-copy strong { font-size: 12.5px; color: var(--text-hi); font-weight: 500; }
+.set-ring-copy span { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+
+/* ── Project library rows ───────────────────────────────────── */
+.set-lib { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 4px; }
+.set-lib-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 11px; border-radius: var(--r-sm);
+  background: var(--bg-elev); border: 1px solid var(--border-hair);
+  transition: border-color .12s, background .12s;
+}
+.set-lib-row.is-active { border-color: var(--accent-line); background: var(--accent-soft); }
+.set-lib-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.set-lib-main strong { font-size: 13px; color: var(--text-hi); font-weight: 500; }
+.set-lib-main span { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+.set-lib-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.set-lib-empty {
+  padding: 14px 12px; text-align: center; font-size: 12px; color: var(--text-faint);
+  background: var(--bg-elev); border: 1px dashed var(--border); border-radius: var(--r-sm);
+}
+
+/* ── Hardware layout editor ─────────────────────────────────── */
+.set-seccounts { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.set-seccount { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.set-seccount span { font-size: 12px; color: var(--text-mid); }
+
+.set-outputs { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.set-outputs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.set-outputs-toolbar [data-testid="output-routing-summary"] { display: flex; flex-direction: column; gap: 1px; }
+.set-outputs-toolbar strong { font-size: 12.5px; color: var(--text-hi); font-weight: 500; }
+.set-outputs-toolbar span { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+.set-outputs-list { display: flex; flex-direction: column; gap: 8px; }
+.set-output-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 9px; border-radius: var(--r-sm);
+  background: var(--bg-elev); border: 1px solid var(--border-hair);
+}
+.set-output-row .pm-input { flex: 1; min-width: 100px; }
+
+/* ── Advanced JSON disclosure ───────────────────────────────── */
+.set-advanced { padding: 4px 0 8px; }
+.set-json {
+  width: 100%; min-height: 220px; resize: vertical;
+  background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5;
+  padding: 10px 12px;
+}
+.set-json:focus { outline: none; border-color: var(--accent); }

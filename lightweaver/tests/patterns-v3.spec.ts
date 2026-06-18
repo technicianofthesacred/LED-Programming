@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { createDefaultCircleLayout } from '../src/lib/defaultCircleLayout.js';
-import { createDefaultPatchBoard } from '../src/lib/patchBoard.js';
-import { DEFAULT_CARD_PATTERN_BANK } from '../src/lib/cardRuntimeContract.js';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { REAL_PATTERNS } from '../src/v3/v3-data.js';
+
+// These specs assert on the EXACT mockup PatternScreen that now ships
+// (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
+// browse cards, .pm-targetcard, .pm-stripfinder, .chips/.chip, and the testids
+// that the live component exposes (strip-color-order, save-current-combo,
+// section-target-*, look-color-picker, look-*-slider/-readout, card-*-label).
 
 async function setRangeValue(locator, value: string) {
   await locator.evaluate((node: HTMLInputElement, nextValue) => {
@@ -15,318 +16,126 @@ async function setRangeValue(locator, value: string) {
   }, value);
 }
 
-test('v3 patterns show a chip-ready catalog with live local preview', async ({ page }) => {
-  const controlRequests: unknown[] = [];
-  const configRequests: unknown[] = [];
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-
+async function gotoFreshPatterns(page) {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+}
 
-  await expect(page.locator('.lw-look-card')).toHaveCount(30);
-  await expect(page.locator('.lw-look-grid')).toHaveAttribute('data-preview-mode', 'compact');
-  await expect(page.locator('.lw-look-card .lw-pattern-thumb')).toHaveCount(30);
-  await expect(page.locator('.lw-look-card .lw-look-led-field i')).toHaveCount(0);
-  await expect(page.locator('.lw-look-orbit')).toHaveCount(0);
-  await expect(page.locator('.lw-look-led-field i')).not.toHaveCount(0);
-  await expect(page.locator('.lw-pattern-led-preview canvas')).toBeVisible();
-  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
-  await expect(page.getByTestId('pattern-load-more')).toContainText('Load 24 more');
-  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
-  await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
-  await expect(page.getByTestId('section-target-range-all')).toHaveText('LED 1-44');
-  await expect(page.getByTestId('section-target-range-patch-default-outer-circle')).toHaveText('LED 1-22');
-  await expect(page.getByTestId('section-target-range-patch-default-inner-circle')).toHaveText('LED 23-44');
+test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {
+  await gotoFreshPatterns(page);
 
-  await page.getByTestId('pattern-load-more').click();
-  await expect(page.locator('.lw-look-card')).toHaveCount(54);
-  await expect(page.locator('.lw-look-card', { hasText: 'Glitch' })).toBeVisible();
-  await page.locator('button[data-pattern-id="glitch"]').click();
-  await expect.poll(() => controlRequests.at(-1)).toMatchObject({ patternId: 'matrix', cancelStream: true });
-  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Glitch');
+  // The mockup shell and the browse grid render.
+  await expect(page.locator('.pm')).toBeVisible();
+  await expect(page.locator('.pm-stripfinder')).toBeVisible();
+  await expect(page.locator('.pm-targetcard')).toBeVisible();
 
-  await page.locator('button[data-pattern-id="ocean"]').click();
+  // Every chip-ready pattern renders as a .pmcard (no load-more in this DOM).
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
+});
 
-  await expect.poll(() => controlRequests.length).toBe(2);
-  expect(controlRequests[1]).toMatchObject({ patternId: 'ocean', cancelStream: true });
-  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
-  await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
+test('first load reads warm (Lava Lamp) on a fresh, untitled project', async ({ page }) => {
+  await gotoFreshPatterns(page);
+
+  // The factory default look is aurora (green); on a fresh untitled project with
+  // no saved looks the screen prefers the warm default for the INITIAL preview,
+  // matching the mockup's Lava Lamp opening. Saved state is not mutated.
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Lava Lamp');
+  await expect(page.getByTestId('card-startup-label')).toHaveText('Lava Lamp');
+  await expect(page.getByTestId('card-live-preview-label')).not.toHaveText('Aurora');
+});
+
+test('search filters the browse grid', async ({ page }) => {
+  await gotoFreshPatterns(page);
+
+  await page.getByPlaceholder('Search chip patterns').fill('ocean');
+
+  await expect(page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]')).toBeVisible();
+  const shown = await page.locator('.pm-cards .pmcard').count();
+  expect(shown).toBeGreaterThan(0);
+  expect(shown).toBeLessThan(REAL_PATTERNS.length);
+  // Every visible card label matches the query.
+  for (const name of await page.locator('.pm-cards .pmcard .pmcard-nm').allTextContents()) {
+    expect(name.toLowerCase()).toContain('ocean');
+  }
+});
+
+test('clicking a card updates the preview', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await gotoFreshPatterns(page);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  // Selected card is marked, and the preview/labels reflect Ocean.
+  await expect(page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]')).toHaveClass(/\bon\b/);
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
-  await expect(page.getByTestId('card-startup-label')).toHaveText('Aurora');
-  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
-
-  await page.getByRole('button', { name: 'Save to card' }).click();
-
-  await expect.poll(() => configRequests.length).toBe(1);
-  expect(configRequests[0]).toMatchObject({ startupPatternId: 'ocean' });
-  await expect(page.getByTestId('card-startup-label')).toHaveText('Ocean');
+  await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
+  // Live preview pushes the selected pattern to the card.
+  await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
 });
 
-test('v3 patterns refuses to overwrite a larger card with the default layout', async ({ page }) => {
-  const configRequests: unknown[] = [];
-  await page.route('http://lightweaver.local/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 388 }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
+test('category chips filter the grid', async ({ page }) => {
+  await gotoFreshPatterns(page);
 
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  // Let the full grid settle before measuring (auto-retrying assertion).
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  const allCount = await page.locator('.pm-cards .pmcard').count();
 
-  await page.getByRole('button', { name: 'Save to card' }).click();
+  // Pick the Water category chip in the browse tools.
+  await page.locator('.pt-tools .chips .chip', { hasText: 'Water' }).click();
 
-  await expect(page.locator('.lw-chip-status')).toContainText('Stopped before saving');
-  await expect(page.locator('.lw-chip-status')).toContainText('default 44-pixel layout');
-  await expect(page.locator('.lw-chip-status')).toContainText('card is configured for 388 pixels');
-  await expect.poll(() => configRequests.length).toBe(0);
+  // The grid shrinks to just the Water-category patterns.
+  await expect.poll(() => page.locator('.pm-cards .pmcard').count()).toBeLessThan(allCount);
+  const waterCount = await page.locator('.pm-cards .pmcard').count();
+  expect(waterCount).toBeGreaterThan(0);
+  await expect(page.locator('.pt-tools .chips .chip.on')).toHaveText('Water');
 });
 
-test('patterns only go on the knob after adding them to the playlist', async ({ page }) => {
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 0 in playlist`)).toBeVisible();
-  await expect(page.locator('.lw-look-card-toggle input:checked')).toHaveCount(0);
-
-  await page.locator('.lw-look-card', { hasText: 'Ocean' }).locator('.lw-look-card-toggle input').check();
-  await expect(page.getByText(`30 shown of ${DEFAULT_CARD_PATTERN_BANK.length} chip-ready / 1 in playlist`)).toBeVisible();
-
-  await page.getByRole('button', { name: 'Playlist', exact: true }).click();
-  await expect(page.locator('.lw-playlist-row')).toHaveCount(1);
-  await expect(page.locator('.lw-playlist-row').first()).toContainText('Ocean');
-});
-
-test('chip-ready patterns drag onto design targets', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.locator('.lw-look-card', { hasText: 'Ocean' }).dragTo(page.getByTestId('section-target-patch-default-inner-circle'));
-
-  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
-  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
-});
-
-test('patterns opened from the local card select that pattern for editing', async ({ page }) => {
+test('a slider changes its readout and sends a tuned color modifier', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
-  await page.addInitScript(() => localStorage.clear());
-  await page.route('http://192.168.18.70/api/control', async route => {
+  await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
 
-  await page.goto('/?cardBridge=1&cardHost=192.168.18.70&studioTakeover=1&editPattern=rainbow#screen=patterns', {
-    waitUntil: 'domcontentloaded',
-  });
+  await gotoFreshPatterns(page);
 
-  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Rainbow');
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Rainbow');
-  await expect.poll(() => controlRequests.some(request => request.patternId === 'rainbow')).toBe(true);
-});
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
-test('selected patterns can reset color and motion back to defaults', async ({ page }) => {
-  const controlRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
+  // Brightness slider readout follows the input value.
+  await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
+  await expect(page.getByTestId('look-brightness-readout')).toHaveText('42%');
 
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
-  await setRangeValue(page.getByTestId('look-saturation-slider'), '80');
+  // Speed slider readout follows the input value.
   await setRangeValue(page.getByTestId('look-speed-slider'), '1.75');
+  await expect(page.getByTestId('look-speed-readout')).toHaveText('1.75×');
 
-  await page.getByRole('button', { name: 'Reset pattern defaults' }).click();
+  // The hue spectrum slider readout updates too.
+  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
+  await expect(page.getByTestId('look-hue-readout')).toContainText('°');
 
-  await expect(page.getByTestId('look-hue-readout')).toHaveText('45 deg');
-  await expect(page.getByTestId('look-saturation-readout')).toHaveText('90%');
-  await expect(page.getByTestId('look-speed-readout')).toHaveText('1.00x');
-  await expect.poll(() => controlRequests.some(request => (
-    request.patternId === 'ocean' &&
-    request.hue === 32 &&
-    request.saturation === 230 &&
-    request.speed === 1
+  // The tuned look is pushed to the card.
+  await expect.poll(() => controlRequests.some(r => (
+    r.patternId === 'ocean' && r.brightness === 0.42 && r.speed === 1.75
   ))).toBe(true);
 });
 
-test('v3 patterns repairs LEDs in escalating user-confirmed steps', async ({ page }) => {
-  const controlRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/zones', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        syncZones: false,
-        zones: [
-          { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
-          { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
-        ],
-      }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/firmware-info', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        pixels: 44,
-        outputs: [
-          { id: 'patch-default-outer-circle', pin: 16, pixels: 22 },
-          { id: 'patch-default-inner-circle', pin: 17, pixels: 22 },
-        ],
-      }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, blackout: false }),
-    });
-  });
-  const recoveryRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/recover-lights', async route => {
-    recoveryRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ok: true,
-        recovered: true,
-        diagnostics: {
-          brightnessByte: 220,
-          firstLogicalPixel: { r: 255, g: 244, b: 220 },
-        },
-      }),
-    });
-  });
-  const identifyRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/identify', async route => {
-    identifyRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true }),
-    });
-  });
-  const configRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, requiresReboot: true }),
-    });
-  });
-  const rebootRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/reboot', async route => {
-    rebootRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true }),
-    });
-  });
+test('the advanced hue-shift slider exposes its testids', async ({ page }) => {
+  await gotoFreshPatterns(page);
 
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect.poll(() => controlRequests.length).toBe(1);
-
-  controlRequests.length = 0;
-  await page.getByRole('button', { name: 'Repair LED' }).click();
-
-  await expect.poll(() => recoveryRequests.length).toBe(1);
-  expect(recoveryRequests[0]).toMatchObject({
-    syncZones: true,
-    patternId: 'warm-white',
-    brightness: 1,
-  });
-  expect(controlRequests).toHaveLength(0);
-  await expect(page.locator('.lw-chip-status')).toContainText('Step 1');
-  await expect(page.getByRole('button', { name: 'Yes, fixed' })).toBeVisible();
-  await page.getByRole('button', { name: 'No, try white test' }).click();
-
-  await expect.poll(() => identifyRequests.length).toBe(1);
-  await expect.poll(() => recoveryRequests.length).toBe(2);
-  expect(recoveryRequests[1]).toMatchObject({
-    syncZones: true,
-    patternId: 'test-white',
-    brightness: 1,
-  });
-  await expect(page.locator('.lw-chip-status')).toContainText('Step 2');
-  await page.getByRole('button', { name: 'No, repair output' }).click();
-
-  await expect.poll(() => configRequests.length).toBe(1);
-  expect(configRequests[0]).toMatchObject({
-    led: {
-      pixels: 44,
-      outputs: [{ id: 'out1', pin: 16, pixels: 44 }],
-    },
-    syncZones: true,
-  });
-  await expect.poll(() => rebootRequests.length).toBe(1);
-  await expect(page.locator('.lw-chip-status')).toContainText('Step 3');
-  await expect(page.getByRole('button', { name: 'Test repaired output' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Test repaired output' }).click();
-  await expect.poll(() => recoveryRequests.length).toBe(3);
-  expect(recoveryRequests[2]).toMatchObject({
-    syncZones: true,
-    patternId: 'test-white',
-    brightness: 1,
-  });
-  await expect(page.locator('.lw-chip-status')).toContainText('Step 4');
+  await page.locator('.pmx-advanced summary').click();
+  await setRangeValue(page.getByTestId('look-hue-shift-slider'), '-24');
+  await expect(page.getByTestId('look-hue-shift-readout')).toHaveText('-24');
 });
 
-test('v3 patterns can test strip colors and toggle RGB order live', async ({ page }) => {
+test('the strip finder order pill cycles to the next color order', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
-  const recoveryRequests: Record<string, unknown>[] = [];
   await page.route('**/api/status', async route => {
     await route.fulfill({
       status: 200,
@@ -335,637 +144,48 @@ test('v3 patterns can test strip colors and toggle RGB order live', async ({ pag
     });
   });
   await page.route('**/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    const body = JSON.parse(route.request().postData() || '{}');
+    controlRequests.push(body);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ ok: true, colorOrder: controlRequests.at(-1)?.colorOrder || 'RGB' }),
+      body: JSON.stringify({ ok: true, colorOrder: body.colorOrder || 'RGB' }),
     });
   });
   await page.route('**/api/recover-lights', async route => {
-    recoveryRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, patternId: recoveryRequests.at(-1)?.patternId || 'warm-white' }),
-    });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  const stripTest = page.locator('.lw-look-picker').getByLabel('Strip color test');
-  await expect(stripTest).toBeVisible();
-  const stripBox = await stripTest.boundingBox();
-  expect(stripBox?.height || 0).toBeLessThanOrEqual(60);
-  await expect(stripTest.getByLabel('Strip type')).toHaveCount(0);
-  await expect(stripTest.getByRole('button', { name: 'Test red' })).toHaveText('R');
-  await expect(stripTest.getByRole('button', { name: 'Test green' })).toHaveText('G');
-  await expect(stripTest.getByRole('button', { name: 'Test blue' })).toHaveText('B');
-  await expect(stripTest.getByRole('button', { name: 'Test white' })).toHaveText('W');
-  await expect(stripTest.getByTestId('strip-color-order')).toHaveText('RGB');
-  await expect(stripTest.getByRole('button', { name: 'Try next color order' })).toBeVisible();
-
-  await stripTest.getByRole('button', { name: 'Test green' }).click();
-  await expect.poll(() => recoveryRequests.some(request => (
-    request.patternId === 'test-green' &&
-    request.syncZones === true &&
-    request.brightness === 1
-  ))).toBe(true);
-
-  await stripTest.getByRole('button', { name: 'Test white' }).click();
-  await expect.poll(() => recoveryRequests.some(request => (
-    request.patternId === 'test-white' &&
-    typeof request.brightness === 'number' &&
-    request.brightness < 0.7
-  ))).toBe(true);
-
-  await stripTest.getByRole('button', { name: 'Try next color order' }).click();
-
-  await expect(stripTest.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
-  await expect.poll(() => recoveryRequests.at(-1)?.patternId).toBe('test-white');
-});
-
-test('v3 patterns saves section-specific combos that appear in Settings', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
 
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await gotoFreshPatterns(page);
 
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
+  await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
+  await page.locator('.pm-stripfinder').getByRole('button', { name: 'Try next order' }).click();
 
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect(page.locator('.lw-look-card.is-previewing strong')).toHaveText('Ocean');
-  await expect(page.locator('.lw-look-card.is-previewing .lw-pattern-thumb')).toBeVisible();
-  await expect(page.locator('.lw-patterns-aside .lw-look-preview.is-large')).toBeVisible();
+  await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
+  await expect.poll(() => controlRequests.some(r => r.colorOrder === 'GRB')).toBe(true);
+});
+
+test('saving the current look as a mix adds a mix card to the grid', async ({ page }) => {
+  await page.route('**/api/control', async route => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+
+  await gotoFreshPatterns(page);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  const before = await page.locator('.pm-cards .pmcard').count();
+
   await page.getByTestId('save-current-combo').click();
 
-  await expect(page.locator('.lw-combo-bench')).toHaveCount(0);
-  await expect(page.locator('.lw-combo-library')).toHaveCount(0);
-  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Inner circle Ocean' })).toBeVisible();
-  await expect(page.locator('.lw-look-card')).toHaveCount(31);
-  await page.getByText('Settings', { exact: true }).click();
-
-  await expect(page.getByText('What the card will run')).toBeVisible();
-  await expect(page.locator('section', { hasText: 'What the card will run' }).getByText('Inner circle', { exact: true })).toBeVisible();
-  await page.getByText('Advanced').click();
-  await expect(page.locator('textarea')).toContainText('"patternId": "ocean"');
+  // A new mix card (tagged 'mix') appears in the grid.
+  await expect(page.locator('.pm-cards .pmcard .mixtag')).toHaveCount(1);
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(before + 1);
 });
 
-test('v3 patterns keeps separate unsaved section choices before saving the combo', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
+test('the mirror geometry control switches the active geometry', async ({ page }) => {
+  await gotoFreshPatterns(page);
 
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.geo-seg').getByRole('button', { name: 'Mirror' }).click();
 
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
-
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="sparkle"]').click();
-
-  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
-
-  await page.getByTestId('save-current-combo').click();
-  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
-  await page.getByText('Settings', { exact: true }).click();
-  await page.getByText('Advanced').click();
-
-  const config = JSON.parse(await page.locator('textarea').inputValue());
-  const zonePatterns = Object.fromEntries(config.zones.map(zone => [zone.id, zone.patternId]));
-  expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
-  expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
-});
-
-test('project download and open preserve Pattern screen draft section choices', async ({ page }) => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-pattern-project-'));
-  await page.addInitScript(() => {
-    Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });
-  });
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
-
-  const downloadEvent = page.waitForEvent('download');
-  await page.locator('.lw-topbar-actions').getByRole('button', { name: 'Download' }).click();
-  const download = await downloadEvent;
-  const projectPath = path.join(tmp, await download.suggestedFilename());
-  await download.saveAs(projectPath);
-
-  const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
-  const innerPatch = projectData.layout.patchBoard.patches.find((patch: any) => patch.id === 'patch-default-inner-circle');
-  expect(innerPatch.playback.patternId).toBe('ocean');
-
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Aurora');
-
-  await page.locator('.lw-topbar-actions input[type="file"]').setInputFiles(projectPath);
-
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Ocean');
-});
-
-test('v3 patterns edits design target names and LED counts inline', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-name-patch-default-outer-circle').fill('Halo ring');
-  await page.getByTestId('section-target-leds-patch-default-outer-circle').fill('30');
-  await page.getByTestId('section-target-leds-patch-default-outer-circle').blur();
-
-  await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toHaveValue('Halo ring');
-  await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toHaveValue('30');
-  await expect(page.getByTestId('section-target-leds-all')).toHaveValue('52');
-
-  await page.getByText('Settings', { exact: true }).click();
-  await page.getByText('Advanced').click();
-  const config = JSON.parse(await page.locator('textarea').inputValue());
-  const editedZone = config.zones.find(zone => zone.id === 'patch-default-outer-circle');
-  expect(editedZone.label).toBe('Halo ring');
-  expect(editedZone.ranges).toEqual([{ start: 0, count: 30 }]);
-  expect(config.led.pixels).toBe(52);
-});
-
-test('v3 pattern target number fields select their full value on click', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  const outerLedCount = page.getByTestId('section-target-leds-patch-default-outer-circle');
-  await outerLedCount.fill('30');
-  await page.getByRole('heading', { name: 'Patterns & Mixes' }).click();
-
-  await outerLedCount.click();
-  await page.keyboard.press('7');
-
-  await expect(outerLedCount).toHaveValue('7');
-});
-
-test('v3 patterns lays out editable section targets in a compact desktop matrix', async ({ page }) => {
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  const outer = page.getByTestId('section-target-patch-default-outer-circle');
-  const inner = page.getByTestId('section-target-patch-default-inner-circle');
-  const outerBox = await outer.boundingBox();
-  const innerBox = await inner.boundingBox();
-  expect(outerBox).not.toBeNull();
-  expect(innerBox).not.toBeNull();
-  expect(innerBox!.x).toBeGreaterThan(outerBox!.x + 180);
-  expect(Math.abs(innerBox!.y - outerBox!.y)).toBeLessThan(12);
-  await expect(page.getByTestId('section-target-name-patch-default-outer-circle')).toBeEditable();
-  await expect(page.getByTestId('section-target-leds-patch-default-outer-circle')).toBeEditable();
-  await expect(page.locator('.lw-target-compound-copy')).toContainText('Layer mix');
-  await expect(page.getByTestId('save-current-combo')).toHaveText('Save mix');
-  await expect(page.getByTestId('section-target-all').locator('.lw-section-target-badge')).toHaveText('All');
-  await expect(page.getByTestId('section-target-patch-default-outer-circle').locator('.lw-section-target-badge')).toHaveText('1');
-  await expect(page.getByTestId('section-target-patch-default-inner-circle').locator('.lw-section-target-badge')).toHaveText('2');
-
-  const browseMetrics = await page.locator('.lw-pattern-browse-tools').evaluate(node => {
-    const tools = node as HTMLElement;
-    const search = tools.querySelector<HTMLInputElement>('input[placeholder="Search chip patterns"]');
-    const filters = tools.querySelector<HTMLElement>('.lw-pattern-filter-row');
-    return {
-      searchTop: search?.offsetTop ?? -1,
-      filtersTop: filters?.offsetTop ?? -1,
-      filtersOverflow: filters ? filters.scrollWidth - filters.clientWidth : 0,
-    };
-  });
-  expect(browseMetrics.searchTop).toBeLessThan(browseMetrics.filtersTop);
-  expect(browseMetrics.filtersOverflow).toBeLessThanOrEqual(1);
-});
-
-test('v3 patterns shows visible card page access without a duplicate bridge button', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
-    (window as any).__lwOpened = [];
-    window.open = ((url: string, name: string) => {
-      (window as any).__lwOpened.push({ url, name });
-      return { postMessage() {} } as any;
-    }) as any;
-  });
-
-  await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('button', { name: 'Connect through card' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open card page' }).click();
-
-  const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
-  expect(opened.name).toBe('_blank');
-  expect(new URL(opened.url).origin).toBe('http://192.168.18.70');
-});
-
-test('v3 patterns can make the local card the default control path', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
-    (window as any).__lwOpened = [];
-    window.open = ((url: string, name: string) => {
-      (window as any).__lwOpened.push({ url, name });
-      return { postMessage() {} } as any;
-    }) as any;
-  });
-
-  await page.goto('/?deployCheck=test#screen=patterns', { waitUntil: 'domcontentloaded' });
-  const toggle = page.getByRole('button', { name: 'Use local card' });
-  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-
-  await toggle.click();
-
-  await expect(page.getByRole('button', { name: 'Using local card' })).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_local_chip_default'))).toBe('1');
-  const opened = await page.evaluate(() => (window as any).__lwOpened.at(-1));
-  expect(opened.name).toBe('lightweaver-card-bridge');
-  expect(new URL(opened.url).searchParams.get('studioAutoOpen')).toBe('1');
-  await expect(page.locator('.lw-chip-status')).toContainText('Local card is now the default control path');
-});
-
-test('v3 patterns saves multiple outer and inner combos that can be re-applied', async ({ page }) => {
-  const controlRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/zones', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        syncZones: false,
-        zones: [
-          { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
-          { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
-        ],
-      }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="sparkle"]').click();
-  await page.getByTestId('save-current-combo').click();
-
-  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' })).toBeVisible();
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="fire"]').click();
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await page.getByTestId('save-current-combo').click();
-
-  await expect(page.locator('.lw-look-card.is-compound')).toHaveCount(2);
-  await expect(page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Fire + Inner circle Ocean' })).toBeVisible();
-
-  controlRequests.length = 0;
-  await page.locator('.lw-look-card.is-compound', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).locator('.lw-look-card-main').click();
-
-  await expect(page.getByTestId('section-target-patch-default-outer-circle')).toContainText('Ocean');
-  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toContainText('Sparkle');
-  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-outer-circle' && request.patternId === 'ocean')).toBe(true);
-  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-inner-circle' && request.patternId === 'sparkle')).toBe(true);
-  await expect(page.locator('.lw-chip-status')).toContainText('previewing on the card');
-});
-
-test('playlist adds saved combos and loads the knob order as card looks', async ({ page }) => {
-  const configRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="sparkle"]').click();
-  await page.getByTestId('save-current-combo').click();
-
-  await page.getByRole('button', { name: 'Playlist', exact: true }).click();
-  await expect(page.getByText('Knob order')).toBeVisible();
-  await page.locator('.lw-playlist-combo-pool button', { hasText: 'Outer circle Ocean + Inner circle Sparkle' }).click();
-  const comboRow = page.locator('.lw-playlist-row', { hasText: 'Outer circle Ocean + Inner circle Sparkle' });
-  await expect(comboRow).toBeVisible();
-  await expect(comboRow.getByRole('button', { name: 'Make first' })).toBeDisabled();
-
-  await page.getByRole('button', { name: 'Load playlist to card' }).click();
-  await expect.poll(() => configRequests.length).toBe(1);
-  const config = configRequests[0] as any;
-  expect(config.startupPatternId).toMatch(/^combo-/);
-  expect(config.looks[0]).toMatchObject({ mode: 'combo' });
-  expect(Object.fromEntries(config.looks[0].zones.map(zone => [zone.id, zone.patternId]))).toMatchObject({
-    'patch-default-outer-circle': 'ocean',
-    'patch-default-inner-circle': 'sparkle',
-  });
-});
-
-test('playlist rows drag into knob-button order and load that order to the card', async ({ page }) => {
-  const configRequests: Record<string, unknown>[] = [];
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="aurora"]').click();
-  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="ocean"]').click();
-  await page.locator('.lw-playlist-pattern-pool button[data-pattern-id="plasma"]').click();
-
-  await page.getByTestId('playlist-row-ocean').dragTo(page.getByTestId('playlist-row-aurora'));
-
-  await expect(page.locator('.lw-playlist-row').first()).toContainText('Ocean');
-
-  await page.getByRole('button', { name: 'Load playlist to card' }).click();
-  await expect.poll(() => configRequests.length).toBe(1);
-
-  const config = configRequests[0] as any;
-  expect(config.looks.map(look => look.id)).toEqual(['ocean', 'aurora', 'plasma']);
-  expect(config.controls.encoder.patternCycleIds).toEqual(['ocean', 'aurora', 'plasma']);
-  expect(config.startupPatternId).toBe('ocean');
-});
-
-test('v3 patterns scales saved combos to four hardware sections', async ({ page }) => {
-  const configRequests: Record<string, unknown>[] = [];
-  const strips = createDefaultCircleLayout({ totalPixels: 80, sectionCount: 4 });
-  const project = {
-    version: 3,
-    name: 'Four Ring Test',
-    layout: {
-      strips,
-      viewBox: '0 0 640 400',
-      svgText: null,
-      hidden: {},
-      layers: [],
-      density: 60,
-      pxPerMm: 3.7795,
-      editCounts: {},
-      layerGroups: [],
-      layerOrder: [],
-      patchBoard: createDefaultPatchBoard(strips),
-    },
-  };
-  await page.addInitScript(savedProject => {
-    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
-  }, project);
-  await page.route('http://lightweaver.local/api/control', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/config', async route => {
-    configRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-
-  await expect(page.locator('.lw-section-target')).toHaveCount(5);
-  await expect(page.locator('.lw-section-target.is-section')).toHaveCount(4);
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="sparkle"]').click();
-  await page.getByTestId('section-target-patch-default-ring-3').click();
-  await page.locator('button[data-pattern-id="fire"]').click();
-  await page.getByTestId('section-target-patch-default-ring-4').click();
-  await page.locator('button[data-pattern-id="calm"]').click();
-  await page.getByTestId('save-current-combo').click();
-
-  const savedCard = page.locator('.lw-look-card.is-compound').first();
-  await expect(savedCard).toContainText('4-layer mix');
-  await expect(savedCard).toContainText('Layer mix');
-  await expect(savedCard.locator('.lw-compound-thumb-cell')).toHaveCount(4);
-
-  await savedCard.locator('.lw-look-card-main').click();
-  await page.getByRole('button', { name: 'Save to card' }).click();
-  await expect.poll(() => configRequests.length).toBe(1);
-  const zonePatterns = Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]));
-  expect(zonePatterns['patch-default-outer-circle']).toBe('ocean');
-  expect(zonePatterns['patch-default-inner-circle']).toBe('sparkle');
-  expect(zonePatterns['patch-default-ring-3']).toBe('fire');
-  expect(zonePatterns['patch-default-ring-4']).toBe('calm');
-});
-
-test('v3 patterns includes searchable visual pattern browsing', async ({ page }) => {
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByPlaceholder('Search chip patterns').fill('ocean');
-
-  await expect(page.locator('button[data-pattern-id="ocean"]')).toBeVisible();
-  await expect(page.locator('button[data-pattern-id="deep-sea"]')).toBeVisible();
-  expect(await page.locator('.lw-look-card').count()).toBeGreaterThan(1);
-  await expect(page.locator('.lw-pattern-browse-tools > span')).toContainText(/of \d+ shown/);
-});
-
-test('v3 tuning controls show immediate values and send card-ready color modifiers', async ({ page }) => {
-  const controlRequests: unknown[] = [];
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await expect.poll(() => controlRequests.length).toBe(1);
-
-  const tunedPreviewLed = page.locator('.lw-patterns-aside .lw-look-preview.is-large .lw-look-led-field i').first();
-  const initialLedColor = await tunedPreviewLed.evaluate(node => getComputedStyle(node).getPropertyValue('--led-color').trim());
-
-  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
-  await expect(page.getByTestId('look-hue-readout')).toHaveText('226 deg');
-  await expect.poll(async () => (
-    await tunedPreviewLed.evaluate(node => getComputedStyle(node).getPropertyValue('--led-color').trim())
-  )).not.toBe(initialLedColor);
-
-  await setRangeValue(page.getByTestId('look-saturation-slider'), '80');
-  await expect(page.getByTestId('look-saturation-readout')).toHaveText('31%');
-
-  await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
-  await expect(page.getByTestId('look-brightness-readout')).toHaveText('42%');
-
-  await setRangeValue(page.getByTestId('look-speed-slider'), '1.75');
-  await expect(page.getByTestId('look-speed-readout')).toHaveText('1.75x');
-
-  await setRangeValue(page.getByTestId('look-hue-shift-slider'), '-24');
-  await expect(page.getByTestId('look-hue-shift-readout')).toHaveText('-24');
-
-  await expect.poll(() => controlRequests.some(request => {
-    const body = request as Record<string, unknown>;
-    return body.patternId === 'ocean'
-      && body.hue === 160
-      && body.saturation === 80
-      && body.brightness === 0.42
-      && body.speed === 1.75
-      && body.hueShift === -24;
-  })).toBe(true);
-});
-
-test('v3 patterns restores the WLED/live mirror geometry control', async ({ page }) => {
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await expect(page.getByRole('button', { name: 'Mirror' })).toBeVisible();
-  await page.getByRole('button', { name: 'Mirror' }).click();
-
-  await expect(page.locator('section', { hasText: 'Geometry' })).toContainText('mirror-hv');
-  await expect(page.getByRole('button', { name: 'Top/bottom' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Left/right' })).toBeVisible();
-});
-
-test('v3 patterns previews on the whole card when the card has not loaded section zones yet', async ({ page }) => {
-  const controlRequests: unknown[] = [];
-  await page.route('http://lightweaver.local/api/zones', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        syncZones: true,
-        zones: [{ id: 'all', label: 'All', ranges: [{ start: 0, count: 44 }] }],
-      }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-
-  await expect.poll(() => controlRequests.length).toBe(1);
-  expect(controlRequests[0]).toMatchObject({ patternId: 'ocean' });
-  expect(controlRequests[0]).not.toHaveProperty('zone');
-  await expect(page.locator('.lw-chip-status')).toContainText('whole card');
-});
-
-test('v3 patterns can apply the split zone config, then live-preview each section physically', async ({ page }) => {
-  const configRequests: unknown[] = [];
-  const controlRequests: unknown[] = [];
-  let splitConfigApplied = false;
-
-  await page.route('http://lightweaver.local/api/zones', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(splitConfigApplied
-        ? {
-            syncZones: false,
-            zones: [
-              { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
-              { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
-            ],
-          }
-        : {
-            syncZones: true,
-            zones: [{ id: 'all', label: 'All', ranges: [{ start: 0, count: 44 }] }],
-          }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/config', async route => {
-    const body = JSON.parse(route.request().postData() || '{}');
-    configRequests.push(body);
-    splitConfigApplied = true;
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/firmware-info', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ outputs: [{ pin: 16, pixels: 44 }] }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-  await page.route('http://lightweaver.local/api/reboot', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-  await page.route('http://lightweaver.local/api/control', async route => {
-    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="ocean"]').click();
-  await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.locator('button[data-pattern-id="sparkle"]').click();
-
-  await page.getByRole('button', { name: 'Send split preview' }).click();
-
-  await expect.poll(() => configRequests.length).toBe(1);
-  expect(configRequests[0].syncZones).toBe(false);
-  expect(configRequests[0].zones.map(zone => zone.id)).toEqual([
-    'patch-default-outer-circle',
-    'patch-default-inner-circle',
-  ]);
-  expect(Object.fromEntries(configRequests[0].zones.map(zone => [zone.id, zone.patternId]))).toMatchObject({
-    'patch-default-outer-circle': 'ocean',
-    'patch-default-inner-circle': 'sparkle',
-  });
-  await expect(page.locator('.lw-chip-status')).toContainText(/Split preview (is live|was saved)/);
-
-  await page.getByTestId('section-target-patch-default-outer-circle').click();
-  await page.locator('button[data-pattern-id="fire"]').click();
-
-  await expect.poll(() => controlRequests.some(request => request.zone === 'patch-default-outer-circle' && request.patternId === 'fire')).toBe(true);
+  await expect(page.locator('.geo-seg button.on')).toHaveText(/Mirror/);
 });

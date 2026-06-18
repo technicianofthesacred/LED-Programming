@@ -16,7 +16,6 @@ export function WledBar() {
     setWledIp: setIp,
     wledConnected: connected,
     wledTransport,
-    wledError,
     wledConnect: connect,
     wledDisconnect: disconnect,
     strips,
@@ -41,10 +40,10 @@ export function WledBar() {
   // the WebSocket open/error event).
   const [connecting, setConnecting] = useState(false);
 
-  // Clear "connecting" spinner once state resolves (connected or a worded error)
+  // Clear "connecting" spinner once state resolves
   useEffect(() => {
-    if (connected || wledError) setConnecting(false);
-  }, [connected, wledError]);
+    if (connected) setConnecting(false);
+  }, [connected]);
 
   useEffect(() => {
     if (!connecting || connected) return undefined;
@@ -199,7 +198,7 @@ export function WledBar() {
 
       {/* Status dot */}
       <span
-        title={wledError || dotLabel}
+        title={dotLabel}
         style={{
           ...styles.dot,
           background: dotColor,
@@ -246,16 +245,6 @@ export function WledBar() {
       {/* Push rate hint when connected */}
       {connected && (
         <span style={styles.hint}>{wledTransport === 'proxy' ? 'via Pi' : 'direct'} · 25 fps max</span>
-      )}
-      {/* Worded error (e.g. https mixed-content cannot reach a local card) */}
-      {!connected && wledError && (
-        <span
-          role="alert"
-          title={wledError}
-          style={{ ...styles.hint, color: 'oklch(64% 0.20 25)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 320 }}
-        >
-          {wledError}
-        </span>
       )}
       {/* LED count warning */}
       {totalLEDs > WLED_LED_WARN && (
