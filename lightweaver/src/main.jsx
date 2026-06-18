@@ -23,4 +23,24 @@ import './styles/v3-patterns-extra.css';
 import './styles/v3-playlist-extra.css';
 import App from './v3/app.jsx';
 
-createRoot(document.getElementById('root')).render(<App />);
+// Version switch. The 3.3 redesign is the default. The previous interface
+// (version 3) is preserved verbatim under ./src-v3 and stays reachable at
+// ?v=3 (or #v3) so nothing is lost — it loads on demand, so it adds nothing
+// to the default bundle.
+const params = new URLSearchParams(window.location.search);
+const wantsV3 = params.get('v') === '3' || window.location.hash === '#v3';
+
+const root = createRoot(document.getElementById('root'));
+
+if (wantsV3) {
+  // Frozen previous interface — its own self-contained tree, untouched by 3.3.
+  // Pull its stylesheet in the same on-demand chunk so it renders styled.
+  Promise.all([
+    import('../src-v3/main.css'),
+    import('../src-v3/App.jsx'),
+  ]).then(([, m]) => {
+    root.render(<m.default />);
+  });
+} else {
+  root.render(<App />);
+}

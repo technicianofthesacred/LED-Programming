@@ -1,0 +1,983 @@
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { samplePath as libSamplePath, assignIndices, getAllPixels } from '../lib/mapper.js';
+import { toWLEDLedmap, toFastLED, toCSV, download, pixelsFromPatchBoard } from '../lib/export.js';
+import { buildWledBasicPackage } from '../lib/wledBasicExport.js';
+import { makeCardRuntimePackage, patchBoardToZones } from '../lib/cardRuntimeContract.js';
+import { deriveStandaloneOutputsFromStrips } from '../lib/standaloneController.js';
+import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
+import { DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS, DEFAULT_WLED_APP_FLASH_ADDRESS, validateFlashPlan } from '../lib/flashPlan.js';
+import { FLASH_COMPLETE_RELEASED_LOG, FLASH_COMPLETE_RELEASED_STATUS, flashFirmwareAndRelease } from '../lib/flashWorkflow.js';
+import { DEMO_STRIPS } from '../data.js';
+import { useProject } from '../state/ProjectContext.jsx';
+
+// ── Layout screen ─────────────────────────────────────────────────────
+const LAYERS = [
+  { id: 'L1', name: 'ceiling-loop',   leds: 120, len: 2.00, brightness: 1.0,
+    path: 'M 100 80 Q 200 40 320 80 T 540 80',
+    emit: 'dir', angle: 0,   color: 'oklch(72% 0.15 210)' },
+  { id: 'L2', name: 'left-spiral',    leds: 96,  len: 1.60, brightness: 0.9,
+    path: 'M 90 180 C 90 260 180 260 180 180 C 180 140 140 140 140 180 Q 140 220 160 220',
+    emit: 'dir', angle: 0,   color: 'oklch(78% 0.14 300)' },
+  { id: 'L3', name: 'right-spiral',   leds: 96,  len: 1.60, brightness: 0.9,
+    path: 'M 460 180 C 460 260 550 260 550 180 C 550 140 510 140 510 180 Q 510 220 530 220',
+    emit: 'dir', angle: 180, color: 'oklch(78% 0.14 60)' },
+  { id: 'L4', name: 'base-bar',       leds: 144, len: 2.40, brightness: 1.2,
+    path: 'M 100 320 L 540 320',
+    emit: 'dir', angle: 180, color: 'oklch(80% 0.15 155)' },
+  { id: 'L5', name: 'diamond-top',    leds: 64,  len: 1.07, brightness: 1.4,
+    path: 'M 320 120 L 360 160 L 320 200 L 280 160 Z',
+    emit: 'omni', angle: 0, color: 'oklch(78% 0.17 30)' },
+];
+
+function totalStripPixels(strips = []) {
+  return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || 0), 0);
+}
+
+function samplePath(d, count) {
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', d);
+  const len = p.getTotalLength ? p.getTotalLength() : 100;
+  const out = [];
+  const n = Math.min(count, 40);
+  for (let i = 0; i < n; i++) {
+    const pt = p.getPointAtLength((i / Math.max(n - 1, 1)) * len);
+    const pt2 = p.getPointAtLength(Math.min(len, (i / Math.max(n - 1, 1)) * len + 1));
+    out.push({ x: pt.x, y: pt.y, tx: pt2.x - pt.x, ty: pt2.y - pt.y });
+  }
+  return out;
+}
+
+let _gradSeq = 0;
+function LightCone({ cx, cy, angle, color, intensity = 1, reach = 100 }) {
+  const a = (angle - 90) * Math.PI / 180;
+  const px = cx + Math.cos(a - Math.PI / 2) * reach;
+  const py = cy + Math.sin(a - Math.PI / 2) * reach;
+  const qx = cx + Math.cos(a + Math.PI / 2) * reach;
+  const qy = cy + Math.sin(a + Math.PI / 2) * reach;
+  const d = `M ${px} ${py} A ${reach} ${reach} 0 0 1 ${qx} ${qy} Z`;
+  const gid = 'lcg-' + (_gradSeq++);
+  return (
+    <>
+      <defs>
+        <radialGradient id={gid} cx={cx} cy={cy} r={reach} gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stopColor={color} stopOpacity={0.85 * intensity}/>
+          <stop offset="30%"  stopColor={color} stopOpacity={0.3 * intensity}/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </radialGradient>
+      </defs>
+      <path d={d} fill={`url(#${gid})`} style={{ mixBlendMode: 'screen' }}/>
+    </>
+  );
+}
+
+function OmniHalo({ cx, cy, color, reach = 90, intensity = 1 }) {
+  const gid = 'ohg-' + (_gradSeq++);
+  return (
+    <>
+      <defs>
+        <radialGradient id={gid} cx={cx} cy={cy} r={reach} gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stopColor={color} stopOpacity={0.85 * intensity}/>
+          <stop offset="30%"  stopColor={color} stopOpacity={0.3 * intensity}/>
+          <stop offset="100%" stopColor={color} stopOpacity="0"/>
+        </radialGradient>
+      </defs>
+      <circle cx={cx} cy={cy} r={reach} fill={`url(#${gid})`} style={{ mixBlendMode: 'screen' }}/>
+    </>
+  );
+}
+
+function DirectionCompass({ angle, emit, onAngle, onEmit }) {
+  const size = 120;
+  const cx = size / 2, cy = size / 2;
+  const r = 44;
+
+  const handleDrag = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const move = (ev) => {
+      const dx = ev.clientX - (rect.left + cx);
+      const dy = ev.clientY - (rect.top + cy);
+      const deg = (Math.atan2(dy, dx) * 180 / Math.PI + 90 + 360) % 360;
+      onAngle(Math.round(deg));
+    };
+    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+    move(e);
+  };
+
+  const a = (angle - 90) * Math.PI / 180;
+  const ex = cx + Math.cos(a) * r, ey = cy + Math.sin(a) * r;
+
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      <svg width={size} height={size} onMouseDown={emit === 'dir' ? handleDrag : undefined}
+           style={{ cursor: emit === 'dir' ? 'crosshair' : 'default', flexShrink: 0 }}>
+        <circle cx={cx} cy={cy} r={r + 6} fill="var(--bg)" stroke="var(--border)"/>
+        <line x1={cx - r - 2} y1={cy} x2={cx + r - 4} y2={cy} stroke="var(--text-4)" strokeWidth="1" strokeDasharray="3 2"/>
+        <polygon points={`${cx + r + 2},${cy} ${cx + r - 4},${cy - 3} ${cx + r - 4},${cy + 3}`} fill="var(--text-4)"/>
+        <text x={cx} y={cy - r - 4} fontSize="8" fill="var(--text-4)" textAnchor="middle" fontFamily="var(--mono-font)">LEFT</text>
+        <text x={cx} y={cy + r + 11} fontSize="8" fill="var(--text-4)" textAnchor="middle" fontFamily="var(--mono-font)">RIGHT</text>
+        {emit === 'dir' && (() => {
+          const px = cx + Math.cos(a - Math.PI / 2) * r;
+          const py = cy + Math.sin(a - Math.PI / 2) * r;
+          const qx = cx + Math.cos(a + Math.PI / 2) * r;
+          const qy = cy + Math.sin(a + Math.PI / 2) * r;
+          return <path d={`M ${px} ${py} A ${r} ${r} 0 0 1 ${qx} ${qy} Z`}
+                       fill="var(--accent)" fillOpacity="0.22" stroke="var(--accent)" strokeWidth="1"/>;
+        })()}
+        {emit === 'omni' && (
+          <circle cx={cx} cy={cy} r={r} fill="var(--accent)" opacity="0.15" stroke="var(--accent)" strokeDasharray="3 2"/>
+        )}
+        <circle cx={cx} cy={cy} r="2.5" fill="var(--accent)"/>
+        {emit === 'dir' && (
+          <>
+            <line x1={cx} y1={cy} x2={ex} y2={ey} stroke="var(--accent-2)" strokeWidth="1.5"/>
+            <circle cx={ex} cy={ey} r="2.5" fill="var(--accent-2)"/>
+          </>
+        )}
+      </svg>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="lw-tweaks-seg" style={{ width: '100%' }}>
+          <button className={emit === 'omni' ? 'active' : ''} onClick={() => onEmit('omni')}>Omni</button>
+          <button className={emit === 'dir'  ? 'active' : ''} onClick={() => onEmit('dir')}>Directed</button>
+        </div>
+        {emit === 'dir' && (
+          <>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 'var(--fs-xs)' }}>
+              <span style={{ width: 48, color: 'var(--text-3)' }}>Offset</span>
+              <input type="range" min="0" max="359" value={angle} onChange={e => onAngle(+e.target.value)} style={{ flex: 1 }}/>
+              <span style={{ fontFamily: 'var(--mono-font)', width: 34, textAlign: 'right' }}>{angle}°</span>
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 'var(--fs-2xs)' }} onClick={() => onAngle(0)}>↑ Left</button>
+              <button className="btn" style={{ flex: 1, padding: '2px 4px', fontSize: 'var(--fs-2xs)' }} onClick={() => onAngle(180)}>↓ Right</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Sample a path at the given LED count — used for ProjectContext strip pixels
+function samplePathFull(d, count) {
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', d);
+  const len = p.getTotalLength?.() || 100;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const frac = count === 1 ? 0.5 : i / (count - 1);
+    const pt = p.getPointAtLength(frac * len);
+    out.push({ x: pt.x, y: pt.y });
+  }
+  return out;
+}
+
+// Parse an imported SVG text → array of layer objects
+function parseSvgLayers(text) {
+  const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+  const svg = doc.querySelector('svg');
+  if (!svg) return null;
+  const vb = svg.getAttribute('viewBox') || '0 0 640 400';
+
+  const COLORS = [
+    'oklch(72% 0.15 210)', 'oklch(78% 0.14 300)', 'oklch(78% 0.14 60)',
+    'oklch(80% 0.15 155)', 'oklch(78% 0.17 30)',  'oklch(74% 0.16 260)',
+  ];
+
+  const extractLayers = (els) => els.map((el, i) => {
+    const name = el.getAttribute('id') ||
+                 el.getAttribute('inkscape:label') ||
+                 el.getAttribute('data-name') ||
+                 (el.tagName === 'path' ? `Path ${i + 1}` : `Layer ${i + 1}`);
+    // Find first <path> in this element (or the element itself)
+    const pathEl = el.tagName === 'path' ? el : el.querySelector('path');
+    const d = pathEl?.getAttribute('d');
+    if (!d) return null;
+    const svgPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    svgPath.setAttribute('d', d);
+    const len = svgPath.getTotalLength?.() || 100;
+    const leds = Math.max(10, Math.round(len / 16.6)); // 60 LED/m at 16.6mm pitch
+    return {
+      id: el.getAttribute('id') || `L${i + 1}`,
+      name,
+      leds,
+      len: parseFloat((len / 96).toFixed(2)),
+      brightness: 1.0,
+      path: d,
+      emit: 'dir',
+      angle: 0,
+      color: COLORS[i % COLORS.length],
+    };
+  }).filter(Boolean);
+
+  // Try top-level <g> elements first, fall back to top-level <path> elements
+  const groups = [...svg.querySelectorAll(':scope > g')];
+  const layers = groups.length > 0
+    ? extractLayers(groups)
+    : extractLayers([...svg.querySelectorAll(':scope > path')]);
+
+  return { vb, layers, innerHTML: svg.innerHTML };
+}
+
+export function LayoutScreen() {
+  const { setSvgText, setViewBox, setStrips } = useProject();
+  const [layers, setLayers]       = useState(LAYERS);
+  const [selId, setSelId]         = useState('L1');
+  const [hidden, setHidden]       = useState({});
+  const [showLight, setShowLight] = useState(true);
+  const [showLeds, setShowLeds]   = useState(true);
+  const [svgViewBox, setSvgViewBox] = useState('0 0 640 400');
+  const [artworkHTML, setArtworkHTML] = useState(null);
+  const [svgZoom, setSvgZoom] = useState(1.0);
+  const fileInputRef = useRef(null);
+
+  const sel = layers.find(l => l.id === selId);
+  const visibleLayers = layers.filter(l => !hidden[l.id]);
+  const totalLeds = layers.reduce((a, l) => a + l.leds, 0);
+
+  const updateSel = (patch) => {
+    setLayers(layers.map(l => l.id === selId ? { ...l, ...patch } : l));
+  };
+
+  const sampled = useMemo(() =>
+    Object.fromEntries(visibleLayers.map(l => [l.id, samplePath(l.path, l.leds)])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visibleLayers.map(l => l.id + l.leds).join(',')]
+  );
+
+  // Sync layers → ProjectContext strips whenever layers or their LED counts change
+  useEffect(() => {
+    const strips = layers
+      .filter(l => !hidden[l.id])
+      .map(l => ({
+        id:         l.id,
+        color:      l.color,
+        speed:      1,
+        brightness: l.brightness ?? 1,
+        hueShift:   0,
+        pixels:     samplePathFull(l.path, l.leds),
+      }));
+    setStrips(strips);
+  }, [layers, hidden, setStrips]);
+
+  const handleImportSVG = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target.result;
+      const parsed = parseSvgLayers(text);
+      if (!parsed || parsed.layers.length === 0) return;
+      setLayers(parsed.layers);
+      setSelId(parsed.layers[0].id);
+      setHidden({});
+      setSvgViewBox(parsed.vb);
+      setArtworkHTML(parsed.innerHTML);
+      setSvgText(text);
+      setViewBox(parsed.vb);
+    };
+    reader.readAsText(file);
+    // Reset input so re-importing the same file triggers onChange
+    e.target.value = '';
+  }, [setSvgText, setViewBox]);
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div className="lw-canvas-toolbar">
+          <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()}>
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M6 1v8M3 5l3-4 3 4M1 10h10"/></svg>
+            Import SVG
+          </button>
+          <input ref={fileInputRef} type="file" accept=".svg,image/svg+xml" style={{ display: 'none' }} onChange={handleImportSVG}/>
+          <span className="tbar-divider"/>
+          <div className="tbar-group">
+            <button className="btn">Select</button>
+            <button className="btn btn-ghost">Pan</button>
+          </div>
+          <span className="tbar-divider"/>
+          <span className="tbar-label">DENSITY</span>
+          <select className="btn" style={{ padding: '4px 8px' }} defaultValue="60">
+            <option value="30">30 /m</option><option value="60">60 /m</option>
+            <option value="96">96 /m</option><option value="144">144 /m</option>
+          </select>
+          <span className="tbar-label" style={{ marginLeft: 12 }}>PITCH</span>
+          <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--text-2)', fontSize: 'var(--fs-sm)' }}>16.6 mm</span>
+          <div style={{ flex: 1 }}/>
+          <button className={`btn ${showLight ? 'btn-primary' : ''}`} onClick={() => setShowLight(!showLight)}>
+            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6" cy="6" r="2"/><path d="M6 1v1.5M6 9.5V11M1 6h1.5M9.5 6H11M2.5 2.5l1 1M8.5 8.5l1 1M2.5 9.5l1-1M8.5 3.5l1-1"/></svg>
+            Show light
+          </button>
+          <button className={`btn ${showLeds ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setShowLeds(!showLeds)}>
+            LEDs
+          </button>
+        </div>
+
+        <div className="lw-viewport" style={{ display: 'grid', placeItems: 'center' }}>
+          <svg viewBox={svgViewBox} style={{ width: `${svgZoom * 92}%`, height: `${svgZoom * 92}%`, maxWidth: 'none' }} overflow="visible">
+            <defs>
+              <filter id="led-bloom" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.5"/>
+              </filter>
+            </defs>
+
+            {artworkHTML && (
+              <g dangerouslySetInnerHTML={{ __html: artworkHTML }}
+                 style={{ opacity: 0.18, filter: 'saturate(0) brightness(1.4)', pointerEvents: 'none' }}/>
+            )}
+
+            {showLight && (
+              <g>
+                {visibleLayers.map(l => (
+                  <g key={l.id} opacity={l.id === selId ? 1 : 0.6}>
+                    {sampled[l.id]?.map((pt, i) => {
+                      const b = l.brightness ?? 1;
+                      if (l.emit === 'omni') {
+                        return <OmniHalo key={i} cx={pt.x} cy={pt.y} color={l.color} reach={50 * b} intensity={0.5}/>;
+                      }
+                      const baseDeg = Math.atan2(pt.tx, -pt.ty) * 180 / Math.PI + 90;
+                      const ledAngle = baseDeg + l.angle;
+                      return <LightCone key={i} cx={pt.x} cy={pt.y} angle={ledAngle} color={l.color} reach={90 * b} intensity={0.5}/>;
+                    })}
+                  </g>
+                ))}
+              </g>
+            )}
+
+            {visibleLayers.map(l => (
+              <path key={l.id + '-p'} d={l.path}
+                    stroke={l.id === selId ? 'var(--text)' : 'oklch(58% 0.02 260)'}
+                    strokeWidth={l.id === selId ? 1.5 : 1}
+                    fill="none" strokeDasharray="2 3" opacity="0.8"/>
+            ))}
+
+            {sel && !hidden[sel.id] && sel.emit === 'dir' && sampled[sel.id]?.filter((_, i) => i % 4 === 0).map((pt, i) => {
+              const baseDeg = Math.atan2(pt.tx, -pt.ty) * 180 / Math.PI + 90;
+              const a = ((baseDeg + sel.angle) - 90) * Math.PI / 180;
+              const ex = pt.x + Math.cos(a) * 18, ey = pt.y + Math.sin(a) * 18;
+              return (
+                <g key={'arr' + i} opacity="0.8">
+                  <line x1={pt.x} y1={pt.y} x2={ex} y2={ey} stroke="var(--accent-2)" strokeWidth="1"/>
+                  <circle cx={ex} cy={ey} r="1.5" fill="var(--accent-2)"/>
+                </g>
+              );
+            })}
+
+            {showLeds && (
+              <>
+                <g filter="url(#led-bloom)" opacity="0.7">
+                  {visibleLayers.map(l =>
+                    sampled[l.id]?.map((pt, i) =>
+                      <circle key={l.id + i} cx={pt.x} cy={pt.y} r={3} fill={l.color}/>
+                    )
+                  )}
+                </g>
+                <g>
+                  {visibleLayers.map(l =>
+                    sampled[l.id]?.map((pt, i) =>
+                      <circle key={l.id + i} cx={pt.x} cy={pt.y} r={1.3}
+                              fill={l.id === selId ? 'white' : l.color}/>
+                    )
+                  )}
+                </g>
+              </>
+            )}
+          </svg>
+
+          <div className="lw-viewport-overlay tl">
+            <div><span className="k">artwork</span> <span className="v">{artworkHTML ? svgViewBox : 'demo · no SVG imported'}</span></div>
+            <div><span className="k">layers</span> <span className="v">{layers.length} · {totalLeds} LEDs</span></div>
+          </div>
+          <div className="lw-viewport-overlay br">
+            <div><span className="k">{sel?.name}</span></div>
+            <div><span className="k">emit</span> <span className="v">
+              {sel?.emit === 'omni' ? 'omnidirectional' : `follows path · ${sel?.angle >= 0 ? '+' : ''}${sel?.angle}° offset`}
+            </span></div>
+          </div>
+
+          <div className="lw-zoom-controls">
+            <button onClick={() => setSvgZoom(z => Math.min(4, z * 1.25))}>+</button>
+            <div className="lw-zoom-level">{Math.round(svgZoom * 100)}%</div>
+            <button onClick={() => setSvgZoom(z => Math.max(0.25, z / 1.25))}>−</button>
+            <button style={{ fontSize: 'var(--fs-2xs)' }} onClick={() => setSvgZoom(1)}>1:1</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="lw-panel" style={{ borderLeft: '1px solid var(--border)' }}>
+        <div className="lw-panel-body">
+          <div className="lw-sec-header">
+            <span>Illustrator Layers</span>
+            <span className="meta">{layers.length} · {totalLeds} LED</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {layers.map(l => {
+              const isSel = l.id === selId;
+              const isHidden = !!hidden[l.id];
+              return (
+                <div key={l.id}
+                     onClick={() => setSelId(l.id)}
+                     style={{
+                       display:'flex', alignItems:'center', gap: 8,
+                       padding: '7px 10px',
+                       background: isSel ? 'var(--surface-2)' : 'transparent',
+                       border: '1px solid ' + (isSel ? 'var(--accent)' : 'var(--border)'),
+                       borderRadius: 'var(--r-sm)',
+                       cursor: 'pointer',
+                       opacity: isHidden ? 0.45 : 1,
+                     }}>
+                  <button onClick={(e) => { e.stopPropagation(); setHidden({ ...hidden, [l.id]: !isHidden }); }}
+                          style={{ color: 'var(--text-3)', width: 14, height: 14, display: 'grid', placeItems: 'center' }}>
+                    {isHidden
+                      ? <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1"><path d="M1 1l10 10M2 6s1.5-3 4-3 4 3 4 3"/></svg>
+                      : <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.1"><path d="M1 6s2-3 5-3 5 3 5 3-2 3-5 3-5-3-5-3z"/><circle cx="6" cy="6" r="1.5"/></svg>}
+                  </button>
+                  <span style={{ width: 10, height: 10, borderRadius: 2, background: l.color, boxShadow: '0 0 6px ' + l.color, flexShrink: 0 }}/>
+                  <span style={{ fontSize: 'var(--fs-md)', flex: 1, fontFamily: 'var(--mono-font)', color: isSel ? 'var(--text)' : 'var(--text-2)' }}>{l.name}</span>
+                  <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', fontFamily: 'var(--mono-font)' }}>
+                    {l.emit === 'omni' ? '◉' : `↗${l.angle}°`}
+                  </span>
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 32, textAlign: 'right' }}>{l.leds}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {sel && (
+            <>
+              <div className="lw-sec-header" style={{ marginTop: 20 }}>
+                <span>Inspector · {sel.name}</span>
+                <span className="meta">{sel.emit}</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', fontSize: 'var(--fs-sm)', marginBottom: 14 }}>
+                <span style={{ color: 'var(--text-3)' }}>Length</span>
+                <span style={{ fontFamily: 'var(--mono-font)' }}>{sel.len.toFixed(2)} m</span>
+                <span style={{ color: 'var(--text-3)' }}>LEDs</span>
+                <input type="number" value={sel.leds} min="1" max="512"
+                       onChange={e => updateSel({ leds: +e.target.value })}
+                       style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 70 }}/>
+                <span style={{ color: 'var(--text-3)' }}>Color tag</span>
+                <div style={{ width: 20, height: 16, borderRadius: 3, background: sel.color, border: '1px solid var(--border-2)' }}/>
+                <span style={{ color: 'var(--text-3)' }}>Brightness</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="range" min="0" max="2" step="0.05" value={sel.brightness ?? 1}
+                         onChange={e => updateSel({ brightness: +e.target.value })}
+                         style={{ flex: 1 }}/>
+                  <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', width: 34, textAlign: 'right', color: 'var(--text-2)' }}>
+                    {Math.round((sel.brightness ?? 1) * 100)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="lw-sec-header">
+                <span>Emit direction</span>
+                <span className="meta">where the light shines</span>
+              </div>
+              <DirectionCompass
+                angle={sel.angle} emit={sel.emit}
+                onAngle={a => updateSel({ angle: a })}
+                onEmit={e => updateSel({ emit: e })}
+              />
+
+              <div style={{ marginTop: 12, fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)', lineHeight: 1.5, padding: 10, background: 'var(--bg)', border: '1px dashed var(--border)', borderRadius: 'var(--r-sm)' }}>
+                Affects the preview's directed glow — not the pattern math. Drag the compass or use sliders.
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Export screen ─────────────────────────────────────────────────────
+export function ExportScreen() {
+  const {
+    projectId,
+    projectName,
+    strips: projectStrips,
+    viewBox,
+    patchBoard,
+    activePatternId,
+    showClips,
+    palette,
+    masterBrightness,
+    showDuration,
+    controllerProfiles,
+    activeControllerId,
+    physicalControls,
+    standaloneController,
+  } = useProject();
+
+  const [normalize, setNormalize] = useState(true);
+  const [scaleX, setScaleX]       = useState(1.0);
+  const [scaleY, setScaleY]       = useState(1.0);
+  const [offsetX, setOffsetX]     = useState(0);
+  const [offsetY, setOffsetY]     = useState(0);
+
+  const sourceStrips = (projectStrips && projectStrips.length > 0) ? projectStrips : DEMO_STRIPS;
+  const usingDemo = !(projectStrips && projectStrips.length > 0);
+
+  const pixels = useMemo(() => {
+    if (!usingDemo) return pixelsFromPatchBoard(patchBoard, sourceStrips);
+    const withPixels = sourceStrips.map(s => {
+      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      pathEl.setAttribute('d', s.path);
+      const px = libSamplePath(pathEl, s.leds);
+      return { ...s, pixels: px };
+    });
+    assignIndices(withPixels);
+    return getAllPixels(withPixels);
+  }, [sourceStrips, usingDemo, patchBoard]);
+
+  const exportOpts = { normalize, scaleX, scaleY, offsetX, offsetY };
+
+  const ledmapJson = useMemo(() => toWLEDLedmap(pixels, exportOpts), [pixels, normalize, scaleX, scaleY, offsetX, offsetY]);
+  const previewJson = ledmapJson.slice(0, 400) + '\n  …';
+
+  const totalLeds = pixels.length;
+  const activeControllerProfile = controllerProfiles.find(profile => profile.id === activeControllerId) || controllerProfiles[0] || null;
+  const wledBasicPackageJson = useMemo(() => JSON.stringify(buildWledBasicPackage({
+    projectName,
+    activePatternId,
+    showClips,
+    strips: sourceStrips,
+    palette,
+    duration: showDuration,
+    brightness: Math.max(32, Math.min(180, Math.round((masterBrightness || 1) * 180))),
+    loop: true,
+    physicalControls: physicalControls || activeControllerProfile?.physicalControls,
+  }), null, 2), [projectName, activePatternId, showClips, sourceStrips, palette, showDuration, masterBrightness, physicalControls, activeControllerProfile?.physicalControls]);
+
+  const standaloneOutputs = useMemo(
+    () => deriveStandaloneOutputsFromStrips(sourceStrips, standaloneController?.outputs || []),
+    [sourceStrips, standaloneController?.outputs],
+  );
+  const cardRuntimeConfigJson = useMemo(() => {
+    const zones = !usingDemo && patchBoard ? patchBoardToZones(patchBoard, sourceStrips) : [];
+    const pkg = makeCardRuntimePackage({
+      projectId,
+      projectName,
+      mode: 'website-flash',
+      led: {
+        pixels: totalLeds || totalStripPixels(sourceStrips) || standaloneOutputs.reduce((sum, output) => sum + (output.pixels || 0), 0) || undefined,
+        colorOrder: standaloneController?.led?.colorOrder,
+        brightnessLimit: standaloneController?.led?.brightnessLimit,
+        outputs: standaloneOutputs.length
+          ? standaloneOutputs.map((output, index) => ({
+              id: output.id || `out${index + 1}`,
+              name: output.name || `Output ${index + 1}`,
+              pin: output.pin,
+              pixels: output.pixels,
+            }))
+          : undefined,
+      },
+      controls: standaloneController?.controls,
+      zones: zones.length ? zones : undefined,
+      syncZones: zones.length <= 1,
+    });
+    return JSON.stringify(pkg.config, null, 2);
+  }, [projectId, projectName, sourceStrips, standaloneController, totalLeds, patchBoard, usingDemo, standaloneOutputs]);
+
+  const artifacts = [
+    {
+      file: 'lightweaver-card-config.json', desc: 'ESP32 local runtime config',
+      size: `${(cardRuntimeConfigJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(cardRuntimeConfigJson, 'lightweaver-card-config.json', 'application/json'),
+    },
+    {
+      file: 'ledmap.json', desc: 'WLED 2D layout',
+      size: `${(ledmapJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(ledmapJson, 'ledmap.json', 'application/json'),
+    },
+    {
+      file: 'wled-basic.json', desc: 'WLED presets, playlist, port list',
+      size: `${(wledBasicPackageJson.length / 1024).toFixed(1)} KB`,
+      action: () => download(wledBasicPackageJson, 'wled-basic.json', 'application/json'),
+    },
+    {
+      file: 'ledmap.h', desc: 'FastLED C++ header',
+      size: `${(toFastLED(pixels, exportOpts).length / 1024).toFixed(1)} KB`,
+      action: () => download(toFastLED(pixels, exportOpts), 'ledmap.h', 'text/plain'),
+    },
+    {
+      file: 'positions.csv', desc: 'normalized 0–1',
+      size: `${(toCSV(pixels).length / 1024).toFixed(1)} KB`,
+      action: () => download(toCSV(pixels), 'positions.csv', 'text/csv'),
+    },
+  ];
+
+  const numInput = (val, setter, step = 0.01) => (
+    <input
+      type="number" value={val} step={step}
+      onChange={e => setter(parseFloat(e.target.value) || 0)}
+      style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 6px', width: 72 }}
+    />
+  );
+
+  return (
+    <div style={{ padding: 40, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, overflow: 'auto', height: '100%' }}>
+      <div>
+        {usingDemo && (
+          <div style={{ padding: '10px 14px', marginBottom: 20, background: 'var(--surface)', border: '1px dashed var(--border-2)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)', color: 'var(--text-3)', fontFamily: 'var(--mono-font)' }}>
+            No strips in project — showing demo data. Draw strips on the Layout screen to export your real layout.
+          </div>
+        )}
+
+        <div className="lw-sec-header"><span>Layout summary</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '6px 12px', fontSize: 'var(--fs-sm)', marginBottom: 20, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)' }}>
+          <span style={{ color: 'var(--text-3)' }}>Total LEDs</span>
+          <span style={{ fontFamily: 'var(--mono-font)', fontWeight: 600 }}>{totalLeds.toLocaleString()}</span>
+          <span style={{ color: 'var(--text-3)' }}>Strips</span>
+          <span style={{ fontFamily: 'var(--mono-font)' }}>{sourceStrips.length}</span>
+          <span style={{ color: 'var(--text-3)' }}>View box</span>
+          <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>{viewBox || '0 0 640 400'}</span>
+        </div>
+
+        <div className="lw-sec-header" style={{ marginTop: 4 }}>
+          <span>Coordinate options</span>
+          <span className="meta">WLED + FastLED exports</span>
+        </div>
+        <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--fs-sm)', marginBottom: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={normalize} onChange={e => setNormalize(e.target.checked)}/>
+            <span style={{ color: 'var(--text-2)' }}>Normalize coordinates</span>
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr 64px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 'var(--fs-sm)' }}>
+            <span style={{ color: 'var(--text-3)' }}>Scale X</span>
+            {numInput(scaleX, setScaleX, 0.01)}
+            <span style={{ color: 'var(--text-3)' }}>Scale Y</span>
+            {numInput(scaleY, setScaleY, 0.01)}
+            <span style={{ color: 'var(--text-3)' }}>Offset X</span>
+            {numInput(offsetX, setOffsetX, 1)}
+            <span style={{ color: 'var(--text-3)' }}>Offset Y</span>
+            {numInput(offsetY, setOffsetY, 1)}
+          </div>
+        </div>
+
+        <div className="lw-sec-header" style={{ marginTop: 4 }}>
+          <span>Strips</span>
+          <span className="meta">{sourceStrips.length} · {totalLeds} LED</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 20 }}>
+          {sourceStrips.map(s => (
+            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)' }}>
+              {s.color && (
+                <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, boxShadow: `0 0 5px ${s.color}`, flexShrink: 0 }}/>
+              )}
+              <span style={{ flex: 1, fontFamily: 'var(--mono-font)', color: 'var(--text-2)' }}>{s.name}</span>
+              <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', minWidth: 28, textAlign: 'right' }}>{s.leds || s.pixelCount || s.pixels?.length || 0}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="lw-sec-header" style={{ marginTop: 8 }}>
+          <span>Artifacts</span>
+          <span className="meta">{pixels.length} LEDs · {sourceStrips.length} strips</span>
+        </div>
+        <div style={{ padding: '8px 12px', marginBottom: 8, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-xs)', color: 'var(--text-3)', lineHeight: 1.5 }}>
+          Install path: download <span style={{ fontFamily: 'var(--mono-font)' }}>lightweaver-card-config.json</span>,
+          open the card at <span style={{ fontFamily: 'var(--mono-font)' }}>http://lightweaver.local</span>,
+          then paste it in Settings → Paste designer config.
+        </div>
+        {artifacts.map(({ file, desc, size, action }) => (
+          <div key={file} style={{ display:'flex', alignItems:'center', gap: 12, padding: '10px 12px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 6 }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" strokeWidth="1.3"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-md)' }}>{file}</div>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-3)' }}>{desc} · {size}</div>
+            </div>
+            <button className="btn" onClick={action}>Download</button>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <div className="lw-sec-header"><span>ledmap.json preview</span><span className="meta">live</span></div>
+        <pre style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', color: 'var(--text-2)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', padding: 14, lineHeight: 1.5, overflow: 'auto', maxHeight: 400 }}>
+          {previewJson}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+// ── Flash screen ──────────────────────────────────────────────────────
+function fmtSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
+const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
+
+function formatFlashResetMode(mode) {
+  if (mode === 'default_reset') return 'auto reset';
+  if (mode === 'usb_reset') return 'USB reset';
+  if (mode === 'no_reset') return 'manual BOOT mode';
+  return mode;
+}
+
+export function FlashScreen() {
+  const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
+
+  const [connected, setConnected]     = useState(false);
+  const [connecting, setConnecting]   = useState(false);
+  const [flashing, setFlashing]       = useState(false);
+  const [progress, setProgress]       = useState(0);
+  const [status, setStatus]           = useState('');
+  const [statusKind, setStatusKind]   = useState('');
+  const [log, setLog]                 = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [address, setAddress]         = useState(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
+  const [eraseAll, setEraseAll]       = useState(true);
+  const [loadingBundledFirmware, setLoadingBundledFirmware] = useState(false);
+
+  const loaderRef    = useRef(null);
+  const transportRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const logRef       = useRef(null);
+
+  const appendLog = (line) => {
+    setLog(prev => prev + line + '\n');
+    setTimeout(() => {
+      if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+    }, 0);
+  };
+
+  const setStatusMsg = (msg, kind = '') => {
+    setStatus(msg);
+    setStatusKind(kind);
+  };
+
+  const handleConnect = async () => {
+    if (connected) {
+      setConnecting(true);
+      await disconnectESP(loaderRef.current, transportRef.current);
+      loaderRef.current = null;
+      transportRef.current = null;
+      setConnected(false);
+      setConnecting(false);
+      setStatusMsg('Disconnected');
+      return;
+    }
+    setConnecting(true);
+    setStatusMsg('Select serial port…');
+    try {
+      const { loader, transport, chip, resetMode } = await connectESP({
+        onAttempt: ({ mode }) => {
+          const label = formatFlashResetMode(mode);
+          setStatusMsg(`Trying ${label}…`);
+          appendLog(`Trying ${label} (${mode})…`);
+        },
+      });
+      loaderRef.current    = loader;
+      transportRef.current = transport;
+      setConnected(true);
+      setStatusMsg(`● ${chip}`, 'connected');
+      appendLog(`Connected: ${chip} via ${formatFlashResetMode(resetMode)}`);
+    } catch (err) {
+      const msg = err.message ?? String(err);
+      setStatusMsg(`✕ ${msg}`, 'error');
+      appendLog(`Connection failed: ${msg}`);
+      if (msg.includes('Failed to connect') || msg.includes('sync')) {
+        appendLog('→ Close other serial monitors/flasher tabs, unplug/replug USB, then try again.');
+        appendLog('→ If it still fails: hold BOOT, press+release RESET, release BOOT, then Connect.');
+      }
+      loaderRef.current = null;
+      transportRef.current = null;
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+  };
+
+  const handleSelectBundledFirmware = async () => {
+    setLoadingBundledFirmware(true);
+    setStatusMsg('Loading Lightweaver firmware…');
+    try {
+      const response = await fetch(LIGHTWEAVER_FIRMWARE_URL, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`firmware file ${response.status}`);
+      const blob = await response.blob();
+      const file = new File([blob], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
+      setSelectedFile(file);
+      setAddress(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
+      setEraseAll(true);
+      setStatusMsg('Lightweaver firmware selected.', 'connected');
+      appendLog(`Selected ${LIGHTWEAVER_FIRMWARE_NAME} (${fmtSize(file.size)})`);
+    } catch (err) {
+      setStatusMsg(`✕ Could not load bundled firmware: ${err.message}`, 'error');
+      appendLog(`Bundled firmware failed: ${err.message}`);
+    } finally {
+      setLoadingBundledFirmware(false);
+    }
+  };
+
+  const handleFlash = async () => {
+    if (!selectedFile || !loaderRef.current) return;
+    let addr;
+    try {
+      ({ address: addr } = validateFlashPlan({ address, eraseAll }));
+    } catch (err) {
+      setStatusMsg(`✕ ${err.message ?? err}`, 'error');
+      appendLog(`Flash blocked: ${err.message ?? err}`);
+      return;
+    }
+
+    setFlashing(true);
+    setProgress(0);
+    setStatusMsg(eraseAll ? 'Erasing flash…' : 'Flashing…');
+    appendLog(`Flashing ${fmtSize(selectedFile.size)} @ 0x${addr.toString(16).toUpperCase()}${eraseAll ? '  [erase all]' : ''}…`);
+    if (eraseAll) appendLog('Erasing flash — this takes ~15 s…');
+
+    try {
+      await flashFirmwareAndRelease({
+        loader: loaderRef.current,
+        transport: transportRef.current,
+        file: selectedFile,
+        address: addr,
+        eraseAll,
+        flashFirmware,
+        disconnectESP,
+        onProgress: (pct) => {
+          setProgress(pct);
+          setStatusMsg(`Flashing… ${Math.round(pct * 100)}%`);
+        },
+      });
+      loaderRef.current = null;
+      transportRef.current = null;
+      setConnected(false);
+      setProgress(1);
+      setStatusMsg(FLASH_COMPLETE_RELEASED_STATUS, 'connected');
+      appendLog(FLASH_COMPLETE_RELEASED_LOG);
+    } catch (err) {
+      setStatusMsg(`✕ Flash failed: ${err.message ?? err}`, 'error');
+      appendLog(`Error: ${err.message ?? err}`);
+    } finally {
+      setFlashing(false);
+    }
+  };
+
+  const statusColor = statusKind === 'connected'
+    ? 'oklch(72% 0.18 155)'
+    : statusKind === 'error'
+      ? 'oklch(72% 0.15 30)'
+      : 'var(--text-3)';
+
+  const canConnect = hasWebSerial && !connecting && !flashing;
+  const canFlash   = connected && !!selectedFile && !flashing;
+
+  return (
+    <div style={{ padding: 40, maxWidth: 680, margin: '0 auto', height: '100%', overflow: 'auto' }}>
+
+      {!hasWebSerial && (
+        <div style={{ padding: '10px 14px', marginBottom: 20, background: 'oklch(28% 0.04 30)', border: '1px solid oklch(45% 0.12 30)', borderRadius: 'var(--r-sm)', fontSize: 'var(--fs-sm)', color: 'oklch(72% 0.15 30)' }}>
+          Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser.
+        </div>
+      )}
+
+      <div className="lw-sec-header"><span>Connection mode</span><span className="meta">auto first, manual fallback</span></div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+        {[
+          { step: 1, label: 'Click Connect', sub: 'the installer tries auto reset first' },
+          { step: 2, label: 'Pick the USB port', sub: 'close other serial tabs first' },
+          { step: 3, label: 'Manual fallback', sub: 'hold BOOT, tap RESET, retry' },
+        ].map(({ step, label, sub }) => (
+          <div key={step} style={{ flex: 1, padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)' }}>
+            <div style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--text-4)' }}>STEP {step}</div>
+            <div style={{ fontSize: 'var(--fs-md)', marginTop: 4, fontWeight: 500 }}>{label}</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-4)', marginTop: 3 }}>{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="lw-sec-header"><span>Lightweaver firmware</span></div>
+      <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
+        <p style={{ margin: '0 0 12px', color: 'var(--text-3)', fontSize: 'var(--fs-sm)', lineHeight: 1.5 }}>
+          Use the bundled Lightweaver factory firmware for sellable cards and blank ESP32-S3 boards. Only browse for a file if Adrian gave you a specific replacement binary.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={handleSelectBundledFirmware} disabled={loadingBundledFirmware}>
+            {loadingBundledFirmware ? 'Loading…' : 'Use Lightweaver firmware'}
+          </button>
+          <span style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-4)' }}>or</span>
+          <button className="btn" onClick={() => fileInputRef.current?.click()}>Browse .bin</button>
+          <input ref={fileInputRef} type="file" accept=".bin" style={{ display: 'none' }} onChange={handleFileChange}/>
+        </div>
+
+        {selectedFile && (
+          <div style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: 'var(--text-2)', padding: '6px 0' }}>
+            {selectedFile.name} ({fmtSize(selectedFile.size)})
+          </div>
+        )}
+      </div>
+
+      <div className="lw-sec-header"><span>Flash options</span></div>
+      <div style={{ padding: '12px 14px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', marginBottom: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 12px', alignItems: 'center', fontSize: 'var(--fs-sm)' }}>
+          <span style={{ color: 'var(--text-3)' }}>Address</span>
+          <input
+            type="text" value={address}
+            onChange={e => setAddress(e.target.value)}
+            style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-sm)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', width: 90 }}
+          />
+          <span></span>
+          <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>
+            Bundled Lightweaver factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS} and can erase the chip first. App-only replacement binaries usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with Erase all off.
+          </span>
+          <span style={{ color: 'var(--text-3)' }}>Erase all</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+            <input type="checkbox" checked={eraseAll} onChange={e => setEraseAll(e.target.checked)}/>
+            <span style={{ color: 'var(--text-4)', fontSize: 'var(--fs-xs)' }}>takes ~15 s</span>
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <button
+          className={`btn ${connected ? '' : 'btn-primary'}`}
+          onClick={handleConnect}
+          disabled={!canConnect}
+        >
+          {connecting ? (connected ? 'Disconnecting…' : 'Connecting…') : connected ? 'Disconnect' : 'Connect'}
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={handleFlash}
+          disabled={!canFlash}
+          title={!connected ? 'Connect device first' : !selectedFile ? 'Select firmware first' : 'Flash firmware'}
+        >
+          Flash firmware
+        </button>
+        {status && (
+          <span style={{ fontSize: 'var(--fs-sm)', fontFamily: 'var(--mono-font)', color: statusColor, flex: 1 }}>
+            {status}
+          </span>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 16, height: 6, background: 'var(--surface)', borderRadius: 99, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <div style={{ height: '100%', width: `${Math.round(progress * 100)}%`, background: 'var(--accent)', borderRadius: 99, transition: 'width 0.15s' }}/>
+      </div>
+
+      <div className="lw-sec-header"><span>Log</span><span className="meta">{Math.round(progress * 100)}%</span></div>
+      <textarea
+        ref={logRef}
+        readOnly
+        value={log}
+        style={{
+          width: '100%', height: 180, resize: 'vertical', boxSizing: 'border-box',
+          fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', lineHeight: 1.6,
+          background: 'var(--bg)', color: 'var(--text-2)',
+          border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '10px 12px',
+        }}
+      />
+    </div>
+  );
+}
