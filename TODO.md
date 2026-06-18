@@ -47,6 +47,8 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
 
 ### Mapper and firmware follow-ups
 
+- [ ] **Rescue the split-zone lighting fix from the old tender-dirac branch** — a zone split into pieces currently goes dark on its later pieces; the fix exists on the stale `claude/tender-dirac-b575t8` branch but that whole branch can't be merged (it predates the v3.3 reorg and collides in ~10 places, including the firmware and the compiled firmware file, so a blind merge would revert newer work) _(you + agent · moderate)_
+  Lift only the multi-range zone rendering change onto a fresh branch off current main, build it, then bench-test on real hardware before flashing any installation. Done when split zones light every segment, the build passes, a bench-test confirms it, and the firmware bundle is redeployed. Do NOT merge the old branch wholesale — salvage the one feature. → Source branch: `claude/tender-dirac-b575t8` (firmware/lightweaver-controller/src/main.cpp + LightweaverWeb.cpp)
 - [ ] **USB controller mode** — add a direct USB mode using the verified bench serial protocol as the first hardware handshake _(agent · moderate)_
   A wired serial path lets the mapper drive the card directly without the network, proving the protocol before wireless. Done when the mapper can drive the controller over USB serial using the bench protocol. → Plan: [docs/roadmap.md](docs/roadmap.md)
 - [ ] **Split mapper file** — break the 4,713-line mapper main file into state, ui, render, and export modules _(agent · deep)_
