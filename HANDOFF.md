@@ -1,17 +1,17 @@
-# Handoff — branch `v3.3`
+# Handoff — branch `claude/new-ui-branch-status-1Qp4Y`
 
 ## State
-- Branch `v3.3` is clean and in sync with `origin/v3.3`; tip `2c06170`, verified author (`Claude <noreply@anthropic.com>`).
-- `lightweaver/` builds: `npm run build` succeeds (~3s; only a chunk-size warning on `main.js`, not an error). `node_modules` present.
-- This branch IS the orange/clay **3.3** design — confirmed by accent token `--accent: oklch(0.553 0.109 56)` (hue 56 = clay) vs `origin/main`'s blue `oklch(74% 0.13 210)` (hue 210). Design target = `lightweaver/public/v3-mock/ref/` (terracotta/clay PNGs).
-- Files are still internally labeled "v3" (`index.html` `<title>Lightweaver v3`, `/* Light Weaver v3 */` headers) — stale naming, not a color mixup. UNDECIDED whether to rename.
-- Known 3.3-fidelity drift, NOT yet fixed: left rail renders **Show** where the v3 mock had **Settings** (`src/v3/app.jsx` rail array). UNDECIDED whether intentional.
-- Vite dev server (was on port 5180) stopped by container restart — not running now.
-- Untested: no runtime/visual verification this session (container just restarted); only `npm run build` confirmed.
+- **PR #9 (v3.3) is MERGED** (squash `ba79250`, merged 2026-06-18). The `v3.3` branch was deleted server-side. The orange/clay **3.3** design now lives in `main`. Do NOT try to push to v3.3 — it's gone; PR #9 cannot be reopened.
+- Active branch is `claude/new-ui-branch-status-1Qp4Y`, cut from merged `main` (`2de187b`), + one follow-up commit `009d4b2` (pushed). A NEW PR is needed to land it (none opened yet).
+- **Verified working (2026-07-04):** on `main`'s 3.3 content — `npm install` → `npm run launch:check` passes (35 runtime contract tests green + production build). Dev server runs (vite, localhost:5173). All 5 screens (Patterns, Playlist, Layout, Flash, Installer) render and navigate in a real browser with no JS/page errors. Accent renders `oklch(0.553 0.109 56)` (hue 56 = clay) → confirmed the orange 3.3 design, not blue.
+- Fixed in `009d4b2`: invalid CSS selector `.tb-btn . kbd` → `.tb-btn .kbd` (`lightweaver/src/v3/v3-styles.css:209`); build no longer emits the css-syntax-error warning. Build is clean except a cosmetic chunk-size note on `main.js`.
+- Runtime console errors are all expected offline artifacts (fetches to `192.168.4.1/api/status` / external hosts fail — no card on LAN, agent proxy). NOT app bugs.
+- Rail renders 7 items: Patterns, Playlist, Layout, Show, Flash, Installer, Settings. **RESOLVED: Show is intended** — PR #9 shipped `lw-show.jsx` as part of the v3 mockup, so it's a real 3.3 screen, not drift. Keep it.
+- Files internally labeled "v3" (`<title>Lightweaver v3`, `/* Light Weaver v3 */` headers). **RESOLVED: leaving as-is** — internal/cosmetic; brand copy is "Lightweaver" regardless. Not renaming.
+- node_modules is wiped on container restart — reinstall before running.
 
 ## Next
-- cd /home/user/LED-Programming/lightweaver && npm run dev   # start dev server, open localhost:5173
-- DECIDE with Adrian: rename internal "v3" labels to "v3.3" (index.html title + lw-*.jsx headers) or leave them.
-- DECIDE with Adrian: rail item — keep **Show** or restore **Settings** to match the v3 mock (edit rail array in src/v3/app.jsx).
-- After any change: cd lightweaver && npm run build  to confirm tree still builds.
-- git add -A && git commit && git push -u origin v3.3   # author must be Claude <noreply@anthropic.com>
+- PR is OPEN for `claude/new-ui-branch-status-1Qp4Y` (CSS fix + handoff) — see link in the PR. Merge it to ship the fix into main.
+- cd /home/user/LED-Programming/lightweaver && npm install && npm run dev   # localhost:5173
+- Future changes: git add -A && git commit && git push -u origin claude/new-ui-branch-status-1Qp4Y   # author must be Claude <noreply@anthropic.com>; updates the open PR
+- Nothing else outstanding — 3.3 is merged in main, verified working; the two prior open questions (Show, "v3" labels) are resolved above.
