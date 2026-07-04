@@ -206,7 +206,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .tb-btn.solid { background: var(--bg-elev); color: var(--text-hi); border-color: var(--border-soft); }
 .tb-btn.solid:hover { background: var(--bg-elev-2); }
 .tb-btn.active { background: var(--accent-soft); color: var(--accent); }
-.tb-btn . kbd { color: var(--text-faint); }
+.tb-btn .kbd { color: var(--text-faint); }
 .tb-btn.icon { padding: 0 8px; }
 .tb-btn:disabled { opacity: 0.4; cursor: default; }
 
