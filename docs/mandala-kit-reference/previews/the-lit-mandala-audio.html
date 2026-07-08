@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Lit Mandala · Live Audio Journey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500&family=Space+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0b0806;--edge:#271c12;--ink:#ece0cc;--soft:#9a8a72;--faint:#5e5142;--gold:#c9a35f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{background:radial-gradient(120% 80% at 50% -8%,#1a130c 0%,var(--bg) 55%) fixed,var(--bg);
+    color:var(--ink);font-family:"Inter",system-ui,sans-serif;line-height:1.55;
+    padding:clamp(18px,4vw,44px) clamp(14px,4vw,40px) 70px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto}
+  .eyebrow{font-family:"Space Mono",monospace;font-size:.68rem;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:12px}
+  h1{font-family:"Cormorant Garamond",serif;font-weight:500;font-size:clamp(1.9rem,6vw,3rem);line-height:1.05;margin-bottom:12px}
+  h1 em{font-style:italic;color:var(--gold)}
+  .lede{color:var(--soft);max-width:60ch;font-size:clamp(.9rem,2.4vw,1rem)}
+
+  .source{margin:18px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .big{font-family:"Inter",sans-serif;font-size:.92rem;font-weight:500;color:#1a120a;
+    background:linear-gradient(180deg,#e8bd72,#cf9a44);border:1px solid #e8bd72;border-radius:999px;
+    padding:11px 22px;cursor:pointer;transition:all .18s}
+  .big:hover{filter:brightness(1.06)}
+  label.file{color:var(--soft);background:#140f0a;border:1px solid var(--edge);border-radius:999px;padding:10px 16px;cursor:pointer;font-size:.82rem;transition:all .18s}
+  label.file:hover{color:var(--ink);border-color:#3a2a1a}
+  input[type=file]{display:none}
+
+  .stage{margin:10px auto 0;width:100%;max-width:540px;position:relative}
+  canvas{width:100%;aspect-ratio:1/1;height:auto;display:block;border-radius:18px;background:#050403;
+    box-shadow:0 26px 64px rgba(0,0,0,.55),0 0 0 1px var(--edge)}
+  .status{position:absolute;left:14px;bottom:12px;font-family:"Space Mono",monospace;font-size:.6rem;
+    letter-spacing:.12em;color:rgba(236,224,204,.55);pointer-events:none;text-shadow:0 1px 6px #000}
+
+  .bars{display:flex;gap:12px;margin:14px 0 4px}
+  .band{flex:1;display:flex;flex-direction:column;gap:5px}
+  .band .nm{font-family:"Space Mono",monospace;font-size:.55rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .meter{height:5px;border-radius:3px;background:#241a11;overflow:hidden}
+  .meter i{display:block;height:100%;width:0%;border-radius:3px;transition:width .05s linear}
+
+  .controls{margin:16px 0 4px}
+  .row-label{font-family:"Space Mono",monospace;font-size:.58rem;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:8px}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+  button.mode{font-family:"Inter",sans-serif;font-size:.82rem;color:var(--soft);background:#140f0a;border:1px solid var(--edge);border-radius:999px;padding:9px 15px;cursor:pointer;transition:all .18s}
+  button.mode:hover{color:var(--ink);border-color:#3a2a1a}
+  button.mode.on{color:#1a120a;background:linear-gradient(180deg,#e0b063,#c9933f);border-color:#e0b063;font-weight:500}
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .hint{color:var(--faint);font-size:.78rem;margin-top:8px}
+  .note{margin-top:26px;color:var(--soft);font-size:.88rem;max-width:62ch}
+  .note b{color:var(--gold);font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Backlit Cut Work · Live Audio · Journey Engine</div>
+  <h1>The Lit <em>Mandala</em>, Listening</h1>
+  <p class="lede">Press play. The track is an original ambient bed generated live in your browser, run through the same analyzer a real song would use, so you can watch the mandala actually respond. Nothing is streamed or uploaded.</p>
+
+  <div class="source">
+    <button class="big" id="play">▶ Play ambient track</button>
+    <label class="file" for="file">or load your own</label>
+    <input type="file" id="file" accept="audio/*">
+  </div>
+
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="status" id="status">idle · breathing</div>
+  </div>
+
+  <div class="bars">
+    <div class="band"><span class="nm">Bass</span><div class="meter"><i id="mBass" style="background:linear-gradient(90deg,#7a2410,#d98a3d)"></i></div></div>
+    <div class="band"><span class="nm">Mid</span><div class="meter"><i id="mMid" style="background:linear-gradient(90deg,#9a5a1c,#f4c869)"></i></div></div>
+    <div class="band"><span class="nm">High</span><div class="meter"><i id="mHigh" style="background:linear-gradient(90deg,#caa15f,#ffe6c0)"></i></div></div>
+    <div class="band"><span class="nm">Motion</span><div class="meter"><i id="mFlux" style="background:linear-gradient(90deg,#5a7a4a,#b8d69a)"></i></div></div>
+  </div>
+
+  <div class="controls">
+    <span class="row-label">Focus</span>
+    <div class="row" id="modes"></div>
+    <div class="hint">Journey blends all three effects and evolves on its own. The others pin the effect but keep the slow color, rotation and symmetry drift alive.</div>
+  </div>
+
+  <p class="note">The ambient bed is synthesized here, so it is original and free of copyright, and it is deliberately calm for a late night room. Watch the status line: it names the leading effect and whether the music is rising, holding or easing. The same four signals (three bands plus motion) are exactly what you would feed a real controller, so this is also a tuning bench.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- color ---------- */
+  function lerp(a,b,t){return a+(b-a)*t}
+  function warm(i,bias){i=Math.min(1,Math.max(0,i*(bias||1)));
+    const s=[[0,[30,12,6]],[.32,[150,52,20]],[.62,[202,112,42]],[.85,[244,200,105]],[1,[255,232,196]]];
+    for(let k=1;k<s.length;k++){if(i<=s[k][0]){const a=s[k-1],b=s[k],f=(i-a[0])/(b[0]-a[0]);
+      return [lerp(a[1][0],b[1][0],f),lerp(a[1][1],b[1][1],f),lerp(a[1][2],b[1][2],f)];}}return s[4][1];}
+  const rgb=(c,a)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+  function angWrap(d){while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return d;}
+  const angG=(d,s)=>{d=angWrap(d);return Math.exp(-(d*d)/(2*s*s));};
+
+  /* ---------- mandala geometry ---------- */
+  const rings=[
+    {rf:0.00,sym:1, type:"core", size:0.060},
+    {rf:0.13,sym:6, type:"dot",  size:0.030},
+    {rf:0.25,sym:12,type:"petal",size:0.052},
+    {rf:0.38,sym:12,type:"diamond",size:0.044},
+    {rf:0.51,sym:24,type:"dot",  size:0.024},
+    {rf:0.64,sym:24,type:"petal",size:0.046},
+    {rf:0.77,sym:36,type:"diamond",size:0.032},
+    {rf:0.90,sym:48,type:"dash", size:0.024}
+  ];
+  const R=rings.length, el=[];
+  rings.forEach((rg,ri)=>{const off=(ri%2)?Math.PI/rg.sym:0;
+    for(let k=0;k<rg.sym;k++)el.push({ri,rf:rg.rf,ang:k/rg.sym*Math.PI*2+off,type:rg.type,size:rg.size});});
+  const NEL=el.length;
+  const vals=new Float32Array(NEL), target=new Float32Array(NEL), temp=new Float32Array(NEL).fill(1);
+
+  /* ---------- audio core ---------- */
+  let AC=null, analyser=null, freq=null, prevFreq=null, live=false, mediaEl=null;
+  function ensureCtx(){ if(!AC){AC=new (window.AudioContext||window.webkitAudioContext)();
+    analyser=AC.createAnalyser(); analyser.fftSize=2048; analyser.smoothingTimeConstant=0.8;
+    freq=new Uint8Array(analyser.frequencyBinCount); prevFreq=new Uint8Array(analyser.frequencyBinCount);
+    masterOut=AC.createGain(); masterOut.gain.value=0.85; masterOut.connect(analyser); analyser.connect(AC.destination);} }
+
+  /* ---------- generative ambient engine ---------- */
+  let masterOut=null, running=false, timer=null, nextNote=0, beat=0, noiseBuf=null;
+  let padVoices=[], curChord=0, padFilter=null, padGain=null;
+  const beatDur=0.82;                 // ~73 bpm, soft
+  const midi=n=>440*Math.pow(2,(n-69)/12);
+  const chords=[
+    [45,52,57,64,67],   // A minor add9 spread
+    [41,48,53,60,64],   // F major
+    [43,50,55,62,66],   // G
+    [40,47,52,59,64]    // E minor-ish
+  ];
+  const penta=[69,72,74,76,79,81,84]; // A minor pentatonic up high
+  function makeNoise(){const len=AC.sampleRate*1.0; noiseBuf=AC.createBuffer(1,len,AC.sampleRate);
+    const d=noiseBuf.getChannelData(0);for(let i=0;i<len;i++)d[i]=Math.random()*2-1;}
+  function tone(freq,t,dur,type,peak,filt,q){
+    const o=AC.createOscillator(); o.type=type||"sine"; o.frequency.value=freq;
+    const g=AC.createGain(); g.gain.value=0;
+    let node=o;
+    if(filt){const f=AC.createBiquadFilter();f.type="lowpass";f.frequency.value=filt;f.Q.value=q||0.7;o.connect(f);f.connect(g);}
+    else o.connect(g);
+    g.connect(masterOut);
+    g.gain.setValueAtTime(0,t);
+    g.gain.linearRampToValueAtTime(peak,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.start(t); o.stop(t+dur+0.05);
+  }
+  function shimmer(t){ const s=AC.createBufferSource(); s.buffer=noiseBuf;
+    const f=AC.createBiquadFilter(); f.type="highpass"; f.frequency.value=6500;
+    const g=AC.createGain(); g.gain.value=0; s.connect(f); f.connect(g); g.connect(masterOut);
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.10,t+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t+0.14);
+    s.start(t); s.stop(t+0.2); }
+  function setPad(chordIdx,t){
+    // fade out old
+    padVoices.forEach(v=>{try{v.g.gain.cancelScheduledValues(t);v.g.gain.setValueAtTime(v.g.gain.value,t);v.g.gain.linearRampToValueAtTime(0,t+2.4);v.o.stop(t+2.6);v.o2.stop(t+2.6);}catch(e){}});
+    padVoices=[];
+    const notes=chords[chordIdx];
+    notes.forEach((n,idx)=>{
+      const f=midi(n+12); // pad up an octave for warmth
+      const o=AC.createOscillator(); o.type="sine"; o.frequency.value=f;
+      const o2=AC.createOscillator(); o2.type="triangle"; o2.frequency.value=f; o2.detune.value=6;
+      const lp=AC.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=900; lp.Q.value=0.5;
+      const g=AC.createGain(); g.gain.value=0;
+      o.connect(lp); o2.connect(lp); lp.connect(g); g.connect(masterOut);
+      g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.045,t+2.2);
+      o.start(t); o2.start(t);
+      padVoices.push({o,o2,g});
+    });
+  }
+  function scheduleBeat(b,t){
+    const bar=Math.floor(b/4), inBar=b%4;
+    if(inBar===0 && bar%2===0){ curChord=(bar/2)%chords.length; setPad(curChord,t); }
+    // bass pulse on 0 and 2 (the tide/kick)
+    if(inBar===0||inBar===2){ const root=chords[curChord][0]-12; tone(midi(root),t,inBar===0?0.7:0.5,"sine",inBar===0?0.5:0.32,300); }
+    // sparse melody -> mid + motion
+    if(Math.random()<0.45){ const n=penta[(Math.random()*penta.length)|0]; tone(midi(n),t+ (Math.random()<0.5?0:beatDur*0.5),0.55,"triangle",0.11,2200,1.0); }
+    // sparse shimmer -> high
+    if(Math.random()<0.4){ shimmer(t+beatDur*0.5); }
+  }
+  function scheduler(){ if(timer)return;
+    timer=setInterval(()=>{ if(!running)return; while(nextNote<AC.currentTime+0.25){ scheduleBeat(beat,nextNote); nextNote+=beatDur; beat++; } },40); }
+  function startSynth(){ ensureCtx(); if(!noiseBuf)makeNoise();
+    if(mediaEl){try{mediaEl.pause();}catch(e){}}
+    AC.resume(); masterOut.gain.cancelScheduledValues(AC.currentTime); masterOut.gain.setValueAtTime(0.0001,AC.currentTime); masterOut.gain.linearRampToValueAtTime(0.85,AC.currentTime+1.2);
+    running=true; live=true; nextNote=AC.currentTime+0.15; beat=0; curChord=0; setPad(0,AC.currentTime+0.15); scheduler();
+    setSource("ambient"); playBtn.textContent="⏸ Pause";
+  }
+  function stopSynth(){ running=false; live=false; if(AC){masterOut.gain.linearRampToValueAtTime(0.0001,AC.currentTime+0.4);} playBtn.textContent="▶ Play ambient track"; setSource("idle"); }
+
+  function connectFile(file){ ensureCtx(); running=false; if(timer){clearInterval(timer);timer=null;}
+    if(mediaEl){try{mediaEl.pause();}catch(e){}}
+    mediaEl=new Audio(); mediaEl.src=URL.createObjectURL(file); mediaEl.loop=true;
+    const src=AC.createMediaElementSource(mediaEl); src.connect(masterOut);
+    masterOut.gain.setValueAtTime(0.85,AC.currentTime);
+    AC.resume(); mediaEl.play(); live=true; setSource("your track"); playBtn.textContent="▶ Play ambient track";
+  }
+
+  /* ---------- feature extraction ---------- */
+  const F={bass:0,mid:0,high:0,flux:0,energy:0,section:0,centroid:0};
+  function analyze(){
+    if(!(live&&analyser)) return null;
+    analyser.getByteFrequencyData(freq);
+    const nyq=AC.sampleRate/2, binHz=nyq/freq.length;
+    function band(lo,hi){let s=0,n=0;const a=Math.floor(lo/binHz),b=Math.min(freq.length-1,Math.floor(hi/binHz));for(let i=a;i<=b;i++){s+=freq[i];n++;}return n?(s/n)/255:0;}
+    let bass=Math.min(1,band(30,150)*1.7), mid=Math.min(1,band(150,1800)*1.9), high=Math.min(1,band(1800,8000)*2.4);
+    let flux=0;for(let i=0;i<freq.length;i++){const d=freq[i]-prevFreq[i];if(d>0)flux+=d;prevFreq[i]=freq[i];}
+    flux=Math.min(1,flux/(freq.length*36));
+    const energy=Math.min(1,bass*0.5+mid*0.35+high*0.25);
+    const centroid=Math.min(1,(mid*0.4+high*0.9)/(bass*0.9+0.3));
+    const up=(o,v,ua,da)=>o+(v-o)*(v>o?ua:da);
+    F.bass=up(F.bass,bass,0.55,0.10);F.mid=up(F.mid,mid,0.5,0.10);F.high=up(F.high,high,0.6,0.16);
+    F.flux=up(F.flux,flux,0.4,0.08);F.energy=up(F.energy,energy,0.5,0.08);F.centroid=up(F.centroid,centroid,0.2,0.05);
+    F.section=up(F.section,energy,0.02,0.012);
+    return F;
+  }
+  function idle(t){const tide=0.5+0.5*Math.sin(t*0.20),kick=Math.exp(-((t%1.1))/0.16);
+    F.bass=Math.min(1,0.16+tide*0.35+kick*0.4);F.mid=Math.min(1,0.4+0.3*Math.sin(t*0.11+1.3));
+    F.high=Math.max(0.04,Math.exp(-((t%2.3))/0.3)*0.5);F.flux=0.12+0.08*Math.sin(t*0.3);F.energy=0.3+0.15*tide;F.centroid=0.4;F.section=0.4;return F;}
+
+  /* ---------- journey engine ---------- */
+  const Wt={eq:0.34,int:0.33,sp:0.33}; let rot=0,wavePhase=0; const JP=125;
+  function journey(f,t,dt,focus){
+    const mA=Math.sin(t*2*Math.PI/70),mB=Math.sin(t*2*Math.PI/113+1.3),mC=Math.sin(t*2*Math.PI/47+0.6);
+    const openness=lerp(0.55,1.0,f.section);
+    const baseTemp=0.9+0.22*(mA*0.5+0.5)+f.centroid*0.28;
+    const k=7+2.5*(mB*0.5+0.5), twist=0.45+0.5*(mC*0.5+0.5);
+    rot+=dt*(0.10+0.45*(0.4+f.section*0.6)+f.mid*0.25);
+    wavePhase+=dt*(0.35+f.energy*0.35);
+    let wq,wi,ws;
+    if(focus==="journey"){const cyc=t*2*Math.PI/JP;
+      wq=Math.max(0,Math.cos(cyc))+f.bass*0.55;
+      wi=Math.max(0,Math.cos(cyc-2.094))+f.mid*(1-f.flux)*0.6;
+      ws=Math.max(0,Math.cos(cyc-4.188))+(f.flux*0.7+f.high*0.35);
+    }else{wq=focus==="eq"?1:0;wi=focus==="int"?1:0;ws=focus==="sp"?1:0;}
+    const sum=wq+wi+ws||1;wq/=sum;wi/=sum;ws/=sum;
+    const wr=1-Math.exp(-0.6*dt); Wt.eq+=(wq-Wt.eq)*wr;Wt.int+=(wi-Wt.int)*wr;Wt.sp+=(ws-Wt.sp)*wr;
+    for(let i=0;i<NEL;i++){const e=el[i],rf=e.rf,ang=e.ang;
+      let bandV; if(rf<0.42)bandV=f.bass*0.9; else if(rf<0.72)bandV=f.mid*0.92; else bandV=f.high;
+      const eqv=(0.04+bandV*openness)*(0.9+0.1*Math.sin(ang*3+t*0.3));
+      const iv=0.04+Math.abs(Math.sin(k*ang)*Math.cos(wavePhase+e.ri*0.4))*(0.3+f.bass*0.7);
+      const phi=rot+e.ri*twist;
+      const sv=0.04+angG(ang-phi,0.5)*(0.4+f.mid*0.5)*openness;
+      target[i]=Wt.eq*eqv+Wt.int*iv+Wt.sp*sv; temp[i]=baseTemp*(0.85+rf*0.35);}
+    return {leading:(Wt.eq>=Wt.int&&Wt.eq>=Wt.sp)?"EQ":(Wt.int>=Wt.sp?"Interference":"Spiral")};
+  }
+
+  /* ---------- render ---------- */
+  let ctx,CW,CH,cx,cy,maxR,spin=0;
+  function shape(type,x,y,r,ang,color,a){ctx.fillStyle=rgb(color,a);
+    if(type==="dot"||type==="core"){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
+    else if(type==="petal"){ctx.save();ctx.translate(x,y);ctx.rotate(ang);ctx.beginPath();ctx.ellipse(0,0,r*0.55,r,0,0,Math.PI*2);ctx.fill();ctx.restore();}
+    else if(type==="diamond"){ctx.save();ctx.translate(x,y);ctx.rotate(ang);ctx.beginPath();ctx.moveTo(0,-r);ctx.lineTo(r*0.7,0);ctx.lineTo(0,r);ctx.lineTo(-r*0.7,0);ctx.closePath();ctx.fill();ctx.restore();}
+    else{ctx.save();ctx.translate(x,y);ctx.rotate(ang+Math.PI/2);ctx.beginPath();ctx.ellipse(0,0,r*0.4,r,0,0,Math.PI*2);ctx.fill();ctx.restore();}}
+  function render(dt){ spin+=dt*0.03;
+    ctx.globalCompositeOperation="source-over";ctx.fillStyle="#050403";ctx.fillRect(0,0,CW,CH);
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(spin);ctx.translate(-cx,-cy);
+    ctx.strokeStyle="rgba(150,120,80,.06)";ctx.lineWidth=Math.max(1,CW*0.003);
+    for(let ri=0;ri<R;ri++){if(rings[ri].rf<0.05)continue;ctx.beginPath();ctx.arc(cx,cy,rings[ri].rf*maxR,0,Math.PI*2);ctx.stroke();}
+    ctx.globalCompositeOperation="lighter";
+    const rAvg=new Float32Array(R),cnt=new Float32Array(R);
+    for(let i=0;i<NEL;i++){rAvg[el[i].ri]+=vals[i];cnt[el[i].ri]++;}
+    for(let ri=0;ri<R;ri++){const av=cnt[ri]?rAvg[ri]/cnt[ri]:0;if(av<0.05)continue;const rr=rings[ri].rf*maxR,c=warm(0.4+av*0.5,1);
+      const g=ctx.createRadialGradient(cx,cy,Math.max(0,rr-maxR*0.09),cx,cy,rr+maxR*0.09);
+      g.addColorStop(0,rgb(c,0));g.addColorStop(0.5,rgb(c,0.10*av));g.addColorStop(1,rgb(c,0));
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,rr+maxR*0.09,0,Math.PI*2);ctx.fill();}
+    for(let i=0;i<NEL;i++){const v=vals[i];if(v<0.05)continue;
+      const e=el[i],r=e.rf*maxR,x=cx+Math.cos(e.ang)*r,y=cy+Math.sin(e.ang)*r,sz=e.size*maxR,c=warm(0.3+v*0.62,temp[i]);
+      const gr=sz*(1.6+v*1.4),g=ctx.createRadialGradient(x,y,0,x,y,gr);
+      g.addColorStop(0,rgb(c,Math.min(0.85,0.3+v*0.6)));g.addColorStop(0.45,rgb(c,Math.min(0.5,v*0.4)));g.addColorStop(1,rgb(c,0));
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,gr,0,Math.PI*2);ctx.fill();
+      shape(e.type,x,y,sz*(0.7+v*0.3),e.ang,warm(0.5+v*0.5,temp[i]),Math.min(0.95,0.35+v*0.6));}
+    ctx.restore();ctx.globalCompositeOperation="source-over";
+  }
+
+  /* ---------- dom ---------- */
+  const cv=document.getElementById("cv");
+  const mB=document.getElementById("mBass"),mM=document.getElementById("mMid"),mH=document.getElementById("mHigh"),mFx=document.getElementById("mFlux");
+  const statusEl=document.getElementById("status"), playBtn=document.getElementById("play");
+  let sourceLabel="idle"; function setSource(s){sourceLabel=s;}
+  playBtn.addEventListener("click",()=>{ if(running){stopSynth();} else {startSynth();} });
+  document.getElementById("file").addEventListener("change",e=>{if(e.target.files[0])connectFile(e.target.files[0]);});
+
+  let focus="journey";
+  const order=[["journey","Journey"],["eq","EQ"],["int","Interference"],["sp","Spiral"]];
+  const modesEl=document.getElementById("modes");
+  order.forEach(([k,lbl])=>{const b=document.createElement("button");b.className="mode";b.textContent=lbl;b.dataset.mode=k;if(k===focus)b.classList.add("on");
+    b.onclick=()=>{focus=k;document.querySelectorAll("#modes button").forEach(x=>x.classList.toggle("on",x.dataset.mode===k));};
+    modesEl.appendChild(b);});
+
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  function size(){const r=cv.getBoundingClientRect();CW=r.width;CH=r.width;cv.width=CW*dpr;cv.height=CH*dpr;
+    ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);cx=CW/2;cy=CH/2;maxR=Math.min(CW,CH)*0.47;}
+  window.addEventListener("resize",()=>{clearTimeout(window.__r);window.__r=setTimeout(size,150)});
+
+  let prev=performance.now(),lastSection=0;
+  function loop(now){const t=now/1000,dt=Math.min(0.05,(now-prev)/1000);prev=now;
+    const f=live?(analyze()||idle(t)):idle(t);
+    const j=journey(f,t,dt,focus);
+    for(let i=0;i<NEL;i++){const k=target[i]>vals[i]?13:2.4;vals[i]+=(target[i]-vals[i])*(1-Math.exp(-k*dt));}
+    render(dt);
+    mB.style.width=(f.bass*100)+"%";mM.style.width=(f.mid*100)+"%";mH.style.width=(f.high*100)+"%";mFx.style.width=(f.flux*100)+"%";
+    const trend=f.section>lastSection+0.0008?"rising":(f.section<lastSection-0.0008?"easing":"holding");lastSection=f.section;
+    const arc=focus==="journey"?("journey · "+j.leading.toLowerCase()+" leading"):(focus+" · locked");
+    statusEl.textContent=sourceLabel+" · "+arc+" · "+trend;
+    if(!reduce)requestAnimationFrame(loop);
+  }
+  function start(){size();if(reduce){const f=idle(2);journey(f,2,0.4,focus);for(let i=0;i<NEL;i++)vals[i]=target[i];render(0.4);}else requestAnimationFrame(loop);}
+  if(document.fonts&&document.fonts.ready){document.fonts.ready.then(start);setTimeout(start,400);}else start();
+})();
+</script>
+</body>
+</html>

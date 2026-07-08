@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Lit Mandala · Concentric Ring Effects Behind Cut Work</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500&family=Space+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0b0806;--edge:#271c12;--ink:#ece0cc;--soft:#9a8a72;--faint:#5e5142;--gold:#c9a35f}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{background:radial-gradient(120% 80% at 50% -8%,#1a130c 0%,var(--bg) 55%) fixed,var(--bg);
+    color:var(--ink);font-family:"Inter",system-ui,sans-serif;line-height:1.55;
+    padding:clamp(18px,4vw,48px) clamp(14px,4vw,40px) 70px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:760px;margin:0 auto}
+  .eyebrow{font-family:"Space Mono",monospace;font-size:.68rem;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:14px}
+  h1{font-family:"Cormorant Garamond",serif;font-weight:500;font-size:clamp(2rem,6vw,3.1rem);line-height:1.05;margin-bottom:14px}
+  h1 em{font-style:italic;color:var(--gold)}
+  .lede{color:var(--soft);max-width:60ch;font-size:clamp(.92rem,2.4vw,1.02rem)}
+  .track{margin:22px 0;display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 16px;border:1px solid var(--edge);border-radius:13px;background:linear-gradient(180deg,#15110b,#100c08)}
+  .track-label{font-family:"Space Mono",monospace;font-size:.62rem;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)}
+  .bands{display:flex;gap:18px;flex:1;min-width:200px}
+  .band{flex:1;display:flex;flex-direction:column;gap:5px}
+  .band .nm{font-family:"Space Mono",monospace;font-size:.56rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .meter{height:5px;border-radius:3px;background:#241a11;overflow:hidden}
+  .meter i{display:block;height:100%;width:0%;border-radius:3px}
+  .stage{margin:8px auto 0;width:100%;max-width:540px}
+  canvas{width:100%;aspect-ratio:1/1;height:auto;display:block;border-radius:18px;background:#050403;
+    box-shadow:0 26px 64px rgba(0,0,0,.55),0 0 0 1px var(--edge)}
+  .controls{margin:20px 0 6px}
+  .row-label{font-family:"Space Mono",monospace;font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:8px}
+  .row{display:flex;flex-wrap:wrap;gap:8px}
+  button{font-family:"Inter",sans-serif;font-size:.84rem;color:var(--soft);background:#140f0a;border:1px solid var(--edge);border-radius:999px;padding:9px 15px;cursor:pointer;transition:all .18s ease}
+  button:hover{color:var(--ink);border-color:#3a2a1a}
+  button.on{color:#1a120a;background:linear-gradient(180deg,#e0b063,#c9933f);border-color:#e0b063;font-weight:500}
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .readout{margin-top:18px;border-top:1px solid var(--edge);padding-top:18px;min-height:92px}
+  .pname{font-family:"Cormorant Garamond",serif;font-size:1.5rem;color:var(--ink);margin-bottom:6px}
+  .pbody{color:var(--soft);font-size:.95rem;max-width:62ch}
+  .ptech{font-family:"Space Mono",monospace;font-size:.66rem;color:var(--faint);margin-top:12px}
+  .note{margin-top:28px;color:var(--soft);font-size:.9rem;max-width:62ch}
+  .note b{color:var(--gold);font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Backlit Cut Work · Ring Strips Behind the Pattern</div>
+  <h1>The Lit <em>Mandala</em></h1>
+  <p class="lede">Concentric ring strips sit behind a cut mandala. Each opening in the pattern is a window onto the ring behind it, so an effect running across the rings gets sculpted by the geometry into something far more intricate than the strips alone. Same imagined track throughout.</p>
+
+  <div class="track">
+    <span class="track-label">Imagined track</span>
+    <div class="bands">
+      <div class="band"><span class="nm">Bass</span><div class="meter"><i id="mBass" style="background:linear-gradient(90deg,#7a2410,#d98a3d)"></i></div></div>
+      <div class="band"><span class="nm">Mid</span><div class="meter"><i id="mMid" style="background:linear-gradient(90deg,#9a5a1c,#f4c869)"></i></div></div>
+      <div class="band"><span class="nm">High</span><div class="meter"><i id="mHigh" style="background:linear-gradient(90deg,#caa15f,#ffe6c0)"></i></div></div>
+    </div>
+  </div>
+
+  <div class="stage"><canvas id="cv"></canvas></div>
+
+  <div class="controls">
+    <span class="row-label">Ring effect</span>
+    <div class="row" id="modes"></div>
+  </div>
+
+  <div class="readout">
+    <div class="pname" id="pname"></div>
+    <div class="pbody" id="pbody"></div>
+    <div class="ptech" id="ptech"></div>
+  </div>
+
+  <p class="note">The trick that makes backlighting sing: the ring strips carry a <b>smooth</b> field (rise fast, fall slow), and the sharp detail comes entirely from the cut edges, not the animation. So you get intricate, crisp pattern and slow liquid motion at the same time, which is very hard to fake any other way. Layer two of these on alternate rings and the pattern reads as having depth.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* imagined track */
+  const KICK=1.1; let highs=[]; (function(){let t=0;while(t<900){t+=0.8+Math.random()*2.4;highs.push(t);}})();
+  const eE=(now,last,d)=>{const dt=now-last;return dt<0?0:Math.exp(-dt/d);};
+  function audioAt(t){
+    const tide=0.5+0.5*Math.sin(t*0.20), lk=Math.floor(t/KICK)*KICK, kick=eE(t,lk,0.15);
+    const bass=Math.min(1,0.2+tide*0.45+kick*0.7);
+    const mid=Math.min(1,Math.max(0,0.5+0.42*Math.sin(t*0.11+1.3)+0.08*Math.sin(t*0.37)));
+    let high=0.03;for(let i=0;i<highs.length;i++){const e=highs[i];if(e>t)break;if(t-e<1.1)high=Math.max(high,eE(t,e,0.26));}
+    const centroid=Math.min(1,Math.max(0,(mid*0.4+high*0.9)/(bass*0.9+0.3)));
+    return {t,bass,mid,high:Math.min(1,high),centroid,lk};
+  }
+
+  function lerp(a,b,t){return a+(b-a)*t}
+  function warm(i,bias){i=Math.min(1,Math.max(0,i*(bias||1)));
+    const s=[[0,[30,12,6]],[.32,[150,52,20]],[.62,[202,112,42]],[.85,[244,200,105]],[1,[255,232,196]]];
+    for(let k=1;k<s.length;k++){if(i<=s[k][0]){const a=s[k-1],b=s[k],f=(i-a[0])/(b[0]-a[0]);
+      return [lerp(a[1][0],b[1][0],f),lerp(a[1][1],b[1][1],f),lerp(a[1][2],b[1][2],f)];}}return s[4][1];}
+  const rgb=(c,a)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+  function angWrap(d){while(d>Math.PI)d-=2*Math.PI;while(d<-Math.PI)d+=2*Math.PI;return d;}
+  const angG=(d,s)=>{d=angWrap(d);return Math.exp(-(d*d)/(2*s*s));};
+
+  /* mandala: concentric rings of motifs */
+  const rings=[
+    {rf:0.00,sym:1, type:"core", size:0.060},
+    {rf:0.13,sym:6, type:"dot",  size:0.030},
+    {rf:0.25,sym:12,type:"petal",size:0.052},
+    {rf:0.38,sym:12,type:"diamond",size:0.044},
+    {rf:0.51,sym:24,type:"dot",  size:0.024},
+    {rf:0.64,sym:24,type:"petal",size:0.046},
+    {rf:0.77,sym:36,type:"diamond",size:0.032},
+    {rf:0.90,sym:48,type:"dash", size:0.024}
+  ];
+  const R=rings.length;
+  const el=[];
+  rings.forEach((rg,ri)=>{const off=(ri%2)?Math.PI/rg.sym:0;
+    for(let k=0;k<rg.sym;k++){el.push({ri,rf:rg.rf,ang:k/rg.sym*Math.PI*2+off,type:rg.type,size:rg.size});}});
+  const NEL=el.length;
+  const vals=new Float32Array(NEL);
+  const target=new Float32Array(NEL);
+  const temp=new Float32Array(NEL).fill(1);
+
+  /* modes: fill target[] and temp[] */
+  let ripples=[], lastKick=-1, rot=0;
+  const MODES={
+    ripple:{name:"Radial Ripple",
+      body:"A pulse leaves the center on every hit and rolls outward through the rings, each ring of the cut work catching it a beat later. The mandala reads like a struck bell seen as light.",
+      tech:"KICK → wavefront · speed ≈ 1.1 rings/s · gaussian across radius",
+      step(a){ if(a.lk!==lastKick){lastKick=a.lk;ripples.push({born:a.t,amp:0.5+a.bass*0.5});}
+        ripples=ripples.filter(r=>a.t-r.born<3);
+        for(let i=0;i<NEL;i++){let t=0.05;
+          for(const r of ripples){const front=(a.t-r.born)*1.1;
+            t=Math.max(t, r.amp*Math.exp(-Math.pow((el[i].rf-front)/0.16,2))*Math.exp(-(a.t-r.born)/2));}
+          target[i]=t;temp[i]=1;}}},
+    bloom:{name:"Center Bloom",
+      body:"Light gathers at the seed and opens outward through the rings on each swell, then draws back in. The pattern breathes from its core.",
+      tech:"FRONT = bass tide · edge-lit wavefront · fills and drains",
+      step(a){const front=0.15+a.bass*0.95;
+        for(let i=0;i<NEL;i++){const rf=el[i].rf;
+          const inside=rf<=front?1:0; const edge=Math.exp(-Math.pow((rf-front)/0.14,2));
+          target[i]=0.06+Math.max(inside*0.45*a.bass, edge*(0.4+a.bass*0.6)); temp[i]=1.05;}}},
+    eq:{name:"Concentric EQ",
+      body:"Each ring is tuned to a slice of the spectrum, bass at the heart and highs at the rim. The mandala becomes a radial analyzer you feel more than read.",
+      tech:"RING → band · inner bass, middle mid, outer high",
+      step(a){for(let i=0;i<NEL;i++){const rf=el[i].rf;let v,b;
+        if(rf<0.42){v=a.bass;b=0.82;}else if(rf<0.72){v=a.mid*0.92;b=1;}else{v=a.high;b=1.3;}
+        target[i]=0.05+v*0.9;temp[i]=b;}}},
+    spiral:{name:"Orbiting Spiral",
+      body:"A bright point orbits each ring, offset ring to ring, so the lit cells line up into a spiral arm that turns slowly through the whole pattern.",
+      tech:"ANGLE offset per ring · rotation led by mids",
+      step(a,dt){rot+=dt*(0.35+a.mid*0.6);
+        for(let i=0;i<NEL;i++){const phi=rot + el[i].ri*0.55;
+          const g=angG(el[i].ang-phi,0.5);
+          target[i]=0.05+g*(0.4+a.mid*0.5);temp[i]=1.05;}}},
+    interfere:{name:"Standing Interference",
+      body:"Two waves run the rings in opposite directions and lock into fixed nodes, so the mandala's symmetry lights up in shifting petals and stars.",
+      tech:"sin(kθ − ωt) + sin(kθ + ωt) → standing nodes · breath = bass",
+      step(a){const amp=0.3+a.bass*0.7, w=a.t*0.6, k=6;
+        for(let i=0;i<NEL;i++){const s=Math.sin(k*el[i].ang)*Math.cos(w + el[i].ri*0.4);
+          target[i]=0.05+Math.abs(s)*amp;temp[i]=1;}}},
+    temp:{name:"Temperature Field",
+      body:"No motion, only heat. The center holds deep amber and the rim drifts toward gold as the music brightens. The cut work glows like backlit stained wood.",
+      tech:"COLOR = spectral balance · center deep, rim pale · still",
+      step(a){const lvl=0.3+a.bass*0.35+a.mid*0.25;
+        for(let i=0;i<NEL;i++){const rf=el[i].rf;
+          target[i]=lvl*(0.7+rf*0.3);
+          temp[i]=0.8+ (rf*0.4) + a.centroid*0.3;}}}
+  };
+  let mode="ripple";
+
+  /* geometry + render */
+  let ctx,W,H,cx,cy,maxR;
+  function shape(type,x,y,r,ang,color,a){
+    ctx.fillStyle=rgb(color,a);
+    if(type==="dot"||type==="core"){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
+    else if(type==="petal"){ctx.save();ctx.translate(x,y);ctx.rotate(ang);ctx.beginPath();ctx.ellipse(0,0,r*0.55,r,0,0,Math.PI*2);ctx.fill();ctx.restore();}
+    else if(type==="diamond"){ctx.save();ctx.translate(x,y);ctx.rotate(ang);ctx.beginPath();
+      ctx.moveTo(0,-r);ctx.lineTo(r*0.7,0);ctx.lineTo(0,r);ctx.lineTo(-r*0.7,0);ctx.closePath();ctx.fill();ctx.restore();}
+    else if(type==="dash"){ctx.save();ctx.translate(x,y);ctx.rotate(ang+Math.PI/2);ctx.beginPath();ctx.ellipse(0,0,r*0.4,r,0,0,Math.PI*2);ctx.fill();ctx.restore();}
+  }
+  function render(a){
+    ctx.globalCompositeOperation="source-over";
+    ctx.fillStyle="#050403";ctx.fillRect(0,0,W,H);
+    // faint ring strip guides behind the panel
+    ctx.strokeStyle="rgba(150,120,80,.07)";ctx.lineWidth=Math.max(1,W*0.003);
+    for(let ri=0;ri<R;ri++){if(rings[ri].rf<0.05)continue;ctx.beginPath();ctx.arc(cx,cy,rings[ri].rf*maxR,0,Math.PI*2);ctx.stroke();}
+    // diffuse backlight halo per ring (light bleeding behind the cut panel)
+    ctx.globalCompositeOperation="lighter";
+    const ringAvg=new Float32Array(R);const cnt=new Float32Array(R);
+    for(let i=0;i<NEL;i++){ringAvg[el[i].ri]+=vals[i];cnt[el[i].ri]++;}
+    for(let ri=0;ri<R;ri++){const av=cnt[ri]?ringAvg[ri]/cnt[ri]:0;if(av<0.05)continue;
+      const rr=rings[ri].rf*maxR;const c=warm(0.4+av*0.5,1);
+      const g=ctx.createRadialGradient(cx,cy,Math.max(0,rr-maxR*0.09),cx,cy,rr+maxR*0.09);
+      g.addColorStop(0,rgb(c,0));g.addColorStop(0.5,rgb(c,0.10*av));g.addColorStop(1,rgb(c,0));
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,rr+maxR*0.09,0,Math.PI*2);ctx.fill();}
+    // mandala elements
+    for(let i=0;i<NEL;i++){const v=vals[i];if(v<0.05)continue;
+      const e=el[i];const r=e.rf*maxR;const x=cx+Math.cos(e.ang)*r,y=cy+Math.sin(e.ang)*r;
+      const sz=e.size*maxR;const c=warm(0.3+v*0.62,temp[i]);
+      // glow window
+      const gr=sz*(1.6+v*1.4);const g=ctx.createRadialGradient(x,y,0,x,y,gr);
+      g.addColorStop(0,rgb(c,Math.min(0.85,0.3+v*0.6)));g.addColorStop(0.45,rgb(c,Math.min(0.5,v*0.4)));g.addColorStop(1,rgb(c,0));
+      ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,gr,0,Math.PI*2);ctx.fill();
+      // crisp cut core
+      shape(e.type,x,y,sz*(0.7+v*0.3),e.ang,warm(0.5+v*0.5,temp[i]),Math.min(0.95,0.35+v*0.6));
+    }
+    ctx.globalCompositeOperation="source-over";
+  }
+
+  /* dom + loop */
+  const cv=document.getElementById("cv");
+  const mB=document.getElementById("mBass"),mM=document.getElementById("mMid"),mH=document.getElementById("mHigh");
+  const pname=document.getElementById("pname"),pbody=document.getElementById("pbody"),ptech=document.getElementById("ptech");
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  function size(){const r=cv.getBoundingClientRect();W=r.width;H=r.width;cv.width=W*dpr;cv.height=H*dpr;
+    ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);cx=W/2;cy=H/2;maxR=Math.min(W,H)*0.47;}
+  window.addEventListener("resize",()=>{clearTimeout(window.__r);window.__r=setTimeout(size,150)});
+
+  const order=["ripple","bloom","eq","spiral","interfere","temp"];
+  const modesEl=document.getElementById("modes");
+  order.forEach(k=>{const b=document.createElement("button");b.textContent=MODES[k].name;b.dataset.mode=k;
+    if(k===mode)b.classList.add("on");
+    b.onclick=()=>{mode=k;ripples=[];lastKick=-1;
+      document.querySelectorAll("#modes button").forEach(x=>x.classList.toggle("on",x.dataset.mode===k));setReadout();};
+    modesEl.appendChild(b);});
+  function setReadout(){const m=MODES[mode];pname.textContent=m.name;pbody.textContent=m.body;ptech.textContent=m.tech;}
+  setReadout();
+
+  let prev=performance.now();
+  function loop(now){const t=now/1000,dt=Math.min(0.05,(now-prev)/1000);prev=now;
+    const a=audioAt(t);
+    mB.style.width=(a.bass*100)+"%";mM.style.width=(a.mid*100)+"%";mH.style.width=(a.high*100)+"%";
+    MODES[mode].step(a,dt);
+    for(let i=0;i<NEL;i++){const k=target[i]>vals[i]?13:2.4;vals[i]+=(target[i]-vals[i])*(1-Math.exp(-k*dt));}
+    render(a);
+    if(!reduce)requestAnimationFrame(loop);
+  }
+  function start(){size();
+    if(reduce){const a=audioAt(2);MODES[mode].step(a,0.4);for(let i=0;i<NEL;i++)vals[i]=target[i];render(a);}
+    else requestAnimationFrame(loop);}
+  if(document.fonts&&document.fonts.ready){document.fonts.ready.then(start);setTimeout(start,400);}else start();
+})();
+</script>
+</body>
+</html>

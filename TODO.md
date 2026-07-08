@@ -4,6 +4,15 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Soon
 
+### Mandala listening-gallery visualizer (in progress — laptop simulator)
+
+Building the sound-reactive effect set for the backlit laser-cut mandala (675 LEDs, 5 concentric rings) as a laptop simulator first, then port the winning effects to the ESP32 card. Aesthetic: high-end listening gallery, NOT festival — warm ember/bronze/candlelight only, slow motion, but the music must OBVIOUSLY move it. Fable used sparingly for taste-only calls (effect recipe, audio→visual mapping, color palettes); Opus for everything else.
+
+- [ ] **Keep tuning the nine mandala effect modes for legibility** — play through all nine with music and dial each until the music is unmistakably driving it, with real dark-to-bright contrast and localized (partial-ring) lighting _(you + agent · deep)_
+  Current state: simulator at [led-art-mapper/mandala-sim/index.html](led-art-mapper/mandala-sim/index.html) (serve it, open localhost, press Play demo). Nine modes in two tiers — slow: Meridian, Hearth, Embers, Strata, Tide; livelier: Lattice, Procession, Bloom, Spiral. Just did a legibility pass (live response ~1s not slow averages, dark floors, arc-gated partial rings). Measured quiet→loud swing 3–8× on most; Meridian/Embers subtlest by design. Still needs: per-mode feel tuning with real listening, decide which modes make the final cut, then port winners to firmware. Direction + specs in `docs/mandala-*.md`. → Direction: [docs/mandala-effects-direction-v2.md](docs/mandala-effects-direction-v2.md), diagnosis: [docs/mandala-effects-diagnosis.md](docs/mandala-effects-diagnosis.md), color: [docs/mandala-color-system.md](docs/mandala-color-system.md), mapping: [docs/mandala-audio-mapping.md](docs/mandala-audio-mapping.md)
+- [ ] **Port the chosen mandala effects to ESP32 firmware** — once the effect set is locked in the simulator, translate the winning modes to FastLED C++ on the card with an onboard mic for standalone audio _(agent · deep)_
+  Blocked on the tuning item above. The simulator math was written cheap-enough-for-the-chip on purpose (per-pixel arithmetic + a few smoothed scalars, one ~50-element ember array). Needs: precompute ring/radius/angle tables at boot, an onboard I2S mic + simple 3-band split feeding the same bass/mid/high/energy/centroid signals, and the auto-leveler. Standalone is the goal — no laptop, no Pi in the runtime path. → Specs: `docs/mandala-*.md`
+
 ### Bench verification of the 2026-06-11 firmware batch (needs a card in hand)
 
 - [ ] **Bench-test WiFi recovery firmware** — flash the rebuilt factory binary to a bench card and verify the new WiFi recovery chain end-to-end _(you · moderate)_

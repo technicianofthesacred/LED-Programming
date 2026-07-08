@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Array · Distributing Sound Across Many Strips</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Inter:wght@400;500&family=Space+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0c0907; --panel:#15100b; --edge:#271c12;
+    --ink:#ece0cc; --soft:#9a8a72; --faint:#5e5142;
+    --gold:#c9a35f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:radial-gradient(120% 80% at 50% -10%, #1a130c 0%, var(--bg) 55%) fixed, var(--bg);
+    color:var(--ink); font-family:"Inter",system-ui,sans-serif; line-height:1.55;
+    padding:clamp(18px,4vw,48px) clamp(14px,4vw,40px) 70px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+  .eyebrow{font-family:"Space Mono",monospace;font-size:.68rem;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:14px}
+  h1{font-family:"Cormorant Garamond",serif;font-weight:500;font-size:clamp(2rem,6vw,3.1rem);line-height:1.05;margin-bottom:14px}
+  h1 em{font-style:italic;color:var(--gold)}
+  .lede{color:var(--soft);max-width:60ch;font-size:clamp(.92rem,2.4vw,1.02rem)}
+
+  .track{margin:22px 0;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:12px 16px;border:1px solid var(--edge);border-radius:13px;background:linear-gradient(180deg,#15110b,#100c08)}
+  .track-label{font-family:"Space Mono",monospace;font-size:.62rem;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)}
+  .bands{display:flex;gap:18px;flex:1;min-width:200px}
+  .band{flex:1;display:flex;flex-direction:column;gap:5px}
+  .band .nm{font-family:"Space Mono",monospace;font-size:.56rem;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .meter{height:5px;border-radius:3px;background:#241a11;overflow:hidden}
+  .meter i{display:block;height:100%;width:0%;border-radius:3px}
+
+  .stage{position:relative;margin:8px auto 0;width:100%;max-width:520px}
+  canvas{width:100%;aspect-ratio:1/1;height:auto;display:block;border-radius:18px;background:#070504;
+    box-shadow:0 24px 60px rgba(0,0,0,.5), 0 0 0 1px var(--edge)}
+
+  .controls{margin:20px 0 6px;display:flex;flex-direction:column;gap:14px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .row-label{font-family:"Space Mono",monospace;font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);width:100%;margin-bottom:-4px}
+  button{font-family:"Inter",sans-serif;font-size:.84rem;color:var(--soft);
+    background:#140f0a;border:1px solid var(--edge);border-radius:999px;padding:9px 15px;cursor:pointer;
+    transition:all .18s ease}
+  button:hover{color:var(--ink);border-color:#3a2a1a}
+  button.on{color:#1a120a;background:linear-gradient(180deg,#e0b063,#c9933f);border-color:#e0b063;font-weight:500}
+  button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+  .readout{margin-top:18px;border-top:1px solid var(--edge);padding-top:18px;min-height:96px}
+  .readout .pname{font-family:"Cormorant Garamond",serif;font-size:1.5rem;color:var(--ink);margin-bottom:6px}
+  .readout .pbody{color:var(--soft);font-size:.95rem;max-width:62ch}
+  .readout .ptech{font-family:"Space Mono",monospace;font-size:.66rem;letter-spacing:.06em;color:var(--faint);margin-top:12px}
+
+  .note{margin-top:30px;color:var(--soft);font-size:.9rem;max-width:62ch}
+  .note b{color:var(--gold);font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">Multiple Strips · One Instrument</div>
+  <h1>The <em>Array</em></h1>
+  <p class="lede">Sixteen separate strips placed in space. Instead of broadcasting the same signal to all of them, each mode below is a different logic for deciding where each part of the music goes. Same imagined late night track throughout. Watch how rarely they all light at once.</p>
+
+  <div class="track">
+    <span class="track-label">Imagined track</span>
+    <div class="bands">
+      <div class="band"><span class="nm">Bass</span><div class="meter"><i id="mBass" style="background:linear-gradient(90deg,#7a2410,#d98a3d)"></i></div></div>
+      <div class="band"><span class="nm">Mid</span><div class="meter"><i id="mMid" style="background:linear-gradient(90deg,#9a5a1c,#f4c869)"></i></div></div>
+      <div class="band"><span class="nm">High</span><div class="meter"><i id="mHigh" style="background:linear-gradient(90deg,#caa15f,#ffe6c0)"></i></div></div>
+    </div>
+  </div>
+
+  <div class="stage"><canvas id="cv"></canvas></div>
+
+  <div class="controls">
+    <div class="row"><span class="row-label">Distribution mode</span>
+      <div class="row" id="modes"></div>
+    </div>
+    <div class="row"><span class="row-label">Physical layout</span>
+      <button data-layout="radial" class="on">Radial array (mandala)</button>
+      <button data-layout="parallel">Parallel array (panel)</button>
+    </div>
+  </div>
+
+  <div class="readout">
+    <div class="pname" id="pname"></div>
+    <div class="pbody" id="pbody"></div>
+    <div class="ptech" id="ptech"></div>
+  </div>
+
+  <p class="note">The same principle holds in every mode: a strip rises fast to a hit and falls slow, so motion reads as breath, not flicker. What changes is the <b>address</b>. Spreading the music across real space is what makes a piece feel like it has depth and intent rather than a single panel reacting. Run any two modes back to back and the difference in how the room feels is the whole argument.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const N=16;
+
+  /* imagined track: bass tide+kicks, mid wander, sparse highs */
+  const KICK=1.1;
+  let highs=[]; (function(){let t=0;while(t<900){t+=0.8+Math.random()*2.4;highs.push(t);}})();
+  function envExp(now,last,d){const dt=now-last;return dt<0?0:Math.exp(-dt/d);}
+  function audioAt(t){
+    const tide=0.5+0.5*Math.sin(t*0.20);
+    const lastKick=Math.floor(t/KICK)*KICK;
+    const kick=envExp(t,lastKick,0.15);
+    const bass=Math.min(1,0.2+tide*0.45+kick*0.7);
+    const mid=Math.min(1,Math.max(0,0.5+0.42*Math.sin(t*0.11+1.3)+0.08*Math.sin(t*0.37)));
+    let high=0.03;for(let i=0;i<highs.length;i++){const e=highs[i];if(e>t)break;if(t-e<1.1)high=Math.max(high,envExp(t,e,0.26));}
+    const centroid=Math.min(1,Math.max(0,(mid*0.4+high*0.9)/(bass*0.9+0.3)));
+    return {t,bass,mid,high:Math.min(1,high),centroid,lastKick};
+  }
+
+  /* warm color ramp: coal -> ember -> gold -> warm white */
+  function lerp(a,b,t){return a+(b-a)*t}
+  function warm(i,bias){ i=Math.min(1,Math.max(0,i*(bias||1)));
+    const s=[[0,[34,14,7]],[.32,[150,52,20]],[.62,[202,112,42]],[.85,[244,200,105]],[1,[255,232,196]]];
+    for(let k=1;k<s.length;k++){if(i<=s[k][0]){const a=s[k-1],b=s[k],f=(i-a[0])/(b[0]-a[0]);
+      return [lerp(a[1][0],b[1][0],f),lerp(a[1][1],b[1][1],f),lerp(a[1][2],b[1][2],f)];}}return s[4][1];}
+  const rgb=(c,a)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+
+  /* geometry: place(i,frac) -> {x,y}; dist(i,j) -> neighbour distance */
+  let layout="radial", W=0,H=0,cx=0,cy=0,maxR=0,x0=0,y0=0,pw=0,ph=0;
+  function recalc(){ cx=W/2;cy=H/2;maxR=Math.min(W,H)*0.46;
+    const m=Math.min(W,H)*0.12; x0=m;y0=m;pw=W-2*m;ph=H-2*m; }
+  function place(i,frac){
+    if(layout==="radial"){
+      const ang=i/N*Math.PI*2 - Math.PI/2;
+      const r=lerp(maxR*0.30,maxR*0.99,frac);
+      return {x:cx+Math.cos(ang)*r, y:cy+Math.sin(ang)*r};
+    }else{
+      return {x:x0+(i+0.5)/N*pw, y:y0+frac*ph};
+    }
+  }
+  function dist(i,j){ const d=Math.abs(i-j); return layout==="radial"?Math.min(d,N-d):d; }
+
+  /* per-strip state */
+  const level=new Float32Array(N);
+  const col=new Array(N).fill(null).map(()=>[80,40,20]);
+  function follow(i,target,dt){ // fast attack, slow decay
+    const k=target>level[i]?14:2.2;
+    level[i]+= (target-level[i])*(1-Math.exp(-k*dt));
+  }
+
+  /* mode engines: set target[] and color[] given audio + dt */
+  let waves=[];      // propagation
+  let voices=[];     // voice assignment
+  let lastKickSeen=-1, hiIdx=0, rot=0;
+  const target=new Float32Array(N);
+
+  const MODES={
+    spectral:{
+      name:"Spectral Geography",
+      body:"The spectrum gets an address. Bass occupies one region of the array, mids another, highs a third. You stop hearing the kick everywhere and start seeing it land in a place.",
+      tech:"MAP · band → angular sector · brightness = band envelope",
+      step(a,dt){
+        for(let i=0;i<N;i++){
+          const f=i/N; let t,bias;
+          if(f<0.33){t=a.bass; bias=0.8;}              // bass sector, deeper
+          else if(f<0.66){t=a.mid*0.9; bias=1.0;}      // mid sector
+          else {t=a.high; bias=1.25;}                  // high sector, paler
+          follow(i,t,dt); col[i]=warm(0.35+level[i]*0.6,bias);
+        }
+      }
+    },
+    propagate:{
+      name:"Propagation",
+      body:"A hit enters at one strip and travels strip to strip across the gap, neighbour to neighbour, fading as it goes. The pulse moves through the room instead of arriving everywhere at once.",
+      tech:"ENTRY rotates per kick · speed ≈ 9 strips/s · gaussian wavefront",
+      step(a,dt){
+        if(a.lastKick!==lastKickSeen){ lastKickSeen=a.lastKick;
+          waves.push({born:a.t, entry:(waves.length*5)%N, amp:0.5+a.bass*0.5}); }
+        waves=waves.filter(w=>a.t-w.born<2.4);
+        for(let i=0;i<N;i++){
+          let t=0.04;
+          for(const w of waves){
+            const front=(a.t-w.born)*9;
+            const d=dist(i,w.entry);
+            const g=Math.exp(-((front-d)*(front-d))/2.0);
+            t=Math.max(t, w.amp*g*Math.exp(-(a.t-w.born)/1.5));
+          }
+          follow(i,t,dt); col[i]=warm(0.4+level[i]*0.6);
+        }
+      },
+      travel:true
+    },
+    voices:{
+      name:"Voice Assignment",
+      body:"Each onset is dealt to the next free strip, the way a synth steals voices. A line of music becomes a path that hops around the array in space rather than stacking in one spot.",
+      tech:"POLYPHONY · onset → least-recently-lit strip · independent decay",
+      step(a,dt){
+        // onsets: kicks and highs
+        let onset=null;
+        if(a.lastKick!==lastKickSeen){lastKickSeen=a.lastKick;onset={amp:0.5+a.bass*0.5,bias:0.8};}
+        while(hiIdx<highs.length && highs[hiIdx]<=a.t){ if(a.t-highs[hiIdx]<0.06) onset={amp:0.85,bias:1.3}; hiIdx++; }
+        if(onset){
+          // pick least-recently-lit
+          let best=0,bt=Infinity;
+          for(let i=0;i<N;i++){const last=voices.filter(v=>v.i===i).map(v=>v.born).pop()||-99;
+            if(last<bt){bt=last;best=i;}}
+          voices.push({i:best,born:a.t,amp:onset.amp,bias:onset.bias});
+        }
+        voices=voices.filter(v=>a.t-v.born<2.6);
+        for(let i=0;i<N;i++){
+          let t=0.03,bias=1;
+          for(const v of voices) if(v.i===i){const e=v.amp*Math.exp(-(a.t-v.born)/0.9); if(e>t){t=e;bias=v.bias;}}
+          follow(i,t,dt); col[i]=warm(0.4+level[i]*0.6,bias);
+        }
+      }
+    },
+    phase:{
+      name:"Phase Array",
+      body:"Every strip runs the same slow breath, each offset by its position, so a single bright region rotates through the array forever and never lands in unison.",
+      tech:"PHASE = position offset · one rotating lobe · rate tied to tempo",
+      step(a,dt){
+        rot += dt*(0.5+a.bass*0.7);
+        const amp=0.35+a.bass*0.5;
+        for(let i=0;i<N;i++){
+          const ph=rot - (i/N)*Math.PI*2;
+          const lobe=Math.pow(Math.max(0,Math.sin(ph)),2.2);
+          follow(i, 0.05+lobe*amp, dt); col[i]=warm(0.4+level[i]*0.55);
+        }
+      },
+      travel:true
+    },
+    counter:{
+      name:"Counterpoint",
+      body:"Strips trade energy instead of sharing it. As one pole brightens the opposite dims, so light sloshes between locations and the dark spaces stay alive as part of the composition.",
+      tech:"DIPOLE · opposite strips in antiphase · swing led by mids",
+      step(a,dt){
+        const swing=Math.sin(a.t*0.22)+0.3*Math.sin(a.t*0.07);
+        const amp=0.3+(a.mid*0.5+a.bass*0.2);
+        for(let i=0;i<N;i++){
+          const ang=(layout==="radial")? i/N*Math.PI*2 : (i/N)*Math.PI*2;
+          const pole=Math.cos(ang - swing);          // +1 one side, -1 other
+          const t=Math.max(0.03, amp*Math.max(0,pole));
+          follow(i,t,dt); col[i]=warm(0.4+level[i]*0.55);
+        }
+      }
+    }
+  };
+  let mode="propagate";
+
+  /* render */
+  let ctx;
+  function draw(a){
+    ctx.globalCompositeOperation="source-over";
+    ctx.fillStyle="#070504"; ctx.fillRect(0,0,W,H);
+    // faint structure: all strips visible
+    ctx.strokeStyle="rgba(150,120,80,.09)"; ctx.lineWidth=Math.max(1,W*0.004);
+    for(let i=0;i<N;i++){const p0=place(i,0),p1=place(i,1);
+      ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.stroke();}
+    // lit strips, additive
+    ctx.globalCompositeOperation="lighter"; ctx.lineCap="round";
+    const lw=Math.max(2,W*0.012);
+    const tr=MODES[mode].travel;
+    for(let i=0;i<N;i++){
+      const L=level[i]; if(L<=0.02) continue;
+      const c=col[i], p0=place(i,0),p1=place(i,1);
+      ctx.shadowColor=rgb(c,0.9); ctx.shadowBlur=W*0.045*Math.min(1,L*1.3);
+      ctx.strokeStyle=rgb(c, Math.min(0.9,0.25+L*0.7)); ctx.lineWidth=lw*(0.7+L*0.8);
+      ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.stroke();
+      // travelling node along the strip (adds the outward dimension)
+      if(tr && L>0.18){
+        const frac=((a.t*0.5 + i*0.06)%1);
+        const pn=place(i,frac);
+        const g=ctx.createRadialGradient(pn.x,pn.y,0,pn.x,pn.y,W*0.05);
+        g.addColorStop(0,rgb(c,Math.min(0.9,L))); g.addColorStop(1,rgb(c,0));
+        ctx.fillStyle=g; ctx.beginPath();ctx.arc(pn.x,pn.y,W*0.05,0,Math.PI*2);ctx.fill();
+      }
+    }
+    ctx.shadowBlur=0; ctx.globalCompositeOperation="source-over";
+  }
+
+  /* dom + loop */
+  const cv=document.getElementById("cv");
+  const mB=document.getElementById("mBass"),mM=document.getElementById("mMid"),mH=document.getElementById("mHigh");
+  const pname=document.getElementById("pname"),pbody=document.getElementById("pbody"),ptech=document.getElementById("ptech");
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  function size(){const r=cv.getBoundingClientRect();W=r.width;H=r.width;cv.width=W*dpr;cv.height=H*dpr;ctx=cv.getContext("2d");ctx.setTransform(dpr,0,0,dpr,0,0);recalc();}
+  window.addEventListener("resize",()=>{clearTimeout(window.__r);window.__r=setTimeout(size,150)});
+
+  // mode buttons
+  const order=["spectral","propagate","voices","phase","counter"];
+  const modesEl=document.getElementById("modes");
+  order.forEach(k=>{const b=document.createElement("button");b.textContent=MODES[k].name;b.dataset.mode=k;
+    if(k===mode)b.classList.add("on");
+    b.onclick=()=>{mode=k;waves=[];voices=[];lastKickSeen=-1;
+      document.querySelectorAll("#modes button").forEach(x=>x.classList.toggle("on",x.dataset.mode===k));
+      setReadout();};
+    modesEl.appendChild(b);});
+  // layout buttons
+  document.querySelectorAll("[data-layout]").forEach(b=>b.onclick=()=>{
+    layout=b.dataset.layout; recalc();
+    document.querySelectorAll("[data-layout]").forEach(x=>x.classList.toggle("on",x===b));
+  });
+  function setReadout(){const m=MODES[mode];pname.textContent=m.name;pbody.textContent=m.body;ptech.textContent=m.tech;}
+  setReadout();
+
+  let prev=performance.now();
+  function loop(now){
+    const t=now/1000, dt=Math.min(0.05,(now-prev)/1000); prev=now;
+    const a=audioAt(t);
+    mB.style.width=(a.bass*100)+"%";mM.style.width=(a.mid*100)+"%";mH.style.width=(a.high*100)+"%";
+    MODES[mode].step(a,dt);
+    draw(a);
+    if(!reduce) requestAnimationFrame(loop);
+  }
+  function start(){ size();
+    if(reduce){const a=audioAt(2);MODES[mode].step(a,0.4);draw(a);}
+    else requestAnimationFrame(loop);
+  }
+  if(document.fonts&&document.fonts.ready){document.fonts.ready.then(start);setTimeout(start,400);}else start();
+})();
+</script>
+</body>
+</html>
