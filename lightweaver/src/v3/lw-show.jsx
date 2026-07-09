@@ -113,7 +113,7 @@ function ShowScreen({ connected, go }) {
   const engineRef = useRef(null);
   if (!engineRef.current) engineRef.current = createMandalaEngine();
   const canvasRef = useRef(null);
-  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elWired: false, objectUrl: '' });
+  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
   const playerRef = useRef(null);
   const fileInputRef = useRef(null);
   const streamRef = useRef(null);
@@ -273,12 +273,11 @@ function ShowScreen({ connected, go }) {
     audio.objectUrl = URL.createObjectURL(file);
     player.src = audio.objectUrl;
     player.loop = true;
-    if (!audio.elWired) {
-      connectSource(audio.ctx.createMediaElementSource(player), true);
-      audio.elWired = true;
-    } else {
-      audio.analyser.connect(audio.ctx.destination);
-    }
+    // A media element can only be wrapped in a source node once — create it the
+    // first time, re-route it back through the analyser on every later pick
+    // (the mic disconnects it when it takes over).
+    if (!audio.elSource) audio.elSource = audio.ctx.createMediaElementSource(player);
+    connectSource(audio.elSource, true);
     void player.play();
     engineRef.current.setListening(true);
     setFileName(file.name);
