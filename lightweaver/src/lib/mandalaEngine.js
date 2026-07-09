@@ -421,10 +421,32 @@ export function createMandalaEngine() {
     return paletteRamp(PALETTES.candle, v);
   }
 
+  // Buffer-reuse API: compute every pixel's pre-master color ONCE into `out`
+  // (Float32Array, TOTAL*3 — same values colorAt returns, no allocation when
+  // the buffer is reused). The Show screen shares this buffer between the
+  // canvas paint and frameRGB so the palette walk runs once per frame instead
+  // of twice per pixel.
+  function colorFrame(out) {
+    const buf = (out && out.length === TOTAL * 3) ? out : new Float32Array(TOTAL * 3);
+    for (let i = 0; i < TOTAL; i++) {
+      const c = colorFor(i, clamp01(vals[i]));
+      buf[i * 3] = c[0];
+      buf[i * 3 + 1] = c[1];
+      buf[i * 3 + 2] = c[2];
+    }
+    return buf;
+  }
+
   // The LED frame: ramp output scaled by the master ceiling (a linear scale,
   // so the B≤G≤R warmth law survives — see color spec §2 corollary).
-  function frameRGB(out) {
+  // Pass a colorFrame() buffer as `colors` to skip recomputing the palette
+  // walk when the colors were already computed for the preview paint.
+  function frameRGB(out, colors) {
     const buf = (out && out.length === TOTAL * 3) ? out : new Uint8Array(TOTAL * 3);
+    if (colors && colors.length === TOTAL * 3) {
+      for (let k = 0; k < TOTAL * 3; k++) buf[k] = Math.round(colors[k] * master);
+      return buf;
+    }
     for (let i = 0; i < TOTAL; i++) {
       const c = colorFor(i, clamp01(vals[i]));
       buf[i * 3] = Math.round(c[0] * master);
@@ -438,6 +460,7 @@ export function createMandalaEngine() {
     // frame step
     tick,
     frameRGB,
+    colorFrame,
     // audio in
     analyze,
     setBands(bands = {}) {

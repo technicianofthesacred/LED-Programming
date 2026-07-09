@@ -2,7 +2,12 @@
 //  - throttled to the configured fps (default 18, hard cap 24)
 //  - latest-frame-wins: a burst of pushes sends only the newest frame
 //  - keepalive: never a >2s silent gap while active (the card's frame-source
-//    watchdog reverts the canvas after 2s of silence)
+//    watchdog reverts the canvas after 2s of silence), including in a
+//    background tab where setInterval is clamped to 1000ms
+//  - delivery health: wsOpen:false replies (F1 contract) and send rejections
+//    count as failures, exposed via getStats() and the onHealth callback, and
+//    stop() can be driven from inside the callback (the UI's auto-stop path)
+//  - direct transport backs off between failed WS opens (250ms → 4s cap)
 //  - stop releases the canvas through the EXISTING control path
 //    ({cancelStream:true}) — no bespoke stop message
 // Plus the Studio bridge side of frame streaming: 'frame' is a privileged
@@ -14,7 +19,10 @@ import {
   clampFrameFps,
   createBridgeFrameTransport,
   createCardFrameStream,
+  createDirectFrameTransport,
   DEFAULT_FRAME_FPS,
+  DIRECT_BACKOFF_MAX_MS,
+  DIRECT_BACKOFF_MIN_MS,
   MAX_FRAME_FPS,
   FRAME_KEEPALIVE_MS,
 } from '../src/lib/cardFrameStream.js';
@@ -163,6 +171,166 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   assert.equal(record.sends.length, sent, 'no frames go out after stop');
   await stream.stop(); // idempotent
   assert.equal(record.cancels, 1, 'double-stop does not double-cancel');
+}
+
+// ── background tab: 1000ms-clamped ticks still beat the 2s watchdog ───────
+{
+  assert.ok(FRAME_KEEPALIVE_MS <= 900,
+    'keepalive threshold sits under the 1000ms background-tab interval clamp');
+  const clock = makeClock();
+  const { transport, sends } = makeTransport(clock);
+  const stream = createCardFrameStream({
+    transport,
+    // hidden tabs clamp setInterval to 1000ms — simulate the clamp
+    setIntervalImpl: (fn, ms) => clock.setIntervalImpl(fn, Math.max(1000, ms)),
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(8000);
+  assert.ok(sends.length >= 7, `clamped ticks keep sending (${sends.length} sends in 8s)`);
+  for (let i = 1; i < sends.length; i++) {
+    const gap = sends[i].at - sends[i - 1].at;
+    assert.ok(gap <= 2000, `background-tab wire cadence ${gap}ms stays under the 2s watchdog`);
+  }
+  await stream.stop();
+}
+
+// ── wsOpen:false replies are undelivered (F1 contract) ────────────────────
+{
+  const clock = makeClock();
+  const healthReports = [];
+  let reply = { ok: true, relayed: false, wsOpen: false }; // relay socket closed
+  const transport = {
+    kind: 'fake',
+    async sendFrame() { return reply; },
+    async sendCancel() {},
+    close() {},
+  };
+  const stream = createCardFrameStream({
+    transport,
+    onHealth: (health) => healthReports.push({ ...health }),
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(500);
+  let stats = stream.getStats();
+  assert.equal(stats.sentFrames, 0, 'wsOpen:false replies never count as delivered');
+  assert.ok(stats.consecutiveFailures >= 2, `failures accumulate (${stats.consecutiveFailures})`);
+  assert.ok(stats.undeliveredFrames >= 2, 'undelivered frames are counted');
+  assert.ok(stats.failingForMs > 0, 'the failing window is tracked');
+  assert.equal(stats.lastError?.reason, 'relay-socket-closed', 'the failure names the closed relay socket');
+  assert.ok(healthReports.length >= 2, 'the health callback fires per attempt');
+  assert.ok(healthReports.every((h) => h.delivered === false), 'health reports the frames as undelivered');
+
+  // Old firmware: no wsOpen field at all → unknown → assume delivered.
+  reply = { ok: true, relayed: true };
+  stream.push(FRAME(2));
+  await clock.advance(200);
+  stats = stream.getStats();
+  assert.ok(stats.sentFrames >= 1, 'a reply without wsOpen (old firmware) counts as delivered');
+  assert.equal(stats.consecutiveFailures, 0, 'recovery resets the failure streak');
+  assert.ok(stats.lastDeliveredAt > 0, 'delivery timestamp recorded');
+  assert.equal(healthReports[healthReports.length - 1].delivered, true, 'health reports the recovery');
+  await stream.stop();
+}
+
+// ── health callback: rejections count, and stop() works from inside it ────
+{
+  const clock = makeClock();
+  let failing = false;
+  const record = { cancels: 0 };
+  const stops = [];
+  const transport = {
+    kind: 'fake',
+    async sendFrame() {
+      if (failing) {
+        const error = new Error('Open the card page once to let Studio use it as the local hardware bridge.');
+        error.reason = 'bridge-missing';
+        throw error;
+      }
+      return { ok: true };
+    },
+    async sendCancel() { record.cancels += 1; },
+    close() {},
+  };
+  const stream = createCardFrameStream({
+    transport,
+    onHealth(health) {
+      // the Show screen's auto-stop path: persistent bridge-missing → stop
+      if (health.reason === 'bridge-missing' && health.consecutiveFailures >= 3) {
+        stops.push(health.consecutiveFailures);
+        void stream.stop();
+      }
+    },
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(60);
+  assert.equal(stream.getStats().consecutiveFailures, 0, 'healthy sends carry no failures');
+  failing = true; // the popup closes
+  stream.push(FRAME(2));
+  await clock.advance(2000);
+  assert.equal(stream.isActive(), false, 'auto-stop from inside the health callback lands');
+  assert.equal(record.cancels, 1, 'auto-stop releases the canvas exactly once');
+  assert.equal(stops.length, 1, 'the callback fired the stop exactly once');
+  const stats = stream.getStats();
+  assert.ok(stats.consecutiveFailures >= 3, 'the failure streak is visible in stats');
+  assert.equal(stats.lastError?.reason, 'bridge-missing', 'the bridge-missing reason surfaces');
+}
+
+// ── direct transport: capped backoff between failed WS opens ──────────────
+{
+  assert.equal(DIRECT_BACKOFF_MIN_MS, 250);
+  assert.equal(DIRECT_BACKOFF_MAX_MS, 4000);
+  let t = 0;
+  const attempts = [];
+  class FailingWS {
+    constructor() {
+      attempts.push(t);
+      // settle asynchronously like a real refused connection
+      queueMicrotask(() => { this.onclose?.({}); });
+    }
+
+    close() {}
+  }
+  const transport = createDirectFrameTransport('192.168.4.1', {
+    WebSocketImpl: FailingWS,
+    nowImpl: () => t,
+  });
+  // drive a ~55ms pump against an unreachable card for 20 seconds
+  const reasons = new Set();
+  let deliveredWhileDown = 0;
+  for (; t <= 20000; t += 55) {
+    try {
+      await transport.sendFrame(['FF0000']);
+      deliveredWhileDown += 1;
+    } catch (error) {
+      reasons.add(error.reason || 'open-failed');
+    }
+  }
+  assert.equal(deliveredWhileDown, 0, 'sendFrame always fails while the card is unreachable');
+  assert.ok(attempts.length <= 12,
+    `backoff limits socket opens to a handful in 20s, not one per tick (${attempts.length})`);
+  assert.ok(attempts.length >= 6, `backoff still retries (${attempts.length} attempts)`);
+  assert.ok(reasons.has('ws-backoff'), 'ticks inside the backoff window fail fast with ws-backoff');
+  const gaps = [];
+  for (let i = 1; i < attempts.length; i++) gaps.push(attempts[i] - attempts[i - 1]);
+  assert.ok(gaps[0] >= DIRECT_BACKOFF_MIN_MS, `first retry waits ≥250ms (${gaps[0]}ms)`);
+  for (let i = 1; i < gaps.length; i++) {
+    assert.ok(gaps[i] + 1 >= gaps[i - 1] || gaps[i] >= DIRECT_BACKOFF_MAX_MS,
+      `gaps grow toward the cap (${gaps.join(', ')})`);
+  }
+  assert.ok(Math.max(...gaps) <= DIRECT_BACKOFF_MAX_MS + 60,
+    `backoff caps at 4s (max gap ${Math.max(...gaps)}ms)`);
+  transport.close();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
