@@ -116,10 +116,17 @@ assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_
       });
       args[4](1);
     },
+    resetESP: async (...args) => {
+      calls.push({
+        type: 'resetESP',
+        transport: args[0],
+      });
+    },
   });
 
   assert.deepEqual(calls, [
     { type: 'flashFirmware', loader: 'loader', file, address: 0, eraseAll: true },
+    { type: 'resetESP', transport },
     { type: 'disconnect' },
   ]);
   assert.deepEqual(progress, [1]);
