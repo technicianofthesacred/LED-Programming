@@ -7,9 +7,17 @@ import {
 } from './cardConnection.js';
 
 // Message types that command the hardware (write state, push config, reboot,
-// repair the LED output). These require a card origin we've verified is on the
-// local network before we'll postMessage them — see assertPrivilegedTarget.
-const PRIVILEGED_BRIDGE_TYPES = new Set(['config', 'control', 'reboot', 'recover-lights']);
+// repair the LED output, stream live frames). These require a card origin we've
+// verified is on the local network before we'll postMessage them — see
+// assertPrivilegedTarget.
+const PRIVILEGED_BRIDGE_TYPES = new Set(['config', 'control', 'reboot', 'recover-lights', 'frame']);
+
+// Bridge protocol version this Studio speaks, and the version each versioned
+// feature first shipped in. Cards report their version in the 'ready'
+// handshake (and on every relay reply); firmware older than the versioned
+// bridge reports nothing, which we treat as 0 (legacy).
+export const CARD_BRIDGE_PROTOCOL_VERSION = 1;
+export const CARD_BRIDGE_FEATURE_VERSIONS = { frame: 1 };
 
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
@@ -24,6 +32,9 @@ let bridgeConnected = false;
 // `ready` event or a successful request response whose event.origin matched the
 // derived local card origin. Privileged sends require this to be true.
 let bridgeReady = false;
+// The card page's reported bridge protocol version. 0 = legacy firmware that
+// predates versioning (no `version` field in its ready/replies).
+let bridgeVersion = 0;
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let listenerAttached = false;
@@ -77,6 +88,7 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
   bridgeConnected = false;
   bridgeReady = false;
+  bridgeVersion = 0;
   dispatchBridgeChange();
 }
 
@@ -147,6 +159,7 @@ function handleBridgeMessage(event) {
     const claimedHost = normalizeCardHost(data.host || hostFromOrigin(event.origin));
     const derivedOrigin = cardHostToUrl(claimedHost);
     if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
+    bridgeVersion = Number(data.version) || 0;
     setBridgeState({
       source: event.source,
       origin: event.origin,
@@ -177,6 +190,9 @@ function handleBridgeMessage(event) {
   // the bridge ready for subsequent privileged sends.
   const verifiedReady = isLocalCardHost(hostFromOrigin(event.origin))
     && (!request.origin || event.origin === request.origin);
+  // v1 card pages stamp every relay reply with their protocol version, which
+  // covers the iframe flow where the ready event can be missed.
+  if (verifiedReady && data.version !== undefined) bridgeVersion = Number(data.version) || 0;
   setBridgeState({
     source: event.source,
     origin: event.origin,
@@ -271,10 +287,32 @@ export function getCardBridgeState() {
     // True once a handshake (ready event or verified response) confirmed the
     // bridge speaks from the local card origin.
     verified: bridgeReady,
+    // Bridge protocol version the card reported (0 = legacy firmware).
+    version: bridgeVersion,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
     open: Boolean(bridgeWindow),
+  };
+}
+
+export function getCardBridgeVersion() {
+  return bridgeVersion;
+}
+
+// When Studio wants a v1 feature (e.g. 'frame' streaming) but the connected
+// card page reported an older protocol, return what's missing so the UI can
+// say "card firmware needs an update — open Flash". Returns null when the
+// feature is supported.
+export function cardBridgeFeatureGap(feature) {
+  const required = CARD_BRIDGE_FEATURE_VERSIONS[feature] ?? 0;
+  if (bridgeVersion >= required) return null;
+  return {
+    feature,
+    required,
+    reported: bridgeVersion,
+    action: 'open-flash',
+    message: 'This card is running older firmware that can\'t do this yet. Open Flash to update the card, then try again.',
   };
 }
 
