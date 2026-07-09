@@ -17,6 +17,7 @@ import {
 } from '../lib/cardLink.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
+import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { PatternScreen } from './lw-pattern.jsx';
 import { PlaylistScreen } from './lw-playlist.jsx';
 import { LayoutScreen } from './lw-layout.jsx';
@@ -204,7 +205,10 @@ function Shell() {
 
   // real project actions
   const onSave = useCallback(() => {
-    try { saveCurrentProjectToLibrary(serializeProject()); setSaveLabel('saved'); }
+    try {
+      const record = saveCurrentProjectToLibrary(serializeProject());
+      setSaveLabel(formatBrowserProjectSaveLabel(record));
+    }
     catch { setSaveLabel('save failed'); }
   }, [serializeProject]);
   const onDownload = useCallback(async () => {
