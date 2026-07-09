@@ -32,10 +32,16 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import {
+  previewResponseUsedZoneFallback,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   resetLiveOutputOnCard,
 } from '../lib/cardLiveControl.js';
+
+// Shown when a section-mix preview collapsed to the whole strip because the
+// card has no matching zones yet (contract: no silent zone fallback).
+const ZONE_FALLBACK_NOTE =
+  "This preview lit the whole piece — the card doesn't have sections yet. Send sections from the Patterns screen.";
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -68,6 +74,9 @@ function realPatternShape(patternId) {
     // faithful. The real engine still pushes the preview to the card.
     const [live, setLive] = useState(null);
     const [handoffUrl, setHandoffUrl] = useState('');
+    // Friendly note when a row preview fell back from sections to the whole
+    // strip — the fallback must never happen silently.
+    const [previewNote, setPreviewNote] = useState('');
     const [drag, setDrag] = useState({ from: null, over: null });
 
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -138,18 +147,26 @@ function realPatternShape(patternId) {
     const previewPatternOnCard = async (patternId) => {
       setHandoffUrl('');
       try {
-        await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-      } catch { /* preview is best-effort; the mockup has no status surface */ }
+        const response = await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
+        // A whole-piece preview proves nothing about the card's sections, so
+        // it leaves the note alone — but the response is still inspected so a
+        // fallback can never pass silently.
+        if (previewResponseUsedZoneFallback(response)) setPreviewNote(ZONE_FALLBACK_NOTE);
+      } catch { /* preview is best-effort; connection state lives in the footer */ }
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
       if (!savedLook) return;
       setHandoffUrl('');
       try {
-        await pushSectionPreviewToCard(
+        const response = await pushSectionPreviewToCard(
           buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board }),
           { host, timeoutMs: 2600 },
         );
+        // Never silent: when the card has no matching sections the preview
+        // collapses to the whole strip — say so; a clean sectioned preview
+        // clears the note.
+        setPreviewNote(previewResponseUsedZoneFallback(response) ? ZONE_FALLBACK_NOTE : '');
       } catch { /* best-effort */ }
     };
 
@@ -261,6 +278,12 @@ function realPatternShape(patternId) {
                 <button className="btn" onClick={openCard}>{I.open}Open card</button>
               </div>
             </header>
+
+            {previewNote &&
+              <div className="pmx-status" data-testid="playlist-zone-fallback-note">
+                {previewNote}
+              </div>
+            }
 
             <div className="pm-grid">
               <section className="pm-main">

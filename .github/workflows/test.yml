@@ -1,0 +1,62 @@
+name: Tests
+
+# The always-on test gate. Runs `npm run launch:check` (core runtime contract
+# tests + production Vite build) on every push and pull request that touches
+# the app or firmware — independent of any secrets.
+#
+# Why this exists (2026-07-09): deploy-site.yml used to be the only workflow
+# that ran tests, and it gated them on the Cloudflare secrets being present —
+# with secrets absent a push was green having run ZERO tests. build-firmware.yml
+# runs zero tests by design. This workflow closes both gaps; deploy-site.yml
+# calls it as a reusable workflow (workflow_call) and gates its deploy job on it.
+
+on:
+  push:
+    paths:
+      - 'lightweaver/**'
+      - 'firmware/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    paths:
+      - 'lightweaver/**'
+      - 'firmware/**'
+      - '.github/workflows/test.yml'
+  # Lets deploy-site.yml reuse this exact test job as its deploy gate instead
+  # of maintaining a near-copy of these steps.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # factory-bin-freshness.mjs compares the committed binary's last
+          # commit against firmware-source history (git log / rev-list). A
+          # shallow checkout makes that check pass trivially, so fetch it all.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: lightweaver
+        run: |
+          # `npm ci` installs exactly what lightweaver/package-lock.json pins,
+          # for reproducible builds (vs `npm install`, which can drift the tree).
+          npm ci
+          # Workaround for npm/cli#4828: npm may skip the platform-specific
+          # Rollup native binding on fresh installs, breaking `vite build`.
+          node scripts/ensure-rollup-native.mjs
+
+      - name: Launch check (core tests + production build)
+        working-directory: lightweaver
+        run: npm run launch:check

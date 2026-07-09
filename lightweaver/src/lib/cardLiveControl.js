@@ -62,6 +62,14 @@ async function drainLatestPreviewQueue(key, queue) {
   if (!queue.pending) latestPreviewQueues.delete(key);
 }
 
+// Live-preview pushes may fall back from a specific zone to the whole strip
+// when the card does not have that zone yet. The resolved response always
+// carries `previewZoneFallback` when that happened; callers use this helper so
+// the fallback can never pass silently (contract: no silent zone fallback).
+export function previewResponseUsedZoneFallback(response) {
+  return Boolean(response?.previewZoneFallback);
+}
+
 export function buildLiveHardwareControlPayload(settings = {}) {
   const colorOrder = String(settings.colorOrder || '').toUpperCase();
   return {

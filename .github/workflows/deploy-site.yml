@@ -19,11 +19,18 @@ name: Deploy site
 #   CLOUDFLARE_ACCOUNT_ID  - your Cloudflare account id
 # Add them under Settings -> Secrets and variables -> Actions.
 #
-# Until those secrets exist, a push-triggered run SKIPS cleanly (green, with a
-# notice) so it never reddens main; a HUMAN manual run fails loudly so you know
-# why. Dispatches from build-firmware.yml pass source=ci and skip cleanly like
-# push runs — otherwise every firmware rebuild would redden CI until the
+# Until those secrets exist, a push-triggered DEPLOY skips cleanly (green, with
+# a notice) so it never reddens main; a HUMAN manual run fails loudly so you
+# know why. Dispatches from build-firmware.yml pass source=ci and skip cleanly
+# like push runs — otherwise every firmware rebuild would redden CI until the
 # Cloudflare secrets are configured.
+#
+# The `test` job is NOT gated on those secrets: it reuses the standalone Tests
+# workflow (.github/workflows/test.yml, via workflow_call) on every trigger of
+# this workflow, and the deploy job hard-depends on it. (Before 2026-07-09,
+# tests only ran when the Cloudflare secrets were present — a push could go
+# green having run zero tests.) Pushes and PRs on other branches get the same
+# gate from test.yml's own push/pull_request triggers.
 
 on:
   workflow_dispatch:
@@ -47,8 +54,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Always-on test gate — runs regardless of Cloudflare secrets, so this
+  # workflow can never go green without having run the tests. Reuses the
+  # standalone Tests workflow so the gate (fetch-depth: 0 for the
+  # factory-bin-freshness history walk, npm ci, launch:check) is defined once.
+  test:
+    uses: ./.github/workflows/test.yml
+
   deploy:
     runs-on: ubuntu-latest
+    needs: test
     steps:
       - uses: actions/checkout@v4
 
@@ -86,11 +101,8 @@ jobs:
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs
 
-      - name: Run core tests
-        if: steps.creds.outputs.enabled == 'true'
-        working-directory: lightweaver
-        run: npm run test:core
-
+      # Core tests already ran (and passed) in the required `test` job above —
+      # no secrets-gated re-run here.
       - name: Build and deploy to Cloudflare Pages
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver

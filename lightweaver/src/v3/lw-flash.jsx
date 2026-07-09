@@ -9,6 +9,8 @@ import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
 import {
   DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS,
   DEFAULT_WLED_APP_FLASH_ADDRESS,
+  MIN_FACTORY_IMAGE_BYTES,
+  validateFirmwareImage,
   validateFlashPlan,
 } from '../lib/flashPlan.js';
 
@@ -92,7 +94,15 @@ import {
         const response = await fetch(LIGHTWEAVER_FIRMWARE_URL, { cache: 'no-store' });
         if (!response.ok) throw new Error(`firmware file ${response.status}`);
         const blob = await response.blob();
-        const file = new File([blob], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
+        // Guard against the SPA fallback: a missing .bin path answers with
+        // index.html and HTTP 200. Never let a web page reach the flasher.
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        validateFirmwareImage({
+          bytes,
+          contentType: response.headers.get('content-type'),
+          minBytes: MIN_FACTORY_IMAGE_BYTES,
+        });
+        const file = new File([bytes], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
         setFw(file);
         setAddr(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
         setErase(true);
@@ -118,6 +128,16 @@ import {
       let address;
       try {
         ({ address } = validateFlashPlan({ address: addr, eraseAll: erase }));
+      } catch (err) {
+        setStatus(`✕ ${err.message ?? err}`); setKind("err");
+        append(`Flash blocked: ${err.message ?? err}`);
+        return;
+      }
+      // Last line of defense before anything touches the chip: whatever is
+      // selected (bundled or browsed) must at least be an ESP image.
+      try {
+        const head = new Uint8Array(await fw.slice(0, 1).arrayBuffer());
+        validateFirmwareImage({ bytes: head, size: fw.size });
       } catch (err) {
         setStatus(`✕ ${err.message ?? err}`); setKind("err");
         append(`Flash blocked: ${err.message ?? err}`);

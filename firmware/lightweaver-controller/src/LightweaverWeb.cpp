@@ -15,6 +15,15 @@ ErrorCode* errorCodePtr = nullptr;
 uint16_t* totalPixelsPtr = nullptr;
 uint8_t* currentLookIndexPtr = nullptr;
 
+// Bridge protocol version — the card-page postMessage bridge contract shared
+// with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
+// gains message types Studio must feature-detect. v1 added the 'frame' relay
+// (live pixel streaming) and version reporting itself; pre-v1 firmware sends
+// no version at all and Studio treats it as 0 (legacy). The bridge script
+// strings below splice String(LW_BRIDGE_VERSION) in, so this constant is the
+// single source of truth.
+constexpr int LW_BRIDGE_VERSION = 1;
+
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
   char suffix[5];
@@ -112,14 +121,18 @@ String studioBridgeUrl(const RuntimeConfig& cfg) {
 }
 
 String studioOpenScript() {
-  return F("function lwOpenStudio(event,url){"
+  String script;
+  script.reserve(1100);
+  script += F("function lwOpenStudio(event,url){"
            "if(event)event.preventDefault();"
            "try{const u=new URL(url);u.searchParams.set('cardHost',location.host);url=u.href}catch(_){}"
            "const frame=document.createElement('iframe');"
            "frame.src=url;"
            "frame.title='Lightweaver Studio';"
            "frame.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;border:0;background:#050505;z-index:9999';"
-           "const ready=()=>{try{const o=new URL(frame.src).origin;frame.contentWindow&&frame.contentWindow.postMessage({app:'LightweaverCardBridge',type:'ready',href:location.href,host:location.host},o)}catch(_){}};"
+           "const ready=()=>{try{const o=new URL(frame.src).origin;frame.contentWindow&&frame.contentWindow.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
+  script += String(LW_BRIDGE_VERSION);
+  script += F(",href:location.href,host:location.host},o)}catch(_){}};"
            "frame.addEventListener('load',ready);"
            "document.documentElement.style.background='#050505';"
            "document.body.style.margin='0';"
@@ -135,17 +148,64 @@ String studioOpenScript() {
            "const url=p.get('studioUrl')||(link&&link.href)||'';"
            "if(url)setTimeout(()=>lwOpenStudio(null,url),80)"
            "}}catch(_){}}");
+  return script;
 }
 
 String studioBridgeScript() {
   String script;
-  script.reserve(2400);
+  script.reserve(3900);
+  const String bridgeVersion = String(LW_BRIDGE_VERSION);
   // Keep in sync with corsOriginAllowed(): production Studio, the studio
   // preview deployment (Pages branch subdomains), and local dev.
+  // Bridge protocol (see LW_BRIDGE_VERSION, spliced in below): every reply and
+  // the ready handshake carry version:N so Studio can feature-detect the frame
+  // relay.
   script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
               "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
-              "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge'},msg),ev.origin)}catch(_){}};"
-              "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',href:location.href,host:location.host},'*')}catch(_){}};"
+              "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
+  script += bridgeVersion;
+  script += F("},msg),ev.origin)}catch(_){}};"
+              "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
+  script += bridgeVersion;
+  script += F(",href:location.href,host:location.host},'*')}catch(_){}};"
+              // Frame relay (bridge v1): Studio posts {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n}}
+              // and this page forwards it into ONE persistent same-origin WebSocket
+              // (ws://<own-host>:81/ws) as {seg:[{i:pixels}]} — the firmware's WLED
+              // JSON frame path. Text JSON only (binary WS frames are ignored by the
+              // firmware). Single-slot pending: a newer frame replaces an unsent one
+              // (latest-frame-wins), never a queue — a congested socket must not
+              // build a backlog of stale frames. ALL reconnects funnel through
+              // lwFrameRetryLater — one pending attempt, doubling backoff capped at
+              // 4s — so a burst of incoming frames while the socket is down cannot
+              // open a socket per frame (reconnect storm).
+              "let lwFrameWs=null,lwFrameNext=null,lwFrameWait=250,lwFrameTimer=null,lwFrameRetry=null,lwFrameLast=0;"
+              "const lwFrameLater=(fn,ms)=>{if(lwFrameTimer)return;lwFrameTimer=setTimeout(()=>{lwFrameTimer=null;fn()},ms)};"
+              "const lwFrameRetryLater=()=>{if(lwFrameRetry)return;"
+                "lwFrameRetry=setTimeout(()=>{lwFrameRetry=null;lwFrameLast=Date.now();lwFrameWait=Math.min(4000,lwFrameWait*2);lwFrameConnect()},"
+                "Math.max(0,lwFrameLast+lwFrameWait-Date.now()))};"
+              "const lwFrameConnect=()=>{"
+                "if(lwFrameWs&&lwFrameWs.readyState<2)return;"
+                "try{lwFrameWs=new WebSocket('ws://'+location.hostname+':81/ws')}catch(_){lwFrameWs=null;lwFrameRetryLater();return}"
+                "lwFrameWs.onopen=()=>{lwFrameWait=250;lwFrameFlush()};"
+                "lwFrameWs.onclose=()=>{lwFrameWs=null;if(lwFrameNext)lwFrameRetryLater()};"
+                "lwFrameWs.onerror=()=>{try{lwFrameWs&&lwFrameWs.close()}catch(_){}}"
+              "};"
+              "const lwFrameFlush=()=>{"
+                "if(!lwFrameNext)return;"
+                "if(!lwFrameWs||lwFrameWs.readyState>1){lwFrameRetryLater();return}" // down: backoff-gated reconnect, never direct
+                "if(lwFrameWs.readyState===0)return;"                       // onopen flushes
+                "if(lwFrameWs.bufferedAmount>8192){lwFrameLater(lwFrameFlush,40);return}" // congested: keep only the latest
+                "const p=lwFrameNext;lwFrameNext=null;"
+                "const s={i:p.pixels};if(Number.isInteger(p.seg))s.id=p.seg;"
+                "try{lwFrameWs.send(JSON.stringify({seg:[s]}))}catch(_){}"
+              "};"
+              // Returns true iff the frame was handed to an OPEN socket (sent, or
+              // parked in the pending slot of an open-but-congested socket that is
+              // already scheduled to flush).
+              "const lwFrameSend=p=>{if(!p||!Array.isArray(p.pixels))throw new Error('frame needs pixels');lwFrameNext=p;lwFrameFlush();return!!(lwFrameWs&&lwFrameWs.readyState===1)};"
+              // Stop: drop any undelivered frame and cancel the scheduled reconnect
+              // so a stale frame can't land after cancelStream and re-claim the canvas.
+              "const lwFrameCancel=()=>{lwFrameNext=null;if(lwFrameRetry){clearTimeout(lwFrameRetry);lwFrameRetry=null}};"
               "window.addEventListener('message',async ev=>{"
                 "const m=ev.data||{};"
                 "if(m.app!=='LightweaverStudioBridge'||!lwBridgeAllowed(ev.origin))return;"
@@ -153,7 +213,8 @@ String studioBridgeScript() {
                   "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
-                  "else if(m.type==='control'){response=await post('/api/control',m.payload||{})}"
+                  "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1)}}"
+                  "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
                   "else if(m.type==='config'){"
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
@@ -1047,7 +1108,26 @@ void handleRenamePost() {
 
 void handleFirmwareInfo() {
   sendCors();
-  server.send(200, "application/json", runtimeFirmwareInfo());
+  // The bridge protocol version belongs to the card page's bridge script
+  // (this file), not the runtime — splice it into the runtime info JSON so
+  // Studio can gate v1 features (frame streaming) on what the card actually
+  // serves, even before a bridge handshake.
+  String info = runtimeFirmwareInfo();
+  // Locate the top-level opening brace robustly: skip any leading whitespace
+  // (and a UTF-8 BOM) instead of trusting the payload to start at '{'.
+  unsigned int brace = 0;
+  while (brace < info.length()) {
+    char c = info[brace];
+    if (c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+        uint8_t(c) == 0xEF || uint8_t(c) == 0xBB || uint8_t(c) == 0xBF) { brace++; continue; }
+    break;
+  }
+  if (brace < info.length() && info[brace] == '{' && info.indexOf("\"bridgeVersion\"") < 0) {
+    info = info.substring(0, brace + 1)
+         + "\"bridgeVersion\":" + String(LW_BRIDGE_VERSION) + ","
+         + info.substring(brace + 1);
+  }
+  server.send(200, "application/json", info);
 }
 
 void handlePatterns() {

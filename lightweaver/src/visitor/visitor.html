@@ -108,6 +108,18 @@
     }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; }
 
+    .wifi-notice {
+      width: 100%; max-width: 480px; margin: 24px 16px 0;
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .wifi-notice h2 { font-size: 18px; font-weight: 500; }
+    .wifi-notice p  { font-size: 14px; color: var(--text-2); line-height: 1.55; }
+    .wifi-notice a  { color: var(--accent); }
+
     .master-controls {
       width: 100%; max-width: 480px; padding: 0 16px 16px;
       display: flex; flex-direction: column; gap: 10px;
@@ -131,6 +143,15 @@
     <div class="brand-dot"></div>
     <div class="brand-name">Lightweaver</div>
     <div class="brand-sub">Scene Control</div>
+  </div>
+
+  <div class="wifi-notice" id="wifiNotice" hidden>
+    <h2>Open this from your light's WiFi</h2>
+    <p>This remote talks to your light directly, so it only works when your phone
+       or computer is on the same WiFi as the light.</p>
+    <p>Join your light's WiFi network (it's named <strong>Lightweaver</strong>),
+       then visit <a href="http://lightweaver.local">lightweaver.local</a> —
+       the remote will work from there.</p>
   </div>
 
   <div class="wled-connect">
@@ -188,6 +209,13 @@
     const STORAGE_KEY = 'lw_visitor_ip';
     let ws = null, connected = false, activeScene = null;
 
+    // Secure (https) pages aren't allowed to open plain ws:// connections to
+    // devices on the local network, so from the hosted site this remote can
+    // never reach the light. Opened over http on the light's own WiFi
+    // (lightweaver.local / 192.168.x.x) it works normally.
+    const LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+    const remoteBlocked = location.protocol === 'https:' && !LOCAL_HOSTS.includes(location.hostname);
+
     const ipInput          = document.getElementById('wledIp');
     const connectBtn       = document.getElementById('connectBtn');
     const statusDot        = document.getElementById('statusDot');
@@ -208,6 +236,7 @@
     }
 
     function connect() {
+      if (remoteBlocked) return;
       const ip = ipInput.value.trim();
       if (!ip) return;
       localStorage.setItem(STORAGE_KEY, ip);
@@ -276,10 +305,16 @@
       sendMaster();
     });
 
-    renderScenes();
-
-    // Auto-connect if IP stored
-    if (ipInput.value) setTimeout(connect, 300);
+    if (remoteBlocked) {
+      // Show the friendly notice instead of a connect form that can never work.
+      document.getElementById('wifiNotice').hidden = false;
+      document.querySelector('.wled-connect').style.display = 'none';
+      scenesEl.style.display = 'none';
+    } else {
+      renderScenes();
+      // Auto-connect if IP stored
+      if (ipInput.value) setTimeout(connect, 300);
+    }
   </script>
 </body>
 </html>
