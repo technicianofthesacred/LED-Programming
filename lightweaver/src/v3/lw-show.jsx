@@ -1,223 +1,472 @@
-/* Light Weaver v3 — Show (timeline) screen */
-/* Exact mockup file, converted from window-global script to ES module.
-   Only the wrapper changed; the component body below is byte-identical. */
-import React, { useState, useEffect, useRef } from 'react';
-import { I, PATTERNS, CLIP_COLOR, CLIPS, TRANSITIONS, LANES, CUES, SHOW_DURATION, fmtTime } from './lw-shared.jsx';
+/* Light Weaver v3 — Show (sound-reactive) screen */
+/* The piece listens: nine hand-tuned mandala modes driven by live audio
+   (microphone or a song file), previewed on canvas with the simulator's
+   radial-halo look, and optionally streamed to the card's LEDs through
+   the bridge frame protocol (v1). Compute lives in lib/mandalaEngine.js;
+   transport in lib/cardFrameStream.js — this file is UI + wiring only. */
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useProject } from '../state/ProjectContext.jsx';
+import {
+  createMandalaEngine,
+  frameToHex,
+  resampleFrame,
+  angOf,
+  rfOf,
+  MODE_LIBRARY,
+  RINGS,
+  TOTAL_PIXELS,
+} from '../lib/mandalaEngine.js';
+import { createCardFrameStream } from '../lib/cardFrameStream.js';
+import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
+import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
 
+const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
+const LIVELY_MODES = MODE_LIBRARY.filter((m) => m.tier === 'lively');
 
-  const PPS = 1.5;            // px per second
-  const HEAD = 132;          // left head column width
-  const LANE_W = SHOW_DURATION * PPS;
-  const cc = (id) => CLIP_COLOR[id] || "var(--text-lo)";
+// ── canvas render (port of the simulator's fused halo render) ─────────────
+function rgbaStr(c, a) {
+  return `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+}
 
-  const TRACKS = [
-    { n: 0, name: "Full piece", meta: "all sections" },
-    { n: 1, name: "Outer ring", meta: "layer 2 · 3" },
-  ];
-
-  function lanePath(keys, w, h) {
-    return keys.map(([t, v], i) => `${i ? "L" : "M"}${((t / SHOW_DURATION) * w).toFixed(1)} ${((1 - v) * h).toFixed(1)}`).join(" ");
+function renderMandala(ctx, engine, geom) {
+  const { W, cx, cy, maxR } = geom;
+  const master = engine.getMaster();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = '#050403';
+  ctx.beginPath(); ctx.arc(cx, cy, maxR * 1.08, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(150,120,80,.04)';
+  ctx.lineWidth = Math.max(1, W * 0.002);
+  for (let r = 0; r < RINGS.length; r++) {
+    ctx.beginPath(); ctx.arc(cx, cy, RINGS[r].rf * maxR, 0, Math.PI * 2); ctx.stroke();
   }
+  const dot = 0.013 * maxR;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < TOTAL_PIXELS; i++) {
+    const v = Math.min(1, engine.getIntensity(i) * master);
+    const r = rfOf[i] * maxR;
+    const x = cx + Math.cos(angOf[i]) * r;
+    const y = cy + Math.sin(angOf[i]) * r;
+    const c = engine.colorAt(i);
+    if (v > 0.03) {
+      const gr = dot * (1.4 + v * 3.0);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, gr);
+      g.addColorStop(0, rgbaStr(c, Math.min(0.9, 0.22 + v * 0.7)));
+      g.addColorStop(0.4, rgbaStr(c, Math.min(0.4, v * 0.4)));
+      g.addColorStop(1, rgbaStr(c, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(x, y, gr, 0, Math.PI * 2); ctx.fill();
+    }
+    const lit = Math.max(0.05, v);
+    ctx.fillStyle = rgbaStr(c, Math.min(1, 0.12 + lit * 0.85));
+    ctx.beginPath(); ctx.arc(x, y, dot, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
 
-  function AutoLane({ lane }) {
-    const h = 48;
-    const d = lanePath(lane.keys, LANE_W, h);
-    return (
-      <div className="tl-row">
-        <div className="tl-head"><span className="tn" style={{ fontSize: 11 }}>{lane.label}</span></div>
-        <div className="tl-lane auto-lane" style={{ height: h }}>
-          <svg viewBox={`0 0 ${LANE_W} ${h}`} preserveAspectRatio="none">
-            <defs>
-              <linearGradient id={`g-${lane.id}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor={lane.color} stopOpacity="0.30" />
-                <stop offset="1" stopColor={lane.color} stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={`${d} L${LANE_W} ${h} L0 ${h} Z`} fill={`url(#g-${lane.id})`} />
-            <path d={d} fill="none" stroke={lane.color} strokeWidth="1.5" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-            {lane.keys.map(([t, v], i) => (
-              <circle key={i} cx={(t / SHOW_DURATION) * LANE_W} cy={(1 - v) * h} r="3" fill="var(--bg-panel)" stroke={lane.color} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-            ))}
-          </svg>
-        </div>
+// ── small UI pieces (v3 token styling, inline where no class fits) ─────────
+const chipStyle = (on) => ({
+  padding: '6px 12px',
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: 'pointer',
+  border: `1px solid ${on ? 'var(--accent)' : 'var(--border-soft)'}`,
+  background: on ? 'var(--accent)' : 'var(--bg-elev)',
+  color: on ? 'var(--on-accent)' : 'var(--text-mid)',
+});
+
+function Chip({ on, onClick, children, title }) {
+  return (
+    <button type="button" title={title} style={chipStyle(on)} onClick={onClick}>{children}</button>
+  );
+}
+
+function ChipRow({ children }) {
+  return <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{children}</div>;
+}
+
+function Slider({ k, v, value, min, max, step, onChange }) {
+  return (
+    <div className="slider-row">
+      <div className="lab"><span className="k">{k}</span><span className="v">{v}</span></div>
+      <input className="lw" type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseFloat(e.target.value))} />
+    </div>
+  );
+}
+
+function BandMeter({ label, value }) {
+  return (
+    <div style={{ flex: 1 }}>
+      <div className="mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-faint)', textAlign: 'center', marginBottom: 3 }}>{label}</div>
+      <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-elev)', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${Math.round(Math.min(1, value) * 100)}%`, background: 'var(--accent)', transition: 'width 0.08s linear' }} />
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  function ShowScreen() {
-    const [playing, setPlaying] = useState(false);
-    const [loop, setLoop] = useState(true);
-    const [snap, setSnap] = useState(true);
-    const [bpm] = useState(120);
-    const [t, setT] = useState(92);
-    const [selId, setSelId] = useState("c2");
-    const [tab, setTab] = useState("clip");
-    const [muted, setMuted] = useState(() => new Set());
-    const [solo, setSolo] = useState(null);
-    const raf = useRef(0);
-    const last = useRef(0);
+function ShowScreen({ connected, go }) {
+  const { strips } = useProject();
+  const projectPixels = strips.reduce((sum, strip) => sum + (strip.pixels?.length || 0), 0) || TOTAL_PIXELS;
 
-    useEffect(() => {
-      if (!playing) return;
-      last.current = performance.now();
-      const step = (now) => {
-        const dt = (now - last.current) / 1000; last.current = now;
-        setT((p) => {
-          let n = p + dt;
-          if (n >= SHOW_DURATION) n = loop ? 0 : SHOW_DURATION;
-          if (n >= SHOW_DURATION && !loop) setPlaying(false);
-          return n;
-        });
-        raf.current = requestAnimationFrame(step);
-      };
-      raf.current = requestAnimationFrame(step);
-      return () => cancelAnimationFrame(raf.current);
-    }, [playing, loop]);
+  // ── engine + mutable per-frame machinery live in refs ────────────────────
+  const engineRef = useRef(null);
+  if (!engineRef.current) engineRef.current = createMandalaEngine();
+  const canvasRef = useRef(null);
+  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
+  const playerRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const streamRef = useRef(null);
+  const rgbBufRef = useRef(null);
+  const resampleBufRef = useRef(null);
+  const pixelsRef = useRef(projectPixels);
+  pixelsRef.current = projectPixels;
 
-    const sel = CLIPS.find((c) => c.id === selId);
-    const toggleMute = (n) => setMuted((s) => { const x = new Set(s); x.has(n) ? x.delete(n) : x.add(n); return x; });
+  // ── UI state ──────────────────────────────────────────────────────────────
+  const [modeKey, setModeKey] = useState('strata');
+  const [preset, setPreset] = useState('Calm');
+  const [sensitivity, setSensitivity] = useState(1.0);
+  const [master, setMaster] = useState(0.75);
+  const [source, setSource] = useState('quiet'); // quiet | mic | file
+  const [fileName, setFileName] = useState('');
+  const [onLights, setOnLights] = useState(false);
+  const [lightsBusy, setLightsBusy] = useState(false);
+  const [notice, setNotice] = useState(null); // { kind: 'err'|'info', text, action? }
+  const [levels, setLevels] = useState({ bass: 0, mid: 0, high: 0, energy: 0 });
 
-    return (
-      <div className="screen">
-        <div className="sh">
-          {/* transport */}
-          <div className="transport">
-            <div className="tp-btns">
-              <button className="tp-btn" title="Back to start" onClick={() => setT(0)}>{I.toStart}</button>
-              <button className="tp-btn play" onClick={() => setPlaying((p) => !p)}>{playing ? I.pause : I.play}</button>
-              <button className={"tp-btn" + (loop ? " on" : "")} title="Loop" onClick={() => setLoop((l) => !l)}>{I.loop}</button>
+  const modeInfo = MODE_LIBRARY.find((m) => m.key === modeKey) || MODE_LIBRARY[0];
+
+  // ── the one animation loop: analyze → tick → paint → (stream) ───────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const ctx = canvas.getContext('2d');
+    const geom = { W: 0, H: 0, cx: 0, cy: 0, maxR: 0 };
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const size = () => {
+      const rect = canvas.getBoundingClientRect();
+      geom.W = rect.width; geom.H = rect.height;
+      canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      geom.cx = rect.width / 2; geom.cy = rect.height / 2;
+      geom.maxR = Math.min(rect.width, rect.height) * 0.46;
+    };
+    size();
+    let resizeTimer = 0;
+    const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(size, 150); };
+    window.addEventListener('resize', onResize);
+
+    let raf = 0;
+    let prev = performance.now();
+    let meterAt = 0;
+    const step = (now) => {
+      const dt = Math.min(0.05, (now - prev) / 1000);
+      prev = now;
+      const engine = engineRef.current;
+      const audio = audioRef.current;
+      if (audio.analyser) engine.analyze(audio.analyser);
+      engine.tick(dt);
+      renderMandala(ctx, engine, geom);
+      const stream = streamRef.current;
+      if (stream) {
+        rgbBufRef.current = engine.frameRGB(rgbBufRef.current);
+        let frame = rgbBufRef.current;
+        if (pixelsRef.current !== TOTAL_PIXELS) {
+          resampleBufRef.current = resampleFrame(frame, pixelsRef.current, resampleBufRef.current);
+          frame = resampleBufRef.current;
+        }
+        stream.push(frameToHex(frame));
+      }
+      if (now - meterAt > 120) {
+        meterAt = now;
+        setLevels(engine.getLevels());
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', onResize);
+    };
+  }, []);
+
+  // ── teardown on unmount: lights released, audio closed ───────────────────
+  useEffect(() => () => {
+    const stream = streamRef.current;
+    streamRef.current = null;
+    if (stream) void stream.stop();
+    const audio = audioRef.current;
+    audio.micStream?.getTracks?.().forEach((track) => track.stop());
+    audio.micStream = null;
+    if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
+    try { audio.ctx?.close(); } catch { /* already closed */ }
+    audio.ctx = null;
+    audio.analyser = null;
+  }, []);
+
+  // ── audio plumbing (mirrors the simulator's Web Audio pipeline) ──────────
+  const ensureAudio = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio.ctx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audio.ctx = new Ctx();
+      audio.analyser = audio.ctx.createAnalyser();
+      audio.analyser.fftSize = 2048;
+      audio.analyser.smoothingTimeConstant = 0.75;
+    }
+    if (audio.ctx.state === 'suspended') void audio.ctx.resume();
+    return audio;
+  }, []);
+
+  const connectSource = useCallback((node, toSpeakers) => {
+    const audio = audioRef.current;
+    if (audio.source) { try { audio.source.disconnect(); } catch { /* noop */ } }
+    try { audio.analyser.disconnect(); } catch { /* noop */ }
+    node.connect(audio.analyser);
+    if (toSpeakers) audio.analyser.connect(audio.ctx.destination);
+    audio.source = node;
+  }, []);
+
+  const stopMicTracks = useCallback(() => {
+    const audio = audioRef.current;
+    audio.micStream?.getTracks?.().forEach((track) => track.stop());
+    audio.micStream = null;
+  }, []);
+
+  const goQuiet = useCallback(() => {
+    stopMicTracks();
+    try { playerRef.current?.pause(); } catch { /* noop */ }
+    engineRef.current.setListening(false);
+    setSource('quiet');
+  }, [stopMicTracks]);
+
+  const startMic = useCallback(async () => {
+    try {
+      try { playerRef.current?.pause(); } catch { /* noop */ }
+      const mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      const audio = ensureAudio();
+      stopMicTracks();
+      audio.micStream = mic;
+      connectSource(audio.ctx.createMediaStreamSource(mic), false);
+      engineRef.current.setListening(true);
+      setSource('mic');
+      setNotice(null);
+    } catch (error) {
+      setNotice({ kind: 'err', text: `Couldn't use the microphone: ${error?.message || error}` });
+    }
+  }, [connectSource, ensureAudio, stopMicTracks]);
+
+  const pickFile = useCallback(() => fileInputRef.current?.click(), []);
+
+  const onFile = useCallback((e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const audio = ensureAudio();
+    const player = playerRef.current;
+    stopMicTracks();
+    if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
+    audio.objectUrl = URL.createObjectURL(file);
+    player.src = audio.objectUrl;
+    player.loop = true;
+    // A media element can only be wrapped in a source node once — create it the
+    // first time, re-route it back through the analyser on every later pick
+    // (the mic disconnects it when it takes over).
+    if (!audio.elSource) audio.elSource = audio.ctx.createMediaElementSource(player);
+    connectSource(audio.elSource, true);
+    void player.play();
+    engineRef.current.setListening(true);
+    setFileName(file.name);
+    setSource('file');
+    setNotice(null);
+  }, [connectSource, ensureAudio, stopMicTracks]);
+
+  // ── control handlers ─────────────────────────────────────────────────────
+  const chooseMode = useCallback((key) => {
+    engineRef.current.setMode(key);
+    setModeKey(key);
+  }, []);
+  const choosePreset = useCallback((name) => {
+    engineRef.current.setPreset(name);
+    setPreset(name);
+    setMaster(engineRef.current.getMaster());
+  }, []);
+  const changeSensitivity = useCallback((value) => {
+    engineRef.current.setSensitivity(value);
+    setSensitivity(value);
+  }, []);
+  const changeMaster = useCallback((value) => {
+    engineRef.current.setMaster(value);
+    setMaster(value);
+  }, []);
+
+  // ── the lights: start/stop the card frame stream ─────────────────────────
+  const toggleLights = useCallback(async () => {
+    if (lightsBusy) return;
+    if (streamRef.current) {
+      const stream = streamRef.current;
+      streamRef.current = null;
+      setOnLights(false);
+      setLightsBusy(true);
+      try { await stream.stop(); } catch { /* the card reverts on its own after 2s */ }
+      setLightsBusy(false);
+      return;
+    }
+    setLightsBusy(true);
+    try {
+      if (!canPushDirectlyToCard()) {
+        if (!hasCardBridge()) {
+          setNotice({
+            kind: 'err',
+            text: "Studio can't reach your lights from here yet. Open your piece's card page once (tap “Open Lightweaver Studio” on it) so it can carry the show.",
+          });
+          return;
+        }
+        // Elicit a versioned reply so a quietly-bootstrapped bridge reports
+        // its real protocol version before we gate on it.
+        try { await pingCardBridge({ timeoutMs: 2500 }); } catch { /* gap check below still applies */ }
+        const gap = cardBridgeFeatureGap('frame');
+        if (gap) {
+          setNotice({ kind: 'err', text: gap.message, action: 'flash' });
+          return;
+        }
+      }
+      const stream = createCardFrameStream({ host: readStoredCardHost() });
+      stream.start();
+      streamRef.current = stream;
+      setOnLights(true);
+      setNotice(null);
+    } finally {
+      setLightsBusy(false);
+    }
+  }, [lightsBusy]);
+
+  const listening = source !== 'quiet';
+
+  return (
+    <div className="screen">
+      <div className="sh">
+        {/* top bar */}
+        <div className="transport">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-hi)' }}>The piece listens</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
+              {listening ? `hearing ${source === 'mic' ? 'the room' : (fileName || 'your song')} · ${modeInfo.name.toLowerCase()}` : 'quiet — pick a sound source to begin'}
+            </span>
+          </div>
+          <div className="tp-spring" />
+          <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
+            {onLights ? `playing on ${projectPixels} LEDs` : `${projectPixels} LEDs ready`}
+          </span>
+          <button
+            type="button"
+            className={'btn' + (onLights ? ' primary' : '')}
+            onClick={toggleLights}
+            disabled={lightsBusy}
+          >
+            {onLights ? 'Stop playing on the lights' : 'Play on the lights'}
+          </button>
+        </div>
+
+        {/* body: stage + controls */}
+        <div className="sh-body">
+          <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, background: 'var(--bg-canvas)', overflow: 'auto' }}>
+            <div style={{
+              position: 'relative',
+              width: 'min(100%, 520px)',
+              aspectRatio: '1 / 1',
+              borderRadius: '50%',
+              background: 'radial-gradient(circle at 50% 44%, #160f09 0%, #0b0705 78%, #060403 100%)',
+              boxShadow: '0 40px 90px rgba(0,0,0,.55), inset 0 0 0 2px rgba(120,90,55,.22), inset 0 0 60px rgba(0,0,0,.7)',
+            }}>
+              <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', borderRadius: '50%' }} />
             </div>
-            <div className="tp-time">{fmtTime(t)}<span className="d"> / {fmtTime(SHOW_DURATION)}</span></div>
-            <div className="tp-field">BPM <span className="val">{bpm}</span></div>
-            <div className="tp-spring" />
-            <button className={"tp-btn" + (snap ? " on" : "")} title="Snap to grid" onClick={() => setSnap((s) => !s)}>{I.snap}</button>
-            <button className="btn">{I.dice}Randomize</button>
-            <button className="btn">{I.plus}Add clip</button>
+            <div className="mono" style={{ fontSize: 10.5, letterSpacing: '0.06em', color: 'var(--text-lo)', textAlign: 'center' }}>
+              {modeInfo.name} · {preset === 'Calm' ? 'calm' : 'listening closely'}
+            </div>
+            {notice && (
+              <div style={{
+                maxWidth: 460,
+                padding: '10px 14px',
+                borderRadius: 'var(--r-md)',
+                border: `1px solid ${notice.kind === 'err' ? 'var(--danger)' : 'var(--border)'}`,
+                background: 'var(--bg-panel)',
+                color: 'var(--text-mid)',
+                fontSize: 12.5,
+                lineHeight: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}>
+                <span style={{ flex: 1 }}>{notice.text}</span>
+                {notice.action === 'flash' && (
+                  <button type="button" className="btn primary" onClick={() => go?.('flash')}>Open Flash</button>
+                )}
+                <button type="button" className="btn" onClick={() => setNotice(null)}>Dismiss</button>
+              </div>
+            )}
           </div>
 
-          {/* body: timeline + inspector */}
-          <div className="sh-body">
-            <div className="tl-wrap">
-              <div className="tl-scroll">
-                <div className="tl-inner" style={{ width: HEAD + LANE_W }}>
-                  {/* ruler */}
-                  <div className="tl-row">
-                    <div className="tl-head"><span className="tmeta">timeline</span></div>
-                    <div className="tl-lane tl-ruler" style={{ height: 30 }}>
-                      {Array.from({ length: SHOW_DURATION / 60 + 1 }, (_, i) => (
-                        <div key={i} className="tick" style={{ left: i * 60 * PPS }}><span className="lbl">{fmtTime(i * 60)}</span></div>
-                      ))}
-                      {CUES.map((c, i) => (
-                        <div key={i} className="tl-cue" style={{ left: c.t * PPS }}><span className="cue-lbl">{c.label}</span></div>
-                      ))}
-                    </div>
-                  </div>
+          {/* controls */}
+          <aside className="sh-insp">
+            <div className="sh-insp-body">
+              <div className="sec-h"><span className="t">Sound</span><span className="line" /></div>
+              <ChipRow>
+                <Chip on={source === 'mic'} onClick={startMic} title="Listen through your device's microphone">Microphone</Chip>
+                <Chip on={source === 'file'} onClick={pickFile} title="Play a song from a file">Song file</Chip>
+                <Chip on={source === 'quiet'} onClick={goQuiet} title="Stop listening — the piece settles to a dim glow">Quiet</Chip>
+              </ChipRow>
+              {source === 'file' && fileName && (
+                <div className="mono" style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</div>
+              )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <BandMeter label="deep" value={levels.bass} />
+                <BandMeter label="middle" value={levels.mid} />
+                <BandMeter label="sparkle" value={levels.high} />
+              </div>
+              <Slider k="Sensitivity" v={`${sensitivity.toFixed(1)}×`} value={sensitivity} min={0.3} max={3} step={0.05} onChange={changeSensitivity} />
 
-                  {/* tracks */}
-                  {TRACKS.map((tr) => {
-                    const dim = solo !== null && solo !== tr.n;
-                    return (
-                      <div className="tl-row" key={tr.n}>
-                        <div className="tl-head">
-                          <div style={{ minWidth: 0 }}>
-                            <div className="tn">{tr.name}</div>
-                            <div className="tmeta">{tr.meta}</div>
-                          </div>
-                          <div className="ctrls">
-                            <button className={"tl-mini" + (muted.has(tr.n) ? " on" : "")} title="Mute" onClick={() => toggleMute(tr.n)}>M</button>
-                            <button className={"tl-mini solo" + (solo === tr.n ? " on" : "")} title="Solo" onClick={() => setSolo(solo === tr.n ? null : tr.n)}>S</button>
-                          </div>
-                        </div>
-                        <div className="tl-lane" style={{ height: 56, opacity: dim || muted.has(tr.n) ? 0.4 : 1 }}>
-                          {CLIPS.filter((c) => c.track === tr.n).map((c) => (
-                            <div key={c.id} className={"clip" + (c.id === selId ? " sel" : "")}
-                              style={{ left: c.start * PPS, width: (c.end - c.start) * PPS, "--cc": cc(c.patternId) }}
-                              onClick={() => { setSelId(c.id); setTab("clip"); }}>
-                              <div className="clab">
-                                <div className="nm">{c.label}</div>
-                                <div className="meta">{c.patternId} · {Math.round(c.end - c.start)}s</div>
-                              </div>
-                            </div>
-                          ))}
-                          {tr.n === 0 && TRANSITIONS.map((tz) => (
-                            <div key={tz.id} className="tl-trans" style={{ left: (tz.at - tz.dur / 2) * PPS, width: tz.dur * PPS }} title={tz.type}>
-                              <span className="ti">{tz.type === "cross-fade" ? "✕" : tz.type === "dip-black" ? "▽" : "→"}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
+              <div className="field-sep" />
+              <div className="sec-h"><span className="t">Mode</span><span className="line" /></div>
+              <div className="mono" style={{ fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', margin: '2px 0 6px' }}>Slow &amp; meditative</div>
+              <ChipRow>
+                {SLOW_MODES.map((m) => (
+                  <Chip key={m.key} on={modeKey === m.key} onClick={() => chooseMode(m.key)} title={m.desc}>{m.name}</Chip>
+                ))}
+              </ChipRow>
+              <div className="mono" style={{ fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', margin: '10px 0 6px' }}>Livelier</div>
+              <ChipRow>
+                {LIVELY_MODES.map((m) => (
+                  <Chip key={m.key} on={modeKey === m.key} onClick={() => chooseMode(m.key)} title={m.desc}>{m.name}</Chip>
+                ))}
+              </ChipRow>
+              <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-lo)', marginTop: 9, minHeight: '3.1em' }}>{modeInfo.desc}</div>
 
-                  {/* automation */}
-                  {LANES.map((l) => <AutoLane key={l.id} lane={l} />)}
-
-                  {/* playhead */}
-                  <div className="playhead" style={{ left: HEAD + t * PPS }}><span className="ph-cap" /></div>
-                </div>
+              <div className="field-sep" />
+              <div className="sec-h"><span className="t">Feel</span><span className="line" /></div>
+              <ChipRow>
+                <Chip on={preset === 'Calm'} onClick={() => choosePreset('Calm')} title="The piece's true self — gentle, warm">Calm</Chip>
+                <Chip on={preset === 'Active'} onClick={() => choosePreset('Active')} title="Listens more closely — deeper swells, never faster">Active</Chip>
+              </ChipRow>
+              <Slider k="Brightness" v={master.toFixed(2)} value={master} min={0.2} max={0.85} step={0.01} onChange={changeMaster} />
+              <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-faint)', marginTop: 8 }}>
+                Warm, never harsh. Nothing spins fast or snaps — mostly-dark is allowed, which makes the gold precious.
               </div>
             </div>
-
-            {/* inspector */}
-            <aside className="sh-insp">
-              <div className="sh-tabs">
-                <button className={"sh-tab" + (tab === "clip" ? " on" : "")} onClick={() => setTab("clip")}>Clip</button>
-                <button className={"sh-tab" + (tab === "show" ? " on" : "")} onClick={() => setTab("show")}>Show</button>
-              </div>
-              <div className="sh-insp-body">
-                {tab === "clip" && sel && (
-                  <>
-                    <div className="sh-insp-head"><span className="dot" style={{ background: cc(sel.patternId) }} /><span className="nm">{sel.label}</span></div>
-                    <div className="insp-row"><span className="k">Pattern</span>
-                      <select className="lw-select" value={sel.patternId} onChange={() => {}}>
-                        {PATTERNS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-                      </select>
-                    </div>
-                    <div className="insp-row"><span className="k">Target</span>
-                      <select className="lw-select" defaultValue={sel.track === 0 ? "all" : "outer"}>
-                        <option value="all">All sections</option>
-                        <option value="outer">Outer ring</option>
-                        <option value="center">Center ring</option>
-                      </select>
-                    </div>
-                    <div className="field-sep" />
-                    <div className="insp-row"><span className="k">Start</span><span className="v">{fmtTime(sel.start)}</span></div>
-                    <div className="insp-row"><span className="k">End</span><span className="v">{fmtTime(sel.end)}</span></div>
-                    <div className="insp-row"><span className="k">Length</span><span className="v">{fmtTime(sel.end - sel.start)}</span></div>
-                    <div className="insp-row"><span className="k">Track</span><span className="v">{sel.track + 1}</span></div>
-                    <div className="field-sep" />
-                    <div className="slider-row"><div className="lab"><span className="k">Speed</span><span className="v">1.00×</span></div><input className="lw" type="range" min="0.1" max="3" step="0.01" defaultValue="1" /></div>
-                    <div className="slider-row"><div className="lab"><span className="k">Brightness</span><span className="v">100%</span></div><input className="lw" type="range" min="0" max="1" step="0.01" defaultValue="1" /></div>
-                    <div className="insp-actions">
-                      <button className="insp-act">{I.plus}Transition</button>
-                      <button className="insp-act">{I.scissors}Split</button>
-                      <button className="insp-act">{I.copy}Duplicate</button>
-                      <button className="insp-act danger">{I.trash}Delete</button>
-                    </div>
-                  </>
-                )}
-                {tab === "show" && (
-                  <>
-                    <div className="sec-h"><span className="t">Overview</span><span className="line" /></div>
-                    <div className="insp-row"><span className="k">Duration</span><span className="v">{fmtTime(SHOW_DURATION)}</span></div>
-                    <div className="insp-row"><span className="k">Clips</span><span className="v">{CLIPS.length}</span></div>
-                    <div className="insp-row"><span className="k">Transitions</span><span className="v">{TRANSITIONS.length}</span></div>
-                    <div className="insp-row"><span className="k">Tracks</span><span className="v">{TRACKS.length} active</span></div>
-                    <div className="field-sep" />
-                    <div className="sec-h"><span className="t">Cue markers</span><span className="line" /></div>
-                    {CUES.map((c, i) => (
-                      <div key={i} className="insp-row" style={{ cursor: "pointer" }} onClick={() => setT(c.t)}>
-                        <span className="k">{c.label}</span><span className="v">{fmtTime(c.t)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            </aside>
-          </div>
+          </aside>
         </div>
       </div>
-    );
-  }
+
+      {/* hidden audio plumbing */}
+      <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio ref={playerRef} style={{ display: 'none' }} />
+    </div>
+  );
+}
 
 export { ShowScreen };
