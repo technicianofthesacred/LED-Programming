@@ -90,8 +90,21 @@ assert.equal(reduceCardLink(bridged, { type: 'direct-status', connected: true, h
 assert.equal(reduceCardLink(bridged, { type: 'connecting', via: 'direct' }), bridged);
 // and a failed direct probe never cancels an in-progress bridge connect
 assert.equal(reduceCardLink(connecting, { type: 'direct-status', connected: false }), connecting);
+// a direct 'connecting' never displaces an in-flight bridge connect either
+// (same reference back means the runtime dispatch bails out and the bridge's
+// 15s no-answer timer keeps running)
+assert.equal(reduceCardLink(connecting, { type: 'connecting', via: 'direct', host: '10.0.0.9' }), connecting);
 // a bridge losing its window does not touch a live direct link
 assert.equal(reduceCardLink(direct, { type: 'bridge-lost' }), direct);
+
+// ── reducer: checking semantics for the footer's direct transport ───────────
+// an established direct link can never be demoted by a routine poll starting
+assert.equal(reduceCardLink(direct, { type: 'connecting', via: 'direct', host: '192.168.18.70' }), direct);
+// but a disconnected re-probe shows the searching state again
+const reprobe = reduceCardLink(directDown, { type: 'connecting', via: 'direct', host: '192.168.18.70' });
+assert.equal(reprobe.state, 'connecting');
+assert.equal(reprobe.transport, 'direct');
+assert.equal(cardLinkStatusText(reprobe), 'Looking for the card…');
 
 // ── friendly copy ───────────────────────────────────────────────────────────
 for (const reason of ['card-page-closed', 'card-stopped-answering', 'bridge-missing', 'popup-blocked', 'no-answer', 'card-unreachable', 'never-connected']) {
@@ -165,6 +178,23 @@ assert.equal(slowLink.getState().state, 'connecting');
 await waitFor(() => slowLink.getState().state === 'disconnected', 2000, 'connect timeout');
 assert.equal(slowLink.getState().reason, 'no-answer');
 slowLink.destroy();
+
+// ── runtime: a direct probe cannot cancel the bridge no-answer timer ────────
+// Before the guard, a direct 'connecting' dispatched mid-bridge-connect moved
+// the state to connecting-direct, dispatch's else branch cleared the timer,
+// and the link sat in 'connecting' forever. Now the bridge connect (and its
+// timer) survive and still resolve to an honest no-answer.
+const guardedLink = createCardLink({
+  sendRequest: async () => ({ ok: true }),
+  pingIntervalMs: 1000,
+  connectTimeoutMs: 30,
+});
+guardedLink.dispatch({ type: 'connecting', via: 'bridge', host: 'lightweaver.local' });
+guardedLink.dispatch({ type: 'connecting', via: 'direct', host: '192.168.18.70' });
+assert.equal(guardedLink.getState().transport, 'bridge', 'bridge connect stays in flight');
+await waitFor(() => guardedLink.getState().state === 'disconnected', 2000, 'bridge no-answer timer survives a direct probe');
+assert.equal(guardedLink.getState().reason, 'no-answer');
+guardedLink.destroy();
 
 // ── no-silent-fallback contract on the HTTPS bridge path ────────────────────
 // Production Studio is HTTPS; live pushes travel over the card-page bridge.

@@ -55,8 +55,15 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
   switch (event.type) {
     case 'connecting': {
       const via = event.via === 'direct' ? 'direct' : 'bridge';
-      // A direct probe starting up never demotes an established bridge link.
-      if (via === 'direct' && prev.state === 'connected-bridge') return prev;
+      // A direct probe starting up never demotes an established link (either
+      // transport) and never displaces an in-flight bridge connect — if it
+      // did, the runtime dispatch's else branch would cancel the bridge's
+      // no-answer timer and the state could sit in 'connecting' forever.
+      if (via === 'direct' && (
+        prev.state === 'connected-bridge' ||
+        prev.state === 'connected-direct' ||
+        (prev.state === 'connecting' && prev.transport === 'bridge')
+      )) return prev;
       if (prev.state === 'connecting' && prev.transport === via && prev.host === host) return prev;
       return { state: 'connecting', reason: '', transport: via, host, missedPings: 0 };
     }
@@ -323,6 +330,10 @@ export async function bootstrapCardLink() {
     await sendCardBridgeRequest('ping', {}, { timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
     link.dispatch({ type: 'bridge-ready', host: getCardBridgeState().host });
   } catch (error) {
+    // The remembered bridge is gone — forget it, so future app loads do not
+    // pay this failing re-ping on every startup. A successful bridge
+    // establishment sets the flag again (see dispatch's connected-bridge arm).
+    writeBridgeWasActive(false);
     link.dispatch({
       type: 'bridge-lost',
       reason: error?.reason === 'bridge-missing' ? 'bridge-missing' : 'no-answer',

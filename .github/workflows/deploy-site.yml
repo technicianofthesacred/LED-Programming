@@ -25,11 +25,12 @@ name: Deploy site
 # like push runs — otherwise every firmware rebuild would redden CI until the
 # Cloudflare secrets are configured.
 #
-# The `test` job is NOT gated on those secrets: it runs launch:check on every
-# trigger of this workflow, and the deploy job hard-depends on it. (Before
-# 2026-07-09, tests only ran when the Cloudflare secrets were present — a push
-# could go green having run zero tests.) Pushes and PRs on other branches get
-# the same gate from .github/workflows/test.yml.
+# The `test` job is NOT gated on those secrets: it reuses the standalone Tests
+# workflow (.github/workflows/test.yml, via workflow_call) on every trigger of
+# this workflow, and the deploy job hard-depends on it. (Before 2026-07-09,
+# tests only ran when the Cloudflare secrets were present — a push could go
+# green having run zero tests.) Pushes and PRs on other branches get the same
+# gate from test.yml's own push/pull_request triggers.
 
 on:
   workflow_dispatch:
@@ -54,34 +55,11 @@ concurrency:
 
 jobs:
   # Always-on test gate — runs regardless of Cloudflare secrets, so this
-  # workflow can never go green without having run the tests.
+  # workflow can never go green without having run the tests. Reuses the
+  # standalone Tests workflow so the gate (fetch-depth: 0 for the
+  # factory-bin-freshness history walk, npm ci, launch:check) is defined once.
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # factory-bin-freshness.mjs compares the committed binary's last
-          # commit against firmware-source history (git log / rev-list). A
-          # shallow checkout makes that check pass trivially, so fetch it all.
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
-        working-directory: lightweaver
-        run: |
-          # `npm ci` installs exactly what lightweaver/package-lock.json pins,
-          # for reproducible builds (vs `npm install`, which can drift the tree).
-          npm ci
-          # Workaround for npm/cli#4828: npm may skip the platform-specific
-          # Rollup native binding on fresh installs, breaking `vite build`.
-          node scripts/ensure-rollup-native.mjs
-
-      - name: Launch check (core tests + production build)
-        working-directory: lightweaver
-        run: npm run launch:check
+    uses: ./.github/workflows/test.yml
 
   deploy:
     runs-on: ubuntu-latest

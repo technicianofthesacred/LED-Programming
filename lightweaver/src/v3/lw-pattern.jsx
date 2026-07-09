@@ -323,12 +323,16 @@ import {
             { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: true },
           );
           if (sequence === livePreviewSeq.current) {
+            const usedFallback = previewResponseUsedZoneFallback(response);
             // Surface (never swallow) a section push that collapsed to the
             // whole strip — the banner stays up until sections reach the card.
-            setZoneFallback(zone ? previewResponseUsedZoneFallback(response) : false);
+            // Only a zoned push says anything about the card's sections: an
+            // All-sections push leaves the banner unchanged (it clears when a
+            // config carrying zones lands — savePreviewToCard / sendSplitPreview).
+            if (zone) setZoneFallback(usedFallback);
             setStatusKind('ok');
             const patternLabel = getCardPatternById(nextLook.patternId)?.label || nextLook.patternId;
-            setStatus(previewResponseUsedZoneFallback(response)
+            setStatus(usedFallback
               ? `Previewing ${patternLabel} on the whole piece — the card doesn't have ${targetLabel(target)} as its own section yet.`
               : `Previewing ${patternLabel} on ${targetLabel(target)}. Not saved yet.`);
           }
@@ -377,7 +381,11 @@ import {
     const selectTarget = (target) => {
       if (!target) return;
       setSelectedTargetId(target.id);
-      if (livePreview && !connected) {
+      // Picking a target only changes what the controls edit — with live
+      // preview off nothing is sent, so there is nothing to report. The
+      // "Live preview is off…" note belongs to actual look changes only.
+      if (!livePreview) return;
+      if (!connected) {
         setStatusKind('err');
         setStatus(`Not connected to the card, so the lights can't follow this selection. Use Connect to card in the bottom bar.`);
         return;

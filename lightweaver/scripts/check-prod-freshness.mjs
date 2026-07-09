@@ -21,8 +21,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The flasher's own validation (pure ESM, dependency-free): ESP magic byte +
+// HTML/SPA-fallback detection live in one place instead of being re-implemented.
+import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js';
 
-const ESP_IMAGE_MAGIC = 0xe9;
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
 const url = process.env.PROD_FIRMWARE_URL
@@ -38,8 +40,12 @@ function fail(message) {
 }
 
 const local = new Uint8Array(readFileSync(localBinPath));
-if (local[0] !== ESP_IMAGE_MAGIC) {
-  fail(`Committed binary ${localBinPath} does not start with the ESP image magic byte (0xE9) — the repo copy itself is broken.`);
+try {
+  validateFirmwareImage({ bytes: local });
+} catch (err) {
+  fail(
+    `Committed binary ${localBinPath} is not a flashable ESP32 image (magic byte 0x${ESP_IMAGE_MAGIC.toString(16).toUpperCase()}) — the repo copy itself is broken.\n  ${err.message}`,
+  );
 }
 const localHash = sha256(local);
 
@@ -66,10 +72,13 @@ if (!response.ok) {
 const remote = new Uint8Array(await response.arrayBuffer());
 const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
 
-if (contentType.includes('text/html') || remote[0] !== ESP_IMAGE_MAGIC) {
+try {
+  validateFirmwareImage({ bytes: remote, contentType });
+} catch (err) {
   fail(
     `Production serves something that is NOT an ESP32 firmware image at\n  ${url}\n` +
       `  content-type: ${contentType || '(none)'}  first byte: 0x${(remote[0] ?? 0).toString(16)}  size: ${remote.length}\n` +
+      `  ${err.message}\n` +
       'This is likely the SPA fallback (index.html with HTTP 200). The Studio flasher refuses this payload, so website flashing is effectively down until the bundle is republished with the binary included.',
   );
 }

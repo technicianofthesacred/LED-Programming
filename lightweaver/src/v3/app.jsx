@@ -176,10 +176,14 @@ function Shell() {
     if (!directCardControl) return;
     reportDirectCardStatus({
       connected: cardStatus.connected,
-      checking: cardStatus.checking && !cardStatus.checkedAt,
+      // "checking" here means searching-while-not-connected: a disconnected
+      // re-probe shows "Looking for the card…" again, while a routine poll on
+      // a live link (connected=true) can never demote it — the reducer also
+      // guards established links against a direct 'connecting' event.
+      checking: cardStatus.checking && !cardStatus.connected,
       host: cardStatus.host,
     });
-  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.checkedAt, cardStatus.host]);
+  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host]);
   const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const onConnectCard = useCallback(() => {

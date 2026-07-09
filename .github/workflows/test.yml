@@ -7,8 +7,8 @@ name: Tests
 # Why this exists (2026-07-09): deploy-site.yml used to be the only workflow
 # that ran tests, and it gated them on the Cloudflare secrets being present —
 # with secrets absent a push was green having run ZERO tests. build-firmware.yml
-# runs zero tests by design. This workflow closes both gaps; deploy-site.yml's
-# deploy job additionally runs its own test job as a hard dependency.
+# runs zero tests by design. This workflow closes both gaps; deploy-site.yml
+# calls it as a reusable workflow (workflow_call) and gates its deploy job on it.
 
 on:
   push:
@@ -21,6 +21,9 @@ on:
       - 'lightweaver/**'
       - 'firmware/**'
       - '.github/workflows/test.yml'
+  # Lets deploy-site.yml reuse this exact test job as its deploy gate instead
+  # of maintaining a near-copy of these steps.
+  workflow_call:
 
 permissions:
   contents: read
