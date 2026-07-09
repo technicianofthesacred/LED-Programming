@@ -2,5 +2,5 @@
   Permissions-Policy: serial=(self), usb=(self), bluetooth=(self)
   Referrer-Policy: strict-origin-when-cross-origin
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://api.fontshare.com https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com https://api.fontshare.com https://cdn.fontshare.com; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://led.mandalacodes.com
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://api.fontshare.com https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com https://api.fontshare.com https://cdn.fontshare.com; connect-src 'self' http: ws: http://lightweaver.local:* ws://lightweaver.local:* http://192.168.4.1:* ws://192.168.4.1:*; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://led.mandalacodes.com
   X-Frame-Options: SAMEORIGIN
