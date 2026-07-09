@@ -6,6 +6,25 @@ Bench-to-gallery checklist for taking a Lightweaver installation from a working 
 
 ---
 
+## How production actually ships
+
+Pushing to this repo does **not** update `led.mandalacodes.com`. The real path:
+
+- **Push to this repo (main)** → CI runs tests (`Tests` workflow + the `test` job in `Deploy site`) and, when the Cloudflare secrets are set, publishes the Studio bundle to the **`studio` preview branch only** (`https://studio.lightweaver-edw.pages.dev`). It never touches production.
+- **Production (`led.mandalacodes.com`)** = a **manual** rebuild + wrangler deploy of the **mandalacodes repo's bundle** (which embeds this repo's Studio dist and the factory firmware binary). Exact commands: `docs/led-mandalacodes-setup.md`, "Deploy".
+- **Firmware on the live site** only updates with that manual publish — a fresh binary committed here sits in preview until the mandalacodes bundle is republished.
+- **Cards already in the field** only update by **USB reflash** (there is no OTA). Reflash from the Flash screen at `led.mandalacodes.com/design/` or the studio preview.
+
+After any production publish, verify the live site serves the firmware this repo built:
+
+```bash
+cd lightweaver && npm run check:prod
+```
+
+It hashes the live `/firmware/*.bin` against the committed binary and checks the ESP magic byte; it exits 0 with a SKIPPED note when offline (deploy-time check — not part of `test:core`).
+
+---
+
 ## 0. Code/runtime launch gate
 
 Run this before the controller leaves the bench, and again after any code, firmware, or exported config change.
