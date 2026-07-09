@@ -27,8 +27,9 @@ import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js'
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
+// Production serves the Studio embedded at /design/, so the bin lives there.
 const url = process.env.PROD_FIRMWARE_URL
-  || 'https://led.mandalacodes.com/firmware/lightweaver-controller-esp32s3-factory.bin';
+  || 'https://led.mandalacodes.com/design/firmware/lightweaver-controller-esp32s3-factory.bin';
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
