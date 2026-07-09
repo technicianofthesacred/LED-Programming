@@ -3,6 +3,8 @@ import {
   ESP_CONNECT_RESET_SEQUENCE,
   connectEspWithResetSequence,
 } from '../src/lib/flashConnection.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_reset']);
 
@@ -123,6 +125,31 @@ assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_
   assert.deepEqual(progress, [1]);
   assert.match(FLASH_COMPLETE_RELEASED_STATUS, /USB released/);
   assert.match(FLASH_COMPLETE_RELEASED_LOG, /Lightweaver-XXXX WiFi/);
+}
+
+{
+  const screen = readFileSync(resolve(import.meta.dirname, '../src/v3/lw-flash.jsx'), 'utf8');
+
+  assert.match(
+    screen,
+    /flashFirmwareAndRelease/,
+    'Flash screen should use the post-flash release workflow instead of the raw flasher',
+  );
+  assert.match(
+    screen,
+    /transportRef\.current/,
+    'Flash screen should pass the active serial transport so the workflow can release USB after flashing',
+  );
+  assert.match(
+    screen,
+    /FLASH_COMPLETE_RELEASED_STATUS/,
+    'Flash screen should show the USB-released completion status',
+  );
+  assert.match(
+    screen,
+    /FLASH_COMPLETE_RELEASED_LOG/,
+    'Flash screen should log the concrete post-flash WiFi/IP next step',
+  );
 }
 
 console.log('flash-connect tests passed');

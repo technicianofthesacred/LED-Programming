@@ -7,6 +7,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { I } from './lw-shared.jsx';
 import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
 import {
+  FLASH_COMPLETE_RELEASED_LOG,
+  FLASH_COMPLETE_RELEASED_STATUS,
+  flashFirmwareAndRelease,
+} from '../lib/flashWorkflow.js';
+import {
   DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS,
   DEFAULT_WLED_APP_FLASH_ADDRESS,
   MIN_FACTORY_IMAGE_BYTES,
@@ -150,17 +155,28 @@ import {
       append(`Flashing ${fmtSize(fw.size)} @ 0x${address.toString(16).toUpperCase()}${erase ? "  [erase all]" : ""}…`);
       if (erase) append("Erasing flash — this takes ~15 s…");
       try {
-        await flashFirmware(loaderRef.current, fw, address, erase, (pct) => {
-          setProgress(pct);
-          setStatus(`Flashing… ${Math.round(pct * 100)}%`);
+        await flashFirmwareAndRelease({
+          loader: loaderRef.current,
+          transport: transportRef.current,
+          file: fw,
+          address,
+          eraseAll: erase,
+          flashFirmware,
+          onProgress: (pct) => {
+            setProgress(pct);
+            setStatus(`Flashing… ${Math.round(pct * 100)}%`);
+          },
         });
         setProgress(1);
-        setStatus("● Flash complete — Lightweaver is booting"); setKind("ok");
-        append("Flash complete. Lightweaver should start in a few seconds.");
+        setStatus(FLASH_COMPLETE_RELEASED_STATUS); setKind("ok");
+        append(FLASH_COMPLETE_RELEASED_LOG);
       } catch (err) {
         setStatus(`✕ Flash failed: ${err.message ?? err}`); setKind("err");
         append(`Error: ${err.message ?? err}`);
       } finally {
+        loaderRef.current = null;
+        transportRef.current = null;
+        setConnected(false);
         setFlashing(false);
       }
     };
