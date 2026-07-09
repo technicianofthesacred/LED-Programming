@@ -1,11 +1,20 @@
 /* Studio shell (app.jsx), converted from the v3 mockup to an ES module and
    wired to the real ProjectProvider. The shell chrome (TopBar/Rail/StatusBar)
    keeps the mockup markup; data/handlers are threaded in from project state. */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
+import {
+  bootstrapCardLink,
+  cardLinkStatusText,
+  connectCardLink,
+  getCardLinkState,
+  isCardLinkConnected,
+  reportDirectCardStatus,
+  subscribeCardLink,
+} from '../lib/cardLink.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { PatternScreen } from './lw-pattern.jsx';
@@ -77,18 +86,32 @@ function Rail({ view, setView }) {
   );
 }
 
-/* ---------- Status / Card bar (wired to real card status + totals) ---------- */
-function StatusBar({ connected, cardHost, onToggleConnect, totalLeds, stripCount, density, fps }) {
+/* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
+/* The connection indicator reads the cardLink state machine ONLY: green dot +
+   transport label when connected; otherwise the honest reason plus the
+   one-click fix (Connect to card opens the card page popup, which is the only
+   live path from the HTTPS Studio). */
+function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps }) {
+  const connected = isCardLinkConnected(link);
+  const connecting = link.state === 'connecting';
   return (
     <footer className="status-bar">
       <div className="sb-card">
         <span className={"sb-dot " + (connected ? "on" : "off")} />
         <span className="sb-label">Card</span>
-        <input className="sb-host" value={cardHost} readOnly disabled={connected} aria-label="Card hostname or IP" />
-        <button className={"sb-connect" + (connected ? " is-on" : "")} onClick={onToggleConnect}>
-          {connected ? "Disconnect" : "Connect"}
-        </button>
-        {connected && <span className="sb-stream"><span className="pulse" />Art-Net live</span>}
+        <input className="sb-host" value={link.host || 'lightweaver.local'} readOnly disabled aria-label="Card hostname or IP" />
+        {connected ? (
+          <span className="sb-stream" data-testid="card-link-status"><span className="pulse" />{cardLinkStatusText(link)}</span>
+        ) : (
+          <>
+            <span data-testid="card-link-status" style={{ color: 'var(--text-mid)', whiteSpace: 'nowrap' }}>
+              {cardLinkStatusText(link)}
+            </span>
+            {!connecting && (
+              <button className="sb-connect" onClick={onConnectCard}>Connect to card</button>
+            )}
+          </>
+        )}
       </div>
 
       <div className="sb-div" />
@@ -118,7 +141,7 @@ function Shell() {
   const [view, setView] = useState(viewFromHash);
   const {
     projectName, serializeProject, loadProject, newProject,
-    strips, layoutDensity, wledConnected, wledIp,
+    strips, layoutDensity,
   } = useProject();
   const [saveLabel, setSaveLabel] = useState('');
   const fileInputRef = useRef(null);
@@ -142,13 +165,30 @@ function Shell() {
     return () => clearTimeout(t);
   }, [saveLabel]);
 
-  // real card status
+  // real card status — every screen and the footer read the cardLink state
+  // machine, which merges direct HTTP polling (http/file pages) with the
+  // card-page postMessage bridge keepalive (the only live path on HTTPS).
   const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const cardStatus = useCardStatus({ enabled: directCardControl });
-  const connected = cardStatus.connected || wledConnected;
-  const cardHost = cardStatus.host || wledIp || 'lightweaver.local';
+  const cardLink = useSyncExternalStore(subscribeCardLink, getCardLinkState, getCardLinkState);
+  useEffect(() => { void bootstrapCardLink(); }, []);
+  useEffect(() => {
+    if (!directCardControl) return;
+    reportDirectCardStatus({
+      connected: cardStatus.connected,
+      checking: cardStatus.checking && !cardStatus.checkedAt,
+      host: cardStatus.host,
+    });
+  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.checkedAt, cardStatus.host]);
+  const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
-  const onToggleConnect = useCallback(() => { cardStatus.connect?.(); }, [cardStatus]);
+  const onConnectCard = useCallback(() => {
+    if (directCardControl) {
+      cardStatus.connect?.();
+      return;
+    }
+    connectCardLink();
+  }, [directCardControl, cardStatus]);
 
   // configured push rate; Tweaks fires lw-preview-settings when it changes
   const [pushFps, setPushFps] = useState(readPushFps);
@@ -207,9 +247,8 @@ function Shell() {
       {Screen ? <Screen connected={connected} go={setView} /> : null}
 
       <StatusBar
-        connected={connected}
-        cardHost={cardHost}
-        onToggleConnect={onToggleConnect}
+        link={cardLink}
+        onConnectCard={onConnectCard}
         totalLeds={totalLeds}
         stripCount={strips.length}
         density={layoutDensity}

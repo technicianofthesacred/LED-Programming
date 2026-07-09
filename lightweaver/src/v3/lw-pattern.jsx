@@ -45,6 +45,7 @@ import {
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import {
+  previewResponseUsedZoneFallback,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
   recoverCardLights,
@@ -158,6 +159,10 @@ import {
     const [status, setStatus] = useState("");
     const [statusKind, setStatusKind] = useState("");
     const [handoffUrl, setHandoffUrl] = useState("");
+    // True when the last live push fell back from a section to the whole strip
+    // because the card has no matching zone. Never silent: it renders the
+    // "Send sections to card" banner until sections reach the card.
+    const [zoneFallback, setZoneFallback] = useState(false);
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
     const livePreviewTimer = useRef(null);
@@ -297,8 +302,13 @@ import {
       });
     };
 
-    const scheduleLivePreview = useCallback((nextLook, target = selectedTarget) => {
-      if (!livePreview) return;
+    const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80) => {
+      if (!livePreview) {
+        // Never silently do nothing: say why the lights are not following.
+        setStatusKind('');
+        setStatus('Live preview is off, so the lights stayed as they were. Turn on "Preview taps on the LED card" above to see changes on the piece.');
+        return;
+      }
       setHandoffUrl('');
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
       const sequence = ++livePreviewSeq.current;
@@ -313,21 +323,31 @@ import {
             { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: true },
           );
           if (sequence === livePreviewSeq.current) {
+            // Surface (never swallow) a section push that collapsed to the
+            // whole strip — the banner stays up until sections reach the card.
+            setZoneFallback(zone ? previewResponseUsedZoneFallback(response) : false);
             setStatusKind('ok');
             const patternLabel = getCardPatternById(nextLook.patternId)?.label || nextLook.patternId;
-            setStatus(response?.previewZoneFallback
-              ? `Previewing ${patternLabel} on the whole card. Save these Settings to the card once to preview ${targetLabel(target)} separately.`
+            setStatus(previewResponseUsedZoneFallback(response)
+              ? `Previewing ${patternLabel} on the whole piece — the card doesn't have ${targetLabel(target)} as its own section yet.`
               : `Previewing ${patternLabel} on ${targetLabel(target)}. Not saved yet.`);
           }
         } catch (error) {
+          if (error?.reason === 'superseded') {
+            // An older send was replaced by a newer one — say so briefly
+            // instead of staying silent; the newest send reports its own result.
+            setStatusKind('');
+            setStatus('Skipped an older preview — sending your latest change.');
+            return;
+          }
           if (sequence === livePreviewSeq.current) {
             setStatusKind('err');
             setStatus(error?.reason === 'mixed-content'
               ? error.message
-              : `Could not preview on the card at ${cardHostToUrl(cardHost)}.`);
+              : `Could not reach the card at ${cardHostToUrl(cardHost)} — this change is not on the lights. Use Connect to card in the bottom bar.`);
           }
         }
-      }, 80);
+      }, delayMs);
     }, [cardHost, livePreview, selectedTarget]);
 
     useEffect(() => () => {
@@ -350,6 +370,19 @@ import {
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
       setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
       if (push) scheduleLivePreview(nextLook, selectedTarget);
+    };
+
+    // Clicking a target tab pushes that target's current look to its zone
+    // (debounced) so the physical strip follows the selection.
+    const selectTarget = (target) => {
+      if (!target) return;
+      setSelectedTargetId(target.id);
+      if (livePreview && !connected) {
+        setStatusKind('err');
+        setStatus(`Not connected to the card, so the lights can't follow this selection. Use Connect to card in the bottom bar.`);
+        return;
+      }
+      scheduleLivePreview(resolveDraftTargetLook(target), target, 150);
     };
 
     const buildCurrentHardwareState = ({ saveNamedLook = false, label = '', uniqueLookId = false } = {}) => {
@@ -463,6 +496,8 @@ import {
         setDraftLooks({});
         setMixName('');
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+        // The saved config carries the section zones, so the card has them now.
+        setZoneFallback(false);
         if (response.rebooting) {
           setStatusKind('ok');
           setStatus('Saved on the card. The card is rebooting now so the LED output layout takes effect.');
@@ -667,6 +702,7 @@ import {
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
+        setZoneFallback(false);
         if (response.rebooting) {
           setStatusKind('ok');
           setStatus('Split preview was saved. The card is rebooting now so the LED output layout takes effect.');
@@ -736,6 +772,9 @@ import {
               </div>
               <div className="pm-actions">
                 <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard}>{I.bolt}Save to card</button>
+                {connected &&
+                  <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed}>{I.wrench}Recover lights</button>
+                }
                 <div className="ag-conn">
                   <button className={"btn" + (localCard ? " toggled" : "")} aria-pressed={localCard} onClick={toggleLocalCard}>{localCard ? "Using local card" : "Use local card"}</button>
                   <button className="btn" onClick={openCardPage}>{I.open}Open card page</button>
@@ -766,6 +805,17 @@ import {
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   </div>
                 }
+              </div>
+            }
+
+            {/* Section pushes must never quietly collapse to the whole strip:
+                this banner stays up until the card actually has the sections. */}
+            {zoneFallback &&
+              <div className="pmx-status is-err" data-testid="zone-fallback-banner">
+                Card doesn't have sections yet — for now the whole strip shows every look.
+                <div className="pmx-status-actions">
+                  <button className="btn primary" onClick={sendSplitPreview}>Send sections to card</button>
+                </div>
               </div>
             }
 
@@ -800,7 +850,7 @@ import {
                   {sectionTargets.length > 1 &&
                     <div className="chips" style={{ marginBottom: 8 }} aria-label="Target sections">
                       {sectionTargets.map((t) =>
-                        <button key={t.id} data-testid={`section-target-${t.id}`} className={"chip" + (t.id === selectedTarget?.id ? " on" : "")} onClick={() => setSelectedTargetId(t.id)}>{targetLabel(t)}</button>
+                        <button key={t.id} data-testid={`section-target-${t.id}`} className={"chip" + (t.id === selectedTarget?.id ? " on" : "")} onClick={() => selectTarget(t)}>{targetLabel(t)}</button>
                       )}
                     </div>
                   }
