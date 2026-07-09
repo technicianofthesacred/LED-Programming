@@ -20,7 +20,10 @@ import {
     { n: 3, label: "Release BOOT", sub: "then click Connect", kbd: "BOOT ↑" },
   ];
 
-  const LIGHTWEAVER_FIRMWARE_URL = '/firmware/lightweaver-controller-esp32s3-factory.bin';
+  // Base-relative so the same code works at the standalone Studio root ('/')
+  // AND embedded in the mandalacodes bundle at led.mandalacodes.com/design/
+  // ('/design/'). A hardcoded '/firmware/...' 404s to the SPA fallback there.
+  const LIGHTWEAVER_FIRMWARE_URL = `${import.meta.env.BASE_URL}firmware/lightweaver-controller-esp32s3-factory.bin`;
   const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 
   // Mockup-bug guard: keep button-internal glyphs at the mockup's 16px so the
