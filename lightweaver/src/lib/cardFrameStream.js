@@ -29,8 +29,12 @@ export const DEFAULT_FRAME_FPS = 18;
 export const MAX_FRAME_FPS = 24;
 export const MIN_FRAME_FPS = 1;
 // Re-send the latest frame if the wire has been quiet this long, so the card's
-// 2s frame-source watchdog never fires mid-show.
-export const FRAME_KEEPALIVE_MS = 1200;
+// 2s frame-source watchdog never fires mid-show. Must sit UNDER 1000ms:
+// background tabs clamp setInterval to 1000ms, and a keepalive threshold above
+// that would skip every other clamped tick — a 2000ms wire cadence that ties
+// the watchdog exactly and flickers. At ≤900ms every clamped 1000ms tick
+// re-sends, keeping the cadence at 1000ms, safely under the 2s watchdog.
+export const FRAME_KEEPALIVE_MS = 850;
 // Direct-WS congestion guard: past this many unsent bytes we skip the tick and
 // let the next one carry the (newer) frame instead of queueing stale ones.
 const WS_CONGESTION_BYTES = 8192;
@@ -66,32 +70,61 @@ export function createBridgeFrameTransport(host = '') {
   };
 }
 
+// How long an unreachable card backs off between direct-WS open attempts:
+// 250ms doubling to a 4s cap, so a dead card costs a few opens per minute
+// instead of a fresh socket every ~55ms tick.
+export const DIRECT_BACKOFF_MIN_MS = 250;
+export const DIRECT_BACKOFF_MAX_MS = 4000;
+
 // Direct transport — local dev (http/file pages) talks to the card itself.
-export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl } = {}) {
+export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl, nowImpl } = {}) {
   const resolvedHost = normalizeCardHost(host || readStoredCardHost());
   const WS = WebSocketImpl || (typeof WebSocket !== 'undefined' ? WebSocket : null);
   const doFetch = fetchImpl || ((...args) => fetch(...args));
+  const nowFn = nowImpl || (() => Date.now());
   let ws = null;
   let opening = null;
+  let backoffMs = 0;
+  let retryAt = 0;
+
+  function noteOpenFailure() {
+    backoffMs = backoffMs ? Math.min(DIRECT_BACKOFF_MAX_MS, backoffMs * 2) : DIRECT_BACKOFF_MIN_MS;
+    retryAt = nowFn() + backoffMs;
+  }
 
   function openSocket() {
     if (ws && ws.readyState === 1) return Promise.resolve(ws);
     if (opening) return opening;
     if (!WS) return Promise.reject(new Error('WebSocket is not available here.'));
+    if (nowFn() < retryAt) {
+      // Still inside the backoff window: fail fast without opening a socket.
+      // The pump counts this as an undelivered tick, which feeds the same
+      // health path as a bridge failure.
+      const error = new Error(`Waiting to retry ws://${resolvedHost}:81/ws`);
+      error.reason = 'ws-backoff';
+      return Promise.reject(error);
+    }
     opening = new Promise((resolve, reject) => {
       let socket;
       try {
         socket = new WS(`ws://${resolvedHost}:81/ws`);
       } catch (error) {
         opening = null;
+        noteOpenFailure();
         reject(error);
         return;
       }
-      socket.onopen = () => { ws = socket; opening = null; resolve(socket); };
+      socket.onopen = () => { ws = socket; opening = null; backoffMs = 0; retryAt = 0; resolve(socket); };
       socket.onerror = () => { /* onclose follows and settles state */ };
       socket.onclose = () => {
         if (ws === socket) ws = null;
-        if (opening) { opening = null; reject(new Error(`Could not open ws://${resolvedHost}:81/ws`)); }
+        if (opening) {
+          opening = null;
+          noteOpenFailure();
+          const error = new Error(`Could not open ws://${resolvedHost}:81/ws`);
+          error.reason = 'ws-open-failed';
+          reject(error);
+        }
       };
     });
     return opening;
@@ -120,6 +153,8 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
       try { ws?.close(); } catch { /* noop */ }
       ws = null;
       opening = null;
+      backoffMs = 0;
+      retryAt = 0;
     },
   };
 }
@@ -132,12 +167,20 @@ export function defaultFrameTransport(host = '') {
 
 // The streamer. push() as fast as you like (every RAF); frames go out on the
 // throttle clock, one in flight at a time, newest frame always winning.
+//
+// Delivery health: every pump outcome is classified. A send rejection OR a
+// bridge reply carrying wsOpen:false (F1 contract: the card page's socket to
+// the card was not open, the frame was NOT delivered) counts as a failure;
+// a reply without a wsOpen field (older firmware) is unknown → assumed
+// delivered. Failures feed getStats() and the optional onHealth callback so
+// the UI can warn and auto-stop instead of streaming into the void.
 export function createCardFrameStream({
   host = '',
   fps = DEFAULT_FRAME_FPS,
   seg = undefined,
   transport = null,
   keepaliveMs = FRAME_KEEPALIVE_MS,
+  onHealth = null,
   setIntervalImpl = (...args) => setInterval(...args),
   clearIntervalImpl = (...args) => clearInterval(...args),
   now = () => Date.now(),
@@ -150,9 +193,38 @@ export function createCardFrameStream({
   let latestDirty = false;
   let inflight = false;
   let lastSentAt = 0;
+  let lastDeliveredAt = 0;
   let sentFrames = 0;
   let droppedFrames = 0;
+  let undeliveredFrames = 0;
+  let consecutiveFailures = 0;
+  let failingSince = 0;
   let lastError = null;
+
+  function noteFailure(error) {
+    lastError = error;
+    consecutiveFailures += 1;
+    undeliveredFrames += 1;
+    if (!failingSince) failingSince = now();
+    // The frame never reached the card — keep it dirty so the very next tick
+    // retries instead of waiting out the keepalive window.
+    latestDirty = true;
+  }
+
+  function emitHealth() {
+    if (typeof onHealth !== 'function') return;
+    try {
+      onHealth({
+        active,
+        delivered: consecutiveFailures === 0,
+        consecutiveFailures,
+        failingForMs: failingSince ? now() - failingSince : 0,
+        lastDeliveredAt,
+        lastError,
+        reason: lastError?.reason || null,
+      });
+    } catch { /* a health listener must never break the pump */ }
+  }
 
   async function pump() {
     if (!active || inflight) return;
@@ -162,15 +234,27 @@ export function createCardFrameStream({
     latestDirty = false;
     inflight = true;
     try {
-      await wire.sendFrame(frame, seg);
-      lastSentAt = now();
-      sentFrames += 1;
-      lastError = null;
+      const result = await wire.sendFrame(frame, seg);
+      if (result && result.wsOpen === false) {
+        // F1 contract: the relay accepted the postMessage but its socket to
+        // the card was closed — the frame did NOT reach the LEDs.
+        const error = new Error('The card page could not reach the card (its socket to the card is closed).');
+        error.reason = 'relay-socket-closed';
+        noteFailure(error);
+      } else {
+        lastSentAt = now();
+        lastDeliveredAt = lastSentAt;
+        sentFrames += 1;
+        lastError = null;
+        consecutiveFailures = 0;
+        failingSince = 0;
+      }
     } catch (error) {
-      lastError = error;
+      noteFailure(error);
     } finally {
       inflight = false;
     }
+    emitHealth();
   }
 
   function start() {
@@ -226,7 +310,11 @@ export function createCardFrameStream({
         transport: wire.kind || 'custom',
         sentFrames,
         droppedFrames,
+        undeliveredFrames,
+        consecutiveFailures,
+        failingForMs: failingSince ? now() - failingSince : 0,
         lastSentAt,
+        lastDeliveredAt,
         lastError,
       };
     },

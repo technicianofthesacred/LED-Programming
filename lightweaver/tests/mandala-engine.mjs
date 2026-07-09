@@ -204,6 +204,37 @@ for (const key of ['strata', 'embers', 'hearth']) {
   assert.deepEqual(frameToHex(new Uint8Array([255, 0, 16])), ['FF0010'], 'hex encoding is exact');
 }
 
+// ── buffer-reuse APIs: one palette walk shared by preview + stream ────────
+{
+  const engine = createMandalaEngine();
+  engine.setListening(true);
+  driveLoud(engine, 4);
+
+  const colors = engine.colorFrame();
+  assert.equal(colors.length, TOTAL_PIXELS * 3, 'colorFrame covers every pixel');
+  assert.equal(engine.colorFrame(colors), colors, 'colorFrame reuses a right-sized caller buffer');
+  const c0 = engine.colorAt(0);
+  assert.ok(
+    Math.abs(colors[0] - c0[0]) < 1e-4 && Math.abs(colors[1] - c0[1]) < 1e-4 && Math.abs(colors[2] - c0[2]) < 1e-4,
+    'colorFrame agrees with colorAt',
+  );
+
+  const direct = engine.frameRGB();
+  const viaColors = engine.frameRGB(new Uint8Array(TOTAL_PIXELS * 3), colors);
+  assert.deepEqual(Array.from(viaColors), Array.from(direct),
+    'frameRGB from a shared colorFrame buffer matches the direct path exactly');
+
+  const out = new Uint8Array(TOTAL_PIXELS * 3);
+  assert.equal(engine.frameRGB(out, colors), out, 'frameRGB reuses a right-sized caller buffer');
+
+  const hex = frameToHex(direct);
+  assert.equal(frameToHex(direct, hex), hex, 'frameToHex reuses a right-sized caller array');
+  assert.deepEqual(frameToHex(direct, hex), frameToHex(direct), 'reused hex output matches a fresh encode');
+
+  const resBuf = new Uint8Array(44 * 3);
+  assert.equal(resampleFrame(direct, 44, resBuf), resBuf, 'resampleFrame reuses a right-sized caller buffer');
+}
+
 // ── preset + master controls ─────────────────────────────────────────────
 {
   const engine = createMandalaEngine();

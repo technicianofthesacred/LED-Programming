@@ -16,7 +16,7 @@ import {
   RINGS,
   TOTAL_PIXELS,
 } from '../lib/mandalaEngine.js';
-import { createCardFrameStream } from '../lib/cardFrameStream.js';
+import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
 
@@ -24,13 +24,45 @@ const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
 const LIVELY_MODES = MODE_LIBRARY.filter((m) => m.tier === 'lively');
 
 // ── canvas render (port of the simulator's fused halo render) ─────────────
-function rgbaStr(c, a) {
-  return `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+function rgbaStr(r, g, b, a) {
+  return `rgba(${r | 0},${g | 0},${b | 0},${a})`;
 }
 
-function renderMandala(ctx, engine, geom) {
+// One pre-rendered white radial-glow sprite, tinted per pixel — replaces the
+// old per-pixel ctx.createRadialGradient (up to 675 gradient allocations per
+// frame). Same soft three-stop falloff and the same additive 'lighter'
+// compositing; per-pixel halo brightness rides on globalAlpha at draw time
+// (the 0.444 mid stop is the full-brightness 0.4/0.9 stop ratio).
+const GLOW_SPRITE_R = 32;
+let glowSprite = null;
+let glowTintCtx = null;
+function ensureGlowSprite() {
+  if (glowTintCtx) return true;
+  if (typeof document === 'undefined') return false;
+  const size = GLOW_SPRITE_R * 2;
+  const sprite = document.createElement('canvas');
+  sprite.width = sprite.height = size;
+  const sctx = sprite.getContext('2d');
+  const g = sctx.createRadialGradient(GLOW_SPRITE_R, GLOW_SPRITE_R, 0, GLOW_SPRITE_R, GLOW_SPRITE_R, GLOW_SPRITE_R);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.4, 'rgba(255,255,255,0.444)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  sctx.fillStyle = g;
+  sctx.fillRect(0, 0, size, size);
+  glowSprite = sprite;
+  const tint = document.createElement('canvas');
+  tint.width = tint.height = size;
+  glowTintCtx = tint.getContext('2d');
+  return true;
+}
+
+// `colors` is the engine's shared colorFrame() buffer (Float32Array TOTAL*3),
+// computed once per frame and reused by the LED-frame encode.
+function renderMandala(ctx, engine, geom, colors) {
   const { W, cx, cy, maxR } = geom;
   const master = engine.getMaster();
+  const haveGlow = ensureGlowSprite();
+  const glowSize = GLOW_SPRITE_R * 2;
   ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = '#050403';
   ctx.beginPath(); ctx.arc(cx, cy, maxR * 1.08, 0, Math.PI * 2); ctx.fill();
@@ -46,22 +78,30 @@ function renderMandala(ctx, engine, geom) {
     const r = rfOf[i] * maxR;
     const x = cx + Math.cos(angOf[i]) * r;
     const y = cy + Math.sin(angOf[i]) * r;
-    const c = engine.colorAt(i);
-    if (v > 0.03) {
+    const cr = colors[i * 3], cg = colors[i * 3 + 1], cb = colors[i * 3 + 2];
+    if (v > 0.03 && haveGlow) {
       const gr = dot * (1.4 + v * 3.0);
-      const g = ctx.createRadialGradient(x, y, 0, x, y, gr);
-      g.addColorStop(0, rgbaStr(c, Math.min(0.9, 0.22 + v * 0.7)));
-      g.addColorStop(0.4, rgbaStr(c, Math.min(0.4, v * 0.4)));
-      g.addColorStop(1, rgbaStr(c, 0));
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, gr, 0, Math.PI * 2); ctx.fill();
+      // tint the white sprite with this pixel's color, then draw it additively
+      glowTintCtx.globalCompositeOperation = 'copy';
+      glowTintCtx.fillStyle = rgbaStr(cr, cg, cb, 1);
+      glowTintCtx.fillRect(0, 0, glowSize, glowSize);
+      glowTintCtx.globalCompositeOperation = 'destination-in';
+      glowTintCtx.drawImage(glowSprite, 0, 0);
+      ctx.globalAlpha = Math.min(0.9, 0.22 + v * 0.7);
+      ctx.drawImage(glowTintCtx.canvas, x - gr, y - gr, gr * 2, gr * 2);
+      ctx.globalAlpha = 1;
     }
     const lit = Math.max(0.05, v);
-    ctx.fillStyle = rgbaStr(c, Math.min(1, 0.12 + lit * 0.85));
+    ctx.fillStyle = rgbaStr(cr, cg, cb, Math.min(1, 0.12 + lit * 0.85));
     ctx.beginPath(); ctx.arc(x, y, dot, 0, Math.PI * 2); ctx.fill();
   }
   ctx.globalCompositeOperation = 'source-over';
 }
+
+// LED-frame encodes (frameRGB → resample → hex) are gated to the stream's
+// ~18fps wire cadence instead of every RAF tick; the small epsilon keeps RAF's
+// ~16.7ms quantization from landing the cadence a whole tick late.
+const STREAM_ENCODE_GAP_MS = 1000 / DEFAULT_FRAME_FPS - 8;
 
 // ── small UI pieces (v3 token styling, inline where no class fits) ─────────
 const chipStyle = (on) => ({
@@ -105,7 +145,7 @@ function BandMeter({ label, value }) {
   );
 }
 
-function ShowScreen({ connected, go }) {
+function ShowScreen({ go }) {
   const { strips } = useProject();
   const projectPixels = strips.reduce((sum, strip) => sum + (strip.pixels?.length || 0), 0) || TOTAL_PIXELS;
 
@@ -119,6 +159,9 @@ function ShowScreen({ connected, go }) {
   const streamRef = useRef(null);
   const rgbBufRef = useRef(null);
   const resampleBufRef = useRef(null);
+  const colorBufRef = useRef(null);
+  const hexBufRef = useRef(null);
+  const healthNoticeShownRef = useRef(false);
   const pixelsRef = useRef(projectPixels);
   pixelsRef.current = projectPixels;
 
@@ -159,6 +202,7 @@ function ShowScreen({ connected, go }) {
     let raf = 0;
     let prev = performance.now();
     let meterAt = 0;
+    let encodeAt = 0;
     const step = (now) => {
       const dt = Math.min(0.05, (now - prev) / 1000);
       prev = now;
@@ -166,16 +210,21 @@ function ShowScreen({ connected, go }) {
       const audio = audioRef.current;
       if (audio.analyser) engine.analyze(audio.analyser);
       engine.tick(dt);
-      renderMandala(ctx, engine, geom);
+      // per-pixel colors computed ONCE per frame, shared by the canvas paint
+      // and the LED-frame encode below
+      colorBufRef.current = engine.colorFrame(colorBufRef.current);
+      renderMandala(ctx, engine, geom, colorBufRef.current);
       const stream = streamRef.current;
-      if (stream) {
-        rgbBufRef.current = engine.frameRGB(rgbBufRef.current);
+      if (stream && now - encodeAt >= STREAM_ENCODE_GAP_MS) {
+        encodeAt = now;
+        rgbBufRef.current = engine.frameRGB(rgbBufRef.current, colorBufRef.current);
         let frame = rgbBufRef.current;
         if (pixelsRef.current !== TOTAL_PIXELS) {
           resampleBufRef.current = resampleFrame(frame, pixelsRef.current, resampleBufRef.current);
           frame = resampleBufRef.current;
         }
-        stream.push(frameToHex(frame));
+        hexBufRef.current = frameToHex(frame, hexBufRef.current);
+        stream.push(hexBufRef.current);
       }
       if (now - meterAt > 120) {
         meterAt = now;
@@ -206,6 +255,31 @@ function ShowScreen({ connected, go }) {
     audio.analyser = null;
   }, []);
 
+  // ── returning to a backgrounded tab: revive audio, explain any pause ─────
+  // Browsers clamp timers in hidden tabs (Chrome's 5-minute intensive
+  // throttling clamps them to once a minute), so the stream's keepalive can
+  // gap past the card's 2s watchdog and the lights fall back to their own
+  // pattern until we resume. RAF pausing is fine — the pump re-sends the
+  // latest frame — but a long gap deserves a friendly word.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+      const audio = audioRef.current;
+      if (audio.ctx && (audio.ctx.state === 'suspended' || audio.ctx.state === 'interrupted')) {
+        audio.ctx.resume().catch(() => { /* resumes on the next user gesture */ });
+      }
+      const stream = streamRef.current;
+      if (stream) {
+        const stats = stream.getStats();
+        if (stats.lastSentAt && Date.now() - stats.lastSentAt > 2500) {
+          setNotice({ kind: 'info', text: "The lights paused while this tab was in the background — they're back now." });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   // ── audio plumbing (mirrors the simulator's Web Audio pipeline) ──────────
   const ensureAudio = useCallback(() => {
     const audio = audioRef.current;
@@ -216,7 +290,11 @@ function ShowScreen({ connected, go }) {
       audio.analyser.fftSize = 2048;
       audio.analyser.smoothingTimeConstant = 0.75;
     }
-    if (audio.ctx.state === 'suspended') void audio.ctx.resume();
+    // iOS reports 'interrupted' (phone call, Siri, control center) — treat it
+    // exactly like 'suspended' and try to resume.
+    if (audio.ctx.state === 'suspended' || audio.ctx.state === 'interrupted') {
+      audio.ctx.resume().catch(() => { /* resumes on the next user gesture */ });
+    }
     return audio;
   }, []);
 
@@ -243,12 +321,15 @@ function ShowScreen({ connected, go }) {
   }, [stopMicTracks]);
 
   const startMic = useCallback(async () => {
+    // iOS: the AudioContext must be created/resumed synchronously inside the
+    // tap — any await first (like getUserMedia's permission prompt) consumes
+    // the user-gesture activation and the context stays suspended forever.
+    const audio = ensureAudio();
     try {
       try { playerRef.current?.pause(); } catch { /* noop */ }
       const mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
-      const audio = ensureAudio();
       stopMicTracks();
       audio.micStream = mic;
       connectSource(audio.ctx.createMediaStreamSource(mic), false);
@@ -305,14 +386,49 @@ function ShowScreen({ connected, go }) {
   }, []);
 
   // ── the lights: start/stop the card frame stream ─────────────────────────
+  const stopLights = useCallback(async (stopNotice) => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    streamRef.current = null;
+    healthNoticeShownRef.current = false;
+    setOnLights(false);
+    if (stopNotice) setNotice(stopNotice);
+    try { await stream.stop(); } catch { /* the card reverts on its own after 2s */ }
+  }, []);
+
+  // Delivery health from the streamer: warn when frames stop reaching the
+  // lights, and auto-stop (button back to its off state) when the path is
+  // clearly gone — the card page popup closed, or ~15s of sustained failure.
+  const handleStreamHealth = useCallback((health) => {
+    if (!streamRef.current) return;
+    if (health.delivered) {
+      if (healthNoticeShownRef.current) {
+        healthNoticeShownRef.current = false;
+        setNotice(null);
+      }
+      return;
+    }
+    const bridgeGone = health.reason === 'bridge-missing';
+    if ((bridgeGone && health.failingForMs >= 1200 && health.consecutiveFailures >= 3) || health.failingForMs >= 15000) {
+      void stopLights({
+        kind: 'err',
+        text: bridgeGone
+          ? 'The card page closed, so the show stopped reaching the lights. Open the card page again, then press "Play on the lights".'
+          : "The lights stopped receiving the show, so it's been paused. Check that your card is on and its page is open, then try again.",
+      });
+      return;
+    }
+    if (health.failingForMs >= 3000 && !healthNoticeShownRef.current) {
+      healthNoticeShownRef.current = true;
+      setNotice({ kind: 'err', text: "The lights aren't receiving the show — check that your card page is still open." });
+    }
+  }, [stopLights]);
+
   const toggleLights = useCallback(async () => {
     if (lightsBusy) return;
     if (streamRef.current) {
-      const stream = streamRef.current;
-      streamRef.current = null;
-      setOnLights(false);
       setLightsBusy(true);
-      try { await stream.stop(); } catch { /* the card reverts on its own after 2s */ }
+      await stopLights();
       setLightsBusy(false);
       return;
     }
@@ -327,15 +443,33 @@ function ShowScreen({ connected, go }) {
           return;
         }
         // Elicit a versioned reply so a quietly-bootstrapped bridge reports
-        // its real protocol version before we gate on it.
-        try { await pingCardBridge({ timeoutMs: 2500 }); } catch { /* gap check below still applies */ }
+        // its real protocol version before we gate on it. Retry once — a
+        // sleepy card page often misses the first ping.
+        let pinged = false;
+        try {
+          await pingCardBridge({ timeoutMs: 2500 });
+          pinged = true;
+        } catch {
+          try {
+            await pingCardBridge({ timeoutMs: 2500 });
+            pinged = true;
+          } catch { /* the card never answered — handled below */ }
+        }
         const gap = cardBridgeFeatureGap('frame');
         if (gap) {
-          setNotice({ kind: 'err', text: gap.message, action: 'flash' });
+          if (!pinged && gap.reported === 0) {
+            // The card never replied, so we don't actually know its firmware
+            // is old — don't send anyone to reflash over a connection hiccup.
+            setNotice({ kind: 'err', text: "Couldn't check your card — make sure the card page is open, then try again." });
+          } else {
+            // The card really reported a version below what streaming needs.
+            setNotice({ kind: 'err', text: gap.message, action: 'flash' });
+          }
           return;
         }
       }
-      const stream = createCardFrameStream({ host: readStoredCardHost() });
+      healthNoticeShownRef.current = false;
+      const stream = createCardFrameStream({ host: readStoredCardHost(), onHealth: handleStreamHealth });
       stream.start();
       streamRef.current = stream;
       setOnLights(true);
@@ -343,7 +477,7 @@ function ShowScreen({ connected, go }) {
     } finally {
       setLightsBusy(false);
     }
-  }, [lightsBusy]);
+  }, [lightsBusy, stopLights, handleStreamHealth]);
 
   const listening = source !== 'quiet';
 
