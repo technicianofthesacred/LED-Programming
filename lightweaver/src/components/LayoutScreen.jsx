@@ -3869,8 +3869,8 @@ export function LayoutScreen() {
             {/* Live wire editor — chop / link / route order (function preserved) */}
             <details className="la-wire-editor">
               <summary>
-                <span className="ttl">Wire tools</span>
-                <span className="meta">chop · link · route</span>
+                <span className="ttl">Advanced</span>
+                <span className="meta">split a strip into runs</span>
               </summary>
               <PatchBoardScreen
                 embedded

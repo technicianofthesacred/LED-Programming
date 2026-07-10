@@ -178,6 +178,7 @@ export function PatchBoardScreen({
 
   return (
     <div className={`lw-wire-path ${embedded ? 'is-embedded' : ''}`}>
+      {!embedded && (
       <div className="lw-wire-head">
         <div>
           <h1>Wire Path</h1>
@@ -195,6 +196,12 @@ export function PatchBoardScreen({
           </button>
         </div>
       </div>
+      )}
+      {embedded && (
+        <p style={{ fontSize: 12, color: 'var(--text-faint, #9a8d75)', margin: '0 0 8px', lineHeight: 1.45 }}>
+          Optional. Your strip list already sets the wiring order — use this only to split one physical strip into separate runs.
+        </p>
+      )}
 
       {pushStatus && (
         <div style={{
@@ -265,6 +272,7 @@ export function PatchBoardScreen({
         </section>
       )}
 
+      {!embedded && (
       <section className="lw-wire-source">
         <div className="lw-wire-section-title">
           <span>Source Paths</span>
@@ -285,6 +293,7 @@ export function PatchBoardScreen({
           ))}
         </div>
       </section>
+      )}
 
       <section className="lw-wire-cut-summary">
         <div className="lw-wire-section-title">
@@ -299,6 +308,7 @@ export function PatchBoardScreen({
         </div>
       </section>
 
+      {(!embedded || orderedPatches.length > strips.length) && (<>
       <section className="lw-wire-order">
         <div className="lw-wire-section-title">
           <span>Wire order</span>
@@ -376,6 +386,7 @@ export function PatchBoardScreen({
           </button>
         </div>
       </section>
+      </>)}
 
       {advancedOpen && selectedPatch && (
         <section className="lw-wire-advanced">
