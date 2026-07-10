@@ -3,6 +3,50 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+async function mockLocalCard(page: any) {
+  const card = {
+    zones: [
+      { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
+      { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+    ],
+    savedConfig: null as any,
+  };
+
+  await page.route('http://lightweaver.local/**', async (route: any) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === '/api/status') {
+      await route.fulfill({ json: { ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
+      return;
+    }
+    if (pathname === '/api/zones') {
+      await route.fulfill({ json: { ok: true, syncZones: false, zones: card.zones } });
+      return;
+    }
+    if (pathname === '/api/firmware-info') {
+      await route.fulfill({
+        json: {
+          ok: true,
+          pixels: 44,
+          outputs: [
+            { id: 'out1', pin: 16, pixels: 22 },
+            { id: 'out2', pin: 17, pixels: 22 },
+          ],
+        },
+      });
+      return;
+    }
+    if (pathname === '/api/config') {
+      card.savedConfig = JSON.parse(request.postData() || '{}');
+      card.zones = card.savedConfig.zones || card.zones;
+      await route.fulfill({ json: { ok: true, requiresReboot: false } });
+      return;
+    }
+    await route.fulfill({ json: { ok: true } });
+  });
+  return card;
+}
+
 function writeLayerFixture(tmp: string, fileName = 'workflow-layers.svg') {
   const fixture = path.join(tmp, fileName);
   fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
@@ -197,4 +241,16 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
   expect(projectData.layout.layers.map((layer: any) => layer.layerId)).toEqual(['bg-layer', 'bar-layer']);
   expect(projectData.layout.strips.map((strip: any) => strip.id)).toEqual(['bg-layer', 'bar-layer']);
+});
+
+test('quiet pattern preview does not render routine notifications', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await mockLocalCard(page);
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+
+  await page.locator('[data-pattern-id="aurora"]').click();
+  await page.waitForTimeout(350);
+
+  await expect(page.locator('.pmx-status')).toHaveCount(0);
 });

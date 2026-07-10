@@ -44,8 +44,8 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import {
-  previewResponseUsedZoneFallback,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
   recoverCardLights,
@@ -159,10 +159,6 @@ import {
     const [status, setStatus] = useState("");
     const [statusKind, setStatusKind] = useState("");
     const [handoffUrl, setHandoffUrl] = useState("");
-    // True when the last live push fell back from a section to the whole strip
-    // because the card has no matching zone. Never silent: it renders the
-    // "Send sections to card" banner until sections reach the card.
-    const [zoneFallback, setZoneFallback] = useState(false);
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
     const livePreviewTimer = useRef(null);
@@ -304,9 +300,8 @@ import {
 
     const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80) => {
       if (!livePreview) {
-        // Never silently do nothing: say why the lights are not following.
         setStatusKind('');
-        setStatus('Live preview is off, so the lights stayed as they were. Turn on "Preview taps on the LED card" above to see changes on the piece.');
+        setStatus('');
         return;
       }
       setHandoffUrl('');
@@ -315,44 +310,36 @@ import {
       const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
       livePreviewTimer.current = setTimeout(async () => {
         setHandoffUrl('');
-        setStatusKind('');
-        setStatus(`Previewing ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} on ${targetLabel(target)} at ${cardHostToUrl(cardHost)}...`);
         try {
-          const response = await pushLivePreviewToCard(
+          if (zone) {
+            await ensureCardSectionsForPreview({
+              host: cardHost,
+              requiredZoneIds: [zone],
+              runtimePackage,
+            });
+          }
+          await pushLivePreviewToCard(
             { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
-            { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: true },
+            { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: false },
           );
           if (sequence === livePreviewSeq.current) {
-            const usedFallback = previewResponseUsedZoneFallback(response);
-            // Surface (never swallow) a section push that collapsed to the
-            // whole strip — the banner stays up until sections reach the card.
-            // Only a zoned push says anything about the card's sections: an
-            // All-sections push leaves the banner unchanged (it clears when a
-            // config carrying zones lands — savePreviewToCard / sendSplitPreview).
-            if (zone) setZoneFallback(usedFallback);
-            setStatusKind('ok');
-            const patternLabel = getCardPatternById(nextLook.patternId)?.label || nextLook.patternId;
-            setStatus(usedFallback
-              ? `Previewing ${patternLabel} on the whole piece — the card doesn't have ${targetLabel(target)} as its own section yet.`
-              : `Previewing ${patternLabel} on ${targetLabel(target)}. Not saved yet.`);
+            setStatusKind('');
+            setStatus('');
           }
         } catch (error) {
           if (error?.reason === 'superseded') {
-            // An older send was replaced by a newer one — say so briefly
-            // instead of staying silent; the newest send reports its own result.
-            setStatusKind('');
-            setStatus('Skipped an older preview — sending your latest change.');
             return;
           }
           if (sequence === livePreviewSeq.current) {
             setStatusKind('err');
-            setStatus(error?.reason === 'mixed-content'
+            const actionableReason = ['mixed-content', 'layout-mismatch', 'project-mismatch', 'zones-missing'].includes(error?.reason);
+            setStatus(actionableReason
               ? error.message
-              : `Could not reach the card at ${cardHostToUrl(cardHost)} — this change is not on the lights. Use Connect to card in the bottom bar.`);
+              : `Could not reach the card at ${cardHostToUrl(cardHost)}. This change is not on the lights. Use Connect to card in the bottom bar.`);
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, selectedTarget]);
+    }, [cardHost, livePreview, runtimePackage, selectedTarget]);
 
     useEffect(() => () => {
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
@@ -495,7 +482,7 @@ import {
       const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
       setHandoffUrl('');
       setStatusKind('');
-      setStatus(`Saving ${getCardPatternById(nextLook.patternId)?.label || nextLook.patternId} to ${cardHostToUrl(cardHost)}...`);
+      setStatus('');
       try {
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'saving');
         if (!safety.ok) return;
@@ -504,17 +491,12 @@ import {
         setDraftLooks({});
         setMixName('');
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
-        // The saved config carries the section zones, so the card has them now.
-        setZoneFallback(false);
-        if (response.rebooting) {
-          setStatusKind('ok');
-          setStatus('Saved on the card. The card is rebooting now so the LED output layout takes effect.');
-          return;
+        if (!response.rebooting) {
+          const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
+          await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
         }
-        const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
-        await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
-        setStatusKind('ok');
-        setStatus('Saved on the card. This is now the startup look and playlist config.');
+        setStatusKind('');
+        setStatus('');
       } catch (error) {
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
@@ -540,8 +522,8 @@ import {
       setStandaloneController(nextController);
       setDraftLooks({});
       setMixName('');
-      setStatusKind('ok');
-      setStatus(`${saved?.label || 'Layer mix'} saved to the pattern bank.`);
+      setStatusKind('');
+      setStatus('');
     };
 
     const playStripColorTest = async (testId, colorOrder = stripColorOrder) => {
@@ -585,25 +567,23 @@ import {
       void applyStripColorOrder(nextOrder);
     };
 
-    const writePlaylist = (nextItems, message = '') => {
+    const writePlaylist = (nextItems) => {
       const normalized = normalizeCardPlaylist(nextItems, { savedLooks, allowEmpty: true });
       updateController({
         playlist: normalized,
         controls: { encoder: { patternCycleIds: derivePlaylistLookIds(normalized) } },
       });
-      if (message) { setStatusKind('ok'); setStatus(message); }
+      setStatusKind('');
+      setStatus('');
     };
 
     const setPatternInPlaylist = (patternId, enabled) => {
-      const pattern = getCardPatternById(patternId);
       const next = enabled
         ? playlistContainsPattern(playlist, patternId)
           ? playlist
           : [...playlist, makePatternPlaylistItem(patternId)].filter(Boolean)
         : playlist.filter(item => !(item.type === 'pattern' && item.patternId === patternId));
-      writePlaylist(next, enabled
-        ? `${pattern?.label || patternId} added to the Playlist.`
-        : `${pattern?.label || patternId} removed from the Playlist.`);
+      writePlaylist(next);
     };
 
     const setSavedLookInPlaylist = (savedLook, enabled) => {
@@ -612,9 +592,7 @@ import {
           ? playlist
           : [...playlist, makeComboPlaylistItem(savedLook)].filter(Boolean)
         : playlist.filter(item => !(item.type === 'combo' && item.lookId === savedLook.id));
-      writePlaylist(next, enabled
-        ? `${savedLook.label} added to the Playlist.`
-        : `${savedLook.label} removed from the Playlist.`);
+      writePlaylist(next);
     };
 
     // Toggle playlist membership for any browse card (pattern or saved mix).
@@ -702,7 +680,7 @@ import {
       const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
       setHandoffUrl('');
       setStatusKind('');
-      setStatus(`Applying split preview to ${cardHostToUrl(cardHost)}...`);
+      setStatus('');
       try {
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
         if (!safety.ok) return;
@@ -710,16 +688,12 @@ import {
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
-        setZoneFallback(false);
-        if (response.rebooting) {
-          setStatusKind('ok');
-          setStatus('Split preview was saved. The card is rebooting now so the LED output layout takes effect.');
-          return;
+        if (!response.rebooting) {
+          const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
+          await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
         }
-        const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
-        await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
-        setStatusKind('ok');
-        setStatus('Split preview is live on the card. Section taps now target each section separately.');
+        setStatusKind('');
+        setStatus('');
       } catch (error) {
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to apply this split on the card.');
@@ -813,17 +787,6 @@ import {
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   </div>
                 }
-              </div>
-            }
-
-            {/* Section pushes must never quietly collapse to the whole strip:
-                this banner stays up until the card actually has the sections. */}
-            {zoneFallback &&
-              <div className="pmx-status is-err" data-testid="zone-fallback-banner">
-                Card doesn't have sections yet — for now the whole strip shows every look.
-                <div className="pmx-status-actions">
-                  <button className="btn primary" onClick={sendSplitPreview}>Send sections to card</button>
-                </div>
               </div>
             }
 
