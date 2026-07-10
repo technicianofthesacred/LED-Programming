@@ -19,7 +19,11 @@ import {
 } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
-import { createDefaultPatchBoard } from './patchBoard.js';
+import {
+  createDefaultPatchBoard,
+  migrateChainToStripOrder,
+  normalizePatchBoard,
+} from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
 import {
   deriveLegacyPatternCycleIds,
@@ -160,6 +164,20 @@ export function createDefaultProject() {
   };
 }
 
+// Canonical migration choke point: rebuild the patch-board chain so its wire
+// order follows strips[] order (off rows preserved). After this, the chain is
+// the sole authority for pixel addressing and can never diverge from strips[].
+function alignChainToStripOrder(project) {
+  const layout = project?.layout;
+  if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
+  if (!layout.patchBoard) return project;
+  layout.patchBoard = migrateChainToStripOrder(
+    normalizePatchBoard(layout.patchBoard, layout.strips),
+    layout.strips,
+  );
+  return project;
+}
+
 export function migrateProject(data) {
   if (!data || typeof data !== 'object') return null;
   const base = createDefaultProject();
@@ -167,7 +185,7 @@ export function migrateProject(data) {
   if (data.version === PROJECT_VERSION) {
     const pattern = { ...base.pattern, ...(data.pattern || {}) };
     pattern.motionSmoothing = normalizeMotionSmoothing(pattern.motionSmoothing);
-    return {
+    return alignChainToStripOrder({
       ...base,
       ...data,
       id: normalizeProjectId(data.id || data.projectId, base.id),
@@ -181,11 +199,11 @@ export function migrateProject(data) {
         physicalControls: normalizeWledPhysicalControls(data.devices?.physicalControls),
         standaloneController: defaultStandaloneController(data.devices?.standaloneController),
       },
-    };
+    });
   }
 
   if (data.version === 1 || data.version === 2) {
-    return {
+    return alignChainToStripOrder({
       ...base,
       version: PROJECT_VERSION,
       id: normalizeProjectId(data.id || data.projectId, base.id),
@@ -239,7 +257,7 @@ export function migrateProject(data) {
         physicalControls: normalizeWledPhysicalControls(data.devices?.physicalControls),
         standaloneController: defaultStandaloneController(data.devices?.standaloneController),
       },
-    };
+    });
   }
 
   return null;

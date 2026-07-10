@@ -653,6 +653,162 @@ export function addOffPatch(board, ledCount = 1) {
   return patch;
 }
 
+// ── Chain-order primitives ───────────────────────────────────────────────
+// The chain (`chains[0].rowIds`) is the physical wire order and the sole
+// authority for pixel addressing. These pure helpers read/reorder the chain
+// without ever consulting the `strips[]` array order for offsets.
+
+// Number of LED addresses a strip patch reserves, resolved exactly the way
+// expandStripPatch (and therefore expandPatchBoard) resolves them: clamp the
+// stored range to the strip bounds and count the LEDs it walks.
+function stripPatchAddressSpan(patch, strip) {
+  if (!strip) return 0;
+  const rangeInfo = validStripRange(patch.source, strip);
+  if (rangeInfo.reason === 'malformed') return 0;
+  return sourceLedRangeWithinBounds(rangeInfo.startLed, rangeInfo.endLed, 0, rangeInfo.maxLed).length;
+}
+
+// The chain's row order, falling back to patches-array order when a board has
+// no chain yet (raw pre-normalization input). Never injects phantom rows.
+export function chainRowIds(board) {
+  const patches = Array.isArray(board?.patches) ? board.patches : [];
+  const rowIds = board?.chains?.[0]?.rowIds;
+  return Array.isArray(rowIds) && rowIds.length ? rowIds : patches.map(patch => patch.id);
+}
+
+// Map<patchId, startOffset> accumulated along the chain (rowIds order). A strip
+// patch reserves its resolved LED span (clamped to strip bounds exactly like
+// expandStripPatch); an off patch reserves its ledCount. Reads the board as
+// given — strip patches are NOT auto-injected — so callers keep byte-identical
+// address sets regardless of which strips[] they pass for span resolution.
+export function chainPixelOffsets(board, strips = []) {
+  const patchesById = byId(Array.isArray(board?.patches) ? board.patches : []);
+  const stripsById = byId(strips);
+  const offsets = new Map();
+  let cursor = 0;
+  for (const rowId of chainRowIds(board)) {
+    const patch = patchesById.get(rowId);
+    if (!patch) continue;
+    offsets.set(patch.id, cursor);
+    if (patch.source?.type === 'off') {
+      cursor += Math.max(0, Math.trunc(numberOr(patch.source?.ledCount, 0)));
+    } else if (patch.source?.type === 'strip') {
+      cursor += stripPatchAddressSpan(patch, stripsById.get(patch.source.stripId));
+    }
+  }
+  return offsets;
+}
+
+// Strip ids in chain order, deduped (a split strip appears once, at its first
+// occurrence). Any strip with no patch in the chain is appended at the end so
+// UI lists never lose a strip.
+export function orderedStripIdsFromChain(board, strips = []) {
+  const normalized = normalizePatchBoard(board, strips);
+  const patchesById = byId(normalized.patches);
+  const chain = mainChain(normalized);
+  const ordered = [];
+  const seen = new Set();
+  for (const rowId of chain.rowIds) {
+    const patch = patchesById.get(rowId);
+    if (patch?.source?.type !== 'strip') continue;
+    const stripId = patch.source.stripId;
+    if (seen.has(stripId)) continue;
+    seen.add(stripId);
+    ordered.push(stripId);
+  }
+  for (const strip of strips) {
+    if (seen.has(strip.id)) continue;
+    seen.add(strip.id);
+    ordered.push(strip.id);
+  }
+  return ordered;
+}
+
+// Reads which strip a chain row belongs to, or null for off/unknown rows.
+function stripIdForRow(patchesById, rowId) {
+  const patch = patchesById.get(rowId);
+  return patch?.source?.type === 'strip' ? patch.source.stripId : null;
+}
+
+// Re-lay a reordered strip-patch sequence back into the chain's strip slots,
+// leaving off (non-strip) rows pinned to their positions. Mirrors the slot-fill
+// approach in applyPatchRouteOrder.
+function relayStripSlots(rowIds, patchesById, newStripPatchIds) {
+  let cursor = 0;
+  return rowIds.map(rowId => {
+    if (stripIdForRow(patchesById, rowId) !== null) {
+      return newStripPatchIds[cursor++] ?? rowId;
+    }
+    return rowId;
+  });
+}
+
+// Move every patch belonging to each dragged strip as one contiguous block
+// (each strip keeps its internal split order) to immediately after the target
+// strip's last row. Off rows keep their positions. Returns a new board.
+export function moveStripRowsInChain(board, draggedStripIds = [], targetStripId = null) {
+  const next = normalizePatchBoard(board);
+  const chain = mutableMainChain(next);
+  const patchesById = byId(next.patches);
+  const rowIds = [...chain.rowIds];
+
+  const draggedSet = new Set((draggedStripIds || []).filter(id => id != null));
+  if (!draggedSet.size || targetStripId == null || draggedSet.has(targetStripId)) {
+    return next;
+  }
+
+  const stripPatchIds = rowIds.filter(rowId => stripIdForRow(patchesById, rowId) !== null);
+  const draggedBlock = stripPatchIds.filter(rowId => draggedSet.has(stripIdForRow(patchesById, rowId)));
+  if (!draggedBlock.length) return next;
+  const remaining = stripPatchIds.filter(rowId => !draggedSet.has(stripIdForRow(patchesById, rowId)));
+
+  let insertAfter = -1;
+  remaining.forEach((rowId, index) => {
+    if (stripIdForRow(patchesById, rowId) === targetStripId) insertAfter = index;
+  });
+  if (insertAfter < 0) return next;
+
+  const newStripPatchIds = [
+    ...remaining.slice(0, insertAfter + 1),
+    ...draggedBlock,
+    ...remaining.slice(insertAfter + 1),
+  ];
+  chain.rowIds = relayStripSlots(rowIds, patchesById, newStripPatchIds);
+  return next;
+}
+
+// Rebuild the chain so strip rows follow the strips[] array order (each strip's
+// split patches ordered by ascending LED span). Off rows stay at their slots.
+// Bypasses physicalLocked the way sliceStripIntoPatchesPreservingRoute does.
+// Returns a new board.
+export function migrateChainToStripOrder(board, strips = []) {
+  const next = normalizePatchBoard(board, strips);
+  const chain = mutableMainChain(next);
+  const patchesById = byId(next.patches);
+  const rowIds = [...chain.rowIds];
+
+  const desiredStripPatchIds = [];
+  const seen = new Set();
+  for (const strip of strips) {
+    for (const patch of stripPatchesInVisualOrder(next, strip.id)) {
+      if (seen.has(patch.id)) continue;
+      seen.add(patch.id);
+      desiredStripPatchIds.push(patch.id);
+    }
+  }
+  // Preserve any strip patches whose strip isn't in strips[] (orphans), in
+  // their current chain order, appended after the known strips.
+  for (const rowId of rowIds) {
+    if (stripIdForRow(patchesById, rowId) === null) continue;
+    if (seen.has(rowId)) continue;
+    seen.add(rowId);
+    desiredStripPatchIds.push(rowId);
+  }
+
+  chain.rowIds = relayStripSlots(rowIds, patchesById, desiredStripPatchIds);
+  return next;
+}
+
 export function validatePatchBoard(board, strips = []) {
   const normalized = normalizePatchBoard(board, strips);
   const stripsById = byId(strips);

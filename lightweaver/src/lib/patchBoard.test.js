@@ -3,14 +3,18 @@ import assert from 'node:assert/strict';
 
 import {
   applyPatchRouteOrder,
+  chainPixelOffsets,
   createDefaultPatchBoard,
   cutsForStrip,
   deleteStripCut,
   expandPatchBoard,
   addOffPatch,
+  migrateChainToStripOrder,
   movePatch,
+  moveStripRowsInChain,
   nudgeStripCut,
   normalizePatchBoard,
+  orderedStripIdsFromChain,
   resolvePatchPlayback,
   sliceStripIntoPatches,
   sliceStripIntoPatchesPreservingRoute,
@@ -881,4 +885,121 @@ test('validation reports stacked ranges and out-of-range endpoints', () => {
 
   assert.ok(warnings.some(w => w.code === 'overlap'));
   assert.ok(warnings.some(w => w.code === 'endpoint-out-of-range'));
+});
+
+// ── Chain-order primitives ───────────────────────────────────────────────
+
+test('chainPixelOffsets accumulates split segments then an off block', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const strips = [stripA, stripB];
+  let board = createDefaultPatchBoard(strips);
+  board = sliceStripIntoPatches(board, stripA, [0]); // A -> [0..0], [1..2]
+  const off = addOffPatch(board, 4);
+
+  const offsets = chainPixelOffsets(board, strips);
+  assert.equal(offsets.get('patch-A-0-0'), 0);
+  assert.equal(offsets.get('patch-A-1-2'), 1);
+  assert.equal(offsets.get('patch-B'), 3);
+  assert.equal(offsets.get(off.id), 5);
+});
+
+test('chainPixelOffsets counts an off block ahead of a strip against its address', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const strips = [stripA, stripB];
+  const board = createDefaultPatchBoard(strips);
+  const off = addOffPatch(board, 5);
+  board.chains[0].rowIds = [off.id, 'patch-A', 'patch-B'];
+
+  const offsets = chainPixelOffsets(board, strips);
+  assert.equal(offsets.get(off.id), 0);
+  assert.equal(offsets.get('patch-A'), 5);
+  assert.equal(offsets.get('patch-B'), 8);
+});
+
+test('orderedStripIdsFromChain returns chain order with split strips deduped', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const strips = [stripA, stripB];
+  let board = createDefaultPatchBoard(strips);
+  board = sliceStripIntoPatches(board, stripA, [0]); // [A1, A2, patch-B]
+  const [a1, a2, b] = board.chains[0].rowIds;
+  board.chains[0].rowIds = [b, a1, a2]; // B before A's segments
+
+  assert.deepEqual(orderedStripIdsFromChain(board, strips), ['B', 'A']);
+});
+
+test('orderedStripIdsFromChain never drops a strip that lacks a chain row', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const board = createDefaultPatchBoard([stripA]);
+
+  assert.deepEqual(orderedStripIdsFromChain(board, [stripA, stripB]), ['A', 'B']);
+});
+
+test('moveStripRowsInChain moves a split strip as a block after the target, off row pinned', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const stripC = makeStrip('C', 4, 20);
+  const strips = [stripA, stripB, stripC];
+  let board = createDefaultPatchBoard(strips);
+  board = sliceStripIntoPatches(board, stripA, [0]); // A -> A1, A2
+  const off = addOffPatch(board, 2);
+  board.chains[0].rowIds = ['patch-A-0-0', 'patch-A-1-2', off.id, 'patch-B', 'patch-C'];
+
+  const next = moveStripRowsInChain(board, ['A'], 'C');
+
+  assert.deepEqual(next.chains[0].rowIds, ['patch-B', 'patch-C', off.id, 'patch-A-0-0', 'patch-A-1-2']);
+  // input board is not mutated
+  assert.deepEqual(board.chains[0].rowIds, ['patch-A-0-0', 'patch-A-1-2', off.id, 'patch-B', 'patch-C']);
+});
+
+test('moveStripRowsInChain is a no-op when dragging onto itself', () => {
+  const strips = [makeStrip('A', 2), makeStrip('B', 2, 10)];
+  const board = createDefaultPatchBoard(strips);
+  const next = moveStripRowsInChain(board, ['A'], 'A');
+  assert.deepEqual(next.chains[0].rowIds, ['patch-A', 'patch-B']);
+});
+
+test('migrateChainToStripOrder reorders to strips[] order, off row kept, splits intact', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const stripC = makeStrip('C', 4, 20);
+  const strips = [stripA, stripB, stripC];
+  let board = createDefaultPatchBoard(strips);
+  board = sliceStripIntoPatches(board, stripA, [0]);
+  const off = addOffPatch(board, 3);
+  board.chains[0].rowIds = ['patch-C', off.id, 'patch-B', 'patch-A-1-2', 'patch-A-0-0'];
+
+  const next = migrateChainToStripOrder(board, strips);
+
+  assert.deepEqual(next.chains[0].rowIds, ['patch-A-0-0', off.id, 'patch-A-1-2', 'patch-B', 'patch-C']);
+});
+
+test('migrateChainToStripOrder is idempotent', () => {
+  const stripA = makeStrip('A', 3);
+  const stripB = makeStrip('B', 2, 10);
+  const strips = [stripA, stripB];
+  let board = createDefaultPatchBoard(strips);
+  board = sliceStripIntoPatches(board, stripA, [0]);
+  board.chains[0].rowIds = ['patch-B', 'patch-A-1-2', 'patch-A-0-0'];
+
+  const once = migrateChainToStripOrder(board, strips);
+  const twice = migrateChainToStripOrder(once, strips);
+
+  assert.deepEqual(once.chains[0].rowIds, ['patch-A-0-0', 'patch-A-1-2', 'patch-B']);
+  assert.deepEqual(twice.chains[0].rowIds, once.chains[0].rowIds);
+});
+
+test('migrateChainToStripOrder reorders even when physicalLocked', () => {
+  const strips = [makeStrip('A', 2), makeStrip('B', 2, 10)];
+  const board = createDefaultPatchBoard(strips);
+  board.physicalLocked = true;
+  board.chains[0].rowIds = ['patch-B', 'patch-A'];
+
+  const next = migrateChainToStripOrder(board, strips);
+
+  assert.deepEqual(next.chains[0].rowIds, ['patch-A', 'patch-B']);
+  assert.equal(next.physicalLocked, true);
 });

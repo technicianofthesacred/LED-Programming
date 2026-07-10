@@ -1,4 +1,5 @@
 import { CARD_PATTERN_BANK } from './cardPatternBank.js';
+import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = 10;
@@ -68,33 +69,30 @@ export function normalizeCardRuntimeConfig(config = {}) {
 // Raw zones input shape: [{ id, label, patternId, brightness, ..., ranges: [{ start, count }] }]
 export function patchBoardToZones(patchBoard, strips = []) {
   if (!patchBoard || !Array.isArray(patchBoard.patches)) return [];
-  const stripPixelOffsets = new Map();
-  let cursor = 0;
-  for (const strip of strips) {
-    stripPixelOffsets.set(strip.id, cursor);
-    cursor += strip.pixelCount ?? strip.pixels?.length ?? 0;
-  }
-  return patchBoard.patches
-    .filter(p => p?.source?.type === 'strip' && p.output?.mode !== 'off')
-    .map(p => {
-      const stripOffset = stripPixelOffsets.get(p.source.stripId) || 0;
-      const start = stripOffset + (p.source.startLed || 0);
-      const count = (p.source.endLed - p.source.startLed) + 1;
-      const playback = p.playback || {};
-      return {
-        id: sanitizeId(p.id || `zone-${start}`),
-        label: String(p.name || p.id || 'Zone'),
-        patternId: sanitizeId(playback.patternId || ''),
-        brightness: clampUnit(playback.brightness ?? 1.0),
-        speed: Number.isFinite(playback.speed) ? playback.speed : 1.0,
-        hueShift: Number.isFinite(playback.hueShift) ? playback.hueShift : 0,
-        customHue: clampInt(playback.customHue, 32, 0, 255),
-        customSaturation: clampInt(playback.customSaturation, 230, 0, 255),
-        customBreathe: Boolean(playback.customBreathe),
-        customDrift: Boolean(playback.customDrift),
-        ranges: [{ start, count }],
-      };
+  const offsets = chainPixelOffsets(patchBoard, strips);
+  const patchesById = new Map(patchBoard.patches.map(p => [p.id, p]));
+  const zones = [];
+  for (const rowId of chainRowIds(patchBoard)) {
+    const p = patchesById.get(rowId);
+    if (!p || p.source?.type !== 'strip' || p.output?.mode === 'off') continue;
+    const start = offsets.get(p.id) || 0;
+    const count = (p.source.endLed - p.source.startLed) + 1;
+    const playback = p.playback || {};
+    zones.push({
+      id: sanitizeId(p.id || `zone-${start}`),
+      label: String(p.name || p.id || 'Zone'),
+      patternId: sanitizeId(playback.patternId || ''),
+      brightness: clampUnit(playback.brightness ?? 1.0),
+      speed: Number.isFinite(playback.speed) ? playback.speed : 1.0,
+      hueShift: Number.isFinite(playback.hueShift) ? playback.hueShift : 0,
+      customHue: clampInt(playback.customHue, 32, 0, 255),
+      customSaturation: clampInt(playback.customSaturation, 230, 0, 255),
+      customBreathe: Boolean(playback.customBreathe),
+      customDrift: Boolean(playback.customDrift),
+      ranges: [{ start, count }],
     });
+  }
+  return zones;
 }
 
 function normalizeZones(zones, totalPixels) {
