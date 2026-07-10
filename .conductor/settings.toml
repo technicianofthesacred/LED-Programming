@@ -1,0 +1,28 @@
+# Conductor workspace scripts — shared across every workspace on this repo.
+# The Run / Setup tabs in Conductor read these. Docs: https://conductor.build/docs
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+# Runs once when Conductor creates a new workspace (fresh git checkout).
+# lightweaver/ is the React Studio (the surface a human previews — it ships to
+# led.mandalacodes.com). Its Vite install includes native deps (serialport,
+# bonjour-service) that the dev server's /api middleware needs; `npm install`
+# builds them for this worktree.
+setup = "cd lightweaver && npm install"
+
+# Let several workspaces run their preview at once — each gets its own
+# $CONDUCTOR_PORT instead of fighting over one fixed port.
+run_mode = "concurrent"
+
+# Default Run action — the Lightweaver Studio (design/control app).
+# - Binds the port Conductor assigns this workspace ($CONDUCTOR_PORT), falling
+#   back to 9998 (the project's pinned dev port) when run outside Conductor.
+#   Passing --port on the CLI overrides vite.config.js's `strictPort: true`
+#   pin, which is what otherwise limits the repo to one previewable workspace.
+# - No secrets are wired into Run: the dev server boots and serves the UI from
+#   local code. AI/serial features that need env (e.g. AI_PATTERN_AUTH_TOKEN)
+#   stay optional and aren't refreshed here, keeping the preview light.
+[scripts.run.web]
+command = "cd lightweaver && npx vite --port ${CONDUCTOR_PORT:-9998}"
+icon = "play"
+default = true
