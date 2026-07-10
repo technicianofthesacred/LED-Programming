@@ -23,6 +23,6 @@ run_mode = "concurrent"
 #   local code. AI/serial features that need env (e.g. AI_PATTERN_AUTH_TOKEN)
 #   stay optional and aren't refreshed here, keeping the preview light.
 [scripts.run.web]
-command = "cd lightweaver && npx vite --port ${CONDUCTOR_PORT:-9998}"
+command = "cd lightweaver && { lsof -ti tcp:${CONDUCTOR_PORT:-9998} | xargs kill -9 2>/dev/null; true; }; npx vite --port ${CONDUCTOR_PORT:-9998}"
 icon = "play"
 default = true
