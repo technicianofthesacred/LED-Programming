@@ -240,7 +240,7 @@ export function PatchBoardScreen({
       {selectedWireCut && (
         <section className="lw-wire-selected-detail">
           <div className="lw-wire-section-title">
-            <span>Selected cut</span>
+            <span>Selected split</span>
             <strong>LED {selectedWireCut.cutLed}</strong>
           </div>
           <div className="lw-wire-tool-row">
@@ -297,13 +297,13 @@ export function PatchBoardScreen({
 
       <section className="lw-wire-cut-summary">
         <div className="lw-wire-section-title">
-          <span>Canvas cuts</span>
+          <span>Splits</span>
           <strong>{pluralize(activeCuts.length, 'cut')}</strong>
         </div>
         <div className="lw-wire-cut-summary-row">
           <span className="lw-wire-cut-summary-name">{friendlyName(activeStrip?.name)}</span>
           <button className="btn btn-ghost" disabled={!activeStrip || board.physicalLocked || activeCuts.length === 0} onClick={resetActivePath}>
-            Clear cuts
+            Merge back into one strip
           </button>
         </div>
       </section>
@@ -311,8 +311,8 @@ export function PatchBoardScreen({
       {(!embedded || orderedPatches.length > strips.length) && (<>
       <section className="lw-wire-order">
         <div className="lw-wire-section-title">
-          <span>Wire order</span>
-          <strong>{orderedPatches.length} runs</strong>
+          <span>Wiring order</span>
+          <strong>{orderedPatches.length} segments</strong>
         </div>
         <div className="lw-wire-chip-row">
           {orderedPatches.map((patch, index) => {
@@ -323,10 +323,13 @@ export function PatchBoardScreen({
                 key={patch.id}
                 className={`lw-wire-segment-chip ${active ? 'active' : ''} ${isOff ? 'lw-wire-off-chip' : ''}`}
                 onClick={() => setSelectedPatchId(patch.id)}
-                title={isOff ? `${patchLength(patch)} off LEDs` : `${patchLength(patch)} LEDs`}
+                title={isOff ? `${patchLength(patch)} unlit LEDs` : `${patchLength(patch)} LEDs`}
               >
                 <span>{String(index + 1).padStart(2, '0')}</span>
-                <strong>{isOff ? 'Off' : friendlyName(patch.name)}</strong>
+                <strong>
+                  {isOff ? 'Gap' : friendlyName(patch.name)}
+                  {!isOff && <small> part {index + 1}</small>}
+                </strong>
                 <em>{isOff ? `x${patchLength(patch)}` : patchDirection(patch)}</em>
               </button>
             );
@@ -375,14 +378,14 @@ export function PatchBoardScreen({
             aria-label="Off LED count"
           />
           <button className="btn" disabled={board.physicalLocked} onClick={addOffBlock}>
-            Insert off LEDs
+            Add a gap
           </button>
           <button
             className="btn btn-ghost"
             disabled={!selectedPatch}
             onClick={() => setAdvancedOpen(open => !open)}
           >
-            Advanced
+            Edit LED range
           </button>
         </div>
       </section>

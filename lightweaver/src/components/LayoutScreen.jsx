@@ -2477,24 +2477,24 @@ export function LayoutScreen() {
           {/* Draw / Chop / Link tools */}
           <button
             className={`tb-btn${drawMode ? ' active' : ''}`}
-            title={drawMode ? 'Cancel draw (Esc / right-click)' : 'Draw strip (D) — click waypoints, double-click to finish'}
+            title="Draw a new LED strip path on the artwork."
             onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
             {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
           </button>
           <button
             className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
-            title="Chop wire path segments on the artwork"
+            title="Split one physical strip where the wire jumps to a new spot."
             onClick={() => {
               setDrawMode(false);
               setWaypoints([]);
               setGhostPt(null);
               setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
             }}>
-            Chop
+            Split
           </button>
           <button
             className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
-            title="Link chopped segments into physical order"
+            title="Join two strips into one continuous run."
             onClick={() => {
               setDrawMode(false);
               setWaypoints([]);
@@ -2530,7 +2530,7 @@ export function LayoutScreen() {
 
           {/* Density segmented control */}
           <div className="seg">
-            <span className="seg-label" title="Project default LED density">Density</span>
+            <span className="seg-label" title="LEDs per metre — count = size × density.">Density</span>
             {DENSITY_OPTIONS.map(d => (
               <button key={d} className={density === d ? 'on' : ''}
                       onClick={() => handleDensityChange(d)}>{d}</button>
@@ -3713,7 +3713,7 @@ export function LayoutScreen() {
 	              <span className="ttl">LED strips</span>
 	              <span className="meta">
 	                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
-	                {strips.length} · {totalLeds.toLocaleString()} LEDs · physical order
+	                {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
 	              </span>
 	            </div>
 	            {selectedStrips.length > 1 && (
@@ -3817,7 +3817,7 @@ export function LayoutScreen() {
                                  onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, clampLedCount(e.target.value)); }}/>
                           <button className="btn" style={{ padding: '0 6px' }}
                                   title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
-                                  onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Calibrate</button>
+                                  onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Set real count</button>
                         </div>
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>

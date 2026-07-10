@@ -83,7 +83,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .app {
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr) 320px;
-  grid-template-rows: 52px 48px 1fr 32px;
+  grid-template-rows: 52px minmax(48px, auto) 1fr 32px;
   grid-template-areas:
     "top   top   top"
     "rail  tool  side"
@@ -287,6 +287,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .panel-head {
   display: flex; align-items: baseline; justify-content: space-between;
   padding: 14px 16px 10px;
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg-panel);
 }
 .panel-head .ttl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-lo); font-weight: 600; }
 .panel-head .meta { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }

@@ -565,7 +565,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* ============================================================
    LAYOUT screen (rich)
    ============================================================ */
-.la { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: 48px minmax(0, 1fr); grid-template-areas: "tool tool" "body side"; }
+.la { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: minmax(48px, auto) minmax(0, 1fr); grid-template-areas: "tool tool" "body side"; }
 .la .toolbar { grid-area: tool; }
 .la .body { grid-area: body; }
 .la .side { grid-area: side; overflow-y: auto; overflow-x: hidden; }

@@ -7,11 +7,9 @@
    ============================================================ */
 
 /* Keep the toolbar contained to its grid column — never force page overflow.
-   The mockup toolbar is a single non-wrapping flex row; on narrow widths it
-   scrolls horizontally inside its own area rather than widening the layout. */
-.la .toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.la .toolbar::-webkit-scrollbar { height: 6px; }
-.la .toolbar::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
+   Rather than scroll (which hid items like "Load"), the toolbar wraps: every
+   control stays visible and the grid row grows to fit the wrapped rows. */
+.la .toolbar { min-width: 0; flex-wrap: wrap; overflow: visible; row-gap: 6px; }
 .la .toolbar > * { flex-shrink: 0; }
 
 /* Light toolbar button + popover (tucks Directed-glow + glow-mode) */
@@ -302,9 +300,7 @@
 .lw-wire-tools,
 .lw-wire-advanced {
   min-width: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-top: 1px solid var(--border-soft);
 }
 
 .lw-wire-source,
@@ -312,7 +308,7 @@
 .lw-wire-order,
 .lw-wire-tools,
 .lw-wire-advanced {
-  padding: var(--s-3);
+  padding: var(--s-3) 0;
 }
 
 .lw-wire-selected-detail {
@@ -333,11 +329,12 @@
 
 .lw-wire-section-title span,
 .lw-wire-kicker {
-  color: var(--text-3);
+  color: var(--text-faint);
   font-family: var(--mono-font);
-  font-size: var(--fs-xs);
+  font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
 }
 
 .lw-wire-section-title strong {
@@ -359,7 +356,7 @@
   align-items: center;
   gap: var(--s-2);
   min-height: 28px;
-  padding: 4px 7px;
+  padding: 4px 8px;
   color: var(--text-2);
   border: 1px solid transparent;
   border-radius: var(--r-sm);
@@ -429,13 +426,13 @@
   min-height: 28px;
   padding: 4px 8px;
   color: var(--text-2);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
 }
 
 .lw-wire-segment-chip:hover {
-  border-color: var(--border-2);
+  background: var(--bg-elev);
 }
 
 .lw-wire-segment-chip.active {
@@ -467,10 +464,10 @@
 }
 
 .lw-wire-tool-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
   align-items: center;
-  gap: var(--s-2);
+  gap: 6px;
 }
 
 .lw-wire-tool-row + .lw-wire-tool-row {
@@ -479,7 +476,7 @@
 
 .lw-wire-off-input {
   width: 54px;
-  padding: 5px 7px;
+  padding: 4px 8px;
   color: var(--text);
   background: var(--surface-2);
   border: 1px solid var(--border-2);
@@ -499,11 +496,12 @@
 }
 
 .lw-wire-advanced label {
-  color: var(--text-3);
+  color: var(--text-faint);
   font-family: var(--mono-font);
-  font-size: var(--fs-xs);
+  font-size: 10px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
 }
 
 .lw-wire-advanced input,
@@ -511,7 +509,7 @@
   display: block;
   width: 100%;
   margin-top: var(--s-1);
-  padding: 5px 7px;
+  padding: 4px 8px;
   color: var(--text);
   background: var(--surface-2);
   border: 1px solid var(--border-2);
