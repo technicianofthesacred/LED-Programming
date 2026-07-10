@@ -597,6 +597,7 @@ export function LayoutScreen() {
   const [strips, setStrips]         = useState(project.strips || []);
   const [density, setDensity]       = useState(project.layoutDensity ?? 60);
   const [pxPerMm, setPxPerMm]       = useState(project.layoutPxPerMm ?? 3.7795);
+  const [scaleUnit, setScaleUnit]   = useState('cm'); // 'cm' | 'in' — display unit for the artwork Size control
   const [selLayerId, setSelLayerId] = useState(null);
   const [selStripId, setSelStripId] = useState(null);
   const [hidden, setHidden]         = useState(project.hidden || {});
@@ -2537,19 +2538,37 @@ export function LayoutScreen() {
           </div>
 
           <div className="tb-div"/>
-          {/* Scale (overall size) segmented control */}
-          <div className="seg">
-            <span className="seg-label" title="Overall physical size — coarse. LED count + density have the final say.">Scale</span>
-            {SCALE_OPTIONS.map(opt => {
-              const optPxPerMm = SCALE_BASE_PX_PER_MM / opt.mult;
-              const on = Math.abs(pxPerMm - optPxPerMm) < optPxPerMm * 0.01;
-              return (
-                <button key={opt.label} className={on ? 'on' : ''}
-                        title={`Overall size ${opt.label}`}
-                        onClick={() => handleScaleChange(optPxPerMm)}>{opt.label}</button>
-              );
-            })}
-          </div>
+          {/* Size — the loaded artwork's real-world dimensions. Type a width to
+              rescale everything; LED counts follow size × density. */}
+          {(() => {
+            const vb = parsedVb(viewBox);
+            const per = scaleUnit === 'in' ? 25.4 : 10;      // mm per display unit
+            const wDisp = (vb.w / pxPerMm) / per;
+            const hDisp = (vb.h / pxPerMm) / per;
+            const applyWidth = (raw) => {
+              const val = parseFloat(raw);
+              if (!(val > 0)) return;
+              handleScaleChange(vb.w / (val * per));          // pxPerMm = svgWidth / targetWidthMm
+            };
+            return (
+              <div className="seg" title="Real-world size of the loaded artwork. Type a width to scale it — LED counts follow size × density.">
+                <span className="seg-label">Size</span>
+                <input type="number" min="0.1" step="0.1" inputMode="decimal"
+                       key={`sz-${scaleUnit}-${wDisp.toFixed(2)}`}
+                       defaultValue={wDisp.toFixed(1)}
+                       aria-label={`Artwork width in ${scaleUnit}`}
+                       style={{ width: 54, height: 24, textAlign: 'right', background: 'var(--bg-app)',
+                                border: '1px solid var(--border-soft)', borderRadius: 4, color: 'var(--text-hi)',
+                                fontFamily: 'var(--font-mono)', fontSize: 12, padding: '0 6px' }}
+                       onFocus={e => e.target.select()}
+                       onBlur={e => applyWidth(e.target.value)}
+                       onKeyDown={e => { if (e.key === 'Enter') { applyWidth(e.target.value); e.target.blur(); } }}/>
+                <span style={{ color: 'var(--text-faint)', fontSize: 12, whiteSpace: 'nowrap' }}>× {hDisp.toFixed(1)}</span>
+                <button title="Toggle centimetres / inches"
+                        onClick={() => setScaleUnit(u => (u === 'cm' ? 'in' : 'cm'))}>{scaleUnit}</button>
+              </div>
+            );
+          })()}
 
           <div className="tb-spring"/>
 
@@ -3768,10 +3787,7 @@ export function LayoutScreen() {
 	                         selectStrip(s.id);
 	                         setExpandedStrips(ex => ({ ...ex, [s.id]: !ex[s.id] }));
 	                       }}>
-	                      <span data-drag-handle="true" className="la-strip-dup" style={{ opacity: isBatchSel ? 1 : 0.5, color: isBatchSel ? 'var(--accent)' : undefined, cursor: 'grab' }}>
-	                        <DragHandleIcon/>
-	                      </span>
-	                      <span className="la-wire-n" style={{ flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+	                      <span data-drag-handle="true" className="la-wire-n" title="Drag to reorder" style={{ flexShrink: 0, cursor: 'grab', color: isBatchSel ? 'var(--accent)' : undefined }}>{String(i + 1).padStart(2, '0')}</span>
                       <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : undefined }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
