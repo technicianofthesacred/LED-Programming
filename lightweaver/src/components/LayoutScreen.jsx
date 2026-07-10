@@ -3762,7 +3762,8 @@ export function LayoutScreen() {
 	                         e.dataTransfer.effectAllowed = 'move';
 	                         e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
 	                         e.dataTransfer.setData('text/plain', ids.join(','));
-	                         setSelectedStripIds(ids);
+	                         // Do NOT setState here — re-rendering the row during dragstart
+	                         // cancels the native HTML5 drag. The ids ride in dataTransfer.
 	                       }}
 	                       onDragOver={e => {
 	                         if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
