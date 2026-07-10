@@ -10,6 +10,7 @@ async function mockLocalCard(page: any) {
       { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
     ],
     savedConfig: null as any,
+    operations: [] as string[],
   };
 
   await page.route('http://lightweaver.local/**', async (route: any) => {
@@ -20,6 +21,7 @@ async function mockLocalCard(page: any) {
       return;
     }
     if (pathname === '/api/zones') {
+      card.operations.push('zones');
       await route.fulfill({ json: { ok: true, syncZones: false, zones: card.zones } });
       return;
     }
@@ -37,6 +39,7 @@ async function mockLocalCard(page: any) {
       return;
     }
     if (pathname === '/api/config') {
+      card.operations.push('config');
       card.savedConfig = JSON.parse(request.postData() || '{}');
       card.zones = card.savedConfig.zones || card.zones;
       await route.fulfill({ json: { ok: true, requiresReboot: false } });
@@ -253,4 +256,23 @@ test('quiet pattern preview does not render routine notifications', async ({ pag
   await page.waitForTimeout(350);
 
   await expect(page.locator('.pmx-status')).toHaveCount(0);
+});
+
+test('quiet complete playlist sync writes and verifies all card sections', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  const card = await mockLocalCard(page);
+  await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+
+  card.operations.length = 0;
+  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await expect.poll(() => card.savedConfig).not.toBeNull();
+  await expect.poll(() => card.operations).toEqual(['config', 'zones']);
+
+  expect(card.savedConfig.zones.map((zone: any) => zone.id)).toEqual([
+    'patch-default-outer-circle',
+    'patch-default-inner-circle',
+  ]);
+  await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
 });

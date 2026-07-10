@@ -30,9 +30,11 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { pushConfigToCard } from '../lib/cardPushClient.js';
 import {
-  previewResponseUsedZoneFallback,
+  ensureCardSectionsForPreview,
+  syncRuntimePackageToCard,
+} from '../lib/cardSectionSync.js';
+import {
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   resetLiveOutputOnCard,
@@ -42,11 +44,6 @@ import {
   makePlaylistPushPendingState,
   makePlaylistPushSuccessState,
 } from '../lib/studioActionStatus.js';
-
-// Shown when a section-mix preview collapsed to the whole strip because the
-// card has no matching zones yet (contract: no silent zone fallback).
-const ZONE_FALLBACK_NOTE =
-  "This preview lit the whole piece — the card doesn't have sections yet. Send sections from the Patterns screen.";
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -80,9 +77,7 @@ function realPatternShape(patternId) {
     const [live, setLive] = useState(null);
     const [handoffUrl, setHandoffUrl] = useState('');
     const [playlistStatus, setPlaylistStatus] = useState(null);
-    // Friendly note when a row preview fell back from sections to the whole
-    // strip — the fallback must never happen silently.
-    const [previewNote, setPreviewNote] = useState('');
+    const [playlistSyncing, setPlaylistSyncing] = useState(false);
     const [drag, setDrag] = useState({ from: null, over: null });
 
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -153,11 +148,8 @@ function realPatternShape(patternId) {
     const previewPatternOnCard = async (patternId) => {
       setHandoffUrl('');
       try {
-        const response = await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-        // A whole-piece preview proves nothing about the card's sections, so
-        // it leaves the note alone — but the response is still inspected so a
-        // fallback can never pass silently.
-        if (previewResponseUsedZoneFallback(response)) setPreviewNote(ZONE_FALLBACK_NOTE);
+        await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
+        setPlaylistStatus(null);
       } catch { /* preview is best-effort; connection state lives in the footer */ }
     };
 
@@ -165,15 +157,26 @@ function realPatternShape(patternId) {
       if (!savedLook) return;
       setHandoffUrl('');
       try {
-        const response = await pushSectionPreviewToCard(
-          buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board }),
+        const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
+        const requiredZoneIds = targets
+          .filter(target => target.kind === 'section')
+          .map(target => String(target.zoneId || target.id || ''))
+          .filter(Boolean);
+        await ensureCardSectionsForPreview({
+          host,
+          requiredZoneIds,
+          runtimePackage,
+        });
+        await pushSectionPreviewToCard(
+          targets,
           { host, timeoutMs: 2600 },
         );
-        // Never silent: when the card has no matching sections the preview
-        // collapses to the whole strip — say so; a clean sectioned preview
-        // clears the note.
-        setPreviewNote(previewResponseUsedZoneFallback(response) ? ZONE_FALLBACK_NOTE : '');
-      } catch { /* best-effort */ }
+        setPlaylistStatus(null);
+      } catch (error) {
+        const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
+        setPlaylistStatus(nextStatus);
+        setHandoffUrl(nextStatus.handoffUrl || '');
+      }
     };
 
     const setLiveItem = (item) => {
@@ -204,13 +207,16 @@ function realPatternShape(patternId) {
     const loadPlaylistToCard = async () => {
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
+      setPlaylistSyncing(true);
       try {
-        const response = await pushConfigToCard(runtimePackage, { host, timeoutMs: 6000, reboot: 'if-needed' });
+        const response = await syncRuntimePackageToCard({ host, runtimePackage });
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
         setPlaylistStatus(nextStatus);
         setHandoffUrl(nextStatus.handoffUrl || '');
+      } finally {
+        setPlaylistSyncing(false);
       }
     };
 
@@ -280,7 +286,9 @@ function realPatternShape(patternId) {
               </div>
               <div className="pm-actions">
                 <button className="btn" onClick={resetLiveOutput}>{I.refresh}Reset live</button>
-                <button className="btn primary" disabled={!connected} onClick={loadPlaylistToCard}>{I.bolt}Load playlist to card</button>
+                <button className="btn primary" disabled={!connected || playlistSyncing} onClick={loadPlaylistToCard}>
+                  {I.bolt}{playlistSyncing ? 'Loading…' : 'Load playlist to card'}
+                </button>
                 <div className="pm-menu">
                   <button className="btn" onClick={copyConfig}>{I.copy}Copy chip config</button>
                 </div>
@@ -301,12 +309,6 @@ function realPatternShape(patternId) {
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   }
                 </div>
-              </div>
-            }
-
-            {previewNote &&
-              <div className="pmx-status" data-testid="playlist-zone-fallback-note">
-                {previewNote}
               </div>
             }
 
