@@ -170,6 +170,30 @@ function sampleStripPixels(pathData, pixelCount, reversed = false, x = 0, y = 0)
   return offsetPixels(pixels, x || 0, y || 0);
 }
 
+function svgPathLength(pathData) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  el.setAttribute('d', pathData || '');
+  return el.getTotalLength ? el.getTotalLength() : 0;
+}
+
+// Recompute every strip's LED count from (pxPerMm, density) using the
+// canonical formula count = (svgLength / pxPerMm) * density / 1000.
+function recountStrips(strips, pxPerMm, density) {
+  const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+  return strips.map(s => {
+    const len = (Number.isFinite(s.svgLength) && s.svgLength > 0)
+      ? s.svgLength
+      : svgPathLength(s.pathData);
+    const count = Math.max(1, Math.round((len / scale) * density / 1000));
+    return {
+      ...s,
+      svgLength: len,
+      pixelCount: count,
+      pixels: sampleStripPixels(s.pathData, count, s.reversed, s.x || 0, s.y || 0),
+    };
+  });
+}
+
 function rgbCss(rgb, fallback = 'white') {
   if (!rgb) return fallback;
   const r = Math.round(rgb.r ?? rgb.avgR ?? 0);
@@ -378,6 +402,13 @@ const STRIP_COLORS = [
 ];
 
 const DENSITY_OPTIONS = [30, 60, 96, 144];
+const SCALE_BASE_PX_PER_MM = 3.7795;            // 96 DPI, the current default
+const SCALE_OPTIONS = [
+  { label: 'S',  mult: 0.5 },
+  { label: 'M',  mult: 1 },
+  { label: 'L',  mult: 2 },
+  { label: 'XL', mult: 4 },
+];
 const LED_COUNT_PRESETS = [30, 43, 60, 100, 150, 300, 600, 1000, 1500, 3000];
 const MAX_HISTORY = 50;
 const LS_KEY = 'lw-layout-autosave';
@@ -623,6 +654,7 @@ export function LayoutScreen() {
   const stripDragPointRef = useRef(null);
   const stripDragSuppressClickRef = useRef(false);
   const stripsRef         = useRef(strips);
+  const pxPerMmRef = useRef(pxPerMm);
   const [movingStripIds, setMovingStripIds] = useState([]);
 
   // Drag-and-drop
@@ -712,7 +744,7 @@ export function LayoutScreen() {
   useEffect(() => { setProjectHidden(hidden); },    [hidden, setProjectHidden]);
   useEffect(() => { setLayoutLayers(layers); },      [layers, setLayoutLayers]);
   useEffect(() => { setLayoutDensity(density); },    [density, setLayoutDensity]);
-  useEffect(() => { setLayoutPxPerMm(pxPerMm); },    [pxPerMm, setLayoutPxPerMm]);
+  useEffect(() => { setLayoutPxPerMm(pxPerMm); pxPerMmRef.current = pxPerMm; }, [pxPerMm, setLayoutPxPerMm]);
   useEffect(() => { setLayoutEditCounts(editCounts); }, [editCounts, setLayoutEditCounts]);
   useEffect(() => { setLayoutLayerGroups(layerGroups); }, [layerGroups, setLayoutLayerGroups]);
   useEffect(() => { setLayoutLayerOrder(layerOrder); }, [layerOrder, setLayoutLayerOrder]);
@@ -743,6 +775,7 @@ export function LayoutScreen() {
     svgText:     curSvgText,
     viewBox:     curViewBox,
     density:     curDensity,
+    pxPerMm:     pxPerMmRef.current,
     layerGroups: layerGroupsRef.current.map(g => ({ ...g, members: g.members.map(m => ({ ...m })) })),
     layerOrder:  [...layerOrderRef.current],
   }), []);
@@ -769,6 +802,7 @@ export function LayoutScreen() {
         svgText:     curSvgText,
         viewBox:     curViewBox,
         density:     curDensity,
+        pxPerMm:     pxPerMmRef.current,
         layerGroups: layerGroupsRef.current,
         layerOrder:  layerOrderRef.current,
         // Pattern state
@@ -1003,6 +1037,22 @@ export function LayoutScreen() {
         : [...prev, entry];
     });
   }, []);
+
+  // Drag a strip row onto another to change the physical wire order.
+  const reorderStrips = useCallback((draggedIds, targetId) => {
+    const ids = draggedIds.filter(Boolean);
+    if (!ids.length || ids.includes(targetId)) return;
+    setStrips(prev => {
+      const dragged = prev.filter(s => ids.includes(s.id));
+      const rest = prev.filter(s => !ids.includes(s.id));
+      const ti = rest.findIndex(s => s.id === targetId);
+      if (!dragged.length || ti === -1) return prev;
+      const next = [...rest.slice(0, ti + 1), ...dragged, ...rest.slice(ti + 1)];
+      pushHistory(prev, layers, editCounts, hidden, svgText, viewBox, density);
+      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
+      return next;
+    });
+  }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
@@ -1718,23 +1768,36 @@ export function LayoutScreen() {
 
   const handleDensityChange = useCallback((newDensity) => {
     let saved;
-    setStrips(prev => {
-      saved = prev.map(s => {
-        const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        pathEl.setAttribute('d', s.pathData);
-        const svgLen = pathEl.getTotalLength ? pathEl.getTotalLength() : 0;
-        const count = Math.max(1, Math.round((svgLen / pxPerMm) * newDensity / 1000));
-        const pixels = sampleStripPixels(s.pathData, count, s.reversed, s.x || 0, s.y || 0);
-        return { ...s, pixelCount: count, pixels };
-      });
-      return saved;
-    });
+    setStrips(prev => { saved = recountStrips(prev, pxPerMm, newDensity); return saved; });
     setEditCounts({});
     setDensity(newDensity);
-    setTimeout(() => {
-      if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, newDensity);
-    }, 0);
+    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, newDensity); }, 0);
   }, [pxPerMm, lsSave, layers, hidden, svgText, viewBox]);
+
+  const handleScaleChange = useCallback((nextPxPerMm) => {
+    let saved;
+    setStrips(prev => { saved = recountStrips(prev, nextPxPerMm, density); return saved; });
+    setEditCounts({});
+    setPxPerMm(nextPxPerMm);
+    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, density); }, 0);
+  }, [density, lsSave, layers, hidden, svgText, viewBox]);
+
+  const calibrateScaleFromStrip = useCallback((stripId, realCount) => {
+    const strip = strips.find(s => s.id === stripId);
+    if (!strip) return;
+    const len = (Number.isFinite(strip.svgLength) && strip.svgLength > 0)
+      ? strip.svgLength : svgPathLength(strip.pathData);
+    const count = Math.max(1, Math.round(Number(realCount)));
+    if (!len || !Number.isFinite(count)) return;
+    const nextPxPerMm = (len * density) / (count * 1000);
+    if (!Number.isFinite(nextPxPerMm) || nextPxPerMm <= 0) return;
+    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    let saved;
+    setStrips(prev => { saved = recountStrips(prev, nextPxPerMm, density); return saved; });
+    setPxPerMm(nextPxPerMm);
+    setEditCounts({});
+    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, density); }, 0);
+  }, [strips, density, layers, editCounts, hidden, svgText, viewBox, pushHistory, lsSave]);
 
   // ── Draw tool ──────────────────────────────────────────────────────────────
 
@@ -1878,6 +1941,7 @@ export function LayoutScreen() {
     setSvgText(snap.svgText);
     setViewBox(snap.viewBox);
     setDensity(snap.density);
+    if (snap.pxPerMm != null) setPxPerMm(snap.pxPerMm);
     setLayers(snap.layers);
     setStrips(snap.strips.map(rebuildStrip));
     setEditCounts(snap.editCounts);
@@ -1944,6 +2008,19 @@ export function LayoutScreen() {
         return;
       }
 
+      // Arrow keys nudge the selected strip one pixel (Shift = ×10)
+      if (selStripId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        const strip = strips.find(s => s.id === selStripId);
+        if (strip) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+          const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+          setStripOffset(strip.id, (strip.x || 0) + dx, (strip.y || 0) + dy, true);
+          return;
+        }
+      }
+
       // Single-key shortcuts
       switch (e.key) {
         case 's': setDrawMode(false); setWaypoints([]); setGhostPt(null); break;
@@ -1997,7 +2074,7 @@ export function LayoutScreen() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips]);
+  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset]);
 
   // ── Memoised visualisation data ────────────────────────────────────────────
 
@@ -2459,6 +2536,21 @@ export function LayoutScreen() {
             ))}
           </div>
 
+          <div className="tb-div"/>
+          {/* Scale (overall size) segmented control */}
+          <div className="seg">
+            <span className="seg-label" title="Overall physical size — coarse. LED count + density have the final say.">Scale</span>
+            {SCALE_OPTIONS.map(opt => {
+              const optPxPerMm = SCALE_BASE_PX_PER_MM / opt.mult;
+              const on = Math.abs(pxPerMm - optPxPerMm) < optPxPerMm * 0.01;
+              return (
+                <button key={opt.label} className={on ? 'on' : ''}
+                        title={`Overall size ${opt.label}`}
+                        onClick={() => handleScaleChange(optPxPerMm)}>{opt.label}</button>
+              );
+            })}
+          </div>
+
           <div className="tb-spring"/>
 
           {/* Zoom cluster */}
@@ -2734,6 +2826,12 @@ export function LayoutScreen() {
               // Schematic at rest = warm identity color; only let the (possibly
               // cool) pattern frame tint the strand when light preview is on.
               const stripColor = effectiveShowLight ? rgbCss(stripFrame, s.color) : (s.color || 'var(--accent)');
+              // The physical strip RAIL is neutral hardware — decoupled from the
+              // LED colour so the lit pixels (warm dots) read as distinct from the
+              // rail they sit on. Only the live pattern preview tints the rail.
+              const railColor = isHid
+                ? 'oklch(40% 0.01 75)'
+                : (effectiveShowLight ? stripColor : 'oklch(62% 0.012 75)');
               return (
                 <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
                   <path d={s.pathData}
@@ -2764,16 +2862,16 @@ export function LayoutScreen() {
                           else selectStrip(s.id);
                         }}/>
                   <path d={s.pathData}
-                        stroke={isHid ? 'oklch(40% 0.01 75)' : stripColor}
-                        strokeWidth={isSel ? 8 : 4.5} fill="none"
-                        strokeOpacity={isHid ? 0 : isSel ? 0.22 : 0.1}
+                        stroke={railColor}
+                        strokeWidth={isSel ? 5 : 3} fill="none"
+                        strokeOpacity={isHid ? 0 : isSel ? 0.16 : 0.09}
                         strokeLinecap="round"
                         pointerEvents="none"/>
                   <path d={s.pathData}
-                        stroke={isHid ? 'oklch(40% 0.01 75)' : stripColor}
-                        strokeWidth={isSel ? 3.5 : 1.8} fill="none"
+                        stroke={railColor}
+                        strokeWidth={isSel ? 1.6 : 1} fill="none"
                         pointerEvents="none"
-                        opacity={isHid ? 0.25 : isMoving ? 1 : isSel ? 1 : 0.7}
+                        opacity={isHid ? 0.25 : isMoving ? 0.95 : isSel ? 0.9 : 0.55}
                         style={{ filter: isSel && !isEditingGesture ? `drop-shadow(0 0 3px ${stripColor})` : 'none' }}/>
                 </g>
               );
@@ -2860,7 +2958,8 @@ export function LayoutScreen() {
                     const selected = s.id === selStripId;
                     // Warm identity color at rest; pattern-driven tint only when lit.
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
-                    const shellOpacity = restingLedAlpha(ledFrame, { selected });
+                    // Keep unlit LEDs clearly visible so the strip's pixels are countable at rest.
+                    const shellOpacity = Math.max(selected ? 0.85 : 0.62, restingLedAlpha(ledFrame, { selected }));
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
                     <g key={i}>
@@ -2884,7 +2983,7 @@ export function LayoutScreen() {
                     // Warm identity color at rest; pattern-driven tint only when lit.
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
-                    const restOpacity = restingLedAlpha(ledFrame, { selected }) * 0.45;
+                    const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
                     return (
                     <circle key={i} cx={px.x} cy={px.y}
                             r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
@@ -3657,7 +3756,7 @@ export function LayoutScreen() {
 	                         if (!draggedStripIds.length) return;
 	                         e.preventDefault();
 	                         e.stopPropagation();
-	                         createStripGroupFromIds([...draggedStripIds, s.id]);
+	                         reorderStrips(draggedStripIds, s.id);
 	                         setStripGroupDragOver(null);
 	                       }}
 	                       onDragEnd={() => setStripGroupDragOver(null)}
@@ -3669,14 +3768,14 @@ export function LayoutScreen() {
 	                         selectStrip(s.id);
 	                         setExpandedStrips(ex => ({ ...ex, [s.id]: !ex[s.id] }));
 	                       }}>
-	                      <span data-drag-handle="true" className="la-strip-dup" style={{ opacity: isBatchSel ? 1 : undefined, color: isBatchSel ? 'var(--accent)' : undefined, cursor: 'grab' }}>
+	                      <span data-drag-handle="true" className="la-strip-dup" style={{ opacity: isBatchSel ? 1 : 0.5, color: isBatchSel ? 'var(--accent)' : undefined, cursor: 'grab' }}>
 	                        <DragHandleIcon/>
 	                      </span>
 	                      <span className="la-stripnum">{i + 1}</span>
                       <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : undefined }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
-                                    className="layer-name" style={{ cursor: 'pointer' }}/>
+                                    className="layer-name" style={{ cursor: 'pointer', flex: 1, minWidth: 0 }}/>
                       {s.reversed && <span className="la-strip-rev">REV</span>}
                       <span className="layer-len">{s.pixelCount} px</span>
                       <button className="la-strip-eye"
@@ -3694,21 +3793,7 @@ export function LayoutScreen() {
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
-	                        {/* Position */}
-	                        <div className="move-grid">
-	                          <span style={{ color: 'var(--text-mid)' }}>Move</span>
-	                          <label>X
-	                            <input type="number" step="1" value={Math.round(s.x || 0)}
-	                                   onChange={e => setStripOffset(s.id, Number(e.target.value) || 0, s.y || 0)}
-	                                   onBlur={e => setStripOffset(s.id, Number(e.target.value) || 0, s.y || 0, true)}/>
-	                          </label>
-	                          <label>Y
-	                            <input type="number" step="1" value={Math.round(s.y || 0)}
-	                                   onChange={e => setStripOffset(s.id, s.x || 0, Number(e.target.value) || 0)}
-	                                   onBlur={e => setStripOffset(s.id, s.x || 0, Number(e.target.value) || 0, true)}/>
-	                          </label>
-	                        </div>
-	                        <div className="hint">Drag this strip on the canvas to reposition it.</div>
+	                        <div className="hint">Drag on canvas to move · click, then arrow keys to nudge (Shift = ×10).</div>
                         {/* LED count */}
                         <div className="row">
                           <span className="k">LEDs</span>
@@ -3725,16 +3810,9 @@ export function LayoutScreen() {
                                  onChange={e => resampleStrip(s.id, clampLedCount(e.target.value))}
                                  onBlur={e => resampleStrip(s.id, clampLedCount(e.target.value))}
                                  onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, clampLedCount(e.target.value)); }}/>
-                        </div>
-                        <div className="presets">
-                          {LED_COUNT_PRESETS.map(count => (
-                            <button key={count} type="button"
-                                    className={`btn ${s.pixelCount === count ? 'primary' : ''}`}
-                                    style={{ fontSize: 11, padding: '3px 6px', justifyContent: 'center' }}
-                                    onClick={() => resampleStrip(s.id, count)}>
-                              {count}
-                            </button>
-                          ))}
+                          <button className="btn" style={{ padding: '0 6px' }}
+                                  title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
+                                  onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Calibrate</button>
                         </div>
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
@@ -3761,37 +3839,10 @@ export function LayoutScreen() {
               {defaultCircleLayoutActive && (
                 <div
                   data-testid="default-circle-layout-panel"
-                  style={{
-                    margin: '8px 12px 10px',
-                    padding: 12,
-                    border: '1px solid var(--accent-line)',
-                    borderRadius: 6,
-                    background: 'var(--accent-soft)',
-                    boxShadow: 'inset 0 1px 0 oklch(100% 0 0 / 0.06)',
-                  }}
+                  style={{ margin: '2px 12px 8px', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', lineHeight: 1.45 }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 8 }}>
-                    <strong style={{ fontSize: 'var(--fs-sm)', color: 'var(--text)', letterSpacing: 0 }}>
-                      Default two-circle hardware
-                    </strong>
-                    <span style={{ fontFamily: 'var(--mono-font)', fontSize: 'var(--fs-xs)', color: 'var(--accent)' }}>
-                      {strips.length} rings
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 'var(--fs-xs)', lineHeight: 1.45, color: 'var(--text-3)', marginBottom: 10 }}>
-                    Outer and inner circles stay here until an SVG or saved project replaces the layout.
-                  </div>
-                  <div style={{ display: 'grid', gap: 6 }}>
-                    {strips.map(strip => (
-                      <div key={strip.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, fontSize: 'var(--fs-xs)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: '50%', background: strip.color, flexShrink: 0 }}/>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{strip.name}</span>
-                        </span>
-                        <span style={{ fontFamily: 'var(--mono-font)', color: 'var(--text-3)', flexShrink: 0 }}>{strip.pixelCount} LEDs</span>
-                      </div>
-                    ))}
-                  </div>
+                  <strong style={{ fontWeight: 500, color: 'var(--text-3)', letterSpacing: 0 }}>Default two-circle hardware</strong>
+                  {' '}— starter layout; import an SVG or open a project to replace it.
                 </div>
               )}
 	          </>
@@ -3819,9 +3870,9 @@ export function LayoutScreen() {
               )}
             </div>
             {/* Live wire editor — chop / link / route order (function preserved) */}
-            <details className="la-wire-editor" open>
+            <details className="la-wire-editor">
               <summary>
-                <span className="ttl">Wire editor</span>
+                <span className="ttl">Wire tools</span>
                 <span className="meta">chop · link · route</span>
               </summary>
               <PatchBoardScreen

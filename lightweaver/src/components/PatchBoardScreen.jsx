@@ -181,7 +181,7 @@ export function PatchBoardScreen({
       <div className="lw-wire-head">
         <div>
           <h1>Wire Path</h1>
-          <p>Physical route setup for the selected artwork layers.</p>
+          <p>The order LEDs light along the physical strip.</p>
         </div>
         <div className="lw-wire-head-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--text-3, #9a8d75)' }}>
