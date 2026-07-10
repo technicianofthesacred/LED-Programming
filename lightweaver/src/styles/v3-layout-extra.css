@@ -9,8 +9,9 @@
 /* Keep the toolbar contained to its grid column — never force page overflow.
    The mockup toolbar is a single non-wrapping flex row; on narrow widths it
    scrolls horizontally inside its own area rather than widening the layout. */
-.la .toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-.la .toolbar::-webkit-scrollbar { height: 0; }
+.la .toolbar { min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.la .toolbar::-webkit-scrollbar { height: 6px; }
+.la .toolbar::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
 .la .toolbar > * { flex-shrink: 0; }
 
 /* Light toolbar button + popover (tucks Directed-glow + glow-mode) */
@@ -42,7 +43,7 @@
 .la-strip-detail {
   display: flex; flex-direction: column; gap: 8px;
   margin: 2px 10px 8px 10px; padding: 10px 12px;
-  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  background: var(--bg-elev);
   border-radius: var(--r-md);
 }
 .la-strip-detail .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }

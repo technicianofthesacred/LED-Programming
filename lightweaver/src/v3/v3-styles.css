@@ -82,7 +82,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
    ============================================================ */
 .app {
   display: grid;
-  grid-template-columns: 58px 1fr 320px;
+  grid-template-columns: 58px minmax(0, 1fr) 320px;
   grid-template-rows: 52px 48px 1fr 32px;
   grid-template-areas:
     "top   top   top"

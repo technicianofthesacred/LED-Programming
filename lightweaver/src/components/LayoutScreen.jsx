@@ -2557,7 +2557,7 @@ export function LayoutScreen() {
                        key={`sz-${scaleUnit}-${wDisp.toFixed(2)}`}
                        defaultValue={wDisp.toFixed(1)}
                        aria-label={`Artwork width in ${scaleUnit}`}
-                       style={{ width: 54, height: 24, textAlign: 'right', background: 'var(--bg-app)',
+                       style={{ width: 64, height: 24, textAlign: 'right', fontVariantNumeric: 'tabular-nums', background: 'var(--bg-app)',
                                 border: '1px solid var(--border-soft)', borderRadius: 4, color: 'var(--text-hi)',
                                 fontFamily: 'var(--font-mono)', fontSize: 12, padding: '0 6px' }}
                        onFocus={e => e.target.select()}
@@ -3746,7 +3746,7 @@ export function LayoutScreen() {
 	                </div>
 	              </div>
 	            )}
-	            <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', overflow: 'auto', minHeight: 0, maxHeight: 320, paddingBottom: 4 }}>
+	            <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', minHeight: 0, paddingBottom: 4 }}>
 	              {strips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
