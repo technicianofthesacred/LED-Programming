@@ -283,6 +283,11 @@ async function readCardZones(host, timeoutMs = 1200) {
   }
 }
 
+export async function readCardZonesFromCard(options = {}) {
+  const host = options.host || readStoredCardHost();
+  return readCardZones(host, options.timeoutMs || 1200);
+}
+
 function zoneExists(zonesPayload, zoneId = '') {
   if (!zoneId || !Array.isArray(zonesPayload?.zones)) return false;
   return zonesPayload.zones.some(zone => String(zone?.id || '') === zoneId);
