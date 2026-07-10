@@ -21,7 +21,7 @@ assert.deepEqual(
   missingCardZoneIds({ zones: [{ id: 'outer' }] }, ['outer', 'inner', 'inner']),
   ['inner'],
 );
-assert.deepEqual(missingCardZoneIds(null, ['outer']), []);
+assert.deepEqual(missingCardZoneIds(null, ['outer']), ['outer']);
 
 let configPushes = 0;
 const alreadyReady = await ensureCardSectionsForPreview({
@@ -61,6 +61,39 @@ const repaired = await ensureCardSectionsForPreview({
 });
 assert.equal(repaired.synced, true);
 assert.deepEqual(operations, ['zones', 'config', 'zones']);
+assert.deepEqual(repaired.zones.zones.map(zone => zone.id), ['outer', 'inner']);
+
+let releaseConcurrentConfig;
+const concurrentConfigGate = new Promise(resolve => { releaseConcurrentConfig = resolve; });
+let concurrentConfigPushes = 0;
+let concurrentReady = false;
+const concurrentOptions = {
+  host: '192.168.4.1',
+  runtimePackage,
+  readZones: async () => concurrentReady
+    ? { zones: [{ id: 'outer' }, { id: 'inner' }] }
+    : { zones: [{ id: 'full-piece' }] },
+  pushConfig: async () => {
+    concurrentConfigPushes += 1;
+    await concurrentConfigGate;
+    concurrentReady = true;
+    return { ok: true };
+  },
+  sleep: async () => {},
+};
+const concurrentOuter = ensureCardSectionsForPreview({
+  ...concurrentOptions,
+  requiredZoneIds: ['outer'],
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+const concurrentInner = ensureCardSectionsForPreview({
+  ...concurrentOptions,
+  requiredZoneIds: ['inner'],
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+releaseConcurrentConfig();
+await Promise.all([concurrentOuter, concurrentInner]);
+assert.equal(concurrentConfigPushes, 1);
 
 let unavailableReads = 0;
 await assert.rejects(

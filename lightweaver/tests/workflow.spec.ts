@@ -3,14 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-async function mockLocalCard(page: any) {
+async function mockLocalCard(page: any, options: any = {}) {
   const card = {
-    zones: [
+    zones: options.zones || [
       { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
       { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
     ],
     savedConfig: null as any,
     operations: [] as string[],
+    controls: [] as any[],
   };
 
   await page.route('http://lightweaver.local/**', async (route: any) => {
@@ -40,9 +41,16 @@ async function mockLocalCard(page: any) {
     }
     if (pathname === '/api/config') {
       card.operations.push('config');
+      if (options.configDelayMs) await new Promise(resolve => setTimeout(resolve, options.configDelayMs));
       card.savedConfig = JSON.parse(request.postData() || '{}');
       card.zones = card.savedConfig.zones || card.zones;
       await route.fulfill({ json: { ok: true, requiresReboot: false } });
+      return;
+    }
+    if (pathname === '/api/control') {
+      card.operations.push('control');
+      card.controls.push(JSON.parse(request.postData() || '{}'));
+      await route.fulfill({ json: { ok: true } });
       return;
     }
     await route.fulfill({ json: { ok: true } });
@@ -275,4 +283,24 @@ test('quiet complete playlist sync writes and verifies all card sections', async
   ]);
   await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+});
+
+test('latest section preview installs dependencies once and wins rapid taps', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  const card = await mockLocalCard(page, {
+    zones: [{ id: 'full-piece', label: 'Full piece', ranges: [{ start: 0, count: 44 }] }],
+    configDelayMs: 160,
+  });
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+
+  card.operations.length = 0;
+  await page.getByRole('button', { name: 'Outer circle', exact: true }).click();
+  await page.waitForTimeout(100);
+  await page.getByRole('button', { name: 'Inner circle', exact: true }).click();
+
+  await expect.poll(() => card.operations.filter(item => item === 'config').length).toBe(1);
+  await expect.poll(() => card.controls.length).toBe(1);
+  expect(card.controls[0].zone).toBe('patch-default-inner-circle');
+  await expect(page.locator('.pmx-status')).toHaveCount(0);
 });

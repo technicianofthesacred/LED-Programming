@@ -9,6 +9,7 @@ import {
   repairMirroredLedOutputOnCard,
   resetLiveOutputOnCard,
   pushSectionPreviewToCard,
+  readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
 
 const payload = buildLivePreviewControlPayload({
@@ -65,6 +66,12 @@ assert.equal(request.options.method, 'POST');
 assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
+
+globalThis.fetch = async () => { throw new TypeError('network down'); };
+await assert.rejects(
+  readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
+  error => error?.reason === 'offline',
+);
 
 assert.deepEqual(buildLiveHardwareControlPayload({ colorOrder: 'grb' }), {
   colorOrder: 'GRB',

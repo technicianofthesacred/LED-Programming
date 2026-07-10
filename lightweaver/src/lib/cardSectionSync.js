@@ -5,15 +5,25 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+const previewSectionSyncs = new Map();
+
+function uniqueZoneIds(zoneIds = []) {
+  return [...new Set(zoneIds.map(String).filter(Boolean))];
+}
+
+function previewSectionSyncKey(host, runtimePackage) {
+  return `${String(host || '').trim().toLowerCase()}|${runtimeZoneIds(runtimePackage).sort().join(',')}`;
+}
+
 export function missingCardZoneIds(zonesPayload = {}, requiredZoneIds = []) {
-  if (!Array.isArray(zonesPayload?.zones)) return [];
+  const required = uniqueZoneIds(requiredZoneIds);
+  if (!Array.isArray(zonesPayload?.zones)) return required;
   const available = new Set(
     zonesPayload.zones
       .map(zone => String(zone?.id || ''))
       .filter(Boolean),
   );
-  return [...new Set(requiredZoneIds.map(String).filter(Boolean))]
-    .filter(zoneId => !available.has(zoneId));
+  return required.filter(zoneId => !available.has(zoneId));
 }
 
 export function runtimeZoneIds(runtimePackage = {}) {
@@ -64,15 +74,19 @@ export async function syncRuntimePackageToCard({
     timeoutMs: 6000,
     reboot: 'if-needed',
   });
+  let verifiedZones = null;
   if (requiredZoneIds.length) {
-    await waitForCardZones({
+    verifiedZones = await waitForCardZones({
       host,
       requiredZoneIds,
       readZones,
       sleep,
     });
   }
-  return response;
+  return {
+    ...(response && typeof response === 'object' ? response : { ok: true }),
+    verifiedZones,
+  };
 }
 
 export async function ensureCardSectionsForPreview({
@@ -88,13 +102,22 @@ export async function ensureCardSectionsForPreview({
   const missing = missingCardZoneIds(zones, requiredZoneIds);
   if (!missing.length) return { synced: false, zones };
 
-  const response = await syncRuntimePackageToCard({
-    host,
-    runtimePackage,
-    requiredZoneIds,
-    pushConfig,
-    readZones,
-    sleep,
-  });
-  return { synced: true, zones: response };
+  const syncKey = previewSectionSyncKey(host, runtimePackage);
+  let pendingSync = previewSectionSyncs.get(syncKey);
+  if (!pendingSync) {
+    pendingSync = syncRuntimePackageToCard({
+      host,
+      runtimePackage,
+      requiredZoneIds: runtimeZoneIds(runtimePackage),
+      pushConfig,
+      readZones,
+      sleep,
+    });
+    previewSectionSyncs.set(syncKey, pendingSync);
+    void pendingSync.finally(() => {
+      if (previewSectionSyncs.get(syncKey) === pendingSync) previewSectionSyncs.delete(syncKey);
+    }).catch(() => {});
+  }
+  const response = await pendingSync;
+  return { synced: true, zones: response.verifiedZones, response };
 }

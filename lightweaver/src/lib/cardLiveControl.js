@@ -285,7 +285,11 @@ async function readCardZones(host, timeoutMs = 1200) {
 
 export async function readCardZonesFromCard(options = {}) {
   const host = options.host || readStoredCardHost();
-  return readCardZones(host, options.timeoutMs || 1200);
+  try {
+    return await readCardZones(host, options.timeoutMs || 1200);
+  } catch (error) {
+    throw normalizePreviewError(host, error);
+  }
 }
 
 function zoneExists(zonesPayload, zoneId = '') {

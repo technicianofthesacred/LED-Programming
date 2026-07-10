@@ -317,6 +317,7 @@ import {
               requiredZoneIds: [zone],
               runtimePackage,
             });
+            if (sequence !== livePreviewSeq.current) return;
           }
           await pushLivePreviewToCard(
             { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
@@ -333,6 +334,9 @@ import {
           if (sequence === livePreviewSeq.current) {
             setStatusKind('err');
             const actionableReason = ['mixed-content', 'layout-mismatch', 'project-mismatch', 'zones-missing'].includes(error?.reason);
+            if (error?.reason === 'mixed-content') {
+              setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
+            }
             setStatus(actionableReason
               ? error.message
               : `Could not reach the card at ${cardHostToUrl(cardHost)}. This change is not on the lights. Use Connect to card in the bottom bar.`);

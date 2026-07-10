@@ -78,6 +78,7 @@ function realPatternShape(patternId) {
     const [handoffUrl, setHandoffUrl] = useState('');
     const [playlistStatus, setPlaylistStatus] = useState(null);
     const [playlistSyncing, setPlaylistSyncing] = useState(false);
+    const previewSequence = React.useRef(0);
     const [drag, setDrag] = useState({ from: null, over: null });
 
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -146,15 +147,17 @@ function realPatternShape(patternId) {
 
     // ── live preview / card control ───────────────────────────────────────
     const previewPatternOnCard = async (patternId) => {
+      const sequence = ++previewSequence.current;
       setHandoffUrl('');
       try {
         await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-        setPlaylistStatus(null);
+        if (sequence === previewSequence.current) setPlaylistStatus(null);
       } catch { /* preview is best-effort; connection state lives in the footer */ }
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
       if (!savedLook) return;
+      const sequence = ++previewSequence.current;
       setHandoffUrl('');
       try {
         const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
@@ -167,12 +170,14 @@ function realPatternShape(patternId) {
           requiredZoneIds,
           runtimePackage,
         });
+        if (sequence !== previewSequence.current) return;
         await pushSectionPreviewToCard(
           targets,
           { host, timeoutMs: 2600 },
         );
-        setPlaylistStatus(null);
+        if (sequence === previewSequence.current) setPlaylistStatus(null);
       } catch (error) {
+        if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
         setPlaylistStatus(nextStatus);
         setHandoffUrl(nextStatus.handoffUrl || '');
@@ -205,6 +210,7 @@ function realPatternShape(patternId) {
     };
 
     const loadPlaylistToCard = async () => {
+      previewSequence.current += 1;
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
       setPlaylistSyncing(true);
