@@ -6,21 +6,11 @@ export function formatBrowserProjectSaveLabel(record = {}) {
 }
 
 export function makePlaylistPushPendingState() {
-  return {
-    kind: 'info',
-    message: 'Sending playlist to the card...',
-    handoffUrl: '',
-  };
+  return null;
 }
 
-export function makePlaylistPushSuccessState(response = {}) {
-  return {
-    kind: 'ok',
-    message: response?.rebooting
-      ? 'Playlist saved to the card. The card is rebooting so the new startup playlist can take over.'
-      : 'Playlist saved to the card.',
-    handoffUrl: '',
-  };
+export function makePlaylistPushSuccessState() {
+  return null;
 }
 
 function shouldOfferHandoff(reason = '') {

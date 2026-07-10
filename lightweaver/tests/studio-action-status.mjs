@@ -21,14 +21,9 @@ assert.equal(
   'Shanghai Mandala saved in browser library',
 );
 
-assert.deepEqual(makePlaylistPushPendingState(), {
-  kind: 'info',
-  message: 'Sending playlist to the card...',
-  handoffUrl: '',
-});
-
-assert.equal(makePlaylistPushSuccessState().message, 'Playlist saved to the card.');
-assert.match(makePlaylistPushSuccessState({ rebooting: true }).message, /rebooting/);
+assert.equal(makePlaylistPushPendingState(), null);
+assert.equal(makePlaylistPushSuccessState(), null);
+assert.equal(makePlaylistPushSuccessState({ rebooting: true }), null);
 assert.equal(makePlaylistPushSuccessStateV3().message, 'Playlist saved to the card.');
 
 const handoffBuilder = (host) => `http://${host}/#lwconfig=abc&reboot=1`;
