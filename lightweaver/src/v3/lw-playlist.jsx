@@ -30,13 +30,18 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { pushConfigToCard } from '../lib/cardPushClient.js';
 import {
   previewResponseUsedZoneFallback,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   resetLiveOutputOnCard,
 } from '../lib/cardLiveControl.js';
+import {
+  makePlaylistPushErrorState,
+  makePlaylistPushPendingState,
+  makePlaylistPushSuccessState,
+} from '../lib/studioActionStatus.js';
 
 // Shown when a section-mix preview collapsed to the whole strip because the
 // card has no matching zones yet (contract: no silent zone fallback).
@@ -74,6 +79,7 @@ function realPatternShape(patternId) {
     // faithful. The real engine still pushes the preview to the card.
     const [live, setLive] = useState(null);
     const [handoffUrl, setHandoffUrl] = useState('');
+    const [playlistStatus, setPlaylistStatus] = useState(null);
     // Friendly note when a row preview fell back from sections to the whole
     // strip — the fallback must never happen silently.
     const [previewNote, setPreviewNote] = useState('');
@@ -197,10 +203,14 @@ function realPatternShape(patternId) {
 
     const loadPlaylistToCard = async () => {
       setHandoffUrl('');
+      setPlaylistStatus(makePlaylistPushPendingState());
       try {
-        await pushConfigToCard(runtimePackage, { host, timeoutMs: 6000, reboot: 'if-needed' });
+        const response = await pushConfigToCard(runtimePackage, { host, timeoutMs: 6000, reboot: 'if-needed' });
+        setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
-        if (error?.reason === 'mixed-content') setHandoffUrl(buildCardConfigHandoffUrl(host, runtimePackage));
+        const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
+        setPlaylistStatus(nextStatus);
+        setHandoffUrl(nextStatus.handoffUrl || '');
       }
     };
 
@@ -275,9 +285,24 @@ function realPatternShape(patternId) {
                   <button className="btn" onClick={copyConfig}>{I.copy}Copy chip config</button>
                 </div>
                 <button className="btn" onClick={downloadConfig}>{I.download}Download</button>
-                <button className="btn" onClick={openCard}>{I.open}Open card</button>
+                <button className="btn" onClick={openCard}>{I.open}Open card page</button>
               </div>
             </header>
+
+            {playlistStatus &&
+              <div
+                className={"pmx-status" + (playlistStatus.kind === 'ok' ? ' is-ok' : playlistStatus.kind === 'err' ? ' is-err' : '')}
+                data-testid="playlist-card-status"
+              >
+                {playlistStatus.message}
+                <div className="pmx-status-actions">
+                  <button className="btn" onClick={openCard}>{I.open}Open card page</button>
+                  {handoffUrl &&
+                    <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
+                  }
+                </div>
+              </div>
+            }
 
             {previewNote &&
               <div className="pmx-status" data-testid="playlist-zone-fallback-note">

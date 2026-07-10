@@ -893,20 +893,23 @@ import {
                     <span className="pt-count">{filtered.length} of {REAL_PATTERNS.length} shown</span>
                   </div>
                   <div className="pm-cards">
-                    {filtered.map((p) =>
-                    <div key={p.id} className={"pmcard" + (p.id === selId ? " on" : "")} data-pattern-id={p.id} onClick={() => selectCard(p)}>
+                    {filtered.map((p) => {
+                      const cardInPlaylist = inPlaylist(p.id);
+                      return (
+                    <div key={p.id} className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} onClick={() => selectCard(p)}>
                         <div className="pmcard-led"><LedRow pal={p.pal} n={9} /></div>
                         <div className="pmcard-row">
                           <span className="pmcard-nm">{p.label}</span>
                           {p.mix && <span className="mixtag">mix</span>}
                           <span className="pmcard-sp">{p.sp}</span>
                         </div>
-                        <button className={"pmcard-pl" + (inPlaylist(p.id) ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
+                        <button className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
                           <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z" /></svg>
-                          {inPlaylist(p.id) ? "In playlist" : "Add to playlist"}
+                          {cardInPlaylist ? "In playlist" : "Add to playlist"}
                         </button>
                       </div>
-                    )}
+                      );
+                    })}
                     {!filtered.length && <p style={{ color: "var(--text-faint)", fontSize: 13, gridColumn: "1 / -1", padding: 20 }}>No chip patterns match this search.</p>}
                   </div>
                 </div>

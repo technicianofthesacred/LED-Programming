@@ -350,6 +350,11 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pmcard { text-align: left; padding: 10px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); transition: border-color .12s; display: flex; flex-direction: column; gap: 9px; }
 .pmcard:hover { border-color: var(--border); }
 .pmcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.pmcard.in-playlist {
+  background: linear-gradient(180deg, var(--accent-soft), var(--bg-panel) 72%);
+  border-color: var(--accent-line);
+}
+.pmcard.in-playlist:not(.on) { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--accent-line), transparent 45%); }
 .pmcard-top { display: flex; align-items: center; gap: 9px; }
 .pmcard-thumb { width: 42px; height: 42px; border-radius: var(--r-sm); flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
 .pmcard-nm { font-size: 13px; font-weight: 500; color: var(--text-hi); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
@@ -358,6 +363,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pmcard-pal { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .pmcard-pal span { height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
 .pmcard-pl { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-lo); cursor: pointer; padding-top: 2px; }
+.pmcard-pl.on { color: var(--accent); font-weight: 600; }
+.pmcard-pl.on .plstar { fill: var(--accent); stroke: var(--accent); }
 .pmcard-pl .pm-box { width: 15px; height: 15px; }
 
 /* aside */
