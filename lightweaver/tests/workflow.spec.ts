@@ -289,18 +289,19 @@ test('latest section preview installs dependencies once and wins rapid taps', as
   await page.addInitScript(() => localStorage.clear());
   const card = await mockLocalCard(page, {
     zones: [{ id: 'full-piece', label: 'Full piece', ranges: [{ start: 0, count: 44 }] }],
-    configDelayMs: 160,
+    configDelayMs: 1000,
   });
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
 
   card.operations.length = 0;
   await page.getByRole('button', { name: 'Outer circle', exact: true }).click();
-  await page.waitForTimeout(100);
+  await expect.poll(() => card.operations.filter(item => item === 'config').length).toBe(1);
   await page.getByRole('button', { name: 'Inner circle', exact: true }).click();
 
-  await expect.poll(() => card.operations.filter(item => item === 'config').length).toBe(1);
-  await expect.poll(() => card.controls.length).toBe(1);
+  await page.waitForTimeout(1500);
+  expect(card.operations.filter(item => item === 'config')).toHaveLength(1);
+  expect(card.controls).toHaveLength(1);
   expect(card.controls[0].zone).toBe('patch-default-inner-circle');
   await expect(page.locator('.pmx-status')).toHaveCount(0);
 });

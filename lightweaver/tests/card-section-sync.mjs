@@ -95,6 +95,35 @@ releaseConcurrentConfig();
 await Promise.all([concurrentOuter, concurrentInner]);
 assert.equal(concurrentConfigPushes, 1);
 
+let releaseProjectConfigs;
+const projectConfigGate = new Promise(resolve => { releaseProjectConfigs = resolve; });
+const pushedProjects = [];
+const projectPackage = projectId => ({
+  config: {
+    piece: { id: projectId },
+    led: { outputs: [{ id: 'out1', pin: 16, pixels: 44 }] },
+    zones: [{ id: 'outer', ranges: [{ start: 0, count: 44 }] }],
+  },
+});
+const projectOptions = runtimePackageForProject => ensureCardSectionsForPreview({
+  host: '192.168.4.1',
+  requiredZoneIds: ['outer'],
+  runtimePackage: runtimePackageForProject,
+  readZones: async () => ({ zones: [{ id: 'full-piece' }] }),
+  pushConfig: async pkg => {
+    pushedProjects.push(pkg.config.piece.id);
+    await projectConfigGate;
+    return { ok: true };
+  },
+  sleep: async () => {},
+});
+const projectA = projectOptions(projectPackage('project-a'));
+const projectB = projectOptions(projectPackage('project-b'));
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(pushedProjects.sort(), ['project-a', 'project-b']);
+releaseProjectConfigs();
+await Promise.allSettled([projectA, projectB]);
+
 let unavailableReads = 0;
 await assert.rejects(
   waitForCardZones({

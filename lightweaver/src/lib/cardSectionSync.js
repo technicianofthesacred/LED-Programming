@@ -12,7 +12,19 @@ function uniqueZoneIds(zoneIds = []) {
 }
 
 function previewSectionSyncKey(host, runtimePackage) {
-  return `${String(host || '').trim().toLowerCase()}|${runtimeZoneIds(runtimePackage).sort().join(',')}`;
+  const config = runtimePackage?.config || runtimePackage || {};
+  const topology = {
+    piece: {
+      id: String(config?.piece?.id || ''),
+      name: String(config?.piece?.name || ''),
+    },
+    led: {
+      pixels: Number(config?.led?.pixels) || 0,
+      outputs: Array.isArray(config?.led?.outputs) ? config.led.outputs : [],
+    },
+    zones: Array.isArray(config?.zones) ? config.zones : [],
+  };
+  return `${String(host || '').trim().toLowerCase()}|${JSON.stringify(topology)}`;
 }
 
 export function missingCardZoneIds(zonesPayload = {}, requiredZoneIds = []) {
