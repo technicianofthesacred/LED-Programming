@@ -3694,7 +3694,7 @@ export function LayoutScreen() {
 	              <span className="ttl">LED strips</span>
 	              <span className="meta">
 	                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
-	                {strips.length} · {totalLeds.toLocaleString()} LEDs
+	                {strips.length} · {totalLeds.toLocaleString()} LEDs · physical order
 	              </span>
 	            </div>
 	            {selectedStrips.length > 1 && (
@@ -3771,25 +3771,13 @@ export function LayoutScreen() {
 	                      <span data-drag-handle="true" className="la-strip-dup" style={{ opacity: isBatchSel ? 1 : 0.5, color: isBatchSel ? 'var(--accent)' : undefined, cursor: 'grab' }}>
 	                        <DragHandleIcon/>
 	                      </span>
-	                      <span className="la-stripnum">{i + 1}</span>
+	                      <span className="la-wire-n" style={{ flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
                       <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : undefined }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
                                     className="layer-name" style={{ cursor: 'pointer', flex: 1, minWidth: 0 }}/>
                       {s.reversed && <span className="la-strip-rev">REV</span>}
                       <span className="layer-len">{s.pixelCount} px</span>
-                      <button className="la-strip-eye"
-                              title={hidden[s.id] ? 'Show (H)' : 'Hide (H)'}
-                              onClick={e => { e.stopPropagation(); setHidden(h => ({ ...h, [s.id]: !h[s.id] })); }}>
-                        {hidden[s.id] ? <EyeOffIcon/> : <EyeIcon/>}
-                      </button>
-                      <button className="la-strip-dup"
-                              title="Duplicate strip"
-                              onClick={e => { e.stopPropagation(); duplicateStrip(s.id); }}>⧉</button>
-                      <button className="la-x" title="Remove strip (X)"
-                              onClick={e => { e.stopPropagation(); removeStrip(s.id); }}>
-                        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-                      </button>
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
@@ -3826,6 +3814,14 @@ export function LayoutScreen() {
                             ↔ Reverse
                           </button>
                           <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
+                                  onClick={() => setHidden(h => ({ ...h, [s.id]: !h[s.id] }))}>
+                            {hidden[s.id] ? 'Show' : 'Hide'}
+                          </button>
+                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
+                                  onClick={() => duplicateStrip(s.id)}>
+                            Duplicate
+                          </button>
+                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
                                   onClick={() => removeStrip(s.id)}>
                             Remove
                           </button>
@@ -3853,22 +3849,6 @@ export function LayoutScreen() {
           return (
           <>
             <div className="panel-divider"/>
-            <div className="panel-head"><span className="ttl">Wire path</span><span className="meta">physical order</span></div>
-            {/* Read-only physical-order summary (mockup .la-wire) */}
-            <div className="la-wire">
-              {wireStrips.map((st, idx, arr) => (
-                <div key={st.id} className="la-wire-row">
-                  <span className="la-wire-n">{String(idx + 1).padStart(2, '0')}</span>
-                  <span className="la-wire-dot" style={{ background: st.color }}/>
-                  <span className="layer-name">{st.name}</span>
-                  <span className="la-wire-len">{st.pixelCount}px</span>
-                  {idx < arr.length - 1 && <span className="la-wire-link">↳</span>}
-                </div>
-              ))}
-              {wireStrips.length > 1 && (
-                <div className="la-wire-total">{totalLeds.toLocaleString()} LEDs · {wireStrips.length} strips in series</div>
-              )}
-            </div>
             {/* Live wire editor — chop / link / route order (function preserved) */}
             <details className="la-wire-editor">
               <summary>
