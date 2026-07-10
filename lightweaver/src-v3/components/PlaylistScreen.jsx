@@ -25,8 +25,12 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLivePreviewToCard, pushSectionPreviewToCard, resetLiveOutputOnCard } from '../lib/cardLiveControl.js';
+import {
+  makePlaylistPushErrorState,
+  makePlaylistPushSuccessState,
+} from '../lib/studioActionStatus.js';
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -380,20 +384,14 @@ export function PlaylistScreen() {
     setStatus(`Loading playlist to ${cardHostToUrl(cardHost)}...`);
     try {
       const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed' });
-      setStatusKind('ok');
-      setStatus(response.rebooting
-        ? 'Playlist loaded. The card is rebooting so the knob order takes effect.'
-        : 'Playlist loaded. The knob now follows this order.');
+      const nextStatus = makePlaylistPushSuccessState(response);
+      setStatusKind(nextStatus.kind);
+      setStatus(nextStatus.message);
     } catch (error) {
-      setStatusKind('err');
-      if (error?.reason === 'mixed-content') {
-        setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
-        setStatus('The browser blocked direct local-card access from this public page. Open the card installer to save this playlist on the card.');
-      } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
-        setStatus(error.message);
-      } else {
-        setStatus(`Could not load the playlist to the card at ${cardHostToUrl(cardHost)}.`);
-      }
+      const nextStatus = makePlaylistPushErrorState(error, { host: cardHost, runtimePackage });
+      setStatusKind(nextStatus.kind);
+      setStatus(nextStatus.message);
+      setHandoffUrl(nextStatus.handoffUrl || '');
     }
   };
 
@@ -422,13 +420,14 @@ export function PlaylistScreen() {
             <button type="button" className="btn btn-primary" onClick={loadPlaylistToCard}>Load playlist to card</button>
             <button type="button" className="btn btn-primary" onClick={copyConfig}>Copy chip config</button>
             <button type="button" className="btn" onClick={() => downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson)}>Download</button>
-            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card</button>
+            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
           </div>
         </header>
 
         {status && (
           <div className={`lw-chip-status ${statusKind === 'ok' ? 'is-ok' : statusKind === 'err' ? 'is-err' : ''}`}>
             {status}
+            <button type="button" className="btn btn-ghost" onClick={() => window.open(cardHostToUrl(cardHost), '_blank')}>Open card page</button>
             {handoffUrl && (
               <a className="btn btn-primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">
                 Open card installer

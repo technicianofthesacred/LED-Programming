@@ -10,6 +10,7 @@ import {
 } from '../lib/cardBridge.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
+import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 
 const Icon = {
   pattern: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"><path d="M4 13.5c3.8-7.6 12.2-7.6 16 0"/><path d="M4 17.5c3.8-4.4 12.2-4.4 16 0"/><circle cx="8" cy="11" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="11" r="1"/></svg>,
@@ -43,8 +44,8 @@ export function TopBar() {
 
   const handleSave = () => {
     try {
-      saveCurrentProjectToLibrary(serializeProject());
-      setSaveState('saved in browser');
+      const record = saveCurrentProjectToLibrary(serializeProject());
+      setSaveState(formatBrowserProjectSaveLabel(record));
     } catch {
       setSaveState('save failed');
     }
