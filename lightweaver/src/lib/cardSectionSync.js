@@ -28,8 +28,8 @@ export async function waitForCardZones({
   requiredZoneIds = [],
   readZones = readCardZonesFromCard,
   sleep = delay,
-  attempts = 12,
-  intervalMs = 500,
+  attempts = 20,
+  intervalMs = 600,
 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0) await sleep(intervalMs);

@@ -79,6 +79,22 @@ await assert.rejects(
 );
 assert.equal(unavailableReads, 3);
 
+let rebootWindowReads = 0;
+await assert.rejects(
+  waitForCardZones({
+    host: '192.168.4.1',
+    requiredZoneIds: ['outer'],
+    intervalMs: 0,
+    readZones: async () => {
+      rebootWindowReads += 1;
+      throw new Error('card rebooting');
+    },
+    sleep: async () => {},
+  }),
+  error => error?.reason === 'zones-missing',
+);
+assert.equal(rebootWindowReads, 20);
+
 const layoutMismatch = new Error('output layout changed');
 layoutMismatch.reason = 'layout-mismatch';
 await assert.rejects(
