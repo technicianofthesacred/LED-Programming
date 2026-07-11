@@ -59,6 +59,25 @@ for (const [name, range, dominant, others] of [
   }
 }
 
+// Frequencies in the gaps above each musical band must not leak into that band.
+// Use exact FFT-bin centers so the fixtures remain honest about frequency resolution.
+for (const [name, requestedHz, excludedBand] of [
+  ['bass upper boundary', 193.8, 'bass'],
+  ['mid upper boundary', 1894.9, 'mid'],
+  ['high upper boundary', 9496.1, 'high'],
+]) {
+  const analyzer = fresh();
+  const bin = Math.round(requestedHz / binHz);
+  const resolvedHz = bin * binHz;
+  assert.ok(Math.abs(resolvedHz - requestedHz) <= binHz / 2,
+    `${name}: fixture resolves within half an FFT bin (${resolvedHz} Hz)`);
+  const bins = new Uint8Array(binCount);
+  bins[bin] = 210;
+  advance(analyzer, bins, 1);
+  assert.ok(analyzer.getFeatures()[excludedBand] < 0.03,
+    `${name}: ${resolvedHz} Hz is outside ${excludedBand} (${analyzer.getFeatures()[excludedBand]})`);
+}
+
 // Slowly adapting normalization must not erase a sustained musical passage.
 {
   const analyzer = fresh();

@@ -1,7 +1,7 @@
 const FEATURE_RANGES = {
-  bass: [20, 250],
-  mid: [250, 2000],
-  high: [2000, 10000],
+  bass: [30, 140],
+  mid: [150, 1800],
+  high: [2000, 9000],
 };
 
 const MIN_FREQUENCY = 20;
