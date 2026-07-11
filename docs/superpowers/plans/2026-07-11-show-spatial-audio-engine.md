@@ -29,7 +29,7 @@
 - Create: `lightweaver/tests/show-audio-features.mjs`
 - Modify: `lightweaver/package.json`
 
-- [ ] **Step 1: Write the failing feature tests**
+- [x] **Step 1: Write the failing feature tests**
 
 Create fixtures for silence, steady broadband input, isolated bands, and 100 ms pulses. Lock the public API:
 
@@ -44,12 +44,12 @@ assert.deepEqual(Object.keys(frame), [
 
 Test that steady input retains at least 70% of its stabilized energy after five simulated minutes, a pulse raises `beat` within 300 ms, silence does not trigger beats, and isolated band fixtures produce the expected dominant band.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run: `node lightweaver/tests/show-audio-features.mjs`  
 Expected: FAIL because `showAudioFeatures.js` does not exist.
 
-- [ ] **Step 3: Implement logarithmic RMS bands and stable normalization**
+- [x] **Step 3: Implement logarithmic RMS bands and stable normalization**
 
 Implement `createShowAudioFeatures({ sampleRate, fftSize })` with:
 
@@ -73,12 +73,12 @@ export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } =
 
 Use RMS across 30–140 Hz, 150–1800 Hz, and 2000–9000 Hz. Let the floor rise slowly and fall moderately; let headroom rise quickly and decay very slowly so a steady signal cannot be normalized away. Compute positive spectral flux from normalized bin increases. Drive `beat` from flux plus positive broadband-energy change with eased attack and roughly 350–650 ms release.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `node lightweaver/tests/show-audio-features.mjs`  
 Expected: `show-audio-features tests passed`.
 
-- [ ] **Step 5: Add the test to `test:core` and commit**
+- [x] **Step 5: Add the test to `test:core` and commit**
 
 Add `node tests/show-audio-features.mjs` immediately before `node tests/mandala-engine.mjs`.
 
@@ -94,7 +94,7 @@ git commit -m "feat(show): add stable musical feature analysis"
 - Create: `lightweaver/tests/show-spatial-template.mjs`
 - Modify: `lightweaver/package.json`
 
-- [ ] **Step 1: Write failing geometry tests**
+- [x] **Step 1: Write failing geometry tests**
 
 Lock the sample shape and both constructors:
 
@@ -112,12 +112,12 @@ assert.deepEqual(Object.keys(template.samples[0]), [
 
 Test centered aspect-preserving normalization, stable strip/output order, exclusion of hidden/empty strips, zero-width/height safety, and `createMandalaSpatialTemplate()` parity with the exported 675-pixel ring coordinates.
 
-- [ ] **Step 2: Run focused test and verify RED**
+- [x] **Step 2: Run focused test and verify RED**
 
 Run: `node lightweaver/tests/show-spatial-template.mjs`  
 Expected: FAIL because `showSpatialTemplate.js` does not exist.
 
-- [ ] **Step 3: Implement cached pure template constructors**
+- [x] **Step 3: Implement cached pure template constructors**
 
 Export:
 
@@ -131,12 +131,12 @@ export function hasUsableConnectedLayout(strips = [], hidden = {}) {
 
 Normalize the longer layout dimension to `[-1, 1]`, center the shorter dimension, derive `radius` and `angle`, and retain `stripId`, `stripIndex`, `stripProgress`, and contiguous `outputIndex`.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run: `node lightweaver/tests/show-spatial-template.mjs`  
 Expected: `show-spatial-template tests passed`.
 
-- [ ] **Step 5: Add to `test:core` and commit**
+- [x] **Step 5: Add to `test:core` and commit**
 
 ```bash
 git add lightweaver/src/lib/showSpatialTemplate.js lightweaver/tests/show-spatial-template.mjs lightweaver/package.json
@@ -149,7 +149,7 @@ git commit -m "feat(show): normalize connected layout geometry"
 - Modify: `lightweaver/src/lib/mandalaEngine.js`
 - Modify: `lightweaver/tests/mandala-engine.mjs`
 
-- [ ] **Step 1: Write failing coverage and response contracts**
+- [x] **Step 1: Write failing coverage and response contracts**
 
 Add deterministic fixtures that call `engine.setFeatures(features)` and assert:
 
@@ -165,12 +165,12 @@ for (const { key } of MODE_LIBRARY) {
 
 Also require Tide and Bloom to change outer-radius samples, lively modes to exceed a beat-delta threshold, Active to exceed Calm modulation without exceeding the brightness ceiling, and equivalent coordinates across template kinds to receive equivalent field values.
 
-- [ ] **Step 2: Run the mandala test and verify RED**
+- [x] **Step 2: Run the mandala test and verify RED**
 
 Run: `node lightweaver/tests/mandala-engine.mjs`  
 Expected: FAIL on whole-layer coverage for Meridian/Embers/Procession/Spiral and outer-radius coverage for Tide/Bloom.
 
-- [ ] **Step 3: Generalize engine buffers to the active template**
+- [x] **Step 3: Generalize engine buffers to the active template**
 
 Change construction and template updates to:
 
@@ -186,7 +186,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
 Keep `analyze()` as a compatibility wrapper only if existing non-Show callers require it; the Show screen should use the new analyzer in Task 4.
 
-- [ ] **Step 4: Add the shared beat substrate**
+- [x] **Step 4: Add the shared beat substrate**
 
 After the mode field fills `target[]`, combine a restrained per-sample substrate:
 
@@ -199,7 +199,7 @@ target[i] = clamp01(target[i] + depth * travellingBeat);
 
 Use mode-specific radial/angular/strip phase weights. Do not apply one uniform flash.
 
-- [ ] **Step 5: Rework all nine modes as spatial fields**
+- [x] **Step 5: Rework all nine modes as spatial fields**
 
 Use `sample.radius`, `sample.angle`, `sample.stripIndex`, and `sample.stripProgress` rather than `ringOf`, `rfOf`, and `angOf` inside effect kernels. Preserve palette identities while meeting the spec expectations:
 
@@ -213,12 +213,12 @@ Use `sample.radius`, `sample.angle`, `sample.stripIndex`, and `sample.stripProgr
 - Bloom reaches radius `1` and leaves a soft trail.
 - Spiral adds beat travel and broadband fallback along authored arms.
 
-- [ ] **Step 6: Verify engine tests GREEN**
+- [x] **Step 6: Verify engine tests GREEN**
 
 Run: `node lightweaver/tests/mandala-engine.mjs`  
 Expected: `mandala-engine tests passed` with all coverage contracts.
 
-- [ ] **Step 7: Commit the engine slice**
+- [x] **Step 7: Commit the engine slice**
 
 ```bash
 git add lightweaver/src/lib/mandalaEngine.js lightweaver/tests/mandala-engine.mjs
@@ -231,7 +231,7 @@ git commit -m "feat(show): spread musical motion across every layer"
 - Modify: `lightweaver/src/v3/lw-show.jsx`
 - Create: `lightweaver/tests/show-screen.spec.ts`
 
-- [ ] **Step 1: Write failing browser tests**
+- [x] **Step 1: Write failing browser tests**
 
 Add stable `data-testid` hooks and tests for:
 
@@ -248,12 +248,12 @@ await expect(page.getByTestId('show-transport-state')).toHaveText('paused');
 
 Use an in-test browser stub for `AudioContext`, `HTMLMediaElement.play/pause`, RAF, and the frame stream. Assert that the rendered/staged frame remains stable while paused and changes again after resume.
 
-- [ ] **Step 2: Run focused Playwright test and verify RED**
+- [x] **Step 2: Run focused Playwright test and verify RED**
 
 Run: `cd lightweaver && npx playwright test tests/show-screen.spec.ts`  
 Expected: FAIL because the template and pause controls do not exist.
 
-- [ ] **Step 3: Integrate the analyzer and templates**
+- [x] **Step 3: Integrate the analyzer and templates**
 
 In `ShowScreen`, memoize Mandala and connected templates from `strips` and `hidden`, instantiate `createShowAudioFeatures()`, and call:
 
@@ -265,16 +265,16 @@ engine.setTemplate(activeTemplate);
 
 Connected layout defaults on when usable; otherwise Mandala is selected with an inline explanation. Render canvas pixels from active sample x/y coordinates instead of the fixed ring arrays.
 
-- [ ] **Step 4: Add synchronized pause/resume**
+- [x] **Step 4: Add synchronized pause/resume**
 
 Track `songPaused` in React state and a mutable `pausedRef` for RAF. Pause the media element, stop engine ticks and new frame encodes, and keep the last encoded frame available to the stream keepalive. On resume, call `play()`, resume the audio context, set `prev = performance.now()`, and continue without applying elapsed pause time.
 
-- [ ] **Step 5: Verify focused Playwright GREEN**
+- [x] **Step 5: Verify focused Playwright GREEN**
 
 Run: `cd lightweaver && npx playwright test tests/show-screen.spec.ts`  
 Expected: all Show screen tests pass.
 
-- [ ] **Step 6: Commit the Show UI slice**
+- [x] **Step 6: Commit the Show UI slice**
 
 ```bash
 git add lightweaver/src/v3/lw-show.jsx lightweaver/tests/show-screen.spec.ts
@@ -288,11 +288,11 @@ git commit -m "feat(show): add connected template and song pause"
 - Modify: `docs/mandala-color-system.md` only if implementation changes a documented invariant
 - Modify: `docs/superpowers/plans/2026-07-11-show-spatial-audio-engine.md`
 
-- [ ] **Step 1: Update the effect direction to the new approved contract**
+- [x] **Step 1: Update the effect direction to the new approved contract**
 
 Replace claims that sparse/partial-field output may leave layers inert with the foreground-plus-substrate model. Define “livelier” as stronger musical articulation and spatial propagation, while retaining the no-strobe and warm-palette constraints.
 
-- [ ] **Step 2: Run focused deterministic tests**
+- [x] **Step 2: Run focused deterministic tests**
 
 Run:
 
@@ -304,17 +304,17 @@ node lightweaver/tests/mandala-engine.mjs
 
 Expected: all three print their passed message and exit 0.
 
-- [ ] **Step 3: Run browser integration tests**
+- [x] **Step 3: Run browser integration tests**
 
 Run: `cd lightweaver && npx playwright test tests/show-screen.spec.ts`  
 Expected: all tests pass.
 
-- [ ] **Step 4: Run the complete launch gate**
+- [x] **Step 4: Run the complete launch gate**
 
 Run: `cd lightweaver && npm run launch:check`  
 Expected: `test:core` and Vite production build exit 0.
 
-- [ ] **Step 5: Inspect the final diff and commit documentation**
+- [x] **Step 5: Inspect the final diff and commit documentation**
 
 Run `git diff --check` and review `git diff origin/main...HEAD` for unrelated changes, placeholder comments, duplicate analyzer paths, and accidental changes to deferred Pi runtime files.
 
@@ -322,4 +322,3 @@ Run `git diff --check` and review `git diff origin/main...HEAD` for unrelated ch
 git add docs/mandala-effects-direction-v2.md docs/mandala-color-system.md docs/superpowers/plans/2026-07-11-show-spatial-audio-engine.md
 git commit -m "docs(show): align effects contract with spatial response"
 ```
-

@@ -1,84 +1,96 @@
 # Lightweaver Mandala — Effect Set Direction v2
 
-*Design director: Fable. Diagnosis by Opus (`mandala-effects-diagnosis.md`). Governing aesthetic: high-end listening gallery, NOT festival. For owner approval BEFORE code. On sign-off, next artifact is the implementation spec (per-effect tables, palette hex ramps, smoothing constants).*
+*Design direction aligned to the built Show spatial-audio engine. Diagnosis by Opus (`mandala-effects-diagnosis.md`). Governing aesthetic: high-end listening gallery, not festival.*
 
 ## 1. North star
-A quiet companion to listening, not a performance. Reference: firelight and patina — embers, candle-flame, sun crawling across brass. Music breathes *through* the mandala; nothing performs at you. Test: could two people hold a conversation in front of it for an hour and still be glad it's on the wall?
+
+A quiet companion to listening, not a performance. Reference: firelight and patina — embers, candle-flame, sun crawling across brass. Music breathes *through* the whole piece; nothing performs at you. Test: could two people hold a conversation in front of it for an hour and still be glad it is on the wall?
+
+Every mode therefore has two simultaneous readings:
+
+- a distinctive foreground gesture — a ring, spark, arm, petal, tide, or spectral structure;
+- a gentle whole-piece musical substrate, spatially phased so a beat propagates through the geometry instead of flashing every pixel uniformly.
+
+Sparse and local describe the foreground, never a dead output region. Every ring, strip, and connected-layout region remains faintly alive. In silence the piece settles over seconds to its dim living-coal character; it does not go black or freeze.
 
 ## 2. Diversity strategy — vary instruments, not petal counts
+
 Each effect owns a different combination of six axes:
-- **Color-temperature zones (unlock, carefully):** one bronze object under three lights, all inside amber–cream (1800–3200K, no hue ever leaves it). **Hearth** (coal→ember→amber→gold→sun-gold), **Patina** (bronze→aged brass→antique gold→parchment; the Rothko-dark end), **Candlelight** (charcoal→smoke-amber→candle-white→ivory; light itself, not fire).
-- **Density (unlock hard):** two effects must be sparse (<10% lit, darkness as canvas). Absence of black is why everything currently blurs together.
-- **Edge (unlock):** one effect crisp (machined brass rim); the rest soft-by-choice.
-- **Rhythmic time-scale (most important):** each effect listens on a different clock. At most ONE effect relates to individual musical events, heavily slewed. Kills the "four effects fire on bass" problem.
-- **Motion type:** radial-static / radial-flow / rotational / stochastic / positional / near-still — no two share.
-- **Symmetry:** perfect radial → low-order arms → none. Petal count stops being an identity.
 
-## 3. The new set — six effects
-Verdicts: EQ + Temperature kept/refined (flagships). Bloom+Ripple merged→Tide. Spiral kept, slowed 40×. Interference retired (its snap violates "nothing snaps"; its good idea absorbed into Procession).
+- **Color-temperature zone:** one bronze object under three lights, all inside amber–cream (1800–3200K, no hue ever leaves it). **Hearth** (coal→ember→amber→gold→sun-gold), **Patina** (bronze→aged brass→antique gold→parchment), **Candlelight** (charcoal→smoke-amber→candle-white→ivory).
+- **Foreground density:** full fields, broad structures, one-ring gestures, and sparse sparks may coexist in the library. Sparse foregrounds sit over a quiet living field; darkness remains the canvas without making a layer inert.
+- **Edge:** one effect can read as a crisp machined-brass rim while the others use deliberately softer edges.
+- **Authored motion clock:** the modes range from near-still through minute-scale drift to clearly visible, watchable motion. This clock belongs to the authored effect and is not accelerated by audio.
+- **Musical articulation:** stable bass/mid/high energy, broadband energy, centroid, flux, and a beat envelope shape amplitude, position, breadth, probability, and texture. Every mode receives a restrained whole-piece beat substrate.
+- **Symmetry and geometry:** perfect radial, low-order arms, and non-symmetric texture remain distinct on the Mandala, while the same fields are evaluated at the actual samples of a connected layout.
 
-| # | Effect | Zone | Density | Edge | Clock | Motion | Symmetry |
-|---|---|---|---|---|---|---|---|
-| 1 | Strata (EQ) | all three by ring | full | soft | seconds | radial-static | perfect radial |
-| 2 | Hearth (Temp) | Hearth | full | soft | minutes | field drift | none |
-| 3 | Embers | Hearth on black | sparse 3–8% | point | texture | stochastic | none |
-| 4 | Meridian | Patina | ~1 ring | crisp | tens of sec | positional | perfect radial |
-| 5 | Procession | Patina | medium | soft-med | tens of sec | rotational | 2–3 arms |
-| 6 | Tide | Hearth→Candlelight | full low-contrast | soft | seconds→tens | radial-flow | perfect radial |
+## 3. The nine modes
 
-- **1. Strata** *(EQ flagship)* — spectrum made architectural; bass center → highs rim. Slowed ballistics (attack ~300ms, release 2–4s). Each ring at a different palette point (ember-core → ivory-rim). Only effect with a seconds-clock; spends it on envelope not events. No rotation.
-- **2. Hearth** *(Temp flagship)* — fireplace; overall temperature integrates energy over 60–120s. Drift field evolves 20–40s. Hears the record, not the bar. Gets the minutes-clock exclusively.
-- **3. Embers** *(new, owns sparse)* — darkness with 20–50 living embers; each ignites coal-red, breathes up, dies over 4–10s. High/centroid raise ignition *probability* only — never brightness of existing embers. First dark pointillist look. ~50-struct array.
-- **4. Meridian** *(new, owns crisp)* — one thin precisely-lit ring at a time, machined-brass. Centroid chooses which ring; migrates by slow crossfade over 10–20s. The late-night solo-listening effect.
-- **5. Procession** *(Spiral, slowed)* — 2–3 broad aged-brass arms, one revolution per 60–90s (sun-across-wall). Sustained mid (30s-smoothed) modulates arm brightness/breadth only; **audio never touches rotation**. Arms on different radii-weightings create slow emergent moiré (Interference's idea, no snap).
-- **6. Tide** *(Bloom+Ripple merged)* — not a beat wavefront but a breathing; low-band energy over 5–10s feeds a swell traveling center→rim over 10–15s (was 1.1s), Hearth-gold core → candle-ivory rim as it crests. Only effect with radial travel; travels at the pace of a slow exhale.
+The foreground identities remain deliberately different. “Full-field” below describes the authored foreground; every row also includes the shared whole-piece substrate.
 
-## 3b. Livelier tier — three revived modes (owner request: don't overcorrect to only-calm)
-The six above are the meditative tier. The owner wants *several modes* spanning slow→lively, all still gallery-grade (warm, never harsh, never strobing). These three revive the visually-striking looks from the old set, retuned to the restraint rules — they are the "more alive, still sophisticated" end of the library. Distinct from Procession/Tide by having more visible motion, but bounded by the lively-tier band in §4.
+| # | Effect | Zone | Foreground | Authored motion | Musical articulation |
+|---|---|---|---|---|---|
+| 1 | Meridian | Patina | one crisp ring + quiet echoes | slow positional migration | centroid position, local band amplitude |
+| 2 | Hearth | Hearth | full fire field | slow drift | long energy mood + localized bass warmth |
+| 3 | Embers | Hearth on dark | sparse sparks + low shimmer | stochastic lifetimes | energy/treble texture set births and intensity |
+| 4 | Strata | all three by radius | full spectral field | near-static scallop | continuous bass→mid→high radial interpolation |
+| 5 | Tide | Hearth→Candlelight | broad radial swell | visible center→edge travel | bass controls reach and crest |
+| 6 | Lattice | Hearth | full six-fold star | 30s precession | energy, bass contrast, and beat-defined nodes |
+| 7 | Procession | Patina | broad 2–3 arm field | 60s revolution | mids/broadband shape brightness and breadth |
+| 8 | Bloom | Hearth | full eight-petal flower | eased radial opening | bass opens the flower; energy leaves a soft trail |
+| 9 | Spiral | Patina→Hearth | broad three-arm field | 15s revolution | mids/broadband amplitude + beat travel along arms |
 
-| # | Effect | Zone | Density | Edge | Clock | Motion | Symmetry |
-|---|---|---|---|---|---|---|---|
-| 7 | Bloom | Hearth | full | soft | seconds | radial-flow | 8 petals |
-| 8 | Spiral | Patina→Hearth | medium | soft | seconds | rotational | 2–3 arms |
-| 9 | Lattice | Hearth | full | soft-med | tens of sec | rotational | 6-fold star |
+- **Meridian** is the minimal solo-listening effect: one precise ring selected by spectral centroid, with neighboring echoes and the shared substrate keeping the rest of the piece alive.
+- **Hearth** combines a slow energy trend with a localized live bass swell. The beat is felt as warmth moving through a fire, not a flash laid over it.
+- **Embers** keeps sparse sparks as the foreground identity while a very low, textured field and the shared substrate preserve whole-piece life.
+- **Strata** makes the spectrum architectural. Stable logarithmic RMS bands interpolate continuously from bass at the center through mids to highs at the edge; radial palette zones remain Hearth→Patina→Candlelight.
+- **Tide** sends a broad, lobed bass swell across the complete normalized radius, including the outermost samples. The crest warms from Hearth toward Candlelight.
+- **Lattice** is the six-fold sacred-pattern mode. Energy sets the whole-star level, bass shapes contrast, and the beat articulates spatial nodes without snapping.
+- **Procession** turns broad aged-brass arms at its authored minute-scale rate. Audio changes their brightness and breadth, never their revolution speed.
+- **Bloom** opens an eight-petal flower with eased bass articulation and leaves a soft trail through the full radius. It is Tide’s livelier, more locally articulated cousin.
+- **Spiral** turns authored arms at a watchable middle speed. Audio strengthens the arms and sends visible texture along them; it does not change the 15-second rotation period.
 
-- **7. Bloom** *(revived flower — the livelier cousin of Tide)* — an 8-petalled flower that opens outward and draws back in with the bass, faster and more articulate than Tide's slow swell. Petal edges visible; opening cycle ~3–6s (not Tide's 10–15s). Still eased, never snapping. This is "the flower is dancing" vs Tide's "the tide is breathing" — same family, different tempo, so both earn a slot.
-- **8. Spiral** *(gallery-grade spiral — the middle speed the old one never had)* — 2–3 arms rotating at **one revolution per 12–20s** (vs the old ~2–4s and Procession's 60–90s). Alive and turning, clearly in motion, but slow enough to watch a single arm travel. Mid energy modulates arm brightness/breadth; rotation speed is authored and constant per the "audio never touches velocity" rule — the liveliness is in the *visible turning*, not in reactivity. Warmer Hearth arms (vs Procession's cooler Patina) so it reads as the more active sibling.
-- **9. Lattice** *(revived 6-fold star — Interference without the snap)* — the beautiful six-petal standing star, kept for its shape, but the bass no longer *snaps* it hard. Instead node contrast rises and falls on a slow eased envelope (attack ~400ms, release ~2.5s) so the star *breathes* between soft-glow and defined-star over seconds, and a slow node precession turns it over ~20–30s. Bass raises contrast amplitude, never triggers a hard transition. The geometric, symmetric, "sacred pattern" mode.
+## 3b. What “livelier” means
 
-## 4. Restraint rules (guardrails — cannot be violated)
-1. Nothing completes a revolution under 45s. Radial traversal ≥8s. Positional migration crossfade ≥10s.
-2. Nothing snaps: min attack 250ms, min release 2s, ease-in-out curves, on every audio-driven parameter.
-3. Audio modulates amplitude/probability/position — **never velocity**. Motion speed is authored, constant, slow.
-4. One events-adjacent effect maximum (Strata). All others listen to windows ≥5s.
-5. Brightness ceiling ~75% of hardware max; brighter means paler (desaturate toward ivory). Full-saturation full-brightness is the festival tell — banned.
-6. Change budget: ≤~15% of total field luminance may change per second in full-field effects.
-7. Silence must be beautiful: on music stop, decay over ~10s to a dim idle of each effect's character. Never black, never frozen.
-8. Hue never leaves amber–cream. Three zones are the entire color universe.
+The library order runs from minimal to most active, but “livelier” does not mean faster beat flashes. Lattice, Procession, Bloom, and Spiral are the livelier tier because musical articulation is stronger and spatial propagation is easier to see. Their foreground motion may also be more visible, but authored rotation speed remains independent from audio.
 
-**Lively-tier band (rules 1–4 relax, but only within these limits — the livelier modes 7–9 may NOT become festival):**
-- Rotation: livelier modes may turn as fast as **one revolution per 12s** (Spiral) — never faster. Still authored/constant; audio never changes speed.
-- Radial travel: Bloom's flower may cycle as fast as **3s** open-to-close (vs the ≥8s meditative floor), still eased.
-- Transient response: a livelier mode may respond over a **1–3s** window (vs ≥5s meditative), but the "nothing snaps" attack floor (250ms) and the brightness/paleness ceiling (rule 5) still hold absolutely.
-- The festival line stays hard: no rotation under 12s, no snapping ever, no full-saturation full-brightness, no per-beat strobing. Ceiling test unchanged — a fire fed another log, never a light show.
+At the lively end:
 
-All nine remain per-pixel arithmetic + a few smoothed scalars — inside ESP32 budget. Embers adds one ~50-element array.
+- a beat produces a measurable, non-uniform change across the geometry;
+- energy can deepen contrast, widen a path, open a flower, or send texture along an arm;
+- propagation remains eased and spatially phased;
+- no beat produces a uniform full-piece flash, hard cut, strobe, or palette excursion.
 
-## The library, slow → lively (what the mode switcher shows)
-1. **Meridian** — a single crisp ring, drifting over a whole song (most minimal)
-2. **Hearth** — fireplace warmth over minutes
-3. **Embers** — sparks on darkness
-4. **Strata** — the spectrum read in the rings *(flagship)*
-5. **Tide** — a slow breath, center to rim
-6. **Lattice** — a six-fold star breathing between soft and defined
-7. **Procession** — brass arms, one slow turn per minute
-8. **Bloom** — an 8-petal flower opening with the bass
-9. **Spiral** — arms turning at a watchable middle speed (most active)
+## 4. Spatial-audio contract and restraint rules
 
-## 5. Presets — what "active" means in a gallery
-Calm is the piece's true self. Active means it *listens more closely*, not faster: deepen modulation ~1.5×, shorten releases toward (never below) 2s, raise Embers ignition ~2×, let Tide crest more fully. Active may NOT touch rotation/traversal speed, lower the attack floor, add per-beat triggering, or exceed the brightness ceiling. Ceiling test: at most active, reads as a fire fed another log — never a light show switched on. If a guest calls active mode "reactive," we overshot.
+1. **Every layer remains alive.** Repeated beats move at least most of the Calm field and reach every Mandala ring; Active reaches still more. Sparse/local geometry is foreground only.
+2. **The substrate is shared but not uniform.** Calm adds a restrained beat depth of `0.08`; Active uses `0.14`. Radius, angle, strip index, strip progress, and normalized x/y position phase the response so motion visibly propagates.
+3. **Analysis must stay stable.** The Show analyzer uses logarithmic-frequency RMS bands (bass 30–140 Hz, mid 150–1800 Hz, high 2000–9000 Hz), stable adaptive floor/headroom, broadband energy, centroid, positive spectral flux, and a decaying beat envelope. Sustained music must not normalize itself away; silence must not invent beats.
+4. **Audio changes expression, not authored rotation speed.** It may modulate amplitude, probability, position, contrast, breadth, and texture. Procession, Lattice, and Spiral keep their authored motion periods.
+5. **Use the real layout.** The Mandala evaluates its 675 exported ring samples. Connected mode evaluates the visible connected-layout pixels in stable strip/output order, using aspect-preserving normalized x/y, radius, angle, strip index, and strip progress. Effects must reach the layout’s actual outer radius rather than assuming a flat five-ring frame.
+6. **No strobing.** Feature and per-pixel envelopes ease attack and decay; the beat substrate lifts existing light and travels through space instead of replacing a frame with a flash.
+7. **Warmth remains absolute.** Hue never leaves the Hearth/Patina/Candlelight amber–cream corridor. The `B ≤ G ≤ R` warmth law, incandescent brightening, and palette ramps remain governed by `mandala-color-system.md`.
+8. **Brightness remains bounded.** Calm uses a `0.75` master and Active `0.82`, both below the engine’s hard `0.85` master cap. Greater activity still reads as warmer light gaining articulation, never full-saturation full-brightness festival output.
+9. **Silence stays beautiful.** On music stop, presence decays over roughly eight seconds to a dim mode-compatible coal field. Never black, never frozen.
 
-## 6. What this fixes
-- **Not diverse enough:** six effects each own a distinct axis-row — spectrum architecture, fireplace, sparks on darkness, single machined rim, brass clockwork, breathing tide. Three palette zones, two dark/sparse looks, one crisp, four clocks. Bloom/Ripple duplicate gone.
-- **Too fast:** Spiral → 60–90s revolutions; Ripple → Tide's 10–15s swell; the deeper cause (four effects on 60ms bass attack) structurally eliminated (only Strata keeps a seconds-clock, slewed). Rules 1–4 make it permanent.
-- **Gallery framing:** the mandala can now be *mostly dark*, which makes the moments of gold precious.
+## 5. Presets — Calm and Active
+
+Calm is the piece’s baseline: `1.0×` effect modulation, `0.08` shared beat depth, `0.75` master, standard release scaling, standard ember rate, and standard Tide crest.
+
+Active listens more closely: `1.5×` effect modulation, `0.14` shared beat depth, `0.82` master, `0.7×` release scaling, `2×` ember rate, and `1.35×` Tide crest. It does not change authored rotation speed. Its stronger response must remain spatially propagated and non-strobing.
+
+Ceiling test: at most active, the result reads as a fire fed another log — more articulate and visibly traveling through the object, never a light show switched on.
+
+## 6. The library, slow → lively
+
+1. **Meridian** — one crisp ring with living echoes
+2. **Hearth** — fireplace warmth over a long energy mood
+3. **Embers** — sparks over a low whole-piece shimmer
+4. **Strata** — the spectrum read continuously through radius *(flagship)*
+5. **Tide** — a broad breath from center to the actual outer edge
+6. **Lattice** — a six-fold star with beat-articulated nodes
+7. **Procession** — brass arms, one authored slow turn per minute
+8. **Bloom** — an eight-petal flower opening with the bass
+9. **Spiral** — authored arms with the strongest visible musical travel
+
+This set preserves distinct foreground instruments while making the whole installation respond as one connected object. The difference between modes now comes from what leads the composition; whole-piece life is a permanent invariant.
