@@ -10,11 +10,13 @@ import {
   CardPushError,
 } from '../../../lib/cardPushClient.js';
 
-// Extracted verbatim from PatchBoardScreen.pushToCard + its push* state.
-// `connected` is accepted for the Phase 3 props contract (ambient status
-// dot) but is not used yet — no button invokes pushToCard in this step,
-// preserving today's latent/unrendered behavior. Phase 3 wires a button
-// in Wire mode.
+// Send-to-card control (Wire mode, Phase 2 step 9 / plan Phase 3). Extracted
+// from PatchBoardScreen.pushToCard + its push* state. The `connected` prop
+// drives the ambient status dot (grey when disconnected, green when the card
+// link is live) but never disables the button — pushConfigToCard runs its own
+// discovery/fallback, so a push is worth attempting even when the ambient link
+// reads disconnected. `children` render next to the Send button (Wire mode
+// slots the Export ledmap.json button in there).
 export function CardPushControl({
   connected,
   board,
@@ -22,6 +24,7 @@ export function CardPushControl({
   projectId,
   projectName,
   standaloneController,
+  children,
 }) {
   const [pushHost, setPushHost] = useState(() => getCardHostname());
   const [pushStatus, setPushStatus] = useState('');
@@ -78,38 +81,36 @@ export function CardPushControl({
     }
   };
 
-  if (!pushStatus) return null;
+  const pushing = pushKind === 'pending';
 
   return (
-    <div style={{
-      padding: '10px 14px',
-      margin: '4px 0 12px',
-      borderRadius: 8,
-      fontSize: 13,
-      background: pushKind === 'ok' ? 'rgba(127,176,105,0.1)' : pushKind === 'err' ? 'rgba(224,120,86,0.1)' : 'rgba(154,141,117,0.1)',
-      border: `1px solid ${pushKind === 'ok' ? 'rgba(127,176,105,0.5)' : pushKind === 'err' ? 'rgba(224,120,86,0.5)' : 'rgba(154,141,117,0.3)'}`,
-      color: pushKind === 'ok' ? '#7fb069' : pushKind === 'err' ? '#e07856' : '#9a8d75',
-    }}>
-      {pushStatus}
-      {pushFallbackJson && (
-        <textarea
-          readOnly
-          value={pushFallbackJson}
-          onClick={e => e.target.select()}
-          style={{
-            width: '100%',
-            minHeight: 140,
-            marginTop: 10,
-            fontFamily: 'ui-monospace, SF Mono, monospace',
-            fontSize: 11,
-            padding: 10,
-            borderRadius: 6,
-            border: '1px solid var(--border, #333)',
-            background: 'var(--bg-1, #0a0a0a)',
-            color: 'var(--text-2, #c89b5c)',
-            boxSizing: 'border-box',
-          }}
-        />
+    <div className="la-card-push">
+      <div className="la-card-push-row">
+        <button
+          className="btn primary la-card-push-btn"
+          data-testid="layout-send-to-card"
+          disabled={pushing}
+          onClick={pushToCard}
+          title={connected ? `Push zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
+        >
+          <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
+          {pushing ? `Pushing to ${pushHost}…` : 'Send to card'}
+        </button>
+        {children}
+      </div>
+
+      {pushStatus && (
+        <div className={`la-card-push-banner ${pushKind === 'ok' ? 'is-ok' : pushKind === 'err' ? 'is-err' : 'is-pending'}`}>
+          {pushStatus}
+          {pushFallbackJson && (
+            <textarea
+              readOnly
+              value={pushFallbackJson}
+              onClick={e => e.target.select()}
+              className="la-card-push-fallback"
+            />
+          )}
+        </div>
       )}
     </div>
   );

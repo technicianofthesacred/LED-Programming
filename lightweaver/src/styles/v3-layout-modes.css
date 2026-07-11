@@ -163,3 +163,128 @@
   line-height: 1.5;
 }
 .la-size-usbcap { margin-top: 8px; font-family: var(--font-mono); }
+
+/* ── Wire mode — chain list + absorbed patch-board editor + finish line ──── */
+
+/* The moved patch-board markup uses the legacy token names that were aliased
+   on `.la-wire-editor`; carry the same aliases onto the Wire panel root so the
+   `.lw-wire-*` rules (in v3-layout-extra.css) read in the warm v3 idiom. */
+.la-wire-panel {
+  --surface:    var(--bg-panel);
+  --surface-2:  var(--bg-elev);
+  --bg:         var(--bg-canvas);
+  --border-2:   var(--border);
+  --text:       var(--text-hi);
+  --text-2:     var(--text-mid);
+  --text-3:     var(--text-lo);
+  --text-4:     var(--text-faint);
+  --mono-font:  var(--font-mono);
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;  --s-4: 16px;
+  --fs-xs: 11px;  --fs-sm: 12.5px;  --fs-lg: 15px;
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}
+.la-wire-panel .lw-wire-chain,
+.la-wire-panel .lw-wire-cut-summary,
+.la-wire-panel .lw-wire-order,
+.la-wire-panel .lw-wire-tools { border-top: 1px solid var(--border-soft); }
+.la-wire-panel .lw-wire-chain { border-top: none; padding: 0 0 var(--s-3); }
+
+/* PatchBoard button variants (warm) — re-scoped from `.la-wire-editor`. */
+.la-wire-panel .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--text-mid); }
+.la-wire-panel .btn-ghost:hover { color: var(--text-hi); background: var(--bg-elev); }
+.la-wire-panel .lw-btn-danger:hover { color: var(--danger) !important; border-color: var(--accent-line) !important; }
+
+/* Chain rows — the strip list AS the wiring order */
+.la-wire-chain-list { display: flex; flex-direction: column; gap: 2px; }
+.la-wire-chain-empty {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+.la-wire-chain-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.la-wire-chain-row:hover { background: var(--bg-elev); }
+.la-wire-chain-row.active { background: var(--accent-soft); border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
+.la-wire-chain-grip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  cursor: grab;
+  color: var(--text-faint);
+}
+.la-wire-chain-n {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: inherit;
+}
+.la-wire-chain-row .nm {
+  font-size: 12.5px;
+  color: var(--text-hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.la-wire-chain-splits {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Finish line — Send to card + Export ledmap.json */
+.lw-wire-finish { border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 8px; }
+
+.la-card-push { display: flex; flex-direction: column; gap: 10px; }
+.la-card-push-row { display: flex; gap: 8px; align-items: stretch; }
+.la-card-push-btn {
+  flex: 1;
+  justify-content: center;
+  gap: 8px;
+}
+/* Ambient status dot — matches StatusBar's `.sb-dot` visual language */
+.la-card-push-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.la-card-push-dot.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
+.la-card-push-dot.off { background: var(--idle, var(--text-faint)); }
+.la-export-ledmap { justify-content: center; white-space: nowrap; flex-shrink: 0; }
+
+.la-card-push-banner {
+  padding: 10px 12px;
+  border-radius: var(--r-md, 8px);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.la-card-push-banner.is-ok { background: color-mix(in oklab, var(--ok) 12%, transparent); border: 1px solid color-mix(in oklab, var(--ok) 50%, transparent); color: var(--ok); }
+.la-card-push-banner.is-err { background: color-mix(in oklab, var(--danger) 12%, transparent); border: 1px solid color-mix(in oklab, var(--danger) 50%, transparent); color: var(--danger); }
+.la-card-push-banner.is-pending { background: color-mix(in oklab, var(--text-faint) 12%, transparent); border: 1px solid color-mix(in oklab, var(--text-faint) 30%, transparent); color: var(--text-mid); }
+.la-card-push-fallback {
+  width: 100%;
+  min-height: 140px;
+  margin-top: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-canvas);
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}

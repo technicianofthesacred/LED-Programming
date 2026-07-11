@@ -9,6 +9,7 @@ import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
+import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
 
 // eslint-disable-next-line no-unused-vars
@@ -30,7 +31,7 @@ const LED_COUNT_PRESETS = [30, 43, 60, 100, 150, 300, 600, 1000, 1500, 3000];
 // The full useLayoutState() bundle is passed straight through to DrawModePanel
 // as a single `state` prop (that panel references nearly the entire bundle).
 
-export function LayoutScreen() {
+export function LayoutScreen({ connected }) {
   const state = useLayoutState();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -137,40 +138,46 @@ export function LayoutScreen() {
             onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
             {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
           </button>
-          <button
-            className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
-            title="Split one physical strip where the wire jumps to a new spot."
-            onClick={() => {
-              setDrawMode(false);
-              setWaypoints([]);
-              setGhostPt(null);
-              setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
-            }}>
-            Split
-          </button>
-          <button
-            className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
-            title="Join two strips into one continuous run."
-            onClick={() => {
-              setDrawMode(false);
-              setWaypoints([]);
-              setGhostPt(null);
-              setSelectedWirePatchId(null);
-              setWireOverlayMode(mode => {
-                const nextMode = mode === 'link' ? 'idle' : 'link';
-                if (nextMode === 'link') {
-                  const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
-                  setLinkRouteIds(currentRows);
-                  linkRouteStartedRef.current = false;
-                } else {
-                  setLinkRouteIds([]);
-                  linkRouteStartedRef.current = false;
-                }
-                return nextMode;
-              });
-            }}>
-            Link
-          </button>
+          {/* Split / Link are wire concerns — surfaced only in Wire mode
+              (plan's canvas behavior matrix: chop/link overlays are Wire only). */}
+          {mode === 'wire' && (
+            <>
+              <button
+                className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
+                title="Split one physical strip where the wire jumps to a new spot."
+                onClick={() => {
+                  setDrawMode(false);
+                  setWaypoints([]);
+                  setGhostPt(null);
+                  setWireOverlayMode(m => m === 'chop' ? 'idle' : 'chop');
+                }}>
+                Split
+              </button>
+              <button
+                className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
+                title="Join two strips into one continuous run."
+                onClick={() => {
+                  setDrawMode(false);
+                  setWaypoints([]);
+                  setGhostPt(null);
+                  setSelectedWirePatchId(null);
+                  setWireOverlayMode(m => {
+                    const nextMode = m === 'link' ? 'idle' : 'link';
+                    if (nextMode === 'link') {
+                      const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
+                      setLinkRouteIds(currentRows);
+                      linkRouteStartedRef.current = false;
+                    } else {
+                      setLinkRouteIds([]);
+                      linkRouteStartedRef.current = false;
+                    }
+                    return nextMode;
+                  });
+                }}>
+                Link
+              </button>
+            </>
+          )}
 
           {/* Undo / Redo */}
           <button className="tb-btn icon" onClick={doUndo} disabled={layoutHistLen === 0}
@@ -295,11 +302,7 @@ export function LayoutScreen() {
       <aside className="side">
       {mode === 'draw' && <DrawModePanel state={state}/>}
       {mode === 'size' && <SizeModePanel state={state}/>}
-      {mode === 'wire' && (
-        <div className="la-mode-stub" data-testid="layout-wire-stub">
-          Wire tools arrive in the next step
-        </div>
-      )}
+      {mode === 'wire' && <WireModePanel state={state} connected={connected}/>}
       </aside>
       </div>{/* .la */}
     </div>

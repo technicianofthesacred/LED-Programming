@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 // Phase 2 step 6 (docs/layout-redesign-plan.md) — the Draw | Size | Wire mode
 // switch + hash sync + cancelActiveTool. Draw mode renders the existing side
-// panel verbatim; Size now renders the real Size panel (step 8); Wire is still
-// a stub (step 9).
+// panel verbatim; Size renders the real Size panel (step 8); Wire renders the
+// real Wire panel (step 9), so the old `layout-wire-stub` is gone.
 
 async function gotoLayout(page: any, hash = '#screen=layout') {
   await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
@@ -26,21 +26,21 @@ test('keyboard 1/2/3 update the hash mode param and the active segment', async (
   await page.keyboard.press('3');
   await expect(page).toHaveURL(/mode=wire/);
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 
   await page.keyboard.press('1');
   await expect(page).toHaveURL(/mode=draw/);
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-size-panel')).toHaveCount(0);
-  await expect(page.getByTestId('layout-wire-stub')).toHaveCount(0);
+  await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 });
 
 test('reloading with #screen=layout&mode=wire opens directly in Wire mode', async ({ page }) => {
   await gotoLayout(page, '#screen=layout&mode=wire');
 
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
-  await expect(page.getByText('Wire tools arrive in the next step')).toBeVisible();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
 });
 
 test('switching mode mid-draw cancels the in-progress freehand strip', async ({ page }) => {
@@ -77,11 +77,11 @@ test('clicking the segments switches mode; other screens are unaffected', async 
 
   await page.getByTestId('layout-mode-wire').click();
   await expect(page).toHaveURL(/mode=wire/);
-  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 
   await page.getByTestId('layout-mode-draw').click();
   await expect(page).toHaveURL(/mode=draw/);
-  await expect(page.getByTestId('layout-wire-stub')).toHaveCount(0);
+  await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 
   // Toolbar and canvas render identically across modes this step — the
   // Import SVG button and canvas stage are present regardless of mode.

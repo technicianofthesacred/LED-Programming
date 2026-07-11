@@ -22,7 +22,6 @@ import {
   ledCountToSliderValue,
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
-import { PatchBoardScreen } from '../../PatchBoardScreen.jsx';
 
 function startedFromDragHandle(e) {
   return !!e.target?.closest?.('[data-drag-handle="true"]');
@@ -69,10 +68,6 @@ export function DrawModePanel({ state }) {
     renameLayer, renameSubPath, renameGroup,
     deleteLayer, createLayerGroup, deleteLayerGroup,
     toggleGroupExpanded, toggleGroupHidden, reorderLayerOrder, setLayerGroups,
-    // wire
-    wireOverlayMode,
-    selectedWireCut, setSelectedWireCut,
-    nudgeSelectedWireCut, deleteSelectedWireCut,
     // canvas + preview
     setDirectedGlow, enableLightPreview,
     setDrawMode, setWaypoints, setGhostPt,
@@ -796,30 +791,6 @@ export function DrawModePanel({ state }) {
               )}
           </>
         )}
-
-        {strips.length > 0 && (() => {
-          const wireStrips = strips.filter(st => !hidden[st.id]);
-          return (
-          <>
-            <div className="panel-divider"/>
-            {/* Live wire editor — chop / link / route order (function preserved) */}
-            <details className="la-wire-editor">
-              <summary>
-                <span className="ttl">Advanced</span>
-                <span className="meta">split a strip into runs</span>
-              </summary>
-              <PatchBoardScreen
-                embedded
-                wireOverlayMode={wireOverlayMode}
-                selectedWireCut={selectedWireCut}
-                onNudgeSelectedCut={nudgeSelectedWireCut}
-                onDeleteSelectedCut={deleteSelectedWireCut}
-                onClearSelectedCut={() => setSelectedWireCut(null)}
-              />
-            </details>
-          </>
-          );
-        })()}
 
         {/* ── Empty state ── */}
         {!svgText && !error && !defaultCircleLayoutActive && (

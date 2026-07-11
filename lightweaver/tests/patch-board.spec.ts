@@ -14,6 +14,16 @@ function writeFixture(tmp: string) {
   return fixture;
 }
 
+// Phase 2 step 9 (docs/layout-redesign-plan.md): the patch-board editor was
+// absorbed into the Wire-mode panel. There is no `<details className=
+// "la-wire-editor">` disclosure any more — the wire content is always expanded
+// inside `[data-testid=layout-wire-panel]`, reached by entering Wire mode (the
+// Draw|Size|Wire segment or key `3`). Split/Link also only exist in Wire mode.
+async function enterWire(page: any) {
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+}
+
 test('wire path splits a visible source path into saved physical segments', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-patch-board-'));
   const fixture = writeFixture(tmp);
@@ -25,15 +35,12 @@ test('wire path splits a visible source path into saved physical segments', asyn
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
   await expect(page.locator('.la-strip-row')).toHaveCount(1);
 
-  // The old "Wire Path" disclosure (.lw-patch-details, always open, with its
-  // own "Wire Path" heading + "Source Paths" list) is now the collapsed
-  // "Advanced" details (.la-wire-editor) — PatchBoardScreen always renders
-  // `embedded`, which drops the heading and source-path list entirely.
-  const mappingPanel = page.locator('.la-wire-editor');
-  if (!(await mappingPanel.evaluate((el: HTMLDetailsElement) => el.open))) {
-    await page.locator('.la-wire-editor > summary').click();
-  }
-  await expect(page.locator('.lw-wire-path.is-embedded')).toBeVisible();
+  // The old "Advanced" disclosure is gone entirely from Draw mode.
+  await expect(page.locator('.la-wire-editor')).toHaveCount(0);
+
+  await enterWire(page);
+  // The strip list renders AS the wiring chain in Wire mode.
+  await expect(page.getByTestId('layout-wire-chain-row')).toHaveCount(1);
   await expect(page.getByText('Splits')).toBeVisible();
   // No cuts yet: the "Wiring order" segment-chip list only renders once
   // there are more physical patches than strips (i.e. after a split).
@@ -112,10 +119,9 @@ test('canvas split mode creates a cut marker on the artwork path', async ({ page
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
   await expect(page.locator('.la-strip-row')).toHaveCount(1);
 
-  // "Selected split" and its Move/Merge/Delete controls live inside
-  // PatchBoardScreen, which only renders once the "Advanced" details panel
-  // (.la-wire-editor) is open.
-  await page.locator('.la-wire-editor > summary').click();
+  // "Selected split" and its Move/Merge/Delete controls live in the Wire-mode
+  // panel; Split/Link are Wire-mode-only tools.
+  await enterWire(page);
 
   await page.getByRole('button', { name: 'Split' }).click();
   await expect(page.getByRole('button', { name: 'Split' })).toHaveClass(/active/);
@@ -180,6 +186,7 @@ test('canvas split overlay includes one-led physical segments', async ({ page })
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
+  await enterWire(page);
   await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const clickAt = async (ratio: number) => {
@@ -213,9 +220,8 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
-  // "Add a gap" lives inside PatchBoardScreen, which only renders once the
-  // "Advanced" details panel (.la-wire-editor) is open.
-  await page.locator('.la-wire-editor > summary').click();
+  // "Add a gap" lives in the Wire-mode panel; Split/Link are Wire-mode tools.
+  await enterWire(page);
 
   await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
@@ -285,6 +291,7 @@ test('canvas link mode ignores segment clicks while physical map is locked', asy
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
+  await enterWire(page);
   await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const target = await stripPath.evaluate((path: SVGPathElement) => {
@@ -318,8 +325,10 @@ test('canvas link mode ignores segment clicks while physical map is locked', asy
   // "replace your current strips" confirm().
   page.once('dialog', dialog => dialog.accept());
   await page.setInputFiles('input[accept=".json"]', lockedPath);
-  await expect(page.locator('.la-strip-row')).toHaveCount(1);
-
+  // The reload preserved `#...&mode=wire`, so the app reopens in Wire mode; the
+  // loaded single strip shows as one chain row.
+  await enterWire(page);
+  await expect(page.getByTestId('layout-wire-chain-row')).toHaveCount(1);
   await page.getByRole('button', { name: 'Link' }).click();
   const segments = page.locator('.lw-wire-canvas-segment-hit');
   await expect(segments).toHaveCount(2);
