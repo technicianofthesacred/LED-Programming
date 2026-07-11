@@ -6,8 +6,8 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ### Layout screen redesign (planned 2026-07-10)
 
-- [ ] **Execute the Layout redesign plan** — Phase 1 state consolidation (single wire-order truth, one undo stack, one selection model), then the Draw | Size | Wire mode shell, then surface Send-to-card + Export ledmap _(agent · deep)_
-  Full file-level plan with step ordering, risk register, and parity checklist. DONE: all of Phase 1 (chain is the single wire-order truth, strip id namespace, layoutReducer in ProjectContext, one undo stack + autosave, one selection object, chain-driven reorder) and the Playwright spec repair (23 passing, mobile overflow fixed). NEXT: Phase 2 — the Draw | Size | Wire mode shell (steps 1–14 in the plan, starting with pure extractions), then Phase 3 Send-to-card + Export ledmap. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+- [ ] **Try the redesigned Layout screen on a real project** — all three phases of the redesign are code-complete (Draw | Size | Wire modes, Send to card, export for other LED software); what's left is your hands-on pass: import a real artwork file, walk Draw → Size → Wire, push to a bench card, and note anything that feels wrong _(you · moderate)_
+  Everything is committed on the `simplify-ui-design-flow` branch with 36 automated checks green. A real card appeared on the network during the build and the tests were hardened against that. Consider a Codex remote review of the branch before merging. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
 
 ### Mandala listening-gallery visualizer (in progress — laptop simulator)
 
