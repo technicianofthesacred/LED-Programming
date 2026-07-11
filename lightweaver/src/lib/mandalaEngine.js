@@ -142,8 +142,15 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
   function installTemplate(next) {
     const source = Array.isArray(next) ? next : [];
+    let minRadius = Infinity;
+    let maxRadius = -Infinity;
     samples = source.map((sample, outputIndex) => {
-      const radius = Number.isFinite(sample?.radius) ? Math.max(0, sample.radius) : 0;
+      const hasFiniteRadius = Number.isFinite(sample?.radius);
+      const radius = hasFiniteRadius ? Math.max(0, sample.radius) : 0;
+      if (hasFiniteRadius) {
+        minRadius = Math.min(minRadius, radius);
+        maxRadius = Math.max(maxRadius, radius);
+      }
       const angle = Number.isFinite(sample?.angle) ? sample.angle : 0;
       const normalized = {
         outputIndex,
@@ -154,9 +161,21 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
         y: Number.isFinite(sample?.y) ? sample.y : Math.sin(angle) * radius,
         radius,
         angle,
+        hasFiniteRadius,
       };
       return { ...normalized, spatialKey: spatialKey(normalized) };
     });
+    const radialSpan = maxRadius - minRadius;
+    for (const sample of samples) {
+      if (sample.hasFiniteRadius && Number.isFinite(radialSpan) && radialSpan > 1e-9) {
+        sample.radialProgress = clamp01((sample.radius - minRadius) / radialSpan);
+      } else if (sample.stripIndex >= 0 && sample.stripIndex < R) {
+        sample.radialProgress = sample.stripIndex / Math.max(1, R - 1);
+      } else {
+        sample.radialProgress = clamp01(sample.radius);
+      }
+      delete sample.hasFiniteRadius;
+    }
     total = samples.length;
     vals = new Float32Array(total);
     target = new Float32Array(total);
@@ -211,14 +230,14 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       strataBand[r] = smoothAR(strataBand[r], clamp01(band[r] * P.modDepth * 1.2), 0.20, 0.8 * P.relScale, dt);
     }
     for (let i = 0; i < total; i++) {
-      const { radius, angle, stripProgress } = samples[i];
-      const bandPosition = clamp01(radius) * (strataBand.length - 1);
+      const { radialProgress, angle, stripProgress } = samples[i];
+      const bandPosition = radialProgress * (strataBand.length - 1);
       const lo = Math.floor(bandPosition), hi = Math.min(strataBand.length - 1, lo + 1);
       let L = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); L *= L;
       const ang = angle + stripProgress * 0.01;
       const scallop = 0.75 + 0.25 * Math.sin(6 * ang + strataScallop); // deeper 6-tooth so parts of the ring lead
       target[i] = Math.max(L * scallop, 0.0);                       // no floor — silent band = dark
-      zoneOf[i] = radius < 0.45 ? Z_HEARTH : radius < 0.72 ? Z_PATINA : Z_CANDLE;
+      zoneOf[i] = radialProgress < 0.375 ? Z_HEARTH : radialProgress < 0.625 ? Z_PATINA : Z_CANDLE;
       crestOf[i] = 0;
     }
     return 'spectrum';
@@ -230,7 +249,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const mood = 0.10 + 0.35 * CLK.energyTrend;    // slow bed (20s)
     const swell = 0.55 * CLK.bass;
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang, spatialKey: seed } = samples[i];
+      const { radialProgress: rf, angle: ang, spatialKey: seed } = samples[i];
       const local = 0.25 + 0.75 * Math.pow(arcGate(ang, 3, 0.72, driftPhase + rf * 0.1), 2);
       const base = (mood + swell * local) * (0.85 + 0.15 * Math.sin(3 * ang + driftPhase + 1.5 * rf));
       // embers of brightness wander with a live hash so it reads as a living fire, not a flat glow
@@ -249,10 +268,10 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const currentEpoch = Math.floor(t / epochDuration);
     let sparkCount = 0;
     for (let i = 0; i < total; i++) {
-      const { angle, radius, spatialKey: seed } = samples[i];
+      const { angle, radialProgress, spatialKey: seed } = samples[i];
       const field = 0.008 + 0.045 * (0.3 * CLK.energy + 0.7 * CLK.highTex)
         * (0.35 + 0.65 * hash01(seed, Math.floor(t * 4)))
-        * (0.75 + 0.25 * Math.sin(angle * 5 + radius * 3));
+        * (0.75 + 0.25 * Math.sin(angle * 5 + radialProgress * 3));
       target[i] = field; zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
 
       // Each physical sample owns its ignition history. Looking back across
@@ -286,8 +305,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const bandOfRing = [CLK.bass, CLK.bass, CLK.mid, CLK.high, CLK.high];
     const spin = t * (0.04 + 0.4 * CLK.energy);          // arcs sweep faster when louder
     for (let i = 0; i < total; i++) {
-      const { radius, angle } = samples[i];
-      const ringPosition = clamp01(radius) * 4;
+      const { radialProgress, angle } = samples[i];
+      const ringPosition = radialProgress * 4;
       const ri = Math.round(ringPosition);
       const distanceToTarget = Math.abs(ringPosition - meridianTarget);
       const distanceToPrior = Math.abs(ringPosition - meridianRing);
@@ -313,7 +332,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const bright = 0.10 + 0.80 * Math.max(CLK.mid, broadband * 0.5, F.beat * 0.35) * P.modDepth;
     const breadth = 0.38 + 0.18 * Math.max(CLK.mid, broadband);
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang } = samples[i];
+      const { radialProgress: rf, angle: ang } = samples[i];
       const a = ang - processTheta - 0.9 * rf; const u = a * (2 / (2 * Math.PI)); const f = u - Math.floor(u);
       const dA = Math.min(f, 1 - f) * (Math.PI); let arm = clamp01(1 - dA / breadth); arm = arm * arm;
       const a2 = ang + processTheta * 0.6 - 1.4 * rf; const u2 = a2 * (3 / (2 * Math.PI)); const f2 = u2 - Math.floor(u2);
@@ -331,7 +350,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const targetR = 0.1 + 0.95 * drive; tideR += (targetR - tideR) * Math.min(1, dt / 2.5); // 2.5s travel — visible
     const spin = t * 0.04;
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle } = samples[i];
+      const { radialProgress: rf, angle } = samples[i];
       const inside = clamp01((tideR - rf) / 0.16 + 1);
       const crest = clamp01(1 - Math.abs(rf - tideR) / 0.14);
       const arc = 0.55 + 0.45 * arcGate(angle, 2, 0.8, spin);  // the swell has 2 broad lobes, not a solid ring
@@ -347,7 +366,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     latticeC = smoothAR(latticeC, clamp01(0.20 + 0.80 * CLK.bass * P.modDepth), 0.25, 1.0 * P.relScale, dt); // LIVE contrast
     const level = 0.12 + 0.75 * CLK.energy;             // whole star brightens with energy, dark when quiet
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang, x, y } = samples[i];
+      const { radialProgress: rf, angle: ang, x, y } = samples[i];
       const cartesianPhase = (x * 0.7 + y * 0.3) * F.beat;
       const p = 0.5 + 0.5 * Math.sin(6 * ang + latticePhase + 2.0 * rf + cartesianPhase); const p2 = p * p * p;
       let B = level * ((1 - latticeC) + latticeC * p2);
@@ -365,7 +384,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     bloomR = smoothAR(bloomR, CLK.bass, 0.25, 1.0 * P.relScale, dt);  // LIVE: opens within a second of bass
     const Rrad = 0.15 + 0.90 * bloomR * P.modDepth, open = 0.2 + 0.8 * bloomR;
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang } = samples[i];
+      const { radialProgress: rf, angle: ang } = samples[i];
       const radial = clamp01((Rrad - rf) / 0.18 + 1);
       const fr = clamp01(1 - Math.abs(rf - Rrad) / 0.15);
       const trail = clamp01(1 - Math.abs(rf - (Rrad - 0.16)) / 0.24);
@@ -384,7 +403,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const broadband = 0.45 * CLK.energy + 0.30 * CLK.bass + 0.25 * CLK.high;
     const bright = 0.12 + 0.85 * Math.max(CLK.mid, broadband * 0.55, F.beat * 0.4) * P.modDepth, halfW = 0.35;
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang, stripProgress } = samples[i];
+      const { radialProgress: rf, angle: ang, stripProgress } = samples[i];
       const beatTravel = F.beat * (0.15 + 0.2 * rf) * Math.sin(Math.PI * 2 * stripProgress + 3 * rf);
       const a = ang - spiralTheta - 1.4 * rf - beatTravel;
       const u = a * (3 / (2 * Math.PI)); const f = u - Math.floor(u);
@@ -426,6 +445,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const up = (o, v, ua, da) => o + (v - o) * (v > o ? ua : da);
     F.bass = up(F.bass, bass, 0.60, 0.14); F.mid = up(F.mid, mid, 0.55, 0.16); F.high = up(F.high, high, 0.70, 0.20);
     F.energy = up(F.energy, energy, 0.5, 0.10); F.centroid = up(F.centroid, centroid, 0.2, 0.05);
+    F.flux = 0;
+    F.beat = 0;
   }
   function setFeatures(features = {}) {
     F.bass = clamp01(Number(features.bass) || 0);
@@ -484,8 +505,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const beatDepth = (presetName === 'Active' ? 0.14 : 0.08) * F.beat;
     if (beatDepth > 0) {
       for (let i = 0; i < total; i++) {
-        const { x, y, radius, angle, stripIndex, stripProgress } = samples[i];
-        const phase = angle * 2 + radius * 4.5 + stripIndex * 0.37
+        const { x, y, radialProgress, angle, stripIndex, stripProgress } = samples[i];
+        const phase = angle * 2 + radialProgress * 4.5 + stripIndex * 0.37
           + stripProgress * Math.PI * 2 + x * 0.6 - y * 0.4;
         const spatial = 0.28 + 0.72 * (0.5 + 0.5 * Math.sin(phase - t * 1.1));
         const base = clamp01(target[i]);
@@ -497,7 +518,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     if (presence < 0.99) {
       const idle = 0.03;
       for (let i = 0; i < total; i++) {
-        target[i] = Math.max(idle * (1 - samples[i].radius * 0.5), target[i] * presence + idle * (1 - presence));
+        target[i] = Math.max(idle * (1 - samples[i].radialProgress * 0.5), target[i] * presence + idle * (1 - presence));
       }
     }
 

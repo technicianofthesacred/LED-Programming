@@ -125,6 +125,67 @@ for (const [key, sourceIndex] of [['hearth', 317], ['embers', 511]]) {
 assert.deepEqual(stochasticParityFailures, [],
   'Hearth/Embers equivalent samples have template-independent stochastic histories');
 
+// Radial effects normalize against the observed template extent. The default
+// Mandala begins at radius .2, so its five authored rings must occupy all five
+// effect slots (0..4), rather than silently collapsing toward the outside.
+for (let expectedRing = 0; expectedRing < RINGS.length; expectedRing += 1) {
+  const engine = createMandalaEngine();
+  engine.setMode('meridian');
+  engine.setListening(true);
+  for (let frame = 0; frame < 8 * 30; frame += 1) {
+    engine.setFeatures({
+      bass: 0.72, mid: 0.72, high: 0.72, energy: 0.72,
+      centroid: expectedRing / (RINGS.length - 1), flux: 0, beat: 0,
+    });
+    engine.tick(1 / 30);
+  }
+  const ringMeans = RINGS.map((ring) => {
+    let sum = 0;
+    for (let i = ring.start; i < ring.start + ring.count; i += 1) sum += engine.getIntensity(i);
+    return sum / ring.count;
+  });
+  const selectedRing = ringMeans.indexOf(Math.max(...ringMeans));
+  assert.equal(selectedRing, expectedRing,
+    `Meridian centroid ${expectedRing}/4 selects default ring ${expectedRing + 1}`);
+}
+
+// Connected layouts can have corner samples beyond radius 1. Their observed
+// maximum is still radial progress 1, so full-radius effects and the universal
+// beat substrate reach it instead of treating it as out of bounds.
+{
+  const connectedTemplate = [
+    { outputIndex: 0, stripId: 'connected', stripIndex: 0, stripProgress: 0, x: 0.1, y: 0, radius: 0.1, angle: 0 },
+    { outputIndex: 1, stripId: 'connected', stripIndex: 0, stripProgress: 0.5, x: 0.5, y: 0.5, radius: Math.SQRT1_2, angle: Math.PI / 4 },
+    { outputIndex: 2, stripId: 'connected', stripIndex: 0, stripProgress: 1, x: 1, y: 1, radius: Math.SQRT2, angle: Math.PI / 4 },
+  ];
+  for (const key of ['tide', 'bloom']) {
+    const engine = createMandalaEngine({ template: connectedTemplate });
+    engine.setMode(key);
+    engine.setListening(true);
+    let outerPeak = 0;
+    for (let frame = 0; frame < 8 * 30; frame += 1) {
+      engine.setFeatures({ bass: 1, mid: 0.5, high: 0.35, energy: 0.8, centroid: 0.4, flux: 0.3, beat: 0 });
+      engine.tick(1 / 30);
+      outerPeak = Math.max(outerPeak, engine.getIntensity(2));
+    }
+    assert.ok(outerPeak > 0.3, `${key}: connected max radius sqrt(2) reaches the full-radius effect (${outerPeak})`);
+  }
+
+  const dry = createMandalaEngine({ template: connectedTemplate });
+  const beat = createMandalaEngine({ template: connectedTemplate });
+  for (const engine of [dry, beat]) { engine.setMode('hearth'); engine.setListening(true); }
+  let outerBeatDelta = 0;
+  for (let frame = 0; frame < 90; frame += 1) {
+    const features = { bass: 0.5, mid: 0.5, high: 0.5, energy: 0.5, centroid: 0.5, flux: 0.2 };
+    dry.setFeatures({ ...features, beat: 0 });
+    beat.setFeatures({ ...features, beat: frame % 15 < 4 ? 1 : 0 });
+    dry.tick(1 / 30);
+    beat.tick(1 / 30);
+    outerBeatDelta = Math.max(outerBeatDelta, Math.abs(beat.getIntensity(2) - dry.getIntensity(2)));
+  }
+  assert.ok(outerBeatDelta > 0.005, 'beat substrate reaches connected max radius beyond 1');
+}
+
 // ── color-law helpers ────────────────────────────────────────────────────
 // Hue for warm pixels where R is the max channel: hue = 60 * (G-B) / (R-B).
 // The corridor in the color spec prose is 18–42° HSV; the hand-tuned Hearth
@@ -256,6 +317,25 @@ for (const key of ['strata', 'embers', 'hearth']) {
 
   engine.setListening(false);
   assert.equal(engine.analyze(bins, 44100), false, 'analyze respects the quiet switch');
+}
+
+// Legacy audio entry points own a complete feature update. A beat supplied by
+// the modern analyzer must not remain latched when a caller switches back to
+// setBands() or analyze().
+{
+  const engine = createMandalaEngine();
+  engine.setFeatures({ bass: 0.5, mid: 0.5, high: 0.5, energy: 0.5, centroid: 0.5, flux: 0.8, beat: 1 });
+  engine.setBands({ bass: 0.4, mid: 0.3, high: 0.2 });
+  assert.equal(engine.getLevels().beat, 0, 'setBands clears stale beat');
+  assert.equal(engine.getLevels().flux, 0, 'setBands clears stale flux');
+
+  engine.setFeatures({ bass: 0.5, mid: 0.5, high: 0.5, energy: 0.5, centroid: 0.5, flux: 0.8, beat: 1 });
+  engine.setListening(true);
+  const bins = new Uint8Array(1024);
+  bins.fill(160, 2, 400);
+  assert.equal(engine.analyze(bins, 44100), true, 'legacy analyze fixture updates');
+  assert.equal(engine.getLevels().beat, 0, 'analyze clears stale beat');
+  assert.equal(engine.getLevels().flux, 0, 'analyze clears stale flux');
 }
 
 // ── resample adapter: 675-ring frame → arbitrary project pixel counts ────
