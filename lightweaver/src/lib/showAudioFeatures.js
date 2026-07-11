@@ -142,6 +142,14 @@ export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } =
         `Analyser frequencyBinCount must be ${configuredBinCount}; received ${receivedBinCount}`,
       );
     }
+    const receivedSampleRate = analyser?.context?.sampleRate;
+    if (Number.isFinite(receivedSampleRate)
+      && receivedSampleRate > 0
+      && receivedSampleRate !== sampleRate) {
+      throw new RangeError(
+        `Analyser sampleRate must be ${sampleRate}; received ${receivedSampleRate}`,
+      );
+    }
     analyser.getByteFrequencyData(analyserBuffer);
     return updateBins(analyserBuffer, dt);
   }

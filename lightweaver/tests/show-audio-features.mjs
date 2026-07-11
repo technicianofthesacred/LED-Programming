@@ -216,4 +216,21 @@ for (const missingBins of [undefined, new Uint8Array(0)]) {
   );
 }
 
+// A reported Web Audio sample rate must match the frequency mapping configuration.
+{
+  const analyzer = fresh();
+  const mismatchedAnalyser = {
+    frequencyBinCount: binCount,
+    context: { sampleRate: 48000 },
+    getByteFrequencyData() {},
+  };
+  assert.throws(
+    () => analyzer.updateAnalyser(mismatchedAnalyser, 1 / 60),
+    (error) => error instanceof RangeError
+      && /sampleRate/i.test(error.message)
+      && error.message.includes(String(sampleRate))
+      && error.message.includes('48000'),
+  );
+}
+
 console.log('show-audio-features tests passed');
