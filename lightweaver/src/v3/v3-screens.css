@@ -19,9 +19,9 @@
 @keyframes ptdrift { from { background-position: 0% 0; } to { background-position: 200% 0; } }
 
 /* section header used across screens */
-.sec-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.sec-h { display: flex; align-items: baseline; gap: 6px 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .sec-h .t { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-lo); font-weight: 600; white-space: nowrap; }
-.sec-h .m { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); white-space: nowrap; }
+.sec-h .m { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 100%; }
 .sec-h .line { flex: 1; height: 1px; background: var(--border-hair); }
 
 .card { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); }
@@ -308,7 +308,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pm-box svg { width: 12px; height: 12px; stroke: var(--on-accent); fill: none; stroke-width: 2.4; }
 .pm-box.on { background: var(--accent); border-color: var(--accent); }
 
-.pm-livebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); margin-bottom: 10px; }
+.pm-livebar { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 11px 14px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); margin-bottom: 10px; flex-wrap: wrap; }
 .pm-check { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-mid); cursor: pointer; white-space: nowrap; }
 .pm-saved { font-size: 11.5px; font-family: var(--font-mono); color: var(--ok); white-space: nowrap; }
 
@@ -325,10 +325,10 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* design target */
 .pm-target { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-lg); padding: 14px 16px 16px; margin-bottom: 18px; }
 .pm-mixbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.pm-mixlabel { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
+.pm-mixlabel { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; min-width: 0; }
 .pm-mixlabel span { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
-.pm-mixlabel strong { font-size: 13.5px; font-weight: 600; color: var(--text-hi); }
-.pm-input { flex: 1; height: 34px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--text-hi); font-family: var(--font-ui); font-size: 13px; padding: 0 12px; }
+.pm-mixlabel strong { font-size: 13.5px; font-weight: 600; color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; }
+.pm-input { flex: 1; min-width: 0; height: 34px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--text-hi); font-family: var(--font-ui); font-size: 13px; padding: 0 12px; }
 .pm-input::placeholder { color: var(--text-faint); }
 .pm-input:focus { outline: none; border-color: var(--accent); }
 
@@ -344,6 +344,17 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .tc-total strong { font-family: var(--font-mono); font-size: 13.5px; color: var(--text-hi); }
 .tc-patval { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tc-patval .sw { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
+
+/* The target card's row is 4 fixed-plus-flexible columns (icon / name /
+   total / pattern swatch) — the 180px pattern column alone is wider than
+   a phone viewport. Below ~640px, drop the pattern swatch to its own
+   full-width row instead of forcing the row to stay one line. */
+@media (max-width: 640px) {
+  .tc-head, .tc-layer { grid-template-columns: 40px 1fr auto; row-gap: 8px; }
+  .tc-pat { grid-column: 1 / -1; }
+  .pm-mixbar { flex-wrap: wrap; }
+  .pm-mixlabel { flex-basis: 100%; }
+}
 
 /* browse cards */
 .pm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 10px; }
@@ -401,6 +412,15 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .led.wave { animation: ledwave 2.6s ease-in-out infinite; }
 @keyframes ledwave { 0%, 100% { opacity: 0.62; transform: scale(0.9); } 46% { opacity: 1; transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .led.wave { animation: none; } }
+
+/* The big preview strand (22 LEDs, `.ledrow.big`) is a fixed-count,
+   non-wrapping row — at phone widths 22 * (11px led + 9px gap) is wider
+   than the whole aside panel. Scale the beads down instead of wrapping
+   (a strand that wraps to a second line reads as broken, not compact). */
+@media (max-width: 640px) {
+  .ledrow.big { gap: 4px; }
+  .ledrow.big .led { width: 6px; height: 6px; }
+}
 
 .pm-led-stage { position: relative; height: 134px; border-radius: var(--r-md); overflow: hidden; display: grid; place-items: center; padding: 0 14px;
   background: radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%); border: 1px solid var(--border-soft); }

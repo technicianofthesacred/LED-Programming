@@ -282,18 +282,6 @@ for (const viewport of [
   { name: 'mobile', width: 390, height: 844 },
 ]) {
   test(`main screens load without overflow or console errors on ${viewport.name}`, async ({ page }) => {
-    // Found while repairing this suite (unrelated to the stale-selector
-    // repair itself): the Patterns screen's "Design target" chip row
-    // (.pm-target / .chips, src/v3/lw-pattern.jsx) does not wrap or shrink
-    // below ~420px and pushes document.documentElement.scrollWidth to ~733px
-    // at a 390px viewport — a genuine, pre-existing mobile responsive-layout
-    // bug, not something this spec repair should paper over by loosening the
-    // assertion. Flagging as fixme rather than silently weakening the check;
-    // worth a real fix (or a TODO.md entry) separately.
-    test.fixme(
-      viewport.name === 'mobile',
-      'Patterns screen .pm-target/.chips overflows horizontally below ~420px viewports',
-    );
     const consoleErrors: string[] = [];
     page.on('console', msg => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
