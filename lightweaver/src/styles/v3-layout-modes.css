@@ -158,9 +158,10 @@
 
 /* ── Wire mode — chain list + absorbed patch-board editor + finish line ──── */
 
-/* The moved patch-board markup uses the legacy token names that were aliased
-   on `.la-wire-editor`; carry the same aliases onto the Wire panel root so the
-   `.lw-wire-*` rules (in v3-layout-extra.css) read in the warm v3 idiom. */
+/* The moved patch-board markup uses the legacy app's token names. Declare the
+   same aliases on the Wire panel root so the `.lw-wire-*` rules (in
+   v3-layout-extra.css) read in the warm v3 idiom (no blue, no legacy palette
+   leaking in). */
 .la-wire-panel {
   --surface:    var(--bg-panel);
   --surface-2:  var(--bg-elev);
@@ -186,7 +187,7 @@
 .la-wire-panel .lw-wire-tools { border-top: 1px solid var(--border-soft); }
 .la-wire-panel .lw-wire-chain { border-top: none; padding: 0 0 var(--s-3); }
 
-/* PatchBoard button variants (warm) — re-scoped from `.la-wire-editor`. */
+/* PatchBoard button variants (warm), scoped to the Wire panel. */
 .la-wire-panel .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--text-mid); }
 .la-wire-panel .btn-ghost:hover { color: var(--text-hi); background: var(--bg-elev); }
 .la-wire-panel .lw-btn-danger:hover { color: var(--danger) !important; border-color: var(--accent-line) !important; }

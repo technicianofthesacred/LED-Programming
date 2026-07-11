@@ -1,6 +1,6 @@
 # Layout Screen Redesign — Implementation Plan
 
-**Date:** 2026-07-10 · **Status:** planned, not started
+**Date:** 2026-07-10 · **Status:** Phase 1 complete · Phase 2 complete (steps 0–14, including CSS cleanup + the final test-plan audit) · Phase 3 (Send to card + Export ledmap.json) folded into Phase 2 step 9 and complete. All testids from step 14 exist; the named Playwright suites (`workflow`, `patch-board`, `screen-smoke`, `layout-mode-switch`, `layout-size-mode`, `layout-send-to-card`) are green: 36 passed / 1 skip.
 **Scope:** `lightweaver/src/components/LayoutScreen.jsx` (3,909 lines) + `PatchBoardScreen.jsx` (452 lines) and the state underneath them.
 
 ## Diagnosis (why, in three sentences)

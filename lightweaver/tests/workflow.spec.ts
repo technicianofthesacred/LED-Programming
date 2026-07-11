@@ -109,11 +109,11 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   // Note: the old "Export" rail screen (ledmap.json download) no longer
-  // exists in the current build — per docs/layout-redesign-plan.md, Send to
-  // card + Export ledmap.json are Phase 3 work that hasn't shipped yet
-  // ("exists in code with no button"). That portion of this test is dropped
-  // until Phase 3 lands a real Export surface (plan step 14 names the future
-  // `layout-export-ledmap` testid to repoint this at).
+  // exists — Send to card + Export ledmap.json now live in Layout's Wire
+  // mode (docs/layout-redesign-plan.md Phase 3 / step 9), behind the
+  // `layout-export-ledmap` testid. That coverage lives in
+  // tests/layout-send-to-card.spec.ts, so this workflow test doesn't
+  // duplicate it.
   //
   // The live LED preview also moved off the Patterns screen onto its own
   // "Show" screen (src/v3/lw-show.jsx): an always-on audio-reactive mandala
