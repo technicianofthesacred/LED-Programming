@@ -7,7 +7,9 @@ Living list of outstanding work on the LED installation controller. Project is b
 ### Layout screen redesign (planned 2026-07-10)
 
 - [ ] **Execute the Layout redesign plan** — Phase 1 state consolidation (single wire-order truth, one undo stack, one selection model), then the Draw | Size | Wire mode shell, then surface Send-to-card + Export ledmap _(agent · deep)_
-  Full file-level plan with step ordering, risk register, and parity checklist. Phase 1 steps 1–3 (chain migration) land first — they're the only steps touching firmware addressing. Also repairs the stale Playwright specs that target the frozen `src-v3` DOM. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+  Full file-level plan with step ordering, risk register, and parity checklist. DONE so far: Phase 1 steps 1–3 (chain is the single wire-order truth, parity-tested) and the Playwright spec repair (22 passing). NEXT: Phase 1 steps 4–9 (strip id namespace, layoutReducer, single undo stack, selection consolidation, chain-based reorder). → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+- [ ] **Fix the Patterns mobile overflow** — the "Design target" chips row (`.pm-target`/`.chips` in `lightweaver/src/v3/lw-pattern.jsx`) won't shrink below ~420px, forcing ~733px scrollWidth on every screen at a 390px viewport _(agent · quick)_
+  Found during the e2e spec repair; the mobile screen-smoke test is `test.fixme`-skipped until this is fixed — un-skip it in [lightweaver/tests/screen-smoke.spec.ts](lightweaver/tests/screen-smoke.spec.ts) as the done-check.
 
 ### Mandala listening-gallery visualizer (in progress — laptop simulator)
 
