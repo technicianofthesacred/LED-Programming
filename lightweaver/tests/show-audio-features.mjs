@@ -28,6 +28,17 @@ function fresh() {
 const silence = binsWith();
 const broadband = binsWith([[30, 9000, 92]]);
 
+// Invalid spectral geometry is rejected at construction time.
+for (const [options, pattern] of [
+  [{ sampleRate: 0, fftSize }, /sampleRate.*positive finite/i],
+  [{ sampleRate: Number.NaN, fftSize }, /sampleRate.*positive finite/i],
+  [{ sampleRate, fftSize: 3 }, /fftSize.*even integer/i],
+  [{ sampleRate, fftSize: 2048.5 }, /fftSize.*even integer/i],
+]) {
+  assert.throws(() => createShowAudioFeatures(options), RangeError);
+  assert.throws(() => createShowAudioFeatures(options), pattern);
+}
+
 // Public API and feature shape remain small and deterministic.
 {
   const analyzer = fresh();
@@ -78,6 +89,27 @@ for (const [name, requestedHz, excludedBand] of [
     `${name}: ${resolvedHz} Hz is outside ${excludedBand} (${analyzer.getFeatures()[excludedBand]})`);
 }
 
+// Frequency-to-bin mapping follows non-default analyser geometry too.
+{
+  const alternateRate = 48000;
+  const alternateFftSize = 4096;
+  const analyzer = createShowAudioFeatures({
+    sampleRate: alternateRate,
+    fftSize: alternateFftSize,
+  });
+  const bins = new Uint8Array(alternateFftSize / 2);
+  const bassBin = 10;
+  const resolvedHz = bassBin * alternateRate / alternateFftSize;
+  assert.ok(resolvedHz >= 30 && resolvedHz <= 140,
+    `alternate geometry fixture resolves inside bass (${resolvedHz} Hz)`);
+  bins[bassBin] = 210;
+  analyzer.updateBins(bins, 1 / 60);
+  const frame = analyzer.getFeatures();
+  assert.ok(frame.bass > 0.3, `alternate geometry maps the single bin to bass (${frame.bass})`);
+  assert.ok(frame.mid < 0.03 && frame.high < 0.03,
+    `alternate geometry keeps the bin out of other bands (${frame.mid}, ${frame.high})`);
+}
+
 // Slowly adapting normalization must not erase a sustained musical passage.
 {
   const analyzer = fresh();
@@ -121,6 +153,29 @@ for (const [name, bins] of [
   assert.ok(frame.flux < 0.03, `${name}: flux stays quiet (${frame.flux})`);
 }
 
+// A missing/empty frame is a stream gap: levels clear, transients decay, and
+// the next real frame establishes a fresh spectral baseline without a false beat.
+for (const missingBins of [undefined, new Uint8Array(0)]) {
+  const analyzer = fresh();
+  analyzer.updateBins(broadband, 1 / 60);
+  analyzer.updateBins(binsWith([[30, 9000, 210]]), 1 / 60);
+  const beforeGap = analyzer.getFeatures();
+  analyzer.updateBins(missingBins, 1);
+  const duringGap = analyzer.getFeatures();
+  assert.deepEqual({
+    bass: duringGap.bass,
+    mid: duringGap.mid,
+    high: duringGap.high,
+    energy: duringGap.energy,
+    centroid: duringGap.centroid,
+  }, { bass: 0, mid: 0, high: 0, energy: 0, centroid: 0 });
+  assert.ok(duringGap.beat < beforeGap.beat && duringGap.flux < beforeGap.flux,
+    `gap decays transient features (${duringGap.beat}, ${duringGap.flux})`);
+  analyzer.updateBins(broadband, 1 / 60);
+  assert.ok(analyzer.getFeatures().beat < 0.03,
+    `first frame after a gap resets spectral history (${analyzer.getFeatures().beat})`);
+}
+
 // Browser analyser integration reuses its frequency buffer and reset clears state.
 {
   const analyzer = fresh();
@@ -143,6 +198,22 @@ for (const [name, bins] of [
   });
   analyzer.updateAnalyser(fakeAnalyser, 1 / 60);
   assert.strictEqual(seen[1], seen[2], 'reset does not reallocate the analyser buffer');
+}
+
+// Browser analyser geometry must match the configured FFT size.
+{
+  const analyzer = fresh();
+  const mismatchedAnalyser = {
+    frequencyBinCount: binCount / 2,
+    getByteFrequencyData() {},
+  };
+  assert.throws(
+    () => analyzer.updateAnalyser(mismatchedAnalyser, 1 / 60),
+    (error) => error instanceof RangeError
+      && /frequencyBinCount/i.test(error.message)
+      && error.message.includes(String(binCount))
+      && error.message.includes(String(binCount / 2)),
+  );
 }
 
 console.log('show-audio-features tests passed');

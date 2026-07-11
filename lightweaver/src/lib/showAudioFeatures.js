@@ -17,6 +17,13 @@ function smoothingFactor(dt, timeConstant) {
 }
 
 export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } = {}) {
+  if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+    throw new RangeError('sampleRate must be a positive finite number');
+  }
+  if (!Number.isInteger(fftSize) || fftSize <= 0 || fftSize % 2 !== 0) {
+    throw new RangeError('fftSize must be a positive even integer');
+  }
+
   const configuredBinCount = Math.max(1, Math.floor(fftSize / 2));
   const binHz = sampleRate / fftSize;
   let analyserBuffer = new Uint8Array(configuredBinCount);
@@ -61,6 +68,13 @@ export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } =
     if (usableBins === 0) {
       features.beat *= Math.exp(-frameDt / 0.23);
       features.flux *= Math.exp(-frameDt / 0.09);
+      features.bass = 0;
+      features.mid = 0;
+      features.high = 0;
+      features.energy = 0;
+      features.centroid = 0;
+      previousBins.fill(0);
+      hasPreviousFrame = false;
       return getFeatures();
     }
 
@@ -122,9 +136,11 @@ export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } =
   }
 
   function updateAnalyser(analyser, dt = 1 / 60) {
-    const requiredLength = analyser?.frequencyBinCount ?? configuredBinCount;
-    if (analyserBuffer.length !== requiredLength) {
-      analyserBuffer = new Uint8Array(requiredLength);
+    const receivedBinCount = analyser?.frequencyBinCount;
+    if (receivedBinCount !== configuredBinCount) {
+      throw new RangeError(
+        `Analyser frequencyBinCount must be ${configuredBinCount}; received ${receivedBinCount}`,
+      );
     }
     analyser.getByteFrequencyData(analyserBuffer);
     return updateBins(analyserBuffer, dt);
