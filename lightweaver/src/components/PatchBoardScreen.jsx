@@ -54,7 +54,7 @@ export function PatchBoardScreen({
   onDeleteSelectedCut,
   onClearSelectedCut,
 }) {
-  const { strips, patchBoard, setPatchBoard, projectId, projectName, standaloneController } = useProject();
+  const { strips, patchBoard, updatePatchBoard, projectId, projectName, standaloneController } = useProject();
   const [pushHost, setPushHost] = useState(() => getCardHostname());
   const [pushStatus, setPushStatus] = useState('');
   const [pushKind, setPushKind] = useState(''); // '' | 'ok' | 'err' | 'pending'
@@ -86,13 +86,9 @@ export function PatchBoardScreen({
   const selectedPatch = patchesById.get(selectedPatchId) || activeStripPatches[0] || orderedPatches[0] || null;
   const activeCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
 
-  const updateBoard = (mutate) => {
-    setPatchBoard(prev => {
-      const next = normalizePatchBoard(prev, strips);
-      mutate(next);
-      return normalizePatchBoard(next, strips);
-    });
-  };
+  // Patch-board edits route through the context's history-aware mutation so
+  // they join the shared undo stack (interleaved with strip edits).
+  const updateBoard = updatePatchBoard;
 
   const reversePatch = (patch) => {
     if (!patch || patch.source?.type !== 'strip') return;

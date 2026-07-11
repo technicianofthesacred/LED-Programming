@@ -435,8 +435,6 @@ const SCALE_OPTIONS = [
   { label: 'XL', mult: 4 },
 ];
 const LED_COUNT_PRESETS = [30, 43, 60, 100, 150, 300, 600, 1000, 1500, 3000];
-const MAX_HISTORY = 50;
-const LS_KEY = 'lw-layout-autosave';
 const GLOW_MODES = ['dots', 'center', 'outward', 'inward'];
 
 // ── SVG icon helpers ───────────────────────────────────────────────────────
@@ -616,22 +614,16 @@ function OmniHalo({ uid, cx, cy, color, reach = 90, intensity = 0.5 }) {
 export function LayoutScreen() {
   const project = useProject();
   // Mockup .la uses a fixed 320px side panel (no resize handle).
-  const [viewBox, setViewBox]       = useState(project.viewBox || '0 0 640 400');
-  const [svgText, setSvgText]       = useState(project.svgText ?? null);
-  const [layers, setLayers]         = useState(project.layoutLayers || []);
-  const [strips, setStrips]         = useState(project.strips || []);
-  const [density, setDensity]       = useState(project.layoutDensity ?? 60);
-  const [pxPerMm, setPxPerMm]       = useState(project.layoutPxPerMm ?? 3.7795);
+  // Persisted+undoable layout state now lives in the reducer behind context;
+  // this component READS it directly (no local mirror copies).
   const [scaleUnit, setScaleUnit]   = useState('cm'); // 'cm' | 'in' — display unit for the artwork Size control
   const [selLayerId, setSelLayerId] = useState(null);
   const [selStripId, setSelStripId] = useState(null);
-  const [hidden, setHidden]         = useState(project.hidden || {});
   const [showLight, setShowLight]   = useState(false);
   const [showLeds, setShowLeds]     = useState(true);
   const [glowMode, setGlowMode]     = useState('dots');
   const [directedGlow, setDirectedGlow] = useState(false);
   const [showHeat, setShowHeat]     = useState(false);
-  const [editCounts, setEditCounts] = useState(project.layoutEditCounts || {});
   const [error, setError]           = useState(null);
 
   // Layer panel state
@@ -679,8 +671,10 @@ export function LayoutScreen() {
   const stripDragFrameRef = useRef(0);
   const stripDragPointRef = useRef(null);
   const stripDragSuppressClickRef = useRef(false);
-  const stripsRef         = useRef(strips);
-  const pxPerMmRef = useRef(pxPerMm);
+  // Initialised empty and synced from the reducer state via effects below
+  // (declared before the `project` destructure, so they can't read it here).
+  const stripsRef         = useRef([]);
+  const pxPerMmRef = useRef(3.7795);
   const [movingStripIds, setMovingStripIds] = useState([]);
 
   // Drag-and-drop
@@ -689,24 +683,10 @@ export function LayoutScreen() {
   // Canvas cursor position overlay
   const [cursorSvgPt, setCursorSvgPt] = useState(null);
 
-  // Undo / redo
-  const historyRef = useRef([]);
-  const futureRef  = useRef([]);
-  const [histLen, setHistLen]   = useState(0);
-  const [futLen,  setFutLen]    = useState(0);
-
-  // Layer groups + ordering (V1 parity)
-  const [layerGroups, setLayerGroups]     = useState(project.layoutLayerGroups || []);  // [{groupId,name,_hidden,_expanded,members:[{layerId,pathId,pathData,name,svgLength}]}]
-  const [layerOrder, setLayerOrder]       = useState(project.layoutLayerOrder || []);  // [{type:'layer'|'group', id}]
+  // Layer-list drag state (ephemeral view state — stays local)
   const [layerDragging, setLayerDragging] = useState(null);
   const [layerDragOver, setLayerDragOver] = useState(null);
   const [stripGroupDragOver, setStripGroupDragOver] = useState(null);
-
-  // Refs so snapshot/save always capture latest values without dependency churn
-  const layerGroupsRef = useRef(layerGroups);
-  const layerOrderRef  = useRef(layerOrder);
-  useEffect(() => { layerGroupsRef.current = layerGroups; }, [layerGroups]);
-  useEffect(() => { layerOrderRef.current  = layerOrder;  }, [layerOrder]);
 
   const fileRef     = useRef(null);
   const loadRef     = useRef(null);
@@ -720,28 +700,34 @@ export function LayoutScreen() {
   const nextColor   = () => STRIP_COLORS[colorIdxRef.current++ % STRIP_COLORS.length];
 
   const {
-    strips: projectStrips,
-    viewBox: projectViewBox,
-    svgText: projectSvgText,
-    hidden: projectHidden,
-    layoutLayers,
-    setLayoutLayers,
-    layoutDensity,
-    setLayoutDensity,
-    layoutPxPerMm,
-    setLayoutPxPerMm,
-    layoutEditCounts,
-    setLayoutEditCounts,
-    layoutLayerGroups,
-    setLayoutLayerGroups,
-    layoutLayerOrder,
-    setLayoutLayerOrder,
+    // Persisted+undoable layout state, read straight from the reducer. Local
+    // aliases match the names the rest of this component already uses, and the
+    // setters are the context's history-aware compat dispatchers.
+    strips,             setStrips,
+    viewBox,            setViewBox,
+    svgText,            setSvgText,
+    hidden,             setHidden,
+    layoutLayers:       layers,
+    setLayoutLayers:    setLayers,
+    layoutDensity:      density,
+    setLayoutDensity:   setDensity,
+    layoutPxPerMm:      pxPerMm,
+    setLayoutPxPerMm:   setPxPerMm,
+    layoutEditCounts:   editCounts,
+    setLayoutEditCounts: setEditCounts,
+    layoutLayerGroups:  layerGroups,
+    setLayoutLayerGroups: setLayerGroups,
+    layoutLayerOrder:   layerOrder,
+    setLayoutLayerOrder: setLayerOrder,
     projectRevision,
+    patchBoard,
     setPatchBoard,
-    setStrips: setProjectStrips,
-    setViewBox: setProjectViewBox,
-    setSvgText: setProjectSvgText,
-    setHidden: setProjectHidden,
+    updatePatchBoard,
+    pushLayoutHistory,
+    undoLayout,
+    redoLayout,
+    layoutHistLen,
+    layoutFutLen,
     serializeProject,
     loadProject,
     // Pattern state
@@ -763,17 +749,10 @@ export function LayoutScreen() {
 
   const usbLedMaxPixels = usbLedStatus?.maxPixels || 300;
 
-  useEffect(() => { setProjectStrips(strips); },    [strips, setProjectStrips]);
-  useEffect(() => { stripsRef.current = strips; },   [strips]);
-  useEffect(() => { setProjectViewBox(viewBox); },  [viewBox, setProjectViewBox]);
-  useEffect(() => { setProjectSvgText(svgText); },  [svgText, setProjectSvgText]);
-  useEffect(() => { setProjectHidden(hidden); },    [hidden, setProjectHidden]);
-  useEffect(() => { setLayoutLayers(layers); },      [layers, setLayoutLayers]);
-  useEffect(() => { setLayoutDensity(density); },    [density, setLayoutDensity]);
-  useEffect(() => { setLayoutPxPerMm(pxPerMm); pxPerMmRef.current = pxPerMm; }, [pxPerMm, setLayoutPxPerMm]);
-  useEffect(() => { setLayoutEditCounts(editCounts); }, [editCounts, setLayoutEditCounts]);
-  useEffect(() => { setLayoutLayerGroups(layerGroups); }, [layerGroups, setLayoutLayerGroups]);
-  useEffect(() => { setLayoutLayerOrder(layerOrder); }, [layerOrder, setLayoutLayerOrder]);
+  // Keep the drag/geometry refs in sync with the reducer-owned state (these are
+  // read synchronously inside pointer handlers, so they must not lag a render).
+  useEffect(() => { stripsRef.current = strips; }, [strips]);
+  useEffect(() => { pxPerMmRef.current = pxPerMm; }, [pxPerMm]);
   useEffect(() => {
     setSelectedStripIds(prev => prev.filter(id => strips.some(s => s.id === id)));
   }, [strips]);
@@ -791,58 +770,10 @@ export function LayoutScreen() {
 
   const resetView = () => { setZoom(1); setPanX(0); setPanY(0); };
 
-  // ── Snapshot helpers ──────────────────────────────────────────────────────
-
-  const makeSnapshot = useCallback((curStrips, curLayers, curEditCounts, curHidden, curSvgText, curViewBox, curDensity) => ({
-    strips:      curStrips.map(s => ({ ...s, pixels: s.pixels.slice() })),
-    layers:      curLayers.map(({ subPaths, ...rest }) => ({ ...rest, subPaths: subPaths?.map(sp => ({ ...sp })) ?? [] })),
-    editCounts:  { ...curEditCounts },
-    hidden:      { ...curHidden },
-    svgText:     curSvgText,
-    viewBox:     curViewBox,
-    density:     curDensity,
-    pxPerMm:     pxPerMmRef.current,
-    layerGroups: layerGroupsRef.current.map(g => ({ ...g, members: g.members.map(m => ({ ...m })) })),
-    layerOrder:  [...layerOrderRef.current],
-  }), []);
-
-  const pushHistory = useCallback((curStrips, curLayers, curEditCounts, curHidden, curSvgText, curViewBox, curDensity) => {
-    const snap = makeSnapshot(curStrips, curLayers, curEditCounts, curHidden, curSvgText, curViewBox, curDensity);
-    if (historyRef.current.length >= MAX_HISTORY) historyRef.current.shift();
-    historyRef.current.push(snap);
-    futureRef.current = [];
-    setHistLen(historyRef.current.length);
-    setFutLen(0);
-  }, [makeSnapshot]);
-
-  // ── localStorage auto-save ─────────────────────────────────────────────
-
-  const lsSave = useCallback((curStrips, curLayers, curEditCounts, curHidden, curSvgText, curViewBox, curDensity) => {
-    try {
-      const data = {
-        version: 2,
-        strips:      curStrips.map(({ pixels: _px, ...s }) => s),
-        layers:      curLayers,
-        editCounts:  curEditCounts,
-        hidden:      curHidden,
-        svgText:     curSvgText,
-        viewBox:     curViewBox,
-        density:     curDensity,
-        pxPerMm:     pxPerMmRef.current,
-        layerGroups: layerGroupsRef.current,
-        layerOrder:  layerOrderRef.current,
-        // Pattern state
-        activePatternId,
-        masterSpeed, masterBrightness, masterSaturation,
-        gammaEnabled, gammaValue,
-        patternParams,
-        bpm,
-      };
-      localStorage.setItem(LS_KEY, JSON.stringify(data));
-    } catch {}
-  }, [activePatternId, masterSpeed, masterBrightness, masterSaturation, gammaEnabled, gammaValue, patternParams, bpm]);
-
   // ── Restore strips from saved data ────────────────────────────────────────
+  // Undo history + autosave are owned by ProjectContext now. This component
+  // calls `pushLayoutHistory()` before a mutation and `undoLayout/redoLayout`
+  // for undo; autosave runs off the reducer state via serializeProject.
 
   const rebuildStrip = (stripData) => {
     return {
@@ -851,17 +782,9 @@ export function LayoutScreen() {
     };
   };
 
+  // Loading a project resets only EPHEMERAL view state — the persisted layout
+  // data now lives in the reducer and is already replaced by `applyProject`.
   useEffect(() => {
-    setViewBox(projectViewBox || '0 0 640 400');
-    setSvgText(projectSvgText ?? null);
-    setHidden(projectHidden || {});
-    setLayers(layoutLayers || []);
-    setDensity(layoutDensity ?? 60);
-    setPxPerMm(layoutPxPerMm ?? 3.7795);
-    setEditCounts(layoutEditCounts || {});
-    setLayerGroups(layoutLayerGroups || []);
-    setLayerOrder(layoutLayerOrder || (layoutLayers || []).map(l => ({ type: 'layer', id: l.layerId })));
-    setStrips((projectStrips || []).map(s => shouldRebuildStripPixels(s) ? rebuildStrip(s) : s));
     setSelLayerId(null);
     setSelStripId(null);
     resetView();
@@ -896,7 +819,7 @@ export function LayoutScreen() {
     }
     const newLayers = parsed.map(l => ({ ...l, _color: nextColor(), _emit: 'dir', _angle: 0 }));
     const newLayerOrder = parsed.map(l => ({ type: 'layer', id: l.layerId }));
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setViewBox(vb);
     setPxPerMm(newPxPerMm);
     setSvgText(text);
@@ -912,8 +835,7 @@ export function LayoutScreen() {
     setDrawMode(false);
     setWaypoints([]);
     resetView();
-    lsSave([], newLayers, {}, {}, text, vb, density);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave, setPatchBoard]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, setPatchBoard]);
 
   // ── SVG import via button ─────────────────────────────────────────────────
 
@@ -1028,18 +950,18 @@ export function LayoutScreen() {
     const baseName = unique[0].name?.split('·')[0]?.trim();
     const name = nameOverride.trim() || baseName || `Group ${layerGroups.length + 1}`;
     const newGroup = { groupId, name, _hidden: false, _expanded: true, members: unique.map(p => ({ ...p })) };
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayerGroups(prev => [...prev, newGroup]);
     setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
     setPathSel(unique);
-  }, [layerGroups.length, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+  }, [layerGroups.length, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const addPathsToGroup = useCallback((groupId, entries) => {
     const group = layerGroups.find(g => g.groupId === groupId);
     if (!group || group.type === 'strip') return;
     const incoming = entries.filter(entry => entry?.pathId && entry?.pathData);
     if (!incoming.length) return;
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayerGroups(prev => prev.map(g => {
       if (g.groupId !== groupId) return g;
       const existingIds = new Set(g.members.map(m => m.pathId));
@@ -1050,7 +972,7 @@ export function LayoutScreen() {
       return { ...g, _expanded: true, members: nextMembers };
     }));
     setPathSel(incoming);
-  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const togglePathSelection = useCallback((entry, additive = false) => {
     setSelLayerId(null);
@@ -1069,17 +991,14 @@ export function LayoutScreen() {
   const reorderStrips = useCallback((draggedIds, targetId) => {
     const ids = draggedIds.filter(Boolean);
     if (!ids.length || ids.includes(targetId)) return;
-    setStrips(prev => {
-      const dragged = prev.filter(s => ids.includes(s.id));
-      const rest = prev.filter(s => !ids.includes(s.id));
-      const ti = rest.findIndex(s => s.id === targetId);
-      if (!dragged.length || ti === -1) return prev;
-      const next = [...rest.slice(0, ti + 1), ...dragged, ...rest.slice(ti + 1)];
-      pushHistory(prev, layers, editCounts, hidden, svgText, viewBox, density);
-      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
-      return next;
-    });
-  }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+    const dragged = strips.filter(s => ids.includes(s.id));
+    const rest = strips.filter(s => !ids.includes(s.id));
+    const ti = rest.findIndex(s => s.id === targetId);
+    if (!dragged.length || ti === -1) return;
+    const next = [...rest.slice(0, ti + 1), ...dragged, ...rest.slice(ti + 1)];
+    pushLayoutHistory();
+    setStrips(next);
+  }, [strips, setStrips, pushLayoutHistory]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
@@ -1101,7 +1020,7 @@ export function LayoutScreen() {
       members: picked.map(stripGroupMember),
     };
 
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayerGroups(prev => [
       ...prev
         .map(g => ({ ...g, members: g.members.filter(m => !pickedIds.has(m.stripId || m.pathId)) }))
@@ -1111,7 +1030,7 @@ export function LayoutScreen() {
     setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev.filter(item => item.id !== groupId && !emptiedGroupIds.has(item.id))]);
     setSelectedStripIds(picked.map(s => s.id));
     setStripSelectionName('');
-  }, [strips, layerGroups, stripSelectionName, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+  }, [strips, layerGroups, stripSelectionName, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const addStripsToGroup = useCallback((groupId, stripIds) => {
     const group = layerGroups.find(g => g.groupId === groupId);
@@ -1121,7 +1040,7 @@ export function LayoutScreen() {
     if (!picked.length) return;
     const pickedIds = new Set(picked.map(s => s.id));
 
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayerGroups(prev => prev
       .map(g => {
         const existing = g.members.filter(m => !pickedIds.has(m.stripId || m.pathId));
@@ -1135,7 +1054,7 @@ export function LayoutScreen() {
       })
       .filter(g => g.members.length > 0));
     setSelectedStripIds(picked.map(s => s.id));
-  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory]);
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const addStrip = () => {
     if (!selLayer) return;
@@ -1145,10 +1064,9 @@ export function LayoutScreen() {
     const id = existing ? existing.id : nextStripId(strips);
     const newStrip = makeStrip(selLayer, getLedCount(selLayer), id);
     const newStrips = [...strips.filter(s => s.id !== id), newStrip];
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setSelStripId(newStrip.id);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     scrollToStrip(newStrip.id);
   };
 
@@ -1178,10 +1096,9 @@ export function LayoutScreen() {
       patternId: null,
     };
     const newStrips = [...strips.filter(s => s.id !== id), newStrip];
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setSelStripId(newStrip.id);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     scrollToStrip(newStrip.id);
   };
 
@@ -1206,11 +1123,10 @@ export function LayoutScreen() {
         speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
       };
       const newStrips = [...strips, newStrip];
-      pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+      pushLayoutHistory();
       setStrips(newStrips);
       setSelStripId(newStrip.id);
       setSelectedStripIds([newStrip.id]);
-      lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
       setPathSel([]);
       setPathSelName('');
       scrollToStrip(newStrip.id);
@@ -1241,7 +1157,7 @@ export function LayoutScreen() {
       return strip;
     });
     const newStrips = [...strips, ...created];
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setSelStripId(created[0]?.id || null);
     setSelectedStripIds(created.map(s => s.id));
@@ -1261,11 +1177,10 @@ export function LayoutScreen() {
       setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
     }
 
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     setPathSel([]);
     setPathSelName('');
     scrollToStrip(created[0]?.id);
-  }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushHistory, lsSave]);
+  }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushLayoutHistory]);
 
   const addAllStrips = useCallback(() => {
     if (strips.length > 0 &&
@@ -1277,12 +1192,11 @@ export function LayoutScreen() {
     for (const l of layers.filter(l => l.pathData)) {
       newStrips.push(makeStrip(l, getLedCount(l), nextStripId(newStrips)));
     }
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     if (newStrips.length > 0) setSelStripId(newStrips[0].id);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     scrollToStrip(newStrips[0]?.id);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const removeStrip = useCallback((id) => {
     const newStrips = strips.filter(s => s.id !== id);
@@ -1295,7 +1209,7 @@ export function LayoutScreen() {
     const emptiedGroupIds = new Set(layerGroups
       .filter(g => g.members.length > 0 && g.members.every(m => (m.stripId || m.pathId) === id))
       .map(g => g.groupId));
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setLayerGroups(prev => prev
       .map(g => ({ ...g, members: g.members.filter(m => (m.stripId || m.pathId) !== id) }))
@@ -1305,8 +1219,7 @@ export function LayoutScreen() {
     setEditCounts(newEditCounts);
     setHidden(newHidden);
     if (selStripId === id) setSelStripId(null);
-    lsSave(newStrips, layers, newEditCounts, newHidden, svgText, viewBox, density);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushLayoutHistory]);
 
   const reverseStrip = (id) => {
     const newStrips = strips.map(s => {
@@ -1315,9 +1228,8 @@ export function LayoutScreen() {
       const pixels = s.pixels.slice().reverse();
       return { ...s, reversed, pixels };
     });
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
   };
 
   const selectLayer = (layerId) => {
@@ -1366,7 +1278,7 @@ export function LayoutScreen() {
     }));
     if (!startStrips.length) return;
 
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setSelectedStripIds(ids);
     setSelStripId(strip.id);
     setSelLayerId(null);
@@ -1423,13 +1335,12 @@ export function LayoutScreen() {
       stripDragPointRef.current = null;
       stripDragRef.current = null;
       setMovingStripIds([]);
-      lsSave(finalStrips, layers, editCounts, hidden, svgText, viewBox, density);
       setTimeout(() => { stripDragSuppressClickRef.current = false; }, 0);
     };
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave, toggleStripSelection]);
+  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSelection]);
 
   // ── Rename helpers ─────────────────────────────────────────────────────────
 
@@ -1454,7 +1365,7 @@ export function LayoutScreen() {
       layerId,
       ...(layer?.subPaths || []).map(path => path.pathId),
     ]);
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     const nextLayers = layers.filter(l => l.layerId !== layerId);
     const removedStrips = strips.filter(s => relatedPathIds.has(stripSourceKey(s)));
     const removedStripIds = new Set(removedStrips.map(s => s.id));
@@ -1478,8 +1389,7 @@ export function LayoutScreen() {
     setSelectedStripIds(prev => prev.filter(id => !removedStripIds.has(id)));
     if (selLayerId === layerId) setSelLayerId(null);
     if (selStripId && removedStripIds.has(selStripId)) setSelStripId(null);
-    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushLayoutHistory]);
 
   const deleteSelectedVectorPaths = useCallback(() => {
     if (!pathSel.length) return;
@@ -1549,7 +1459,7 @@ export function LayoutScreen() {
         ? liveGroupIds.has(item.id)
         : liveLayerIds.has(item.id));
 
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayers(nextLayers);
     setStrips(nextStrips);
     setEditCounts(nextEditCounts);
@@ -1561,8 +1471,7 @@ export function LayoutScreen() {
     setSelectedStripIds(prev => prev.filter(id => nextStrips.some(strip => strip.id === id)));
     if (selLayerId && deletedLayerIds.has(selLayerId)) setSelLayerId(null);
     if (selStripId && !nextStrips.some(strip => strip.id === selStripId)) setSelStripId(null);
-    lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
-  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, selLayerId, selStripId, pushHistory, lsSave]);
+  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, selLayerId, selStripId, pushLayoutHistory]);
 
   // ── Duplicate strip ────────────────────────────────────────────────────────
 
@@ -1578,12 +1487,11 @@ export function LayoutScreen() {
       pixels: s.pixels.slice(),
     };
     const newStrips = strips.flatMap(st => st.id === id ? [st, newStrip] : [st]);
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setSelStripId(newId);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     scrollToStrip(newId);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   // ── Layer group management ─────────────────────────────────────────────────
 
@@ -1630,7 +1538,7 @@ export function LayoutScreen() {
     const newStrips = [...remaining];
     newStrips.splice(Math.max(0, insertAt), 0, mergedStrip);
 
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setLayerGroups(prev => prev
       .map(g => ({ ...g, members: g.members.filter(m => !pickedIds.has(m.stripId || m.pathId)) }))
       .filter(g => g.members.length > 0));
@@ -1645,9 +1553,8 @@ export function LayoutScreen() {
     setSelStripId(mergedId);
     setSelectedStripIds([mergedId]);
     setStripSelectionName('');
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     scrollToStrip(mergedId);
-  }, [selectedStripIds, strips, stripSelectionName, layerGroups, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+  }, [selectedStripIds, strips, stripSelectionName, layerGroups, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const removeSelectedStrips = useCallback(() => {
     const selected = new Set(selectedStripIds);
@@ -1656,7 +1563,7 @@ export function LayoutScreen() {
     const emptiedGroupIds = new Set(layerGroups
       .filter(g => g.members.length > 0 && g.members.every(m => selected.has(m.stripId || m.pathId)))
       .map(g => g.groupId));
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setLayerGroups(prev => prev
       .map(g => ({ ...g, members: g.members.filter(m => !selected.has(m.stripId || m.pathId)) }))
@@ -1670,8 +1577,7 @@ export function LayoutScreen() {
     setSelectedStripIds([]);
     setStripSelectionName('');
     if (selected.has(selStripId)) setSelStripId(null);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
-  }, [selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushHistory, lsSave]);
+  }, [selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushLayoutHistory]);
 
   const deleteLayerGroup = useCallback((groupId) => {
     setLayerGroups(prev => prev.filter(g => g.groupId !== groupId));
@@ -1711,46 +1617,29 @@ export function LayoutScreen() {
   // ── Update strip property (with localStorage save) ─────────────────────────
 
   const updateStrip = useCallback((id, patch) => {
-    setStrips(prev => {
-      const next = prev.map(x => x.id === id ? { ...x, ...patch } : x);
-      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
-      return next;
-    });
-  }, [layers, editCounts, hidden, svgText, viewBox, density, lsSave]);
+    setStrips(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+  }, [setStrips]);
 
   const updateStripWithHistory = useCallback((id, patch) => {
-    setStrips(prev => {
-      pushHistory(prev, layers, editCounts, hidden, svgText, viewBox, density);
-      const next = prev.map(x => x.id === id ? { ...x, ...patch } : x);
-      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
-      return next;
-    });
-  }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+    pushLayoutHistory();
+    setStrips(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+  }, [setStrips, pushLayoutHistory]);
 
   const setStripOffset = useCallback((id, nextX, nextY, withHistory = false) => {
-    setStrips(prev => {
-      if (withHistory) pushHistory(prev, layers, editCounts, hidden, svgText, viewBox, density);
-      const next = prev.map(s => {
-        if (s.id !== id) return s;
-        return {
-          ...s,
-          x: nextX,
-          y: nextY,
-          pixels: sampleStripPixels(s.pathData, s.pixelCount, s.reversed, nextX, nextY),
-        };
-      });
-      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
-      return next;
-    });
-  }, [layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+    if (withHistory) pushLayoutHistory();
+    setStrips(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      return {
+        ...s,
+        x: nextX,
+        y: nextY,
+        pixels: sampleStripPixels(s.pathData, s.pixelCount, s.reversed, nextX, nextY),
+      };
+    }));
+  }, [setStrips, pushLayoutHistory]);
 
-  const updatePatchBoard = useCallback((mutate) => {
-    setPatchBoard(prev => {
-      const next = normalizePatchBoard(prev, strips);
-      mutate(next);
-      return normalizePatchBoard(next, strips);
-    });
-  }, [setPatchBoard, strips]);
+  // `updatePatchBoard` is provided by ProjectContext (it snapshots history first,
+  // so patch-board edits are undoable). No local definition — pulled from context.
 
   const nearestLedIndex = useCallback((event, strip) => {
     if (!svgRef.current || !strip?.pixels?.length) return null;
@@ -1825,31 +1714,22 @@ export function LayoutScreen() {
   }, [selectedWireCut, strips, updatePatchBoard]);
 
   const resampleStrip = useCallback((id, newCount) => {
-    setStrips(prev => {
-      const next = prev.map(s => {
-        if (s.id !== id) return s;
-        return rebuildStrip({ ...s, pixelCount: newCount });
-      });
-      lsSave(next, layers, editCounts, hidden, svgText, viewBox, density);
-      return next;
-    });
-  }, [layers, editCounts, hidden, svgText, viewBox, density, lsSave]);
+    setStrips(prev => prev.map(s => s.id === id ? rebuildStrip({ ...s, pixelCount: newCount }) : s));
+  }, [setStrips]);
 
   const handleDensityChange = useCallback((newDensity) => {
-    let saved;
-    setStrips(prev => { saved = recountStrips(prev, pxPerMm, newDensity); return saved; });
+    pushLayoutHistory();
+    setStrips(prev => recountStrips(prev, pxPerMm, newDensity));
     setEditCounts({});
     setDensity(newDensity);
-    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, newDensity); }, 0);
-  }, [pxPerMm, lsSave, layers, hidden, svgText, viewBox]);
+  }, [pxPerMm, setStrips, setEditCounts, setDensity, pushLayoutHistory]);
 
   const handleScaleChange = useCallback((nextPxPerMm) => {
-    let saved;
-    setStrips(prev => { saved = recountStrips(prev, nextPxPerMm, density); return saved; });
+    pushLayoutHistory();
+    setStrips(prev => recountStrips(prev, nextPxPerMm, density));
     setEditCounts({});
     setPxPerMm(nextPxPerMm);
-    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, density); }, 0);
-  }, [density, lsSave, layers, hidden, svgText, viewBox]);
+  }, [density, setStrips, setEditCounts, setPxPerMm, pushLayoutHistory]);
 
   const calibrateScaleFromStrip = useCallback((stripId, realCount) => {
     const strip = strips.find(s => s.id === stripId);
@@ -1860,13 +1740,11 @@ export function LayoutScreen() {
     if (!len || !Number.isFinite(count)) return;
     const nextPxPerMm = (len * density) / (count * 1000);
     if (!Number.isFinite(nextPxPerMm) || nextPxPerMm <= 0) return;
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
-    let saved;
-    setStrips(prev => { saved = recountStrips(prev, nextPxPerMm, density); return saved; });
+    pushLayoutHistory();
+    setStrips(prev => recountStrips(prev, nextPxPerMm, density));
     setPxPerMm(nextPxPerMm);
     setEditCounts({});
-    setTimeout(() => { if (saved) lsSave(saved, layers, {}, hidden, svgText, viewBox, density); }, 0);
-  }, [strips, density, layers, editCounts, hidden, svgText, viewBox, pushHistory, lsSave]);
+  }, [strips, density, setStrips, setPxPerMm, setEditCounts, pushLayoutHistory]);
 
   // ── Draw tool ──────────────────────────────────────────────────────────────
 
@@ -1905,13 +1783,12 @@ export function LayoutScreen() {
       speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
     };
     const newStrips = [...strips, newStrip];
-    pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
+    pushLayoutHistory();
     setStrips(newStrips);
     setSelStripId(newStrip.id);
-    lsSave(newStrips, layers, editCounts, hidden, svgText, viewBox, density);
     setPendingDraw(null);
     scrollToStrip(newStrip.id);
-  }, [pendingDraw, pendingDrawCount, pendingDrawName, strips, layers, editCounts, hidden, svgText, viewBox, density, pushHistory, lsSave]);
+  }, [pendingDraw, pendingDrawCount, pendingDrawName, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
 
   const cancelDraw = () => { setPendingDraw(null); };
 
@@ -2002,42 +1879,11 @@ export function LayoutScreen() {
   };
 
   // ── Undo / Redo ────────────────────────────────────────────────────────────
+  // Owned by ProjectContext's single snapshot stack (strip + patch-board edits
+  // share it). These thin wrappers keep the existing call sites/keyboard code.
 
-  const applySnapshot = (snap) => {
-    if (snap.svgText !== svgText) {
-      const doc = new DOMParser().parseFromString(snap.svgText || '', 'image/svg+xml');
-      const srcSvg = doc.querySelector('svg');
-      if (srcSvg) setPxPerMm(getPxPerMm(srcSvg));
-    }
-    setSvgText(snap.svgText);
-    setViewBox(snap.viewBox);
-    setDensity(snap.density);
-    if (snap.pxPerMm != null) setPxPerMm(snap.pxPerMm);
-    setLayers(snap.layers);
-    setStrips(snap.strips.map(rebuildStrip));
-    setEditCounts(snap.editCounts);
-    setHidden(snap.hidden);
-    if (snap.layerGroups) setLayerGroups(snap.layerGroups);
-    if (snap.layerOrder)  setLayerOrder(snap.layerOrder);
-  };
-
-  const doUndo = useCallback(() => {
-    if (!historyRef.current.length) return;
-    const snap = historyRef.current.pop();
-    futureRef.current.push(makeSnapshot(strips, layers, editCounts, hidden, svgText, viewBox, density));
-    setHistLen(historyRef.current.length);
-    setFutLen(futureRef.current.length);
-    applySnapshot(snap);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, makeSnapshot]);
-
-  const doRedo = useCallback(() => {
-    if (!futureRef.current.length) return;
-    const snap = futureRef.current.pop();
-    historyRef.current.push(makeSnapshot(strips, layers, editCounts, hidden, svgText, viewBox, density));
-    setHistLen(historyRef.current.length);
-    setFutLen(futureRef.current.length);
-    applySnapshot(snap);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, makeSnapshot]);
+  const doUndo = undoLayout;
+  const doRedo = redoLayout;
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 
@@ -2594,13 +2440,13 @@ export function LayoutScreen() {
           </button>
 
           {/* Undo / Redo */}
-          <button className="tb-btn icon" onClick={doUndo} disabled={histLen === 0}
-                  title={`Undo (⌘Z) · ${histLen} step${histLen !== 1 ? 's' : ''}`}>
-            {TbIcon.undo}{histLen > 0 && <span className="cnt">{histLen}</span>}
+          <button className="tb-btn icon" onClick={doUndo} disabled={layoutHistLen === 0}
+                  title={`Undo (⌘Z) · ${layoutHistLen} step${layoutHistLen !== 1 ? 's' : ''}`}>
+            {TbIcon.undo}{layoutHistLen > 0 && <span className="cnt">{layoutHistLen}</span>}
           </button>
-          <button className="tb-btn icon" onClick={doRedo} disabled={futLen === 0}
-                  title={`Redo (⌘⇧Z) · ${futLen} step${futLen !== 1 ? 's' : ''}`}>
-            {TbIcon.redo}{futLen > 0 && <span className="cnt">{futLen}</span>}
+          <button className="tb-btn icon" onClick={doRedo} disabled={layoutFutLen === 0}
+                  title={`Redo (⌘⇧Z) · ${layoutFutLen} step${layoutFutLen !== 1 ? 's' : ''}`}>
+            {TbIcon.redo}{layoutFutLen > 0 && <span className="cnt">{layoutFutLen}</span>}
           </button>
 
           <div className="tb-div"/>
