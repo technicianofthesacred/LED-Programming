@@ -4,18 +4,21 @@
    radial-halo look, and optionally streamed to the card's LEDs through
    the bridge frame protocol (v1). Compute lives in lib/mandalaEngine.js;
    transport in lib/cardFrameStream.js — this file is UI + wiring only. */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../state/ProjectContext.jsx';
 import {
   createMandalaEngine,
   frameToHex,
-  resampleFrame,
-  angOf,
-  rfOf,
   MODE_LIBRARY,
   RINGS,
   TOTAL_PIXELS,
 } from '../lib/mandalaEngine.js';
+import { createShowAudioFeatures } from '../lib/showAudioFeatures.js';
+import {
+  createConnectedSpatialTemplate,
+  createMandalaSpatialTemplate,
+  hasUsableConnectedLayout,
+} from '../lib/showSpatialTemplate.js';
 import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
@@ -58,26 +61,29 @@ function ensureGlowSprite() {
 
 // `colors` is the engine's shared colorFrame() buffer (Float32Array TOTAL*3),
 // computed once per frame and reused by the LED-frame encode.
-function renderMandala(ctx, engine, geom, colors) {
+function renderSpatial(ctx, engine, geom, colors, samples, templateKind) {
   const { W, cx, cy, maxR } = geom;
   const master = engine.getMaster();
   const haveGlow = ensureGlowSprite();
   const glowSize = GLOW_SPRITE_R * 2;
   ctx.globalCompositeOperation = 'source-over';
   ctx.fillStyle = '#050403';
-  ctx.beginPath(); ctx.arc(cx, cy, maxR * 1.08, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = 'rgba(150,120,80,.04)';
-  ctx.lineWidth = Math.max(1, W * 0.002);
-  for (let r = 0; r < RINGS.length; r++) {
-    ctx.beginPath(); ctx.arc(cx, cy, RINGS[r].rf * maxR, 0, Math.PI * 2); ctx.stroke();
+  if (templateKind === 'mandala') {
+    ctx.beginPath(); ctx.arc(cx, cy, maxR * 1.08, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = 'rgba(150,120,80,.04)';
+    ctx.lineWidth = Math.max(1, W * 0.002);
+    for (let r = 0; r < RINGS.length; r++) {
+      ctx.beginPath(); ctx.arc(cx, cy, RINGS[r].rf * maxR, 0, Math.PI * 2); ctx.stroke();
+    }
+  } else {
+    ctx.fillRect(0, 0, geom.W, geom.H);
   }
   const dot = 0.013 * maxR;
   ctx.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < TOTAL_PIXELS; i++) {
+  for (let i = 0; i < samples.length; i++) {
     const v = Math.min(1, engine.getIntensity(i) * master);
-    const r = rfOf[i] * maxR;
-    const x = cx + Math.cos(angOf[i]) * r;
-    const y = cy + Math.sin(angOf[i]) * r;
+    const x = cx + samples[i].x * maxR;
+    const y = cy + samples[i].y * maxR;
     const cr = colors[i * 3], cg = colors[i * 3 + 1], cb = colors[i * 3 + 2];
     if (v > 0.03 && haveGlow) {
       const gr = dot * (1.4 + v * 3.0);
@@ -146,24 +152,52 @@ function BandMeter({ label, value }) {
 }
 
 function ShowScreen({ go }) {
-  const { strips } = useProject();
-  const projectPixels = strips.reduce((sum, strip) => sum + (strip.pixels?.length || 0), 0) || TOTAL_PIXELS;
+  const { strips, hidden } = useProject();
+  const mandalaTemplate = useMemo(() => createMandalaSpatialTemplate(), []);
+  const connectedUsable = useMemo(
+    () => hasUsableConnectedLayout(strips, hidden),
+    [strips, hidden],
+  );
+  const connectedTemplate = useMemo(
+    () => createConnectedSpatialTemplate({ strips, hidden }),
+    [strips, hidden],
+  );
+  const [requestedTemplate, setRequestedTemplate] = useState('connected');
+  const activeTemplateKind = requestedTemplate === 'connected' && connectedUsable
+    ? 'connected'
+    : 'mandala';
+  const activeTemplate = activeTemplateKind === 'connected' ? connectedTemplate : mandalaTemplate;
+  const activePixels = activeTemplate.length || TOTAL_PIXELS;
+  const outputOrder = useMemo(() => {
+    const byStrip = new Map();
+    return activeTemplate.map((sample) => {
+      const pixelIndex = byStrip.get(sample.stripId) || 0;
+      byStrip.set(sample.stripId, pixelIndex + 1);
+      return `${sample.stripId}:${pixelIndex}`;
+    }).join(',');
+  }, [activeTemplate]);
+  const samplePositions = useMemo(() => activeTemplate
+    .map((sample) => `${sample.x.toFixed(3)}:${sample.y.toFixed(3)}`)
+    .join(','), [activeTemplate]);
 
   // ── engine + mutable per-frame machinery live in refs ────────────────────
   const engineRef = useRef(null);
   if (!engineRef.current) engineRef.current = createMandalaEngine();
   const canvasRef = useRef(null);
+  const stageRef = useRef(null);
+  const templateRef = useRef(activeTemplate);
+  const templateKindRef = useRef(activeTemplateKind);
   const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
+  const featureRef = useRef(null);
   const playerRef = useRef(null);
   const fileInputRef = useRef(null);
   const streamRef = useRef(null);
   const rgbBufRef = useRef(null);
-  const resampleBufRef = useRef(null);
   const colorBufRef = useRef(null);
   const hexBufRef = useRef(null);
   const healthNoticeShownRef = useRef(false);
-  const pixelsRef = useRef(projectPixels);
-  pixelsRef.current = projectPixels;
+  const pausedRef = useRef(false);
+  const resetTimingRef = useRef(false);
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [modeKey, setModeKey] = useState('strata');
@@ -172,12 +206,22 @@ function ShowScreen({ go }) {
   const [master, setMaster] = useState(0.75);
   const [source, setSource] = useState('quiet'); // quiet | mic | file
   const [fileName, setFileName] = useState('');
+  const [songPaused, setSongPaused] = useState(false);
   const [onLights, setOnLights] = useState(false);
   const [lightsBusy, setLightsBusy] = useState(false);
   const [notice, setNotice] = useState(null); // { kind: 'err'|'info', text, action? }
   const [levels, setLevels] = useState({ bass: 0, mid: 0, high: 0, energy: 0 });
 
   const modeInfo = MODE_LIBRARY.find((m) => m.key === modeKey) || MODE_LIBRARY[0];
+
+  useEffect(() => {
+    templateRef.current = activeTemplate;
+    templateKindRef.current = activeTemplateKind;
+    engineRef.current.setTemplate(activeTemplate);
+    rgbBufRef.current = null;
+    colorBufRef.current = null;
+    hexBufRef.current = null;
+  }, [activeTemplate, activeTemplateKind]);
 
   // ── the one animation loop: analyze → tick → paint → (stream) ───────────
   useEffect(() => {
@@ -203,27 +247,43 @@ function ShowScreen({ go }) {
     let prev = performance.now();
     let meterAt = 0;
     let encodeAt = 0;
+    let frameVersion = 0;
     const step = (now) => {
+      if (resetTimingRef.current) {
+        prev = now;
+        resetTimingRef.current = false;
+      }
+      if (pausedRef.current) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
       const dt = Math.min(0.05, (now - prev) / 1000);
       prev = now;
       const engine = engineRef.current;
       const audio = audioRef.current;
-      if (audio.analyser) engine.analyze(audio.analyser);
+      if (audio.analyser && featureRef.current && engine.isListening()) {
+        featureRef.current.updateAnalyser(audio.analyser, dt);
+        engine.setFeatures(featureRef.current.getFeatures());
+      }
       engine.tick(dt);
       // per-pixel colors computed ONCE per frame, shared by the canvas paint
       // and the LED-frame encode below
       colorBufRef.current = engine.colorFrame(colorBufRef.current);
-      renderMandala(ctx, engine, geom, colorBufRef.current);
+      renderSpatial(
+        ctx,
+        engine,
+        geom,
+        colorBufRef.current,
+        templateRef.current,
+        templateKindRef.current,
+      );
+      frameVersion += 1;
+      if (stageRef.current) stageRef.current.dataset.frameVersion = String(frameVersion);
       const stream = streamRef.current;
       if (stream && now - encodeAt >= STREAM_ENCODE_GAP_MS) {
         encodeAt = now;
         rgbBufRef.current = engine.frameRGB(rgbBufRef.current, colorBufRef.current);
-        let frame = rgbBufRef.current;
-        if (pixelsRef.current !== TOTAL_PIXELS) {
-          resampleBufRef.current = resampleFrame(frame, pixelsRef.current, resampleBufRef.current);
-          frame = resampleBufRef.current;
-        }
-        hexBufRef.current = frameToHex(frame, hexBufRef.current);
+        hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
         stream.push(hexBufRef.current);
       }
       if (now - meterAt > 120) {
@@ -265,7 +325,7 @@ function ShowScreen({ go }) {
     const onVisibility = () => {
       if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
       const audio = audioRef.current;
-      if (audio.ctx && (audio.ctx.state === 'suspended' || audio.ctx.state === 'interrupted')) {
+      if (!pausedRef.current && audio.ctx && (audio.ctx.state === 'suspended' || audio.ctx.state === 'interrupted')) {
         audio.ctx.resume().catch(() => { /* resumes on the next user gesture */ });
       }
       const stream = streamRef.current;
@@ -288,7 +348,13 @@ function ShowScreen({ go }) {
       audio.ctx = new Ctx();
       audio.analyser = audio.ctx.createAnalyser();
       audio.analyser.fftSize = 2048;
-      audio.analyser.smoothingTimeConstant = 0.75;
+      // Feature extraction owns the musical envelope, so the browser analyser
+      // only gets a light anti-jitter pass instead of a second heavy smoother.
+      audio.analyser.smoothingTimeConstant = 0.15;
+      featureRef.current = createShowAudioFeatures({
+        sampleRate: audio.ctx.sampleRate,
+        fftSize: audio.analyser.fftSize,
+      });
     }
     // iOS reports 'interrupted' (phone call, Siri, control center) — treat it
     // exactly like 'suspended' and try to resume.
@@ -316,6 +382,9 @@ function ShowScreen({ go }) {
   const goQuiet = useCallback(() => {
     stopMicTracks();
     try { playerRef.current?.pause(); } catch { /* noop */ }
+    pausedRef.current = false;
+    resetTimingRef.current = true;
+    setSongPaused(false);
     engineRef.current.setListening(false);
     setSource('quiet');
   }, [stopMicTracks]);
@@ -327,6 +396,9 @@ function ShowScreen({ go }) {
     const audio = ensureAudio();
     try {
       try { playerRef.current?.pause(); } catch { /* noop */ }
+      pausedRef.current = false;
+      resetTimingRef.current = true;
+      setSongPaused(false);
       const mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       });
@@ -360,11 +432,31 @@ function ShowScreen({ go }) {
     if (!audio.elSource) audio.elSource = audio.ctx.createMediaElementSource(player);
     connectSource(audio.elSource, true);
     void player.play();
+    pausedRef.current = false;
+    resetTimingRef.current = true;
+    setSongPaused(false);
     engineRef.current.setListening(true);
     setFileName(file.name);
     setSource('file');
     setNotice(null);
   }, [connectSource, ensureAudio, stopMicTracks]);
+
+  const toggleSongPause = useCallback(() => {
+    if (source !== 'file' || !fileName) return;
+    const audio = audioRef.current;
+    const player = playerRef.current;
+    if (pausedRef.current) {
+      pausedRef.current = false;
+      resetTimingRef.current = true;
+      setSongPaused(false);
+      if (audio.ctx) void audio.ctx.resume();
+      void player?.play();
+      return;
+    }
+    try { player?.pause(); } catch { /* noop */ }
+    pausedRef.current = true;
+    setSongPaused(true);
+  }, [fileName, source]);
 
   // ── control handlers ─────────────────────────────────────────────────────
   const chooseMode = useCallback((key) => {
@@ -494,7 +586,7 @@ function ShowScreen({ go }) {
           </div>
           <div className="tp-spring" />
           <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
-            {onLights ? `playing on ${projectPixels} LEDs` : `${projectPixels} LEDs ready`}
+            {onLights ? `playing on ${activePixels} LEDs` : `${activePixels} LEDs ready`}
           </span>
           <button
             type="button"
@@ -509,15 +601,48 @@ function ShowScreen({ go }) {
         {/* body: stage + controls */}
         <div className="sh-body">
           <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, background: 'var(--bg-canvas)', overflow: 'auto' }}>
-            <div style={{
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                data-testid="show-template-mandala"
+                onClick={() => setRequestedTemplate('mandala')}
+                title="Preview and stream the five-ring Mandala map"
+                style={chipStyle(activeTemplateKind === 'mandala')}
+              >
+                Mandala
+              </button>
+              <button
+                type="button"
+                data-testid="show-template-connected"
+                disabled={!connectedUsable}
+                onClick={() => setRequestedTemplate('connected')}
+                title={connectedUsable ? 'Preview and stream your connected layout' : 'No visible connected pixels'}
+                style={{ ...chipStyle(activeTemplateKind === 'connected'), opacity: connectedUsable ? 1 : 0.45, cursor: connectedUsable ? 'pointer' : 'not-allowed' }}
+              >
+                Connected layout
+              </button>
+            </div>
+            {!connectedUsable && (
+              <div style={{ maxWidth: 460, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-faint)', textAlign: 'center' }}>
+                Connected layout has no visible pixels, so Show is using the Mandala template.
+              </div>
+            )}
+            <div
+              ref={stageRef}
+              data-testid="show-stage"
+              data-template={activeTemplateKind}
+              data-frame-size={activePixels}
+              data-output-order={outputOrder}
+              data-sample-positions={samplePositions}
+              style={{
               position: 'relative',
               width: 'min(100%, 520px)',
               aspectRatio: '1 / 1',
-              borderRadius: '50%',
+              borderRadius: activeTemplateKind === 'mandala' ? '50%' : 'var(--r-lg)',
               background: 'radial-gradient(circle at 50% 44%, #160f09 0%, #0b0705 78%, #060403 100%)',
               boxShadow: '0 40px 90px rgba(0,0,0,.55), inset 0 0 0 2px rgba(120,90,55,.22), inset 0 0 60px rgba(0,0,0,.7)',
             }}>
-              <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', borderRadius: '50%' }} />
+              <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', borderRadius: activeTemplateKind === 'mandala' ? '50%' : 'var(--r-lg)' }} />
             </div>
             <div className="mono" style={{ fontSize: 10.5, letterSpacing: '0.06em', color: 'var(--text-lo)', textAlign: 'center' }}>
               {modeInfo.name} · {preset === 'Calm' ? 'calm' : 'listening closely'}
@@ -555,7 +680,15 @@ function ShowScreen({ go }) {
                 <Chip on={source === 'quiet'} onClick={goQuiet} title="Stop listening — the piece settles to a dim glow">Quiet</Chip>
               </ChipRow>
               {source === 'file' && fileName && (
-                <div className="mono" style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                  <button type="button" className="btn" data-testid="show-pause" onClick={toggleSongPause}>
+                    {songPaused ? 'Resume song' : 'Pause song'}
+                  </button>
+                  <span className="mono" data-testid="show-transport-state" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
+                    {songPaused ? 'paused' : 'playing'}
+                  </span>
+                  <span className="mono" style={{ minWidth: 0, fontSize: 10, color: 'var(--text-faint)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fileName}</span>
+                </div>
               )}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <BandMeter label="deep" value={levels.bass} />
@@ -596,7 +729,7 @@ function ShowScreen({ go }) {
       </div>
 
       {/* hidden audio plumbing */}
-      <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
+      <input ref={fileInputRef} data-testid="show-song-input" type="file" accept="audio/*" style={{ display: 'none' }} onChange={onFile} />
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio ref={playerRef} style={{ display: 'none' }} />
     </div>
