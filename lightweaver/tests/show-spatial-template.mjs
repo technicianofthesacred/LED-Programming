@@ -120,4 +120,42 @@ assert.ok([...vertical, ...point].every((sample) => SAMPLE_KEYS.every((key) => (
   typeof sample[key] !== 'number' || Number.isFinite(sample[key])
 ))));
 
+// Persisted or caller-provided malformed containers degrade to an empty layout.
+for (const strips of [null, false, 42, {}, 'not-strips']) {
+  assert.equal(hasUsableConnectedLayout(strips, null), false);
+  assert.deepEqual(createConnectedSpatialTemplate({ strips, hidden: null }), []);
+}
+assert.deepEqual(createConnectedSpatialTemplate(null), []);
+assert.equal(
+  hasUsableConnectedLayout([{ id: 'visible', pixels: [{ x: 0, y: 0 }] }], null),
+  true,
+  'a null hidden map does not hide or crash a valid layout',
+);
+assert.equal(
+  createConnectedSpatialTemplate({
+    strips: [{ id: 'visible', pixels: [{ x: 0, y: 0 }] }],
+    hidden: 'not-a-map',
+  }).length,
+  1,
+);
+
+// Large installations must not pass every coordinate through Math.min/max spread.
+const LARGE_POINT_COUNT = 125_001;
+const large = createConnectedSpatialTemplate({
+  strips: [{
+    id: 'large',
+    pixels: Array.from({ length: LARGE_POINT_COUNT }, (_, index) => ({
+      x: index,
+      y: index % 2 === 0 ? 10 : 20,
+    })),
+  }],
+});
+assert.equal(large.length, LARGE_POINT_COUNT);
+assert.equal(large[0].outputIndex, 0);
+assert.equal(large.at(-1).outputIndex, LARGE_POINT_COUNT - 1);
+assertClose(large[0].x, -1, 'large layout minimum x');
+assertClose(large.at(-1).x, 1, 'large layout maximum x');
+assertClose(large[0].y, -0.00008, 'large layout centered minimum y');
+assertClose(large[1].y, 0.00008, 'large layout centered maximum y');
+
 console.log('show-spatial-template tests passed');

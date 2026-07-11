@@ -20,6 +20,14 @@ function validPoints(strip) {
   ));
 }
 
+function normalizeStrips(strips) {
+  return Array.isArray(strips) ? strips : [];
+}
+
+function normalizeHidden(hidden) {
+  return hidden && typeof hidden === 'object' ? hidden : {};
+}
+
 export function createMandalaSpatialTemplate() {
   return Array.from({ length: TOTAL_PIXELS }, (_, outputIndex) => {
     const stripIndex = ringOf[outputIndex];
@@ -41,27 +49,39 @@ export function createMandalaSpatialTemplate() {
 }
 
 export function hasUsableConnectedLayout(strips = [], hidden = {}) {
-  return strips.some((strip) => (
-    strip && !hidden[strip.id] && !strip.hidden && validPoints(strip).length > 0
+  const sourceStrips = normalizeStrips(strips);
+  const hiddenById = normalizeHidden(hidden);
+  return sourceStrips.some((strip) => (
+    strip && !hiddenById[strip.id] && !strip.hidden && validPoints(strip).length > 0
   ));
 }
 
-export function createConnectedSpatialTemplate({ strips = [], hidden = {} } = {}) {
-  const physicalStrips = strips.flatMap((strip, stripIndex) => {
-    if (!strip || hidden[strip.id] || strip.hidden) return [];
-    const points = validPoints(strip);
-    if (points.length === 0) return [];
-    return [{ strip, stripIndex, points }];
-  });
-  const points = physicalStrips.flatMap(({ points: stripPoints }) => stripPoints);
-  if (points.length === 0) return [];
+export function createConnectedSpatialTemplate(options = {}) {
+  const source = options && typeof options === 'object' ? options : {};
+  const strips = normalizeStrips(source.strips);
+  const hidden = normalizeHidden(source.hidden);
+  const physicalStrips = [];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
 
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
+  for (let stripIndex = 0; stripIndex < strips.length; stripIndex += 1) {
+    const strip = strips[stripIndex];
+    if (!strip || hidden[strip.id] || strip.hidden) continue;
+    const points = validPoints(strip);
+    if (points.length === 0) continue;
+    physicalStrips.push({ strip, stripIndex, points });
+    for (const point of points) {
+      if (point.x < minX) minX = point.x;
+      if (point.x > maxX) maxX = point.x;
+      if (point.y < minY) minY = point.y;
+      if (point.y > maxY) maxY = point.y;
+    }
+  }
+
+  if (physicalStrips.length === 0) return [];
+
   const range = Math.max(maxX - minX, maxY - minY);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
