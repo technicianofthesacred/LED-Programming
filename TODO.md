@@ -7,7 +7,7 @@ Living list of outstanding work on the LED installation controller. Project is b
 ### Layout screen redesign (planned 2026-07-10)
 
 - [ ] **Execute the Layout redesign plan** — Phase 1 state consolidation (single wire-order truth, one undo stack, one selection model), then the Draw | Size | Wire mode shell, then surface Send-to-card + Export ledmap _(agent · deep)_
-  Full file-level plan with step ordering, risk register, and parity checklist. DONE so far: Phase 1 steps 1–3 (chain is the single wire-order truth, parity-tested) and the Playwright spec repair (22 passing). NEXT: Phase 1 steps 4–9 (strip id namespace, layoutReducer, single undo stack, selection consolidation, chain-based reorder). → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+  Full file-level plan with step ordering, risk register, and parity checklist. DONE: all of Phase 1 (chain is the single wire-order truth, strip id namespace, layoutReducer in ProjectContext, one undo stack + autosave, one selection object, chain-driven reorder) and the Playwright spec repair (23 passing, mobile overflow fixed). NEXT: Phase 2 — the Draw | Size | Wire mode shell (steps 1–14 in the plan, starting with pure extractions), then Phase 3 Send-to-card + Export ledmap. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
 
 ### Mandala listening-gallery visualizer (in progress — laptop simulator)
 
