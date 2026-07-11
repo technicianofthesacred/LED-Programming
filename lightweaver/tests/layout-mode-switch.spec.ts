@@ -1,0 +1,96 @@
+import { test, expect } from '@playwright/test';
+
+// Phase 2 step 6 (docs/layout-redesign-plan.md) — the Draw | Size | Wire mode
+// switch + hash sync + cancelActiveTool. No panel content has moved yet: Draw
+// mode renders the existing side panel verbatim; Size/Wire render stubs.
+
+async function gotoLayout(page: any, hash = '#screen=layout') {
+  await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+test('keyboard 1/2/3 update the hash mode param and the active segment', async ({ page }) => {
+  await gotoLayout(page);
+
+  await expect(page.getByTestId('layout-mode-switch')).toBeVisible();
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+
+  await page.keyboard.press('2');
+  await expect(page).toHaveURL(/mode=size/);
+  await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-mode-draw')).not.toHaveClass(/on/);
+  await expect(page.getByTestId('layout-size-stub')).toBeVisible();
+
+  await page.keyboard.press('3');
+  await expect(page).toHaveURL(/mode=wire/);
+  await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
+
+  await page.keyboard.press('1');
+  await expect(page).toHaveURL(/mode=draw/);
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-size-stub')).toHaveCount(0);
+  await expect(page.getByTestId('layout-wire-stub')).toHaveCount(0);
+});
+
+test('reloading with #screen=layout&mode=wire opens directly in Wire mode', async ({ page }) => {
+  await gotoLayout(page, '#screen=layout&mode=wire');
+
+  await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
+  await expect(page.getByText('Wire tools arrive in the next step')).toBeVisible();
+});
+
+test('switching mode mid-draw cancels the in-progress freehand strip', async ({ page }) => {
+  await gotoLayout(page);
+
+  const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
+  await drawBtn.click();
+  await expect(drawBtn).toHaveClass(/active/);
+
+  // Click twice in the empty top-left corner of the canvas — the default
+  // two-circle hardware layout (viewBox 0 0 640 400, circles centered at
+  // 320,200 with radius <=144) never reaches this corner.
+  const svg = page.locator('.lw-viewport svg');
+  const box = await svg.boundingBox();
+  if (!box) throw new Error('canvas svg not found');
+  await page.mouse.click(box.x + box.width * 0.06, box.y + box.height * 0.08);
+  await page.mouse.click(box.x + box.width * 0.14, box.y + box.height * 0.16);
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-size-stub')).toBeVisible();
+
+  await page.keyboard.press('1');
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  // Cancelled: no leftover draw hint / waypoints, and the Draw tool is inactive.
+  await expect(page.locator('.la-draw-hint')).toHaveCount(0);
+  await expect(drawBtn).not.toHaveClass(/active/);
+  await expect(drawBtn).toHaveText('Draw');
+});
+
+test('clicking the segments switches mode; other screens are unaffected', async ({ page }) => {
+  await gotoLayout(page);
+
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page).toHaveURL(/mode=wire/);
+  await expect(page.getByTestId('layout-wire-stub')).toBeVisible();
+
+  await page.getByTestId('layout-mode-draw').click();
+  await expect(page).toHaveURL(/mode=draw/);
+  await expect(page.getByTestId('layout-wire-stub')).toHaveCount(0);
+
+  // Toolbar and canvas render identically across modes this step — the
+  // Import SVG button and canvas stage are present regardless of mode.
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
+  await expect(page.locator('.lw-viewport svg')).toBeVisible();
+
+  // A totally different screen still loads fine — the mode hash-merge never
+  // fights Shell's `#screen=` writes (src/v3/app.jsx).
+  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.chips[aria-label="Target sections"]')).toBeVisible();
+  await expect(page.locator('.rail-item.active')).toContainText('Patterns');
+});

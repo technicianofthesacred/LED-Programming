@@ -26,6 +26,29 @@ import {
   normalizePatchBoard,
 } from '../../../lib/patchBoard.js';
 
+// Draw | Size | Wire — deep-linked via `#screen=layout&mode=<x>`.
+const LAYOUT_MODES = ['draw', 'size', 'wire'];
+
+function parseModeFromHash() {
+  if (typeof window === 'undefined') return 'draw';
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const raw = params.get('mode');
+  return LAYOUT_MODES.includes(raw) ? raw : 'draw';
+}
+
+// Merges `mode=<x>` into whatever's already in the hash (e.g. `screen=layout`)
+// instead of overwriting it — Shell (src/v3/app.jsx) owns `screen=` writes and
+// re-derives its `view` state only from that key, so this never fights it.
+function mergeModeIntoHash(nextMode) {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  params.set('mode', nextMode);
+  const nextHash = `#${params.toString()}`;
+  if (window.location.hash !== nextHash) {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${nextHash}`);
+  }
+}
+
 // Canvas: pan/zoom/wheel, lasso, strip move + nudge, draw mode + waypoints,
 // keyboard shortcuts, hover state, preview toggles, and every derived
 // visualisation memo the <svg> tree renders. Cross-hook mutators arrive via
@@ -58,7 +81,10 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   const { removeStrip, removeSelectedStrips, groupSelectedStrips, mergeSelectedStrips, setStripOffset } = stripsApi;
   const { deleteSelectedVectorPaths, deleteLayer, createLayerGroup, addAllStrips, artworkHTML } = artworkApi;
-  const { wireOverlayMode, selectedWireCut } = wireApi;
+  const {
+    wireOverlayMode, selectedWireCut,
+    setWireOverlayMode, setSelectedWireCut, setLinkRouteIds,
+  } = wireApi;
 
   // ── Preview toggles ────────────────────────────────────────────────────────
   const [showLight, setShowLight]   = useState(false);
@@ -76,6 +102,34 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const [pendingDrawName, setPendingDrawName] = useState('');
   const [pendingDrawCount, setPendingDrawCount] = useState(0);
   const pendingDrawNameRef = useRef(null);
+
+  // ── Mode (Draw | Size | Wire) — ephemeral, never in undo/autosave ──────────
+  // Deep-linked via `#screen=layout&mode=<x>`; the initial read tolerates a
+  // missing/invalid param (falls back to 'draw'). Writes only happen on an
+  // explicit mode change (setMode), merging into whatever hash already exists
+  // so Shell's own `#screen=` writes (src/v3/app.jsx) are never fought.
+  const [mode, setModeState] = useState(() => parseModeFromHash());
+
+  // Clears every in-progress tool's ephemeral state (draw waypoints/ghost/
+  // pending-name panel + the wire chop/link overlay) without touching any
+  // persisted/undoable state. Called before every mode switch, and by the
+  // Escape handler's draw-cancel branch.
+  const cancelActiveTool = useCallback(() => {
+    setDrawMode(false);
+    setWaypoints([]);
+    setGhostPt(null);
+    setPendingDraw(null);
+    setWireOverlayMode('idle');
+    setLinkRouteIds([]);
+    setSelectedWireCut(null);
+  }, [setWireOverlayMode, setLinkRouteIds, setSelectedWireCut]);
+
+  const setMode = useCallback((nextMode) => {
+    if (!LAYOUT_MODES.includes(nextMode) || nextMode === mode) return;
+    cancelActiveTool();
+    setModeState(nextMode);
+    mergeModeIntoHash(nextMode);
+  }, [mode, cancelActiveTool]);
 
   // ── Rubber-band lasso — coords stored in CLIENT (viewport px), not SVG ──────
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -304,7 +358,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       }
 
       if (e.key === 'Escape') {
-        if (drawMode) { setDrawMode(false); setWaypoints([]); setGhostPt(null); }
+        if (drawMode) { cancelActiveTool(); }
         else if (pendingDraw) { cancelDraw(); }
         else { clearLayoutSelection(); }
         return;
@@ -331,6 +385,9 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
       // Single-key shortcuts
       switch (e.key) {
+        case '1': setMode('draw'); break;
+        case '2': setMode('size'); break;
+        case '3': setMode('wire'); break;
         case 's': setDrawMode(false); setWaypoints([]); setGhostPt(null); break;
         case 'd': setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); break;
         case 'Backspace':
@@ -389,7 +446,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selection, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [drawMode, pendingDraw, selection, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden, cancelActiveTool, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Memoised visualisation data ────────────────────────────────────────────
   const isEditingGesture = movingStripIds.length > 0 || !!rubberBand;
@@ -739,6 +796,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const glowStdDev = effectiveGlowMode === 'outward' ? 2.8 : effectiveGlowMode === 'inward' ? 0.8 : 1.6;
 
   return {
+    // mode
+    mode, setMode, cancelActiveTool,
     // preview
     showLight, setShowLight,
     showLeds, setShowLeds,

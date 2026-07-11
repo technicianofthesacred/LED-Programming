@@ -9,6 +9,7 @@ import {
   EmitCompass,
   InlineRename,
 } from './layout/shared/InspectorPrimitives.jsx';
+import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
 import {
   STRIP_COLORS,
   DENSITY_OPTIONS,
@@ -111,6 +112,8 @@ export function LayoutScreen() {
     // import
     error, setError, dragOver, fileRef, loadRef,
     handleFile, handleDragOver, handleDragLeave, handleDrop, saveProject, handleLoad,
+    // mode (Draw | Size | Wire)
+    mode, setMode,
   } = useLayoutState();
 
   const canvasProps = {
@@ -147,6 +150,10 @@ export function LayoutScreen() {
 
       {/* ── Toolbar (mockup .toolbar) ──────────────────────────────── */}
         <div className="toolbar">
+          <ModeSwitch mode={mode} setMode={setMode}/>
+
+          <div className="tb-div"/>
+
           <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
                   title="Import an SVG to map LED strips">
             {TbIcon.import}Import SVG
@@ -324,6 +331,14 @@ export function LayoutScreen() {
 
       {/* ── Right panel (mockup .side) ─────────────────────────────── */}
       <aside className="side">
+      {mode !== 'draw' ? (
+        <div className="la-mode-stub" data-testid={`layout-${mode}-stub`}>
+          {mode === 'size'
+            ? 'Size tools arrive in the next step'
+            : 'Wire tools arrive in the next step'}
+        </div>
+      ) : (
+      <>
 
         {error && (
           <div className="la-error-banner">
@@ -1075,6 +1090,8 @@ export function LayoutScreen() {
             </button>
           </div>
         )}
+      </>
+      )}
       </aside>
       </div>{/* .la */}
     </div>
