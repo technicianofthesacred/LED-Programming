@@ -21,6 +21,7 @@ import {
   RINGS,
   TOTAL_PIXELS,
 } from '../src/lib/mandalaEngine.js';
+import { createMandalaSpatialTemplate } from '../src/lib/showSpatialTemplate.js';
 
 // ── geometry + library shape ─────────────────────────────────────────────
 assert.equal(TOTAL_PIXELS, 675, 'the hardware ring map is 675 pixels');
@@ -36,6 +37,55 @@ assert.deepEqual(
   'mode order is the sim library order, slow → lively',
 );
 assert.equal(PRESETS.Active.modDepth, 1.5, 'Active deepens modulation (never speeds motion)');
+
+// ── spatial template + full audio feature contract ───────────────────────
+{
+  const defaultTemplate = createMandalaSpatialTemplate();
+  const compactTemplate = defaultTemplate.filter((_, index) => index % 97 === 0);
+  const engine = createMandalaEngine({ template: compactTemplate });
+  assert.equal(engine.frameRGB().length, compactTemplate.length * 3,
+    'constructor sizes frame buffers to the supplied spatial samples');
+  assert.equal(engine.colorFrame().length, compactTemplate.length * 3,
+    'constructor sizes color buffers to the supplied spatial samples');
+
+  engine.setMode('spiral');
+  engine.setPreset('Active');
+  engine.setMaster(0.61);
+  engine.setSensitivity(2.2);
+  engine.setTemplate(defaultTemplate.slice(0, 11));
+  assert.equal(engine.frameRGB().length, 33, 'setTemplate rebuilds buffers for new geometry');
+  assert.equal(engine.getMode(), 'spiral', 'setTemplate preserves the selected mode');
+  assert.equal(engine.getPreset(), 'Active', 'setTemplate preserves the preset');
+  assert.equal(engine.getMaster(), 0.61, 'setTemplate preserves master');
+  assert.equal(engine.getSensitivity(), 2.2, 'setTemplate preserves sensitivity');
+
+  const supplied = { bass: -1, mid: 0.35, high: 2, energy: 0.7, centroid: 0.55, flux: 0.4, beat: 0.9 };
+  engine.setFeatures(supplied);
+  supplied.mid = 1;
+  assert.deepEqual(engine.getLevels(), {
+    bass: 0, mid: 0.35, high: 1, energy: 0.7, centroid: 0.55, flux: 0.4, beat: 0.9,
+  }, 'setFeatures clamps and copies the complete analyzer feature vector');
+}
+
+// An equivalent spatial coordinate renders identically whether it lives in the
+// full Mandala template or a one-sample fixture. This catches accidental reads
+// from the legacy ringOf/rfOf/angOf arrays inside effects.
+{
+  const template = createMandalaSpatialTemplate();
+  const sourceIndex = 511;
+  const full = createMandalaEngine({ template });
+  const one = createMandalaEngine({ template: [{ ...template[sourceIndex], outputIndex: 0 }] });
+  for (const engine of [full, one]) {
+    engine.setMode('lattice');
+    engine.setListening(true);
+    for (let frame = 0; frame < 90; frame += 1) {
+      engine.setFeatures({ bass: 0.62, mid: 0.48, high: 0.31, energy: 0.56, centroid: 0.44, flux: 0.2, beat: 0.7 });
+      engine.tick(1 / 30);
+    }
+  }
+  assert.ok(Math.abs(full.getIntensity(sourceIndex) - one.getIntensity(0)) < 1e-6,
+    'effect evaluation has template parity for equivalent coordinates');
+}
 
 // ── color-law helpers ────────────────────────────────────────────────────
 // Hue for warm pixels where R is the max channel: hue = 60 * (G-B) / (R-B).
@@ -246,6 +296,100 @@ for (const key of ['strata', 'embers', 'hearth']) {
   assert.equal(engine.getMaster(), 0.85, 'master clamps at 0.85 — the festival line stays hard');
   engine.setSensitivity(99);
   assert.equal(engine.getSensitivity(), 3, 'sensitivity clamps to the sim range');
+}
+
+// ── musical motion coverage + beat articulation ─────────────────────────
+function beatCoverage(key, preset) {
+  const template = createMandalaSpatialTemplate();
+  const dry = createMandalaEngine({ template });
+  const pulsed = createMandalaEngine({ template });
+  const peakDelta = new Float32Array(template.length);
+  for (const engine of [dry, pulsed]) {
+    engine.setMode(key);
+    engine.setPreset(preset);
+    engine.setListening(true);
+  }
+  for (let frame = 0; frame < 8 * 30; frame += 1) {
+    const shared = {
+      bass: 0.52,
+      mid: 0.47,
+      high: 0.39,
+      energy: 0.5,
+      centroid: 0.48,
+      flux: frame % 15 === 0 ? 0.7 : 0.12,
+    };
+    dry.setFeatures({ ...shared, beat: 0 });
+    pulsed.setFeatures({ ...shared, beat: frame % 15 < 4 ? 1 - frame % 15 * 0.2 : 0 });
+    dry.tick(1 / 30);
+    pulsed.tick(1 / 30);
+    for (let i = 0; i < template.length; i += 1) {
+      peakDelta[i] = Math.max(peakDelta[i], Math.abs(pulsed.getIntensity(i) - dry.getIntensity(i)));
+    }
+  }
+  const changed = peakDelta.filter((delta) => delta > 0.002).length;
+  const perRing = RINGS.map((ring) => {
+    let ringChanged = 0;
+    for (let i = ring.start; i < ring.start + ring.count; i += 1) {
+      if (peakDelta[i] > 0.002) ringChanged += 1;
+    }
+    return ringChanged / ring.count;
+  });
+  return { ratio: changed / template.length, perRing, peakDelta };
+}
+
+for (const { key, tier } of MODE_LIBRARY) {
+  const calm = beatCoverage(key, 'Calm');
+  const active = beatCoverage(key, 'Active');
+  assert.ok(calm.ratio >= 0.8, `${key}: Calm repeated beat moves >=80% of pixels (${calm.ratio.toFixed(3)})`);
+  assert.ok(active.ratio >= 0.9, `${key}: Active repeated beat moves >=90% of pixels (${active.ratio.toFixed(3)})`);
+  assert.ok(calm.perRing.every((ratio) => ratio > 0.5),
+    `${key}: repeated beat reaches every Mandala ring (${calm.perRing.map(v => v.toFixed(2)).join(', ')})`);
+  if (tier === 'lively') {
+    assert.ok(Math.max(...active.peakDelta) >= 0.025,
+      `${key}: lively mode has a measurable beat delta`);
+  }
+}
+
+// The beat substrate is spatially phased: it must not read as a uniform flash.
+{
+  const result = beatCoverage('hearth', 'Active');
+  const min = Math.min(...result.peakDelta);
+  const max = Math.max(...result.peakDelta);
+  assert.ok(max - min > 0.01, 'beat response varies across spatial phase');
+}
+
+function maxOuterIntensity(key, features) {
+  const engine = createMandalaEngine();
+  engine.setMode(key);
+  engine.setPreset('Active');
+  engine.setListening(true);
+  let outerPeak = 0;
+  for (let frame = 0; frame < 8 * 30; frame += 1) {
+    engine.setFeatures(typeof features === 'function' ? features(frame) : features);
+    engine.tick(1 / 30);
+    for (let i = RINGS.at(-1).start; i < TOTAL_PIXELS; i += 1) {
+      outerPeak = Math.max(outerPeak, engine.getIntensity(i));
+    }
+  }
+  return outerPeak;
+}
+
+for (const key of ['tide', 'bloom']) {
+  const peak = maxOuterIntensity(key, (frame) => ({
+    bass: 0.9, mid: 0.45, high: 0.3, energy: 0.75, centroid: 0.4, flux: 0.4,
+    beat: frame % 20 < 4 ? 1 : 0,
+  }));
+  assert.ok(peak > 0.35, `${key}: musical motion reaches the outermost radius (${peak.toFixed(3)})`);
+}
+
+// Modes with a named primary band retain a broadband/beat fallback rather than
+// becoming inert when that one band is absent.
+for (const key of ['procession', 'spiral']) {
+  const fallback = maxOuterIntensity(key, (frame) => ({
+    bass: 0.55, mid: 0, high: 0.5, energy: 0.62, centroid: 0.5, flux: 0.5,
+    beat: frame % 18 < 3 ? 1 : 0,
+  }));
+  assert.ok(fallback > 0.14, `${key}: broadband/beat fallback remains visibly active (${fallback.toFixed(3)})`);
 }
 
 console.log('mandala-engine tests passed');
