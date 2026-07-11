@@ -101,6 +101,22 @@ export function paletteRamp(stops, i) {
   }
   const l = stops[stops.length - 1]; return [l[1], l[2], l[3]];
 }
+function writePaletteRamp(stops, i, out, offset, scale = 1, rounded = false) {
+  i = clamp01(i);
+  let a = stops[stops.length - 1], b = a, f = 0;
+  for (let k = 1; k < stops.length; k++) {
+    if (i <= stops[k][0]) {
+      a = stops[k - 1]; b = stops[k]; f = (i - a[0]) / (b[0] - a[0]);
+      break;
+    }
+  }
+  const r = (a[1] + (b[1] - a[1]) * f) * scale;
+  const g = (a[2] + (b[2] - a[2]) * f) * scale;
+  const blue = (a[3] + (b[3] - a[3]) * f) * scale;
+  out[offset] = rounded ? Math.round(r) : r;
+  out[offset + 1] = rounded ? Math.round(g) : g;
+  out[offset + 2] = rounded ? Math.round(blue) : blue;
+}
 // blend two palettes' OUTPUTS at the same intensity (Fable §3b) — stays law-compliant
 function palBlend(pa, pb, i, w) {
   const A = paletteRamp(pa, i), B = paletteRamp(pb, i);
@@ -139,6 +155,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let target;
   let zoneOf;
   let crestOf;
+  const colorScratchA = new Float32Array(3);
+  const colorScratchB = new Float32Array(3);
 
   function installTemplate(next) {
     const source = Array.isArray(next) ? next : [];
@@ -191,6 +209,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
   // ---------- audio scalars (already smoothed by analyzer) ----------
   const F = { bass: 0, mid: 0, high: 0, energy: 0, centroid: 0.4, flux: 0, beat: 0 };
+  const rawFeatures = { ...F };
+  let directFeaturesActive = false;
   let listening = false;   // sim's sourceMode!=="rest"
   let sensitivity = 1.0;
 
@@ -218,7 +238,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   //  (candle blend). All rotations obey the restraint budget.
   // ============================================================
   // rotation phases (all SLOW — see per-effect periods)
-  let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0;
+  let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0, meridianPhase = 0;
   let processTheta = 0, spiralTheta = 0, latticePhase = 0, latticeC = 0.3, tideR = 0.15, tideVal = 0, driftPhase = 0, bloomWob = 0;
   let bloomR = 0.15;
   // ---- 1. Strata (EQ flagship) — the spectrum, real dark-to-bright swing ----
@@ -298,12 +318,13 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
   // ---- 4. Meridian — one crisp ring that BREATHES live with the band it sits on ----
   function fxMeridian(t, dt) {
+    meridianPhase += dt * 0.04;                       // authored 25s cycle; audio never changes velocity
     const wantRing = Math.round(clamp(CLK.centroid * 4, 0, 4));
     if (wantRing !== meridianTarget) { meridianTarget = wantRing; meridianMix = 0; }
     meridianMix = Math.min(1, meridianMix + dt / 6);     // 6s migrate — you can see it move
     // the lit ring's brightness tracks the band it represents, LIVE, with arc detail.
     const bandOfRing = [CLK.bass, CLK.bass, CLK.mid, CLK.high, CLK.high];
-    const spin = t * (0.04 + 0.4 * CLK.energy);          // arcs sweep faster when louder
+    const spin = meridianPhase;
     for (let i = 0; i < total; i++) {
       const { radialProgress, angle } = samples[i];
       const ringPosition = radialProgress * 4;
@@ -440,6 +461,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     return clamp01(((raw - g.lo) / span) * sensitivity);
   }
   function applyBands(bass, mid, high) {
+    directFeaturesActive = false;
     const energy = clamp01(bass * 0.5 + mid * 0.35 + high * 0.25);
     const centroid = clamp01((mid * 0.4 + high * 0.9) / (bass * 0.9 + 0.3));
     const up = (o, v, ua, da) => o + (v - o) * (v > o ? ua : da);
@@ -448,14 +470,25 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     F.flux = 0;
     F.beat = 0;
   }
+  function applyDirectFeatures() {
+    F.bass = clamp01(rawFeatures.bass * sensitivity);
+    F.mid = clamp01(rawFeatures.mid * sensitivity);
+    F.high = clamp01(rawFeatures.high * sensitivity);
+    F.energy = clamp01(rawFeatures.energy * sensitivity);
+    F.centroid = rawFeatures.centroid;
+    F.flux = clamp01(rawFeatures.flux * sensitivity);
+    F.beat = clamp01(rawFeatures.beat * sensitivity);
+  }
   function setFeatures(features = {}) {
-    F.bass = clamp01(Number(features.bass) || 0);
-    F.mid = clamp01(Number(features.mid) || 0);
-    F.high = clamp01(Number(features.high) || 0);
-    F.energy = clamp01(Number(features.energy) || 0);
-    F.centroid = clamp01(Number(features.centroid) || 0);
-    F.flux = clamp01(Number(features.flux) || 0);
-    F.beat = clamp01(Number(features.beat) || 0);
+    rawFeatures.bass = clamp01(Number(features.bass) || 0);
+    rawFeatures.mid = clamp01(Number(features.mid) || 0);
+    rawFeatures.high = clamp01(Number(features.high) || 0);
+    rawFeatures.energy = clamp01(Number(features.energy) || 0);
+    rawFeatures.centroid = clamp01(Number(features.centroid) || 0);
+    rawFeatures.flux = clamp01(Number(features.flux) || 0);
+    rawFeatures.beat = clamp01(Number(features.beat) || 0);
+    directFeaturesActive = true;
+    applyDirectFeatures();
   }
   function analyze(analyserOrBins, sampleRate = 44100) {
     if (!listening) return false;
@@ -540,6 +573,23 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     return paletteRamp(PALETTES.candle, v);
   }
 
+  function writeColorFor(i, v, out, offset, scale = 1, rounded = false) {
+    const z = zoneOf[i], crest = crestOf[i];
+    if (z === Z_HEARTH && crest > 0.001) {
+      writePaletteRamp(PALETTES.hearth, v, colorScratchA, 0);
+      writePaletteRamp(PALETTES.candle, v, colorScratchB, 0);
+      const r = lerp(colorScratchA[0], colorScratchB[0], crest) * scale;
+      const g = lerp(colorScratchA[1], colorScratchB[1], crest) * scale;
+      const b = lerp(colorScratchA[2], colorScratchB[2], crest) * scale;
+      out[offset] = rounded ? Math.round(r) : r;
+      out[offset + 1] = rounded ? Math.round(g) : g;
+      out[offset + 2] = rounded ? Math.round(b) : b;
+      return;
+    }
+    const palette = z === Z_HEARTH ? PALETTES.hearth : z === Z_PATINA ? PALETTES.patina : PALETTES.candle;
+    writePaletteRamp(palette, v, out, offset, scale, rounded);
+  }
+
   // Buffer-reuse API: compute every pixel's pre-master color ONCE into `out`
   // (Float32Array, sample-count*3 — same values colorAt returns, no allocation when
   // the buffer is reused). The Show screen shares this buffer between the
@@ -548,10 +598,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   function colorFrame(out) {
     const buf = (out && out.length === total * 3) ? out : new Float32Array(total * 3);
     for (let i = 0; i < total; i++) {
-      const c = colorFor(i, clamp01(vals[i]));
-      buf[i * 3] = c[0];
-      buf[i * 3 + 1] = c[1];
-      buf[i * 3 + 2] = c[2];
+      writeColorFor(i, clamp01(vals[i]), buf, i * 3);
     }
     return buf;
   }
@@ -567,10 +614,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       return buf;
     }
     for (let i = 0; i < total; i++) {
-      const c = colorFor(i, clamp01(vals[i]));
-      buf[i * 3] = Math.round(c[0] * master);
-      buf[i * 3 + 1] = Math.round(c[1] * master);
-      buf[i * 3 + 2] = Math.round(c[2] * master);
+      writeColorFor(i, clamp01(vals[i]), buf, i * 3, master, true);
     }
     return buf;
   }
@@ -588,7 +632,10 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     },
     setListening(on) { listening = Boolean(on); },
     isListening() { return listening; },
-    setSensitivity(x) { sensitivity = clamp(Number(x) || 1, 0.3, 3); },
+    setSensitivity(x) {
+      sensitivity = clamp(Number(x) || 1, 0.3, 3);
+      if (directFeaturesActive) applyDirectFeatures();
+    },
     getSensitivity() { return sensitivity; },
     // mode / preset / master
     setMode(key) { if (STEPS[key]) mode = key; },

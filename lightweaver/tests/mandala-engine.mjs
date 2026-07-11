@@ -38,6 +38,14 @@ assert.deepEqual(
 );
 assert.equal(PRESETS.Active.modDepth, 1.5, 'Active deepens modulation (never speeds motion)');
 
+function assertFeatureLevels(engine, expected, message) {
+  const actual = engine.getLevels();
+  for (const [key, value] of Object.entries(expected)) {
+    assert.ok(Math.abs(actual[key] - value) < 1e-9,
+      `${message}: ${key} expected ${value}, received ${actual[key]}`);
+  }
+}
+
 // ── spatial template + full audio feature contract ───────────────────────
 {
   const defaultTemplate = createMandalaSpatialTemplate();
@@ -62,9 +70,9 @@ assert.equal(PRESETS.Active.modDepth, 1.5, 'Active deepens modulation (never spe
   const supplied = { bass: -1, mid: 0.35, high: 2, energy: 0.7, centroid: 0.55, flux: 0.4, beat: 0.9 };
   engine.setFeatures(supplied);
   supplied.mid = 1;
-  assert.deepEqual(engine.getLevels(), {
-    bass: 0, mid: 0.35, high: 1, energy: 0.7, centroid: 0.55, flux: 0.4, beat: 0.9,
-  }, 'setFeatures clamps and copies the complete analyzer feature vector');
+  assertFeatureLevels(engine, {
+    bass: 0, mid: 0.77, high: 1, energy: 1, centroid: 0.55, flux: 0.88, beat: 1,
+  }, 'setFeatures clamps, copies, and applies sensitivity to the complete analyzer feature vector');
 }
 
 // An equivalent spatial coordinate renders identically whether it lives in the
@@ -414,6 +422,95 @@ for (const key of ['strata', 'embers', 'hearth']) {
   assert.equal(engine.getMaster(), 0.85, 'master clamps at 0.85 — the festival line stays hard');
   engine.setSensitivity(99);
   assert.equal(engine.getSensitivity(), 3, 'sensitivity clamps to the sim range');
+}
+
+// ── direct feature sensitivity is stable and materially audible ──────────
+{
+  const engine = createMandalaEngine();
+  const raw = { bass: 0.34, mid: 0.28, high: 0.22, energy: 0.31, centroid: 0.63, flux: 0.27, beat: 0.29 };
+  engine.setFeatures(raw);
+  engine.setSensitivity(3);
+  assertFeatureLevels(engine, {
+    bass: 1, mid: 0.84, high: 0.66, energy: 0.93, centroid: 0.63, flux: 0.81, beat: 0.87,
+  }, 'sensitivity scales direct levels except centroid');
+  engine.setSensitivity(0.3);
+  assertFeatureLevels(engine, {
+    bass: 0.102, mid: 0.084, high: 0.066, energy: 0.093, centroid: 0.63, flux: 0.081, beat: 0.087,
+  }, 'sensitivity reapplies from stable raw features without compounding');
+  engine.setSensitivity(1);
+  assertFeatureLevels(engine, raw, 'returning to sensitivity 1 restores raw direct features exactly');
+
+  const response = [];
+  for (const sensitivity of [0.3, 1, 3]) {
+    const candidate = createMandalaEngine();
+    candidate.setMode('hearth');
+    candidate.setListening(true);
+    candidate.setSensitivity(sensitivity);
+    for (let frame = 0; frame < 90; frame += 1) {
+      candidate.setFeatures(raw);
+      candidate.tick(1 / 30);
+    }
+    response.push(meanBrightness(candidate.frameRGB()));
+  }
+  assert.ok(response[0] + 3 < response[1] && response[1] + 3 < response[2],
+    `setFeatures output responds materially to sensitivity (${response.map(v => v.toFixed(2)).join(', ')})`);
+}
+
+// Meridian's authored rotation is an integrated clock. Changing energy can
+// widen/brighten its arcs, but cannot teleport their angular phase.
+{
+  const engine = createMandalaEngine();
+  engine.setMode('meridian');
+  engine.setListening(true);
+  const brightestOuterOffset = () => {
+    const outer = RINGS.at(-1);
+    let bestOffset = 0, best = -Infinity;
+    for (let offset = 0; offset < outer.count; offset += 1) {
+      const value = engine.getIntensity(outer.start + offset);
+      if (value > best) { best = value; bestOffset = offset; }
+    }
+    return bestOffset;
+  };
+  for (let frame = 0; frame < 8 * 30; frame += 1) {
+    engine.setFeatures({ bass: 0.3, mid: 0.4, high: 0.8, energy: 0.08, centroid: 1, flux: 0, beat: 0 });
+    engine.tick(1 / 30);
+  }
+  const before = brightestOuterOffset();
+  engine.setFeatures({ bass: 0.3, mid: 0.4, high: 0.8, energy: 1, centroid: 1, flux: 0, beat: 0 });
+  engine.tick(1 / 30);
+  const after = brightestOuterOffset();
+  const count = RINGS.at(-1).count;
+  const lobeSpacing = count / 3;
+  const phaseJump = Math.min(...[-1, 0, 1].map((lobe) => {
+    const shifted = after + lobe * lobeSpacing;
+    const distance = Math.abs(shifted - before) % count;
+    return Math.min(distance, count - distance);
+  }));
+  assert.ok(phaseJump <= 2, `Meridian energy step does not jump authored phase (${phaseJump} pixels)`);
+}
+
+// Large connected layouts exercise the frame hot path without a brittle wall
+// clock assertion. Both palette and RGB passes must reuse caller-owned buffers.
+{
+  const count = 125_000;
+  const template = Array.from({ length: count }, (_, index) => {
+    const progress = index / (count - 1);
+    const angle = progress * Math.PI * 2;
+    const radius = 0.1 + progress * 1.3;
+    return {
+      outputIndex: index, stripId: 'large', stripIndex: 0, stripProgress: progress,
+      x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, radius, angle,
+    };
+  });
+  const engine = createMandalaEngine({ template });
+  engine.setListening(true);
+  engine.setFeatures({ bass: 0.6, mid: 0.5, high: 0.4, energy: 0.55, centroid: 0.5, flux: 0.2, beat: 0.7 });
+  engine.tick(1 / 30);
+  const colors = new Float32Array(count * 3);
+  const rgb = new Uint8Array(count * 3);
+  assert.equal(engine.colorFrame(colors), colors, 'large-template colorFrame reuses its buffer');
+  assert.equal(engine.frameRGB(rgb, colors), rgb, 'large-template frameRGB reuses RGB + shared colors');
+  assert.ok(rgb.some(channel => channel > 0), 'large-template frame probe writes visible channels');
 }
 
 // ── musical motion coverage + beat articulation ─────────────────────────
