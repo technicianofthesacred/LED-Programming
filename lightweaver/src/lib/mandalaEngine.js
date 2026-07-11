@@ -52,6 +52,22 @@ function hash01(i, bucket) {
   h ^= h >>> 15; h = Math.imul(h, 0x2C1B3C6D); h ^= h >>> 12;
   return (h >>> 0 & 0xFFFF) / 65536;
 }
+function spatialKey(sample) {
+  const values = [
+    Math.round(sample.x * 4096),
+    Math.round(sample.y * 4096),
+    Math.round(sample.radius * 4096),
+    Math.round(sample.angle * 4096),
+    Math.round(sample.stripProgress * 4096),
+    Math.round(sample.stripIndex),
+  ];
+  let h = 0x6D2B79F5;
+  for (const value of values) {
+    h ^= value;
+    h = Math.imul(h ^ (h >>> 15), 0x2C1B3C6D);
+  }
+  return (h ^ (h >>> 12)) | 0;
+}
 // per-pixel localized gate: lights only PART of a ring, chosen by angle, so you
 // SEE a specific region answer the audio instead of the whole row at once.
 function arcGate(ang, nLobes, width, spin) {
@@ -129,7 +145,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     samples = source.map((sample, outputIndex) => {
       const radius = Number.isFinite(sample?.radius) ? Math.max(0, sample.radius) : 0;
       const angle = Number.isFinite(sample?.angle) ? sample.angle : 0;
-      return {
+      const normalized = {
         outputIndex,
         stripId: sample?.stripId ?? `strip-${sample?.stripIndex ?? 0}`,
         stripIndex: Number.isFinite(sample?.stripIndex) ? sample.stripIndex : 0,
@@ -139,6 +155,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
         radius,
         angle,
       };
+      return { ...normalized, spatialKey: spatialKey(normalized) };
     });
     total = samples.length;
     vals = new Float32Array(total);
@@ -185,8 +202,6 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0;
   let processTheta = 0, spiralTheta = 0, latticePhase = 0, latticeC = 0.3, tideR = 0.15, tideVal = 0, driftPhase = 0, bloomWob = 0;
   let bloomR = 0.15;
-  const embers = []; // {i, born, life, peak}
-
   // ---- 1. Strata (EQ flagship) — the spectrum, real dark-to-bright swing ----
   const strataBand = [0, 0, 0, 0, 0];
   function fxStrata(t, dt) {
@@ -215,11 +230,11 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     const mood = 0.10 + 0.35 * CLK.energyTrend;    // slow bed (20s)
     const swell = 0.55 * CLK.bass;
     for (let i = 0; i < total; i++) {
-      const { radius: rf, angle: ang, stripIndex } = samples[i];
+      const { radius: rf, angle: ang, spatialKey: seed } = samples[i];
       const local = 0.25 + 0.75 * Math.pow(arcGate(ang, 3, 0.72, driftPhase + rf * 0.1), 2);
       const base = (mood + swell * local) * (0.85 + 0.15 * Math.sin(3 * ang + driftPhase + 1.5 * rf));
       // embers of brightness wander with a live hash so it reads as a living fire, not a flat glow
-      const flick = 0.85 + 0.15 * hash01(i + stripIndex * 31, Math.floor(t * 2));
+      const flick = 0.85 + 0.15 * hash01(seed, Math.floor(t * 2));
       target[i] = Math.max(base * flick, 0.015);
       zoneOf[i] = Z_HEARTH; crestOf[i] = clamp01(CLK.centroid - 0.4) * 0.3;
     }
@@ -228,29 +243,38 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
   // ---- 3. Embers — sparks on true darkness; louder = more AND brighter sparks ----
   function fxEmbers(t, dt) {
-    // rate AND count scale with the music so loud passages are visibly a field of embers,
-    // quiet ones just a few. Bigger multiplier so the difference is obvious.
     const rate = (0.05 + 1.6 * CLK.highTex + 1.0 * CLK.energy) * P.emberRate;
-    const cap = Math.round(6 + 44 * CLK.energy);      // few sparks when quiet, many when loud
-    if (embers.length < cap && hash01(Math.floor(t * 111), embers.length) < rate * dt * 10) {
-      const i = (hash01(Math.floor(t * 137), embers.length * 7) * total) | 0;
-      embers.push({ i, born: t, life: 3 + hash01(i, 3) * 5, peak: 0.35 + 0.65 * F.energy }); // peak scales with level
-    }
+    const ignitionChance = clamp(0.001 + rate * 0.0028, 0.001, 0.015);
+    const epochDuration = 0.5;
+    const currentEpoch = Math.floor(t / epochDuration);
+    let sparkCount = 0;
     for (let i = 0; i < total; i++) {
-      const { angle, radius, stripIndex, stripProgress } = samples[i];
+      const { angle, radius, spatialKey: seed } = samples[i];
       const field = 0.008 + 0.045 * (0.3 * CLK.energy + 0.7 * CLK.highTex)
-        * (0.35 + 0.65 * hash01(stripIndex * 257 + Math.floor(stripProgress * 1024), Math.floor(t * 4)))
+        * (0.35 + 0.65 * hash01(seed, Math.floor(t * 4)))
         * (0.75 + 0.25 * Math.sin(angle * 5 + radius * 3));
       target[i] = field; zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
+
+      // Each physical sample owns its ignition history. Looking back across
+      // deterministic epochs preserves long spark envelopes without storing a
+      // template-relative pixel index or depending on the template's size.
+      let spark = 0;
+      for (let epoch = currentEpoch - 15; epoch <= currentEpoch; epoch++) {
+        if (hash01(seed ^ 0x51ED270B, epoch) >= ignitionChance) continue;
+        const born = epoch * epochDuration;
+        const life = 3 + hash01(seed ^ 0x27D4EB2D, epoch) * 5;
+        const age = (t - born) / life;
+        if (age < 0 || age >= 1) continue;
+        const env = age < 0.12 ? smoothstep(age / 0.12) : 1 - smoothstep((age - 0.12) / 0.88);
+        spark = Math.max(spark, (0.35 + 0.65 * F.energy) * env);
+      }
+      if (spark > 0.01) {
+        sparkCount += 1;
+        target[i] = Math.max(target[i], spark);
+        crestOf[i] = clamp01(CLK.centroid - 0.35) * 0.5;
+      }
     }
-    for (let e = embers.length - 1; e >= 0; e--) {
-      const em = embers[e]; const a = (t - em.born) / em.life;
-      if (a >= 1) { embers.splice(e, 1); continue; }
-      const env = a < 0.12 ? smoothstep(a / 0.12) : (1 - smoothstep((a - 0.12) / 0.88));
-      target[em.i] = Math.max(target[em.i], em.peak * env);
-      crestOf[em.i] = clamp01(CLK.centroid - 0.35) * 0.5;
-    }
-    return embers.length + ' sparks';
+    return sparkCount + ' sparks';
   }
 
   // ---- 4. Meridian — one crisp ring that BREATHES live with the band it sits on ----
@@ -557,7 +581,6 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     getMaster() { return master; },
     setTemplate(next) {
       installTemplate(next);
-      embers.length = 0;
     },
     // introspection (meters, status line, preview render)
     getLevels() { return { ...F }; },

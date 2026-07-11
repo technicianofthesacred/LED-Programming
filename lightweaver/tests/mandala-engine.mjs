@@ -87,6 +87,44 @@ assert.equal(PRESETS.Active.modDepth, 1.5, 'Active deepens modulation (never spe
     'effect evaluation has template parity for equivalent coordinates');
 }
 
+// Stochastic-looking modes must derive their identity from sample geometry,
+// never from a sample's loop index or the template length. The same physical
+// sample therefore receives the same flicker/spark history in any template.
+const stochasticParityFailures = [];
+for (const [key, sourceIndex] of [['hearth', 317], ['embers', 511]]) {
+  const template = createMandalaSpatialTemplate();
+  const full = createMandalaEngine({ template });
+  const one = createMandalaEngine({ template: [{ ...template[sourceIndex], outputIndex: 0 }] });
+  let peakDifference = 0;
+  for (const engine of [full, one]) {
+    engine.setMode(key);
+    engine.setPreset('Active');
+    engine.setListening(true);
+  }
+  for (let frame = 0; frame < 8 * 30; frame += 1) {
+    const features = {
+      bass: 0.58,
+      mid: 0.46,
+      high: frame % 21 < 5 ? 0.9 : 0.38,
+      energy: 0.61,
+      centroid: 0.53,
+      flux: frame % 21 === 0 ? 0.8 : 0.14,
+      beat: frame % 15 < 4 ? 1 - frame % 15 * 0.2 : 0,
+    };
+    full.setFeatures(features);
+    one.setFeatures(features);
+    full.tick(1 / 30);
+    one.tick(1 / 30);
+    peakDifference = Math.max(
+      peakDifference,
+      Math.abs(full.getIntensity(sourceIndex) - one.getIntensity(0)),
+    );
+  }
+  if (peakDifference >= 1e-6) stochasticParityFailures.push(`${key}: ${peakDifference}`);
+}
+assert.deepEqual(stochasticParityFailures, [],
+  'Hearth/Embers equivalent samples have template-independent stochastic histories');
+
 // ── color-law helpers ────────────────────────────────────────────────────
 // Hue for warm pixels where R is the max channel: hue = 60 * (G-B) / (R-B).
 // The corridor in the color spec prose is 18–42° HSV; the hand-tuned Hearth
