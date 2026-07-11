@@ -254,10 +254,12 @@ test('canvas link mode records clicked chopped segments as physical route order'
   const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
   const offRowId = rowIds.find((id: string) => id.startsWith('off-'));
   expect(offRowId).toBeTruthy();
+  // The strip now lives on the strip-<n> id namespace (line-layer → strip-1), so
+  // its split-segment patch ids follow suit.
   expect(rowIds).toEqual([
-    'patch-line-layer-7-9',
+    'patch-strip-1-7-9',
     offRowId,
-    'patch-line-layer-0-3',
+    'patch-strip-1-0-3',
   ]);
 });
 

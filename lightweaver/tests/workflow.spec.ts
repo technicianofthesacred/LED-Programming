@@ -255,7 +255,11 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
   await savedProject.saveAs(projectPath);
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
   expect(projectData.layout.layers.map((layer: any) => layer.layerId)).toEqual(['bg-layer', 'bar-layer']);
-  expect(projectData.layout.strips.map((strip: any) => strip.id)).toEqual(['bg-layer', 'bar-layer']);
+  // Strips carry their own `strip-<n>` id namespace now; their artwork source is
+  // recorded on `sourceLayerId`, so that is what maps back to the surviving layers.
+  expect(projectData.layout.strips.map((strip: any) => strip.id))
+    .toEqual(projectData.layout.strips.map((strip: any) => expect.stringMatching(/^strip-\d+$/)));
+  expect(projectData.layout.strips.map((strip: any) => strip.sourceLayerId)).toEqual(['bg-layer', 'bar-layer']);
 });
 
 test('quiet pattern preview does not render routine notifications', async ({ page }) => {

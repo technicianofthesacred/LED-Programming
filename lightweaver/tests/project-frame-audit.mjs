@@ -1212,7 +1212,10 @@ const recoveredStartup = resolveStartupProject({
   savedProject: createDefaultProject(),
   legacyLayoutProject: recoverableLegacyLayout,
 });
-assert.equal(recoveredStartup.layout.strips[0].id, 'legacy-strip');
+// The recovered legacy strip is re-homed onto the strip-<n> namespace (its old
+// id is preserved as sourceLayerId so its artwork source can still be found).
+assert.match(recoveredStartup.layout.strips[0].id, /^strip-\d+$/);
+assert.equal(recoveredStartup.layout.strips[0].sourceLayerId, 'legacy-strip');
 assert.equal(recoveredStartup.pattern.activePatternId, 'aurora');
 
 const wledBasicTier = getRuntimeTier(WLED_BASIC_TIER_ID);

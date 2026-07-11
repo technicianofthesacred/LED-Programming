@@ -32,6 +32,31 @@ import {
 } from '../lib/patchBoard.js';
 import { isDefaultCircleLayout } from '../lib/defaultCircleLayout.js';
 
+// ── Strip identity helpers ─────────────────────────────────────────────────
+
+// A strip owns its own `strip-<n>` id namespace, distinct from the artwork
+// layer/path it was sampled from (recorded on `sourceLayerId`/`sourcePathId`).
+// Legacy strips reused their source layer/path id as their own id, and several
+// call sites relied on that coincidence to answer "which artwork does this strip
+// come from?". `stripSourceKey` recovers that answer for both eras: the source
+// path id (sub-path strips), else the source layer id (whole-layer strips), else
+// the strip id itself (freehand/merged strips that have no artwork source) — so
+// every coincidence-era comparison keeps identical behaviour.
+const stripSourceKey = strip => strip?.sourcePathId ?? strip?.sourceLayerId ?? strip?.id;
+
+// Allocate the next collision-free `strip-<n>` id by scanning existing strips for
+// the highest number in use. (The layout reducer carries `nextStripSeq` for a
+// persistence-safe monotonic sequence; this scan is enough while layout state is
+// still scattered useState.)
+function nextStripId(strips = []) {
+  let max = 0;
+  for (const strip of strips) {
+    const match = /^strip-(\d+)$/.exec(strip?.id || '');
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return `strip-${max + 1}`;
+}
+
 // ── Pure utility functions ─────────────────────────────────────────────────
 
 function shapeToD(el) {
@@ -932,12 +957,13 @@ export function LayoutScreen() {
     return Math.max(1, Math.round((layer.svgLength / pxPerMm) * density / 1000));
   };
 
-  const makeStrip = (layer, count) => {
+  const makeStrip = (layer, count, id) => {
     const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathEl.setAttribute('d', layer.pathData);
     const pixels = libSamplePath(pathEl, count);
     return {
-      id: layer.layerId, name: layer.name,
+      id, name: layer.name,
+      sourceLayerId: layer.layerId, sourcePathId: null,
       pathData: layer.pathData, pixelCount: count,
       pixels, color: layer._color,
       x: 0, y: 0,
@@ -960,8 +986,8 @@ export function LayoutScreen() {
   const stripGroupMember = (s) => ({
     type: 'strip',
     stripId: s.id,
-    pathId: s.id,
-    layerId: s.id,
+    pathId: stripSourceKey(s),
+    layerId: stripSourceKey(s),
     pathData: s.pathData,
     name: s.name,
     svgLength: s.svgLength || 0,
@@ -1113,8 +1139,12 @@ export function LayoutScreen() {
 
   const addStrip = () => {
     if (!selLayer) return;
-    const newStrip = makeStrip(selLayer, getLedCount(selLayer));
-    const newStrips = [...strips.filter(s => s.id !== selLayer.layerId), newStrip];
+    // Re-sampling an existing whole-layer strip keeps its id (so patches, wiring
+    // and selection survive the update); a brand-new strip gets a fresh id.
+    const existing = strips.find(s => stripSourceKey(s) === selLayer.layerId);
+    const id = existing ? existing.id : nextStripId(strips);
+    const newStrip = makeStrip(selLayer, getLedCount(selLayer), id);
+    const newStrips = [...strips.filter(s => s.id !== id), newStrip];
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);
     setSelStripId(newStrip.id);
@@ -1127,8 +1157,12 @@ export function LayoutScreen() {
     pathEl.setAttribute('d', sp.pathData);
     const count = Math.max(1, Math.round((sp.svgLength / pxPerMm) * density / 1000));
     const pixels = libSamplePath(pathEl, count);
+    const existing = strips.find(s => stripSourceKey(s) === sp.pathId);
+    const id = existing ? existing.id : nextStripId(strips);
     const newStrip = {
-      id: sp.pathId,
+      id,
+      sourceLayerId: layer.layerId,
+      sourcePathId: sp.pathId,
       name: `${layer.name} · ${sp.name}`,
       pathData: sp.pathData,
       pixelCount: count,
@@ -1143,7 +1177,7 @@ export function LayoutScreen() {
       hueShift: 0,
       patternId: null,
     };
-    const newStrips = [...strips.filter(s => s.id !== sp.pathId), newStrip];
+    const newStrips = [...strips.filter(s => s.id !== id), newStrip];
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);
     setSelStripId(newStrip.id);
@@ -1153,7 +1187,6 @@ export function LayoutScreen() {
 
   const addSelectedPathsAsStrips = useCallback((mode = 'merged') => {
     if (!pathSel.length) return;
-    const now = Date.now();
 
     if (mode === 'merged') {
       const combinedPathData = pathSel.map(p => p.pathData).join(' ');
@@ -1164,7 +1197,9 @@ export function LayoutScreen() {
       const pixels = libSamplePath(pathEl, count);
       const name = pathSelName.trim() || `Strip ${strips.length + 1}`;
       const newStrip = {
-        id: `sel-${now}`, name,
+        id: nextStripId(strips), name,
+        // Merged from several paths: no single artwork source.
+        sourceLayerId: null, sourcePathId: null,
         pathData: combinedPathData, pixelCount: count, pixels,
         x: 0, y: 0,
         color: nextColor(), emit: 'dir', angle: 0, reversed: false,
@@ -1182,14 +1217,17 @@ export function LayoutScreen() {
       return;
     }
 
-    const created = pathSel.map((p, index) => {
+    let running = strips;
+    const created = pathSel.map((p) => {
       const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       pathEl.setAttribute('d', p.pathData);
       const count = Math.max(1, Math.round((p.svgLength / pxPerMm) * density / 1000));
       const pixels = libSamplePath(pathEl, count);
       const layerColor = layers.find(l => l.layerId === p.layerId)?._color;
-      return {
-        id: `sel-${now}-${index}`,
+      const strip = {
+        id: nextStripId(running),
+        sourceLayerId: p.layerId ?? null,
+        sourcePathId: p.pathId ?? null,
         name: p.name,
         pathData: p.pathData,
         pixelCount: count,
@@ -1199,6 +1237,8 @@ export function LayoutScreen() {
         emit: 'dir', angle: 0, reversed: false,
         speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
       };
+      running = [...running, strip];
+      return strip;
     });
     const newStrips = [...strips, ...created];
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
@@ -1207,7 +1247,7 @@ export function LayoutScreen() {
     setSelectedStripIds(created.map(s => s.id));
 
     if (mode === 'grouped' && created.length > 1) {
-      const groupId = `strip-grp-${now}`;
+      const groupId = `strip-grp-${Date.now()}`;
       const name = pathSelName.trim() || `Strip Group ${layerGroups.length + 1}`;
       const newGroup = {
         groupId,
@@ -1233,7 +1273,10 @@ export function LayoutScreen() {
         !window.confirm(`Replace all ${strips.length} drawn strip(s) with auto-generated strips from every layer? This cannot be undone except via Undo.`)) {
       return;
     }
-    const newStrips = layers.filter(l => l.pathData).map(l => makeStrip(l, getLedCount(l)));
+    const newStrips = [];
+    for (const l of layers.filter(l => l.pathData)) {
+      newStrips.push(makeStrip(l, getLedCount(l), nextStripId(newStrips)));
+    }
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);
     if (newStrips.length > 0) setSelStripId(newStrips[0].id);
@@ -1245,6 +1288,10 @@ export function LayoutScreen() {
     const newStrips = strips.filter(s => s.id !== id);
     const newEditCounts = { ...editCounts };
     delete newEditCounts[id];
+    // Drop the strip's own hidden flag so a reused strip-<n> id can't inherit a
+    // stale "hidden" state.
+    const newHidden = { ...hidden };
+    delete newHidden[id];
     const emptiedGroupIds = new Set(layerGroups
       .filter(g => g.members.length > 0 && g.members.every(m => (m.stripId || m.pathId) === id))
       .map(g => g.groupId));
@@ -1256,8 +1303,9 @@ export function LayoutScreen() {
     setLayerOrder(prev => prev.filter(item => !emptiedGroupIds.has(item.id)));
     setSelectedStripIds(prev => prev.filter(stripId => stripId !== id));
     setEditCounts(newEditCounts);
+    setHidden(newHidden);
     if (selStripId === id) setSelStripId(null);
-    lsSave(newStrips, layers, newEditCounts, hidden, svgText, viewBox, density);
+    lsSave(newStrips, layers, newEditCounts, newHidden, svgText, viewBox, density);
   }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushHistory, lsSave]);
 
   const reverseStrip = (id) => {
@@ -1286,7 +1334,7 @@ export function LayoutScreen() {
     setPathSel([]);
     setPathSelName('');
     const s = strips.find(st => st.id === id);
-    if (s) setSelLayerId(s.id);
+    if (s) setSelLayerId(stripSourceKey(s));
   };
 
   const toggleStripSelection = useCallback((id) => {
@@ -1408,13 +1456,18 @@ export function LayoutScreen() {
     ]);
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     const nextLayers = layers.filter(l => l.layerId !== layerId);
-    const nextStrips = strips.filter(s => !relatedPathIds.has(s.id));
+    const removedStrips = strips.filter(s => relatedPathIds.has(stripSourceKey(s)));
+    const removedStripIds = new Set(removedStrips.map(s => s.id));
+    const nextStrips = strips.filter(s => !removedStripIds.has(s.id));
     const nextEditCounts = { ...editCounts };
     const nextHidden = { ...hidden };
     relatedPathIds.forEach(id => {
       delete nextEditCounts[id];
       delete nextHidden[id];
     });
+    // Drop the deleted strips' own hidden flags so a reused strip-<n> id can't
+    // inherit a stale "hidden" state.
+    removedStripIds.forEach(id => { delete nextHidden[id]; });
     setLayers(nextLayers);
     setLayerOrder(prev => prev.filter(x => x.id !== layerId));
     setLayerGroups(prev => prev.map(g => ({ ...g, members: g.members.filter(m => m.layerId !== layerId) }))
@@ -1422,9 +1475,9 @@ export function LayoutScreen() {
     setStrips(nextStrips);
     setEditCounts(nextEditCounts);
     setHidden(nextHidden);
-    setSelectedStripIds(prev => prev.filter(id => !relatedPathIds.has(id)));
+    setSelectedStripIds(prev => prev.filter(id => !removedStripIds.has(id)));
     if (selLayerId === layerId) setSelLayerId(null);
-    if (selStripId && relatedPathIds.has(selStripId)) setSelStripId(null);
+    if (selStripId && removedStripIds.has(selStripId)) setSelStripId(null);
     lsSave(nextStrips, nextLayers, nextEditCounts, nextHidden, svgText, viewBox, density);
   }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushHistory, lsSave]);
 
@@ -1464,21 +1517,28 @@ export function LayoutScreen() {
     }
 
     const removedIds = new Set([...selectedPathIds, ...deletedLayerIds]);
-    const nextStrips = strips.filter(strip =>
-      !removedIds.has(strip.id) &&
-      !selectedPathData.has(strip.pathData));
+    const removedStrips = strips.filter(strip =>
+      removedIds.has(stripSourceKey(strip)) ||
+      selectedPathData.has(strip.pathData));
+    const removedStripIds = new Set(removedStrips.map(s => s.id));
+    const nextStrips = strips.filter(strip => !removedStripIds.has(strip.id));
     const nextEditCounts = { ...editCounts };
     const nextHidden = { ...hidden };
     removedIds.forEach(id => {
       delete nextEditCounts[id];
       delete nextHidden[id];
     });
+    // Drop the deleted strips' own hidden flags so a reused strip-<n> id can't
+    // inherit a stale "hidden" state.
+    removedStripIds.forEach(id => { delete nextHidden[id]; });
 
     const nextLayerGroups = layerGroups
       .map(group => ({
         ...group,
         members: group.members.filter(member =>
-          !removedIds.has(member.stripId || member.pathId) &&
+          // member.pathId carries the strip's source key (or a path id for path
+          // members), so this prunes both eras identically as the artwork is cut.
+          !removedIds.has(member.pathId) &&
           !deletedLayerIds.has(member.layerId)),
       }))
       .filter(group => group.members.length > 0);
@@ -1509,8 +1569,14 @@ export function LayoutScreen() {
   const duplicateStrip = useCallback((id) => {
     const s = strips.find(st => st.id === id);
     if (!s) return;
-    const newId = `dup-${Date.now()}`;
-    const newStrip = { ...s, id: newId, name: `${s.name} copy`, pixels: s.pixels.slice() };
+    const newId = nextStripId(strips);
+    // A duplicate is a free copy: it does not own the original's artwork source,
+    // so it never counts as the whole-layer strip for that layer.
+    const newStrip = {
+      ...s, id: newId, name: `${s.name} copy`,
+      sourceLayerId: null, sourcePathId: null,
+      pixels: s.pixels.slice(),
+    };
     const newStrips = strips.flatMap(st => st.id === id ? [st, newStrip] : [st]);
     pushHistory(strips, layers, editCounts, hidden, svgText, viewBox, density);
     setStrips(newStrips);
@@ -1541,12 +1607,14 @@ export function LayoutScreen() {
     const emptiedGroupIds = new Set(layerGroups
       .filter(g => g.members.length > 0 && g.members.every(m => pickedIds.has(m.stripId || m.pathId)))
       .map(g => g.groupId));
-    const mergedId = `merged-${Date.now()}`;
+    const mergedId = nextStripId(strips);
     const mergedName = stripSelectionName.trim() || `Merged Strip ${strips.length - picked.length + 1}`;
     const pixels = picked.flatMap(s => s.pixels?.length ? s.pixels : []);
     const mergedStrip = {
       ...first,
       id: mergedId,
+      // Merged from several strips: no single artwork source.
+      sourceLayerId: null, sourcePathId: null,
       name: mergedName,
       pathData: picked.map(s => translatePathData(s.pathData, s.x || 0, s.y || 0)).filter(Boolean).join(' '),
       pixelCount: picked.reduce((sum, s) => sum + (s.pixelCount || 0), 0),
@@ -1827,7 +1895,9 @@ export function LayoutScreen() {
     pathEl.setAttribute('d', pathData);
     const pixels = libSamplePath(pathEl, count);
     const newStrip = {
-      id: `drawn-${Date.now()}`,
+      id: nextStripId(strips),
+      // Freehand strip: no artwork source.
+      sourceLayerId: null, sourcePathId: null,
       name,
       pathData, pixelCount: count, pixels, color,
       x: 0, y: 0,
@@ -1857,7 +1927,7 @@ export function LayoutScreen() {
     if (selLayerId)     activeIds.add(selLayerId);
     if (selStripId) {
       const s = strips.find(st => st.id === selStripId);
-      if (s) activeIds.add(s.id);
+      if (s) activeIds.add(stripSourceKey(s));
     }
     pathSel.forEach(p => { if (p.layerId) activeIds.add(p.layerId); });
 
@@ -2031,8 +2101,15 @@ export function LayoutScreen() {
           e.preventDefault();
           if (pathSel.length > 0) deleteSelectedVectorPaths();
           else if (selectedStripIds.length > 1) removeSelectedStrips();
-          else if (selStripId && layers.some(layer => layer.layerId === selStripId)) deleteLayer(selStripId);
-          else if (selStripId) removeStrip(selStripId);
+          else if (selStripId) {
+            // Deleting a whole-layer-backed strip deletes its source layer (and
+            // with it the strip); any other strip is just removed.
+            const selStrip = strips.find(s => s.id === selStripId);
+            const sourceLayer = selStrip && layers.some(layer => layer.layerId === stripSourceKey(selStrip))
+              ? stripSourceKey(selStrip) : null;
+            if (sourceLayer) deleteLayer(sourceLayer);
+            else removeStrip(selStripId);
+          }
           else if (selLayerId) deleteLayer(selLayerId);
           break;
         case 'x':
@@ -2437,7 +2514,7 @@ export function LayoutScreen() {
     return Math.max(1, Math.round(len / (16.6 * pxPerMm)));
   }, [drawMode, waypoints, pxPerMm]);
 
-  const existingStrip = selLayer ? strips.find(s => s.id === selLayer.layerId) : null;
+  const existingStrip = selLayer ? strips.find(s => stripSourceKey(s) === selLayer.layerId) : null;
 
   const enableLightPreview = useCallback(() => {
     setShowLight(true);
@@ -3351,11 +3428,11 @@ export function LayoutScreen() {
                   const l = layers.find(lyr => lyr.layerId === item.id);
                   if (!l) return null;
                   const isHidden   = !!hidden[l.layerId];
-                  const hasStrip   = strips.some(s => s.id === l.layerId);
+                  const hasStrip   = strips.some(s => stripSourceKey(s) === l.layerId);
                   const isSel      = l.layerId === selLayerId;
                   const canExpand  = l.subPaths?.length > 1;
                   const isExpanded = !!expandedLayers[l.layerId];
-                  const stripForLayer = strips.find(s => s.id === l.layerId);
+                  const stripForLayer = strips.find(s => stripSourceKey(s) === l.layerId);
                   const isDragTarget  = layerDragOver === l.layerId;
 
                   return (
@@ -3695,8 +3772,8 @@ export function LayoutScreen() {
 
               {existingStrip && (
                 <div className="la-insp-actions">
-                  <button className="btn" onClick={() => reverseStrip(selLayer.layerId)} title="Flip pixel 0 from start to end">↔ Reverse</button>
-                  <button className="btn danger" onClick={() => removeStrip(selLayer.layerId)}>Remove</button>
+                  <button className="btn" onClick={() => reverseStrip(existingStrip.id)} title="Flip pixel 0 from start to end">↔ Reverse</button>
+                  <button className="btn danger" onClick={() => removeStrip(existingStrip.id)}>Remove</button>
                 </div>
               )}
             </div>

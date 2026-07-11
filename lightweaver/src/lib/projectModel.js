@@ -164,10 +164,119 @@ export function createDefaultProject() {
   };
 }
 
+// Move legacy strips onto their own `strip-<n>` id namespace. Historically a
+// strip reused its source layer/path id as its own id, forcing every consumer to
+// guess whether an id meant a layer or a strip. This rewrites strip ids and every
+// reference to them (patch ids, patch `source.stripId`, chain `rowIds`, strip
+// group members, and the strip-keyed `hidden` flags) atomically from a single
+// old→new map, recording the old id as `sourceLayerId` so callers can recover the
+// artwork a strip came from.
+//
+// Runs BEFORE the chain alignment below so the chain migration sees final ids.
+export function migrateStripIdNamespace(project) {
+  const layout = project?.layout;
+  if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
+
+  const strips = layout.strips;
+  // The generated default circle layout owns a stable synthetic id namespace
+  // (`default-outer-circle`, …) that flashed cards address by zone id. It never
+  // collided with the artwork layer namespace, so it needs no remap — and
+  // renaming it would silently change every default card's zone ids.
+  if (isDefaultCircleLayout(strips)) return project;
+
+  const isNamespaced = id => typeof id === 'string' && /^strip-\d+$/.test(id);
+
+  // Seed the sequence past any strips already on the namespace so ids stay unique.
+  let seq = 0;
+  for (const strip of strips) {
+    const match = /^strip-(\d+)$/.exec(strip?.id || '');
+    if (match) seq = Math.max(seq, Number(match[1]));
+  }
+
+  const oldToNew = new Map();
+  for (const strip of strips) {
+    if (!strip || typeof strip.id !== 'string' || isNamespaced(strip.id)) continue;
+    if (oldToNew.has(strip.id)) continue;
+    seq += 1;
+    oldToNew.set(strip.id, `strip-${seq}`);
+  }
+  if (!oldToNew.size) return project;
+
+  // 1. Strip ids. The old id was the strip's source layer/path id, so preserve it
+  //    as sourceLayerId where the strip doesn't already record a source.
+  for (const strip of strips) {
+    const next = oldToNew.get(strip.id);
+    if (!next) continue;
+    if (strip.sourceLayerId == null && strip.sourcePathId == null) {
+      strip.sourceLayerId = strip.id;
+    }
+    strip.id = next;
+  }
+
+  // 2. patchBoard: patch ids (patch-<stripId>[-start-end]), source.stripId, and
+  //    chain rowIds (which reference patch ids).
+  const board = layout.patchBoard;
+  if (board && Array.isArray(board.patches)) {
+    const patchIdMap = new Map();
+    for (const patch of board.patches) {
+      const src = patch?.source;
+      if (src?.type !== 'strip' || !oldToNew.has(src.stripId)) continue;
+      const oldStripId = src.stripId;
+      const newStripId = oldToNew.get(oldStripId);
+      const oldPrefix = `patch-${oldStripId}`;
+      let newPatchId = patch.id;
+      if (patch.id === oldPrefix) {
+        newPatchId = `patch-${newStripId}`;
+      } else if (typeof patch.id === 'string' && patch.id.startsWith(`${oldPrefix}-`)) {
+        newPatchId = `patch-${newStripId}${patch.id.slice(oldPrefix.length)}`;
+      }
+      if (newPatchId !== patch.id) patchIdMap.set(patch.id, newPatchId);
+      patch.id = newPatchId;
+      src.stripId = newStripId;
+    }
+    if (patchIdMap.size && Array.isArray(board.chains)) {
+      for (const chain of board.chains) {
+        if (Array.isArray(chain.rowIds)) {
+          chain.rowIds = chain.rowIds.map(rowId => patchIdMap.get(rowId) ?? rowId);
+        }
+      }
+    }
+  }
+
+  // 3. Strip group members reference a strip by `stripId`; path members carry no
+  //    stripId, so only strip members are remapped. (Their `pathId`/`layerId`
+  //    stay the old id — that is exactly the source key.)
+  if (Array.isArray(layout.layerGroups)) {
+    for (const group of layout.layerGroups) {
+      if (!Array.isArray(group?.members)) continue;
+      for (const member of group.members) {
+        if (member && oldToNew.has(member.stripId)) {
+          member.stripId = oldToNew.get(member.stripId);
+        }
+      }
+    }
+  }
+
+  // 4. `hidden` is a shared namespace: a legacy strip and its source layer/path
+  //    shared one key. Copy the flag onto the new strip key while KEEPING the old
+  //    one so the artwork keeps its hidden state (editCounts stays with the layer
+  //    and is left untouched).
+  if (layout.hidden && typeof layout.hidden === 'object') {
+    for (const [oldId, newId] of oldToNew) {
+      if (Object.prototype.hasOwnProperty.call(layout.hidden, oldId)) {
+        layout.hidden[newId] = layout.hidden[oldId];
+      }
+    }
+  }
+
+  return project;
+}
+
 // Canonical migration choke point: rebuild the patch-board chain so its wire
 // order follows strips[] order (off rows preserved). After this, the chain is
 // the sole authority for pixel addressing and can never diverge from strips[].
 function alignChainToStripOrder(project) {
+  migrateStripIdNamespace(project);
   const layout = project?.layout;
   if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
   if (!layout.patchBoard) return project;
