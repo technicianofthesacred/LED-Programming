@@ -51,7 +51,7 @@ export function DrawModePanel({ state }) {
     expandedStrips, setExpandedStrips,
     stripListRef,
     // size
-    getLedCount, resampleStrip,
+    getLedCount, resampleStrip, setStripCount,
     handleDensityChange, calibrateScaleFromStrip,
     density,
     // strips
@@ -741,16 +741,16 @@ export function DrawModePanel({ state }) {
                           <input className="lw" type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
                                  value={ledCountToSliderValue(s.pixelCount)}
                                  aria-label="Strip LED count slider"
-                                 onChange={e => resampleStrip(s.id, sliderValueToLedCount(e.target.value))}/>
+                                 onChange={e => setStripCount(s.id, sliderValueToLedCount(e.target.value))}/>
                           <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                                  value={s.pixelCount}
                                  aria-label="Strip LED count"
                                  inputMode="numeric"
                                  style={{ width: 72 }}
                                  onFocus={e => e.target.select()}
-                                 onChange={e => resampleStrip(s.id, clampLedCount(e.target.value))}
-                                 onBlur={e => resampleStrip(s.id, clampLedCount(e.target.value))}
-                                 onKeyDown={e => { if (e.key === 'Enter') resampleStrip(s.id, clampLedCount(e.target.value)); }}/>
+                                 onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                 onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                 onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
                           <button className="btn" style={{ padding: '0 6px' }}
                                   title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
                                   onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Set real count</button>

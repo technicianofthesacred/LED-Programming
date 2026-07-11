@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 
 // Phase 2 step 6 (docs/layout-redesign-plan.md) — the Draw | Size | Wire mode
-// switch + hash sync + cancelActiveTool. No panel content has moved yet: Draw
-// mode renders the existing side panel verbatim; Size/Wire render stubs.
+// switch + hash sync + cancelActiveTool. Draw mode renders the existing side
+// panel verbatim; Size now renders the real Size panel (step 8); Wire is still
+// a stub (step 9).
 
 async function gotoLayout(page: any, hash = '#screen=layout') {
   await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
@@ -20,7 +21,7 @@ test('keyboard 1/2/3 update the hash mode param and the active segment', async (
   await expect(page).toHaveURL(/mode=size/);
   await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-mode-draw')).not.toHaveClass(/on/);
-  await expect(page.getByTestId('layout-size-stub')).toBeVisible();
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
 
   await page.keyboard.press('3');
   await expect(page).toHaveURL(/mode=wire/);
@@ -30,7 +31,7 @@ test('keyboard 1/2/3 update the hash mode param and the active segment', async (
   await page.keyboard.press('1');
   await expect(page).toHaveURL(/mode=draw/);
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-size-stub')).toHaveCount(0);
+  await expect(page.getByTestId('layout-size-panel')).toHaveCount(0);
   await expect(page.getByTestId('layout-wire-stub')).toHaveCount(0);
 });
 
@@ -61,7 +62,7 @@ test('switching mode mid-draw cancels the in-progress freehand strip', async ({ 
 
   await page.keyboard.press('2');
   await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-size-stub')).toBeVisible();
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
 
   await page.keyboard.press('1');
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);

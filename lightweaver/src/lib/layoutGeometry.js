@@ -176,12 +176,18 @@ export function svgPathLength(pathData) {
 
 // Recompute every strip's LED count from (pxPerMm, density) using the
 // canonical formula count = (svgLength / pxPerMm) * density / 1000.
-export function recountStrips(strips, pxPerMm, density) {
+//
+// Strips whose id is truthy in `overrides` carry a manual, user-set LED count
+// (the per-strip count controls in Size/Draw mode). Those keep their count +
+// sampled pixels untouched — density / scale / calibrate rescales only refresh
+// their measured `svgLength`. Everything else rescales as before.
+export function recountStrips(strips, pxPerMm, density, overrides = {}) {
   const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
   return strips.map(s => {
     const len = (Number.isFinite(s.svgLength) && s.svgLength > 0)
       ? s.svgLength
       : svgPathLength(s.pathData);
+    if (overrides[s.id]) return { ...s, svgLength: len };
     const count = Math.max(1, Math.round((len / scale) * density / 1000));
     return {
       ...s,

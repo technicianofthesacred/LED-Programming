@@ -8,6 +8,7 @@ import {
 import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
+import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
 
 // eslint-disable-next-line no-unused-vars
@@ -292,14 +293,12 @@ export function LayoutScreen() {
 
       {/* ── Right panel (mockup .side) ─────────────────────────────── */}
       <aside className="side">
-      {mode !== 'draw' ? (
-        <div className="la-mode-stub" data-testid={`layout-${mode}-stub`}>
-          {mode === 'size'
-            ? 'Size tools arrive in the next step'
-            : 'Wire tools arrive in the next step'}
+      {mode === 'draw' && <DrawModePanel state={state}/>}
+      {mode === 'size' && <SizeModePanel state={state}/>}
+      {mode === 'wire' && (
+        <div className="la-mode-stub" data-testid="layout-wire-stub">
+          Wire tools arrive in the next step
         </div>
-      ) : (
-        <DrawModePanel state={state}/>
       )}
       </aside>
       </div>{/* .la */}
