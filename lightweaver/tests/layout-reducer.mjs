@@ -179,4 +179,14 @@ test('selection actions replace and clear each other', () => {
   state = layoutReducer(state, layoutActions.renameSelection('My group'));
   assert.equal(state.selection.kind, 'strip');
   assert.equal(state.selection.name, 'My group');
+
+  // Multi-strip select replaces the whole selection in one action.
+  state = layoutReducer(state, layoutActions.selectStrips(['strip-1', 'strip-2', 'strip-1', null]));
+  assert.equal(state.selection.kind, 'strip');
+  assert.deepEqual(state.selection.ids, ['strip-1', 'strip-2']); // deduped, nulls dropped
+  assert.equal(state.selection.name, '');
+
+  // Empty multi-select collapses to no selection.
+  state = layoutReducer(state, layoutActions.selectStrips([]));
+  assert.equal(state.selection.kind, 'none');
 });

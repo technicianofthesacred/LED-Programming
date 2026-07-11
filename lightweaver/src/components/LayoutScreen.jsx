@@ -26,8 +26,10 @@ import {
   cutsForStrip,
   deleteStripCut,
   mainChain,
+  moveStripRowsInChain,
   nudgeStripCut,
   normalizePatchBoard,
+  orderedStripIdsFromChain,
   sliceStripIntoPatchesPreservingRoute,
 } from '../lib/patchBoard.js';
 import { isDefaultCircleLayout } from '../lib/defaultCircleLayout.js';
@@ -43,6 +45,11 @@ import { isDefaultCircleLayout } from '../lib/defaultCircleLayout.js';
 // the strip id itself (freehand/merged strips that have no artwork source) — so
 // every coincidence-era comparison keeps identical behaviour.
 const stripSourceKey = strip => strip?.sourcePathId ?? strip?.sourceLayerId ?? strip?.id;
+
+// Stable empty stand-ins so the derived selection views keep referential
+// identity across renders when the selection is a different kind.
+const NO_IDS = [];
+const NO_ENTRIES = [];
 
 // Allocate the next collision-free `strip-<n>` id by scanning existing strips for
 // the highest number in use. (The layout reducer carries `nextStripSeq` for a
@@ -617,8 +624,6 @@ export function LayoutScreen() {
   // Persisted+undoable layout state now lives in the reducer behind context;
   // this component READS it directly (no local mirror copies).
   const [scaleUnit, setScaleUnit]   = useState('cm'); // 'cm' | 'in' — display unit for the artwork Size control
-  const [selLayerId, setSelLayerId] = useState(null);
-  const [selStripId, setSelStripId] = useState(null);
   const [showLight, setShowLight]   = useState(false);
   const [showLeds, setShowLeds]     = useState(true);
   const [glowMode, setGlowMode]     = useState('dots');
@@ -626,12 +631,9 @@ export function LayoutScreen() {
   const [showHeat, setShowHeat]     = useState(false);
   const [error, setError]           = useState(null);
 
-  // Layer panel state
+  // Layer panel state (selection itself lives in the reducer — see the derived
+  // selection views right after the `project` destructure below)
   const [expandedLayers, setExpandedLayers] = useState({});
-  const [pathSel, setPathSel]       = useState([]);
-  const [pathSelName, setPathSelName] = useState('');
-  const [selectedStripIds, setSelectedStripIds] = useState([]);
-  const [stripSelectionName, setStripSelectionName] = useState('');
 
   // v3 layout-screen live-only UI state
   const [lightMenuOpen, setLightMenuOpen] = useState(false);   // Light disclosure popover
@@ -728,6 +730,16 @@ export function LayoutScreen() {
     redoLayout,
     layoutHistLen,
     layoutFutLen,
+    // Selection — the single reducer-owned selection object + its dispatchers
+    selection,
+    selectStrip,
+    selectStrips,
+    toggleStripSel,
+    selectLayer,
+    selectPaths,
+    togglePathSel,
+    clearLayoutSelection,
+    renameLayoutSelection,
     serializeProject,
     loadProject,
     // Pattern state
@@ -753,9 +765,38 @@ export function LayoutScreen() {
   // read synchronously inside pointer handlers, so they must not lag a render).
   useEffect(() => { stripsRef.current = strips; }, [strips]);
   useEffect(() => { pxPerMmRef.current = pxPerMm; }, [pxPerMm]);
+
+  // ── Selection: derived views over the reducer's single selection object ────
+  // selection = { kind: 'none'|'strip'|'layer'|'path', ids, entries, name }.
+  // These consts keep the old local names so the JSX below reads unchanged.
+  const selectedStripIds = selection.kind === 'strip' ? selection.ids : NO_IDS;
+  const selStripId = selection.kind === 'strip' && selection.ids.length === 1 ? selection.ids[0] : null;
+  const pathSel = selection.kind === 'path' ? selection.entries : NO_ENTRIES;
+  const pathSelName = selection.kind === 'path' ? selection.name : '';
+  const stripSelectionName = selection.kind === 'strip' ? selection.name : '';
+  // Selecting a strip also "selects" its source layer for the inspector and
+  // artwork highlight (parity with the old selectStrip, which set selLayerId).
+  const selectedStrip = selStripId ? strips.find(s => s.id === selStripId) : null;
+  const selLayerId = selection.kind === 'layer'
+    ? (selection.ids[0] ?? null)
+    : (selectedStrip ? stripSourceKey(selectedStrip) : null);
+
+  // Prune the strip selection when selected strips disappear through any
+  // mutation path (strip/layer/path deletes, loads). Toggling a missing id
+  // removes exactly that id; an emptied selection collapses to 'none'.
   useEffect(() => {
-    setSelectedStripIds(prev => prev.filter(id => strips.some(s => s.id === id)));
-  }, [strips]);
+    if (selection.kind !== 'strip') return;
+    const missing = selection.ids.filter(id => !strips.some(s => s.id === id));
+    missing.forEach(id => toggleStripSel(id));
+  }, [strips, selection, toggleStripSel]);
+
+  // ── Wire order comes from the patch-board chain ────────────────────────────
+  // The strips[] array is an unordered entity store; the chain (rowIds) is the
+  // single wire-order truth the list, exports and firmware all share.
+  const orderedStrips = useMemo(() => {
+    const byId = new Map(strips.map(s => [s.id, s]));
+    return orderedStripIdsFromChain(patchBoard, strips).map(id => byId.get(id)).filter(Boolean);
+  }, [patchBoard, strips]);
 
   // ── Computed viewBox with pan/zoom ────────────────────────────────────────
 
@@ -785,8 +826,8 @@ export function LayoutScreen() {
   // Loading a project resets only EPHEMERAL view state — the persisted layout
   // data now lives in the reducer and is already replaced by `applyProject`.
   useEffect(() => {
-    setSelLayerId(null);
-    setSelStripId(null);
+    // Selection was already reset by the project load (layout/reset clears it);
+    // only the ephemeral view state needs resetting here.
     resetView();
   }, [projectRevision]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -830,12 +871,11 @@ export function LayoutScreen() {
     setHidden({});
     setLayerGroups([]);
     setLayerOrder(newLayerOrder);
-    setSelLayerId(null);
-    setSelStripId(null);
+    clearLayoutSelection();
     setDrawMode(false);
     setWaypoints([]);
     resetView();
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, setPatchBoard]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, setPatchBoard, clearLayoutSelection]);
 
   // ── SVG import via button ─────────────────────────────────────────────────
 
@@ -953,8 +993,8 @@ export function LayoutScreen() {
     pushLayoutHistory();
     setLayerGroups(prev => [...prev, newGroup]);
     setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
-    setPathSel(unique);
-  }, [layerGroups.length, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+    selectPaths(unique);
+  }, [layerGroups.length, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectPaths]);
 
   const addPathsToGroup = useCallback((groupId, entries) => {
     const group = layerGroups.find(g => g.groupId === groupId);
@@ -971,34 +1011,33 @@ export function LayoutScreen() {
       });
       return { ...g, _expanded: true, members: nextMembers };
     }));
-    setPathSel(incoming);
-  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+    selectPaths(incoming);
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectPaths]);
 
   const togglePathSelection = useCallback((entry, additive = false) => {
-    setSelLayerId(null);
-    setSelStripId(null);
-    setSelectedStripIds([]);
-    setStripSelectionName('');
-    setPathSel(prev => {
-      if (!additive) return [entry];
-      return prev.some(p => p.pathId === entry.pathId)
-        ? prev.filter(p => p.pathId !== entry.pathId)
-        : [...prev, entry];
-    });
-  }, []);
+    // Path selection replaces any strip/layer selection (single selection kind).
+    if (additive) togglePathSel(entry);
+    else selectPaths([entry]);
+  }, [togglePathSel, selectPaths]);
 
-  // Drag a strip row onto another to change the physical wire order.
-  const reorderStrips = useCallback((draggedIds, targetId) => {
-    const ids = draggedIds.filter(Boolean);
+  // Drag a strip row onto another to change the physical wire order. Only the
+  // patch-board chain moves — the strips[] array order is never touched by
+  // reordering. moveStripRowsInChain moves each dragged strip's patches as one
+  // contiguous block (splits preserved, off rows pinned to their slots). One
+  // gesture = one undo entry (updatePatchBoard pushes history exactly once).
+  const reorderStripRows = useCallback((draggedIds, targetId) => {
+    const ids = (draggedIds || []).filter(Boolean);
     if (!ids.length || ids.includes(targetId)) return;
-    const dragged = strips.filter(s => ids.includes(s.id));
-    const rest = strips.filter(s => !ids.includes(s.id));
-    const ti = rest.findIndex(s => s.id === targetId);
-    if (!dragged.length || ti === -1) return;
-    const next = [...rest.slice(0, ti + 1), ...dragged, ...rest.slice(ti + 1)];
-    pushLayoutHistory();
-    setStrips(next);
-  }, [strips, setStrips, pushLayoutHistory]);
+    updatePatchBoard(board => {
+      // moveStripRowsInChain returns a normalized copy; write its result back
+      // onto the mutable board `updatePatchBoard` hands us.
+      const moved = moveStripRowsInChain(board, ids, targetId);
+      board.patches = moved.patches;
+      board.chains = moved.chains;
+      board.groups = moved.groups;
+      board.physicalLocked = moved.physicalLocked;
+    });
+  }, [updatePatchBoard]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
@@ -1028,9 +1067,8 @@ export function LayoutScreen() {
       newGroup,
     ]);
     setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev.filter(item => item.id !== groupId && !emptiedGroupIds.has(item.id))]);
-    setSelectedStripIds(picked.map(s => s.id));
-    setStripSelectionName('');
-  }, [strips, layerGroups, stripSelectionName, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+    selectStrips(picked.map(s => s.id));
+  }, [strips, layerGroups, stripSelectionName, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrips]);
 
   const addStripsToGroup = useCallback((groupId, stripIds) => {
     const group = layerGroups.find(g => g.groupId === groupId);
@@ -1053,8 +1091,8 @@ export function LayoutScreen() {
         };
       })
       .filter(g => g.members.length > 0));
-    setSelectedStripIds(picked.map(s => s.id));
-  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+    selectStrips(picked.map(s => s.id));
+  }, [layerGroups, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrips]);
 
   const addStrip = () => {
     if (!selLayer) return;
@@ -1066,7 +1104,7 @@ export function LayoutScreen() {
     const newStrips = [...strips.filter(s => s.id !== id), newStrip];
     pushLayoutHistory();
     setStrips(newStrips);
-    setSelStripId(newStrip.id);
+    selectStrip(newStrip.id);
     scrollToStrip(newStrip.id);
   };
 
@@ -1098,7 +1136,7 @@ export function LayoutScreen() {
     const newStrips = [...strips.filter(s => s.id !== id), newStrip];
     pushLayoutHistory();
     setStrips(newStrips);
-    setSelStripId(newStrip.id);
+    selectStrip(newStrip.id);
     scrollToStrip(newStrip.id);
   };
 
@@ -1125,10 +1163,7 @@ export function LayoutScreen() {
       const newStrips = [...strips, newStrip];
       pushLayoutHistory();
       setStrips(newStrips);
-      setSelStripId(newStrip.id);
-      setSelectedStripIds([newStrip.id]);
-      setPathSel([]);
-      setPathSelName('');
+      selectStrip(newStrip.id);
       scrollToStrip(newStrip.id);
       return;
     }
@@ -1159,8 +1194,7 @@ export function LayoutScreen() {
     const newStrips = [...strips, ...created];
     pushLayoutHistory();
     setStrips(newStrips);
-    setSelStripId(created[0]?.id || null);
-    setSelectedStripIds(created.map(s => s.id));
+    selectStrips(created.map(s => s.id));
 
     if (mode === 'grouped' && created.length > 1) {
       const groupId = `strip-grp-${Date.now()}`;
@@ -1177,10 +1211,8 @@ export function LayoutScreen() {
       setLayerOrder(prev => [{ type: 'group', id: groupId }, ...prev]);
     }
 
-    setPathSel([]);
-    setPathSelName('');
     scrollToStrip(created[0]?.id);
-  }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushLayoutHistory]);
+  }, [pathSel, pathSelName, strips, layers, editCounts, hidden, svgText, viewBox, density, pxPerMm, layerGroups.length, pushLayoutHistory, selectStrip, selectStrips]);
 
   const addAllStrips = useCallback(() => {
     if (strips.length > 0 &&
@@ -1194,9 +1226,9 @@ export function LayoutScreen() {
     }
     pushLayoutHistory();
     setStrips(newStrips);
-    if (newStrips.length > 0) setSelStripId(newStrips[0].id);
+    if (newStrips.length > 0) selectStrip(newStrips[0].id);
     scrollToStrip(newStrips[0]?.id);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrip]);
 
   const removeStrip = useCallback((id) => {
     const newStrips = strips.filter(s => s.id !== id);
@@ -1215,11 +1247,10 @@ export function LayoutScreen() {
       .map(g => ({ ...g, members: g.members.filter(m => (m.stripId || m.pathId) !== id) }))
       .filter(g => g.members.length > 0));
     setLayerOrder(prev => prev.filter(item => !emptiedGroupIds.has(item.id)));
-    setSelectedStripIds(prev => prev.filter(stripId => stripId !== id));
     setEditCounts(newEditCounts);
     setHidden(newHidden);
-    if (selStripId === id) setSelStripId(null);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushLayoutHistory]);
+    // Selection pruning happens in the strips-change effect above.
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, layerGroups, pushLayoutHistory]);
 
   const reverseStrip = (id) => {
     const newStrips = strips.map(s => {
@@ -1232,38 +1263,13 @@ export function LayoutScreen() {
     setStrips(newStrips);
   };
 
-  const selectLayer = (layerId) => {
-    setSelLayerId(layerId);
-    setSelStripId(null);
-    setSelectedStripIds([]);
-    setStripSelectionName('');
-  };
-
-  const selectStrip = (id) => {
-    setSelStripId(id);
-    setSelectedStripIds([id]);
-    setStripSelectionName('');
-    setPathSel([]);
-    setPathSelName('');
-    const s = strips.find(st => st.id === id);
-    if (s) setSelLayerId(stripSourceKey(s));
-  };
-
-  const toggleStripSelection = useCallback((id) => {
-    setSelectedStripIds(prev => {
-      const base = prev.length ? prev : (selStripId ? [selStripId] : []);
-      return base.includes(id) ? base.filter(x => x !== id) : [...base, id];
-    });
-    setSelStripId(id);
-    setSelLayerId(null);
-    setPathSel([]);
-    setPathSelName('');
-  }, [selStripId]);
+  // selectLayer / selectStrip / toggleStripSel come straight from the context
+  // (reducer dispatchers) — selecting one kind clears the others in the reducer.
 
   const startStripMove = useCallback((event, strip) => {
     if (event.button !== 0 || drawMode || !svgRef.current) return;
     if (event.shiftKey || event.metaKey || event.ctrlKey) {
-      toggleStripSelection(strip.id);
+      toggleStripSel(strip.id);
       return;
     }
 
@@ -1279,11 +1285,9 @@ export function LayoutScreen() {
     if (!startStrips.length) return;
 
     pushLayoutHistory();
-    setSelectedStripIds(ids);
-    setSelStripId(strip.id);
-    setSelLayerId(null);
-    setPathSel([]);
-    setPathSelName('');
+    // Dragging a strip that isn't part of the current selection selects it;
+    // dragging inside an existing multi-selection keeps the selection intact.
+    if (!selectedStripIds.includes(strip.id)) selectStrip(strip.id);
     setMovingStripIds(ids);
     stripDragSuppressClickRef.current = false;
     stripDragPointRef.current = null;
@@ -1340,7 +1344,7 @@ export function LayoutScreen() {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSelection]);
+  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSel, selectStrip]);
 
   // ── Rename helpers ─────────────────────────────────────────────────────────
 
@@ -1386,10 +1390,10 @@ export function LayoutScreen() {
     setStrips(nextStrips);
     setEditCounts(nextEditCounts);
     setHidden(nextHidden);
-    setSelectedStripIds(prev => prev.filter(id => !removedStripIds.has(id)));
-    if (selLayerId === layerId) setSelLayerId(null);
-    if (selStripId && removedStripIds.has(selStripId)) setSelStripId(null);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selLayerId, selStripId, pushLayoutHistory]);
+    // Removed strips are pruned from the selection by the strips-change effect;
+    // an explicitly selected (deleted) layer clears here.
+    if (selection.kind === 'layer' && selection.ids.includes(layerId)) clearLayoutSelection();
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, selection, clearLayoutSelection, pushLayoutHistory]);
 
   const deleteSelectedVectorPaths = useCallback(() => {
     if (!pathSel.length) return;
@@ -1466,12 +1470,9 @@ export function LayoutScreen() {
     setHidden(nextHidden);
     setLayerGroups(nextLayerGroups);
     setLayerOrder(nextLayerOrder);
-    setPathSel([]);
-    setPathSelName('');
-    setSelectedStripIds(prev => prev.filter(id => nextStrips.some(strip => strip.id === id)));
-    if (selLayerId && deletedLayerIds.has(selLayerId)) setSelLayerId(null);
-    if (selStripId && !nextStrips.some(strip => strip.id === selStripId)) setSelStripId(null);
-  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, selLayerId, selStripId, pushLayoutHistory]);
+    // The current selection is the just-deleted paths — clear it.
+    clearLayoutSelection();
+  }, [pathSel, layers, strips, editCounts, hidden, svgText, viewBox, density, layerGroups, layerOrder, clearLayoutSelection, pushLayoutHistory]);
 
   // ── Duplicate strip ────────────────────────────────────────────────────────
 
@@ -1489,17 +1490,16 @@ export function LayoutScreen() {
     const newStrips = strips.flatMap(st => st.id === id ? [st, newStrip] : [st]);
     pushLayoutHistory();
     setStrips(newStrips);
-    setSelStripId(newId);
+    selectStrip(newId);
     scrollToStrip(newId);
-  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+  }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrip]);
 
   // ── Layer group management ─────────────────────────────────────────────────
 
   const createLayerGroup = useCallback(() => {
     createLayerGroupFromEntries(pathSel);
-    setPathSel([]);
-    setPathSelName('');
-  }, [pathSel, createLayerGroupFromEntries]);
+    clearLayoutSelection();
+  }, [pathSel, createLayerGroupFromEntries, clearLayoutSelection]);
 
   const groupSelectedStrips = useCallback(() => {
     createStripGroupFromIds(selectedStripIds);
@@ -1507,7 +1507,8 @@ export function LayoutScreen() {
 
   const mergeSelectedStrips = useCallback(() => {
     const selected = new Set(selectedStripIds);
-    const picked = strips.filter(s => selected.has(s.id));
+    // Merge in displayed wire (chain) order — the list order the user sees.
+    const picked = orderedStrips.filter(s => selected.has(s.id));
     if (picked.length < 2) return;
 
     const first = picked[0];
@@ -1549,12 +1550,9 @@ export function LayoutScreen() {
       pickedIds.forEach(id => { delete next[id]; });
       return next;
     });
-    setSelLayerId(null);
-    setSelStripId(mergedId);
-    setSelectedStripIds([mergedId]);
-    setStripSelectionName('');
+    selectStrip(mergedId);
     scrollToStrip(mergedId);
-  }, [selectedStripIds, strips, stripSelectionName, layerGroups, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+  }, [selectedStripIds, strips, orderedStrips, stripSelectionName, layerGroups, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrip]);
 
   const removeSelectedStrips = useCallback(() => {
     const selected = new Set(selectedStripIds);
@@ -1574,10 +1572,8 @@ export function LayoutScreen() {
       selected.forEach(id => { delete next[id]; });
       return next;
     });
-    setSelectedStripIds([]);
-    setStripSelectionName('');
-    if (selected.has(selStripId)) setSelStripId(null);
-  }, [selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, selStripId, layerGroups, pushLayoutHistory]);
+    clearLayoutSelection();
+  }, [selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, layerGroups, pushLayoutHistory, clearLayoutSelection]);
 
   const deleteLayerGroup = useCallback((groupId) => {
     setLayerGroups(prev => prev.filter(g => g.groupId !== groupId));
@@ -1665,11 +1661,10 @@ export function LayoutScreen() {
     const currentCuts = cutsForStrip(normalizePatchBoard(project.patchBoard, strips), strip.id);
     const nextCuts = [...new Set([...currentCuts, cutLed])].sort((a, b) => a - b);
     updatePatchBoard(next => sliceStripIntoPatchesPreservingRoute(next, strip, nextCuts));
-    setSelStripId(strip.id);
-    setSelectedStripIds([strip.id]);
+    selectStrip(strip.id);
     setSelectedWireCut({ stripId: strip.id, cutLed });
     setSelectedWirePatchId(null);
-  }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard]);
+  }, [nearestLedIndex, project.patchBoard, strips, updatePatchBoard, selectStrip]);
 
   const toggleRoutePatch = useCallback((patchId) => {
     if (wireOverlayMode !== 'link' || project.patchBoard?.physicalLocked) return;
@@ -1785,10 +1780,10 @@ export function LayoutScreen() {
     const newStrips = [...strips, newStrip];
     pushLayoutHistory();
     setStrips(newStrips);
-    setSelStripId(newStrip.id);
+    selectStrip(newStrip.id);
     setPendingDraw(null);
     scrollToStrip(newStrip.id);
-  }, [pendingDraw, pendingDrawCount, pendingDrawName, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory]);
+  }, [pendingDraw, pendingDrawCount, pendingDrawName, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrip]);
 
   const cancelDraw = () => { setPendingDraw(null); };
 
@@ -1825,18 +1820,10 @@ export function LayoutScreen() {
         el.style.opacity = activeIds.has(l.layerId) ? '0.9' : dimOpacity;
       });
     }
-  }, [hoveredLayerId, selLayerId, selStripId, strips, layers, artworkHTML, pathSel]);
+  }, [hoveredLayerId, selection, strips, layers, artworkHTML]);
 
-  // ── pathSelName auto-fill ────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (pathSel.length === 1) {
-      setPathSelName(pathSel[0].name);
-    } else if (pathSel.length === 0) {
-      setPathSelName('');
-    }
-    // Intentionally using full pathSel as dep so name updates when selection changes
-  }, [pathSel]);
+  // (pathSelName auto-fill now lives in the reducer: SELECT_PATHS/TOGGLE_PATH
+  // name a single-path selection after the path and blank multi-selections.)
 
   // ── Save / Load project ────────────────────────────────────────────────────
 
@@ -1908,14 +1895,7 @@ export function LayoutScreen() {
       if (e.key === 'Escape') {
         if (drawMode) { setDrawMode(false); setWaypoints([]); setGhostPt(null); }
         else if (pendingDraw) { cancelDraw(); }
-        else {
-          setSelLayerId(null);
-          setSelStripId(null);
-          setSelectedStripIds([]);
-          setStripSelectionName('');
-          setPathSel([]);
-          setPathSelName('');
-        }
+        else { clearLayoutSelection(); }
         return;
       }
 
@@ -1998,7 +1978,7 @@ export function LayoutScreen() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selStripId, selLayerId, selectedStripIds, pathSel, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset]);
+  }, [drawMode, pendingDraw, selection, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden]);
 
   // ── Memoised visualisation data ────────────────────────────────────────────
 
@@ -2178,8 +2158,8 @@ export function LayoutScreen() {
   const defaultCircleLayoutActive = !svgText && layers.length === 0 && isDefaultCircleLayout(strips);
   const selectedStrips = useMemo(() => {
     const selected = new Set(selectedStripIds);
-    return strips.filter(s => selected.has(s.id));
-  }, [strips, selectedStripIds]);
+    return orderedStrips.filter(s => selected.has(s.id));
+  }, [orderedStrips, selectedStripIds]);
 
   // ── Viewport scale for adaptive sizing ────────────────────────────────────
 
@@ -2217,14 +2197,12 @@ export function LayoutScreen() {
     });
     if (hits.length > 0) {
       justFinishedLassoRef.current = true;
-      setPathSel(prev => ev.shiftKey
-        ? [...prev, ...hits.filter(h => !prev.some(p => p.pathId === h.pathId))]
-        : hits);
-      setSelLayerId(null);
-      setSelectedStripIds([]);
-      setStripSelectionName('');
+      // Shift extends an existing path selection; otherwise the hits replace it
+      // (path selection clears strip/layer selection in the reducer).
+      const current = ev.shiftKey && selection.kind === 'path' ? selection.entries : [];
+      selectPaths([...current, ...hits.filter(h => !current.some(p => p.pathId === h.pathId))]);
     }
-  }, [layers, hidden]);
+  }, [layers, hidden, selection, selectPaths]);
   useEffect(() => { lassoFinishRef.current = finishLasso; }, [finishLasso]);
 
   // ── Draw mode SVG events ───────────────────────────────────────────────────
@@ -2278,12 +2256,7 @@ export function LayoutScreen() {
     // Don't clear selection if we just finished a lasso drag
     if (justFinishedLassoRef.current) { justFinishedLassoRef.current = false; return; }
     if (e.target === svgRef.current || e.target.tagName === 'svg') {
-      setPathSel([]);
-      setPathSelName('');
-      setSelLayerId(null);
-      setSelStripId(null);
-      setSelectedStripIds([]);
-      setStripSelectionName('');
+      clearLayoutSelection();
     }
   };
 
@@ -2677,22 +2650,11 @@ export function LayoutScreen() {
                         onMouseLeave={() => { setHoveredLayerId(null); setHoveredSubPathId(null); }}
                         onClick={e => {
                           e.stopPropagation();
-	                          if (e.shiftKey) {
-	                            // Shift-click: toggle this path in/out of selection
-	                            setPathSel(prev => prev.some(p => p.pathId === t.pathId)
-	                              ? prev.filter(p => p.pathId !== t.pathId)
-	                              : [...prev, entry]);
-	                          } else {
-                            // Single click: select only this individual path
-                            setPathSel([entry]);
-                            setSelStripId(null);
-                            // Clear inspector — canvas clicks don't open the layer inspector
-	                            // (use the layer panel rows for that)
-	                            setSelLayerId(null);
-	                          }
-	                          setSelectedStripIds([]);
-	                          setStripSelectionName('');
-	                        }}/>
+                          // Shift-click toggles this path in/out of the selection;
+                          // plain click selects only it. Path selection clears
+                          // strip/layer selection in the reducer.
+                          togglePathSelection(entry, e.shiftKey);
+                        }}/>
                 );
               });
             })}
@@ -2800,7 +2762,7 @@ export function LayoutScreen() {
                             chopStripAtEvent(e, s);
                             return;
                           }
-                          if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSelection(s.id);
+                          if (e.shiftKey || e.metaKey || e.ctrlKey) toggleStripSel(s.id);
                           else selectStrip(s.id);
                         }}/>
                   <path d={s.pathData}
@@ -3353,7 +3315,7 @@ export function LayoutScreen() {
 	                                 e.dataTransfer.effectAllowed = 'move';
 	                                 e.dataTransfer.setData('application/x-lightweaver-path', JSON.stringify(payload));
 	                                 e.dataTransfer.setData('text/plain', payload.map(p => p.name).join(', '));
-	                                 if (!spSel) setPathSel([entry]);
+	                                 if (!spSel) selectPaths([entry]);
 	                               }}
 	                               onDragOver={e => {
 	                                 if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-path')) return;
@@ -3406,7 +3368,7 @@ export function LayoutScreen() {
             <div className="la-sub-h">
               <span>{pathSel.length} path{pathSel.length > 1 ? 's' : ''} selected</span>
               <button className="meta" style={{ color: 'var(--text-faint)' }}
-                      onClick={() => { setPathSel([]); setPathSelName(''); }}>✕</button>
+                      onClick={clearLayoutSelection}>✕</button>
             </div>
             <div style={{ maxHeight: 80, overflow: 'auto', marginBottom: 8 }}>
               {pathSel.map((p, i) => (
@@ -3421,20 +3383,30 @@ export function LayoutScreen() {
                     </span>
                   )}
                   <button disabled={i === 0} style={{ fontSize: 11, padding: '0 3px', color: 'var(--text-faint)', opacity: i === 0 ? 0.3 : 1 }}
-                          onClick={() => setPathSel(prev => {
-                            const a = [...prev]; [a[i-1], a[i]] = [a[i], a[i-1]]; return a;
-                          })}>↑</button>
+                          onClick={() => {
+                            const a = [...pathSel]; [a[i-1], a[i]] = [a[i], a[i-1]];
+                            selectPaths(a);
+                            if (pathSelName) renameLayoutSelection(pathSelName); // keep the typed name across reorders
+                          }}>↑</button>
                   <button disabled={i === pathSel.length - 1} style={{ fontSize: 11, padding: '0 3px', color: 'var(--text-faint)', opacity: i === pathSel.length - 1 ? 0.3 : 1 }}
-                          onClick={() => setPathSel(prev => {
-                            const a = [...prev]; [a[i], a[i+1]] = [a[i+1], a[i]]; return a;
-                          })}>↓</button>
+                          onClick={() => {
+                            const a = [...pathSel]; [a[i], a[i+1]] = [a[i+1], a[i]];
+                            selectPaths(a);
+                            if (pathSelName) renameLayoutSelection(pathSelName); // keep the typed name across reorders
+                          }}>↓</button>
                   <button style={{ fontSize: 12, padding: '0 4px', color: 'var(--text-faint)' }}
-                          onClick={() => setPathSel(prev => prev.filter((_, j) => j !== i))}>✕</button>
+                          onClick={() => {
+                            const next = pathSel.filter((_, j) => j !== i);
+                            selectPaths(next);
+                            // Dropping to one path auto-names after it (reducer);
+                            // otherwise keep whatever the user typed.
+                            if (next.length > 1 && pathSelName) renameLayoutSelection(pathSelName);
+                          }}>✕</button>
                 </div>
               ))}
             </div>
             <input type="text" className="pm-input" style={{ height: 30, marginBottom: 8 }}
-                   value={pathSelName} onChange={e => setPathSelName(e.target.value)}
+                   value={pathSelName} onChange={e => renameLayoutSelection(e.target.value)}
                    placeholder="Name…"/>
             <div className="la-merge">
               <button className="btn primary" style={{ flex: 1 }}
@@ -3643,7 +3615,7 @@ export function LayoutScreen() {
 	              <div className="la-batch">
 	                <div className="la-batch-head">
 	                  <span>{selectedStrips.length} strips selected</span>
-	                  <button title="Clear strip selection" onClick={() => { setSelectedStripIds([]); setStripSelectionName(''); }}>✕</button>
+	                  <button title="Clear strip selection" onClick={clearLayoutSelection}>✕</button>
 	                </div>
 	                <div className="la-batch-list">
 	                  {selectedStrips.map((s, i) => (
@@ -3657,7 +3629,7 @@ export function LayoutScreen() {
 	                  <input
 	                    type="text"
 	                    value={stripSelectionName}
-	                    onChange={e => setStripSelectionName(e.target.value)}
+	                    onChange={e => renameLayoutSelection(e.target.value)}
 	                    placeholder="Group or merged strip name..."
 	                  />
 	                  <button className="btn" title="Organize selected strips as one expandable group (G)" onClick={groupSelectedStrips}>
@@ -3670,7 +3642,8 @@ export function LayoutScreen() {
 	              </div>
 	            )}
 	            <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', minHeight: 0, paddingBottom: 4 }}>
-	              {strips.map((s, i) => {
+	              {/* List order = chain order; the row badge is the strip's chain position. */}
+	              {orderedStrips.map((s, i) => {
 	                const isSel = s.id === selStripId;
 	                const isBatchSel = selectedStripIds.includes(s.id);
 	                const isOpen = !!expandedStrips[s.id];
@@ -3699,7 +3672,7 @@ export function LayoutScreen() {
 	                         if (!draggedStripIds.length) return;
 	                         e.preventDefault();
 	                         e.stopPropagation();
-	                         reorderStrips(draggedStripIds, s.id);
+	                         reorderStripRows(draggedStripIds, s.id);
 	                         setStripGroupDragOver(null);
 	                       }}
 	                       onDragEnd={() => setStripGroupDragOver(null)}
@@ -3707,7 +3680,7 @@ export function LayoutScreen() {
 	                                outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
 	                                outlineOffset: -1 }}
 	                       onClick={e => {
-	                         if (e.shiftKey || e.metaKey || e.ctrlKey) { toggleStripSelection(s.id); return; }
+	                         if (e.shiftKey || e.metaKey || e.ctrlKey) { toggleStripSel(s.id); return; }
 	                         selectStrip(s.id);
 	                         setExpandedStrips(ex => ({ ...ex, [s.id]: !ex[s.id] }));
 	                       }}>

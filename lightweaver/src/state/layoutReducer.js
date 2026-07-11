@@ -93,6 +93,7 @@ export const LayoutActions = Object.freeze({
   SET_PATCH_BOARD: 'layout/setPatchBoard',
   // Selection
   SELECT_STRIP: 'layout/selectStrip',
+  SELECT_STRIPS: 'layout/selectStrips',
   TOGGLE_STRIP: 'layout/toggleStrip',
   SELECT_LAYER: 'layout/selectLayer',
   SELECT_PATHS: 'layout/selectPaths',
@@ -105,6 +106,7 @@ export const LayoutActions = Object.freeze({
 // selecting never pushed history).
 const SELECTION_ACTIONS = new Set([
   LayoutActions.SELECT_STRIP,
+  LayoutActions.SELECT_STRIPS,
   LayoutActions.TOGGLE_STRIP,
   LayoutActions.SELECT_LAYER,
   LayoutActions.SELECT_PATHS,
@@ -141,6 +143,7 @@ export const layoutActions = {
   calibrate: (pxPerMm, strips) => ({ type: LayoutActions.CALIBRATE, pxPerMm, strips }),
   setPatchBoard: patchBoard => ({ type: LayoutActions.SET_PATCH_BOARD, patchBoard }),
   selectStrip: id => ({ type: LayoutActions.SELECT_STRIP, id }),
+  selectStrips: ids => ({ type: LayoutActions.SELECT_STRIPS, ids }),
   toggleStrip: id => ({ type: LayoutActions.TOGGLE_STRIP, id }),
   selectLayer: layerId => ({ type: LayoutActions.SELECT_LAYER, layerId }),
   selectPaths: entries => ({ type: LayoutActions.SELECT_PATHS, entries }),
@@ -442,6 +445,11 @@ export function layoutReducer(state, action) {
 
     case LayoutActions.SELECT_STRIP:
       return { ...state, selection: stripSelection([action.id]) };
+
+    case LayoutActions.SELECT_STRIPS: {
+      const ids = [...new Set((action.ids || []).filter(Boolean))];
+      return { ...state, selection: ids.length ? stripSelection(ids) : emptySelection() };
+    }
 
     case LayoutActions.TOGGLE_STRIP: {
       const base = state.selection.kind === 'strip' ? state.selection.ids : [];

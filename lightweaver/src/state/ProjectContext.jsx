@@ -255,8 +255,9 @@ export function ProjectProvider({ children }) {
     dispatchLayout({ type: 'layout/updatePatchBoard', mutate });
   }, []);
 
-  // Selection dispatchers (inert until step 9 wires LayoutScreen onto them).
+  // Selection dispatchers (LayoutScreen's single selection model rides on these).
   const selectStrip       = useCallback(id => dispatchLayout(layoutActions.selectStrip(id)), []);
+  const selectStrips      = useCallback(ids => dispatchLayout(layoutActions.selectStrips(ids)), []);
   const toggleStripSel    = useCallback(id => dispatchLayout(layoutActions.toggleStrip(id)), []);
   const selectLayer       = useCallback(layerId => dispatchLayout(layoutActions.selectLayer(layerId)), []);
   const selectPaths       = useCallback(entries => dispatchLayout(layoutActions.selectPaths(entries)), []);
@@ -686,7 +687,8 @@ export function ProjectProvider({ children }) {
       layoutHistLen,     layoutFutLen,
       // Layout selection (reducer-owned; consumed from step 9 on)
       selection,
-      selectStrip,       toggleStripSel,
+      selectStrip,       selectStrips,
+      toggleStripSel,
       selectLayer,       selectPaths,
       togglePathSel,     clearLayoutSelection,
       renameLayoutSelection,
