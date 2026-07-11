@@ -195,9 +195,11 @@ function ShowScreen({ go }) {
   const rgbBufRef = useRef(null);
   const colorBufRef = useRef(null);
   const hexBufRef = useRef(null);
+  const renderFrameRef = useRef(null);
   const healthNoticeShownRef = useRef(false);
   const pausedRef = useRef(false);
   const resetTimingRef = useRef(false);
+  const sourceRequestGenerationRef = useRef(0);
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [modeKey, setModeKey] = useState('strata');
@@ -221,6 +223,7 @@ function ShowScreen({ go }) {
     rgbBufRef.current = null;
     colorBufRef.current = null;
     hexBufRef.current = null;
+    if (pausedRef.current) renderFrameRef.current?.({ push: true });
   }, [activeTemplate, activeTemplateKind]);
 
   // ── the one animation loop: analyze → tick → paint → (stream) ───────────
@@ -248,6 +251,29 @@ function ShowScreen({ go }) {
     let meterAt = 0;
     let encodeAt = 0;
     let frameVersion = 0;
+    const encodeFrame = () => {
+      const stream = streamRef.current;
+      if (!stream) return;
+      rgbBufRef.current = engineRef.current.frameRGB(rgbBufRef.current, colorBufRef.current);
+      hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
+      stream.push(hexBufRef.current);
+    };
+    const renderFrame = ({ push = false } = {}) => {
+      const engine = engineRef.current;
+      colorBufRef.current = engine.colorFrame(colorBufRef.current);
+      renderSpatial(
+        ctx,
+        engine,
+        geom,
+        colorBufRef.current,
+        templateRef.current,
+        templateKindRef.current,
+      );
+      frameVersion += 1;
+      if (stageRef.current) stageRef.current.dataset.frameVersion = String(frameVersion);
+      if (push) encodeFrame();
+    };
+    renderFrameRef.current = renderFrame;
     const step = (now) => {
       if (resetTimingRef.current) {
         prev = now;
@@ -266,25 +292,12 @@ function ShowScreen({ go }) {
         engine.setFeatures(featureRef.current.getFeatures());
       }
       engine.tick(dt);
-      // per-pixel colors computed ONCE per frame, shared by the canvas paint
-      // and the LED-frame encode below
-      colorBufRef.current = engine.colorFrame(colorBufRef.current);
-      renderSpatial(
-        ctx,
-        engine,
-        geom,
-        colorBufRef.current,
-        templateRef.current,
-        templateKindRef.current,
-      );
-      frameVersion += 1;
-      if (stageRef.current) stageRef.current.dataset.frameVersion = String(frameVersion);
+      // Per-pixel colors are computed once and shared by canvas + wire encode.
+      renderFrame();
       const stream = streamRef.current;
       if (stream && now - encodeAt >= STREAM_ENCODE_GAP_MS) {
         encodeAt = now;
-        rgbBufRef.current = engine.frameRGB(rgbBufRef.current, colorBufRef.current);
-        hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
-        stream.push(hexBufRef.current);
+        encodeFrame();
       }
       if (now - meterAt > 120) {
         meterAt = now;
@@ -295,6 +308,7 @@ function ShowScreen({ go }) {
     raf = requestAnimationFrame(step);
 
     return () => {
+      renderFrameRef.current = null;
       cancelAnimationFrame(raf);
       clearTimeout(resizeTimer);
       window.removeEventListener('resize', onResize);
@@ -303,6 +317,7 @@ function ShowScreen({ go }) {
 
   // ── teardown on unmount: lights released, audio closed ───────────────────
   useEffect(() => () => {
+    sourceRequestGenerationRef.current += 1;
     const stream = streamRef.current;
     streamRef.current = null;
     if (stream) void stream.stop();
@@ -380,6 +395,7 @@ function ShowScreen({ go }) {
   }, []);
 
   const goQuiet = useCallback(() => {
+    sourceRequestGenerationRef.current += 1;
     stopMicTracks();
     try { playerRef.current?.pause(); } catch { /* noop */ }
     pausedRef.current = false;
@@ -393,15 +409,21 @@ function ShowScreen({ go }) {
     // iOS: the AudioContext must be created/resumed synchronously inside the
     // tap — any await first (like getUserMedia's permission prompt) consumes
     // the user-gesture activation and the context stays suspended forever.
+    const requestGeneration = sourceRequestGenerationRef.current + 1;
+    sourceRequestGenerationRef.current = requestGeneration;
     const audio = ensureAudio();
     try {
+      const mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      if (sourceRequestGenerationRef.current !== requestGeneration) {
+        mic?.getTracks?.().forEach((track) => track.stop());
+        return;
+      }
       try { playerRef.current?.pause(); } catch { /* noop */ }
       pausedRef.current = false;
       resetTimingRef.current = true;
       setSongPaused(false);
-      const mic = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      });
       stopMicTracks();
       audio.micStream = mic;
       connectSource(audio.ctx.createMediaStreamSource(mic), false);
@@ -409,6 +431,7 @@ function ShowScreen({ go }) {
       setSource('mic');
       setNotice(null);
     } catch (error) {
+      if (sourceRequestGenerationRef.current !== requestGeneration) return;
       setNotice({ kind: 'err', text: `Couldn't use the microphone: ${error?.message || error}` });
     }
   }, [connectSource, ensureAudio, stopMicTracks]);
@@ -419,6 +442,8 @@ function ShowScreen({ go }) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    const requestGeneration = sourceRequestGenerationRef.current + 1;
+    sourceRequestGenerationRef.current = requestGeneration;
     const audio = ensureAudio();
     const player = playerRef.current;
     stopMicTracks();
@@ -431,7 +456,12 @@ function ShowScreen({ go }) {
     // (the mic disconnects it when it takes over).
     if (!audio.elSource) audio.elSource = audio.ctx.createMediaElementSource(player);
     connectSource(audio.elSource, true);
-    void player.play();
+    let playResult;
+    try {
+      playResult = player.play();
+    } catch (error) {
+      playResult = Promise.reject(error);
+    }
     pausedRef.current = false;
     resetTimingRef.current = true;
     setSongPaused(false);
@@ -439,18 +469,46 @@ function ShowScreen({ go }) {
     setFileName(file.name);
     setSource('file');
     setNotice(null);
+    Promise.resolve(playResult).catch((error) => {
+      if (sourceRequestGenerationRef.current !== requestGeneration) return;
+      pausedRef.current = true;
+      setSongPaused(true);
+      setNotice({ kind: 'err', text: `Couldn't play the song: ${error?.message || error}` });
+    });
   }, [connectSource, ensureAudio, stopMicTracks]);
 
   const toggleSongPause = useCallback(() => {
     if (source !== 'file' || !fileName) return;
+    const requestGeneration = sourceRequestGenerationRef.current;
     const audio = audioRef.current;
     const player = playerRef.current;
     if (pausedRef.current) {
-      pausedRef.current = false;
-      resetTimingRef.current = true;
-      setSongPaused(false);
-      if (audio.ctx) void audio.ctx.resume();
-      void player?.play();
+      let resumeResult = Promise.resolve();
+      try {
+        if (audio.ctx) resumeResult = Promise.resolve(audio.ctx.resume());
+      } catch (error) {
+        resumeResult = Promise.reject(error);
+      }
+      let playResult;
+      try {
+        playResult = player?.play();
+      } catch (error) {
+        playResult = Promise.reject(error);
+      }
+      Promise.all([resumeResult, Promise.resolve(playResult)]).then(() => {
+        if (sourceRequestGenerationRef.current === requestGeneration && source === 'file') {
+          pausedRef.current = false;
+          resetTimingRef.current = true;
+          setSongPaused(false);
+          setNotice(null);
+        }
+      }).catch((error) => {
+        if (sourceRequestGenerationRef.current !== requestGeneration || source !== 'file') return;
+        try { player?.pause(); } catch { /* noop */ }
+        pausedRef.current = true;
+        setSongPaused(true);
+        setNotice({ kind: 'err', text: `Couldn't resume the song: ${error?.message || error}` });
+      });
       return;
     }
     try { player?.pause(); } catch { /* noop */ }
@@ -601,10 +659,15 @@ function ShowScreen({ go }) {
         {/* body: stage + controls */}
         <div className="sh-body">
           <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, background: 'var(--bg-canvas)', overflow: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <div
+              role="group"
+              aria-label="Show layout template"
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}
+            >
               <button
                 type="button"
                 data-testid="show-template-mandala"
+                aria-pressed={activeTemplateKind === 'mandala'}
                 onClick={() => setRequestedTemplate('mandala')}
                 title="Preview and stream the five-ring Mandala map"
                 style={chipStyle(activeTemplateKind === 'mandala')}
@@ -614,6 +677,7 @@ function ShowScreen({ go }) {
               <button
                 type="button"
                 data-testid="show-template-connected"
+                aria-pressed={activeTemplateKind === 'connected'}
                 disabled={!connectedUsable}
                 onClick={() => setRequestedTemplate('connected')}
                 title={connectedUsable ? 'Preview and stream your connected layout' : 'No visible connected pixels'}
