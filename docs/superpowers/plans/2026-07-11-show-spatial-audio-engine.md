@@ -71,7 +71,7 @@ export function createShowAudioFeatures({ sampleRate = 44100, fftSize = 2048 } =
 }
 ```
 
-Use RMS across 30–140 Hz, 150–1800 Hz, and 2000–9000 Hz. Let the floor rise slowly and fall moderately; let headroom rise quickly and decay very slowly so a steady signal cannot be normalized away. Compute positive spectral flux from normalized bin increases. Drive `beat` from flux plus positive broadband-energy change with eased attack and roughly 350–650 ms release.
+Use RMS across 30–140 Hz, 150–1800 Hz, and 2000–9000 Hz. Let the floor rise slowly and fall moderately; let headroom rise quickly and decay very slowly so a steady signal cannot be normalized away. Compute positive spectral flux from increases in frequency-bin energy. Drive `beat` from a thresholded spectral-flux onset with a fast onset and decaying release envelope; broadband energy remains a separate level feature rather than an additional beat trigger.
 
 - [x] **Step 4: Run focused tests and verify GREEN**
 
@@ -192,12 +192,15 @@ After the mode field fills `target[]`, combine a restrained per-sample substrate
 
 ```js
 const depth = presetName === 'Active' ? 0.14 : 0.08;
-const phase = sample.radius * radialWeight + sample.stripIndex * 0.17 + sample.stripProgress * 0.25;
-const travellingBeat = features.beat * (0.55 + 0.45 * Math.cos(phase - beatPhase));
-target[i] = clamp01(target[i] + depth * travellingBeat);
+const phase = sample.angle * 2 + sample.radialProgress * 4.5
+  + sample.stripIndex * 0.37 + sample.stripProgress * Math.PI * 2
+  + sample.x * 0.6 - sample.y * 0.4;
+const spatial = 0.28 + 0.72 * (0.5 + 0.5 * Math.sin(phase - time * 1.1));
+const base = clamp01(target[i]);
+target[i] = base + (1 - base) * depth * features.beat * spatial;
 ```
 
-Use mode-specific radial/angular/strip phase weights. Do not apply one uniform flash.
+Use this one shared spatial phase formula across all modes. Mode-specific movement comes from the foreground field each effect already wrote into `target[]`; the substrate only lifts that field with a non-uniform travelling articulation, never a uniform flash.
 
 - [x] **Step 5: Rework all nine modes as spatial fields**
 
