@@ -1,18 +1,10 @@
 /* Layout mode shell (Draw | Size | Wire) — v3 token idiom, matching
-   src/styles/v3-layout-extra.css's live-only-widget convention. This file
-   grows across the remaining layout-redesign-plan.md Phase 2 steps as the
-   Size/Wire panels land; today it only carries the mode switch + stub. */
+   src/styles/v3-layout-extra.css's live-only-widget convention. Carries the
+   mode switch plus the Size and Wire mode panel styles (the Size/Wire stubs
+   are gone now that both panels have landed — layout-redesign-plan.md). */
 
 .la-mode-switch {
   margin-right: 4px;
-}
-
-.la-mode-stub {
-  padding: 32px 16px;
-  text-align: center;
-  color: var(--text-faint);
-  font-size: var(--fs-sm, 12px);
-  line-height: 1.5;
 }
 
 /* ── Size mode — the artwork-size → density → per-strip-count chain ─────── */

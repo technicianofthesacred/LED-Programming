@@ -4,13 +4,7 @@ import {
   measureLayers,
 } from '../../../lib/layoutGeometry.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
-
-function download(filename, text) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-  a.download = filename;
-  a.click();
-}
+import { download } from '../../../lib/export.js';
 
 // SVG import (button + drag-drop), project save/load, and import error state.
 // `ctx` is the shared layout bundle; view-state resets flow in via `deps`.
@@ -125,7 +119,8 @@ export function useLayoutImport(ctx, deps) {
         layerOrder,
       },
     };
-    download(`lightweaver-project-${date}.json`, JSON.stringify(data, null, 2));
+    // Canonical download() (src/lib/export.js): (content, filename, mimeType).
+    download(JSON.stringify(data, null, 2), `lightweaver-project-${date}.json`, 'application/json');
   };
 
   const handleLoad = async (e) => {

@@ -84,6 +84,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const {
     wireOverlayMode, selectedWireCut,
     setWireOverlayMode, setSelectedWireCut, setLinkRouteIds,
+    deleteSelectedWireCut,
   } = wireApi;
 
   // ── Preview toggles ────────────────────────────────────────────────────────
@@ -185,6 +186,10 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       toggleStripSel(strip.id);
       return;
     }
+    // Positional strip-drag is a Draw-mode gesture (canvas behavior matrix,
+    // docs/layout-redesign-plan.md step 11). In Size/Wire a strip mousedown
+    // selects the strip but never starts a move.
+    if (mode !== 'draw') { selectStrip(strip.id); return; }
 
     event.preventDefault();
     event.stopPropagation();
@@ -257,7 +262,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSel, selectStrip]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSel, selectStrip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Per-layer artwork opacity ──────────────────────────────────────────────
   useEffect(() => {
@@ -370,8 +375,9 @@ export function useLayoutCanvasInteraction(ctx, deps) {
         return;
       }
 
-      // Arrow keys nudge the selected strip one pixel (Shift = ×10)
-      if (selStripId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      // Arrow keys nudge the selected strip one pixel (Shift = ×10) — Draw only
+      // (canvas behavior matrix, docs/layout-redesign-plan.md step 11).
+      if (mode === 'draw' && selStripId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         const strip = strips.find(s => s.id === selStripId);
         if (strip) {
           e.preventDefault();
@@ -383,29 +389,46 @@ export function useLayoutCanvasInteraction(ctx, deps) {
         }
       }
 
-      // Single-key shortcuts
+      // Delete/Backspace is mode-specific (canvas behavior matrix, step 11):
+      // Wire deletes the selected cut (or does nothing); Size does nothing;
+      // Draw deletes the selected path/strip/layer.
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        if (mode === 'wire') {
+          if (selectedWireCut) deleteSelectedWireCut();
+          return;
+        }
+        if (mode !== 'draw') return;   // Size: nothing to delete on canvas
+        if (pathSel.length > 0) deleteSelectedVectorPaths();
+        else if (selectedStripIds.length > 1) removeSelectedStrips();
+        else if (selStripId) {
+          // Deleting a whole-layer-backed strip deletes its source layer (and
+          // with it the strip); any other strip is just removed.
+          const selStrip = strips.find(s => s.id === selStripId);
+          const sourceLayer = selStrip && layers.some(layer => layer.layerId === stripSourceKey(selStrip))
+            ? stripSourceKey(selStrip) : null;
+          if (sourceLayer) deleteLayer(sourceLayer);
+          else removeStrip(selStripId);
+        }
+        else if (selLayerId) deleteLayer(selLayerId);
+        return;
+      }
+
+      // Global shortcuts (all modes): mode switch, reset view.
       switch (e.key) {
-        case '1': setMode('draw'); break;
-        case '2': setMode('size'); break;
-        case '3': setMode('wire'); break;
+        case '1': setMode('draw'); return;
+        case '2': setMode('size'); return;
+        case '3': setMode('wire'); return;
+        case 'f': resetView(); return;
+        default: break;
+      }
+
+      // Draw-mode-only editing shortcuts (matrix: g/m/h/a/d gated to Draw; the
+      // draw-tool keys d/s only mean anything while drawing).
+      if (mode !== 'draw') return;
+      switch (e.key) {
         case 's': setDrawMode(false); setWaypoints([]); setGhostPt(null); break;
         case 'd': setDrawMode(m => !m); setWaypoints([]); setGhostPt(null); break;
-        case 'Backspace':
-        case 'Delete':
-          e.preventDefault();
-          if (pathSel.length > 0) deleteSelectedVectorPaths();
-          else if (selectedStripIds.length > 1) removeSelectedStrips();
-          else if (selStripId) {
-            // Deleting a whole-layer-backed strip deletes its source layer (and
-            // with it the strip); any other strip is just removed.
-            const selStrip = strips.find(s => s.id === selStripId);
-            const sourceLayer = selStrip && layers.some(layer => layer.layerId === stripSourceKey(selStrip))
-              ? stripSourceKey(selStrip) : null;
-            if (sourceLayer) deleteLayer(sourceLayer);
-            else removeStrip(selStripId);
-          }
-          else if (selLayerId) deleteLayer(selLayerId);
-          break;
         case 'x':
           e.preventDefault();
           if (selectedStripIds.length > 1) removeSelectedStrips();
@@ -427,9 +450,6 @@ export function useLayoutCanvasInteraction(ctx, deps) {
         case 'a':
           if (layers.length > 0) addAllStrips();
           break;
-        case 'f':
-          resetView();
-          break;
         default: break;
       }
     };
@@ -446,7 +466,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [drawMode, pendingDraw, selection, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden, cancelActiveTool, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, drawMode, pendingDraw, selection, selectedWireCut, deleteSelectedWireCut, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden, cancelActiveTool, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Memoised visualisation data ────────────────────────────────────────────
   const isEditingGesture = movingStripIds.length > 0 || !!rubberBand;
@@ -672,8 +692,10 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       e.preventDefault();
       return;
     }
-    // Start rubber-band lasso when clicking on empty canvas (not on a path element)
-    if (!drawMode && svgRef.current) {
+    // Start rubber-band lasso when clicking on empty canvas (not on a path
+    // element). Lasso is a Draw-mode gesture only (canvas behavior matrix,
+    // docs/layout-redesign-plan.md step 11); Size/Wire don't rubber-band.
+    if (mode === 'draw' && !drawMode && svgRef.current) {
       const onBackground = e.target === svgRef.current || e.target.tagName === 'svg';
       if (onBackground) {
         // Store viewport-relative coords so position:absolute lasso div tracks correctly

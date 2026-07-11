@@ -11,7 +11,6 @@ import {
 } from '../shared/InspectorPrimitives.jsx';
 import {
   STRIP_COLORS,
-  DENSITY_OPTIONS,
   stripSourceKey,
   clampLedCount,
 } from '../../../lib/layoutGeometry.js';
@@ -51,8 +50,7 @@ export function DrawModePanel({ state }) {
     stripListRef,
     // size
     getLedCount, resampleStrip, setStripCount,
-    handleDensityChange, calibrateScaleFromStrip,
-    density,
+    calibrateScaleFromStrip,
     // strips
     updateStrip, removeStrip, reverseStrip, renameStrip, duplicateStrip,
     addStripsToGroup, groupSelectedStrips, mergeSelectedStrips, reorderStripRows,
@@ -500,17 +498,8 @@ export function DrawModePanel({ state }) {
                   <span className="v"><span className="inspector-value">{selLayer.subPaths.length}</span></span>
                 </div>
               )}
-              <div className="field">
-                <span className="k">Density</span>
-                <span className="v">
-                  <div className="mini-seg">
-                    {DENSITY_OPTIONS.map(d => (
-                      <button key={d} className={density === d ? 'on' : ''} onClick={() => handleDensityChange(d)}>{d}</button>
-                    ))}
-                  </div>
-                </span>
-              </div>
-              <div className="field-sep"/>
+              {/* Density lives in Size mode only now (docs/layout-redesign-plan.md
+                  step 10 — the toolbar + inspector duplicates were removed). */}
 
               {/* LED count — slider + number (live resample) */}
               <div className="la-ledrow">
@@ -554,29 +543,20 @@ export function DrawModePanel({ state }) {
               </div>
               <div className="field-sep"/>
 
-              {/* Emit — Omni / Directed */}
-              <div className="field" style={{ opacity: existingStrip ? 1 : 0.5 }}>
-                <span className="k">Emit</span>
-                <span className="v">
-                  <div className="mini-seg">
-                    <button className={isOmni ? 'on' : ''} disabled={!existingStrip}
-                            title={existingStrip ? 'Omnidirectional glow' : 'Add strip first'}
-                            onClick={() => { if (existingStrip) updateStrip(existingStrip.id, { emit: 'omni', angle: 0 }); }}>Omni</button>
-                    <button className={existingStrip && !isOmni ? 'on' : ''} disabled={!existingStrip}
-                            title={existingStrip ? 'Directed emission' : 'Add strip first'}
-                            onClick={() => {
-                              if (!existingStrip) return;
-                              setDirectedGlow(true); enableLightPreview();
-                              updateStrip(existingStrip.id, { emit: 'dir' });
-                            }}>Directed</button>
-                  </div>
-                </span>
-              </div>
-
-              {/* Compass — directed angle dial */}
+              {/* Emit — one widget for BOTH mode + angle (step 10): the compass
+                  center hub toggles Omni⇄Directed; the dial sets the angle. The
+                  old separate Omni/Directed mini-seg was folded into the hub. */}
               <EmitCompass
                 angle={existingStrip?.angle || 0}
                 omni={isOmni || !existingStrip}
+                onToggleEmit={existingStrip ? () => {
+                  if (isOmni) {
+                    setDirectedGlow(true); enableLightPreview();
+                    updateStrip(existingStrip.id, { emit: 'dir' });
+                  } else {
+                    updateStrip(existingStrip.id, { emit: 'omni', angle: 0 });
+                  }
+                } : undefined}
                 setAngle={a => {
                   if (!existingStrip) return;
                   setDirectedGlow(true); enableLightPreview();
@@ -670,8 +650,8 @@ export function DrawModePanel({ state }) {
                   <button className="btn" title="Organize selected strips as one expandable group (G)" onClick={groupSelectedStrips}>
                     <GroupIcon/> Group
                   </button>
-                  <button className="btn primary" title="Paste selected strips into one composite strip (M)" onClick={mergeSelectedStrips}>
-                    Merge
+                  <button className="btn primary" title="Combine selected strips into one composite strip (M)" onClick={mergeSelectedStrips}>
+                    Combine into one strip
                   </button>
                 </div>
               </div>

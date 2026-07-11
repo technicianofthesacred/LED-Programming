@@ -41,7 +41,7 @@ export function LayoutCanvas({
   const {
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
   } = wire;
-  const { drawMode, waypoints, ghostPt, ghostD } = draw;
+  const { mode, drawMode, waypoints, ghostPt, ghostD } = draw;
   const {
     isEditingGesture, isPanning, rubberBand, movingStripIds,
     dragOver, cursorSvgPt, zoom, hoveredSubPathId,
@@ -151,8 +151,9 @@ export function LayoutCanvas({
               ));
             })()}
 
-            {/* ── Hit paths — individual path selection ── */}
-            {!drawMode && layers.map(l => {
+            {/* ── Hit paths — individual path selection (Draw mode only; Size/Wire
+                   ignore artwork paths per the canvas behavior matrix) ── */}
+            {mode === 'draw' && !drawMode && layers.map(l => {
               if (hidden[l.layerId] || !l.pathData) return null;
               const hasSubPaths = l.subPaths?.length > 0;
               const targets = hasSubPaths

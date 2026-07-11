@@ -66,15 +66,21 @@ export const TbIcon = {
 };
 
 // ── Compass — directed/omni emit angle dial (mockup .la-compass) ──────────
-export function EmitCompass({ angle, setAngle, omni }) {
+// The center hub is the emit-MODE control: when `onToggleEmit` is supplied,
+// clicking (or Enter/Space on) the hub flips Omni⇄Directed, and the hub renders
+// differently per mode (a dashed omni ring vs a solid directed dot) so one
+// widget sets both the angle (the dial/slider) and the mode (the hub). This
+// folds in the old separate Emit mini-seg (docs/layout-redesign-plan.md step 10).
+export function EmitCompass({ angle, setAngle, omni, onToggleEmit }) {
   const cx = 34, cy = 34, r = 26;
   const a = (angle - 90) * Math.PI / 180;
   const nx = cx + Math.cos(a) * r, ny = cy + Math.sin(a) * r;
+  const toggleable = typeof onToggleEmit === 'function';
+  const toggle = (e) => { e.stopPropagation(); onToggleEmit(); };
   return (
     <div className="la-compass-wrap">
-      <svg className="la-compass" viewBox="0 0 68 68" style={{ opacity: omni ? 0.4 : 1 }}>
+      <svg className="la-compass" viewBox="0 0 68 68" style={{ opacity: omni ? 0.55 : 1 }}>
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border)" strokeWidth="1"/>
-        <circle cx={cx} cy={cy} r="2.5" fill="var(--accent)"/>
         {[0, 90, 180, 270].map(d => {
           const t = (d - 90) * Math.PI / 180;
           return <line key={d} x1={cx + Math.cos(t) * (r - 4)} y1={cy + Math.sin(t) * (r - 4)}
@@ -84,6 +90,21 @@ export function EmitCompass({ angle, setAngle, omni }) {
         {omni
           ? <circle cx={cx} cy={cy} r={r - 7} fill="var(--accent-soft)" stroke="var(--accent-line)" strokeDasharray="2 3"/>
           : <><line x1={cx} y1={cy} x2={nx} y2={ny} stroke="var(--accent)" strokeWidth="2" strokeLinecap="round"/><circle cx={nx} cy={ny} r="3.5" fill="var(--accent)"/></>}
+        {/* Center hub — toggles omni/directed. Reflects the current mode: a
+            hollow accent ring for omni, a solid accent dot for directed. */}
+        <g
+          role={toggleable ? 'button' : undefined}
+          tabIndex={toggleable ? 0 : undefined}
+          aria-label={toggleable ? 'Toggle omni / directed light' : undefined}
+          onClick={toggleable ? toggle : undefined}
+          onKeyDown={toggleable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); } } : undefined}
+          style={{ cursor: toggleable ? 'pointer' : 'default', outline: 'none' }}>
+          <title>Toggle omni / directed light</title>
+          {omni
+            ? <circle cx={cx} cy={cy} r="5" fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth="1.4"/>
+            : <circle cx={cx} cy={cy} r="3.5" fill="var(--accent)"/>}
+          {toggleable && <circle cx={cx} cy={cy} r="9" fill="transparent" pointerEvents="all"/>}
+        </g>
       </svg>
       <div className="la-compass-ctrl">
         <span className="la-offset-lab">Offset</span>

@@ -115,3 +115,80 @@ test('a count set in Draw mode strip detail shows as an override in Size mode', 
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(1);
   await expect(page.getByLabel('Background LED count')).toHaveValue('55');
 });
+
+// ── Canvas behavior matrix (Phase 2 step 11) ─────────────────────────────────
+// Positional strip-drag is Draw-only; lasso is Draw-only; the Draw-mode compass
+// hub toggles a strip's emit mode. These live here because the size spec already
+// imports a three-strip fixture.
+
+function stripMidpoint(stripPath: any) {
+  return stripPath.evaluate((path: SVGPathElement) => {
+    const pt = path.getPointAtLength(path.getTotalLength() * 0.5);
+    const ctm = path.getScreenCTM();
+    if (!ctm) return null;
+    return { x: pt.x * ctm.a + pt.y * ctm.c + ctm.e, y: pt.x * ctm.b + pt.y * ctm.d + ctm.f };
+  });
+}
+
+test('Size mode: dragging a strip on the canvas does not move it', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-nodrag-'));
+  await importThreeStrips(page, tmp);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
+
+  const stripPath = page.locator('path[data-strip-path]').first();
+  const before = await stripMidpoint(stripPath);
+  expect(before).not.toBeNull();
+
+  // A press-drag-release gesture that WOULD move the strip in Draw mode.
+  await page.mouse.move(before!.x, before!.y);
+  await page.mouse.down();
+  await page.mouse.move(before!.x + 42, before!.y + 30, { steps: 6 });
+  await page.mouse.up();
+
+  const after = await stripMidpoint(stripPath);
+  expect(after).not.toBeNull();
+  // Position is unchanged — the mousedown selected the strip but never moved it.
+  expect(Math.round(after!.x - before!.x)).toBe(0);
+  expect(Math.round(after!.y - before!.y)).toBe(0);
+});
+
+test('Wire mode: lasso-drag on empty canvas selects nothing', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-wire-lasso-'));
+  await importThreeStrips(page, tmp);
+  await page.keyboard.press('3');
+  await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
+
+  const svg = page.locator('.lw-viewport svg');
+  const box = await svg.boundingBox();
+  if (!box) throw new Error('canvas svg not found');
+  // A big rubber-band gesture that WOULD lasso the artwork paths in Draw mode.
+  await page.mouse.move(box.x + box.width * 0.04, box.y + box.height * 0.04);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.96, box.y + box.height * 0.96, { steps: 10 });
+  await page.mouse.up();
+
+  // Switch to Draw: a working lasso would have populated the path-select panel.
+  await page.keyboard.press('1');
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  await expect(page.locator('.la-pathsel')).toHaveCount(0);
+});
+
+test('Draw mode: the compass hub toggles a strip between directed and omni emit', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-emit-toggle-'));
+  await importThreeStrips(page, tmp);
+
+  // Draw mode is the default; selecting a strip-backed layer opens the inspector
+  // (with the compass). Imported strips default to directed emit.
+  await page.locator('.layer-row').first().click();
+  const emitReadout = page.locator('.la-overlay.br');
+  await expect(emitReadout).toContainText('dir');
+
+  // The compass center hub is now the emit-MODE control (the old Omni/Directed
+  // mini-seg was folded into it in step 10).
+  const hub = page.getByRole('button', { name: 'Toggle omni / directed light' });
+  await hub.click();
+  await expect(emitReadout).toContainText('omni');
+  await hub.click();
+  await expect(emitReadout).toContainText('dir');
+});

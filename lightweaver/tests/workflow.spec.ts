@@ -161,7 +161,8 @@ test('groups selected strips and merges them into one composite strip', async ({
   await page.locator('.la-strip-row').nth(1).click({ modifiers: ['Shift'] });
   await page.locator('.la-strip-row').nth(2).click({ modifiers: ['Shift'] });
   await page.locator('.la-batch-actions input').fill('Heart merged');
-  await page.getByRole('button', { name: 'Merge' }).click();
+  // Step 10 renamed the destructive strip merge to "Combine into one strip".
+  await page.getByRole('button', { name: 'Combine into one strip' }).click();
 
   await expect(page.locator('.la-strip-row')).toHaveCount(1);
   await expect(page.locator('.la-strip-row').getByText('Heart merged', { exact: true })).toBeVisible();

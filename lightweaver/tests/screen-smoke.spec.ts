@@ -282,6 +282,18 @@ for (const viewport of [
   { name: 'mobile', width: 390, height: 844 },
 ]) {
   test(`main screens load without overflow or console errors on ${viewport.name}`, async ({ page }) => {
+    // Hermetic: answer ambient card-status polling with a benign empty body so
+    // a real card on the LAN (or its CORS rejection of the dev origin, or an
+    // aborted load) can't leak console errors into the assertion below.
+    const benign = route => route.fulfill({
+      status: 200,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      contentType: 'application/json',
+      body: '{}',
+    });
+    await page.route('http://lightweaver.local/**', benign);
+    await page.route('http://192.168.4.1/**', benign);
+
     const consoleErrors: string[] = [];
     page.on('console', msg => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());

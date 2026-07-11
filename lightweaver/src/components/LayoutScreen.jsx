@@ -1,28 +1,12 @@
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
-import {
-  DENSITY_OPTIONS,
-  GLOW_MODES,
-  parsedVb,
-} from '../lib/layoutGeometry.js';
+import { GLOW_MODES } from '../lib/layoutGeometry.js';
 import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
-
-// eslint-disable-next-line no-unused-vars
-const SCALE_BASE_PX_PER_MM = 3.7795;            // 96 DPI, the current default
-// eslint-disable-next-line no-unused-vars
-const SCALE_OPTIONS = [
-  { label: 'S',  mult: 0.5 },
-  { label: 'M',  mult: 1 },
-  { label: 'L',  mult: 2 },
-  { label: 'XL', mult: 4 },
-];
-// eslint-disable-next-line no-unused-vars
-const LED_COUNT_PRESETS = [30, 43, 60, 100, 150, 300, 600, 1000, 1500, 3000];
 
 // ── Main component ─────────────────────────────────────────────────────────
 // All state, handlers, derived memos and effects live in useLayoutState() and
@@ -36,7 +20,7 @@ export function LayoutScreen({ connected }) {
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
     strips, layers, hidden,
-    viewBox, svgText, density, pxPerMm,
+    viewBox, svgText,
     patchBoard,
     selectStrip, toggleStripSel, togglePathSelection,
     layoutHistLen, layoutFutLen,
@@ -46,9 +30,6 @@ export function LayoutScreen({ connected }) {
     pathSel,
     totalLeds,
     svgRef, artworkRef, vpRef,
-    // size
-    scaleUnit, setScaleUnit,
-    handleDensityChange, handleScaleChange,
     // strips
     addAllStrips,
     // artwork
@@ -89,7 +70,7 @@ export function LayoutScreen({ connected }) {
       showHeat, showLeds, layoutPatternFrame, stripSamples, stripArrows,
     },
     wire: { wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers },
-    draw: { drawMode, waypoints, ghostPt, ghostD },
+    draw: { mode, drawMode, waypoints, ghostPt, ghostD },
     interaction: {
       isEditingGesture, isPanning, rubberBand, movingStripIds,
       dragOver, cursorSvgPt, zoom, hoveredSubPathId,
@@ -189,49 +170,9 @@ export function LayoutScreen({ connected }) {
             {TbIcon.redo}{layoutFutLen > 0 && <span className="cnt">{layoutFutLen}</span>}
           </button>
 
-          <div className="tb-div"/>
-
-          {/* Density segmented control */}
-          <div className="seg">
-            <span className="seg-label" title="LEDs per metre — count = size × density.">Density</span>
-            {DENSITY_OPTIONS.map(d => (
-              <button key={d} className={density === d ? 'on' : ''}
-                      onClick={() => handleDensityChange(d)}>{d}</button>
-            ))}
-          </div>
-
-          <div className="tb-div"/>
-          {/* Size — the loaded artwork's real-world dimensions. Type a width to
-              rescale everything; LED counts follow size × density. */}
-          {(() => {
-            const vb = parsedVb(viewBox);
-            const per = scaleUnit === 'in' ? 25.4 : 10;      // mm per display unit
-            const wDisp = (vb.w / pxPerMm) / per;
-            const hDisp = (vb.h / pxPerMm) / per;
-            const applyWidth = (raw) => {
-              const val = parseFloat(raw);
-              if (!(val > 0)) return;
-              handleScaleChange(vb.w / (val * per));          // pxPerMm = svgWidth / targetWidthMm
-            };
-            return (
-              <div className="seg" title="Real-world size of the loaded artwork. Type a width to scale it — LED counts follow size × density.">
-                <span className="seg-label">Size</span>
-                <input type="number" min="0.1" step="0.1" inputMode="decimal"
-                       key={`sz-${scaleUnit}-${wDisp.toFixed(2)}`}
-                       defaultValue={wDisp.toFixed(1)}
-                       aria-label={`Artwork width in ${scaleUnit}`}
-                       style={{ width: 64, height: 24, textAlign: 'right', fontVariantNumeric: 'tabular-nums', background: 'var(--bg-app)',
-                                border: '1px solid var(--border-soft)', borderRadius: 4, color: 'var(--text-hi)',
-                                fontFamily: 'var(--font-mono)', fontSize: 12, padding: '0 6px' }}
-                       onFocus={e => e.target.select()}
-                       onBlur={e => applyWidth(e.target.value)}
-                       onKeyDown={e => { if (e.key === 'Enter') { applyWidth(e.target.value); e.target.blur(); } }}/>
-                <span style={{ color: 'var(--text-faint)', fontSize: 12, whiteSpace: 'nowrap' }}>× {hDisp.toFixed(1)}</span>
-                <button title="Toggle centimetres / inches"
-                        onClick={() => setScaleUnit(u => (u === 'cm' ? 'in' : 'cm'))}>{scaleUnit}</button>
-              </div>
-            );
-          })()}
+          {/* Density + artwork-size controls live in Size mode only now
+              (docs/layout-redesign-plan.md step 10 — the toolbar duplicates of
+              the Size panel's density seg and width field were removed). */}
 
           <div className="tb-spring"/>
 
