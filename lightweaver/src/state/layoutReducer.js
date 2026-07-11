@@ -13,6 +13,7 @@
 // DOM-backed sampler; tests pass a stub).
 
 import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
+import { stripSourceKey } from '../lib/layoutGeometry.js';
 
 // The layout state slice. `selection` is the single selection model that replaces
 // the scattered selLayerId / selStripId / selectedStripIds / pathSel booleans.
@@ -25,10 +26,6 @@ const DEFAULT_PX_PER_MM = 3.7795;
 const DEFAULT_DENSITY = 60;
 
 export const LAYOUT_HISTORY_LIMIT = 50;
-
-// The old strip id coincided with its source layer/path id. `stripSourceKey`
-// recovers "which artwork does this strip come from" for both eras.
-const stripSourceKey = strip => strip?.sourcePathId ?? strip?.sourceLayerId ?? strip?.id;
 
 function emptySelection() {
   return { kind: 'none', ids: [], entries: [], name: '' };
