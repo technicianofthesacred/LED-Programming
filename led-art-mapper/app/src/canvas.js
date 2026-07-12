@@ -57,7 +57,9 @@ export class CanvasManager {
     this._getPxPerMm = getPxPerMm  ?? (() => 2.8346);
 
     this.tool          = 'select';
-    this._waypoints    = [];
+    this._drawShape    = 'polyline'; // 'polyline' | 'line' | 'circle' | 'rect'
+    this._waypoints    = [];         // polyline corner points
+    this._anchor       = null;       // first click for two-click shapes (line/circle/rect)
     this._ghostPath    = null;
     this._ghostDots    = [];
     this.selectedId    = null;
@@ -109,7 +111,12 @@ export class CanvasManager {
     this.svg.addEventListener('contextmenu', e => { e.preventDefault(); this._cancelDraw(); });
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') this._cancelDraw();
+      if (this.tool !== 'draw') return;
+      // Ignore while typing in a field (strip-name prompt, inspector inputs, etc.)
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'Escape')  { e.preventDefault(); this._drawStepBack(); }
+      if (e.key === 'Enter')   { e.preventDefault(); this._commitPolyline(); }
     });
 
     // Strip drag-to-move
@@ -129,8 +136,21 @@ export class CanvasManager {
   _onClick(e) {
     if (e.detail > 1) return;
     if (this.tool === 'draw') {
-      this._waypoints.push(this._pt(e));
-      this._renderGhost();
+      const pt = this._pt(e);
+      if (this._drawShape === 'polyline') {
+        this._waypoints.push(pt);
+        this._renderGhost();
+      } else if (!this._anchor) {
+        // First click of a two-click shape — set the anchor, begin preview.
+        this._anchor = pt;
+        this._renderShapeGhost(pt);
+      } else {
+        // Second click — commit the shape.
+        const d = this._shapePathData(this._anchor, pt);
+        this._anchor = null;
+        this._clearGhost();
+        if (d) this._commitPath(d);
+      }
     } else if (this.tool === 'select') {
       // Click on blank canvas → deselect
       this.deselectAll();
@@ -139,18 +159,27 @@ export class CanvasManager {
   }
 
   _onDblClick(e) {
-    if (this.tool !== 'draw') return;
-    if (this._waypoints.length < 2) { this._cancelDraw(); return; }
-    this._waypoints.pop();
-    this._finishDraw();
+    if (this.tool !== 'draw' || this._drawShape !== 'polyline') return;
+    // A dblclick fires a leading single click first. If that landed a point
+    // coincident with the previous one (double-click to close), drop the dupe;
+    // if it landed a distinct final point, keep it.
+    const n = this._waypoints.length;
+    if (n >= 2) {
+      const a = this._waypoints[n - 1], b = this._waypoints[n - 2];
+      if (Math.hypot(a.x - b.x, a.y - b.y) < 4) this._waypoints.pop();
+    }
+    this._commitPolyline();
   }
 
   _onMouseMove(e) {
     const pt = this._pt(e);
     const el = document.getElementById('status-coords');
     if (el) el.textContent = `x: ${Math.round(pt.x)}, y: ${Math.round(pt.y)}`;
-    if (this.tool === 'draw' && this._waypoints.length > 0) {
-      this._stretchGhost(pt);
+    if (this.tool !== 'draw') return;
+    if (this._drawShape === 'polyline') {
+      if (this._waypoints.length > 0) this._stretchGhost(pt);
+    } else if (this._anchor) {
+      this._renderShapeGhost(pt);
     }
   }
 
@@ -187,13 +216,86 @@ export class CanvasManager {
 
   _cancelDraw() {
     this._waypoints = [];
+    this._anchor    = null;
     this._clearGhost();
   }
 
-  async _finishDraw() {
-    const pathData = this._ptsToD(this._waypoints);
-    this._cancelDraw();
+  /** Escape while drawing: undo the last placement rather than wiping everything. */
+  _drawStepBack() {
+    if (this._drawShape === 'polyline') {
+      if (!this._waypoints.length) return;
+      this._waypoints.pop();
+      if (this._waypoints.length) this._renderGhost();
+      else this._clearGhost();
+    } else if (this._anchor) {
+      this._anchor = null;
+      this._clearGhost();
+    }
+  }
 
+  /** Commit the in-progress polyline (Enter or double-click). Needs ≥2 points. */
+  _commitPolyline() {
+    if (this._drawShape !== 'polyline') return;
+    if (this._waypoints.length < 2) { this._cancelDraw(); return; }
+    this._commitPath(this._ptsToD(this._waypoints));
+    this._cancelDraw();
+  }
+
+  /** Set the active draw primitive; cancels any in-progress draw. */
+  setDrawShape(shape) {
+    this._drawShape = shape;
+    this._cancelDraw();
+  }
+
+  /** Build the path `d` for a two-click shape from anchor `a` to cursor `b`. */
+  _shapePathData(a, b) {
+    switch (this._drawShape) {
+      case 'line':
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 1) return '';
+        return `M ${a.x.toFixed(1)},${a.y.toFixed(1)} L ${b.x.toFixed(1)},${b.y.toFixed(1)}`;
+      case 'rect': {
+        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+        const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y);
+        if (w < 1 || h < 1) return '';
+        return `M ${x.toFixed(1)},${y.toFixed(1)} H ${(x + w).toFixed(1)} `
+             + `V ${(y + h).toFixed(1)} H ${x.toFixed(1)} Z`;
+      }
+      case 'circle': {
+        // Anchor = center, cursor sets the radius.
+        const r = Math.hypot(b.x - a.x, b.y - a.y);
+        if (r < 1) return '';
+        const cx = a.x, cy = a.y;
+        return `M ${(cx - r).toFixed(1)},${cy.toFixed(1)} `
+             + `A ${r.toFixed(1)},${r.toFixed(1)} 0 1 0 ${(cx + r).toFixed(1)},${cy.toFixed(1)} `
+             + `A ${r.toFixed(1)},${r.toFixed(1)} 0 1 0 ${(cx - r).toFixed(1)},${cy.toFixed(1)} Z`;
+      }
+      default:
+        return '';
+    }
+  }
+
+  /** Live dashed preview for a two-click shape. */
+  _renderShapeGhost(cursor) {
+    this._clearGhost();
+    const a = this._anchor;
+    if (!a) return;
+    const layer = this.svg.querySelector('#strips-layer');
+    const d = this._shapePathData(a, cursor);
+
+    if (d) {
+      this._ghostPath = this._makePath(d, '#555', 1.5);
+      this._ghostPath.setAttribute('stroke-dasharray', '5 3');
+      this._ghostPath.setAttribute('pointer-events', 'none');
+      layer.appendChild(this._ghostPath);
+    }
+    // Anchor marker so the user can see the fixed point.
+    const dot = this._makeCircle(a.x, a.y, 3.5, '#666');
+    dot.setAttribute('pointer-events', 'none');
+    layer.appendChild(dot);
+    this._ghostDots = [dot];
+  }
+
+  async _commitPath(pathData) {
     // Measure in a temp element so we can auto-calculate LED count
     const tempPath = this._makePath(pathData, 'transparent', 0);
     tempPath.setAttribute('pointer-events', 'none');

@@ -349,6 +349,29 @@ button.tool.active {
   border-color: var(--accent); font-weight: 700;
 }
 
+/* Draw shape selector — segmented control shown only while Draw is active */
+.draw-shapes {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.draw-shapes[hidden] { display: none; }
+.draw-shape {
+  font-size: 11px;
+  padding: 2px 7px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.draw-shape:hover:not(.active) { background: #383838; border-color: #484848; }
+.draw-shape.active {
+  background: var(--accent); color: #000;
+  border-color: var(--accent); font-weight: 700;
+}
+
 #btn-run-pattern {
   background: var(--accent); color: #000;
   border-color: var(--accent); font-weight: 700;
@@ -1494,6 +1517,24 @@ body.drag-active #drag-overlay {
   z-index: 5;
   letter-spacing: .03em;
 }
+
+.draw-hint {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(6,214,160,0.12);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--accent);
+  pointer-events: none;
+  z-index: 6;
+  max-width: 90%;
+  text-align: center;
+}
+.draw-hint[hidden] { display: none; }
 
 /* ── LED hover tooltip ───────────────────────────────────────────────────── */
 .led-tooltip {
