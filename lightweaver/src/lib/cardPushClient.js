@@ -151,10 +151,14 @@ function summarizeOutputs(outputs = []) {
 
 function layoutMismatchError(current = {}, runtimePackage = {}) {
   const targetOutputs = targetRuntimeOutputs(runtimePackage);
-  return new CardPushError(
+  const currentSummary = summarizeOutputs(current?.outputs);
+  const targetSummary = summarizeOutputs(targetOutputs);
+  const err = new CardPushError(
     'layout-mismatch',
-    `Stopped before saving: this would change the card output layout from ${summarizeOutputs(current?.outputs)} to ${summarizeOutputs(targetOutputs)}. Use Settings or Send split preview when you intentionally want to change LED wiring.`,
+    `Stopped before saving: this would change the card output layout from ${currentSummary} to ${targetSummary}. Use Settings or Send split preview when you intentionally want to change LED wiring.`,
   );
+  err.layout = { current: currentSummary, target: targetSummary };
+  return err;
 }
 
 function projectMismatchError(current = {}, runtimePackage = {}) {
@@ -162,10 +166,12 @@ function projectMismatchError(current = {}, runtimePackage = {}) {
   const targetPiece = targetRuntimePiece(runtimePackage);
   const currentName = currentPiece.name || currentPiece.id || 'another Studio project';
   const targetName = targetPiece.name || targetPiece.id || 'this Studio project';
-  return new CardPushError(
+  const err = new CardPushError(
     'project-mismatch',
     `Stopped before saving: this card is paired with ${currentName}, but the open Studio project is ${targetName}. Open the matching project or intentionally recommission the card from Settings.`,
   );
+  err.pieces = { current: currentName, target: targetName };
+  return err;
 }
 
 async function readFirmwareInfoToHost(host, timeoutMs = 1200) {

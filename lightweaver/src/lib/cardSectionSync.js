@@ -80,11 +80,15 @@ export async function syncRuntimePackageToCard({
   pushConfig = pushConfigToCard,
   readZones = readCardZonesFromCard,
   sleep = delay,
+  allowLayoutChange = false,
+  allowProjectChange = false,
 } = {}) {
   const response = await pushConfig(runtimePackage, {
     host,
     timeoutMs: 6000,
     reboot: 'if-needed',
+    allowLayoutChange,
+    allowProjectChange,
   });
   let verifiedZones = null;
   if (requiredZoneIds.length) {
@@ -108,6 +112,12 @@ export async function ensureCardSectionsForPreview({
   pushConfig = pushConfigToCard,
   readZones = readCardZonesFromCard,
   sleep = delay,
+  // Both default false so the normal preview auto-sync (reconciling zones the
+  // real design already declares) never silently pushes past the wiring/
+  // project guard. Test-strip mode is the deliberate exception — it passes
+  // these true because it always changes the output layout on purpose.
+  allowLayoutChange = false,
+  allowProjectChange = false,
 } = {}) {
   if (!requiredZoneIds.length) return { synced: false, zones: null };
   const zones = await readZones({ host, timeoutMs: 900 });
@@ -124,6 +134,8 @@ export async function ensureCardSectionsForPreview({
       pushConfig,
       readZones,
       sleep,
+      allowLayoutChange,
+      allowProjectChange,
     });
     previewSectionSyncs.set(syncKey, pendingSync);
     void pendingSync.finally(() => {

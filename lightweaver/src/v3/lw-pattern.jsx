@@ -45,6 +45,7 @@ import {
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
+import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import {
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
@@ -484,26 +485,52 @@ import {
       const { nextLook, nextBoard, nextController: savedController } = buildCurrentHardwareState({ saveNamedLook: true });
       const nextController = promotePatternFirst(savedController, nextLook.patternId);
       const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
+      // Test strip mode (see src/lib/testStrip.js): the saved design (project
+      // state below) is untouched — only what actually goes to the card is
+      // collapsed to the single bench-strip output/zone.
+      // TODO(test-strip): checkCardLayoutWriteSafety's pixel-mismatch guard
+      // was written for "default template vs. real card" detection and isn't
+      // test-strip aware; it can misfire if the card is already on a test
+      // strip of the same length as a previous session. Revisit if that
+      // proves to be a real annoyance on the bench.
+      const testStrip = readTestStrip();
+      const packageForCard = testStrip.enabled
+        ? applyTestStripToRuntimePackage(nextPackage, testStrip.length)
+        : nextPackage;
       setHandoffUrl('');
       setStatusKind('');
       setStatus('');
       try {
-        const safety = await checkCardLayoutWriteSafety(nextPackage, 'saving');
+        const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
         setMixName('');
-        const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed' });
+        const response = await pushConfigToCard(packageForCard, {
+          host: safety.host || cardHost,
+          timeoutMs: 6000,
+          reboot: 'if-needed',
+          allowLayoutChange: testStrip.enabled || undefined,
+          allowProjectChange: testStrip.enabled || undefined,
+        });
         if (!response.rebooting) {
-          const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
-          await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
+          // A test-strip card only has the one collapsed zone, so there is no
+          // real per-section target to preview against — just sync the whole
+          // (short) strip to the look that was just saved.
+          const zone = testStrip.enabled
+            ? ''
+            : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '');
+          await pushLivePreviewToCard(
+            { ...nextLook, zone, syncZones: testStrip.enabled || nextLook.syncZones },
+            { host: safety.host || cardHost, timeoutMs: 2200 },
+          ).catch(() => null);
         }
         setStatusKind('');
         setStatus('');
       } catch (error) {
         if (error?.reason === 'mixed-content') {
-          offerCardHandoff(nextPackage, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
+          offerCardHandoff(packageForCard, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
         } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
           setStatusKind('err');
           setStatus(error.message);
@@ -679,6 +706,15 @@ import {
       }
     };
 
+    // TODO(test-strip): a "split" preview is inherently multi-zone (it shows
+    // different sections different patterns at once), which has no coherent
+    // meaning on a single collapsed bench-strip zone. This intentionally does
+    // NOT apply applyTestStripToRuntimePackage — it already forces
+    // allowLayoutChange: true (below) because committing a real split is
+    // itself a real wiring change, so it pushes the actual design regardless
+    // of test-strip mode. If bench-testing splits turns out to matter, the
+    // real fix is a dedicated multi-output test rig, not a fake split on one
+    // zone.
     const sendSplitPreview = async () => {
       const { nextLook, nextBoard, nextController } = buildCurrentHardwareState();
       const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });

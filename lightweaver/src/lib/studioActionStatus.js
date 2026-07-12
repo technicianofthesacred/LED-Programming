@@ -39,6 +39,27 @@ function playlistPushErrorMessage(error = {}) {
   return error?.message || 'Could not load the playlist to the card.';
 }
 
+function reconcileAction(error = {}) {
+  const reason = error?.reason || '';
+  if (reason === 'layout-mismatch') {
+    const target = error?.layout?.target;
+    return {
+      kind: 'allow-layout-change',
+      label: target ? `Set card to ${target} & load` : 'Change wiring & load',
+      hint: 'Only do this if the piece is actually wired this way. It re-commissions the card and reboots it.',
+    };
+  }
+  if (reason === 'project-mismatch') {
+    const target = error?.pieces?.target;
+    return {
+      kind: 'allow-project-change',
+      label: target ? `Recommission card for ${target} & load` : 'Recommission card & load',
+      hint: 'This repoints the card to the open Studio project and reboots it.',
+    };
+  }
+  return null;
+}
+
 export function makePlaylistPushErrorState(error = {}, {
   host = '',
   runtimePackage = {},
@@ -49,5 +70,6 @@ export function makePlaylistPushErrorState(error = {}, {
     kind: 'err',
     message: playlistPushErrorMessage(error),
     handoffUrl: shouldOfferHandoff(reason) ? buildHandoffUrl(host, runtimePackage) : '',
+    action: reconcileAction(error),
   };
 }

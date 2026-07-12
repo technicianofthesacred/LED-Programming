@@ -18,6 +18,7 @@ import {
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
+import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { PatternScreen } from './lw-pattern.jsx';
 import { PlaylistScreen } from './lw-playlist.jsx';
 import { LayoutScreen } from './lw-layout.jsx';
@@ -71,7 +72,7 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
 
 /* ---------- Left rail ---------- */
 function Rail({ view, setView }) {
-  const main = [["pattern", "Patterns"], ["playlist", "Playlist"], ["layout", "Layout"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
+  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
   const foot = [["settings", "Settings"]];
   const item = ([id, label]) => (
     <button key={id} className={"rail-item" + (view === id ? " active" : "")} onClick={() => setView(id)}>
@@ -92,7 +93,7 @@ function Rail({ view, setView }) {
    transport label when connected; otherwise the honest reason plus the
    one-click fix (Connect to card opens the card page popup, which is the only
    live path from the HTTPS Studio). */
-function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps }) {
+function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
   const connected = isCardLinkConnected(link);
   const connecting = link.state === 'connecting';
   return (
@@ -123,6 +124,34 @@ function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps })
         <span className="sb-fact"><span>push</span><span className="fv">{connected ? `${fps} fps` : "—"}</span></span>
       </div>
 
+      <div className="sb-div" />
+
+      <div className="sb-teststrip" data-testid="test-strip-control">
+        <button
+          type="button"
+          className={"sb-ts-toggle" + (testStrip.enabled ? " on" : "")}
+          onClick={() => onToggleTestStrip(!testStrip.enabled)}
+          aria-pressed={testStrip.enabled}
+          title="Bench-test on a short strip without changing your saved design"
+        >
+          Test strip
+        </button>
+        <input
+          className="sb-ts-input"
+          type="number"
+          min={1}
+          max={2000}
+          value={testStrip.length}
+          disabled={!testStrip.enabled}
+          onChange={(e) => onTestStripLengthChange(e.target.value)}
+          aria-label="Test strip LED count"
+        />
+        <span>LEDs</span>
+        {testStrip.enabled && (
+          <span className="sb-ts-note">Testing on {testStrip.length} LEDs — your design is unchanged.</span>
+        )}
+      </div>
+
       <div className="sb-spring" />
     </footer>
   );
@@ -147,9 +176,14 @@ function Shell() {
   const [saveLabel, setSaveLabel] = useState('');
   const fileInputRef = useRef(null);
 
-  // navigation <-> URL hash
+  // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
+  // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
+  // count" button land on the right Layout mode; other screens carry no mode.
   useEffect(() => {
-    const next = `#screen=${view}`;
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    params.set('screen', view);
+    if (view !== 'layout') params.delete('mode');
+    const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
     }
@@ -201,6 +235,23 @@ function Shell() {
     const sync = () => setPushFps(readPushFps());
     window.addEventListener('lw-preview-settings', sync);
     return () => window.removeEventListener('lw-preview-settings', sync);
+  }, []);
+
+  // Test strip mode (src/lib/testStrip.js) — a bench/session-only override,
+  // never part of the saved project. Read fresh at mount, then kept in sync
+  // with any other write (e.g. another tab) via its changed event.
+  const [testStrip, setTestStripState] = useState(readTestStrip);
+  useEffect(() => {
+    const sync = () => setTestStripState(readTestStrip());
+    window.addEventListener(TEST_STRIP_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(TEST_STRIP_CHANGED_EVENT, sync);
+  }, []);
+  const onToggleTestStrip = useCallback((enabled) => {
+    setTestStripState(writeTestStrip({ enabled, length: readTestStrip().length }));
+  }, []);
+  const onTestStripLengthChange = useCallback((rawLength) => {
+    const length = Number(rawLength);
+    setTestStripState(writeTestStrip({ enabled: readTestStrip().enabled, length }));
   }, []);
 
   // real project actions
@@ -261,6 +312,9 @@ function Shell() {
         stripCount={strips.length}
         density={layoutDensity}
         fps={pushFps}
+        testStrip={testStrip}
+        onToggleTestStrip={onToggleTestStrip}
+        onTestStripLengthChange={onTestStripLengthChange}
       />
       <input ref={fileInputRef} type="file" accept=".lw.json,.json" style={{ display: 'none' }} onChange={onFile} />
     </div>

@@ -12,6 +12,12 @@ import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
+import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
+import {
+  applyTestStripToRuntimePackage,
+  readTestStrip,
+  TEST_STRIP_ZONE_ID,
+} from '../lib/testStrip.js';
 import {
   buildPatternPlaylistPreview,
   buildSavedLookPlaylistPreviewTargets,
@@ -53,6 +59,25 @@ function downloadJson(filename, content) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Test strip mode: the bench strip's output layout basically never matches
+// whatever the card is already carrying (the real design, or a different
+// bench length), so every live preview reshapes the card to the collapsed
+// single zone first — with the wiring/project guard deliberately overridden,
+// since the user is intentionally testing on a different physical strip.
+// Cheap no-op when the card already has that zone (ensureCardSectionsForPreview
+// only pushes when it's missing).
+async function ensureTestStripLayoutOnCard(host, runtimePackage, length) {
+  const testPackage = applyTestStripToRuntimePackage(runtimePackage, length);
+  await ensureCardSectionsForPreview({
+    host,
+    requiredZoneIds: [TEST_STRIP_ZONE_ID],
+    runtimePackage: testPackage,
+    allowLayoutChange: true,
+    allowProjectChange: true,
+  });
+  return testPackage;
 }
 
 // Adapt one real pattern id into the mockup pattern shape ({id,label,grad,...}).
@@ -150,6 +175,11 @@ function realPatternShape(patternId) {
       const sequence = ++previewSequence.current;
       setHandoffUrl('');
       try {
+        const testStrip = readTestStrip();
+        if (testStrip.enabled) {
+          await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
+          if (sequence !== previewSequence.current) return;
+        }
         await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
         if (sequence === previewSequence.current) setPlaylistStatus(null);
       } catch { /* preview is best-effort; connection state lives in the footer */ }
@@ -160,6 +190,20 @@ function realPatternShape(patternId) {
       const sequence = ++previewSequence.current;
       setHandoffUrl('');
       try {
+        const testStrip = readTestStrip();
+        if (testStrip.enabled) {
+          // A saved mix is normally several section targets across the real
+          // design's zones; a bench strip is one zone, so just play the
+          // mix's own default look across the whole (collapsed) strip.
+          await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
+          if (sequence !== previewSequence.current) return;
+          await pushLivePreviewToCard(
+            { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true },
+            { host, timeoutMs: 2600 },
+          );
+          if (sequence === previewSequence.current) setPlaylistStatus(null);
+          return;
+        }
         const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
         const requiredZoneIds = targets
           .filter(target => target.kind === 'section')
@@ -204,21 +248,37 @@ function realPatternShape(patternId) {
     const resetLiveOutput = async () => {
       setHandoffUrl('');
       try {
+        const testStrip = readTestStrip();
+        if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
         await resetLiveOutputOnCard(fallbackLiveLook(), { host, timeoutMs: 3000 });
         setLive(null);
       } catch { /* best-effort */ }
     };
 
-    const loadPlaylistToCard = async () => {
+    const loadPlaylistToCard = async ({ allowLayoutChange = false, allowProjectChange = false } = {}) => {
       previewSequence.current += 1;
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
       setPlaylistSyncing(true);
+      // Test strip mode is a deliberate, session-only override: everything
+      // pushed to the card targets the collapsed single N-LED output, and the
+      // wiring/project guard is bypassed on purpose (the user knows they're on
+      // a bench strip). The saved project (playlist/zones/patchBoard) is
+      // never touched — only what's sent to the card.
+      const testStrip = readTestStrip();
+      const packageForCard = testStrip.enabled
+        ? applyTestStripToRuntimePackage(runtimePackage, testStrip.length)
+        : runtimePackage;
       try {
-        const response = await syncRuntimePackageToCard({ host, runtimePackage });
+        const response = await syncRuntimePackageToCard({
+          host,
+          runtimePackage: packageForCard,
+          allowLayoutChange: testStrip.enabled ? true : allowLayoutChange,
+          allowProjectChange: testStrip.enabled ? true : allowProjectChange,
+        });
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
-        const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
+        const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage: packageForCard });
         setPlaylistStatus(nextStatus);
         setHandoffUrl(nextStatus.handoffUrl || '');
       } finally {
@@ -232,6 +292,11 @@ function realPatternShape(patternId) {
 
     const downloadConfig = () => downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson);
     const openCard = () => window.open(cardHostToUrl(host), '_blank');
+    // "Adjust" on the wiring-mismatch banner: jump straight to Layout → Size,
+    // where the per-strip LED counts live, so the user can change the number
+    // instead of accepting the card's current wiring. Deep-linked via the hash
+    // the layout screen already parses (#screen=layout&mode=size).
+    const adjustLedCounts = () => { window.location.hash = 'screen=layout&mode=size'; };
 
     const persistHost = (value) => { setHost(value); writeStoredCardHost(value); };
 
@@ -292,7 +357,7 @@ function realPatternShape(patternId) {
               </div>
               <div className="pm-actions">
                 <button className="btn" onClick={resetLiveOutput}>{I.refresh}Reset live</button>
-                <button className="btn primary" disabled={!connected || playlistSyncing} onClick={loadPlaylistToCard}>
+                <button className="btn primary" disabled={!connected || playlistSyncing} onClick={() => loadPlaylistToCard()}>
                   {I.bolt}{playlistSyncing ? 'Loading…' : 'Load playlist to card'}
                 </button>
                 <div className="pm-menu">
@@ -309,7 +374,25 @@ function realPatternShape(patternId) {
                 data-testid="playlist-card-status"
               >
                 {playlistStatus.message}
+                {playlistStatus.action?.hint &&
+                  <div className="pmx-status-hint">{playlistStatus.action.hint}</div>
+                }
                 <div className="pmx-status-actions">
+                  {playlistStatus.action &&
+                    <button
+                      className="btn primary"
+                      disabled={playlistSyncing}
+                      onClick={() => loadPlaylistToCard({
+                        allowLayoutChange: playlistStatus.action.kind === 'allow-layout-change',
+                        allowProjectChange: playlistStatus.action.kind === 'allow-project-change',
+                      })}
+                    >
+                      {playlistSyncing ? 'Loading…' : playlistStatus.action.label}
+                    </button>
+                  }
+                  {playlistStatus.action?.kind === 'allow-layout-change' &&
+                    <button className="btn" disabled={playlistSyncing} onClick={adjustLedCounts}>Adjust LED count</button>
+                  }
                   <button className="btn" onClick={openCard}>{I.open}Open card page</button>
                   {handoffUrl &&
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>

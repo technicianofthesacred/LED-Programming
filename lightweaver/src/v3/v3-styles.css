@@ -417,6 +417,25 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .sb-right .sb-fact .fv { color: var(--text-lo); }
 .sb-right .kbd { color: var(--text-faint); }
 
+/* Test strip mode — bench-test override, always visible in the footer so it
+   can never be forgotten mid-session (see src/lib/testStrip.js). */
+.sb-teststrip { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); }
+.sb-ts-toggle {
+  height: 20px; padding: 0 9px; border-radius: 100px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  color: var(--text-mid); font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.sb-ts-toggle:hover { background: var(--bg-elev-2); color: var(--text-hi); }
+.sb-ts-toggle.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.sb-ts-input {
+  height: 20px; width: 52px; padding: 0 6px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 11px; text-align: right;
+}
+.sb-ts-input:disabled { opacity: 0.5; }
+.sb-ts-note { color: var(--accent); white-space: nowrap; }
+
 /* scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--bg-elev-2); border-radius: 100px; border: 3px solid var(--bg-panel); }
@@ -433,7 +452,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .layer-name, .layer-len, .add-layer,
 .insp-head .nm, .insp-head .tag, .field > .k, .inspector-value,
 .insp-cta, .mini-seg button,
-.sb-label, .sb-stream, .sb-facts, .sb-fact, .sb-right, .sb-right .kbd {
+.sb-label, .sb-stream, .sb-facts, .sb-fact, .sb-right, .sb-right .kbd,
+.sb-teststrip, .sb-ts-toggle, .sb-ts-note {
   white-space: nowrap;
 }
 .crumb { min-width: 0; }

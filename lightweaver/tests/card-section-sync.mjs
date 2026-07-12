@@ -53,8 +53,9 @@ const repaired = await ensureCardSectionsForPreview({
   },
   pushConfig: async (_pkg, options) => {
     operations.push('config');
-    assert.equal(options.allowLayoutChange, undefined);
-    assert.equal(options.allowProjectChange, undefined);
+    // Preview auto-sync must never force a wiring/project change past the guard.
+    assert.ok(!options.allowLayoutChange);
+    assert.ok(!options.allowProjectChange);
     return { ok: true };
   },
   sleep: async () => {},
