@@ -4,14 +4,28 @@ Goal: the Lightweaver browser UI lives at `led.mandalacodes.com`.
 
 Current product rule: the public site is a Studio, installer, and support surface. It is not a Cloudflare relay and it does not provide pairing-code remote control. The ESP32 card owns runtime playback.
 
-## Deploy ownership (decided 2026-06-11)
+## Deploy ownership (updated 2026-07-13)
 
-Two artifacts used to race for the same Pages project; this is now settled:
+**This repo owns production at `led.mandalacodes.com`.** A push to `main` here is
+the live deploy; there is no separate mandalacodes step for the LED surface.
 
-- **Production** (`led.mandalacodes.com`, Pages production branch `main`): the **mandalacodes repo's bundle** — customer landing at `/`, Studio embedded at `/design/`. Deployed from the mandalacodes checkout (build commands below). It must include this repo's Studio dist and the factory firmware binary at `/firmware/`.
-- **Preview** (Pages branch `studio`, `https://studio.lightweaver-edw.pages.dev`): **this repo's** `lightweaver/dist`, deployed by `scripts/go-live.sh`, `npm run deploy:pages`, and `.github/workflows/deploy-site.yml`. All three pass `--branch studio` so they can never clobber the production landing page.
+- **Production** (`led.mandalacodes.com`, Pages project `lightweaver`, production
+  branch `main`): `npm run deploy:pages` stages this repo's Studio (Show screen
+  included) with `/` → `/design/` and `wrangler pages deploy … --branch main`.
+  `.github/workflows/deploy-site.yml` runs it automatically on every push to
+  `main` that touches `lightweaver/**`.
+- **Gate:** the deploy only publishes when `CLOUDFLARE_API_TOKEN` (Pages: Edit)
+  and `CLOUDFLARE_ACCOUNT_ID` are set as **Actions secrets on this repo**. Until
+  then the deploy step skips cleanly and pushes never reach the live domain.
+- **Do not** let the mandalacodes repo also publish to the `lightweaver` Pages
+  project — the two would overwrite each other on the production branch. The
+  mandalacodes site stays its own project serving `mandalacodes.com`.
+- `scripts/go-live.sh` still targets the `studio` preview branch
+  (`https://studio.lightweaver-edw.pages.dev`) for a dry-run before going live.
 
-After Studio or firmware changes land here, redeploy the mandalacodes bundle to ship them to production.
+Trade-off of this repo owning production: `led.mandalacodes.com/` redirects
+straight into the Studio — there is no separate marketing landing page unless
+one is folded into this repo's staged bundle (`stage:pages`).
 
 ## Current recommended setup
 

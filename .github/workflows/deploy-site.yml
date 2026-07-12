@@ -1,16 +1,19 @@
 name: Deploy site
 
-# Publishes the Studio bundle to the `studio` PREVIEW branch of the
-# `lightweaver` Cloudflare Pages project.
+# Publishes THIS repo's Studio bundle to PRODUCTION at led.mandalacodes.com.
 #
-# Deploy ownership (decided 2026-06-11, see docs/led-mandalacodes-setup.md):
-# PRODUCTION at led.mandalacodes.com is the mandalacodes repo's bundle
-# (customer landing at /, Studio embedded at /design/), deployed from the
-# mandalacodes checkout. This workflow must therefore never deploy to the
-# production branch — deploy:pages targets `--branch studio`, which serves at
-# https://studio.lightweaver-edw.pages.dev for verification. To ship to
-# production, redeploy the mandalacodes bundle (it embeds this repo's Studio
-# dist and the factory firmware binary).
+# Deploy ownership (updated 2026-07-13, see docs/led-mandalacodes-setup.md):
+# led.mandalacodes.com is the custom domain on the `lightweaver` Cloudflare
+# Pages project, whose production branch is `main`. `npm run deploy:pages`
+# stages this repo's Studio (Show screen included) with `/` → `/design/` and
+# deploys it to `--branch main`, i.e. the live domain. So a push to this repo's
+# main IS the live deploy — there is no separate mandalacodes step for the LED
+# surface. (mandalacodes.com itself stays a different project; it must NOT also
+# publish to `lightweaver`, or the two would overwrite each other.)
+#
+# GATE: this only actually publishes when the two Cloudflare secrets below are
+# set on THIS repo. Until then the deploy step skips cleanly and nothing reaches
+# the live domain — that is the one switch to flip to make pushes go live.
 #
 # Runs automatically on every push to main that touches the deployable surface
 # (the lightweaver/ app, including the firmware binary it serves), and manually
