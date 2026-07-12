@@ -71,7 +71,13 @@ function assertFeatureLevels(engine, expected, message) {
   engine.setFeatures(supplied);
   supplied.mid = 1;
   assertFeatureLevels(engine, {
-    bass: 0, mid: 0.77, high: 1, energy: 1, centroid: 0.55, flux: 0.88, beat: 1,
+    bass: 0,
+    mid: Math.pow(0.35, 1 / 2.2),
+    high: 1,
+    energy: Math.pow(0.7, 1 / 2.2),
+    centroid: 0.55,
+    flux: Math.pow(0.4, 1 / 2.2),
+    beat: Math.pow(0.9, 1 / 2.2),
   }, 'setFeatures clamps, copies, and applies sensitivity to the complete analyzer feature vector');
 }
 
@@ -438,16 +444,33 @@ for (const key of ['strata', 'embers', 'hearth']) {
 // ── direct feature sensitivity is stable and materially audible ──────────
 {
   const engine = createMandalaEngine();
-  const raw = { bass: 0.34, mid: 0.28, high: 0.22, energy: 0.31, centroid: 0.63, flux: 0.27, beat: 0.29 };
+  const raw = { bass: 0.34, mid: 0.5, high: 0.22, energy: 0.31, centroid: 0.63, flux: 0.27, beat: 0.29 };
   engine.setFeatures(raw);
   engine.setSensitivity(3);
   assertFeatureLevels(engine, {
-    bass: 1, mid: 0.84, high: 0.66, energy: 0.93, centroid: 0.63, flux: 0.81, beat: 0.87,
-  }, 'sensitivity scales direct levels except centroid');
+    bass: Math.pow(raw.bass, 1 / 3),
+    mid: Math.pow(raw.mid, 1 / 3),
+    high: Math.pow(raw.high, 1 / 3),
+    energy: Math.pow(raw.energy, 1 / 3),
+    centroid: raw.centroid,
+    flux: Math.pow(raw.flux, 1 / 3),
+    beat: Math.pow(raw.beat, 1 / 3),
+  }, '3x sensitivity applies a monotonic soft-knee except to centroid');
+  const boosted = engine.getLevels();
+  assert.ok(raw.bass < boosted.bass && boosted.bass < boosted.mid && boosted.mid < 1,
+    'distinct moderate direct inputs remain ordered, boosted, and below clipping at 3x');
   engine.setSensitivity(0.3);
   assertFeatureLevels(engine, {
-    bass: 0.102, mid: 0.084, high: 0.066, energy: 0.093, centroid: 0.63, flux: 0.081, beat: 0.087,
-  }, 'sensitivity reapplies from stable raw features without compounding');
+    bass: Math.pow(raw.bass, 1 / 0.3),
+    mid: Math.pow(raw.mid, 1 / 0.3),
+    high: Math.pow(raw.high, 1 / 0.3),
+    energy: Math.pow(raw.energy, 1 / 0.3),
+    centroid: raw.centroid,
+    flux: Math.pow(raw.flux, 1 / 0.3),
+    beat: Math.pow(raw.beat, 1 / 0.3),
+  }, '0.3x sensitivity attenuates from stable raw features without compounding');
+  assert.ok(engine.getLevels().bass < raw.bass && engine.getLevels().mid < raw.mid,
+    '0.3x soft-knee attenuates moderate direct inputs');
   engine.setSensitivity(1);
   assertFeatureLevels(engine, raw, 'returning to sensitivity 1 restores raw direct features exactly');
 

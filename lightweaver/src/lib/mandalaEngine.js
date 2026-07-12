@@ -471,13 +471,14 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     F.beat = 0;
   }
   function applyDirectFeatures() {
-    F.bass = clamp01(rawFeatures.bass * sensitivity);
-    F.mid = clamp01(rawFeatures.mid * sensitivity);
-    F.high = clamp01(rawFeatures.high * sensitivity);
-    F.energy = clamp01(rawFeatures.energy * sensitivity);
+    const shape = (value) => value <= 0 ? 0 : value >= 1 ? 1 : Math.pow(value, 1 / sensitivity);
+    F.bass = shape(rawFeatures.bass);
+    F.mid = shape(rawFeatures.mid);
+    F.high = shape(rawFeatures.high);
+    F.energy = shape(rawFeatures.energy);
     F.centroid = rawFeatures.centroid;
-    F.flux = clamp01(rawFeatures.flux * sensitivity);
-    F.beat = clamp01(rawFeatures.beat * sensitivity);
+    F.flux = shape(rawFeatures.flux);
+    F.beat = shape(rawFeatures.beat);
   }
   function setFeatures(features = {}) {
     rawFeatures.bass = clamp01(Number(features.bass) || 0);
