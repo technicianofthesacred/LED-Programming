@@ -57,6 +57,13 @@ jobs:
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs
 
+      - name: Install Playwright browser
+        working-directory: lightweaver
+        # launch:check runs test:show (tests/show-screen.spec.ts) under Playwright,
+        # which needs a browser binary. `npm ci` does not fetch it, so without this
+        # the e2e step fails with "Executable doesn't exist" and reddens main.
+        run: npx playwright install --with-deps chromium
+
       - name: Launch check (core tests + production build)
         working-directory: lightweaver
         run: npm run launch:check
