@@ -9,6 +9,10 @@ import { useProject } from '../state/ProjectContext.jsx';
 import {
   createMandalaEngine,
   frameToHex,
+  KNOB_DEFAULTS,
+  KNOB_META,
+  KNOB_RANGES,
+  MODE_KEYS,
   MODE_LIBRARY,
   RINGS,
   TOTAL_PIXELS,
@@ -24,6 +28,29 @@ import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection
 
 const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
 const LIVELY_MODES = MODE_LIBRARY.filter((m) => m.tier === 'lively');
+
+// Per-mode tuning knobs are the user's to set and keep. They live in the browser
+// (survives app updates on the same device), can be exported to a file (portable
+// to any device or a new piece), and that file is what gets baked into the code
+// as the shipped defaults for every future build.
+const MODE_PARAMS_KEY = 'lw.show.modeParams.v1';
+
+function loadSavedParams() {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(MODE_PARAMS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function persistParams(allParams) {
+  if (typeof localStorage === 'undefined') return;
+  try { localStorage.setItem(MODE_PARAMS_KEY, JSON.stringify(allParams)); } catch { /* storage full/blocked */ }
+}
+
+function isTunedAway(knobs) {
+  return KNOB_META.some(({ key }) => Math.abs((knobs?.[key] ?? KNOB_DEFAULTS[key]) - KNOB_DEFAULTS[key]) > 1e-6);
+}
 
 // ── canvas render (port of the simulator's fused halo render) ─────────────
 function rgbaStr(r, g, b, a) {
@@ -68,7 +95,7 @@ function ensureGlowSprite() {
 // computed once per frame and reused by the LED-frame encode.
 function renderSpatial(ctx, engine, geom, colors, samples, templateKind) {
   const { W, cx, cy, maxR } = geom;
-  const master = engine.getMaster();
+  const master = engine.getRenderMaster();
   const haveGlow = ensureGlowSprite();
   const glowSize = GLOW_SPRITE_R * 2;
   ctx.globalCompositeOperation = 'source-over';
@@ -83,7 +110,12 @@ function renderSpatial(ctx, engine, geom, colors, samples, templateKind) {
   } else {
     ctx.fillRect(0, 0, geom.W, geom.H);
   }
-  const dot = 0.013 * maxR;
+  // Dot size follows the light COUNT so a sparse piece fills in instead of
+  // scattering: total lit area stays roughly constant as pixels thin out.
+  // 0.338/sqrt(675) ≈ 0.013 — the Mandala's original dot — so dense layouts are
+  // unchanged; sparse ones get proportionally larger, softer dots.
+  const activeCount = Math.max(1, engine.getDensity().activeCount);
+  const dot = Math.max(0.010 * maxR, Math.min(0.05 * maxR, 0.338 * maxR / Math.sqrt(activeCount)));
   ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < samples.length; i++) {
     if (samples[i].stripId === null) continue;
@@ -114,6 +146,13 @@ function renderSpatial(ctx, engine, geom, colors, samples, templateKind) {
 // ~18fps wire cadence instead of every RAF tick; the small epsilon keeps RAF's
 // ~16.7ms quantization from landing the cadence a whole tick late.
 const STREAM_ENCODE_GAP_MS = 1000 / DEFAULT_FRAME_FPS - 8;
+
+// The canvas repaint (a full palette walk + a tinted glow sprite per lit pixel)
+// is the heavy part of the loop. On a 120Hz display RAF fires every ~8ms, so
+// painting every tick did that work up to 120×/sec for a slow, warm look the
+// eye reads fine at ~48fps. Physics still ticks every RAF (smooth motion); only
+// the paint is capped, which is the lag fix.
+const PAINT_GAP_MS = 1000 / 48 - 4;
 
 // ── small UI pieces (v3 token styling, inline where no class fits) ─────────
 const chipStyle = (on) => ({
@@ -219,8 +258,52 @@ function ShowScreen({ go }) {
   const [lightsBusy, setLightsBusy] = useState(false);
   const [notice, setNotice] = useState(null); // { kind: 'err'|'info', text, action? }
   const [levels, setLevels] = useState({ bass: 0, mid: 0, high: 0, energy: 0 });
+  const [knobs, setKnobs] = useState(KNOB_DEFAULTS);
+  const [tuneOpen, setTuneOpen] = useState(false);
+  const [tuneStatus, setTuneStatus] = useState('');
 
   const modeInfo = MODE_LIBRARY.find((m) => m.key === modeKey) || MODE_LIBRARY[0];
+
+  // Load the user's saved defaults once and push them into the engine for every
+  // mode, so tuning persists across app updates on this device.
+  useEffect(() => {
+    const saved = loadSavedParams();
+    for (const key of MODE_KEYS) {
+      if (saved[key]) engineRef.current.setModeParams(key, saved[key]);
+    }
+    setKnobs(engineRef.current.getModeParams(modeKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const changeKnob = useCallback((knob, value) => {
+    engineRef.current.setModeParam(modeKey, knob, value);
+    setKnobs(engineRef.current.getModeParams(modeKey));
+    setTuneStatus('');
+  }, [modeKey]);
+
+  const saveDefaults = useCallback(() => {
+    persistParams(engineRef.current.getAllModeParams());
+    setTuneStatus('Saved as default on this device.');
+  }, []);
+
+  const resetKnobs = useCallback(() => {
+    engineRef.current.resetModeParams(modeKey);
+    setKnobs(engineRef.current.getModeParams(modeKey));
+    setTuneStatus('');
+  }, [modeKey]);
+
+  const exportDefaults = useCallback(() => {
+    if (typeof document === 'undefined') return;
+    const payload = JSON.stringify(engineRef.current.getAllModeParams(), null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'lightweaver-mode-defaults.json';
+    link.click();
+    URL.revokeObjectURL(url);
+    setTuneStatus('Exported — keep this file to carry your settings anywhere.');
+  }, []);
 
   useEffect(() => {
     templateRef.current = activeTemplate;
@@ -256,6 +339,7 @@ function ShowScreen({ go }) {
     let prev = performance.now();
     let meterAt = 0;
     let encodeAt = 0;
+    let paintAt = 0;
     let frameVersion = 0;
     const encodeFrame = () => {
       const stream = streamRef.current;
@@ -299,10 +383,16 @@ function ShowScreen({ go }) {
         engine.setFeatures(featureRef.current.getFeatures());
       }
       engine.tick(dt);
-      // Per-pixel colors are computed once and shared by canvas + wire encode.
-      renderFrame();
+      // Per-pixel colors are computed once (in renderFrame) and shared by the
+      // canvas paint and the wire encode. Paint is capped to ~48fps; force a
+      // paint on an encode frame so the wire never sends stale colors.
       const stream = streamRef.current;
-      if (stream && now - encodeAt >= STREAM_ENCODE_GAP_MS) {
+      const wantEncode = stream && now - encodeAt >= STREAM_ENCODE_GAP_MS;
+      if (now - paintAt >= PAINT_GAP_MS || wantEncode) {
+        paintAt = now;
+        renderFrame();
+      }
+      if (wantEncode) {
         encodeAt = now;
         encodeFrame();
       }
@@ -528,6 +618,8 @@ function ShowScreen({ go }) {
   const chooseMode = useCallback((key) => {
     engineRef.current.setMode(key);
     setModeKey(key);
+    setKnobs(engineRef.current.getModeParams(key));
+    setTuneStatus('');
   }, []);
   const choosePreset = useCallback((name) => {
     engineRef.current.setPreset(name);
@@ -784,6 +876,52 @@ function ShowScreen({ go }) {
                 ))}
               </ChipRow>
               <div style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-lo)', marginTop: 9, minHeight: '3.1em' }}>{modeInfo.desc}</div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+                <button
+                  type="button"
+                  data-testid="show-tune-toggle"
+                  onClick={() => setTuneOpen((v) => !v)}
+                  style={{ ...chipStyle(tuneOpen), fontSize: 11 }}
+                  title="Adjust how this mode responds to the sound, and save it as the default"
+                >
+                  {tuneOpen ? 'Hide tuning' : `Tune ${modeInfo.name}`}{isTunedAway(knobs) ? ' ·' : ''}
+                </button>
+                {tuneOpen && (
+                  <button type="button" className="btn" style={{ fontSize: 11 }} onClick={resetKnobs} title="Return this mode to its shipped defaults">
+                    Reset
+                  </button>
+                )}
+              </div>
+              {tuneOpen && (
+                <div data-testid="show-tune-panel" style={{ marginTop: 8 }}>
+                  {KNOB_META.map(({ key, label, hint }) => (
+                    <Slider
+                      key={key}
+                      k={label}
+                      v={key === 'freq'
+                        ? (knobs[key] < -0.05 ? 'deep' : knobs[key] > 0.05 ? 'bright' : 'even')
+                        : `${knobs[key].toFixed(2)}×`}
+                      value={knobs[key]}
+                      min={KNOB_RANGES[key].min}
+                      max={KNOB_RANGES[key].max}
+                      step={KNOB_RANGES[key].step}
+                      onChange={(val) => changeKnob(key, val)}
+                    />
+                  ))}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button type="button" className="btn primary" style={{ fontSize: 11 }} data-testid="show-tune-save" onClick={saveDefaults}>
+                      Save as default
+                    </button>
+                    <button type="button" className="btn" style={{ fontSize: 11 }} onClick={exportDefaults} title="Download your settings as a file to keep or bake into a build">
+                      Export file
+                    </button>
+                  </div>
+                  <div className="mono" style={{ fontSize: 10, lineHeight: 1.5, color: 'var(--text-faint)', marginTop: 8, minHeight: '1.4em' }}>
+                    {tuneStatus || KNOB_META.find(({ key }) => Math.abs(knobs[key] - KNOB_DEFAULTS[key]) > 1e-6)?.hint || 'Move a slider to hear the piece change, then Save as default.'}
+                  </div>
+                </div>
+              )}
 
               <div className="field-sep" />
               <div className="sec-h"><span className="t">Feel</span><span className="line" /></div>

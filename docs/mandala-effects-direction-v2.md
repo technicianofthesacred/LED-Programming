@@ -64,7 +64,7 @@ At the lively end:
 ## 4. Spatial-audio contract and restraint rules
 
 1. **Every layer remains alive.** Repeated beats move at least most of the Calm field and reach every Mandala ring; Active reaches still more. Sparse/local geometry is foreground only.
-2. **The substrate is shared but not uniform.** Calm adds a restrained beat depth of `0.08`; Active uses `0.14`. Radius, angle, strip index, strip progress, and normalized x/y position phase the response so motion visibly propagates.
+2. **The substrate is shared but not uniform.** Calm adds a restrained beat depth of `0.08`; Active uses `0.22`. Radius, angle, strip index, strip progress, and normalized x/y position phase the response so motion visibly propagates. Beyond the substrate, a discrete onset layer (F.beat crossing detector, ~0.28s decay envelope) pulses each mode's *geometry* — radius, breadth, contrast, spark rate — preset-gated (Active 1.0×, Calm 0.4×).
 3. **Analysis must stay stable.** The Show analyzer uses logarithmic-frequency RMS bands (bass 30–140 Hz, mid 150–1800 Hz, high 2000–9000 Hz), stable adaptive floor/headroom, broadband energy, centroid, positive spectral flux, and a decaying beat envelope. Sustained music must not normalize itself away; silence must not invent beats.
 4. **Audio changes expression, not authored rotation speed.** It may modulate amplitude, probability, position, contrast, breadth, and texture. Procession, Lattice, and Spiral keep their authored motion periods.
 5. **Use the real layout.** The Mandala evaluates its 675 exported ring samples. Connected mode evaluates the visible connected-layout pixels in stable strip/output order, using aspect-preserving normalized x/y, radius, angle, strip index, and strip progress. Effects must reach the layout’s actual outer radius rather than assuming a flat five-ring frame.
@@ -77,7 +77,7 @@ At the lively end:
 
 Calm is the piece’s baseline: `1.0×` effect modulation, `0.08` shared beat depth, `0.75` master, standard release scaling, standard ember rate, and standard Tide crest.
 
-Active listens more closely: `1.5×` effect modulation, `0.14` shared beat depth, `0.82` master, `0.7×` release scaling, `2×` ember rate, and `1.35×` Tide crest. It does not change authored rotation speed. Its stronger response must remain spatially propagated and non-strobing.
+Active listens more closely: `1.5×` effect modulation, `0.22` shared beat depth, `0.82` master, `0.7×` release scaling, `2×` ember rate, and `1.35×` Tide crest. It does not change authored rotation speed. Its stronger response must remain spatially propagated and non-strobing.
 
 Ceiling test: at most active, the result reads as a fire fed another log — more articulate and visibly traveling through the object, never a light show switched on.
 

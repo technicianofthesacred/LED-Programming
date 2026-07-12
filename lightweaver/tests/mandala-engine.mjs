@@ -1,9 +1,13 @@
 // Locks the invariants of the extracted mandala engine (src/lib/mandalaEngine.js)
 // against the binding aesthetic contract:
 //  - docs/mandala-color-system.md: B ≤ G ≤ R warmth law, permanent warmth margin,
-//    one warm hue corridor, dim-but-never-black idle floor.
-//  - docs/mandala-effects-direction-v2.md: silence decays to a dim coal field
-//    (never black, never frozen), brightness ceiling via the master scale.
+//    one warm hue corridor (pre-gamma), dim-but-never-black idle floor in
+//    silence and Calm.
+//  - docs/mandala-effects-direction-v2.md (2026-07-12 amendment): silence
+//    decays to a dim coal field (never black, never frozen); the master scale
+//    is a SUSTAINED ceiling — onset peaks may overdrive the wire to full;
+//    under music in Active the field may reach true black; frameRGB carries
+//    wire gamma 2.2 (the card applies none), the preview stays linear.
 // Plus the frame plumbing the card stream depends on: frame length matches the
 // pixel count, hex encoding is WLED seg.i-shaped, and the resample adapter maps
 // the 675px ring frame onto arbitrary project pixel counts.
@@ -20,6 +24,7 @@ import {
   PRESETS,
   RINGS,
   TOTAL_PIXELS,
+  WIRE_GAMMA,
 } from '../src/lib/mandalaEngine.js';
 import { createMandalaSpatialTemplate } from '../src/lib/showSpatialTemplate.js';
 
@@ -92,14 +97,24 @@ function assertFeatureLevels(engine, expected, message) {
   assert.deepEqual([...engine.frameRGB().slice(0, 3)], [0, 0, 0], 'inactive addresses have exact black wire output');
 }
 
+// A probe sample padded up to full density so the density-aware pattern
+// (2026-07-13) evaluates at the same detail as the full template. The probe
+// stays at outputIndex 0 — a legacy ringOf/rfOf/angOf[0] read is still caught —
+// and identical fillers keep its radialProgress on the same (stripIndex) path.
+function atFullDensity(sample) {
+  const arr = [{ ...sample, outputIndex: 0 }];
+  for (let k = 1; k < 400; k += 1) arr.push({ ...sample, outputIndex: k });
+  return arr;
+}
+
 // An equivalent spatial coordinate renders identically whether it lives in the
-// full Mandala template or a one-sample fixture. This catches accidental reads
-// from the legacy ringOf/rfOf/angOf arrays inside effects.
+// full Mandala template or a padded single-probe fixture. This catches accidental
+// reads from the legacy ringOf/rfOf/angOf arrays inside effects.
 {
   const template = createMandalaSpatialTemplate();
   const sourceIndex = 511;
   const full = createMandalaEngine({ template });
-  const one = createMandalaEngine({ template: [{ ...template[sourceIndex], outputIndex: 0 }] });
+  const one = createMandalaEngine({ template: atFullDensity(template[sourceIndex]) });
   for (const engine of [full, one]) {
     engine.setMode('lattice');
     engine.setListening(true);
@@ -119,7 +134,7 @@ const stochasticParityFailures = [];
 for (const [key, sourceIndex] of [['hearth', 317], ['embers', 511]]) {
   const template = createMandalaSpatialTemplate();
   const full = createMandalaEngine({ template });
-  const one = createMandalaEngine({ template: [{ ...template[sourceIndex], outputIndex: 0 }] });
+  const one = createMandalaEngine({ template: atFullDensity(template[sourceIndex]) });
   let peakDifference = 0;
   for (const engine of [full, one]) {
     engine.setMode(key);
@@ -230,6 +245,28 @@ function assertWarmPixel(r, g, b, where) {
   }
 }
 
+// Wire bytes are post-gamma. The B ≤ G ≤ R law and the warmth margin survive
+// the monotone LUT exactly ((b/r)^2.2 < b/r), but 8-bit quantization on dim
+// pixels legitimately collapses hue toward pure red (the color spec's corridor
+// is defined PRE-gamma), so wire pixels skip the corridor check — the preview
+// path (colorFrame) locks it instead.
+function assertWireWarm(r, g, b, where) {
+  assert.ok(b <= g && g <= r, `${where}: wire B ≤ G ≤ R law violated (${r},${g},${b})`);
+  assert.ok(b <= 0.8 * r + 1, `${where}: wire warmth margin violated (B > 0.8×R) (${r},${g},${b})`);
+}
+
+// ── wire gamma LUT (2026-07-12 amendment) ────────────────────────────────
+// frameRGB applies gamma 2.2 through this LUT; the card firmware applies none.
+{
+  assert.equal(WIRE_GAMMA.length, 256, 'wire gamma LUT covers every byte');
+  assert.equal(WIRE_GAMMA[0], 0, 'gamma endpoint: 0 → 0 (true black survives)');
+  assert.equal(WIRE_GAMMA[255], 255, 'gamma endpoint: 255 → 255 (full survives)');
+  for (let i = 1; i < 256; i++) {
+    assert.ok(WIRE_GAMMA[i] >= WIRE_GAMMA[i - 1], `gamma LUT monotonic at ${i}`);
+    assert.equal(WIRE_GAMMA[i], Math.round(255 * Math.pow(i / 255, 2.2)), `gamma LUT is exactly 2.2 at ${i}`);
+  }
+}
+
 // Every palette stop obeys the law before any engine math touches it.
 for (const [name, stops] of Object.entries(PALETTES)) {
   for (const [i, r, g, b] of stops) {
@@ -264,21 +301,31 @@ function meanBrightness(rgb) {
   return sum / n;
 }
 
+// The SUSTAINED wire ceiling: driveLoud uses setBands (no beat feature), so no
+// onsets fire and the wire scale is exactly `master` — post-gamma nothing can
+// exceed WIRE_GAMMA[⌈255·0.85⌉] even at the hard 0.85 master cap. Transient
+// onset overdrive above this line is locked separately below.
+const SUSTAINED_CEILING = WIRE_GAMMA[Math.ceil(255 * 0.85)];
 for (const { key } of MODE_LIBRARY) {
   const engine = createMandalaEngine();
   engine.setMode(key);
   assert.equal(engine.getMode(), key, `setMode(${key}) sticks`);
   engine.setListening(true);
   driveLoud(engine, 8);
+  const colors = engine.colorFrame();
   const rgb = engine.frameRGB();
   assert.equal(rgb.length, TOTAL_PIXELS * 3, `${key}: frame length matches the pixel count`);
   for (let i = 0; i < TOTAL_PIXELS; i++) {
-    assertWarmPixel(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], `${key} px${i}`);
+    // hue corridor is locked pre-gamma on the preview path…
+    assertWarmPixel(
+      Math.round(colors[i * 3]), Math.round(colors[i * 3 + 1]), Math.round(colors[i * 3 + 2]),
+      `${key} preview px${i}`,
+    );
+    // …the post-gamma wire keeps the ordering law + warmth margin exactly.
+    assertWireWarm(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], `${key} px${i}`);
   }
-  // Brightness ceiling: master defaults to 0.75, so nothing exceeds 0.85×255
-  // even at the Active preset's 0.82 ceiling.
   for (let i = 0; i < rgb.length; i++) {
-    assert.ok(rgb[i] <= Math.ceil(255 * 0.85), `${key}: master ceiling respected`);
+    assert.ok(rgb[i] <= SUSTAINED_CEILING, `${key}: sustained master ceiling respected`);
   }
   assert.ok(meanBrightness(rgb) > 2, `${key}: music produces visible light`);
 }
@@ -376,7 +423,7 @@ for (const key of ['strata', 'embers', 'hearth']) {
     const small = resampleFrame(rgb, count);
     assert.equal(small.length, count * 3, `resample to ${count} px has ${count} RGB triples`);
     for (let i = 0; i < count; i++) {
-      assertWarmPixel(small[i * 3], small[i * 3 + 1], small[i * 3 + 2], `resample(${count}) px${i}`);
+      assertWireWarm(small[i * 3], small[i * 3 + 1], small[i * 3 + 2], `resample(${count}) px${i}`);
     }
   }
 
@@ -548,11 +595,18 @@ for (const key of ['strata', 'embers', 'hearth']) {
 }
 
 // ── musical motion coverage + beat articulation ─────────────────────────
+// 2026-07-12 amendment: the beat substrate sharpens EXISTING light and no
+// longer lifts the void (lift ∝ 4·b·(1−b) — zero at black). Coverage is
+// therefore measured across the LIT field: pixels the beat-free dry run
+// itself illuminated above a small threshold. In Calm the ungated coal-glow
+// floor keeps the whole field lit, so Calm coverage still spans every pixel
+// and every ring; in Active, true-black regions are deliberately exempt.
 function beatCoverage(key, preset) {
   const template = createMandalaSpatialTemplate();
   const dry = createMandalaEngine({ template });
   const pulsed = createMandalaEngine({ template });
   const peakDelta = new Float32Array(template.length);
+  const litPeak = new Float32Array(template.length);
   for (const engine of [dry, pulsed]) {
     engine.setMode(key);
     engine.setPreset(preset);
@@ -572,27 +626,43 @@ function beatCoverage(key, preset) {
     dry.tick(1 / 30);
     pulsed.tick(1 / 30);
     for (let i = 0; i < template.length; i += 1) {
-      peakDelta[i] = Math.max(peakDelta[i], Math.abs(pulsed.getIntensity(i) - dry.getIntensity(i)));
+      const dryV = dry.getIntensity(i);
+      peakDelta[i] = Math.max(peakDelta[i], Math.abs(pulsed.getIntensity(i) - dryV));
+      litPeak[i] = Math.max(litPeak[i], dryV);
     }
   }
-  const changed = peakDelta.filter((delta) => delta > 0.002).length;
+  const LIT = 0.06;
+  let lit = 0;
+  let changed = 0;
+  for (let i = 0; i < template.length; i += 1) {
+    if (litPeak[i] <= LIT) continue;
+    lit += 1;
+    if (peakDelta[i] > 0.002) changed += 1;
+  }
   const perRing = RINGS.map((ring) => {
-    let ringChanged = 0;
+    let ringLit = 0, ringChanged = 0;
     for (let i = ring.start; i < ring.start + ring.count; i += 1) {
+      if (litPeak[i] <= LIT) continue;
+      ringLit += 1;
       if (peakDelta[i] > 0.002) ringChanged += 1;
     }
-    return ringChanged / ring.count;
+    return ringLit === 0 ? 1 : ringChanged / ringLit;
   });
-  return { ratio: changed / template.length, perRing, peakDelta };
+  return { ratio: lit === 0 ? 0 : changed / lit, litRatio: lit / template.length, perRing, peakDelta };
 }
 
 for (const { key, tier } of MODE_LIBRARY) {
   const calm = beatCoverage(key, 'Calm');
   const active = beatCoverage(key, 'Active');
-  assert.ok(calm.ratio >= 0.8, `${key}: Calm repeated beat moves >=80% of pixels (${calm.ratio.toFixed(3)})`);
-  assert.ok(active.ratio >= 0.9, `${key}: Active repeated beat moves >=90% of pixels (${active.ratio.toFixed(3)})`);
+  // Calm's coal-glow floor keeps the whole field lit, so Calm coverage remains
+  // a whole-piece guarantee (embers stays authored-on-darkness).
+  if (key !== 'embers') {
+    assert.ok(calm.litRatio >= 0.99, `${key}: Calm field stays whole-piece lit (${calm.litRatio.toFixed(3)})`);
+  }
+  assert.ok(calm.ratio >= 0.8, `${key}: Calm repeated beat moves >=80% of the lit field (${calm.ratio.toFixed(3)})`);
+  assert.ok(active.ratio >= 0.9, `${key}: Active repeated beat moves >=90% of the lit field (${active.ratio.toFixed(3)})`);
   assert.ok(calm.perRing.every((ratio) => ratio > 0.5),
-    `${key}: repeated beat reaches every Mandala ring (${calm.perRing.map(v => v.toFixed(2)).join(', ')})`);
+    `${key}: repeated beat reaches every lit Mandala ring (${calm.perRing.map(v => v.toFixed(2)).join(', ')})`);
   if (tier === 'lively') {
     assert.ok(Math.max(...active.peakDelta) >= 0.025,
       `${key}: lively mode has a measurable beat delta`);
@@ -639,6 +709,131 @@ for (const key of ['procession', 'spiral']) {
     beat: frame % 18 < 3 ? 1 : 0,
   }));
   assert.ok(fallback > 0.14, `${key}: broadband/beat fallback remains visibly active (${fallback.toFixed(3)})`);
+}
+
+// ── transient onset overdrive vs sustained ceiling (2026-07-12) ───────────
+// Onset peaks may exceed the sustained master line — up to a true 255 — but
+// ONLY while the onset envelope is hot; once it decays the sustained ceiling
+// is hard again even under continuous loud music.
+{
+  const engine = createMandalaEngine();
+  engine.setMode('strata');
+  engine.setPreset('Active');
+  engine.setSensitivity(1);
+  engine.setListening(true);
+  const loud = { bass: 0.9, mid: 0.6, high: 0.5, energy: 0.8, centroid: 0.4, flux: 0.2, beat: 0 };
+  for (let f = 0; f < 90; f += 1) { engine.setFeatures(loud); engine.tick(1 / 60); }
+  let hotPeak = 0;
+  for (let f = 0; f < 12; f += 1) { // one strong onset + ~0.2s of hot envelope
+    engine.setFeatures({ ...loud, energy: 0.9, flux: 0.8, beat: f < 6 ? 0.95 : 0 });
+    engine.tick(1 / 60);
+    const hot = engine.frameRGB();
+    for (let i = 0; i < hot.length; i += 1) { if (hot[i] > hotPeak) hotPeak = hot[i]; }
+  }
+  assert.ok(hotPeak > SUSTAINED_CEILING,
+    `onset overdrive exceeds the sustained ceiling while onsetEnv is hot (${hotPeak} > ${SUSTAINED_CEILING})`);
+  assert.ok(hotPeak >= 240, `a strong onset drives full-brightness hits on the wire (${hotPeak})`);
+
+  for (let f = 0; f < 180; f += 1) { engine.setFeatures(loud); engine.tick(1 / 60); } // ~10× onset tau
+  assert.equal(engine.getTransients().onsetEnv < 0.01, true, 'onset envelope decayed');
+  const settled = engine.frameRGB();
+  for (let i = 0; i < settled.length; i += 1) {
+    assert.ok(settled[i] <= SUSTAINED_CEILING,
+      `sustained ceiling is hard again after onset decay (byte ${settled[i]})`);
+  }
+}
+
+// ── music-dark + full-peak acceptance (2026-07-12 amendment lock) ─────────
+// The amendment's core contract, locked so it can't silently regress: under a
+// realistic 120bpm feature stream in Active, every mode except Hearth spends
+// real wire output on TRUE DARK (max channel < 8) AND lands FULL hits
+// (max channel ≥ 240) on onsets. Calm on the same stream stays gentle for the
+// majority of modes, and silence still returns to the coal idle — never black.
+function pulseStream(t) {
+  const kick = (t % 0.5) < 0.09 ? 1 : 0;
+  return {
+    bass: 0.2 + 0.45 * kick,
+    mid: 0.25 + 0.2 * Math.sin(3 * t) ** 2,
+    high: 0.15 + 0.25 * (((t + 0.25) % 0.5) < 0.06 ? 1 : 0),
+    energy: 0.25 + 0.3 * kick,
+    centroid: 0.4,
+    flux: 0.3 * kick,
+    beat: 0.75 * kick,
+  };
+}
+
+function measureWire(key, preset) {
+  const engine = createMandalaEngine();
+  engine.setMode(key);
+  engine.setPreset(preset);
+  engine.setSensitivity(1);
+  engine.setListening(true);
+  const colors = new Float32Array(TOTAL_PIXELS * 3);
+  const rgb = new Uint8Array(TOTAL_PIXELS * 3);
+  let dark = 0, full = 0, count = 0;
+  for (let s = 0; s < 10 * 60; s += 1) {
+    const t = s / 60;
+    engine.setFeatures(pulseStream(t));
+    engine.tick(1 / 60);
+    if (t < 4) continue; // settle
+    engine.colorFrame(colors);
+    engine.frameRGB(rgb, colors);
+    for (let i = 0; i < TOTAL_PIXELS; i += 1) {
+      const mx = Math.max(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]);
+      if (mx < 8) dark += 1;
+      if (mx >= 240) full += 1;
+      count += 1;
+    }
+  }
+  return { dark: dark / count, full: full / count };
+}
+
+let calmGentle = 0;
+for (const key of MODE_KEYS) {
+  const active = measureWire(key, 'Active');
+  if (key !== 'hearth') {
+    assert.ok(active.dark >= 0.15,
+      `${key}: Active music reaches true dark on >=15% of wire pixel-samples (${(active.dark * 100).toFixed(2)}%)`);
+    assert.ok(active.full >= 0.005,
+      `${key}: Active onsets land full hits on >=0.5% of wire pixel-samples (${(active.full * 100).toFixed(3)}%)`);
+  } else {
+    assert.ok(active.dark < 0.01, `hearth keeps its fireplace bed under music (${(active.dark * 100).toFixed(2)}% dark)`);
+  }
+  const calm = measureWire(key, 'Calm');
+  if (calm.dark < 0.05) calmGentle += 1;
+}
+assert.ok(calmGentle >= 5,
+  `Calm stays gentle (dark <5%) for the majority of modes on the same stream (${calmGentle}/9)`);
+
+// Silence under the Active preset while still listening: the dark gate closes
+// ahead of the field collapse, so the piece never blacks out and the pre-gamma
+// coal idle returns intact.
+{
+  const engine = createMandalaEngine();
+  engine.setMode('strata');
+  engine.setPreset('Active');
+  engine.setSensitivity(1);
+  engine.setListening(true);
+  const colors = new Float32Array(TOTAL_PIXELS * 3);
+  for (let s = 0; s < 6 * 60; s += 1) { engine.setFeatures(pulseStream(s / 60)); engine.tick(1 / 60); }
+  let minLitFraction = 1;
+  for (let s = 0; s < 10 * 60; s += 1) {
+    engine.setFeatures({ bass: 0, mid: 0, high: 0, energy: 0, centroid: 0.4, flux: 0, beat: 0 });
+    engine.tick(1 / 60);
+    engine.colorFrame(colors);
+    let lit = 0;
+    for (let i = 0; i < TOTAL_PIXELS; i += 1) {
+      if (Math.max(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]) > 1) lit += 1;
+    }
+    minLitFraction = Math.min(minLitFraction, lit / TOTAL_PIXELS);
+  }
+  assert.ok(minLitFraction >= 0.5,
+    `Active silence transition never blacks out the piece (min lit fraction ${(minLitFraction * 100).toFixed(1)}%)`);
+  let coalMin = Infinity;
+  for (let i = 0; i < TOTAL_PIXELS; i += 1) {
+    coalMin = Math.min(coalMin, Math.max(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]));
+  }
+  assert.ok(coalMin > 1, `the pre-gamma coal idle survives Active silence (min channel-max ${coalMin.toFixed(2)})`);
 }
 
 console.log('mandala-engine tests passed');
