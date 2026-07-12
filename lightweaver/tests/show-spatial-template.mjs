@@ -103,6 +103,17 @@ assert.deepEqual(physical.map(sample => sample.outputIndex), [0, 1, 2, 3, 4, 5, 
 assert.deepEqual(physical.map(sample => sample.stripId), [null, null, null, null, null, 'a', 'a', 'a', 'a']);
 assert.deepEqual(physical.slice(5).map(sample => sample.stripProgress), [1, 2 / 3, 0, 1 / 3]);
 
+const inlineHiddenPhysical = createConnectedSpatialTemplate({
+  strips: [{ id: 'inline-hidden', hidden: true, pixels: [{ x: 4, y: 5 }, { x: 6, y: 7 }] }],
+  patchBoard: {
+    chains: [{ id: 'main', rowIds: ['hidden-range'] }],
+    groups: [],
+    patches: [{ id: 'hidden-range', source: { type: 'strip', stripId: 'inline-hidden', startLed: 0, endLed: 1 }, output: { mode: 'normal' } }],
+  },
+});
+assert.equal(inlineHiddenPhysical.length, 2, 'inline-hidden strip addresses remain reserved');
+assert.deepEqual(inlineHiddenPhysical.map(sample => sample.stripId), [null, null]);
+
 // Hidden, empty, malformed, and non-finite points never enter physical output order.
 const filtered = createConnectedSpatialTemplate({
   strips: [

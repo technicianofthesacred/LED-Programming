@@ -73,10 +73,11 @@ export function createConnectedSpatialTemplate(options = {}) {
     const stripById = new Map(strips.map(strip => [strip?.id, strip]));
     const expanded = expandPatchBoard(source.patchBoard, strips).pixels;
     const points = expanded.map(pixel => {
+      const strip = stripById.get(pixel.stripId);
       const inactive = pixel.inactive || pixel.stripId == null || hidden[pixel.stripId]
+        || strip?.hidden
         || !Number.isFinite(pixel.x) || !Number.isFinite(pixel.y);
       if (inactive) return { inactive: true, x: 0, y: 0, stripId: null, stripIndex: -1, stripProgress: 0 };
-      const strip = stripById.get(pixel.stripId);
       const count = strip?.pixels?.length || 1;
       return {
         inactive: false,

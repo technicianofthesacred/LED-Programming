@@ -30,6 +30,12 @@ function rgbaStr(r, g, b, a) {
   return `rgba(${r | 0},${g | 0},${b | 0},${a})`;
 }
 
+function frameHash(rgb) {
+  let hash = 0x811C9DC5;
+  for (let i = 0; i < rgb.length; i += 1) hash = Math.imul(hash ^ rgb[i], 0x01000193);
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 // One pre-rendered white radial-glow sprite, tinted per pixel — replaces the
 // old per-pixel ctx.createRadialGradient (up to 675 gradient allocations per
 // frame). Same soft three-stop falloff and the same additive 'lighter'
@@ -256,7 +262,7 @@ function ShowScreen({ go }) {
       if (!stream) return;
       rgbBufRef.current = engineRef.current.frameRGB(rgbBufRef.current, colorBufRef.current);
       hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
-      if (stageRef.current) stageRef.current.dataset.streamFrame = hexBufRef.current.join(',');
+      if (stageRef.current) stageRef.current.dataset.frameHash = frameHash(rgbBufRef.current);
       stream.push(hexBufRef.current);
     };
     const renderFrame = ({ push = false } = {}) => {

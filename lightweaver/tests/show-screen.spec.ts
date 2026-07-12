@@ -287,10 +287,16 @@ test('pausing with lights active atomically pushes the displayed frame and freez
   await page.getByRole('button', { name: 'Play on the lights' }).click();
   await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
   await page.getByTestId('show-pause').click();
-  const frozen = await page.getByTestId('show-stage').getAttribute('data-stream-frame');
-  await expect.poll(async () => page.evaluate(() => (window as any).__frames.at(-1).seg[0].i.join(','))).toBe(frozen);
+  const frozen = await page.getByTestId('show-stage').getAttribute('data-frame-hash');
+  await expect.poll(async () => page.evaluate(() => {
+    let hash = 0x811C9DC5;
+    for (const pixel of (window as any).__frames.at(-1).seg[0].i) {
+      for (let offset = 0; offset < 6; offset += 2) hash = Math.imul(hash ^ Number.parseInt(pixel.slice(offset, offset + 2), 16), 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  })).toBe(frozen);
   const count = await page.evaluate(() => (window as any).__frames.length);
   await page.waitForTimeout(200);
   expect(await page.evaluate(() => (window as any).__frames.length)).toBe(count);
-  expect(await page.getByTestId('show-stage').getAttribute('data-stream-frame')).toBe(frozen);
+  expect(await page.getByTestId('show-stage').getAttribute('data-frame-hash')).toBe(frozen);
 });
