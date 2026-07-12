@@ -882,7 +882,10 @@ const _hasArtwork = () => (document.querySelector('#imported-svg')?.childElement
 function _updateEmptyState() {
   const el = document.getElementById('canvas-empty');
   if (!el) return;
-  el.classList.toggle('hidden', state.strips.length > 0 || _hasArtwork());
+  // The overlay eats canvas clicks — keep it out of the way while drawing so a
+  // strip can be drawn on a blank canvas without importing artwork first.
+  const drawing = canvasManager.tool === 'draw';
+  el.classList.toggle('hidden', drawing || state.strips.length > 0 || _hasArtwork());
 }
 
 // ── Quick-start shape templates ────────────────────────────────────────────
@@ -3334,6 +3337,7 @@ document.addEventListener('keydown', e => {
   switch (e.key.toUpperCase()) {
     case 'S': _setTool('select'); break;
     case 'X': _setTool('delete'); break;
+    case 'D': _setTool('draw');   break;
     case 'P':
       if (state.animating) stopAnim(); else _compileAndRun();
       break;
@@ -3369,11 +3373,32 @@ document.addEventListener('keyup', e => {
   }
 });
 
+const DRAW_HINTS = {
+  polyline: 'Path — click each corner, then Enter or double-click to finish. Esc undoes the last point.',
+  line:     'Line — click the start, then click the end.',
+  circle:   'Ring — click the center, then click to set the radius.',
+  rect:     'Rectangle — click one corner, then click the opposite corner.',
+};
+
 function _setTool(tool) {
   document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
   document.getElementById(`tool-${tool}`)?.classList.add('active');
   canvasManager.setTool(tool);
   document.getElementById('status-mode').textContent = `Tool: ${tool}`;
+
+  const isDraw   = tool === 'draw';
+  const shapeRow = document.getElementById('draw-shapes');
+  const hint     = document.getElementById('draw-hint');
+  if (shapeRow) shapeRow.hidden = !isDraw;
+  if (hint) {
+    hint.hidden = !isDraw;
+    if (isDraw) {
+      const shape = document.querySelector('.draw-shape.active')?.dataset.shape || 'polyline';
+      hint.textContent = DRAW_HINTS[shape];
+    }
+  }
+  // Draw dismisses the blank-canvas overlay; leaving Draw may restore it.
+  _updateEmptyState();
 }
 
 function _switchTab(name) {
@@ -4078,6 +4103,19 @@ function _renderPathSelectionPanel() {
 // Tool buttons
 document.querySelectorAll('.tool').forEach(btn => {
   btn.addEventListener('click', () => _setTool(btn.id.replace('tool-', '')));
+});
+
+// Draw shape selector
+document.querySelectorAll('.draw-shape').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.draw-shape').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const shape = btn.dataset.shape;
+    canvasManager.setDrawShape(shape);
+    if (canvasManager.tool !== 'draw') _setTool('draw');
+    const hint = document.getElementById('draw-hint');
+    if (hint) hint.textContent = DRAW_HINTS[shape];
+  });
 });
 
 // Inspector — density change
