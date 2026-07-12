@@ -153,29 +153,39 @@ test('falls back to the Mandala with an inline explanation when no connected pix
   await expect(page.getByText(/connected layout.*no visible pixels/i)).toBeVisible();
 });
 
-test('connected preview and physical frames preserve sample positions, length, and output order', async ({ page }) => {
+test('connected preview and frames follow split, reversed, and off physical chain addresses', async ({ page }) => {
   await openShow(page);
   await mutateSavedLayout(page, layout => {
     layout.hidden = {};
+    const firstId = layout.strips[0].id;
+    const secondId = layout.strips[1].id;
     layout.strips = [
-      { id: 'alpha', pixels: [{ x: 0, y: 0 }, { x: 100, y: 50 }] },
-      { id: 'beta', pixels: [{ x: 25, y: 100 }] },
+      { ...layout.strips[0], pixels: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }], pixelCount: 3 },
+      { ...layout.strips[1], pixels: [{ x: 0, y: 100 }, { x: 100, y: 100 }], pixelCount: 2 },
     ];
-    layout.patchBoard = { rows: [], chain: { rowIds: [] } };
+    layout.patchBoard = {
+      chains: [{ id: 'main', rowIds: ['second-reverse', 'off', 'first-tail', 'first-head'] }],
+      groups: [],
+      patches: [
+        { id: 'second-reverse', source: { type: 'strip', stripId: secondId, startLed: 1, endLed: 0 }, output: { mode: 'normal' } },
+        { id: 'off', source: { type: 'off', ledCount: 1 }, output: { mode: 'off' } },
+        { id: 'first-tail', source: { type: 'strip', stripId: firstId, startLed: 2, endLed: 1 }, output: { mode: 'normal' } },
+        { id: 'first-head', source: { type: 'strip', stripId: firstId, startLed: 0, endLed: 0 }, output: { mode: 'normal' } },
+      ],
+    };
   });
 
   const stage = page.getByTestId('show-stage');
   await expect(stage).toHaveAttribute('data-template', 'connected');
-  await expect(stage).toHaveAttribute('data-frame-size', '3');
-  // Project migration gives authored strips their stable strip-N ids while
-  // preserving the authored strip/pixel sequence.
-  await expect(stage).toHaveAttribute('data-output-order', 'strip-1:0,strip-1:1,strip-2:0');
-  await expect(stage).toHaveAttribute('data-sample-positions', '-1.000:-1.000,1.000:0.000,-0.500:1.000');
+  await expect(stage).toHaveAttribute('data-frame-size', '6');
+  await expect(stage).toHaveAttribute('data-sample-positions', '-1.000:-1.000,0.000:0.000,1.000:-1.000,0.000:-1.000,1.000:1.000,-1.000:1.000');
 
   await page.getByRole('button', { name: 'Play on the lights' }).click();
   await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
   const streamed = await page.evaluate(() => (window as any).__frames.at(-1).seg[0].i);
-  expect(streamed).toHaveLength(3);
+  expect(streamed).toHaveLength(6);
+  expect(streamed[1]).toBe('000000');
+  expect(streamed.filter((pixel: string) => pixel !== '000000').length).toBeGreaterThan(0);
 });
 
 test('pausing a loaded song freezes analysis and preview frames, then resumes in place', async ({ page }) => {
@@ -269,4 +279,18 @@ test('switching templates while paused renders and streams exactly one new-size 
   await page.waitForTimeout(200);
   expect(await page.evaluate(() => (window as any).__frames.length)).toBe(before.frames + 1);
   expect(await page.evaluate(() => (window as any).__audioReads)).toBe(before.reads);
+});
+
+test('pausing with lights active atomically pushes the displayed frame and freezes it', async ({ page }) => {
+  await openShow(page);
+  await loadSong(page);
+  await page.getByRole('button', { name: 'Play on the lights' }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
+  await page.getByTestId('show-pause').click();
+  const frozen = await page.getByTestId('show-stage').getAttribute('data-stream-frame');
+  await expect.poll(async () => page.evaluate(() => (window as any).__frames.at(-1).seg[0].i.join(','))).toBe(frozen);
+  const count = await page.evaluate(() => (window as any).__frames.length);
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => (window as any).__frames.length)).toBe(count);
+  expect(await page.getByTestId('show-stage').getAttribute('data-stream-frame')).toBe(frozen);
 });

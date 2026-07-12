@@ -172,7 +172,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       const angle = Number.isFinite(sample?.angle) ? sample.angle : 0;
       const normalized = {
         outputIndex,
-        stripId: sample?.stripId ?? `strip-${sample?.stripIndex ?? 0}`,
+        stripId: sample?.stripId === null ? null : (sample?.stripId ?? `strip-${sample?.stripIndex ?? 0}`),
         stripIndex: Number.isFinite(sample?.stripIndex) ? sample.stripIndex : 0,
         stripProgress: clamp01(Number(sample?.stripProgress) || 0),
         x: Number.isFinite(sample?.x) ? sample.x : Math.cos(angle) * radius,
@@ -598,6 +598,10 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   function colorFrame(out) {
     const buf = (out && out.length === total * 3) ? out : new Float32Array(total * 3);
     for (let i = 0; i < total; i++) {
+      if (samples[i].stripId === null) {
+        buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        continue;
+      }
       writeColorFor(i, clamp01(vals[i]), buf, i * 3);
     }
     return buf;
@@ -610,10 +614,22 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   function frameRGB(out, colors) {
     const buf = (out && out.length === total * 3) ? out : new Uint8Array(total * 3);
     if (colors && colors.length === total * 3) {
-      for (let k = 0; k < total * 3; k++) buf[k] = Math.round(colors[k] * master);
+      for (let i = 0; i < total; i++) {
+        if (samples[i].stripId === null) {
+          buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        } else {
+          buf[i * 3] = Math.round(colors[i * 3] * master);
+          buf[i * 3 + 1] = Math.round(colors[i * 3 + 1] * master);
+          buf[i * 3 + 2] = Math.round(colors[i * 3 + 2] * master);
+        }
+      }
       return buf;
     }
     for (let i = 0; i < total; i++) {
+      if (samples[i].stripId === null) {
+        buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        continue;
+      }
       writeColorFor(i, clamp01(vals[i]), buf, i * 3, master, true);
     }
     return buf;

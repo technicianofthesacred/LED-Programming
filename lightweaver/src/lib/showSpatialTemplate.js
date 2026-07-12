@@ -5,6 +5,7 @@ import {
   rfOf,
   angOf,
 } from './mandalaEngine.js';
+import { expandPatchBoard } from './patchBoard.js';
 
 const TAU = Math.PI * 2;
 
@@ -60,13 +61,43 @@ export function createConnectedSpatialTemplate(options = {}) {
   const source = options && typeof options === 'object' ? options : {};
   const strips = normalizeStrips(source.strips);
   const hidden = normalizeHidden(source.hidden);
+  const usePhysicalChain = source.patchBoard && typeof source.patchBoard === 'object';
   const physicalStrips = [];
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
 
-  for (let stripIndex = 0; stripIndex < strips.length; stripIndex += 1) {
+  if (usePhysicalChain) {
+    const stripIndexById = new Map(strips.map((strip, index) => [strip?.id, index]));
+    const stripById = new Map(strips.map(strip => [strip?.id, strip]));
+    const expanded = expandPatchBoard(source.patchBoard, strips).pixels;
+    const points = expanded.map(pixel => {
+      const inactive = pixel.inactive || pixel.stripId == null || hidden[pixel.stripId]
+        || !Number.isFinite(pixel.x) || !Number.isFinite(pixel.y);
+      if (inactive) return { inactive: true, x: 0, y: 0, stripId: null, stripIndex: -1, stripProgress: 0 };
+      const strip = stripById.get(pixel.stripId);
+      const count = strip?.pixels?.length || 1;
+      return {
+        inactive: false,
+        x: pixel.x,
+        y: pixel.y,
+        stripId: pixel.stripId,
+        stripIndex: stripIndexById.get(pixel.stripId) ?? 0,
+        stripProgress: count > 1 ? pixel.sourceLed / (count - 1) : 0,
+      };
+    });
+    physicalStrips.push({ physicalPoints: points });
+    for (const point of points) {
+      if (point.inactive) continue;
+      if (point.x < minX) minX = point.x;
+      if (point.x > maxX) maxX = point.x;
+      if (point.y < minY) minY = point.y;
+      if (point.y > maxY) maxY = point.y;
+    }
+  }
+
+  for (let stripIndex = 0; !usePhysicalChain && stripIndex < strips.length; stripIndex += 1) {
     const strip = strips[stripIndex];
     if (!strip || hidden[strip.id] || strip.hidden) continue;
     const points = validPoints(strip);
@@ -87,6 +118,24 @@ export function createConnectedSpatialTemplate(options = {}) {
   const centerY = (minY + maxY) / 2;
   const scale = range > 0 ? 2 / range : 0;
   const samples = [];
+
+  if (usePhysicalChain) {
+    for (const point of physicalStrips[0].physicalPoints) {
+      const x = point.inactive || !Number.isFinite(range) ? 0 : (point.x - centerX) * scale;
+      const y = point.inactive || !Number.isFinite(range) ? 0 : (point.y - centerY) * scale;
+      samples.push({
+        outputIndex: samples.length,
+        stripId: point.stripId,
+        stripIndex: point.stripIndex,
+        stripProgress: point.stripProgress,
+        x,
+        y,
+        radius: Math.hypot(x, y),
+        angle: polarAngle(x, y),
+      });
+    }
+    return samples;
+  }
 
   for (const { strip, stripIndex, points: stripPoints } of physicalStrips) {
     for (let pixelIndex = 0; pixelIndex < stripPoints.length; pixelIndex += 1) {

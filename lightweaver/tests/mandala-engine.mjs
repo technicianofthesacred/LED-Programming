@@ -75,6 +75,17 @@ function assertFeatureLevels(engine, expected, message) {
   }, 'setFeatures clamps, copies, and applies sensitivity to the complete analyzer feature vector');
 }
 
+{
+  const template = createMandalaSpatialTemplate().slice(0, 2);
+  template[0] = { ...template[0], stripId: null };
+  const engine = createMandalaEngine({ template });
+  engine.setListening(true);
+  engine.setFeatures({ bass: 1, mid: 1, high: 1, energy: 1, beat: 1 });
+  for (let i = 0; i < 30; i += 1) engine.tick(1 / 30);
+  assert.deepEqual([...engine.colorFrame().slice(0, 3)], [0, 0, 0], 'inactive addresses have black preview color');
+  assert.deepEqual([...engine.frameRGB().slice(0, 3)], [0, 0, 0], 'inactive addresses have exact black wire output');
+}
+
 // An equivalent spatial coordinate renders identically whether it lives in the
 // full Mandala template or a one-sample fixture. This catches accidental reads
 // from the legacy ringOf/rfOf/angOf arrays inside effects.

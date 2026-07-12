@@ -17,7 +17,6 @@ import { createShowAudioFeatures } from '../lib/showAudioFeatures.js';
 import {
   createConnectedSpatialTemplate,
   createMandalaSpatialTemplate,
-  hasUsableConnectedLayout,
 } from '../lib/showSpatialTemplate.js';
 import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
@@ -81,6 +80,7 @@ function renderSpatial(ctx, engine, geom, colors, samples, templateKind) {
   const dot = 0.013 * maxR;
   ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < samples.length; i++) {
+    if (samples[i].stripId === null) continue;
     const v = Math.min(1, engine.getIntensity(i) * master);
     const x = cx + samples[i].x * maxR;
     const y = cy + samples[i].y * maxR;
@@ -152,15 +152,15 @@ function BandMeter({ label, value }) {
 }
 
 function ShowScreen({ go }) {
-  const { strips, hidden } = useProject();
+  const { strips, hidden, patchBoard } = useProject();
   const mandalaTemplate = useMemo(() => createMandalaSpatialTemplate(), []);
-  const connectedUsable = useMemo(
-    () => hasUsableConnectedLayout(strips, hidden),
-    [strips, hidden],
-  );
   const connectedTemplate = useMemo(
-    () => createConnectedSpatialTemplate({ strips, hidden }),
-    [strips, hidden],
+    () => createConnectedSpatialTemplate({ strips, hidden, patchBoard }),
+    [strips, hidden, patchBoard],
+  );
+  const connectedUsable = useMemo(
+    () => connectedTemplate.some(sample => sample.stripId !== null),
+    [connectedTemplate],
   );
   const [requestedTemplate, setRequestedTemplate] = useState('connected');
   const activeTemplateKind = requestedTemplate === 'connected' && connectedUsable
@@ -256,6 +256,7 @@ function ShowScreen({ go }) {
       if (!stream) return;
       rgbBufRef.current = engineRef.current.frameRGB(rgbBufRef.current, colorBufRef.current);
       hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
+      if (stageRef.current) stageRef.current.dataset.streamFrame = hexBufRef.current.join(',');
       stream.push(hexBufRef.current);
     };
     const renderFrame = ({ push = false } = {}) => {
@@ -512,6 +513,7 @@ function ShowScreen({ go }) {
       return;
     }
     try { player?.pause(); } catch { /* noop */ }
+    renderFrameRef.current?.({ push: true });
     pausedRef.current = true;
     setSongPaused(true);
   }, [fileName, source]);

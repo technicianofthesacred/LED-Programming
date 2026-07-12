@@ -79,6 +79,30 @@ assert.deepEqual(Object.keys(connected[0]), SAMPLE_KEYS);
 assertClose(connected[2].radius, Math.hypot(-0.5, 0.25), 'connected radius');
 assertClose(connected[2].angle, Math.atan2(0.25, -0.5), 'connected angle');
 
+// When a board exists, its main chain is the sole physical address authority:
+// ranges may split/reverse strips and off rows reserve black addresses.
+const physical = createConnectedSpatialTemplate({
+  strips: [
+    { id: 'a', pixels: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 }] },
+    { id: 'b', pixels: [{ x: 10, y: 0 }, { x: 11, y: 0 }, { x: 12, y: 0 }] },
+  ],
+  hidden: { b: true },
+  patchBoard: {
+    chains: [{ id: 'main', rowIds: ['b-reverse', 'off', 'a-tail', 'a-head'] }],
+    groups: [],
+    patches: [
+      { id: 'a-head', source: { type: 'strip', stripId: 'a', startLed: 0, endLed: 1 }, output: { mode: 'normal' } },
+      { id: 'a-tail', source: { type: 'strip', stripId: 'a', startLed: 3, endLed: 2 }, output: { mode: 'normal' } },
+      { id: 'b-reverse', source: { type: 'strip', stripId: 'b', startLed: 2, endLed: 0 }, output: { mode: 'normal' } },
+      { id: 'off', source: { type: 'off', ledCount: 2 }, output: { mode: 'off' } },
+    ],
+  },
+});
+assert.equal(physical.length, 9, 'hidden and off physical addresses remain reserved');
+assert.deepEqual(physical.map(sample => sample.outputIndex), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+assert.deepEqual(physical.map(sample => sample.stripId), [null, null, null, null, null, 'a', 'a', 'a', 'a']);
+assert.deepEqual(physical.slice(5).map(sample => sample.stripProgress), [1, 2 / 3, 0, 1 / 3]);
+
 // Hidden, empty, malformed, and non-finite points never enter physical output order.
 const filtered = createConnectedSpatialTemplate({
   strips: [
