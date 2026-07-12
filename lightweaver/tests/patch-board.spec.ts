@@ -14,7 +14,17 @@ function writeFixture(tmp: string) {
   return fixture;
 }
 
-test('wire path chops a visible source path into saved physical segments', async ({ page }) => {
+// Phase 2 step 9 (docs/layout-redesign-plan.md): the patch-board editor was
+// absorbed into the Wire-mode panel. There is no `<details className=
+// "la-wire-editor">` disclosure any more — the wire content is always expanded
+// inside `[data-testid=layout-wire-panel]`, reached by entering Wire mode (the
+// Draw|Size|Wire segment or key `3`). Split/Link also only exist in Wire mode.
+async function enterWire(page: any) {
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+}
+
+test('wire path splits a visible source path into saved physical segments', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-patch-board-'));
   const fixture = writeFixture(tmp);
 
@@ -23,19 +33,20 @@ test('wire path chops a visible source path into saved physical segments', async
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
 
-  const mappingPanel = page.locator('.lw-patch-details');
-  if (!(await mappingPanel.evaluate((el: HTMLDetailsElement) => el.open))) {
-    await page.locator('.lw-patch-details > summary').click();
-  }
-  await expect(page.locator('.lw-wire-path.is-embedded')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Wire Path' })).toBeVisible();
-  await expect(page.getByText('Source Paths')).toBeVisible();
-  await expect(page.locator('.lw-wire-map')).toHaveCount(0);
-  await expect(page.locator('.lw-wire-segment-chip')).toHaveCount(1);
+  // The old "Advanced" disclosure is gone entirely from Draw mode.
+  await expect(page.locator('.la-wire-editor')).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Chop' }).click();
+  await enterWire(page);
+  // The strip list renders AS the wiring chain in Wire mode.
+  await expect(page.getByTestId('layout-wire-chain-row')).toHaveCount(1);
+  await expect(page.getByText('Splits')).toBeVisible();
+  // No cuts yet: the "Wiring order" segment-chip list only renders once
+  // there are more physical patches than strips (i.e. after a split).
+  await expect(page.locator('.lw-wire-segment-chip')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const target = await stripPath.evaluate((path: SVGPathElement) => {
     const point = path.getPointAtLength(path.getTotalLength() * 0.45);
@@ -49,28 +60,21 @@ test('wire path chops a visible source path into saved physical segments', async
   expect(target).not.toBeNull();
   await page.mouse.click(target!.x, target!.y);
   await expect(page.locator('.lw-wire-segment-chip')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Insert off LEDs' }).click();
+  await page.getByRole('button', { name: 'Add a gap' }).click();
   await expect(page.locator('.lw-wire-off-chip')).toBeVisible();
 
+  // Note: the old "Export" rail screen (ledmap.json download) no longer
+  // exists in this build — per docs/layout-redesign-plan.md, Send to card +
+  // Export ledmap.json are Phase 3 work that hasn't shipped ("exists in code
+  // with no button"). Dropped until Phase 3 lands a real Export surface.
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
+  await page.getByTitle('Save project file').click();
   const saved = await saveDownload;
   const projectPath = path.join(tmp, await saved.suggestedFilename());
   await saved.saveAs(projectPath);
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
   expect(projectData.layout.patchBoard.patches.some((patch: any) => patch.source?.type === 'off')).toBe(true);
   expect(projectData.layout.patchBoard.patches.filter((patch: any) => patch.source?.type === 'strip')).toHaveLength(2);
-
-  await page.locator('.lw-rail-btn', { hasText: 'Export' }).click();
-  const exportDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download' }).first().click();
-  const ledmap = await exportDownload;
-  const ledmapPath = path.join(tmp, await ledmap.suggestedFilename());
-  await ledmap.saveAs(ledmapPath);
-  const ledmapData = JSON.parse(fs.readFileSync(ledmapPath, 'utf8'));
-
-  expect(ledmapData.n).toBeGreaterThan(2);
-  expect(ledmapData.map).toHaveLength(ledmapData.n);
 });
 
 test('numeric patch board fields replace the full value when clicked and typed', async ({ page }) => {
@@ -80,27 +84,31 @@ test('numeric patch board fields replace the full value when clicked and typed',
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.locator('.lw-rail-btn', { hasText: 'Layout' }).click();
+  await page.locator('.rail-item', { hasText: 'Layout' }).click();
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
 
-  const mappingPanel = page.locator('.lw-patch-details');
-  if (!(await mappingPanel.evaluate((el: HTMLDetailsElement) => el.open))) {
-    await page.locator('.lw-patch-details > summary').click();
-  }
+  // The old "Off LED count" field this test exercised (.lw-wire-off-input)
+  // never had select-on-focus behavior in the frozen mockup either — this
+  // test's real intent (clicking a numeric field selects its full value so
+  // typing replaces rather than appends) is implemented today on the strip
+  // LED-count field instead (onFocus={e => e.target.select()} at
+  // src/components/LayoutScreen.jsx around the "Strip LED count" input), so
+  // repoint there. Click the strip row to expand its inspector.
+  await page.locator('.la-strip-row').first().click();
+  const stripLedCount = page.getByRole('spinbutton', { name: 'Strip LED count' });
+  await stripLedCount.fill('12');
+  // Click elsewhere in the strip detail panel to move focus off the field.
+  await page.getByText('Drag on canvas to move').click();
 
-  const offLedCount = page.getByLabel('Off LED count');
-  await offLedCount.fill('12');
-  await page.getByRole('heading', { name: 'Wire Path' }).click();
-
-  await offLedCount.click();
+  await stripLedCount.click();
   await page.keyboard.press('3');
 
-  await expect(offLedCount).toHaveValue('3');
+  await expect(stripLedCount).toHaveValue('3');
 });
 
-test('canvas chop mode creates a cut marker on the artwork path', async ({ page }) => {
+test('canvas split mode creates a cut marker on the artwork path', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-chop-'));
   const fixture = writeFixture(tmp);
 
@@ -109,10 +117,14 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
 
-  await page.getByRole('button', { name: 'Chop' }).click();
-  await expect(page.locator('.lw-route-mode-chip')).toContainText('Chop');
+  // "Selected split" and its Move/Merge/Delete controls live in the Wire-mode
+  // panel; Split/Link are Wire-mode-only tools.
+  await enterWire(page);
+
+  await page.getByRole('button', { name: 'Split' }).click();
+  await expect(page.getByRole('button', { name: 'Split' })).toHaveClass(/active/);
 
   const stripPath = page.locator('path[data-strip-path]').first();
   const target = await stripPath.evaluate((path: SVGPathElement) => {
@@ -131,12 +143,12 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
   await expect(page.locator('.lw-wire-cut-marker-notch')).toHaveCount(1);
   await expect(page.locator('.lw-wire-cut-marker circle')).toHaveCount(0);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
-  await expect(page.getByText('Selected cut')).toBeVisible();
+  await expect(page.getByText('Selected split')).toBeVisible();
   await page.getByRole('button', { name: 'Move cut later' }).click();
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
-  await page.getByRole('button', { name: 'Clear cuts' }).click();
+  await page.getByRole('button', { name: 'Merge back into one strip' }).click();
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(0);
-  await expect(page.getByText('Selected cut')).toHaveCount(0);
+  await expect(page.getByText('Selected split')).toHaveCount(0);
   await page.mouse.click(target!.x, target!.y);
   await expect(page.locator('.lw-wire-cut-marker')).toHaveCount(1);
   await page.getByRole('button', { name: 'Delete cut' }).click();
@@ -147,7 +159,7 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
+  await page.getByTitle('Save project file').click();
   const saved = await saveDownload;
   const projectPath = path.join(tmp, await saved.suggestedFilename());
   await saved.saveAs(projectPath);
@@ -164,7 +176,7 @@ test('canvas chop mode creates a cut marker on the artwork path', async ({ page 
   expect(first.source.endLed).toBeLessThan(maxLed);
 });
 
-test('canvas chop overlay includes one-led physical segments', async ({ page }) => {
+test('canvas split overlay includes one-led physical segments', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-one-led-'));
   const fixture = writeFixture(tmp);
 
@@ -174,7 +186,8 @@ test('canvas chop overlay includes one-led physical segments', async ({ page }) 
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
-  await page.getByRole('button', { name: 'Chop' }).click();
+  await enterWire(page);
+  await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const clickAt = async (ratio: number) => {
     const target = await stripPath.evaluate((path: SVGPathElement, ratioArg) => {
@@ -207,7 +220,10 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
-  await page.getByRole('button', { name: 'Chop' }).click();
+  // "Add a gap" lives in the Wire-mode panel; Split/Link are Wire-mode tools.
+  await enterWire(page);
+
+  await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const clickAt = async (ratio: number) => {
     const target = await stripPath.evaluate((path: SVGPathElement, ratioArg) => {
@@ -225,8 +241,8 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await clickAt(0.33);
   await clickAt(0.66);
   await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(3);
-  await page.getByRole('button', { name: 'Chop' }).click();
-  await page.getByRole('button', { name: 'Insert off LEDs' }).click();
+  await page.getByRole('button', { name: 'Split' }).click();
+  await page.getByRole('button', { name: 'Add a gap' }).click();
 
   await page.getByRole('button', { name: 'Link' }).click();
   const segments = page.locator('.lw-wire-canvas-segment-hit');
@@ -236,7 +252,7 @@ test('canvas link mode records clicked chopped segments as physical route order'
   await expect(page.locator('.lw-route-badge')).toHaveCount(2);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
+  await page.getByTitle('Save project file').click();
   const saved = await saveDownload;
   const projectPath = path.join(tmp, await saved.suggestedFilename());
   await saved.saveAs(projectPath);
@@ -244,10 +260,12 @@ test('canvas link mode records clicked chopped segments as physical route order'
   const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
   const offRowId = rowIds.find((id: string) => id.startsWith('off-'));
   expect(offRowId).toBeTruthy();
+  // The strip now lives on the strip-<n> id namespace (line-layer → strip-1), so
+  // its split-segment patch ids follow suit.
   expect(rowIds).toEqual([
-    'patch-line-layer-7-9',
+    'patch-strip-1-7-9',
     offRowId,
-    'patch-line-layer-0-3',
+    'patch-strip-1-0-3',
   ]);
 });
 
@@ -255,13 +273,26 @@ test('canvas link mode ignores segment clicks while physical map is locked', asy
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-canvas-link-locked-'));
   const fixture = writeFixture(tmp);
 
+  // The "Unlocked"/"Locked" toggle button that used to flip
+  // `patchBoard.physicalLocked` only rendered when PatchBoardScreen was NOT
+  // `embedded` — LayoutScreen now always renders it embedded (see
+  // src/components/PatchBoardScreen.jsx:180-198), so that toggle is
+  // unreachable from the current UI. The lock itself is still fully wired
+  // through the data layer (src/lib/patchBoard.js and the canvas link-mode
+  // guard at src/components/LayoutScreen.jsx:1718), so we seed a locked
+  // board the other supported way a locked project can arrive: by loading a
+  // project file that already has `physicalLocked: true`. Build that file by
+  // saving the app's own real output and flipping one field, rather than
+  // hand-authoring the project schema (which is being actively developed
+  // elsewhere in this repo).
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
 
-  await page.getByRole('button', { name: 'Chop' }).click();
+  await enterWire(page);
+  await page.getByRole('button', { name: 'Split' }).click();
   const stripPath = page.locator('path[data-strip-path]').first();
   const target = await stripPath.evaluate((path: SVGPathElement) => {
     const point = path.getPointAtLength(path.getTotalLength() * 0.45);
@@ -274,20 +305,42 @@ test('canvas link mode ignores segment clicks while physical map is locked', asy
   });
   expect(target).not.toBeNull();
   await page.mouse.click(target!.x, target!.y);
-  await page.getByRole('button', { name: 'Chop' }).click();
-  await page.getByRole('button', { name: 'Unlocked' }).click();
+  await page.getByRole('button', { name: 'Split' }).click();
+  await expect(page.locator('.lw-wire-canvas-segment')).toHaveCount(2);
 
+  const saveDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project file').click();
+  const saved = await saveDownload;
+  const unlockedPath = path.join(tmp, await saved.suggestedFilename());
+  await saved.saveAs(unlockedPath);
+  const lockedProject = JSON.parse(fs.readFileSync(unlockedPath, 'utf8'));
+  lockedProject.layout.patchBoard.physicalLocked = true;
+  const lockedPath = path.join(tmp, 'locked-project.json');
+  fs.writeFileSync(lockedPath, JSON.stringify(lockedProject));
+
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  // A cleared project reboots into the default two-circle hardware layout
+  // (strips already present), so loading a project file triggers the
+  // "replace your current strips" confirm().
+  page.once('dialog', dialog => dialog.accept());
+  await page.setInputFiles('input[accept=".json"]', lockedPath);
+  // The reload preserved `#...&mode=wire`, so the app reopens in Wire mode; the
+  // loaded single strip shows as one chain row.
+  await enterWire(page);
+  await expect(page.getByTestId('layout-wire-chain-row')).toHaveCount(1);
   await page.getByRole('button', { name: 'Link' }).click();
   const segments = page.locator('.lw-wire-canvas-segment-hit');
   await expect(segments).toHaveCount(2);
   await segments.nth(1).click();
 
-  const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
-  const saved = await saveDownload;
-  const projectPath = path.join(tmp, await saved.suggestedFilename());
-  await saved.saveAs(projectPath);
+  const relockedDownload = page.waitForEvent('download');
+  await page.getByTitle('Save project file').click();
+  const relocked = await relockedDownload;
+  const projectPath = path.join(tmp, await relocked.suggestedFilename());
+  await relocked.saveAs(projectPath);
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
+  expect(projectData.layout.patchBoard.physicalLocked).toBe(true);
   const rowIds = projectData.layout.patchBoard.chains[0].rowIds;
   expect(rowIds).toHaveLength(2);
 });

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useProject } from '../state/ProjectContext.jsx';
+import { useState } from 'react';
+import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   addOffPatch,
   cutsForStrip,
@@ -9,17 +9,23 @@ import {
   normalizePatchBoard,
   sliceStripIntoPatchesPreservingRoute,
   updatePatchRange,
-} from '../lib/patchBoard.js';
+} from '../../../lib/patchBoard.js';
 import {
-  makeCardRuntimePackage,
-  patchBoardToZones,
-} from '../lib/cardRuntimeContract.js';
-import {
-  getCardHostname,
-  setCardHostname,
-  pushConfigToCard,
-  CardPushError,
-} from '../lib/cardPushClient.js';
+  toWLEDLedmap,
+  pixelsFromPatchBoard,
+  download,
+} from '../../../lib/export.js';
+import { DragHandleIcon, InlineRename } from '../shared/InspectorPrimitives.jsx';
+import { CardPushControl } from '../shared/CardPushControl.jsx';
+
+// ── Wire-mode side panel (Phase 2 step 9) ────────────────────────────────────
+// Absorbs the entire embedded PatchBoardScreen (which no longer exists) plus the
+// strip list rendered AS the wiring chain, and ends with the screen's finish
+// line: Send to card + Export ledmap.json. The wire content is a verbatim lift
+// of PatchBoardScreen's embedded body — same handlers, same `.lw-wire-*` DOM,
+// always expanded (no `<details>` disclosure). The chain rows on top replace the
+// old source-path selector: clicking a row selects the strip (which the cut
+// summary + selected-split editor + advanced range editor target).
 
 function patchLength(patch) {
   if (patch.source?.type === 'off') return Math.max(0, Math.trunc(patch.source.ledCount || 0));
@@ -46,39 +52,40 @@ function patchDirection(patch) {
   return Number(patch.source.startLed) <= Number(patch.source.endLed) ? '->' : '<-';
 }
 
-export function PatchBoardScreen({
-  embedded = false,
-  wireOverlayMode = 'idle',
-  selectedWireCut = null,
-  onNudgeSelectedCut,
-  onDeleteSelectedCut,
-  onClearSelectedCut,
-}) {
-  const { strips, patchBoard, setPatchBoard, projectId, projectName, standaloneController } = useProject();
-  const [pushHost, setPushHost] = useState(() => getCardHostname());
-  const [pushStatus, setPushStatus] = useState('');
-  const [pushKind, setPushKind] = useState(''); // '' | 'ok' | 'err' | 'pending'
-  const [pushFallbackJson, setPushFallbackJson] = useState('');
-  const [activeStripId, setActiveStripId] = useState(() => strips[0]?.id || null);
+function startedFromDragHandle(e) {
+  return !!e.target?.closest?.('[data-drag-handle="true"]');
+}
+
+export function WireModePanel({ state, connected }) {
+  const {
+    strips, patchBoard, hidden,
+    orderedStrips, reorderStripRows, renameStrip,
+    selectStrip, selStripId, selectedStripIds,
+    readDraggedStripIds, stripGroupDragOver, setStripGroupDragOver,
+    // wire-cut selection (from useLayoutWire)
+    selectedWireCut, setSelectedWireCut,
+    nudgeSelectedWireCut, deleteSelectedWireCut,
+  } = state;
+
+  // `updatePatchBoard` (the history-aware patch-board mutator) + the project
+  // identity/controller fields that CardPushControl needs are not surfaced
+  // through useLayoutState, so read them from the project context directly.
+  const { updatePatchBoard, projectId, projectName, standaloneController } = useProject();
+
   const [selectedPatchId, setSelectedPatchId] = useState(null);
   const [offCount, setOffCount] = useState(1);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  useEffect(() => {
-    if (!strips.some(strip => strip.id === activeStripId)) {
-      setActiveStripId(strips[0]?.id || null);
-    }
-  }, [activeStripId, strips]);
-
-  const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
-  const expanded = useMemo(() => expandPatchBoard(board, strips), [board, strips]);
+  const board = normalizePatchBoard(patchBoard, strips);
+  const expanded = expandPatchBoard(board, strips);
   const chain = mainChain(board);
-  const activeStrip = useMemo(
-    () => strips.find(strip => strip.id === activeStripId) || strips[0] || null,
-    [activeStripId, strips],
-  );
-  const patchesById = useMemo(() => new Map(board.patches.map(patch => [patch.id, patch])), [board.patches]);
-  const rowsByPatchId = useMemo(() => new Map(expanded.rows.map(row => [row.patchId, row])), [expanded.rows]);
+
+  // The active strip = the current single strip selection (chain-row click /
+  // canvas chop both drive it), falling back to the first strip.
+  const activeStrip = strips.find(s => s.id === selStripId) || strips[0] || null;
+
+  const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
+  const rowsByPatchId = new Map(expanded.rows.map(row => [row.patchId, row]));
   const orderedPatches = chain.rowIds.map(id => patchesById.get(id)).filter(Boolean);
   const activeStripPatches = orderedPatches.filter(
     patch => patch.source?.type === 'strip' && patch.source.stripId === activeStrip?.id,
@@ -86,13 +93,9 @@ export function PatchBoardScreen({
   const selectedPatch = patchesById.get(selectedPatchId) || activeStripPatches[0] || orderedPatches[0] || null;
   const activeCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
 
-  const updateBoard = (mutate) => {
-    setPatchBoard(prev => {
-      const next = normalizePatchBoard(prev, strips);
-      mutate(next);
-      return normalizePatchBoard(next, strips);
-    });
-  };
+  // Patch-board edits route through the context's history-aware mutation so
+  // they join the shared undo stack (interleaved with strip edits).
+  const updateBoard = updatePatchBoard;
 
   const reversePatch = (patch) => {
     if (!patch || patch.source?.type !== 'strip') return;
@@ -111,132 +114,107 @@ export function PatchBoardScreen({
     if (patch) patch.output = { ...(patch.output || {}), mode };
   });
 
-  // Serialize the current patch board into the firmware's runtime contract.
-  // Direct push is only for local HTTP/file Studio sessions; hosted HTTPS
-  // flows use the copy-paste fallback shown by the error state.
-  const pushToCard = async () => {
-    const cleanHost = pushHost.trim().toLowerCase() || 'lightweaver.local';
-    setCardHostname(cleanHost);
-    setPushHost(getCardHostname());
-    setPushKind('pending');
-    setPushStatus(`Pushing to ${cleanHost}...`);
-    setPushFallbackJson('');
-    const zones = patchBoardToZones(board, strips);
-    const outputs = (standaloneController?.outputs || []).map((o, i) => ({
-      id: o.id || `out${i + 1}`,
-      name: o.name || `Output ${i + 1}`,
-      pin: o.pin,
-      pixels: o.pixels,
-    }));
-    const totalPixels = strips.reduce((sum, s) => sum + (s.pixelCount ?? s.pixels?.length ?? 0), 0);
-    const pkg = makeCardRuntimePackage({
-      projectId,
-      projectName,
-      mode: 'website-flash',
-      led: {
-        pixels: totalPixels || undefined,
-        colorOrder: standaloneController?.led?.colorOrder,
-        brightnessLimit: standaloneController?.led?.brightnessLimit,
-        outputs: outputs.length ? outputs : undefined,
-      },
-      controls: standaloneController?.controls,
-      zones,
-      syncZones: zones.length <= 1,
-    });
-    try {
-      await pushConfigToCard(pkg, { host: getCardHostname(), allowLayoutChange: true });
-      setPushKind('ok');
-      setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}`);
-      setTimeout(() => { setPushStatus(''); setPushKind(''); }, 4000);
-    } catch (err) {
-      setPushKind('err');
-      if (err instanceof CardPushError && err.reason === 'mixed-content') {
-        setPushStatus('Browser blocked the request. Use the JSON below: connect to the card and paste at its onboard page.');
-        setPushFallbackJson(JSON.stringify(pkg.config, null, 2));
-      } else if (err instanceof CardPushError) {
-        setPushStatus(err.message);
-      } else {
-        setPushStatus(`Push failed: ${err.message || err}`);
-      }
-    }
-  };
-
   const resetActivePath = () => {
     if (!activeStrip || board.physicalLocked) return;
     updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, []));
     setSelectedPatchId(null);
-    if (selectedWireCut?.stripId === activeStrip.id) onClearSelectedCut?.();
+    if (selectedWireCut?.stripId === activeStrip.id) setSelectedWireCut(null);
   };
 
-  const addOffBlock = () => updateBoard(next => {
-    const patch = addOffPatch(next, offCount);
-    setSelectedPatchId(patch.id);
-  });
+  const addOffBlock = () => {
+    let newPatchId = null;
+    updateBoard(next => { newPatchId = addOffPatch(next, offCount).id; });
+    if (newPatchId) setSelectedPatchId(newPatchId);
+  };
+
+  const exportLedmap = () => {
+    const pixels = pixelsFromPatchBoard(patchBoard, strips);
+    download(toWLEDLedmap(pixels), 'ledmap.json', 'application/json');
+  };
 
   const selectedRow = selectedPatch ? rowsByPatchId.get(selectedPatch.id) : null;
   const selectedIsOff = selectedPatch?.source?.type === 'off';
 
+  // Chain-row drag reorder (reuses the Draw-mode strip-list drag semantics, but
+  // here a drop IS a chain mutation via reorderStripRows).
+  const onRowDragStart = (e, id) => {
+    if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
+    const ids = selectedStripIds.includes(id) ? selectedStripIds : [id];
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
+    e.dataTransfer.setData('text/plain', ids.join(','));
+  };
+
   return (
-    <div className={`lw-wire-path ${embedded ? 'is-embedded' : ''}`}>
-      {!embedded && (
-      <div className="lw-wire-head">
-        <div>
-          <h1>Wire Path</h1>
-          <p>The order LEDs light along the physical strip.</p>
-        </div>
-        <div className="lw-wire-head-actions" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-3, #9a8d75)' }}>
-            Saved into the Chip package
-          </span>
-          <button
-            className={`btn ${board.physicalLocked ? 'primary' : 'btn-ghost'}`}
-            onClick={() => updateBoard(next => { next.physicalLocked = !next.physicalLocked; })}
-          >
-            {board.physicalLocked ? 'Locked' : 'Unlocked'}
-          </button>
-        </div>
-      </div>
-      )}
-      {embedded && (
-        <p style={{ fontSize: 12, color: 'var(--text-faint, #9a8d75)', margin: '0 0 8px', lineHeight: 1.45 }}>
-          Optional. Your strip list already sets the wiring order — use this only to split one physical strip into separate runs.
-        </p>
-      )}
+    <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
 
-      {pushStatus && (
-        <div style={{
-          padding: '10px 14px',
-          margin: '4px 0 12px',
-          borderRadius: 8,
-          fontSize: 13,
-          background: pushKind === 'ok' ? 'rgba(127,176,105,0.1)' : pushKind === 'err' ? 'rgba(224,120,86,0.1)' : 'rgba(154,141,117,0.1)',
-          border: `1px solid ${pushKind === 'ok' ? 'rgba(127,176,105,0.5)' : pushKind === 'err' ? 'rgba(224,120,86,0.5)' : 'rgba(154,141,117,0.3)'}`,
-          color: pushKind === 'ok' ? '#7fb069' : pushKind === 'err' ? '#e07856' : '#9a8d75',
-        }}>
-          {pushStatus}
-          {pushFallbackJson && (
-            <textarea
-              readOnly
-              value={pushFallbackJson}
-              onClick={e => e.target.select()}
-              style={{
-                width: '100%',
-                minHeight: 140,
-                marginTop: 10,
-                fontFamily: 'ui-monospace, SF Mono, monospace',
-                fontSize: 11,
-                padding: 10,
-                borderRadius: 6,
-                border: '1px solid var(--border, #333)',
-                background: 'var(--bg-1, #0a0a0a)',
-                color: 'var(--text-2, #c89b5c)',
-                boxSizing: 'border-box',
-              }}
-            />
-          )}
+      {/* ── Chain: the strip list IS the wiring order ─────────────────────── */}
+      <section className="lw-wire-chain">
+        <div className="lw-wire-section-title">
+          <span>Wiring chain</span>
+          <strong>{pluralize(orderedStrips.length, 'strip')}</strong>
         </div>
-      )}
+        {orderedStrips.length === 0 ? (
+          <p className="la-wire-chain-empty">
+            Add strips in Draw mode — their order here is the order LEDs light along the wire.
+          </p>
+        ) : (
+          <div className="la-wire-chain-list">
+            {orderedStrips.map((s, i) => {
+              const cuts = cutsForStrip(board, s.id);
+              const isActive = s.id === selStripId;
+              const isBatch = selectedStripIds.includes(s.id);
+              return (
+                <div
+                  key={s.id}
+                  data-strip-id={s.id}
+                  data-testid="layout-wire-chain-row"
+                  className={`la-wire-chain-row${isActive ? ' active' : ''}`}
+                  draggable
+                  onDragStart={e => onRowDragStart(e, s.id)}
+                  onDragOver={e => {
+                    if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
+                    e.preventDefault();
+                    setStripGroupDragOver(`strip:${s.id}`);
+                  }}
+                  onDragLeave={() => setStripGroupDragOver(null)}
+                  onDrop={e => {
+                    const draggedStripIds = readDraggedStripIds(e);
+                    if (!draggedStripIds.length) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    reorderStripRows(draggedStripIds, s.id);
+                    setStripGroupDragOver(null);
+                  }}
+                  onDragEnd={() => setStripGroupDragOver(null)}
+                  style={{ opacity: hidden[s.id] ? 0.4 : 1,
+                           outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
+                           outlineOffset: -1 }}
+                  onClick={() => { selectStrip(s.id); setSelectedPatchId(null); }}>
+                  <span data-drag-handle="true" className="la-wire-chain-grip" title="Drag to reorder the wire chain"
+                        style={{ color: isBatch ? 'var(--accent)' : undefined }}>
+                    <span className="la-wire-chain-n">{String(i + 1).padStart(2, '0')}</span>
+                    <DragHandleIcon/>
+                  </span>
+                  <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
+                                 boxShadow: isActive ? `0 0 8px ${s.color}` : undefined }}/>
+                  <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
+                                className="nm" style={{ flex: 1, minWidth: 0 }}/>
+                  {s.reversed && <span className="la-strip-rev">REV</span>}
+                  {cuts.length > 0 && (
+                    <span className="la-wire-chain-splits" title={`${cuts.length} split${cuts.length === 1 ? '' : 's'}`}>
+                      {pluralize(cuts.length + 1, 'run')}
+                    </span>
+                  )}
+                  <span className="layer-len">{s.pixelCount} px</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
+      {/* ── Selected split (mini-editor) ──────────────────────────────────── */}
       {selectedWireCut && (
         <section className="lw-wire-selected-detail">
           <div className="lw-wire-section-title">
@@ -248,7 +226,7 @@ export function PatchBoardScreen({
               className="btn btn-ghost"
               aria-label="Move cut earlier"
               disabled={board.physicalLocked}
-              onClick={() => onNudgeSelectedCut?.(-1)}
+              onClick={() => nudgeSelectedWireCut(-1)}
             >
               -
             </button>
@@ -256,7 +234,7 @@ export function PatchBoardScreen({
               className="btn btn-ghost"
               aria-label="Move cut later"
               disabled={board.physicalLocked}
-              onClick={() => onNudgeSelectedCut?.(1)}
+              onClick={() => nudgeSelectedWireCut(1)}
             >
               +
             </button>
@@ -264,7 +242,7 @@ export function PatchBoardScreen({
               className="btn btn-ghost lw-btn-danger"
               aria-label="Delete cut"
               disabled={board.physicalLocked}
-              onClick={() => onDeleteSelectedCut?.()}
+              onClick={() => deleteSelectedWireCut()}
             >
               Delete
             </button>
@@ -272,29 +250,7 @@ export function PatchBoardScreen({
         </section>
       )}
 
-      {!embedded && (
-      <section className="lw-wire-source">
-        <div className="lw-wire-section-title">
-          <span>Source Paths</span>
-          <strong>{strips.length} paths</strong>
-        </div>
-        <div className="lw-wire-source-list">
-          {strips.map(strip => (
-            <button
-              key={strip.id}
-              className={`lw-wire-source-row ${strip.id === activeStrip?.id ? 'active' : ''}`}
-              onClick={() => { setActiveStripId(strip.id); setSelectedPatchId(null); }}
-              title={strip.name}
-            >
-              <span className="lw-wire-source-dot" style={{ background: strip.color }}/>
-              <span>{friendlyName(strip.name)}</span>
-              <strong>{strip.pixelCount}</strong>
-            </button>
-          ))}
-        </div>
-      </section>
-      )}
-
+      {/* ── Cut summary + merge-back ──────────────────────────────────────── */}
       <section className="lw-wire-cut-summary">
         <div className="lw-wire-section-title">
           <span>Splits</span>
@@ -308,7 +264,8 @@ export function PatchBoardScreen({
         </div>
       </section>
 
-      {(!embedded || orderedPatches.length > strips.length) && (<>
+      {/* ── Wiring-order chips + segment tools (only once split into runs) ─── */}
+      {orderedPatches.length > strips.length && (<>
       <section className="lw-wire-order">
         <div className="lw-wire-section-title">
           <span>Wiring order</span>
@@ -391,6 +348,7 @@ export function PatchBoardScreen({
       </section>
       </>)}
 
+      {/* ── Advanced LED-range editor ─────────────────────────────────────── */}
       {advancedOpen && selectedPatch && (
         <section className="lw-wire-advanced">
           <div className="lw-wire-section-title">
@@ -447,6 +405,27 @@ export function PatchBoardScreen({
           )}
         </section>
       )}
+
+      {/* ── Finish line: Send to card + Export ledmap.json ────────────────── */}
+      <section className="lw-wire-finish">
+        <CardPushControl
+          connected={connected}
+          board={board}
+          strips={strips}
+          projectId={projectId}
+          projectName={projectName}
+          standaloneController={standaloneController}
+        >
+          <button
+            className="btn la-export-ledmap"
+            data-testid="layout-export-ledmap"
+            onClick={exportLedmap}
+            title="Download a WLED ledmap.json for this layout"
+          >
+            Export ledmap.json
+          </button>
+        </CardPushControl>
+      </section>
     </div>
   );
 }

@@ -62,20 +62,6 @@
 /* strip-row expandable affordance */
 .la-strip-row { cursor: pointer; }
 .la-strip-row.sel { background: var(--bg-sel); }
-.la-strip-row .la-strip-eye,
-.la-strip-row .la-strip-dup {
-  width: 20px; height: 20px; display: grid; place-items: center;
-  color: var(--text-faint); border-radius: 4px; opacity: 0;
-  transition: opacity .12s, color .12s; flex-shrink: 0;
-}
-.la-strip-row:hover .la-strip-eye,
-.la-strip-row:hover .la-strip-dup,
-.la-strip-row.sel .la-strip-eye,
-.la-strip-row.sel .la-strip-dup { opacity: 1; }
-.la-strip-row .la-strip-eye:hover,
-.la-strip-row .la-strip-dup:hover { color: var(--text-hi); }
-.la-strip-row .la-strip-eye svg,
-.la-strip-row .la-strip-dup svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 1.6; }
 .la-strip-rev {
   font-size: 9px; font-family: var(--font-mono); letter-spacing: .04em;
   color: var(--accent); border: 1px solid var(--accent-line);
@@ -164,19 +150,6 @@
 .la-insp-actions .btn { justify-content: center; }
 .la-insp-actions .btn.danger:hover { color: var(--danger); border-color: var(--accent-line); }
 
-/* slider row inside inspector (brightness) */
-.la-slider-row { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
-.la-slider-row .lab { display: flex; justify-content: space-between; font-size: 12px; }
-.la-slider-row .lab .k { color: var(--text-mid); }
-.la-slider-row .lab .v { font-family: var(--font-mono); color: var(--text-hi); }
-
-/* wire-path live editor disclosure (keeps PatchBoardScreen function) */
-.la-wire-editor { margin: 0 12px 12px; }
-.la-wire-editor > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; justify-content: space-between; padding: 8px 0; color: var(--text-lo); }
-.la-wire-editor > summary::-webkit-details-marker { display: none; }
-.la-wire-editor > summary .ttl { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 600; }
-.la-wire-editor > summary .meta { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
-
 /* layout empty state in side panel */
 .la-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 40px 24px; color: var(--text-lo); }
 .la-empty svg { color: var(--text-faint); }
@@ -248,53 +221,10 @@
   border-radius: 7px;
 }
 
-/* ── Embedded PatchBoard wire editor (inside .la-wire-editor disclosure) ──────
-   The PatchBoardScreen markup uses the legacy app's token names. Rather than
-   fork its 250-line stylesheet, we alias those token names to v3 warm tokens
-   for the editor subtree only, then carry its rules verbatim. Result: the wire
-   editor reads in the same warm clay idiom as the rest of the v3 Layout screen,
-   no blue, no legacy palette leaking in. */
-.la-wire-editor {
-  --surface:    var(--bg-panel);
-  --surface-2:  var(--bg-elev);
-  --bg:         var(--bg-canvas);
-  --border-2:   var(--border);
-  --text:       var(--text-hi);
-  --text-2:     var(--text-mid);
-  --text-3:     var(--text-lo);
-  --text-4:     var(--text-faint);
-  --mono-font:  var(--font-mono);
-  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;  --s-4: 16px;
-  --fs-xs: 11px;  --fs-sm: 12.5px;  --fs-lg: 15px;
-}
-.lw-wire-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s-4);
-}
+/* ── Wire-mode content (patch-board editor absorbed into WireModePanel) ───
+   Token names (--surface, --text, --s-*, --fs-*, etc.) referenced below are
+   declared on the panel root `.la-wire-panel` in v3-layout-modes.css. */
 
-.lw-wire-head h1 {
-  margin: 0 0 3px;
-  font-size: var(--fs-lg);
-  line-height: 1.1;
-}
-
-.lw-wire-head p {
-  max-width: 44ch;
-  margin: 0;
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-  line-height: 1.35;
-}
-
-.lw-wire-head-actions {
-  display: flex;
-  gap: var(--s-2);
-  flex-shrink: 0;
-}
-
-.lw-wire-source,
 .lw-wire-cut-summary,
 .lw-wire-order,
 .lw-wire-tools,
@@ -303,7 +233,6 @@
   border-top: 1px solid var(--border-soft);
 }
 
-.lw-wire-source,
 .lw-wire-cut-summary,
 .lw-wire-order,
 .lw-wire-tools,
@@ -327,8 +256,7 @@
   margin-bottom: var(--s-2);
 }
 
-.lw-wire-section-title span,
-.lw-wire-kicker {
+.lw-wire-section-title span {
   color: var(--text-faint);
   font-family: var(--mono-font);
   font-size: 10px;
@@ -342,57 +270,6 @@
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
   font-weight: 500;
-}
-
-.lw-wire-source-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.lw-wire-source-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--s-2);
-  min-height: 28px;
-  padding: 4px 8px;
-  color: var(--text-2);
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  text-align: left;
-}
-
-.lw-wire-source-row:hover {
-  background: var(--surface);
-  border-color: var(--border);
-}
-
-.lw-wire-source-row.active {
-  color: var(--text);
-  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
-  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
-}
-
-.lw-wire-source-row span:nth-child(2) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-sm);
-}
-
-.lw-wire-source-row strong {
-  color: var(--text-4);
-  font-family: var(--mono-font);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-}
-
-.lw-wire-source-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  box-shadow: 0 0 7px currentColor;
 }
 
 .lw-wire-cut-summary-row {
@@ -517,9 +394,3 @@
   font-family: var(--mono-font);
   font-size: var(--fs-xs);
 }
-
-
-/* PatchBoard button variants (warm, scoped to the wire editor) */
-.la-wire-editor .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--text-mid); }
-.la-wire-editor .btn-ghost:hover { color: var(--text-hi); background: var(--bg-elev); }
-.la-wire-editor .lw-btn-danger:hover { color: var(--danger) \!important; border-color: var(--accent-line) \!important; }

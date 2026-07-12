@@ -14,6 +14,8 @@
 // RGB frames. `createMandalaEngine()` returns an isolated instance (all state
 // per-instance so tests and preview never share clocks).
 
+import { createMandalaSpatialTemplate } from './showSpatialTemplate.js';
+
 // ============================================================
 //  HARDWARE RING MAP — the real 675-pixel / 5-ring strip.
 //  Each pixel: ring index ri, normalized radius rf, angle ang.
@@ -50,6 +52,22 @@ function hash01(i, bucket) {
   h ^= h >>> 15; h = Math.imul(h, 0x2C1B3C6D); h ^= h >>> 12;
   return (h >>> 0 & 0xFFFF) / 65536;
 }
+function spatialKey(sample) {
+  const values = [
+    Math.round(sample.x * 4096),
+    Math.round(sample.y * 4096),
+    Math.round(sample.radius * 4096),
+    Math.round(sample.angle * 4096),
+    Math.round(sample.stripProgress * 4096),
+    Math.round(sample.stripIndex),
+  ];
+  let h = 0x6D2B79F5;
+  for (const value of values) {
+    h ^= value;
+    h = Math.imul(h ^ (h >>> 15), 0x2C1B3C6D);
+  }
+  return (h ^ (h >>> 12)) | 0;
+}
 // per-pixel localized gate: lights only PART of a ring, chosen by angle, so you
 // SEE a specific region answer the audio instead of the whole row at once.
 function arcGate(ang, nLobes, width, spin) {
@@ -83,6 +101,22 @@ export function paletteRamp(stops, i) {
   }
   const l = stops[stops.length - 1]; return [l[1], l[2], l[3]];
 }
+function writePaletteRamp(stops, i, out, offset, scale = 1, rounded = false) {
+  i = clamp01(i);
+  let a = stops[stops.length - 1], b = a, f = 0;
+  for (let k = 1; k < stops.length; k++) {
+    if (i <= stops[k][0]) {
+      a = stops[k - 1]; b = stops[k]; f = (i - a[0]) / (b[0] - a[0]);
+      break;
+    }
+  }
+  const r = (a[1] + (b[1] - a[1]) * f) * scale;
+  const g = (a[2] + (b[2] - a[2]) * f) * scale;
+  const blue = (a[3] + (b[3] - a[3]) * f) * scale;
+  out[offset] = rounded ? Math.round(r) : r;
+  out[offset + 1] = rounded ? Math.round(g) : g;
+  out[offset + 2] = rounded ? Math.round(blue) : blue;
+}
 // blend two palettes' OUTPUTS at the same intensity (Fable §3b) — stays law-compliant
 function palBlend(pa, pb, i, w) {
   const A = paletteRamp(pa, i), B = paletteRamp(pb, i);
@@ -113,19 +147,70 @@ export const MODE_LIBRARY = [
 ];
 export const MODE_KEYS = MODE_LIBRARY.map(m => m.key);
 
-export function createMandalaEngine() {
+export function createMandalaEngine({ template = createMandalaSpatialTemplate() } = {}) {
   // ---------- per-pixel state ----------
-  const vals = new Float32Array(TOTAL);      // eased displayed intensity
-  const target = new Float32Array(TOTAL);    // per-frame target intensity
-  const zoneOf = new Uint8Array(TOTAL);      // 0=hearth 1=patina 2=candle
-  const crestOf = new Float32Array(TOTAL);   // 0..1 blend toward candle (for Tide etc)
+  let samples;
+  let total;
+  let vals;
+  let target;
+  let zoneOf;
+  let crestOf;
+  const colorScratchA = new Float32Array(3);
+  const colorScratchB = new Float32Array(3);
+
+  function installTemplate(next) {
+    const source = Array.isArray(next) ? next : [];
+    let minRadius = Infinity;
+    let maxRadius = -Infinity;
+    samples = source.map((sample, outputIndex) => {
+      const hasFiniteRadius = Number.isFinite(sample?.radius);
+      const radius = hasFiniteRadius ? Math.max(0, sample.radius) : 0;
+      if (hasFiniteRadius) {
+        minRadius = Math.min(minRadius, radius);
+        maxRadius = Math.max(maxRadius, radius);
+      }
+      const angle = Number.isFinite(sample?.angle) ? sample.angle : 0;
+      const normalized = {
+        outputIndex,
+        stripId: sample?.stripId === null ? null : (sample?.stripId ?? `strip-${sample?.stripIndex ?? 0}`),
+        stripIndex: Number.isFinite(sample?.stripIndex) ? sample.stripIndex : 0,
+        stripProgress: clamp01(Number(sample?.stripProgress) || 0),
+        x: Number.isFinite(sample?.x) ? sample.x : Math.cos(angle) * radius,
+        y: Number.isFinite(sample?.y) ? sample.y : Math.sin(angle) * radius,
+        radius,
+        angle,
+        hasFiniteRadius,
+      };
+      return { ...normalized, spatialKey: spatialKey(normalized) };
+    });
+    const radialSpan = maxRadius - minRadius;
+    for (const sample of samples) {
+      if (sample.hasFiniteRadius && Number.isFinite(radialSpan) && radialSpan > 1e-9) {
+        sample.radialProgress = clamp01((sample.radius - minRadius) / radialSpan);
+      } else if (sample.stripIndex >= 0 && sample.stripIndex < R) {
+        sample.radialProgress = sample.stripIndex / Math.max(1, R - 1);
+      } else {
+        sample.radialProgress = clamp01(sample.radius);
+      }
+      delete sample.hasFiniteRadius;
+    }
+    total = samples.length;
+    vals = new Float32Array(total);
+    target = new Float32Array(total);
+    zoneOf = new Uint8Array(total);
+    crestOf = new Float32Array(total);
+  }
+
+  installTemplate(template);
 
   let P = PRESETS.Calm;
   let presetName = 'Calm';
   let master = P.master;
 
   // ---------- audio scalars (already smoothed by analyzer) ----------
-  const F = { bass: 0, mid: 0, high: 0, energy: 0, centroid: 0.4 };
+  const F = { bass: 0, mid: 0, high: 0, energy: 0, centroid: 0.4, flux: 0, beat: 0 };
+  const rawFeatures = { ...F };
+  let directFeaturesActive = false;
   let listening = false;   // sim's sourceMode!=="rest"
   let sensitivity = 1.0;
 
@@ -153,25 +238,26 @@ export function createMandalaEngine() {
   //  (candle blend). All rotations obey the restraint budget.
   // ============================================================
   // rotation phases (all SLOW — see per-effect periods)
-  let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0;
+  let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0, meridianPhase = 0;
   let processTheta = 0, spiralTheta = 0, latticePhase = 0, latticeC = 0.3, tideR = 0.15, tideVal = 0, driftPhase = 0, bloomWob = 0;
   let bloomR = 0.15;
-  const embers = []; // {i, born, life, peak}
-
   // ---- 1. Strata (EQ flagship) — the spectrum, real dark-to-bright swing ----
-  const strataRing = [0, 0, 0, 0, 0];
+  const strataBand = [0, 0, 0, 0, 0];
   function fxStrata(t, dt) {
     strataScallop += dt * 0.20;
     const band = [F.bass, 0.5 * F.bass + 0.5 * F.mid, F.mid, 0.5 * F.mid + 0.5 * F.high, F.high];
-    for (let r = 0; r < R; r++) { // LIVE: attack ~200ms, release ~0.8s — the ring answers within a beat
-      strataRing[r] = smoothAR(strataRing[r], clamp01(band[r] * P.modDepth * 1.2), 0.20, 0.8 * P.relScale, dt);
+    for (let r = 0; r < strataBand.length; r++) {
+      strataBand[r] = smoothAR(strataBand[r], clamp01(band[r] * P.modDepth * 1.2), 0.20, 0.8 * P.relScale, dt);
     }
-    for (let i = 0; i < TOTAL; i++) {
-      const ri = ringOf[i], ang = angOf[i];
-      let L = strataRing[ri]; L = L * L;                            // strong gamma: quiet bands go DARK
+    for (let i = 0; i < total; i++) {
+      const { radialProgress, angle, stripProgress } = samples[i];
+      const bandPosition = radialProgress * (strataBand.length - 1);
+      const lo = Math.floor(bandPosition), hi = Math.min(strataBand.length - 1, lo + 1);
+      let L = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); L *= L;
+      const ang = angle + stripProgress * 0.01;
       const scallop = 0.75 + 0.25 * Math.sin(6 * ang + strataScallop); // deeper 6-tooth so parts of the ring lead
       target[i] = Math.max(L * scallop, 0.0);                       // no floor — silent band = dark
-      zoneOf[i] = ri <= 1 ? Z_HEARTH : ri === 2 ? Z_PATINA : Z_CANDLE;
+      zoneOf[i] = radialProgress < 0.375 ? Z_HEARTH : radialProgress < 0.625 ? Z_PATINA : Z_CANDLE;
       crestOf[i] = 0;
     }
     return 'spectrum';
@@ -181,12 +267,13 @@ export function createMandalaEngine() {
   function fxHearth(t, dt) {
     driftPhase += dt * 0.06;
     const mood = 0.10 + 0.35 * CLK.energyTrend;    // slow bed (20s)
-    const swell = 0.55 * CLK.bass;                  // LIVE: bass visibly brightens the whole hearth
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i], ang = angOf[i];
-      const base = (mood + swell) * (0.85 + 0.15 * Math.sin(3 * ang + driftPhase + 1.5 * rf));
+    const swell = 0.55 * CLK.bass;
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle: ang, spatialKey: seed } = samples[i];
+      const local = 0.25 + 0.75 * Math.pow(arcGate(ang, 3, 0.72, driftPhase + rf * 0.1), 2);
+      const base = (mood + swell * local) * (0.85 + 0.15 * Math.sin(3 * ang + driftPhase + 1.5 * rf));
       // embers of brightness wander with a live hash so it reads as a living fire, not a flat glow
-      const flick = 0.85 + 0.15 * hash01(i, Math.floor(t * 2));
+      const flick = 0.85 + 0.15 * hash01(seed, Math.floor(t * 2));
       target[i] = Math.max(base * flick, 0.015);
       zoneOf[i] = Z_HEARTH; crestOf[i] = clamp01(CLK.centroid - 0.4) * 0.3;
     }
@@ -195,42 +282,64 @@ export function createMandalaEngine() {
 
   // ---- 3. Embers — sparks on true darkness; louder = more AND brighter sparks ----
   function fxEmbers(t, dt) {
-    // rate AND count scale with the music so loud passages are visibly a field of embers,
-    // quiet ones just a few. Bigger multiplier so the difference is obvious.
     const rate = (0.05 + 1.6 * CLK.highTex + 1.0 * CLK.energy) * P.emberRate;
-    const cap = Math.round(6 + 44 * CLK.energy);      // few sparks when quiet, many when loud
-    if (embers.length < cap && hash01(Math.floor(t * 111), embers.length) < rate * dt * 10) {
-      const i = (hash01(Math.floor(t * 137), embers.length * 7) * TOTAL) | 0;
-      embers.push({ i, born: t, life: 3 + hash01(i, 3) * 5, peak: 0.35 + 0.65 * F.energy }); // peak scales with level
+    const ignitionChance = clamp(0.001 + rate * 0.0028, 0.001, 0.015);
+    const epochDuration = 0.5;
+    const currentEpoch = Math.floor(t / epochDuration);
+    let sparkCount = 0;
+    for (let i = 0; i < total; i++) {
+      const { angle, radialProgress, spatialKey: seed } = samples[i];
+      const field = 0.008 + 0.045 * (0.3 * CLK.energy + 0.7 * CLK.highTex)
+        * (0.35 + 0.65 * hash01(seed, Math.floor(t * 4)))
+        * (0.75 + 0.25 * Math.sin(angle * 5 + radialProgress * 3));
+      target[i] = field; zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
+
+      // Each physical sample owns its ignition history. Looking back across
+      // deterministic epochs preserves long spark envelopes without storing a
+      // template-relative pixel index or depending on the template's size.
+      let spark = 0;
+      for (let epoch = currentEpoch - 15; epoch <= currentEpoch; epoch++) {
+        if (hash01(seed ^ 0x51ED270B, epoch) >= ignitionChance) continue;
+        const born = epoch * epochDuration;
+        const life = 3 + hash01(seed ^ 0x27D4EB2D, epoch) * 5;
+        const age = (t - born) / life;
+        if (age < 0 || age >= 1) continue;
+        const env = age < 0.12 ? smoothstep(age / 0.12) : 1 - smoothstep((age - 0.12) / 0.88);
+        spark = Math.max(spark, (0.35 + 0.65 * F.energy) * env);
+      }
+      if (spark > 0.01) {
+        sparkCount += 1;
+        target[i] = Math.max(target[i], spark);
+        crestOf[i] = clamp01(CLK.centroid - 0.35) * 0.5;
+      }
     }
-    for (let i = 0; i < TOTAL; i++) { target[i] = 0.0; zoneOf[i] = Z_HEARTH; crestOf[i] = 0; } // truly dark canvas
-    for (let e = embers.length - 1; e >= 0; e--) {
-      const em = embers[e]; const a = (t - em.born) / em.life;
-      if (a >= 1) { embers.splice(e, 1); continue; }
-      const env = a < 0.12 ? smoothstep(a / 0.12) : (1 - smoothstep((a - 0.12) / 0.88));
-      target[em.i] = Math.max(target[em.i], em.peak * env);
-      crestOf[em.i] = clamp01(CLK.centroid - 0.35) * 0.5;
-    }
-    return embers.length + ' sparks';
+    return sparkCount + ' sparks';
   }
 
   // ---- 4. Meridian — one crisp ring that BREATHES live with the band it sits on ----
   function fxMeridian(t, dt) {
+    meridianPhase += dt * 0.04;                       // authored 25s cycle; audio never changes velocity
     const wantRing = Math.round(clamp(CLK.centroid * 4, 0, 4));
     if (wantRing !== meridianTarget) { meridianTarget = wantRing; meridianMix = 0; }
     meridianMix = Math.min(1, meridianMix + dt / 6);     // 6s migrate — you can see it move
     // the lit ring's brightness tracks the band it represents, LIVE, with arc detail.
     const bandOfRing = [CLK.bass, CLK.bass, CLK.mid, CLK.high, CLK.high];
-    const spin = t * (0.04 + 0.4 * CLK.energy);          // arcs sweep faster when louder
-    for (let i = 0; i < TOTAL; i++) {
-      const ri = ringOf[i];
-      const on = ri === meridianTarget ? meridianMix : (ri === meridianRing ? 1 - meridianMix : 0);
+    const spin = meridianPhase;
+    for (let i = 0; i < total; i++) {
+      const { radialProgress, angle } = samples[i];
+      const ringPosition = radialProgress * 4;
+      const ri = Math.round(ringPosition);
+      const distanceToTarget = Math.abs(ringPosition - meridianTarget);
+      const distanceToPrior = Math.abs(ringPosition - meridianRing);
+      const on = Math.exp(-distanceToTarget * distanceToTarget * 22) * meridianMix
+        + Math.exp(-distanceToPrior * distanceToPrior * 22) * (1 - meridianMix);
+      const echo = 0.055 * Math.max(0, 1 - distanceToTarget / 4) * (0.4 + 0.6 * CLK.energy);
       const band = bandOfRing[ri];
       const level = 0.08 + 0.92 * band;                  // near-dark when its band is quiet, blazing when loud
       const arcW = 0.35 + 0.5 * band;                    // arcs widen with the band
-      const arc = 0.25 + 0.75 * arcGate(angOf[i], 3, arcW, spin);
-      const neigh = Math.abs(ri - meridianTarget) === 1 ? 0.14 * band : 0;
-      target[i] = Math.max(0.0, on * level * arc + neigh);
+      const arc = 0.25 + 0.75 * arcGate(angle, 3, arcW, spin);
+      const neigh = distanceToTarget < 1.4 ? 0.11 * band * (1 - distanceToTarget / 1.4) : 0;
+      target[i] = Math.max(0.0, on * level * arc + neigh + echo);
       zoneOf[i] = Z_PATINA; crestOf[i] = 0;
     }
     if (meridianMix >= 1) meridianRing = meridianTarget;
@@ -240,10 +349,11 @@ export function createMandalaEngine() {
   // ---- 5. Procession — slow brass arms (motion), brightness LIVE with mids ----
   function fxProcession(t, dt) {
     processTheta += dt * (2 * Math.PI / 60);            // 60s/rev motion stays slow
-    const bright = 0.10 + 0.80 * CLK.mid * P.modDepth;  // LIVE mids drive brightness — obvious
-    const breadth = 0.30 + 0.15 * CLK.mid;
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i], ang = angOf[i];
+    const broadband = 0.45 * CLK.energy + 0.30 * CLK.bass + 0.25 * CLK.high;
+    const bright = 0.10 + 0.80 * Math.max(CLK.mid, broadband * 0.5, F.beat * 0.35) * P.modDepth;
+    const breadth = 0.38 + 0.18 * Math.max(CLK.mid, broadband);
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle: ang } = samples[i];
       const a = ang - processTheta - 0.9 * rf; const u = a * (2 / (2 * Math.PI)); const f = u - Math.floor(u);
       const dA = Math.min(f, 1 - f) * (Math.PI); let arm = clamp01(1 - dA / breadth); arm = arm * arm;
       const a2 = ang + processTheta * 0.6 - 1.4 * rf; const u2 = a2 * (3 / (2 * Math.PI)); const f2 = u2 - Math.floor(u2);
@@ -260,11 +370,11 @@ export function createMandalaEngine() {
     const drive = tideVal * P.tideCrest;
     const targetR = 0.1 + 0.95 * drive; tideR += (targetR - tideR) * Math.min(1, dt / 2.5); // 2.5s travel — visible
     const spin = t * 0.04;
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i];
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle } = samples[i];
       const inside = clamp01((tideR - rf) / 0.16 + 1);
       const crest = clamp01(1 - Math.abs(rf - tideR) / 0.14);
-      const arc = 0.55 + 0.45 * arcGate(angOf[i], 2, 0.8, spin);  // the swell has 2 broad lobes, not a solid ring
+      const arc = 0.55 + 0.45 * arcGate(angle, 2, 0.8, spin);  // the swell has 2 broad lobes, not a solid ring
       target[i] = Math.max(0.0, inside * (0.15 + 0.85 * drive) * arc + crest * drive * 0.4);
       zoneOf[i] = Z_HEARTH; crestOf[i] = Math.min(0.85, crest * drive);
     }
@@ -276,12 +386,13 @@ export function createMandalaEngine() {
     latticePhase += dt * (2 * Math.PI / 30);            // 30s precession (motion slow)
     latticeC = smoothAR(latticeC, clamp01(0.20 + 0.80 * CLK.bass * P.modDepth), 0.25, 1.0 * P.relScale, dt); // LIVE contrast
     const level = 0.12 + 0.75 * CLK.energy;             // whole star brightens with energy, dark when quiet
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i], ang = angOf[i];
-      const p = 0.5 + 0.5 * Math.sin(6 * ang + latticePhase + 2.0 * rf); const p2 = p * p * p;
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle: ang, x, y } = samples[i];
+      const cartesianPhase = (x * 0.7 + y * 0.3) * F.beat;
+      const p = 0.5 + 0.5 * Math.sin(6 * ang + latticePhase + 2.0 * rf + cartesianPhase); const p2 = p * p * p;
       let B = level * ((1 - latticeC) + latticeC * p2);
       const q = 0.5 + 0.5 * Math.sin(12 * ang - 2 * latticePhase);
-      B += level * 0.30 * CLK.mid * q * q * q;           // mids light the 12-star between petals — visible
+      B += level * (0.30 * CLK.mid + 0.10 * F.beat) * q * q * q;
       target[i] = Math.max(0.0, Math.min(1, B));         // dark nodes go to zero
       zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
     }
@@ -293,13 +404,14 @@ export function createMandalaEngine() {
     bloomWob = 0.6 * Math.sin(0.4 * t);
     bloomR = smoothAR(bloomR, CLK.bass, 0.25, 1.0 * P.relScale, dt);  // LIVE: opens within a second of bass
     const Rrad = 0.15 + 0.90 * bloomR * P.modDepth, open = 0.2 + 0.8 * bloomR;
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i], ang = angOf[i];
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle: ang } = samples[i];
       const radial = clamp01((Rrad - rf) / 0.18 + 1);
       const fr = clamp01(1 - Math.abs(rf - Rrad) / 0.15);
+      const trail = clamp01(1 - Math.abs(rf - (Rrad - 0.16)) / 0.24);
       const petal = Math.pow(0.5 + 0.5 * Math.sin(8 * ang + bloomWob), 2); // sharper petals: dark gaps between them
       let B = radial * (0.15 + 0.85 * petal) * open;                        // petals clearly separated, dark between
-      B += fr * petal * 0.4;
+      B += fr * petal * 0.4 + trail * petal * (0.08 + 0.12 * CLK.energy);
       target[i] = Math.max(0.0, Math.min(1, B));
       zoneOf[i] = Z_HEARTH; crestOf[i] = fr * 0.3;
     }
@@ -309,10 +421,12 @@ export function createMandalaEngine() {
   // ---- 9. Spiral (gallery-grade, middle speed) — 1 rev / 15s ----
   function fxSpiral(t, dt) {
     spiralTheta += dt * (2 * Math.PI / 15);             // 15s per revolution — watchable, not fast
-    const bright = 0.12 + 0.85 * CLK.mid * P.modDepth, halfW = 0.35;  // LIVE mids drive brightness
-    for (let i = 0; i < TOTAL; i++) {
-      const rf = rfOf[i], ang = angOf[i];
-      const a = ang - spiralTheta - 1.4 * rf;
+    const broadband = 0.45 * CLK.energy + 0.30 * CLK.bass + 0.25 * CLK.high;
+    const bright = 0.12 + 0.85 * Math.max(CLK.mid, broadband * 0.55, F.beat * 0.4) * P.modDepth, halfW = 0.35;
+    for (let i = 0; i < total; i++) {
+      const { radialProgress: rf, angle: ang, stripProgress } = samples[i];
+      const beatTravel = F.beat * (0.15 + 0.2 * rf) * Math.sin(Math.PI * 2 * stripProgress + 3 * rf);
+      const a = ang - spiralTheta - 1.4 * rf - beatTravel;
       const u = a * (3 / (2 * Math.PI)); const f = u - Math.floor(u);
       const dA = Math.min(f, 1 - f) * (Math.PI * 2 / 3);
       let arm = clamp01(1 - dA / halfW); arm = arm * arm;
@@ -347,11 +461,35 @@ export function createMandalaEngine() {
     return clamp01(((raw - g.lo) / span) * sensitivity);
   }
   function applyBands(bass, mid, high) {
+    directFeaturesActive = false;
     const energy = clamp01(bass * 0.5 + mid * 0.35 + high * 0.25);
     const centroid = clamp01((mid * 0.4 + high * 0.9) / (bass * 0.9 + 0.3));
     const up = (o, v, ua, da) => o + (v - o) * (v > o ? ua : da);
     F.bass = up(F.bass, bass, 0.60, 0.14); F.mid = up(F.mid, mid, 0.55, 0.16); F.high = up(F.high, high, 0.70, 0.20);
     F.energy = up(F.energy, energy, 0.5, 0.10); F.centroid = up(F.centroid, centroid, 0.2, 0.05);
+    F.flux = 0;
+    F.beat = 0;
+  }
+  function applyDirectFeatures() {
+    const shape = (value) => value <= 0 ? 0 : value >= 1 ? 1 : Math.pow(value, 1 / sensitivity);
+    F.bass = shape(rawFeatures.bass);
+    F.mid = shape(rawFeatures.mid);
+    F.high = shape(rawFeatures.high);
+    F.energy = shape(rawFeatures.energy);
+    F.centroid = rawFeatures.centroid;
+    F.flux = shape(rawFeatures.flux);
+    F.beat = shape(rawFeatures.beat);
+  }
+  function setFeatures(features = {}) {
+    rawFeatures.bass = clamp01(Number(features.bass) || 0);
+    rawFeatures.mid = clamp01(Number(features.mid) || 0);
+    rawFeatures.high = clamp01(Number(features.high) || 0);
+    rawFeatures.energy = clamp01(Number(features.energy) || 0);
+    rawFeatures.centroid = clamp01(Number(features.centroid) || 0);
+    rawFeatures.flux = clamp01(Number(features.flux) || 0);
+    rawFeatures.beat = clamp01(Number(features.beat) || 0);
+    directFeaturesActive = true;
+    applyDirectFeatures();
   }
   function analyze(analyserOrBins, sampleRate = 44100) {
     if (!listening) return false;
@@ -395,16 +533,31 @@ export function createMandalaEngine() {
     updateClocks(t, dt);
     const lead = (STEPS[mode] || fxStrata)(t, dt);
 
+    // A restrained, spatially phased beat substrate belongs to every mode.
+    // It lifts existing light rather than replacing it, so Calm/Active remain
+    // recognizably different without turning a beat into a uniform flash.
+    const beatDepth = (presetName === 'Active' ? 0.14 : 0.08) * F.beat;
+    if (beatDepth > 0) {
+      for (let i = 0; i < total; i++) {
+        const { x, y, radialProgress, angle, stripIndex, stripProgress } = samples[i];
+        const phase = angle * 2 + radialProgress * 4.5 + stripIndex * 0.37
+          + stripProgress * Math.PI * 2 + x * 0.6 - y * 0.4;
+        const spatial = 0.28 + 0.72 * (0.5 + 0.5 * Math.sin(phase - t * 1.1));
+        const base = clamp01(target[i]);
+        target[i] = base + (1 - base) * beatDepth * spatial;
+      }
+    }
+
     // silence handling: fade toward a very dim coal idle over ~8s (barely-there, not a glow).
     if (presence < 0.99) {
       const idle = 0.03;
-      for (let i = 0; i < TOTAL; i++) {
-        target[i] = Math.max(idle * (1 - rfOf[i] * 0.5), target[i] * presence + idle * (1 - presence));
+      for (let i = 0; i < total; i++) {
+        target[i] = Math.max(idle * (1 - samples[i].radialProgress * 0.5), target[i] * presence + idle * (1 - presence));
       }
     }
 
     // per-pixel eased envelope (anti-flicker, never snaps)
-    for (let i = 0; i < TOTAL; i++) {
+    for (let i = 0; i < total; i++) {
       const k = target[i] > vals[i] ? 9 : 2.2;
       vals[i] += (target[i] - vals[i]) * (1 - Math.exp(-k * dt));
     }
@@ -421,18 +574,36 @@ export function createMandalaEngine() {
     return paletteRamp(PALETTES.candle, v);
   }
 
+  function writeColorFor(i, v, out, offset, scale = 1, rounded = false) {
+    const z = zoneOf[i], crest = crestOf[i];
+    if (z === Z_HEARTH && crest > 0.001) {
+      writePaletteRamp(PALETTES.hearth, v, colorScratchA, 0);
+      writePaletteRamp(PALETTES.candle, v, colorScratchB, 0);
+      const r = lerp(colorScratchA[0], colorScratchB[0], crest) * scale;
+      const g = lerp(colorScratchA[1], colorScratchB[1], crest) * scale;
+      const b = lerp(colorScratchA[2], colorScratchB[2], crest) * scale;
+      out[offset] = rounded ? Math.round(r) : r;
+      out[offset + 1] = rounded ? Math.round(g) : g;
+      out[offset + 2] = rounded ? Math.round(b) : b;
+      return;
+    }
+    const palette = z === Z_HEARTH ? PALETTES.hearth : z === Z_PATINA ? PALETTES.patina : PALETTES.candle;
+    writePaletteRamp(palette, v, out, offset, scale, rounded);
+  }
+
   // Buffer-reuse API: compute every pixel's pre-master color ONCE into `out`
-  // (Float32Array, TOTAL*3 — same values colorAt returns, no allocation when
+  // (Float32Array, sample-count*3 — same values colorAt returns, no allocation when
   // the buffer is reused). The Show screen shares this buffer between the
   // canvas paint and frameRGB so the palette walk runs once per frame instead
   // of twice per pixel.
   function colorFrame(out) {
-    const buf = (out && out.length === TOTAL * 3) ? out : new Float32Array(TOTAL * 3);
-    for (let i = 0; i < TOTAL; i++) {
-      const c = colorFor(i, clamp01(vals[i]));
-      buf[i * 3] = c[0];
-      buf[i * 3 + 1] = c[1];
-      buf[i * 3 + 2] = c[2];
+    const buf = (out && out.length === total * 3) ? out : new Float32Array(total * 3);
+    for (let i = 0; i < total; i++) {
+      if (samples[i].stripId === null) {
+        buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        continue;
+      }
+      writeColorFor(i, clamp01(vals[i]), buf, i * 3);
     }
     return buf;
   }
@@ -442,16 +613,25 @@ export function createMandalaEngine() {
   // Pass a colorFrame() buffer as `colors` to skip recomputing the palette
   // walk when the colors were already computed for the preview paint.
   function frameRGB(out, colors) {
-    const buf = (out && out.length === TOTAL * 3) ? out : new Uint8Array(TOTAL * 3);
-    if (colors && colors.length === TOTAL * 3) {
-      for (let k = 0; k < TOTAL * 3; k++) buf[k] = Math.round(colors[k] * master);
+    const buf = (out && out.length === total * 3) ? out : new Uint8Array(total * 3);
+    if (colors && colors.length === total * 3) {
+      for (let i = 0; i < total; i++) {
+        if (samples[i].stripId === null) {
+          buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        } else {
+          buf[i * 3] = Math.round(colors[i * 3] * master);
+          buf[i * 3 + 1] = Math.round(colors[i * 3 + 1] * master);
+          buf[i * 3 + 2] = Math.round(colors[i * 3 + 2] * master);
+        }
+      }
       return buf;
     }
-    for (let i = 0; i < TOTAL; i++) {
-      const c = colorFor(i, clamp01(vals[i]));
-      buf[i * 3] = Math.round(c[0] * master);
-      buf[i * 3 + 1] = Math.round(c[1] * master);
-      buf[i * 3 + 2] = Math.round(c[2] * master);
+    for (let i = 0; i < total; i++) {
+      if (samples[i].stripId === null) {
+        buf[i * 3] = 0; buf[i * 3 + 1] = 0; buf[i * 3 + 2] = 0;
+        continue;
+      }
+      writeColorFor(i, clamp01(vals[i]), buf, i * 3, master, true);
     }
     return buf;
   }
@@ -463,12 +643,16 @@ export function createMandalaEngine() {
     colorFrame,
     // audio in
     analyze,
+    setFeatures,
     setBands(bands = {}) {
       applyBands(clamp01(Number(bands.bass) || 0), clamp01(Number(bands.mid) || 0), clamp01(Number(bands.high) || 0));
     },
     setListening(on) { listening = Boolean(on); },
     isListening() { return listening; },
-    setSensitivity(x) { sensitivity = clamp(Number(x) || 1, 0.3, 3); },
+    setSensitivity(x) {
+      sensitivity = clamp(Number(x) || 1, 0.3, 3);
+      if (directFeaturesActive) applyDirectFeatures();
+    },
     getSensitivity() { return sensitivity; },
     // mode / preset / master
     setMode(key) { if (STEPS[key]) mode = key; },
@@ -480,8 +664,11 @@ export function createMandalaEngine() {
     getPreset() { return presetName; },
     setMaster(x) { master = clamp(Number(x) || 0.75, 0.2, 0.85); },
     getMaster() { return master; },
+    setTemplate(next) {
+      installTemplate(next);
+    },
     // introspection (meters, status line, preview render)
-    getLevels() { return { bass: F.bass, mid: F.mid, high: F.high, energy: F.energy, centroid: F.centroid }; },
+    getLevels() { return { ...F }; },
     getPresence() { return presence; },
     getIntensity(i) { return vals[i]; },
     colorAt(i) { return colorFor(i, clamp01(vals[i])); },

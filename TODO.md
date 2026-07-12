@@ -4,6 +4,11 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Soon
 
+### Layout screen redesign (planned 2026-07-10)
+
+- [ ] **Try the redesigned Layout screen on a real project** — all three phases of the redesign are code-complete (Draw | Size | Wire modes, Send to card, export for other LED software); what's left is your hands-on pass: import a real artwork file, walk Draw → Size → Wire, push to a bench card, and note anything that feels wrong _(you · moderate)_
+  Everything is committed on the `simplify-ui-design-flow` branch with 36 automated checks green. A real card appeared on the network during the build and the tests were hardened against that. Consider a Codex remote review of the branch before merging. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+
 ### Mandala listening-gallery visualizer (in progress — laptop simulator)
 
 Building the sound-reactive effect set for the backlit laser-cut mandala (675 LEDs, 5 concentric rings) as a laptop simulator first, then port the winning effects to the ESP32 card. Aesthetic: high-end listening gallery, NOT festival — warm ember/bronze/candlelight only, slow motion, but the music must OBVIOUSLY move it. Fable used sparingly for taste-only calls (effect recipe, audio→visual mapping, color palettes); Opus for everything else.

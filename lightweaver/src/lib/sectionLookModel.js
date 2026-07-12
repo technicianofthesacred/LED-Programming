@@ -1,4 +1,4 @@
-import { normalizePatchBoard } from './patchBoard.js';
+import { chainPixelOffsets, mainChain, normalizePatchBoard } from './patchBoard.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 
 export const ALL_SECTIONS_TARGET_ID = 'all';
@@ -17,8 +17,9 @@ export function deriveSectionTargets({
   const board = normalizePatchBoard(patchBoard, strips);
   const totalPixels = totalStripPixels(strips);
   const fallbackLook = normalizeSectionVisualLook(defaultLook);
-  const stripOffsets = stripPixelOffsets(strips);
+  const offsets = chainPixelOffsets(board, strips);
   const stripById = new Map(strips.map(strip => [strip.id, strip]));
+  const patchesById = new Map((board.patches || []).map(patch => [patch.id, patch]));
 
   const targets = [{
     id: ALL_SECTIONS_TARGET_ID,
@@ -29,12 +30,12 @@ export function deriveSectionTargets({
     look: fallbackLook,
   }];
 
-  for (const patch of board.patches || []) {
+  for (const rowId of mainChain(board).rowIds) {
+    const patch = patchesById.get(rowId);
     if (patch?.source?.type !== 'strip' || patch.output?.mode === 'off') continue;
     const strip = stripById.get(patch.source.stripId);
     const pixelCount = countPatchPixels(patch);
-    const offset = stripOffsets.get(patch.source.stripId) || 0;
-    const startLed = Number.isFinite(Number(patch.source.startLed)) ? Math.trunc(Number(patch.source.startLed)) : 0;
+    const start = offsets.get(patch.id) || 0;
     targets.push({
       id: patch.id,
       zoneId: sanitizeId(patch.id),
@@ -43,8 +44,8 @@ export function deriveSectionTargets({
       kind: 'section',
       label: String(patch.name || strip?.name || patch.id || 'Section'),
       pixelCount,
-      start: offset + Math.max(0, startLed),
-      end: offset + Math.max(0, startLed) + Math.max(0, pixelCount - 1),
+      start,
+      end: start + Math.max(0, pixelCount - 1),
       look: lookFromPatchPlayback(patch.playback, fallbackLook),
     });
   }
@@ -204,16 +205,6 @@ function normalizeSectionLooks(sectionLooks = {}) {
 
 function totalStripPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixelCount || strip.pixels?.length || 0), 0);
-}
-
-function stripPixelOffsets(strips = []) {
-  const offsets = new Map();
-  let cursor = 0;
-  for (const strip of strips) {
-    offsets.set(strip.id, cursor);
-    cursor += strip.pixelCount || strip.pixels?.length || 0;
-  }
-  return offsets;
 }
 
 function countPatchPixels(patch) {

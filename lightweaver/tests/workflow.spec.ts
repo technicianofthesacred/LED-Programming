@@ -75,20 +75,20 @@ function writeLayerFixture(tmp: string, fileName = 'workflow-layers.svg') {
   return fixture;
 }
 
-test('imports SVG, creates strips, saves, reloads, previews, and exports real ledmap', async ({ page }) => {
+test('imports SVG, creates strips, saves, reloads, and previews on the Show screen', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-workflow-'));
   const fixture = writeLayerFixture(tmp);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
   await page.setInputFiles('input[accept=".svg"]', fixture);
-  await expect(page.locator('.lw-layer-row')).toHaveCount(3);
+  await expect(page.locator('.layer-row')).toHaveCount(3);
 
   await page.getByRole('button', { name: /\+ All \(3\)/ }).click();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+  await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
+  await page.getByTitle('Save project file').click();
   const savedProject = await saveDownload;
   const projectPath = path.join(tmp, await savedProject.suggestedFilename());
   await savedProject.saveAs(projectPath);
@@ -100,40 +100,40 @@ test('imports SVG, creates strips, saves, reloads, previews, and exports real le
 
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+  // A cleared project reboots into the default two-circle hardware layout
+  // (2 strips already present), so loading a project file now triggers the
+  // "replace your current strips" confirm() the app didn't need to show
+  // before strips.length could ever be > 0 at this point.
+  page.once('dialog', dialog => dialog.accept());
   await page.setInputFiles('input[accept=".json"]', projectPath);
-  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+  await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
-  await page.locator('.lw-rail-btn', { hasText: 'Pattern' }).click();
+  // Note: the old "Export" rail screen (ledmap.json download) no longer
+  // exists — Send to card + Export ledmap.json now live in Layout's Wire
+  // mode (docs/layout-redesign-plan.md Phase 3 / step 9), behind the
+  // `layout-export-ledmap` testid. That coverage lives in
+  // tests/layout-send-to-card.spec.ts, so this workflow test doesn't
+  // duplicate it.
+  //
+  // The live LED preview also moved off the Patterns screen onto its own
+  // "Show" screen (src/v3/lw-show.jsx): an always-on audio-reactive mandala
+  // canvas rather than a per-pattern strip preview. Its idle/quiet state is
+  // deliberately "barely-there" (src/lib/mandalaEngine.js fades to a dim coal
+  // idle over ~8s when not listening to anything), so a bright-pixel-count
+  // assertion like the old test's would be measuring the wrong thing here —
+  // it can legitimately stay near-black. What still proves the reload
+  // actually plumbed the strips through to a live screen is the pixel-count
+  // readout, which is derived straight from `strips` in ProjectContext.
+  const totalPixels = projectData.layout.strips.reduce((sum: number, strip: any) => sum + strip.pixels.length, 0);
+  await page.locator('.rail-item', { hasText: 'Show' }).click();
   await page.waitForSelector('canvas');
-  await page.waitForTimeout(800);
-  const canvasStats = await page.evaluate(() => {
+  await expect(page.getByText(`${totalPixels} LEDs ready`)).toBeVisible();
+  const canvasSize = await page.evaluate(() => {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement | null;
-    if (!canvas) return { lit: 0, width: 0, height: 0 };
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return { lit: 0, width: canvas.width, height: canvas.height };
-    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    let lit = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (Math.max(data[i], data[i + 1], data[i + 2]) > 35) lit++;
-    }
-    return { lit, width: canvas.width, height: canvas.height };
+    return { width: canvas?.width || 0, height: canvas?.height || 0 };
   });
-  expect(canvasStats.width).toBeGreaterThan(100);
-  expect(canvasStats.height).toBeGreaterThan(100);
-  expect(canvasStats.lit).toBeGreaterThan(100);
-
-  await page.locator('.lw-rail-btn', { hasText: 'Export' }).click();
-  await expect(page.getByText('3 strips')).toBeVisible();
-  await expect(page.getByText(/No strips in project/)).toHaveCount(0);
-
-  const exportDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download' }).first().click();
-  const ledmap = await exportDownload;
-  const ledmapPath = path.join(tmp, await ledmap.suggestedFilename());
-  await ledmap.saveAs(ledmapPath);
-  const ledmapData = JSON.parse(fs.readFileSync(ledmapPath, 'utf8'));
-  expect(ledmapData.n).toBe(projectData.layout.strips.reduce((sum: number, strip: any) => sum + strip.pixels.length, 0));
-  expect(ledmapData.map).toHaveLength(ledmapData.n);
+  expect(canvasSize.width).toBeGreaterThan(100);
+  expect(canvasSize.height).toBeGreaterThan(100);
 });
 
 test('groups selected strips and merges them into one composite strip', async ({ page }) => {
@@ -145,26 +145,27 @@ test('groups selected strips and merges them into one composite strip', async ({
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(3\)/ }).click();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+  await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
-  await page.locator('.lw-strip-row').nth(0).click();
-  await page.locator('.lw-strip-row').nth(1).click({ modifiers: ['Shift'] });
-  await page.locator('.lw-strip-row').nth(2).click({ modifiers: ['Shift'] });
+  await page.locator('.la-strip-row').nth(0).click();
+  await page.locator('.la-strip-row').nth(1).click({ modifiers: ['Shift'] });
+  await page.locator('.la-strip-row').nth(2).click({ modifiers: ['Shift'] });
   await expect(page.getByText('3 strips selected')).toBeVisible();
 
-  await page.locator('.lw-strip-batch-actions input').fill('Heart outline');
+  await page.locator('.la-batch-actions input').fill('Heart outline');
   await page.getByRole('button', { name: 'Group' }).click();
   await expect(page.getByText('Heart outline')).toBeVisible();
-  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+  await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
-  await page.locator('.lw-strip-row').nth(0).click();
-  await page.locator('.lw-strip-row').nth(1).click({ modifiers: ['Shift'] });
-  await page.locator('.lw-strip-row').nth(2).click({ modifiers: ['Shift'] });
-  await page.locator('.lw-strip-batch-actions input').fill('Heart merged');
-  await page.getByRole('button', { name: 'Merge' }).click();
+  await page.locator('.la-strip-row').nth(0).click();
+  await page.locator('.la-strip-row').nth(1).click({ modifiers: ['Shift'] });
+  await page.locator('.la-strip-row').nth(2).click({ modifiers: ['Shift'] });
+  await page.locator('.la-batch-actions input').fill('Heart merged');
+  // Step 10 renamed the destructive strip merge to "Combine into one strip".
+  await page.getByRole('button', { name: 'Combine into one strip' }).click();
 
-  await expect(page.locator('.lw-strip-row')).toHaveCount(1);
-  await expect(page.locator('.lw-strip-row').getByText('Heart merged', { exact: true })).toBeVisible();
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
+  await expect(page.locator('.la-strip-row').getByText('Heart merged', { exact: true })).toBeVisible();
   await expect(page.getByText('3 strips selected')).toHaveCount(0);
 
   const stripPath = page.locator('path[data-strip-path]').first();
@@ -195,6 +196,10 @@ test('groups selected strips and merges them into one composite strip', async ({
     return Math.round((moved?.x || 0) - start!.x);
   }).not.toBe(0);
 
+  // Directed glow now lives behind the Light toolbar button's options
+  // popover (right-click, or the "▾" affordance) instead of being directly
+  // clickable — open it first.
+  await page.getByTitle('Light glow options').click();
   await page.getByTitle('Directed glow — elongate bloom along strip direction').click();
   await expect.poll(() => page.locator('[data-light-cone]').count()).toBeGreaterThan(0);
 });
@@ -220,8 +225,8 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(3\)/ }).click();
-  await expect(page.locator('.lw-layer-row')).toHaveCount(3);
-  await expect(page.locator('.lw-strip-row')).toHaveCount(3);
+  await expect(page.locator('.layer-row')).toHaveCount(3);
+  await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   const circlePath = page.locator('path[data-vector-path-id="circle-layer-p0"]').first();
   const target = await circlePath.evaluate((path: SVGPathElement) => {
@@ -238,20 +243,24 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
 
   await page.keyboard.press('Delete');
 
-  await expect(page.locator('.lw-layer-row')).toHaveCount(2);
-  await expect(page.locator('.lw-strip-row')).toHaveCount(2);
-  await expect(page.locator('.lw-layer-row', { hasText: 'Circle' })).toHaveCount(0);
-  await expect(page.locator('.lw-strip-row', { hasText: 'Circle' })).toHaveCount(0);
+  await expect(page.locator('.layer-row')).toHaveCount(2);
+  await expect(page.locator('.la-strip-row')).toHaveCount(2);
+  await expect(page.locator('.layer-row', { hasText: 'Circle' })).toHaveCount(0);
+  await expect(page.locator('.la-strip-row', { hasText: 'Circle' })).toHaveCount(0);
   await expect(page.locator('path[data-vector-path-id^="circle-layer-"]')).toHaveCount(0);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project JSON').click();
+  await page.getByTitle('Save project file').click();
   const savedProject = await saveDownload;
   const projectPath = path.join(tmp, await savedProject.suggestedFilename());
   await savedProject.saveAs(projectPath);
   const projectData = JSON.parse(fs.readFileSync(projectPath, 'utf8'));
   expect(projectData.layout.layers.map((layer: any) => layer.layerId)).toEqual(['bg-layer', 'bar-layer']);
-  expect(projectData.layout.strips.map((strip: any) => strip.id)).toEqual(['bg-layer', 'bar-layer']);
+  // Strips carry their own `strip-<n>` id namespace now; their artwork source is
+  // recorded on `sourceLayerId`, so that is what maps back to the surviving layers.
+  expect(projectData.layout.strips.map((strip: any) => strip.id))
+    .toEqual(projectData.layout.strips.map((strip: any) => expect.stringMatching(/^strip-\d+$/)));
+  expect(projectData.layout.strips.map((strip: any) => strip.sourceLayerId)).toEqual(['bg-layer', 'bar-layer']);
 });
 
 test('quiet pattern preview does not render routine notifications', async ({ page }) => {

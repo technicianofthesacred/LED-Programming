@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo, useReducer } from 'react';
 import { useWled } from '../hooks/useWled.js';
 import { useUsbLed } from '../hooks/useUsbLed.js';
 import { samplePath } from '../lib/mapper.js';
@@ -21,6 +21,15 @@ import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js'
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
+import {
+  createLayoutState,
+  createLayoutHistory,
+  layoutReducer,
+  layoutActions,
+  makeLayoutSnapshot,
+  applyLayoutSnapshot,
+  LAYOUT_HISTORY_LIMIT,
+} from './layoutReducer.js';
 import { resolveRotaryInputAction, selectFreshUsbRotaryEvents } from '../lib/usbRotaryInput.js';
 import {
   readStorageJsonWithBackup,
@@ -47,6 +56,89 @@ function restoreStripPixels(strips = []) {
     if (dx || dy) pixels = pixels.map(pixel => ({ ...pixel, x: pixel.x + dx, y: pixel.y + dy }));
     return { ...strip, pixelCount: normalizeStripPixelCount(strip), pixels };
   });
+}
+
+// ── Layout slice reducer (state consolidation) ────────────────────────────
+// The layout slice lives in a useReducer so undo/redo is a single snapshot
+// stack shared across strip + patch-board edits. `_history` rides on the same
+// state object; makeLayoutSnapshot ignores it (it picks named fields) and the
+// undo/redo/reset handlers overwrite it explicitly.
+
+// Rebuild a single strip's pixels when applying a snapshot (DOM-backed sampler).
+function rebuildSnapshotStrip(strip) {
+  const [rebuilt] = restoreStripPixels([strip]);
+  return rebuilt;
+}
+
+function pushSnapshotStack(stack, snapshot) {
+  const next = [...stack, snapshot];
+  return next.length > LAYOUT_HISTORY_LIMIT ? next.slice(next.length - LAYOUT_HISTORY_LIMIT) : next;
+}
+
+function makeInitialLayoutState(layout) {
+  return {
+    ...createLayoutState({
+      strips: layout.strips,
+      layers: layout.layers,
+      layerGroups: layout.layerGroups,
+      layerOrder: layout.layerOrder,
+      editCounts: layout.editCounts,
+      hidden: layout.hidden || {},
+      svgText: layout.svgText ?? null,
+      viewBox: layout.viewBox || '0 0 640 400',
+      density: layout.density,
+      pxPerMm: layout.pxPerMm,
+      patchBoard: normalizePatchBoard(layout.patchBoard, layout.strips),
+    }),
+    _history: createLayoutHistory(),
+  };
+}
+
+function layoutRootReducer(state, action) {
+  switch (action.type) {
+    // Compat setter — mirrors a single useState field; never records history.
+    case 'compat/set': {
+      const current = state[action.field];
+      const value = typeof action.value === 'function' ? action.value(current) : action.value;
+      if (value === current) return state;
+      return { ...state, [action.field]: value };
+    }
+    // Snapshot current state as one undo entry (called before a mutation).
+    case 'layout/pushHistory':
+      return {
+        ...state,
+        _history: { past: pushSnapshotStack(state._history.past, makeLayoutSnapshot(state)), future: [] },
+      };
+    // Patch-board edit (mutating callback over a normalized board copy).
+    case 'layout/updatePatchBoard': {
+      const board = normalizePatchBoard(state.patchBoard, state.strips);
+      action.mutate(board);
+      return { ...state, patchBoard: normalizePatchBoard(board, state.strips) };
+    }
+    case 'layout/undo': {
+      if (!state._history.past.length) return state;
+      const past = state._history.past.slice();
+      const snap = past.pop();
+      const future = pushSnapshotStack(state._history.future, makeLayoutSnapshot(state));
+      const applied = applyLayoutSnapshot(state, snap, rebuildSnapshotStrip);
+      return { ...applied, _history: { past, future } };
+    }
+    case 'layout/redo': {
+      if (!state._history.future.length) return state;
+      const future = state._history.future.slice();
+      const snap = future.pop();
+      const past = pushSnapshotStack(state._history.past, makeLayoutSnapshot(state));
+      const applied = applyLayoutSnapshot(state, snap, rebuildSnapshotStrip);
+      return { ...applied, _history: { past, future } };
+    }
+    // Load a project: reset the slice AND clear history (not undoable back).
+    case 'layout/reset':
+      return { ...createLayoutState(action.init), _history: createLayoutHistory() };
+    // Selection + any structured layout action flow through the pure reducer
+    // (selection actions never create undo entries).
+    default:
+      return layoutReducer(state, action);
+  }
 }
 
 // ── Interpolate automation lane value at a given time ─────────────────────
@@ -112,19 +204,66 @@ export function ProjectProvider({ children }) {
   const defaults = createDefaultProject();
   const projectSnapshotContributorsRef = useRef(new Set());
 
-  // ── Layout ──────────────────────────────────────────────────────────────
-  const [strips,    setStrips]    = useState(defaults.layout.strips);
-  const [viewBox,   setViewBox]   = useState('0 0 640 400');
-  const [svgText,   setSvgText]   = useState(null);
-  const [hidden,    setHidden]    = useState({});
-  const [layoutLayers,      setLayoutLayers]      = useState(defaults.layout.layers);
-  const [layoutDensity,     setLayoutDensity]     = useState(defaults.layout.density);
-  const [layoutPxPerMm,     setLayoutPxPerMm]     = useState(defaults.layout.pxPerMm);
-  const [layoutEditCounts,  setLayoutEditCounts]  = useState(defaults.layout.editCounts);
-  const [layoutLayerGroups, setLayoutLayerGroups] = useState(defaults.layout.layerGroups);
-  const [layoutLayerOrder,  setLayoutLayerOrder]  = useState(defaults.layout.layerOrder);
-  const [patchBoard,        setPatchBoard]        = useState(() => normalizePatchBoard(defaults.layout.patchBoard, defaults.layout.strips));
+  // ── Layout (single reducer over the whole slice; undo/redo is one shared
+  //    snapshot stack across strip + patch-board edits) ────────────────────
+  const [layout, dispatchLayout] = useReducer(layoutRootReducer, defaults.layout, makeInitialLayoutState);
   const [projectRevision,   setProjectRevision]   = useState(0);
+
+  // Live values read straight off the reducer state.
+  const {
+    strips,
+    viewBox,
+    svgText,
+    hidden,
+    layers: layoutLayers,
+    density: layoutDensity,
+    pxPerMm: layoutPxPerMm,
+    editCounts: layoutEditCounts,
+    stripCountOverrides: layoutStripCountOverrides,
+    layerGroups: layoutLayerGroups,
+    layerOrder: layoutLayerOrder,
+    patchBoard,
+    selection,
+  } = layout;
+
+  // Compat setters — same signatures as the old useState setters (value or
+  // updater fn) so every existing screen keeps compiling unchanged.
+  const setLayoutField = useCallback((field, value) => dispatchLayout({ type: 'compat/set', field, value }), []);
+  const setStrips            = useCallback(value => setLayoutField('strips', value), [setLayoutField]);
+  const setViewBox           = useCallback(value => setLayoutField('viewBox', value), [setLayoutField]);
+  const setSvgText           = useCallback(value => setLayoutField('svgText', value), [setLayoutField]);
+  const setHidden            = useCallback(value => setLayoutField('hidden', value), [setLayoutField]);
+  const setLayoutLayers      = useCallback(value => setLayoutField('layers', value), [setLayoutField]);
+  const setLayoutDensity     = useCallback(value => setLayoutField('density', value), [setLayoutField]);
+  const setLayoutPxPerMm     = useCallback(value => setLayoutField('pxPerMm', value), [setLayoutField]);
+  const setLayoutEditCounts  = useCallback(value => setLayoutField('editCounts', value), [setLayoutField]);
+  const setLayoutStripCountOverrides = useCallback(value => setLayoutField('stripCountOverrides', value), [setLayoutField]);
+  const setLayoutLayerGroups = useCallback(value => setLayoutField('layerGroups', value), [setLayoutField]);
+  const setLayoutLayerOrder  = useCallback(value => setLayoutField('layerOrder', value), [setLayoutField]);
+  const setPatchBoard        = useCallback(value => setLayoutField('patchBoard', value), [setLayoutField]);
+
+  // Undo history controls (single stack, shared by strip + patch-board edits).
+  const pushLayoutHistory = useCallback(() => dispatchLayout({ type: 'layout/pushHistory' }), []);
+  const undoLayout        = useCallback(() => dispatchLayout({ type: 'layout/undo' }), []);
+  const redoLayout        = useCallback(() => dispatchLayout({ type: 'layout/redo' }), []);
+  const layoutHistLen     = layout._history.past.length;
+  const layoutFutLen      = layout._history.future.length;
+
+  // Patch-board mutation that joins the undo stack (patch edits are undoable).
+  const updatePatchBoard = useCallback((mutate) => {
+    dispatchLayout({ type: 'layout/pushHistory' });
+    dispatchLayout({ type: 'layout/updatePatchBoard', mutate });
+  }, []);
+
+  // Selection dispatchers (LayoutScreen's single selection model rides on these).
+  const selectStrip       = useCallback(id => dispatchLayout(layoutActions.selectStrip(id)), []);
+  const selectStrips      = useCallback(ids => dispatchLayout(layoutActions.selectStrips(ids)), []);
+  const toggleStripSel    = useCallback(id => dispatchLayout(layoutActions.toggleStrip(id)), []);
+  const selectLayer       = useCallback(layerId => dispatchLayout(layoutActions.selectLayer(layerId)), []);
+  const selectPaths       = useCallback(entries => dispatchLayout(layoutActions.selectPaths(entries)), []);
+  const togglePathSel     = useCallback(entry => dispatchLayout(layoutActions.togglePath(entry)), []);
+  const clearLayoutSelection = useCallback(() => dispatchLayout(layoutActions.clearSelection()), []);
+  const renameLayoutSelection = useCallback(name => dispatchLayout(layoutActions.renameSelection(name)), []);
 
   // ── Pattern ──────────────────────────────────────────────────────────────
   const [activePatternId,  setActivePatternId]  = useState('aurora');
@@ -373,17 +512,25 @@ export function ProjectProvider({ children }) {
     const restoredStrips = restoreStripPixels(sourceStrips);
     setProjectId(data.id || defaults.id);
     setProjectName(data.name || defaults.name);
-    setStrips(restoredStrips);
-    setViewBox(layout.viewBox || defaults.layout.viewBox);
-    setSvgText(layout.svgText ?? null);
-    setHidden(layout.hidden || {});
-    setLayoutLayers(layout.layers || []);
-    setLayoutDensity(layout.density || defaults.layout.density);
-    setLayoutPxPerMm(layout.pxPerMm || defaults.layout.pxPerMm);
-    setLayoutEditCounts(layout.editCounts || {});
-    setLayoutLayerGroups(layout.layerGroups || []);
-    setLayoutLayerOrder(layout.layerOrder || []);
-    setPatchBoard(normalizePatchBoard(shouldSeedDefaultLayout ? defaults.layout.patchBoard : layout.patchBoard, restoredStrips));
+    // Reset the whole layout slice AND clear undo history — loading a project is
+    // not undoable back into the previous project.
+    dispatchLayout({
+      type: 'layout/reset',
+      init: {
+        strips: restoredStrips,
+        viewBox: layout.viewBox || defaults.layout.viewBox,
+        svgText: layout.svgText ?? null,
+        hidden: layout.hidden || {},
+        layers: layout.layers || [],
+        density: layout.density || defaults.layout.density,
+        pxPerMm: layout.pxPerMm || defaults.layout.pxPerMm,
+        editCounts: layout.editCounts || {},
+        stripCountOverrides: layout.stripCountOverrides || {},
+        layerGroups: layout.layerGroups || [],
+        layerOrder: layout.layerOrder || [],
+        patchBoard: normalizePatchBoard(shouldSeedDefaultLayout ? defaults.layout.patchBoard : layout.patchBoard, restoredStrips),
+      },
+    });
     setActivePatternId(pattern.activePatternId || defaults.pattern.activePatternId);
     setPalette(pattern.palette?.length ? pattern.palette : defaults.pattern.palette);
     setMasterSpeed(pattern.masterSpeed ?? defaults.pattern.masterSpeed);
@@ -448,6 +595,7 @@ export function ProjectProvider({ children }) {
         density: layoutDensity,
         pxPerMm: layoutPxPerMm,
         editCounts: layoutEditCounts,
+        stripCountOverrides: layoutStripCountOverrides,
         layerGroups: layoutLayerGroups,
         layerOrder: layoutLayerOrder,
         patchBoard: normalizePatchBoard(patchBoard, strips),
@@ -490,7 +638,7 @@ export function ProjectProvider({ children }) {
     return project;
   }, [
     projectId, projectName, strips, viewBox, svgText, hidden, patchBoard,
-    layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutLayerGroups, layoutLayerOrder,
+    layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     motionSmoothing,
@@ -529,9 +677,21 @@ export function ProjectProvider({ children }) {
       layoutDensity,     setLayoutDensity,
       layoutPxPerMm,     setLayoutPxPerMm,
       layoutEditCounts,  setLayoutEditCounts,
+      layoutStripCountOverrides, setLayoutStripCountOverrides,
       layoutLayerGroups, setLayoutLayerGroups,
       layoutLayerOrder,  setLayoutLayerOrder,
       patchBoard,        setPatchBoard,
+      updatePatchBoard,
+      // Layout undo/redo (single shared snapshot stack)
+      pushLayoutHistory, undoLayout, redoLayout,
+      layoutHistLen,     layoutFutLen,
+      // Layout selection (reducer-owned; consumed from step 9 on)
+      selection,
+      selectStrip,       selectStrips,
+      toggleStripSel,
+      selectLayer,       selectPaths,
+      togglePathSel,     clearLayoutSelection,
+      renameLayoutSelection,
       projectRevision,
       // Pattern
       activePatternId, setActivePatternId,

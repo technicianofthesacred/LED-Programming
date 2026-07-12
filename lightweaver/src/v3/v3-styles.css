@@ -438,3 +438,31 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 }
 .crumb { min-width: 0; }
 .layer-name { overflow: hidden; text-overflow: ellipsis; }
+
+/* ============================================================
+   Mobile shell (narrow viewports, e.g. phones)
+   The outer app grid's third column is a fixed 320px track that
+   nothing at the shell level actually occupies (the Layout screen's
+   right panel is its own nested grid, carved out of the shared
+   `.screen` box — it doesn't use this named "side" area). On desktop
+   that 320px is absorbed harmlessly into `.screen`'s total width.
+   On a phone viewport it's a hard 320px tax the grid can never give
+   back, which forces the whole shell wider than the screen. Below
+   ~640px, collapse it to 0 so `.screen` gets its width from the one
+   flexible column instead. Chrome that can't fit on one line
+   (topbar actions, status-bar telemetry) wraps rather than pushing
+   `document.documentElement.scrollWidth` past the viewport.
+   ============================================================ */
+@media (max-width: 640px) {
+  .app {
+    grid-template-columns: 58px minmax(0, 1fr) 0px;
+    grid-template-rows: minmax(52px, auto) minmax(48px, auto) 1fr minmax(32px, auto);
+  }
+
+  .topbar { flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 8px; padding: 8px 14px; }
+  .top-right { flex-wrap: wrap; row-gap: 6px; }
+
+  .status-bar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 6px; padding: 6px 12px; }
+  .sb-card { flex-wrap: wrap; row-gap: 4px; }
+  .sb-facts { display: none; }
+}
