@@ -8,13 +8,18 @@ export function buildWiringChaseSteps(compiled = {}) {
   const runs = compiled.runs || [];
   return (compiled.outputs || []).flatMap(output => [
     { kind: 'output', outputId: output.id, label: output.name || output.id, pin: output.pin, start: output.start, count: output.count },
-    ...runs.filter(run => run.outputId === output.id && run.type === 'strip').map(run => ({ ...run, kind: 'run', outputId: output.id, runId: run.id })),
+    ...runs.filter(run => run.outputId === output.id).map(run => ({
+      ...run,
+      kind: run.type === 'strip' ? 'run' : run.type,
+      outputId: output.id,
+      runId: run.id,
+    })),
   ]);
 }
 
 export function buildWiringChaseFrame({ totalPixels = 0, step } = {}) {
   const frame = Array.from({ length: Math.max(0, totalPixels) }, () => '000000');
-  if (!step) return frame;
+  if (!step || step.kind === 'cable' || step.kind === 'inactive') return frame;
   const start = Math.max(0, Number(step.start) || 0);
   const end = Math.min(frame.length, start + Math.max(0, Number(step.count) || 0));
   for (let index = start; index < end; index += 1) frame[index] = '001A00';
@@ -24,7 +29,7 @@ export function buildWiringChaseFrame({ totalPixels = 0, step } = {}) {
 
 function completionTruth(state) {
   const outputIds = state.steps.filter(step => step.kind === 'output').map(step => step.outputId);
-  const runIds = state.steps.filter(step => step.kind === 'run').map(step => step.runId);
+  const runIds = state.steps.filter(step => step.kind !== 'output').map(step => step.runId);
   return outputIds.every(id => state.confirmedOutputs.includes(id)) && runIds.every(id => Boolean(state.confirmedRuns[id]));
 }
 
@@ -66,13 +71,20 @@ export function wiringChaseReducer(state, action) {
     const next = withStep({ ...state, confirmedRuns }, state.stepIndex + 1);
     return { ...next, canComplete: completionTruth(next) };
   }
+  if (action.type === 'confirm-cable' || action.type === 'confirm-inactive') {
+    const expectedKind = action.type === 'confirm-cable' ? 'cable' : 'inactive';
+    if (state.delivery !== 'confirmed' || step?.kind !== expectedKind) return state;
+    const confirmedRuns = { ...state.confirmedRuns, [step.runId]: true };
+    const next = withStep({ ...state, confirmedRuns }, state.stepIndex + 1);
+    return { ...next, canComplete: completionTruth(next) };
+  }
   if (action.type === 'reverse-direction') {
     const targetIndex = action.stepIndex ?? state.stepIndex;
     const target = state.steps[targetIndex];
     if (target?.kind !== 'run' || (action.stepIndex == null && state.delivery !== 'confirmed')) return state;
     const physicalDirection = target.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
     const steps = state.steps.map((item, index) => index === targetIndex ? { ...item, physicalDirection } : item);
-    const downstream = new Set(steps.slice(targetIndex).filter(item => item.kind === 'run').map(item => item.runId));
+    const downstream = new Set(steps.slice(targetIndex).filter(item => item.kind !== 'output').map(item => item.runId));
     const confirmedRuns = Object.fromEntries(Object.entries(state.confirmedRuns).filter(([id]) => !downstream.has(id)));
     const corrections = [...state.corrections.filter(item => item.runId !== target.runId), { runId: target.runId, physicalDirection }];
     const next = { ...state, steps, stepIndex: targetIndex, confirmedRuns, corrections, delivery: 'idle', error: '', requestId: state.requestId + 1, firstPixelConfirmed: false };

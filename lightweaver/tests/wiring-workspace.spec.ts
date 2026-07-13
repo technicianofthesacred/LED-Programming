@@ -300,6 +300,10 @@ test('closed-path seam and physical DATA IN are editable independently until fix
 test('guided chase acknowledges full low-brightness frames, verifies every fact, then unlocks assembly documentation', async ({ page }) => {
   await installFrameCard(page);
   await gotoWire(page);
+  const stripRows = page.getByTestId('wiring-run-row').filter({ has: page.getByRole('button', { name: 'Reverse' }) });
+  await stripRows.nth(0).getByRole('button', { name: /OUT port/ }).click();
+  await stripRows.nth(1).getByRole('button', { name: /IN port/ }).click();
+  await page.getByRole('button', { name: 'Add reserved-unlit LEDs' }).click();
   const bench = page.getByTestId('wiring-bench-test');
   await bench.getByRole('checkbox').check();
   await bench.getByRole('button', { name: 'Start wiring test' }).click();
@@ -316,17 +320,31 @@ test('guided chase acknowledges full low-brightness frames, verifies every fact,
     }
     await bench.getByRole('button', { name: 'First pixel is correct' }).click();
     await bench.getByRole('button', { name: 'Direction is correct' }).click();
+    if (run === 0) {
+      await expect(bench).toContainText('Cable jump');
+      await expect(bench).toContainText('Frame confirmed');
+      await bench.getByRole('button', { name: 'Cable is connected' }).click();
+    }
   }
+  await expect(bench).toContainText('Reserved · unlit');
+  await expect(bench).toContainText('Frame confirmed');
+  await bench.getByRole('button', { name: 'Reserved LEDs stay unlit' }).click();
   await expect(bench.getByRole('button', { name: 'Complete verification' })).toBeEnabled();
   await bench.getByRole('button', { name: 'Complete verification' }).click();
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toBeEnabled();
   const correctedProject = await saveProject(page);
   expect(correctedProject.layout.wiring.runs.find((run: any) => run.type === 'strip').physicalDirection).toBe('source-reverse');
+  expect(correctedProject.layout.wiring.runs.map((run: any) => `${run.id}:${run.verified}`)).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(/^cable-\d+:true$/),
+      expect.stringMatching(/^reserved-\d+:true$/),
+    ]),
+  );
 
   const frames = await page.evaluate(() => (window as any).__wiringFrames);
   expect(frames.length).toBeGreaterThanOrEqual(3);
   for (const frame of frames) {
-    expect(frame).toHaveLength(44);
+    expect(frame).toHaveLength(45);
     expect(frame.flatMap((pixel: string) => pixel.match(/../g)!.map(value => parseInt(value, 16))).every((channel: number) => channel <= 26)).toBe(true);
   }
 

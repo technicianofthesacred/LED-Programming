@@ -72,7 +72,9 @@ export function WiringBenchTest({ wiring, compiled, updateWiring, priorConfirmed
     if (!state?.canComplete) return;
     const result = updateWiring(draft => {
       draft.verified = true;
-      draft.runs.forEach(run => { run.verified = true; });
+      draft.runs.forEach(run => {
+        if (state.confirmedRuns[run.id]) run.verified = true;
+      });
     }, { changeKind: null });
     if (!result.ok) return;
     await sessionRef.current?.complete().catch(() => {});
@@ -95,8 +97,12 @@ export function WiringBenchTest({ wiring, compiled, updateWiring, priorConfirmed
       <div className="lw-wire-section-title"><span>Bench test · {state.stepIndex + 1}/{state.steps.length}</span><strong>{state.delivery === 'confirmed' ? 'Frame confirmed' : state.delivery === 'failed' ? 'Delivery failed' : 'Sending frame…'}</strong></div>
       {activeStep?.kind === 'output' ? (
         <div><h4>Identify {activeStep.label}</h4><p>GPIO {activeStep.pin} · {activeStep.count} pixels. Confirm only the expected output is lit.</p><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-output' })}>I see {activeStep.label}</button></div>
-      ) : (
+      ) : activeStep?.kind === 'run' ? (
         <div><h4>Run {activeStep?.runId}</h4><p>The red marker is DATA IN; the green chase shows physical direction.</p><button className="btn" disabled={state.delivery !== 'confirmed' || state.firstPixelConfirmed} onClick={() => dispatch({ type: 'confirm-first-pixel' })}>First pixel is correct</button><button className="btn primary" disabled={state.delivery !== 'confirmed' || !state.firstPixelConfirmed} onClick={() => dispatch({ type: 'confirm-direction' })}>Direction is correct</button><button className="btn" disabled={state.delivery !== 'confirmed'} onClick={correctDirection}>Reverse direction</button></div>
+      ) : activeStep?.kind === 'cable' ? (
+        <div><h4>Cable jump</h4><p>Confirm this zero-address wire jump is physically connected in the shown lane order.</p><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-cable' })}>Cable is connected</button></div>
+      ) : (
+        <div><h4>Reserved · unlit</h4><p>Confirm all {activeStep?.count || 0} reserved LED addresses stay dark.</p><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-inactive' })}>Reserved LEDs stay unlit</button></div>
       )}
       {state.delivery === 'failed' && <div className="lw-wiring-error"><p>{state.error}</p><button className="btn primary" onClick={retry}>Retry</button></div>}
       <div className="lw-bench-nav"><button className="btn" disabled={state.stepIndex === 0} onClick={() => dispatch({ type: 'previous' })}>Previous</button><button className="btn" disabled={state.stepIndex === state.steps.length - 1} onClick={() => dispatch({ type: 'next' })}>Next</button><button className="btn" onClick={cancel}>Cancel test</button><button className="btn primary" disabled={!state.canComplete} onClick={complete}>Complete verification</button></div>

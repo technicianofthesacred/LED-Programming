@@ -21,6 +21,18 @@ const compiled = {
   ],
 };
 
+const compiledWithEveryPhysicalRow = {
+  ...compiled,
+  totalPixels: 10,
+  outputs: [{ ...compiled.outputs[0], count: 10, runIds: ['run-a', 'jump-a', 'reserved-a', 'run-b'] }],
+  runs: [
+    compiled.runs[0],
+    { id: 'jump-a', type: 'cable', outputId: 'out1', start: 4, count: 0 },
+    { id: 'reserved-a', type: 'inactive', outputId: 'out1', start: 4, count: 2 },
+    { ...compiled.runs[1], start: 6 },
+  ],
+};
+
 test('chase steps cover output, run, first pixel, and physical direction in compiler order', () => {
   const steps = buildWiringChaseSteps(compiled);
   assert.deepEqual(steps.map(step => `${step.kind}:${step.outputId}:${step.runId || ''}`), [
@@ -30,6 +42,36 @@ test('chase steps cover output, run, first pixel, and physical direction in comp
   assert.equal(CHASE_ACK_TIMEOUT_MS, 1500);
 });
 
+test('chase steps preserve cable jumps and reserved-unlit rows in compiler order', () => {
+  const steps = buildWiringChaseSteps(compiledWithEveryPhysicalRow);
+  assert.deepEqual(steps.map(step => `${step.kind}:${step.runId || ''}`), [
+    'output:', 'run:run-a', 'cable:jump-a', 'inactive:reserved-a', 'run:run-b',
+  ]);
+});
+
+test('completion requires explicit confirmation of cable and reserved-unlit rows', () => {
+  let state = createWiringChaseState(compiledWithEveryPhysicalRow);
+  const deliver = () => { state = wiringChaseReducer(state, { type: 'delivery', requestId: state.requestId, response: { ok: true } }); };
+  deliver();
+  state = wiringChaseReducer(state, { type: 'confirm-output' });
+  deliver();
+  state = wiringChaseReducer(state, { type: 'confirm-first-pixel' });
+  state = wiringChaseReducer(state, { type: 'confirm-direction' });
+  assert.equal(state.steps[state.stepIndex].kind, 'cable');
+  assert.equal(state.canComplete, false);
+  deliver();
+  state = wiringChaseReducer(state, { type: 'confirm-cable' });
+  assert.equal(state.steps[state.stepIndex].kind, 'inactive');
+  assert.equal(state.canComplete, false);
+  deliver();
+  state = wiringChaseReducer(state, { type: 'confirm-inactive' });
+  deliver();
+  state = wiringChaseReducer(state, { type: 'confirm-first-pixel' });
+  state = wiringChaseReducer(state, { type: 'confirm-direction' });
+  assert.equal(state.canComplete, true);
+  assert.deepEqual(Object.keys(state.confirmedRuns).sort(), ['jump-a', 'reserved-a', 'run-a', 'run-b']);
+});
+
 test('full-frame chase stays black off target, marks first pixel, and never exceeds ten percent', () => {
   const frame = buildWiringChaseFrame({ totalPixels: 8, step: buildWiringChaseSteps(compiled)[1] });
   assert.equal(frame.length, 8);
@@ -37,6 +79,8 @@ test('full-frame chase stays black off target, marks first pixel, and never exce
   assert.ok(frame.slice(1, 4).every(pixel => pixel === '001A00'));
   assert.ok(frame.slice(4).every(pixel => pixel === '000000'));
   for (const pixel of frame) for (const channel of pixel.match(/../g).map(value => parseInt(value, 16))) assert.ok(channel <= CHASE_MAX_CHANNEL);
+  const reservedFrame = buildWiringChaseFrame({ totalPixels: 10, step: { ...compiledWithEveryPhysicalRow.runs[2], kind: 'inactive' } });
+  assert.ok(reservedFrame.every(pixel => pixel === '000000'));
 });
 
 test('state cannot confirm without delivery and requires every output/run fact before completion', () => {
