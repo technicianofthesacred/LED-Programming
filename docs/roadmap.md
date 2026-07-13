@@ -4,7 +4,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-06-02
+Last updated: 2026-07-13
 
 > **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
 > serves its own branded page (the visitor UI) and the WLED API; the public
@@ -52,6 +52,16 @@ Last updated: 2026-06-02
 - [x] Delete the Cloudflare KV namespace and keep `/api/lw/*` excluded from Pages Functions.
 - [x] Reframe Studio v3 as chip-config export/load only: public HTTPS uses copy/download/open-card; direct card push is local HTTP/file only.
 
+### Studio trust and physical wiring (2026-07-13)
+- [x] Make project persistence and card installation separate acknowledged revision states; failed writes retain the last confirmed card revision and retry the exact frozen payload.
+- [x] Replace the flat physical chain with one canonical wiring model compiled into output offsets, zones, WLED ledmap coordinates, frame order, firmware outputs, and assembly instructions.
+- [x] Add pointer drag/drop and accessible move controls for strip runs, cable jumps, reserved-unlit addresses, up to four output lanes, physical direction, split ranges, and closed-path seams.
+- [x] Add deterministic Auto Wire with preview/accept/cancel, output-count constraints, fixed-direction/seam preservation, bounded exact search, and solver-approved alternatives.
+- [x] Add the acknowledged low-brightness bench chase, explicit output/run/jumper/reserved confirmations, correction invalidation, lock gating, prior-look restoration, and phone/print assembly map.
+- [x] Ship Layout Send to card and canonical `ledmap.json` export from the verified compiler result.
+- [x] Harden Patterns, Settings, Show, installer, and the card visitor UI against optimistic success, stale async acknowledgement, inaccessible modal/navigation behavior, and visitor-control rollback.
+- [x] Rebuild the public ESP32-S3 factory binary from the hardened firmware and enforce source/binary freshness in the launch gate.
+
 ## Open — user/hardware actions
 
 These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
@@ -62,6 +72,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 - [ ] Configure & test Madrix Art-Net output → WLED (universes, 510 ch/universe, 30–44 Hz, WiFi sleep disabled)
 - [ ] Define WLED segments matching laser-cut zones — fill in zone IDs in `docs/segments.md`
 - [ ] Capture per-device record: MAC, post-STA IP, segment JSON dump
+- [ ] Run the real-artwork physical wiring acceptance gate: output identity, first pixel, direction/order, jumper routing, reserved addresses, color order, brightness cap, and archived locked wiring/assembly map
 
 ## Open — deployment
 

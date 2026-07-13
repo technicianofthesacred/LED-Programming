@@ -4,10 +4,10 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Soon
 
-### Layout screen redesign (planned 2026-07-10)
+### Layout wiring hardening (implemented 2026-07-13; physical signoff remains)
 
-- [ ] **Try the redesigned Layout screen on a real project** — all three phases of the redesign are code-complete (Draw | Size | Wire modes, Send to card, export for other LED software); what's left is your hands-on pass: import a real artwork file, walk Draw → Size → Wire, push to a bench card, and note anything that feels wrong _(you · moderate)_
-  Everything is committed on the `simplify-ui-design-flow` branch with 36 automated checks green. A real card appeared on the network during the build and the tests were hardened against that. Consider a Codex remote review of the branch before merging. → Plan: [docs/layout-redesign-plan.md](docs/layout-redesign-plan.md)
+- [ ] **Bench-sign off the canonical wiring flow on the real artwork** — Draw and Size the piece, drag or Auto Wire its runs into the correct output lanes, confirm every output/first pixel/direction/jumper/reserved block with the guided chase, lock the wiring, install that exact revision, and compare the phone/print assembly map to the physical build _(you · moderate)_
+  The Studio implementation, compiler, solver, acknowledged transport, rollback, and responsive UI are complete and automated. Hardware identity, color order, brightness/current limits, and actual jumper routing still require the card and artwork; mocks are not accepted as physical proof. → Gate: [docs/deployment-checklist.md](docs/deployment-checklist.md), design: [docs/superpowers/specs/2026-07-13-lightweaver-experience-hardening-design.md](docs/superpowers/specs/2026-07-13-lightweaver-experience-hardening-design.md)
 
 ### Mandala listening-gallery visualizer (in progress — laptop simulator)
 
@@ -61,8 +61,6 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
 
 ### Mapper and firmware follow-ups
 
-- [ ] **Rescue the split-zone lighting fix from the old tender-dirac branch** — a zone split into pieces currently goes dark on its later pieces; the fix exists on the stale `claude/tender-dirac-b575t8` branch but that whole branch can't be merged (it predates the v3.3 reorg and collides in ~10 places, including the firmware and the compiled firmware file, so a blind merge would revert newer work) _(you + agent · moderate)_
-  Lift only the multi-range zone rendering change onto a fresh branch off current main, build it, then bench-test on real hardware before flashing any installation. Done when split zones light every segment, the build passes, a bench-test confirms it, and the firmware bundle is redeployed. Do NOT merge the old branch wholesale — salvage the one feature. → Source branch: `claude/tender-dirac-b575t8` (firmware/lightweaver-controller/src/main.cpp + LightweaverWeb.cpp)
 - [ ] **USB controller mode** — add a direct USB mode using the verified bench serial protocol as the first hardware handshake _(agent · moderate)_
   A wired serial path lets the mapper drive the card directly without the network, proving the protocol before wireless. Done when the mapper can drive the controller over USB serial using the bench protocol. → Plan: [docs/roadmap.md](docs/roadmap.md)
 - [ ] **Split mapper file** — break the 4,713-line mapper main file into state, ui, render, and export modules _(agent · deep)_
@@ -89,8 +87,8 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
   fadeTo spins up to ~2s without servicing the web server or captive DNS, so taps feel laggy exactly when the customer is interacting. Done when fades render incrementally from loop() and the page stays responsive during a transition. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
 - [ ] **OTA firmware updates** — add an OTA path so shipped cards can be updated without USB reflash _(agent · deep)_
   Today a fielded card can only be fixed by mailing it back or a house call; the recovery/WDT machinery assumes firmware can be fixed in the field. Done when a card can safely self-update from a signed/validated image with rollback on failure. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
-- [ ] **Touch support for both editors** — convert Studio Layout/Timeline drags and the mapper canvas to Pointer Events with coarse-pointer-visible controls _(agent · deep)_
-  The stated target is "web interface accessible from phone" but the editing surfaces are mouse-only today. Done when strip drawing, clip dragging, and hover-only buttons work on a tablet. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
+- [ ] **Finish touch support outside the Wire workspace** — extend the Wire screen's pointer-event/coarse-target approach to Studio Draw/Timeline and the mapper canvas _(agent · deep)_
+  Wire lane and cable dragging now work with Pointer Events and retain accessible move controls; Draw, Timeline, and the separate mapper still need equivalent tablet behavior. Done when strip drawing, clip dragging, and remaining hover-only controls work on a tablet. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
 - [ ] **Studio connection-story convergence** — collapse WledBar/DevicesPanel/ChipScreen/StatusBar into one protocol-aware card widget _(agent · moderate)_
   DevicesPanel still uses the broken legacy http push/scan path with guessed diagnoses; ChipScreen does it right. Done when there is one card-connection surface that leads with the bridge on HTTPS. → Findings: [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
 - [ ] **Mapper SVG fidelity** — handle transform attributes, relative compound paths, and viewBox offsets on import _(agent · moderate)_
