@@ -228,3 +228,74 @@ test('exact search stops at 250,000 deterministic candidates and reports the cap
   assert.equal(result.proposal.search.capped, true);
   assert.match(result.proposal.search.warning, /250,000-operation cap/);
 });
+
+test('preserves inactive runs as addressable bundles without adding jumpers', () => {
+  const strips = [strip('a', [[10, 0], [20, 0]]), strip('b', [[30, 0], [40, 0]])];
+  const runs = [run('a'), { id: 'reserved', type: 'inactive', count: 3, verified: false }, run('b')];
+  const wiring = model(runs);
+  const before = JSON.stringify({ wiring, strips });
+  const result = solve({ wiring, strips });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.proposal.wiring.outputs[0].runIds, ['a', 'reserved', 'b']);
+  assert.deepEqual(result.proposal.outputTotals, [7]);
+  assert.equal(result.proposal.jumpers.length, 2);
+  assert.ok(result.proposal.jumpers.every(jumper => jumper.toRunId !== 'reserved'));
+  assert.equal(result.proposal.totalJumperLength, 20);
+  assert.equal(JSON.stringify({ wiring, strips }), before);
+  assert.equal(JSON.stringify(solve({ wiring, strips })), JSON.stringify(result));
+});
+
+test('leading and consecutive inactive runs move with their following pixel run', () => {
+  const strips = [strip('a', [[10, 0], [20, 0]]), strip('b', [[30, 0], [40, 0]])];
+  const runs = [
+    { id: 'lead-1', type: 'inactive', count: 1, verified: false },
+    { id: 'lead-2', type: 'inactive', count: 2, verified: false },
+    run('a'), run('b'),
+  ];
+  const result = solve({ wiring: model(runs), strips });
+  assert.equal(result.ok, true);
+  const ids = result.proposal.wiring.outputs[0].runIds;
+  assert.deepEqual(ids.slice(ids.indexOf('a') - 2, ids.indexOf('a') + 1), ['lead-1', 'lead-2', 'a']);
+  assert.deepEqual(result.proposal.outputTotals, [7]);
+  assert.equal(result.proposal.jumpers.length, 2);
+});
+
+test('inactive bundles stay on their pixel output and count toward limits and balance', () => {
+  const strips = [
+    strip('a', [[-20, 0], [-19, 0]]), strip('b', [[20, 0], [21, 0]]), strip('c', [[22, 0], [23, 0]]),
+  ];
+  const runs = [run('a'), { id: 'reserved', type: 'inactive', count: 2, verified: false }, run('b'), run('c')];
+  const result = solve({
+    wiring: model(runs), strips, outputCount: 'auto',
+    capabilities: { ...capabilities, maxPixelsPerOutput: 4 },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.proposal.wiring.outputs.length, 2);
+  assert.deepEqual(result.proposal.outputTotals, [4, 4]);
+  const bundledLane = result.proposal.wiring.outputs.find(output => output.runIds.includes('a'));
+  assert.deepEqual(bundledLane.runIds.slice(bundledLane.runIds.indexOf('a'), bundledLane.runIds.indexOf('a') + 2), ['a', 'reserved']);
+  assert.equal(result.proposal.wiring.outputs.filter(output => output.runIds.includes('reserved')).length, 1);
+});
+
+test('heuristic scoring includes inactive bundle pixels while routing only strip geometry', () => {
+  const strips = Array.from({ length: 10 }, (_, index) => strip(`h${index}`, [[index * 4, 0], [index * 4 + 1, 0]]));
+  const runs = [run('h0'), { id: 'reserved', type: 'inactive', count: 100, verified: false }, ...strips.slice(1).map(item => run(item.id))];
+  const result = solve({ wiring: model(runs), strips, outputCount: 2 });
+  assert.equal(result.ok, true);
+  assert.equal(result.proposal.search.mode, 'heuristic');
+  assert.equal(result.proposal.outputTotals.reduce((sum, count) => sum + count, 0), 120);
+  assert.equal(result.proposal.jumpers.length, 10);
+});
+
+test('rejects unanchored inactive-only lanes and persisted cable rows without omitting them', () => {
+  const inactive = model([{ id: 'reserved', type: 'inactive', count: 2, verified: false }]);
+  const noAnchor = solve({ wiring: inactive, strips: [] });
+  assert.equal(noAnchor.ok, false);
+  assert.ok(noAnchor.errors.some(item => item.code === 'inactive-unanchored'));
+
+  const strips = [strip('a', [[0, 0], [1, 0]])];
+  const cable = model([run('a'), { id: 'legacy-cable', type: 'cable', verified: false }]);
+  const persisted = solve({ wiring: cable, strips });
+  assert.equal(persisted.ok, false);
+  assert.ok(persisted.errors.some(item => item.code === 'run-type-unsupported'));
+});

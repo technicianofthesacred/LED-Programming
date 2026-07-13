@@ -107,22 +107,26 @@ function retainCandidate(candidates, candidate, limit = 64) {
   if (candidates.length > limit) candidates.length = limit;
 }
 
-function outputLimitsSatisfied(lanes, runById, capabilities) {
-  const maxPixels = Number(capabilities.maxPixelsPerOutput ?? capabilities.maxPixels);
-  const maxRuns = Number(capabilities.maxRunsPerOutput ?? capabilities.maxRangesPerOutput ?? Infinity);
+function bundlePixels(id, context) {
+  return context.bundleById?.get(id)?.totalPixels ?? pixelCount(context.runById.get(id));
+}
+
+function outputLimitsSatisfied(lanes, context) {
+  const maxPixels = Number(context.capabilities.maxPixelsPerOutput ?? context.capabilities.maxPixels);
+  const maxRuns = Number(context.capabilities.maxRunsPerOutput ?? context.capabilities.maxRangesPerOutput ?? Infinity);
   return lanes.every(lane => {
-    const pixels = lane.reduce((sum, id) => sum + pixelCount(runById.get(id)), 0);
+    const pixels = lane.reduce((sum, id) => sum + bundlePixels(id, context), 0);
     return lane.length > 0 && pixels <= maxPixels && lane.length <= maxRuns;
   });
 }
 
 function evaluate(lanes, choices, context) {
-  if (!outputLimitsSatisfied(lanes, context.runById, context.capabilities)) return null;
+  if (!outputLimitsSatisfied(lanes, context)) return null;
   const jumpers = [];
   const totals = [];
   for (let outputIndex = 0; outputIndex < lanes.length; outputIndex += 1) {
     const lane = lanes[outputIndex];
-    totals.push(lane.reduce((sum, id) => sum + pixelCount(context.runById.get(id)), 0));
+    totals.push(lane.reduce((sum, id) => sum + bundlePixels(id, context), 0));
     let cursor = context.anchor;
     for (let index = 0; index < lane.length; index += 1) {
       const choice = choices.get(lane[index]);
@@ -185,7 +189,7 @@ function exactSearch(context, budget) {
   const ids = context.runs.map(run => run.id).sort(compareText);
   permutations(ids, permutation => {
     for (const lanes of splitPermutation(permutation, context.outputs.length)) {
-      if (budget.stopped || !outputLimitsSatisfied(lanes, context.runById, context.capabilities)) continue;
+      if (budget.stopped || !outputLimitsSatisfied(lanes, context)) continue;
       const orderedIds = lanes.flat();
       const choices = new Map();
       function select(index) {
@@ -231,12 +235,12 @@ function spatialClusters(context) {
     seeds.push(best.id);
   }
   const clusters = Array.from({ length: count }, (_, index) => [seeds[index]]);
-  const pixelTotals = seeds.map(id => pixelCount(context.runById.get(id)));
+  const pixelTotals = seeds.map(id => bundlePixels(id, context));
   const maxPixels = Number(context.capabilities.maxPixelsPerOutput ?? context.capabilities.maxPixels);
   const maxRuns = Number(context.capabilities.maxRunsPerOutput ?? context.capabilities.maxRangesPerOutput ?? Infinity);
-  const remaining = ids.filter(id => !seeds.includes(id)).sort((a, b) => pixelCount(context.runById.get(b)) - pixelCount(context.runById.get(a)) || compareText(a, b));
+  const remaining = ids.filter(id => !seeds.includes(id)).sort((a, b) => bundlePixels(b, context) - bundlePixels(a, context) || compareText(a, b));
   for (const id of remaining) {
-    const pixels = pixelCount(context.runById.get(id));
+    const pixels = bundlePixels(id, context);
     const ranked = seeds.map((seed, index) => ({ index, distance: distance(centers.get(id), centers.get(seed), 1) }))
       .sort((a, b) => a.distance - b.distance || a.index - b.index);
     const target = ranked.find(item => pixelTotals[item.index] + pixels <= maxPixels && clusters[item.index].length < maxRuns) || ranked[0];
@@ -341,7 +345,7 @@ function materialize(candidate, context, search) {
     id: output.id,
     ...(output.name ? { name: output.name } : {}),
     pin: output.pin,
-    runIds: [...candidate.lanes[index]],
+    runIds: candidate.lanes[index].flatMap(id => [...context.bundleById.get(id).members]),
   }));
   const choiceById = candidate.choices;
   wiring.runs = wiring.runs.map(run => run.type !== 'strip' ? run : {
@@ -369,6 +373,36 @@ function materialize(candidate, context, search) {
     crossings: candidate.crossings,
     search,
   };
+}
+
+function buildBundles(model) {
+  const allRunsById = new Map(model.runs.map(run => [run.id, run]));
+  const bundles = [];
+  const errors = [];
+  for (const output of model.outputs) {
+    let current = null;
+    const leading = [];
+    for (const runId of output.runIds) {
+      const run = allRunsById.get(runId);
+      if (!run) continue;
+      if (run.type === 'cable') {
+        errors.push(error('run-type-unsupported', `Persisted cable run ${run.id} cannot be routed as addressable pixels.`, { runId: run.id }));
+        continue;
+      }
+      if (run.type === 'inactive') {
+        if (current) current.members.push(run.id);
+        else leading.push(run.id);
+        continue;
+      }
+      current = { id: run.id, run, members: [...leading, run.id] };
+      leading.length = 0;
+      bundles.push(current);
+    }
+    if (leading.length) errors.push(error('inactive-unanchored', `Inactive runs ${leading.join(', ')} have no neighboring pixel run.`, { runIds: [...leading], outputId: output.id }));
+  }
+  for (const bundle of bundles) bundle.totalPixels = bundle.members.reduce((sum, id) => sum + pixelCount(allRunsById.get(id)), 0);
+  bundles.sort((a, b) => compareText(a.id, b.id));
+  return { bundles, errors };
 }
 
 function artworkDiagonal(strips) {
@@ -424,8 +458,10 @@ export function proposeAutoWiring({
     if (!capabilities.supportedOutputPins?.includes(output.pin)) errors.push(error('output-pin-unsupported', `Unsupported available output pin ${output.pin}.`, { pin: output.pin }));
     outputIds.add(output.id); pins.add(output.pin);
   }
-  const runs = model.runs.filter(run => run.type === 'strip').sort((a, b) => compareText(a.id, b.id));
-  if (runs.length !== model.runs.length) errors.push(error('run-type-unsupported', 'Auto Wire currently requires every routed run to be a pixel strip.'));
+  const bundleResult = buildBundles(model);
+  errors.push(...bundleResult.errors);
+  const runs = bundleResult.bundles.map(bundle => bundle.run);
+  const bundleById = new Map(bundleResult.bundles.map(bundle => [bundle.id, bundle]));
   const geometryByStrip = new Map(strips.map(strip => [String(strip.id), strip]));
   for (const run of runs) {
     const strip = geometryByStrip.get(run.source.stripId);
@@ -436,7 +472,7 @@ export function proposeAutoWiring({
       errors.push(error('geometry-invalid', `Run ${run.id} needs finite sampled pixel coordinates.`, { runId: run.id }));
     }
   }
-  const totalPixels = runs.reduce((sum, run) => sum + pixelCount(run), 0);
+  const totalPixels = bundleResult.bundles.reduce((sum, bundle) => sum + bundle.totalPixels, 0);
   if (totalPixels > capabilities.maxPixels) errors.push(error('pixel-limit', `Wiring uses ${totalPixels} pixels; hardware supports ${capabilities.maxPixels}.`));
   if (errors.length) return { ok: false, proposal: null, alternatives: [], assumptions, errors, score: null };
 
@@ -455,7 +491,7 @@ export function proposeAutoWiring({
   for (const count of counts) {
     if (count > runs.length) continue;
     const selectedOutputs = outputs.slice(0, count);
-    const context = { model, runs, runById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
+    const context = { model, runs, runById, bundleById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
     budget = { operations: 0, stopped: false };
     mode = runs.length <= 9 && count <= 2 ? 'exact' : 'heuristic';
     candidates = mode === 'exact' ? exactSearch(context, budget) : heuristicSearch(context, budget);
@@ -471,7 +507,7 @@ export function proposeAutoWiring({
   for (const candidate of candidates) if (!signatures.has(candidate.lexical)) { signatures.add(candidate.lexical); unique.push(candidate); }
   const best = unique[0];
   const selectedOutputs = outputs.slice(0, usedCount);
-  const context = { model, runs, runById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
+  const context = { model, runs, runById, bundleById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
   const search = { mode, operations: budget.operations, cap: OPERATION_CAP, capped: budget.stopped };
   if (budget.stopped) search.warning = 'Search stopped at the deterministic 250,000-operation cap; further improvements may exist.';
   const proposal = materialize(best, context, search);
