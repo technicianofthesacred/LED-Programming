@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // Phase 2 step 9 (docs/layout-redesign-plan.md) — the Wire-mode finish line:
 // Send to card + Export ledmap.json. Reuses the `mockLocalCard` route pattern
@@ -46,26 +49,43 @@ async function mockLocalCard(page: any, options: any = {}) {
   return card;
 }
 
-async function gotoWire(page: any) {
+async function gotoWire(page: any, { verified = false } = {}) {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
+  if (!verified) return;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
+  const pending = page.waitForEvent('download');
+  await page.getByTitle('Save project file').click();
+  const download = await pending;
+  const source = path.join(tmp, 'source.json');
+  await download.saveAs(source);
+  const project = JSON.parse(fs.readFileSync(source, 'utf8'));
+  project.layout.wiring.verified = true;
+  project.layout.wiring.locked = true;
+  project.layout.wiring.runs.forEach((run: any) => { run.verified = true; });
+  const ready = path.join(tmp, 'ready.json');
+  fs.writeFileSync(ready, JSON.stringify(project));
+  await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
-test('Send to card renders in Wire mode with an ambient status dot', async ({ page }) => {
-  await mockLocalCard(page);
+test('Send to card stays disabled for default unverified wiring and makes no request', async ({ page }) => {
+  const card = await mockLocalCard(page);
   await gotoWire(page);
 
   const send = page.getByTestId('layout-send-to-card');
-  await expect(send).toBeEnabled(); // NOT disabled when disconnected
+  await expect(send).toBeDisabled();
   await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
   await expect(page.getByTestId('layout-export-ledmap')).toBeVisible();
+  expect(card.operations).toEqual([]);
 });
 
 test('a successful push shows a green banner mentioning zones', async ({ page }) => {
   const card = await mockLocalCard(page);
-  await gotoWire(page);
+  await gotoWire(page, { verified: true });
 
   await page.getByTestId('layout-send-to-card').click();
 
@@ -79,7 +99,7 @@ test('a successful push shows a green banner mentioning zones', async ({ page })
 
 test('a failed push shows a red banner', async ({ page }) => {
   await mockLocalCard(page, { failConfig: true });
-  await gotoWire(page);
+  await gotoWire(page, { verified: true });
 
   await page.getByTestId('layout-send-to-card').click();
 

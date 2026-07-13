@@ -1,25 +1,18 @@
 import { useState, useRef, useCallback } from 'react';
 import { svgPt } from '../../../lib/layoutGeometry.js';
-import {
-  applyPatchRouteOrder,
-  cutsForStrip,
-  deleteStripCut,
-  normalizePatchBoard,
-  nudgeStripCut,
-  sliceStripIntoPatchesPreservingRoute,
-} from '../../../lib/patchBoard.js';
+import { useProject } from '../../../state/ProjectContext.jsx';
 
-// Wire-mode overlay: chop (split), link (route order), cut selection + nudge.
-// Reads the shared layout bundle (patchBoard, strips, svgRef, updatePatchBoard).
+function uniqueRunId(runs, base) {
+  const ids = new Set(runs.map(run => run.id));
+  if (!ids.has(base)) return base;
+  let suffix = 2;
+  while (ids.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
 export function useLayoutWire(ctx) {
-  const {
-    strips,
-    patchBoard,
-    updatePatchBoard,
-    selectStrip,
-    svgRef,
-  } = ctx;
-
+  const { strips, selectStrip, svgRef } = ctx;
+  const { wiring, updateWiring } = useProject();
   const [wireOverlayMode, setWireOverlayMode] = useState('idle');
   const [selectedWireCut, setSelectedWireCut] = useState(null);
   const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
@@ -30,83 +23,93 @@ export function useLayoutWire(ctx) {
     if (!svgRef.current || !strip?.pixels?.length) return null;
     const point = svgPt(svgRef.current, event.clientX, event.clientY);
     let nearestIndex = 0;
-    let nearestDistance = Infinity;
+    let distance = Infinity;
     strip.pixels.forEach((pixel, index) => {
-      const distance = Math.hypot(point.x - pixel.x, point.y - pixel.y);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestIndex = index;
-      }
+      const next = Math.hypot(point.x - pixel.x, point.y - pixel.y);
+      if (next < distance) { distance = next; nearestIndex = index; }
     });
-    const maxCut = strip.pixels.length - 2;
-    if (maxCut < 0) return null;
-    return Math.max(0, Math.min(maxCut, nearestIndex));
+    return Math.max(0, Math.min(strip.pixels.length - 2, nearestIndex));
   }, [svgRef]);
 
   const chopStripAtEvent = useCallback((event, strip) => {
-    if (!strip || patchBoard?.physicalLocked) return;
+    if (!strip || wiring.locked) return;
     const cutLed = nearestLedIndex(event, strip);
-    if (cutLed === null) return;
-    const currentCuts = cutsForStrip(normalizePatchBoard(patchBoard, strips), strip.id);
-    const nextCuts = [...new Set([...currentCuts, cutLed])].sort((a, b) => a - b);
-    updatePatchBoard(next => sliceStripIntoPatchesPreservingRoute(next, strip, nextCuts));
+    if (cutLed == null) return;
+    const result = updateWiring(draft => {
+      const run = draft.runs.find(item => item.type === 'strip' && item.source.stripId === strip.id && cutLed >= item.source.from && cutLed < item.source.to);
+      if (!run) throw new Error('Choose a point inside a physical run.');
+      const leftId = uniqueRunId(draft.runs, `${run.id}-a-${cutLed}`);
+      const rightId = uniqueRunId([...draft.runs, { id: leftId }], `${run.id}-b-${cutLed + 1}`);
+      const left = { ...run, id: leftId, source: { ...run.source, to: cutLed }, verified: false };
+      const right = { ...run, id: rightId, source: { ...run.source, from: cutLed + 1 }, verified: false };
+      draft.runs.splice(draft.runs.indexOf(run), 1, left, right);
+      draft.outputs.forEach(output => {
+        const index = output.runIds.indexOf(run.id);
+        if (index >= 0) output.runIds.splice(index, 1, left.id, right.id);
+      });
+    }, { changeKind: 'seam' });
+    if (!result.ok) return;
     selectStrip(strip.id);
     setSelectedWireCut({ stripId: strip.id, cutLed });
-    setSelectedWirePatchId(null);
-  }, [nearestLedIndex, patchBoard, strips, updatePatchBoard, selectStrip]);
+  }, [nearestLedIndex, selectStrip, updateWiring, wiring.locked]);
 
-  const toggleRoutePatch = useCallback((patchId) => {
-    if (wireOverlayMode !== 'link' || patchBoard?.physicalLocked) return;
-    setLinkRouteIds(prev => {
-      const baseRoute = linkRouteStartedRef.current ? prev : [];
-      const nextRoute = baseRoute.includes(patchId)
-        ? baseRoute.filter(id => id !== patchId)
-        : [...baseRoute, patchId];
-      linkRouteStartedRef.current = true;
-      updatePatchBoard(next => applyPatchRouteOrder(next, nextRoute));
-      setSelectedWirePatchId(patchId);
-      setSelectedWireCut(null);
-      return nextRoute;
-    });
-  }, [patchBoard, updatePatchBoard, wireOverlayMode]);
-
-  const nudgeSelectedWireCut = useCallback((delta) => {
-    if (!selectedWireCut) return;
-    const strip = strips.find(item => item.id === selectedWireCut.stripId);
-    if (!strip) return;
-    const step = Math.sign(Number(delta) || 0);
-    if (!step) return;
-    const board = normalizePatchBoard(patchBoard, strips);
-    const currentCuts = cutsForStrip(board, strip.id);
-    const index = currentCuts.indexOf(selectedWireCut.cutLed);
-    if (index < 0) return;
-    const maxLed = Math.max(0, strip.pixels?.length ?? strip.pixelCount ?? 1) - 1;
-    const previousLimit = index === 0 ? 0 : currentCuts[index - 1] + 1;
-    const nextLimit = index === currentCuts.length - 1 ? maxLed - 1 : currentCuts[index + 1] - 1;
-    const nextCutLed = selectedWireCut.cutLed + step;
-    if (nextCutLed < previousLimit || nextCutLed > nextLimit) return;
-    updatePatchBoard(next => nudgeStripCut(next, strip, selectedWireCut.cutLed, step));
-    setSelectedWireCut({ stripId: strip.id, cutLed: nextCutLed });
-  }, [patchBoard, selectedWireCut, strips, updatePatchBoard]);
-
-  const deleteSelectedWireCut = useCallback(() => {
-    if (!selectedWireCut) return;
-    const strip = strips.find(item => item.id === selectedWireCut.stripId);
-    if (!strip) return;
-    updatePatchBoard(next => deleteStripCut(next, strip, selectedWireCut.cutLed));
+  const deleteSelectedWireCut = useCallback((requestedCut = null) => {
+    const activeCut = requestedCut || selectedWireCut;
+    if (!activeCut || wiring.locked) return;
+    const { stripId, cutLed } = activeCut;
+    updateWiring(draft => {
+      const left = draft.runs.find(run => run.type === 'strip' && run.source.stripId === stripId && run.source.to === cutLed);
+      const right = draft.runs.find(run => run.type === 'strip' && run.source.stripId === stripId && run.source.from === cutLed + 1);
+      if (!left || !right) throw new Error('The selected split no longer exists.');
+      const mergedId = uniqueRunId(draft.runs.filter(run => run.id !== left.id && run.id !== right.id), `run-${stripId}-${left.source.from}-${right.source.to}`);
+      const merged = { ...left, id: mergedId, source: { ...left.source, to: right.source.to }, verified: false };
+      draft.runs = draft.runs.filter(run => run.id !== left.id && run.id !== right.id);
+      draft.runs.push(merged);
+      draft.outputs.forEach(output => {
+        const index = output.runIds.indexOf(left.id);
+        output.runIds = output.runIds.filter(id => id !== left.id && id !== right.id);
+        if (index >= 0) output.runIds.splice(index, 0, merged.id);
+      });
+    }, { changeKind: 'seam' });
     setSelectedWireCut(null);
-  }, [selectedWireCut, strips, updatePatchBoard]);
+  }, [selectedWireCut, updateWiring, wiring.locked]);
+
+  const nudgeSelectedWireCut = useCallback((delta, requestedCut = null) => {
+    const activeCut = requestedCut || selectedWireCut;
+    if (!activeCut || wiring.locked) return;
+    const next = activeCut.cutLed + Math.sign(delta);
+    const result = updateWiring(draft => {
+      const left = draft.runs.find(run => run.type === 'strip' && run.source.stripId === activeCut.stripId && run.source.to === activeCut.cutLed);
+      const right = draft.runs.find(run => run.type === 'strip' && run.source.stripId === activeCut.stripId && run.source.from === activeCut.cutLed + 1);
+      if (!left || !right || next < left.source.from || next >= right.source.to) throw new Error('Split cannot move beyond its neighboring run.');
+      left.source.to = next;
+      right.source.from = next + 1;
+    }, { changeKind: 'seam' });
+    if (result.ok) setSelectedWireCut({ ...activeCut, cutLed: next });
+  }, [selectedWireCut, updateWiring, wiring.locked]);
+
+  const toggleRoutePatch = useCallback(runId => {
+    if (wireOverlayMode !== 'link' || wiring.locked) return;
+    setLinkRouteIds(previous => {
+      const route = linkRouteStartedRef.current ? previous : [];
+      const next = route.includes(runId) ? route.filter(id => id !== runId) : [...route, runId];
+      linkRouteStartedRef.current = true;
+      updateWiring(draft => {
+        const output = draft.outputs.find(item => item.runIds.includes(runId)) || draft.outputs[0];
+        const rest = output.runIds.filter(id => !next.includes(id));
+        output.runIds = [...next, ...rest];
+      }, { changeKind: 'route' });
+      setSelectedWirePatchId(runId);
+      return next;
+    });
+  }, [updateWiring, wireOverlayMode, wiring.locked]);
 
   return {
     wireOverlayMode, setWireOverlayMode,
     selectedWireCut, setSelectedWireCut,
     selectedWirePatchId, setSelectedWirePatchId,
-    linkRouteIds, setLinkRouteIds,
-    linkRouteStartedRef,
-    nearestLedIndex,
-    chopStripAtEvent,
-    toggleRoutePatch,
-    nudgeSelectedWireCut,
-    deleteSelectedWireCut,
+    linkRouteIds, setLinkRouteIds, linkRouteStartedRef,
+    nearestLedIndex, chopStripAtEvent, toggleRoutePatch,
+    nudgeSelectedWireCut, deleteSelectedWireCut,
   };
 }

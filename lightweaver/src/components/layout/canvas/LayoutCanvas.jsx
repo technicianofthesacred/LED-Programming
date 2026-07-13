@@ -10,6 +10,7 @@ import {
   restingLedAlpha,
 } from '../../../lib/previewVisuals.js';
 import { LightCone, OmniHalo } from '../shared/InspectorPrimitives.jsx';
+import { WiringCordOverlay } from '../wire/WiringCordOverlay.jsx';
 
 // ── LayoutCanvas ────────────────────────────────────────────────────────────
 // Verbatim lift of the LayoutScreen <svg> stage subtree (defs, artwork, heat,
@@ -40,6 +41,7 @@ export function LayoutCanvas({
   } = lightPreview;
   const {
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
+    compiledWiring, selectedWiringRunId,
   } = wire;
   const { mode, drawMode, waypoints, ghostPt, ghostD } = draw;
   const {
@@ -91,10 +93,10 @@ export function LayoutCanvas({
             }}
             onClick={handleSvgClick}
             onDoubleClick={handleSvgDblClick}
-            onMouseMove={handleSvgMouseMove}
-            onMouseDown={handleSvgMouseDown}
-            onMouseUp={handleSvgMouseUp}
-            onMouseLeave={handleSvgMouseLeave}
+            onPointerMove={handleSvgMouseMove}
+            onPointerDown={handleSvgMouseDown}
+            onPointerUp={handleSvgMouseUp}
+            onPointerLeave={handleSvgMouseLeave}
             onContextMenu={handleContextMenu}
             onWheel={handleWheel}
           >
@@ -113,6 +115,10 @@ export function LayoutCanvas({
                 <stop offset="100%" stopColor="oklch(80% 0.2 30)" stopOpacity="0"/>
               </radialGradient>
             </defs>
+
+            {mode === 'wire' && compiledWiring && (
+              <WiringCordOverlay compiled={compiledWiring} selectedRunId={selectedWiringRunId}/>
+            )}
 
             {/* ── Artwork background ── */}
             {artworkHTML && (
@@ -172,7 +178,7 @@ export function LayoutCanvas({
                         fill="none" stroke="#fff" strokeOpacity="0.001"
                         strokeWidth="16" strokeLinecap="round" pointerEvents="stroke"
                         style={{ cursor: 'pointer' }}
-                        onMouseDown={e => e.stopPropagation()}
+                        onPointerDown={e => e.stopPropagation()}
                         onMouseEnter={() => { setHoveredLayerId(l.layerId); setHoveredSubPathId(t.pathId); }}
                         onMouseLeave={() => { setHoveredLayerId(null); setHoveredSubPathId(null); }}
                         onClick={e => {
@@ -267,6 +273,15 @@ export function LayoutCanvas({
                 <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
                   <path d={s.pathData}
                         data-strip-path={s.id}
+                        tabIndex="0"
+                        role="button"
+                        aria-label={`Select ${s.name} strip`}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectStrip(s.id);
+                          }
+                        }}
                         fill="none"
                         stroke="white"
                         strokeOpacity="0.001"
@@ -274,7 +289,7 @@ export function LayoutCanvas({
                         strokeLinecap="round"
                         pointerEvents="visibleStroke"
                         style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
-                        onMouseDown={e => {
+                        onPointerDown={e => {
                           if (wireOverlayMode === 'chop') {
                             e.preventDefault();
                             e.stopPropagation();

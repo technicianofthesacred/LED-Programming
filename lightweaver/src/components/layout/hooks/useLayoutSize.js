@@ -42,12 +42,14 @@ export function useLayoutSize(ctx) {
   // handler behind the per-strip count controls in Size mode and Draw mode's
   // strip detail.
   const setStripCount = useCallback((id, newCount) => {
+    pushLayoutHistory();
     resampleStrip(id, newCount);
     setStripCountOverrides(prev => (prev[id] ? prev : { ...prev, [id]: true }));
-  }, [resampleStrip, setStripCountOverrides]);
+  }, [resampleStrip, setStripCountOverrides, pushLayoutHistory]);
 
   // Clear a strip's override and recompute its count from the current density/scale.
   const resetStripCount = useCallback((id) => {
+    pushLayoutHistory();
     setStripCountOverrides(prev => {
       if (!prev[id]) return prev;
       const next = { ...prev };
@@ -59,7 +61,7 @@ export function useLayoutSize(ctx) {
       const { len, count } = computeStripCount(s);
       return rebuildStrip({ ...s, svgLength: len, pixelCount: count });
     }));
-  }, [setStrips, setStripCountOverrides, rebuildStrip, computeStripCount]);
+  }, [setStrips, setStripCountOverrides, rebuildStrip, computeStripCount, pushLayoutHistory]);
 
   const handleDensityChange = useCallback((newDensity) => {
     pushLayoutHistory();

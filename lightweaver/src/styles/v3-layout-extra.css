@@ -201,6 +201,11 @@
   stroke: var(--accent);
   filter: drop-shadow(0 0 6px var(--accent));
 }
+.lw-compiled-cord { stroke: var(--text-faint); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: .5; }
+.lw-compiled-endpoint { fill: var(--bg-canvas); stroke: var(--accent); stroke-width: 2; }
+.lw-compiled-label { fill: var(--text-mid); font: 10px var(--font-mono); }
+.lw-compiled-cords .is-selected .lw-compiled-cord { stroke: var(--accent); stroke-width: 3; opacity: .95; }
+.lw-compiled-cords .is-selected .lw-compiled-endpoint { fill: var(--accent); }
 
 /* marching-ants animation for canvas path-selection highlight */
 @keyframes lw-march { to { stroke-dashoffset: -24; } }

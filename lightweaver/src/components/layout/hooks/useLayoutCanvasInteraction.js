@@ -20,11 +20,7 @@ import {
   parsedVb,
   pathIntersectsRect,
 } from '../../../lib/layoutGeometry.js';
-import {
-  cutsForStrip,
-  mainChain,
-  normalizePatchBoard,
-} from '../../../lib/patchBoard.js';
+import { useProject } from '../../../state/ProjectContext.jsx';
 
 // Draw | Size | Wire — deep-linked via `#screen=layout&mode=<x>`.
 const LAYOUT_MODES = ['draw', 'size', 'wire'];
@@ -54,11 +50,11 @@ function mergeModeIntoHash(nextMode) {
 // visualisation memo the <svg> tree renders. Cross-hook mutators arrive via
 // `deps` from the composer (no hook reaches into another's internals).
 export function useLayoutCanvasInteraction(ctx, deps) {
+  const { wiring, compiledWiring } = useProject();
   const {
     strips, setStrips,
     hidden, setHidden,
     layers, editCounts, svgText, viewBox, density, pxPerMm,
-    patchBoard,
     pushLayoutHistory,
     selection,
     selectStrip, selectStrips, toggleStripSel, selectPaths, clearLayoutSelection,
@@ -127,10 +123,16 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   const setMode = useCallback((nextMode) => {
     if (!LAYOUT_MODES.includes(nextMode) || nextMode === mode) return;
-    cancelActiveTool();
+    // Mode visits suspend the freehand tool without discarding its waypoints.
+    // Escape / Cancel remain the explicit destructive action.
+    setDrawMode(false);
+    setGhostPt(null);
+    setWireOverlayMode('idle');
+    setLinkRouteIds([]);
+    setSelectedWireCut(null);
     setModeState(nextMode);
     mergeModeIntoHash(nextMode);
-  }, [mode, cancelActiveTool]);
+  }, [mode, setWireOverlayMode, setLinkRouteIds, setSelectedWireCut]);
 
   // ── Rubber-band lasso — coords stored in CLIENT (viewport px), not SVG ──────
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -246,8 +248,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     };
 
     const onUp = (upEvent) => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
       if (stripDragFrameRef.current) {
         cancelAnimationFrame(stripDragFrameRef.current);
         stripDragFrameRef.current = 0;
@@ -260,8 +262,9 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       setTimeout(() => { stripDragSuppressClickRef.current = false; }, 0);
     };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   }, [mode, drawMode, selectedStripIds, strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, toggleStripSel, selectStrip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Per-layer artwork opacity ──────────────────────────────────────────────
@@ -547,30 +550,23 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   }, [strips, isEditingGesture]);
 
   const wirePathCanvasSegments = useMemo(() => {
-    const board = normalizePatchBoard(patchBoard, strips);
     const stripsById = new Map(strips.map(strip => [strip.id, strip]));
-    const rowOrder = new Map(mainChain(board).rowIds.map((patchId, order) => [patchId, order]));
-    const segmentPatches = board.patches
-      .filter(patch => patch.source?.type === 'strip')
-      .map(patch => ({
-        patch,
-        order: rowOrder.get(patch.id),
-        linked: rowOrder.has(patch.id),
-      }));
-    const patchCountsByStrip = segmentPatches.reduce((counts, { patch }) => {
-      const stripId = patch.source.stripId;
+    const rowOrder = new Map(compiledWiring.runs.map((run, order) => [run.id, order]));
+    const segmentRuns = wiring.runs.filter(run => run.type === 'strip').map(run => ({ run, order: rowOrder.get(run.id), linked: rowOrder.has(run.id) }));
+    const patchCountsByStrip = segmentRuns.reduce((counts, { run }) => {
+      const stripId = run.source.stripId;
       counts.set(stripId, (counts.get(stripId) || 0) + 1);
       return counts;
     }, new Map());
 
     const segments = [];
-    segmentPatches.forEach(({ patch, order, linked }) => {
-      const stripId = patch.source.stripId;
+    segmentRuns.forEach(({ run, order, linked }) => {
+      const stripId = run.source.stripId;
       if (hidden[stripId]) return;
       const strip = stripsById.get(stripId);
       if (!strip?.pixels?.length) return;
-      const start = Number(patch.source.startLed);
-      const end = Number(patch.source.endLed);
+      const start = Number(run.source.from);
+      const end = Number(run.source.to);
       if (!Number.isFinite(start) || !Number.isFinite(end)) return;
       const min = Math.min(start, end);
       const max = Math.max(start, end);
@@ -582,8 +578,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       const renderPoints = points.length === 1 ? [points[0], points[0]] : points;
       const isFullStrip = min === 0 && max === strip.pixels.length - 1;
       segments.push({
-        id: patch.id,
-        patchId: patch.id,
+        id: run.id,
+        patchId: run.id,
         stripId,
         color: strip.color || 'var(--accent)',
         order,
@@ -596,7 +592,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       });
     });
     return segments;
-  }, [patchBoard, strips, hidden]);
+  }, [wiring, compiledWiring, strips, hidden]);
 
   const visibleWirePathCanvasSegments = useMemo(
     () => wireOverlayMode === 'link'
@@ -617,10 +613,12 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   }, [wirePathCanvasSegments]);
 
   const wireCutMarkers = useMemo(() => {
-    const board = normalizePatchBoard(patchBoard, strips);
     return strips
       .filter(strip => !hidden[strip.id] && strip.pixels?.length)
-      .flatMap(strip => cutsForStrip(board, strip.id)
+      .flatMap(strip => [...new Set([
+        ...wiring.runs.filter(run => run.type === 'strip' && run.source.stripId === strip.id && run.source.to < strip.pixels.length - 1).map(run => run.source.to),
+        ...(selectedWireCut?.stripId === strip.id ? [selectedWireCut.cutLed] : []),
+      ])]
         .map(cutLed => {
           const point = strip.pixels[cutLed];
           if (!point) return null;
@@ -639,7 +637,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
           };
         })
         .filter(Boolean));
-  }, [patchBoard, strips, hidden, selectedWireCut]);
+  }, [wiring, strips, hidden, selectedWireCut]);
 
   // ── Viewport scale for adaptive sizing ─────────────────────────────────────
   const vbScale = useMemo(() => {
@@ -685,6 +683,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   // ── Draw mode SVG events ───────────────────────────────────────────────────
   const handleSvgMouseDown = (e) => {
+    e.currentTarget?.setPointerCapture?.(e.pointerId);
     if (spaceRef.current) {
       isPanningRef.current = true;
       setIsPanning(true);
@@ -714,12 +713,12 @@ export function useLayoutCanvasInteraction(ctx, deps) {
           setRubberBand({ ...rubberBandRef.current });
         };
         const onWinUp = (ev) => {
-          window.removeEventListener('mousemove', onWinMove);
-          window.removeEventListener('mouseup', onWinUp);
+          window.removeEventListener('pointermove', onWinMove);
+          window.removeEventListener('pointerup', onWinUp);
           lassoFinishRef.current?.(ev);
         };
-        window.addEventListener('mousemove', onWinMove);
-        window.addEventListener('mouseup', onWinUp);
+        window.addEventListener('pointermove', onWinMove);
+        window.addEventListener('pointerup', onWinUp);
       }
     }
   };
