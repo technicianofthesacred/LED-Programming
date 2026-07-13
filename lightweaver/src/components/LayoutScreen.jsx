@@ -251,9 +251,13 @@ export function LayoutScreen({ connected }) {
 
       {/* ── Right panel (mockup .side) ─────────────────────────────── */}
       <aside className="side">
-      {mode === 'draw' && <DrawModePanel state={state}/>}
-      {mode === 'size' && <SizeModePanel state={state}/>}
-      {mode === 'wire' && <WireModePanel state={state} connected={connected}/>}
+        <div className="la-sheet-handle" data-testid="layout-sheet-handle" aria-label="Inspector panel">
+          <span aria-hidden="true"/>
+          <strong>Inspector</strong>
+        </div>
+        {mode === 'draw' && <DrawModePanel state={state}/>}
+        {mode === 'size' && <SizeModePanel state={state}/>}
+        {mode === 'wire' && <WireModePanel state={state} connected={connected}/>}
       </aside>
       </div>{/* .la */}
     </div>

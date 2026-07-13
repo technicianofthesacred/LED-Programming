@@ -40,10 +40,16 @@ test('manual counts and reset are independently undoable', async ({ page }) => {
 test('mobile Layout keeps a useful canvas and presents the inspector as a bottom sheet', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoLayout(page);
-  await expect(page.locator('.lw-viewport')).toBeVisible();
-  const box = await page.locator('.lw-viewport').boundingBox();
-  expect(box?.height).toBeGreaterThan(240);
-  await expect(page.locator('.la .side')).toHaveCSS('position', 'fixed');
+  const canvas = page.locator('.lw-viewport');
+  const sheet = page.locator('.la .side');
+  await expect(canvas).toBeVisible();
+  await expect(sheet).toHaveCSS('position', 'fixed');
+  await expect(page.getByTestId('layout-sheet-handle')).toBeVisible();
+  const canvasBox = await canvas.boundingBox();
+  const sheetBox = await sheet.boundingBox();
+  if (!canvasBox || !sheetBox) throw new Error('mobile canvas or inspector unavailable');
+  const nonOverlappedCanvasHeight = Math.min(canvasBox.y + canvasBox.height, sheetBox.y) - canvasBox.y;
+  expect(nonOverlappedCanvasHeight).toBeGreaterThan(240);
 });
 
 test('toolbar names mode actions before Project and Card calibration groups', async ({ page }) => {
