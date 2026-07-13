@@ -2,9 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { download, toWLEDLedmap } from '../../../lib/export.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
+import { proposeAutoWiring } from '../../../lib/autoWire.js';
+import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
 import { WiringOutputLane } from '../wire/WiringOutputLane.jsx';
 import { WiringPreflight } from '../wire/WiringPreflight.jsx';
+import { WiringBenchTest } from '../wire/WiringBenchTest.jsx';
+import { WiringAssemblyMap } from '../wire/WiringAssemblyMap.jsx';
 
 const PINS = [16, 17, 18, 21];
 const outputName = index => `Output ${String.fromCharCode(65 + index)}`;
@@ -17,7 +21,7 @@ const nextRunId = (runs, prefix) => {
 
 export function WireModePanel({ state, connected }) {
   const {
-    strips, selectStrip, selStripId,
+    strips, selectStrip, selStripId, pxPerMm,
     selectedWireCut, nudgeSelectedWireCut, deleteSelectedWireCut,
   } = state;
   const {
@@ -28,6 +32,10 @@ export function WireModePanel({ state, connected }) {
   const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
   const [advanced, setAdvanced] = useState(false);
   const [mutationError, setMutationError] = useState('');
+  const [autoOutputCount, setAutoOutputCount] = useState('auto');
+  const [autoResult, setAutoResult] = useState(null);
+  const [proposalIndex, setProposalIndex] = useState(0);
+  const [showAssembly, setShowAssembly] = useState(false);
   const connectedCordRef = useRef(null);
   const suppressPortClickRef = useRef(null);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
@@ -240,6 +248,37 @@ export function WireModePanel({ state, connected }) {
     download(toWLEDLedmap(compiledWiring.pixels), 'ledmap.json', 'application/json');
   };
 
+  const availableOutputs = PINS.map((pin, index) => ({ id: `out${index + 1}`, name: outputName(index), pin }));
+  const runAutoWire = () => {
+    const result = proposeAutoWiring({
+      wiring,
+      strips,
+      controllerAnchor: wiring.controllerAnchor,
+      availableOutputs,
+      outputCount: autoOutputCount,
+      physicalScale: Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null,
+      capabilities: CARD_HARDWARE_CAPABILITIES,
+    });
+    setAutoResult(result);
+    setProposalIndex(0);
+    if (!result.ok) setMutationError(result.errors.map(item => item.message).join(' '));
+    else setMutationError('');
+  };
+  const proposals = autoResult?.ok ? [autoResult.proposal, ...autoResult.alternatives] : [];
+  const activeProposal = proposals[proposalIndex] || null;
+  const acceptAutoWire = () => {
+    if (!activeProposal) return;
+    const accepted = activeProposal.wiring;
+    const result = mutate(draft => {
+      draft.controllerAnchor = accepted.controllerAnchor;
+      draft.outputs = accepted.outputs;
+      draft.runs = accepted.runs;
+      draft.verified = false;
+      draft.locked = false;
+    }, { changeKind: 'route' });
+    if (result.ok) { setAutoResult(null); setProposalIndex(0); }
+  };
+
   const selectedRun = runsById.get(effectiveSelectedRunId);
   const derivedCut = selectedWireCut || (() => {
     const cuts = wiring.runs
@@ -262,6 +301,40 @@ export function WireModePanel({ state, connected }) {
         <button className="btn" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>Advanced</button>
       </div>
       <p className="lw-wire-scaffold">Connect each physical run from an output’s OUT port to a run’s IN port. Cable jumps use no LED addresses.</p>
+      <section className="lw-auto-wire-controls" aria-label="Auto Wire controls">
+        <div>
+          <strong>Auto Wire</strong>
+          <span>{wiring.controllerAnchor ? `Controller at ${Math.round(wiring.controllerAnchor.x)}, ${Math.round(wiring.controllerAnchor.y)}` : 'Drag CARD on the artwork to place the controller.'}</span>
+        </div>
+        <label>Outputs
+          <select aria-label="Auto Wire output count" value={autoOutputCount} disabled={wiring.locked} onChange={event => setAutoOutputCount(event.target.value === 'auto' ? 'auto' : Number(event.target.value))}>
+            <option value="auto">Automatic</option>
+            {[1, 2, 3, 4].map(count => <option key={count} value={count}>{count}</option>)}
+          </select>
+        </label>
+        <button className="btn primary" disabled={wiring.locked || !wiring.controllerAnchor} onClick={runAutoWire}>Auto Wire</button>
+      </section>
+      {activeProposal && (
+        <section className="lw-auto-wire-preview" data-testid="auto-wire-preview">
+          <div className="lw-wire-section-title"><span>Routing preview</span><strong>{activeProposal.wiring.outputs.length} output{activeProposal.wiring.outputs.length === 1 ? '' : 's'}</strong></div>
+          {activeProposal.wiring.outputs.map((output, index) => (
+            <div key={output.id} className="lw-auto-wire-lane" data-testid="auto-wire-lane" data-run-order={output.runIds.join(',')}>
+              <strong>{outputName(index)}</strong>
+              <span>{activeProposal.outputTotals[index]} px</span>
+              <code>{output.runIds.join(' → ')}</code>
+            </div>
+          ))}
+          <p>{activeProposal.jumpers.length} jumpers · {activeProposal.totalJumperLength.toFixed(1)} {activeProposal.unit === 'mm' ? 'mm' : 'relative units'} total · longest {activeProposal.worstJumperLength.toFixed(1)}</p>
+          <p>{activeProposal.directionChanges.length ? `${activeProposal.directionChanges.length} physical DATA IN reversal${activeProposal.directionChanges.length === 1 ? '' : 's'}` : 'No physical DATA IN reversals'} · {activeProposal.seamChanges.length ? `${activeProposal.seamChanges.length} seam move${activeProposal.seamChanges.length === 1 ? '' : 's'}` : 'No seam moves'}</p>
+          <p>Assumptions: {autoResult.assumptions.length ? autoResult.assumptions.map(item => item.message).join(' ') : 'physical scale and hardware limits are known.'}</p>
+          {activeProposal.search?.warning && <p className="lw-wiring-warning">{activeProposal.search.warning}</p>}
+          <div className="lw-wire-tool-row">
+            {proposals.length > 1 && <button className="btn" onClick={() => setProposalIndex(index => (index + 1) % proposals.length)}>Try alternative</button>}
+            <button className="btn primary" onClick={acceptAutoWire}>Accept routing</button>
+            <button className="btn" onClick={() => { setAutoResult(null); setProposalIndex(0); }}>Cancel Auto Wire</button>
+          </div>
+        </section>
+      )}
       <div className="lw-wiring-lanes">
         {wiring.outputs.map((output, outputIndex) => (
           <WiringOutputLane
@@ -305,15 +378,33 @@ export function WireModePanel({ state, connected }) {
           <summary>Edit LED range</summary>
           <label>Start LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.from} onChange={event => updateSelectedRange('from', event.target.value)}/></label>
           <label>End LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.to} onChange={event => updateSelectedRange('to', event.target.value)}/></label>
-          <label>Direction
+          <label>Direction policy
             <select disabled={wiring.locked} value={selectedRun.directionPolicy} onChange={event => mutate(draft => {
               const run = draft.runs.find(item => item.id === selectedRun.id);
               if (run?.type === 'strip') run.directionPolicy = event.target.value;
             }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
               <option value="flexible">Flexible</option>
-              <option value="fixed">Fixed by strip</option>
+              <option value="fixed">Fixed</option>
             </select>
           </label>
+          <label>Physical DATA IN
+            <select disabled={wiring.locked || selectedRun.directionPolicy === 'fixed'} value={selectedRun.physicalDirection} onChange={event => mutate(draft => {
+              const run = draft.runs.find(item => item.id === selectedRun.id);
+              if (run?.type === 'strip') run.physicalDirection = event.target.value;
+            }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
+              <option value="source-forward">Start LED</option>
+              <option value="source-reverse">End LED</option>
+            </select>
+          </label>
+          {(stripsById.get(selectedRun.source.stripId)?.closed || stripsById.get(selectedRun.source.stripId)?.isClosed || selectedRun.seamLed != null) && (
+            <label>Connector seam LED
+              <input type="number" min={selectedRun.source.from} max={selectedRun.source.to} disabled={wiring.locked || selectedRun.verified || selectedRun.directionPolicy === 'fixed'} value={selectedRun.seamLed ?? selectedRun.source.from} onChange={event => mutate(draft => {
+                const run = draft.runs.find(item => item.id === selectedRun.id);
+                if (!run || run.verified || run.directionPolicy === 'fixed') throw new Error('Verified or fixed connector seams cannot move.');
+                run.seamLed = Math.max(run.source.from, Math.min(run.source.to, Math.trunc(Number(event.target.value))));
+              }, { changeKind: 'seam', runIds: [selectedRun.id] })}/>
+            </label>
+          )}
         </details>
       )}
       <WiringPreflight
@@ -323,6 +414,14 @@ export function WireModePanel({ state, connected }) {
         onToggleLock={toggleLock}
         mutationError={mutationError}
       />
+      <WiringBenchTest
+        wiring={wiring}
+        compiled={compiledWiring}
+        updateWiring={updateWiring}
+        priorConfirmedLook={null}
+      />
+      {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
+      {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}
       <section className="lw-wire-finish">
           <CardPushControl
             connected={connected}

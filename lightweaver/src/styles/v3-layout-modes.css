@@ -247,6 +247,28 @@
 
 /* Finish line — Send to card + Export ledmap.json */
 .lw-wire-finish { border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 8px; }
+.lw-bench-test,.lw-assembly-map { margin-top: 10px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--bg-elev); }
+.lw-bench-test h4,.lw-assembly-map h3,.lw-assembly-map h4 { margin: 7px 0 4px; color: var(--text-hi); }
+.lw-bench-test p,.lw-assembly-map p { margin: 4px 0 8px; color: var(--text-mid); font-size: 11px; }
+.lw-bench-ack { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; color: var(--text-mid); font-size: 11px; }
+.lw-bench-nav,.lw-assembly-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.lw-bench-test .btn + .btn { margin-left: 5px; }
+.lw-open-assembly { width: 100%; margin-top: 10px; }
+.lw-assembly-map > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lw-assembly-map small { color: var(--text-faint); font: 9px var(--font-mono); letter-spacing: .06em; }
+.lw-assembly-output { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.lw-assembly-output ol { display: flex; flex-direction: column; gap: 7px; margin: 8px 0 0; padding-left: 22px; }
+.lw-assembly-output li { color: var(--text-mid); font-size: 11px; }
+.lw-assembly-output li strong,.lw-assembly-output li span,.lw-assembly-output li small { display: block; }
+
+@media print {
+  body * { visibility: hidden !important; }
+  .lw-assembly-map,.lw-assembly-map * { visibility: visible !important; }
+  .lw-assembly-map { position: absolute; inset: 0; width: 100%; margin: 0; padding: 0; border: 0; color: #111; background: #fff; }
+  .lw-assembly-actions { display: none !important; }
+  .lw-assembly-output { break-after: page; page-break-after: always; }
+  .lw-assembly-output:last-child { break-after: auto; page-break-after: auto; }
+}
 
 .la-card-push { display: flex; flex-direction: column; gap: 10px; }
 .la-card-push-row { display: flex; gap: 8px; align-items: stretch; }
@@ -291,6 +313,23 @@
 .lw-wiring-warning { color: var(--warning, var(--accent)) !important; }
 .lw-send-gate { min-width: 0; margin: 0; padding: 0; border: 0; }
 .lw-wire-recovery { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.lw-auto-wire-controls { display: flex; align-items: end; gap: 10px; padding: 10px; margin-bottom: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--bg-elev); }
+.lw-auto-wire-controls > div { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.lw-auto-wire-controls span,.lw-auto-wire-controls label,.lw-auto-wire-preview p { color: var(--text-faint); font-size: 11px; }
+.lw-auto-wire-controls label { display: flex; flex-direction: column; gap: 3px; }
+.lw-auto-wire-controls select { min-height: 30px; }
+.lw-auto-wire-preview { padding: 10px; margin-bottom: 10px; border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--accent-soft); }
+.lw-auto-wire-lane { display: grid; grid-template-columns: 72px 54px minmax(0,1fr); gap: 8px; padding: 5px 0; align-items: center; }
+.lw-auto-wire-lane span { color: var(--text-faint); font: 10px var(--font-mono); }
+.lw-auto-wire-lane code { overflow: hidden; color: var(--text-mid); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.lw-controller-anchor { cursor: grab; color: var(--accent); outline: none; }
+.lw-controller-anchor > circle { fill: var(--bg-panel); stroke: currentColor; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.lw-controller-anchor > path { stroke: currentColor; stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.lw-controller-anchor > text { fill: currentColor; font-size: 11px; font-family: var(--font-mono); }
+.lw-controller-anchor:focus-visible > circle { stroke-width: 4px; }
+.lw-seam-handle { cursor: grab; color: var(--warning, var(--accent)); }
+.lw-seam-handle > circle:first-child { fill: var(--bg-canvas); stroke: currentColor; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.lw-seam-handle > circle:last-child { fill: currentColor; }
 
 @media (max-width: 600px) {
   .la {

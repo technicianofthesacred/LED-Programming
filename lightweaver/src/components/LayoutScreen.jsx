@@ -1,6 +1,6 @@
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
-import { GLOW_MODES } from '../lib/layoutGeometry.js';
+import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
 import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
@@ -18,7 +18,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 
 export function LayoutScreen({ connected }) {
   const state = useLayoutState();
-  const { wiring, compiledWiring } = useProject();
+  const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
     strips, layers, hidden,
@@ -73,8 +73,28 @@ export function LayoutScreen({ connected }) {
     },
     wire: {
       wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
-      compiledWiring,
+      wiring, compiledWiring,
       selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
+      onControllerAnchorMove: event => {
+        if (!svgRef.current || wiring.locked) return;
+        const point = svgPt(svgRef.current, event.clientX, event.clientY);
+        updateWiring(draft => { draft.controllerAnchor = { x: point.x, y: point.y }; }, { changeKind: 'controller-anchor' });
+      },
+      onSeamMove: (runId, event) => {
+        if (!svgRef.current || wiring.locked) return;
+        const point = svgPt(svgRef.current, event.clientX, event.clientY);
+        updateWiring(draft => {
+          const run = draft.runs.find(item => item.id === runId);
+          if (!run || run.type !== 'strip' || run.verified || run.directionPolicy === 'fixed') throw new Error('Verified or fixed connector seams cannot move.');
+          const strip = strips.find(item => item.id === run.source.stripId);
+          const candidates = strip?.pixels?.slice(run.source.from, run.source.to + 1) || [];
+          let nearest = 0;
+          candidates.forEach((pixel, index) => {
+            if (Math.hypot(point.x - pixel.x, point.y - pixel.y) < Math.hypot(point.x - candidates[nearest].x, point.y - candidates[nearest].y)) nearest = index;
+          });
+          run.seamLed = run.source.from + nearest;
+        }, { changeKind: 'seam', runIds: [runId] });
+      },
     },
     draw: { mode, drawMode, waypoints, ghostPt, ghostD },
     interaction: {

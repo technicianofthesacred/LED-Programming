@@ -12,6 +12,7 @@ import path from 'node:path';
 async function mockLocalCard(page: any, options: any = {}) {
   const card = {
     savedConfig: null as any,
+    attemptedConfigs: [] as any[],
     operations: [] as string[],
   };
   await page.route('http://lightweaver.local/**', async (route: any) => {
@@ -36,6 +37,8 @@ async function mockLocalCard(page: any, options: any = {}) {
     }
     if (pathname === '/api/config') {
       card.operations.push('config');
+      card.attemptedConfigs.push(JSON.parse(request.postData() || '{}'));
+      if (options.delayConfig) await new Promise(resolve => setTimeout(resolve, options.delayConfig));
       if (options.failConfig) {
         await route.fulfill({ status: 500, json: { ok: false, error: 'boom' } });
         return;
@@ -83,29 +86,50 @@ test('Send to card stays disabled for default unverified wiring and makes no req
   expect(card.operations).toEqual([]);
 });
 
-test('a successful push shows a green banner mentioning zones', async ({ page }) => {
-  const card = await mockLocalCard(page);
+test('a successful push is pending until acknowledgement and records the exact installed revision', async ({ page }) => {
+  const options = { delayConfig: 350 };
+  const card = await mockLocalCard(page, options);
   await gotoWire(page, { verified: true });
 
   await page.getByTestId('layout-send-to-card').click();
+  await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
+  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Pushing/);
 
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 5000 });
   await expect(banner).toHaveClass(/is-ok/);
+  await expect(banner).toContainText(/Installed revision \d+ on card/);
   await expect(banner).toContainText(/zone/i);
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
 });
 
-test('a failed push shows a red banner', async ({ page }) => {
-  await mockLocalCard(page, { failConfig: true });
+test('a failed push retains the acknowledged installed revision and Retry installs successfully', async ({ page }) => {
+  const options = { failConfig: false };
+  const card = await mockLocalCard(page, options);
   await gotoWire(page, { verified: true });
 
   await page.getByTestId('layout-send-to-card').click();
-
   const banner = page.locator('.la-card-push-banner');
+  await expect(banner).toHaveClass(/is-ok/);
+  const installed = (await banner.textContent())?.match(/Installed revision (\d+)/)?.[1];
+  expect(installed).toBeTruthy();
+
+  options.failConfig = true;
+  await page.getByTestId('layout-send-to-card').click();
   await expect(banner).toBeVisible({ timeout: 5000 });
   await expect(banner).toHaveClass(/is-err/);
+  await expect(banner).toContainText(`Installed revision ${installed} remains on the card.`);
+  await expect(banner.getByRole('button', { name: 'Retry' })).toBeVisible();
+
+  const failedPayload = card.attemptedConfigs.at(-1);
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'New project' }).click();
+  options.failConfig = false;
+  await banner.getByRole('button', { name: 'Retry' }).click();
+  await expect(banner).toHaveClass(/is-ok/);
+  await expect(banner).toContainText(`Installed revision ${installed} on card`);
+  expect(card.attemptedConfigs.at(-1)).toEqual(failedPayload);
 });
 
 test('Export ledmap.json downloads a valid { n, map } WLED ledmap', async ({ page }) => {

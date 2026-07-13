@@ -20,6 +20,7 @@ import {
   parsedVb,
   pathIntersectsRect,
 } from '../../../lib/layoutGeometry.js';
+import { isClosedPathData } from '../../../lib/pathClosure.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 
 // Draw | Size | Wire — deep-linked via `#screen=layout&mode=<x>`.
@@ -331,7 +332,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       // Freehand strip: no artwork source.
       sourceLayerId: null, sourcePathId: null,
       name,
-      pathData, pixelCount: count, pixels, color,
+      pathData, closed: isClosedPathData(pathData), pixelCount: count, pixels, color,
       x: 0, y: 0,
       emit: 'dir', angle: 0, reversed: false,
       speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
