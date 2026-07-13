@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
 deploy: public Studio at led.mandalacodes.com; local card/WLED/Pi command path
 family: installation
-last_reviewed: 2026-06-10
+last_reviewed: 2026-07-13
 ---
 
 # Lightweaver — branded LED installation controller
