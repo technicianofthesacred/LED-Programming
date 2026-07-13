@@ -258,8 +258,20 @@ const physicalControllerPins = controller => ({
   statusLed: controller?.controls?.statusLed,
 });
 
+const physicalStandaloneOutputs = controller => (controller?.outputs || []).map(output => ({
+  id: String(output?.id || ''),
+  pin: integer(output?.pin),
+  pixels: Math.max(0, integer(output?.pixels ?? output?.pixelCount)),
+}));
+
+const physicalWiringOutputs = outputs => outputs.map(output => ({
+  id: output.id,
+  pin: output.pin,
+  runIds: output.runIds,
+}));
+
 export function standaloneControllerPhysicalChangeKind(previous, next) {
-  if (JSON.stringify(previous?.outputs || []) !== JSON.stringify(next?.outputs || [])) return 'output';
+  if (JSON.stringify(physicalStandaloneOutputs(previous)) !== JSON.stringify(physicalStandaloneOutputs(next))) return 'output';
   if (JSON.stringify(physicalControllerPins(previous)) !== JSON.stringify(physicalControllerPins(next))) return 'gpio';
   return null;
 }
@@ -283,5 +295,5 @@ export function invalidateWiringVerification(wiring, { kind, runIds } = {}) {
 export function wiringFingerprint(wiring) {
   const model = normalizeWiring(wiring);
   const runs = model.runs.map(({ verified, ...run }) => run);
-  return JSON.stringify({ controllerAnchor: model.controllerAnchor, outputs: model.outputs, runs });
+  return JSON.stringify({ controllerAnchor: model.controllerAnchor, outputs: physicalWiringOutputs(model.outputs), runs });
 }

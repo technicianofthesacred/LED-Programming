@@ -99,6 +99,18 @@ test('locked verified wiring mutations return structured errors without partial 
   assert.equal(smuggled.ok, false);
 });
 
+test('locked wiring allows output label edits but still rejects pin and routing changes', () => {
+  const wiring = { ...makeDefaultWiring(strips), locked: true, verified: true };
+  const renamed = updateWiring(wiring, draft => { draft.outputs[0].name = 'Gallery left'; }, { strips });
+  assert.equal(renamed.ok, true);
+  assert.equal(renamed.wiring.outputs[0].name, 'Gallery left');
+  assert.equal(renamed.wiring.locked, true);
+  assert.equal(renamed.wiring.verified, true);
+
+  assert.equal(updateWiring(wiring, draft => { draft.outputs[0].pin = 17; }, { strips }).ok, false);
+  assert.equal(updateWiring(wiring, draft => { draft.outputs[0].runIds.reverse(); }, { strips }).ok, false);
+});
+
 test('mutation validation is mandatory and returns the original model at the context boundary', () => {
   const wiring = makeDefaultWiring(strips);
   const result = updateWiring(wiring, draft => {
@@ -200,6 +212,9 @@ test('controller boundary compares only output and GPIO pin fields', () => {
   const output = JSON.parse(JSON.stringify(previous));
   output.outputs[0].pin = 17;
   assert.equal(standaloneControllerPhysicalChangeKind(previous, output), 'output');
+  const renamed = JSON.parse(JSON.stringify(previous));
+  renamed.outputs[0].name = 'Gallery left';
+  assert.equal(standaloneControllerPhysicalChangeKind(previous, renamed), null);
 });
 
 test('per-run verification survives normalize, JSON save/load, and history-style cloning', () => {
