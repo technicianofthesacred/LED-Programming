@@ -247,6 +247,28 @@
 
 /* Finish line — Send to card + Export ledmap.json */
 .lw-wire-finish { border-top: 1px solid var(--border-soft); padding-top: 12px; margin-top: 8px; }
+.lw-bench-test,.lw-assembly-map { margin-top: 10px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--bg-elev); }
+.lw-bench-test h4,.lw-assembly-map h3,.lw-assembly-map h4 { margin: 7px 0 4px; color: var(--text-hi); }
+.lw-bench-test p,.lw-assembly-map p { margin: 4px 0 8px; color: var(--text-mid); font-size: 11px; }
+.lw-bench-ack { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; color: var(--text-mid); font-size: 11px; }
+.lw-bench-nav,.lw-assembly-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.lw-bench-test .btn + .btn { margin-left: 5px; }
+.lw-open-assembly { width: 100%; margin-top: 10px; }
+.lw-assembly-map > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lw-assembly-map small { color: var(--text-faint); font: 9px var(--font-mono); letter-spacing: .06em; }
+.lw-assembly-output { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.lw-assembly-output ol { display: flex; flex-direction: column; gap: 7px; margin: 8px 0 0; padding-left: 22px; }
+.lw-assembly-output li { color: var(--text-mid); font-size: 11px; }
+.lw-assembly-output li strong,.lw-assembly-output li span,.lw-assembly-output li small { display: block; }
+
+@media print {
+  body * { visibility: hidden !important; }
+  .lw-assembly-map,.lw-assembly-map * { visibility: visible !important; }
+  .lw-assembly-map { position: absolute; inset: 0; width: 100%; margin: 0; padding: 0; border: 0; color: #111; background: #fff; }
+  .lw-assembly-actions { display: none !important; }
+  .lw-assembly-output { break-after: page; page-break-after: always; }
+  .lw-assembly-output:last-child { break-after: auto; page-break-after: auto; }
+}
 
 .la-card-push { display: flex; flex-direction: column; gap: 10px; }
 .la-card-push-row { display: flex; gap: 8px; align-items: stretch; }

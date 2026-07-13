@@ -7,6 +7,8 @@ import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js'
 import { CardPushControl } from '../shared/CardPushControl.jsx';
 import { WiringOutputLane } from '../wire/WiringOutputLane.jsx';
 import { WiringPreflight } from '../wire/WiringPreflight.jsx';
+import { WiringBenchTest } from '../wire/WiringBenchTest.jsx';
+import { WiringAssemblyMap } from '../wire/WiringAssemblyMap.jsx';
 
 const PINS = [16, 17, 18, 21];
 const outputName = index => `Output ${String.fromCharCode(65 + index)}`;
@@ -33,6 +35,7 @@ export function WireModePanel({ state, connected }) {
   const [autoOutputCount, setAutoOutputCount] = useState('auto');
   const [autoResult, setAutoResult] = useState(null);
   const [proposalIndex, setProposalIndex] = useState(0);
+  const [showAssembly, setShowAssembly] = useState(false);
   const connectedCordRef = useRef(null);
   const suppressPortClickRef = useRef(null);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
@@ -411,6 +414,14 @@ export function WireModePanel({ state, connected }) {
         onToggleLock={toggleLock}
         mutationError={mutationError}
       />
+      <WiringBenchTest
+        wiring={wiring}
+        compiled={compiledWiring}
+        updateWiring={updateWiring}
+        priorConfirmedLook={null}
+      />
+      {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
+      {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}
       <section className="lw-wire-finish">
           <CardPushControl
             connected={connected}

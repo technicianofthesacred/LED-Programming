@@ -41,6 +41,26 @@ async function seedFourRunClosedFixture(page: any) {
   await expect(page.getByTestId('wiring-run-row')).toHaveCount(4);
 }
 
+async function installFrameCard(page: any) {
+  const controls: any[] = [];
+  await page.addInitScript(() => {
+    (window as any).__wiringFrames = [];
+    class FrameSocket {
+      readyState = 0;
+      bufferedAmount = 0;
+      onopen: any;
+      onclose: any;
+      onerror: any;
+      constructor() { setTimeout(() => { if ((window as any).__wiringFail) this.onclose?.(); else { this.readyState = 1; this.onopen?.(); } }, 5); }
+      send(payload: string) { (window as any).__wiringFrames.push(JSON.parse(payload).seg[0].i); }
+      close() { this.readyState = 3; }
+    }
+    (window as any).WebSocket = FrameSocket;
+  });
+  await page.route('http://lightweaver.local/**', route => { const body = route.request().postData(); if (body) controls.push(JSON.parse(body)); return route.fulfill({ json: { ok: true } }); });
+  return controls;
+}
+
 test('Wire is a compiler-derived physical output patch board', async ({ page }) => {
   await gotoWire(page);
   await expect(page.getByTestId('wiring-output-lane')).toHaveCount(1);
@@ -275,4 +295,67 @@ test('closed-path seam and physical DATA IN are editable independently until fix
   await expect(dataIn).toBeDisabled();
   await expect(seam).toBeDisabled();
   await expect(page.getByTestId('connector-seam-handle')).toHaveAttribute('aria-disabled', 'true');
+});
+
+test('guided chase acknowledges full low-brightness frames, verifies every fact, then unlocks assembly documentation', async ({ page }) => {
+  await installFrameCard(page);
+  await gotoWire(page);
+  const bench = page.getByTestId('wiring-bench-test');
+  await bench.getByRole('checkbox').check();
+  await bench.getByRole('button', { name: 'Start wiring test' }).click();
+
+  await expect(bench).toContainText('Frame confirmed');
+  await bench.getByRole('button', { name: /I see Output/ }).click();
+  for (let run = 0; run < 2; run += 1) {
+    await expect(bench).toContainText('Frame confirmed');
+    if (run === 0) {
+      const beforeCorrectionFrames = await page.evaluate(() => (window as any).__wiringFrames.length);
+      await bench.getByRole('button', { name: 'Reverse direction' }).click();
+      await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(beforeCorrectionFrames);
+      await expect(bench).toContainText('Frame confirmed');
+    }
+    await bench.getByRole('button', { name: 'First pixel is correct' }).click();
+    await bench.getByRole('button', { name: 'Direction is correct' }).click();
+  }
+  await expect(bench.getByRole('button', { name: 'Complete verification' })).toBeEnabled();
+  await bench.getByRole('button', { name: 'Complete verification' }).click();
+  await expect(page.getByRole('button', { name: 'Lock wiring' })).toBeEnabled();
+  const correctedProject = await saveProject(page);
+  expect(correctedProject.layout.wiring.runs.find((run: any) => run.type === 'strip').physicalDirection).toBe('source-reverse');
+
+  const frames = await page.evaluate(() => (window as any).__wiringFrames);
+  expect(frames.length).toBeGreaterThanOrEqual(3);
+  for (const frame of frames) {
+    expect(frame).toHaveLength(44);
+    expect(frame.flatMap((pixel: string) => pixel.match(/../g)!.map(value => parseInt(value, 16))).every((channel: number) => channel <= 26)).toBe(true);
+  }
+
+  await page.getByRole('button', { name: 'Lock wiring' }).click();
+  await page.getByRole('button', { name: 'Open assembly map' }).click();
+  const assembly = page.getByTestId('wiring-assembly-map');
+  await expect(assembly).toContainText(/GPIO 16/);
+  await expect(assembly).toContainText(/LED 0/);
+  await expect(assembly).toContainText('End LED → start LED');
+  await expect(assembly).toContainText(/Verified/);
+  await expect(assembly.getByRole('button', { name: 'Print assembly map' })).toBeVisible();
+});
+
+test('failed chase stays on the same step, cancels without false verification, and Retry requires a fresh acknowledgement', async ({ page }) => {
+  const controls = await installFrameCard(page);
+  await gotoWire(page);
+  await page.evaluate(() => { (window as any).__wiringFail = true; });
+  const bench = page.getByTestId('wiring-bench-test');
+  await bench.getByRole('checkbox').check();
+  await bench.getByRole('button', { name: 'Start wiring test' }).click();
+  await expect(bench).toContainText(/Identify Output/);
+  await expect(bench).toContainText('Delivery failed');
+  await expect(bench.getByRole('button', { name: /I see Output/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Lock wiring' })).toBeDisabled();
+  expect(controls.some(body => body.cancelStream === true)).toBe(true);
+
+  await page.evaluate(() => { (window as any).__wiringFail = false; });
+  await bench.getByRole('button', { name: 'Retry' }).click();
+  await expect(bench).toContainText('Frame confirmed');
+  await expect(bench).toContainText(/Identify Output/);
+  await expect(bench.getByRole('button', { name: /I see Output/ })).toBeEnabled();
 });
