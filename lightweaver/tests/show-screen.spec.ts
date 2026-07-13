@@ -178,13 +178,15 @@ test('connected preview and frames follow split, reversed, and off physical chai
   const stage = page.getByTestId('show-stage');
   await expect(stage).toHaveAttribute('data-template', 'connected');
   await expect(stage).toHaveAttribute('data-frame-size', '6');
-  await expect(stage).toHaveAttribute('data-sample-positions', '-1.000:-1.000,0.000:0.000,1.000:-1.000,0.000:-1.000,1.000:1.000,-1.000:1.000');
+  // Canonical physical order starts with the reversed second run, then the
+  // off spacer, then the split first run tail-to-head.
+  await expect(stage).toHaveAttribute('data-sample-positions', '1.000:1.000,-1.000:1.000,0.000:0.000,1.000:-1.000,0.000:-1.000,-1.000:-1.000');
 
   await page.getByRole('button', { name: 'Play on the lights' }).click();
   await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
   const streamed = await page.evaluate(() => (window as any).__frames.at(-1).seg[0].i);
   expect(streamed).toHaveLength(6);
-  expect(streamed[1]).toBe('000000');
+  expect(streamed[2]).toBe('000000');
   expect(streamed.filter((pixel: string) => pixel !== '000000').length).toBeGreaterThan(0);
 });
 

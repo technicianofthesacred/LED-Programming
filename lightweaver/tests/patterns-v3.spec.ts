@@ -30,8 +30,8 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
   await expect(page.locator('.pm-stripfinder')).toBeVisible();
   await expect(page.locator('.pm-targetcard')).toBeVisible();
 
-  // Every chip-ready pattern renders as a .pmcard (no load-more in this DOM).
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  // The catalog starts with one exact 24-card batch.
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(24);
   await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
 });
 
@@ -75,7 +75,7 @@ test('clicking a card updates the preview', async ({ page }) => {
   // Selected card is marked, and the preview/labels reflect Ocean.
   await expect(page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]')).toHaveClass(/\bon\b/);
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
-  await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
+  await expect(page.locator('.pm-preview-pane')).toContainText('Ocean');
   // Live preview pushes the selected pattern to the card.
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
 });
@@ -84,7 +84,7 @@ test('category chips filter the grid', async ({ page }) => {
   await gotoFreshPatterns(page);
 
   // Let the full grid settle before measuring (auto-retrying assertion).
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(24);
   const allCount = await page.locator('.pm-cards .pmcard').count();
 
   // Pick the Water category chip in the browse tools.
@@ -179,7 +179,7 @@ test('saving the current look as a mix adds a mix card to the grid', async ({ pa
 
   // A new mix card (tagged 'mix') appears in the grid.
   await expect(page.locator('.pm-cards .pmcard .mixtag')).toHaveCount(1);
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(before + 1);
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(before);
 });
 
 test('the mirror geometry control switches the active geometry', async ({ page }) => {

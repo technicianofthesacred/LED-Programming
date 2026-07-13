@@ -1,7 +1,7 @@
 /* Studio shell (app.jsx), converted from the v3 mockup to an ES module and
    wired to the real ProjectProvider. The shell chrome (TopBar/Rail/StatusBar)
    keeps the mockup markup; data/handlers are threaded in from project state. */
-import React, { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
@@ -19,13 +19,14 @@ import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
-import { PatternScreen } from './lw-pattern.jsx';
-import { PlaylistScreen } from './lw-playlist.jsx';
 import { LayoutScreen } from './lw-layout.jsx';
-import { ShowScreen } from './lw-show.jsx';
-import { FlashScreen } from './lw-flash.jsx';
-import { SettingsScreen } from './lw-settings.jsx';
-import { InstallerScreen } from './lw-installer.jsx';
+
+const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
+const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
+const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
+const FlashScreen = lazy(() => import('./lw-flash.jsx').then(module => ({ default: module.FlashScreen })));
+const SettingsScreen = lazy(() => import('./lw-settings.jsx').then(module => ({ default: module.SettingsScreen })));
+const InstallerScreen = lazy(() => import('./lw-installer.jsx').then(module => ({ default: module.InstallerScreen })));
 
 const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer'];
 function normalizeView(v) {
@@ -54,7 +55,7 @@ const I = {
 function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
   return (
     <header className="topbar">
-      <div className="brand"><span className="glyph" /><span className="name">Light Weaver</span></div>
+      <div className="brand"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
         <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
         {saveLabel && <span className="savechip"><span className="dot" />{saveLabel}</span>}
@@ -167,14 +168,29 @@ function readPushFps() {
   } catch { return DEFAULT_WLED_PUSH_FPS; }
 }
 
+function applyStoredStudioTheme() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('lw_tweaks_v2') || '{}');
+    document.documentElement.dataset.theme = saved.theme === 'daylight' ? 'daylight' : 'studio';
+  } catch {
+    document.documentElement.dataset.theme = 'studio';
+  }
+}
+
 function Shell() {
   const [view, setView] = useState(viewFromHash);
   const {
-    projectName, serializeProject, loadProject, newProject,
+    projectName, serializeProject, replaceProject, replaceWithNewProject,
+    projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
   const [saveLabel, setSaveLabel] = useState('');
   const fileInputRef = useRef(null);
+  useEffect(() => {
+    applyStoredStudioTheme();
+    window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
+    return () => window.removeEventListener('lw-preview-settings', applyStoredStudioTheme);
+  }, []);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
@@ -258,39 +274,41 @@ function Shell() {
   const onSave = useCallback(() => {
     try {
       const record = saveCurrentProjectToLibrary(serializeProject());
+      markProjectPersisted('browser');
       setSaveLabel(formatBrowserProjectSaveLabel(record));
     }
     catch { setSaveLabel('save failed'); }
-  }, [serializeProject]);
+  }, [markProjectPersisted, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
       `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`,
       serializeProject(),
     );
-    setSaveLabel(ok ? 'file downloaded' : 'download failed');
-  }, [projectName, serializeProject]);
+    if (ok) markProjectPersisted('file');
+    else setSaveLabel('Download failed');
+  }, [markProjectPersisted, projectName, serializeProject]);
   const onLoad = useCallback(() => fileInputRef.current?.click(), []);
-  const onNew = useCallback(() => {
-    if (window.confirm('Start a new project? Unsaved changes will be lost.')) {
+  const onNew = useCallback(async () => {
+    const result = await replaceWithNewProject();
+    if (result.ok) {
       writeActiveProjectLibraryRecordId('');
-      newProject();
     }
-  }, [newProject]);
+  }, [replaceWithNewProject]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        const ok = loadProject(data);
-        if (ok) writeActiveProjectLibraryRecordId('');
-        if (!ok) alert('Invalid project file (version mismatch).');
+        const result = await replaceProject(data);
+        if (result.ok) writeActiveProjectLibraryRecordId('');
+        if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       } catch { alert('Could not parse project file.'); }
     };
     reader.readAsText(file);
     e.target.value = '';
-  }, [loadProject]);
+  }, [replaceProject]);
 
   const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, flash: FlashScreen, settings: SettingsScreen, installer: InstallerScreen }[view];
 
@@ -298,12 +316,14 @@ function Shell() {
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
-        saveLabel={saveLabel}
+        saveLabel={saveLabel || projectLifecycleLabel}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
       />
       <Rail view={view} setView={setView} />
 
-      {Screen ? <Screen connected={connected} go={setView} /> : null}
+      <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
+        {Screen ? <Screen connected={connected} go={setView} /> : null}
+      </Suspense>
 
       <StatusBar
         link={cardLink}

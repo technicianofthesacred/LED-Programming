@@ -652,6 +652,7 @@ function ShowScreen({ go }) {
   const handleStreamHealth = useCallback((health) => {
     if (!streamRef.current) return;
     if (health.delivered) {
+      setOnLights(true);
       if (healthNoticeShownRef.current) {
         healthNoticeShownRef.current = false;
         setNotice(null);
@@ -722,7 +723,6 @@ function ShowScreen({ go }) {
       const stream = createCardFrameStream({ host: readStoredCardHost(), onHealth: handleStreamHealth });
       stream.start();
       streamRef.current = stream;
-      setOnLights(true);
       setNotice(null);
     } finally {
       setLightsBusy(false);
@@ -751,6 +751,7 @@ function ShowScreen({ go }) {
             className={'btn' + (onLights ? ' primary' : '')}
             onClick={toggleLights}
             disabled={lightsBusy}
+            aria-pressed={onLights}
           >
             {onLights ? 'Stop playing on the lights' : 'Play on the lights'}
           </button>

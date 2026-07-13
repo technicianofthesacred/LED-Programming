@@ -1,5 +1,20 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+export function createProjectPreviewStrip({ compiledWiring = null, strips = [], hidden = {} } = {}) {
+  const compiledPixels = compiledWiring?.pixels || [];
+  const samples = compiledPixels.length
+    ? compiledPixels
+    : strips.flatMap(strip => hidden[strip.id] ? [] : (strip.pixels || []).map((pixel, sourceLed) => ({ ...pixel, stripId: strip.id, sourceLed, inactive: false })));
+  return {
+    id: 'project-preview',
+    pts: samples.map((sample, index) => ({ x: sample.x, y: sample.y, p: samples.length > 1 ? index / (samples.length - 1) : 0.5 })),
+    offIndexes: samples.map((sample, index) => sample.inactive || sample.stripId === null ? index : -1).filter(index => index >= 0),
+    order: samples.map(sample => sample.inactive || sample.stripId === null ? 'inactive' : `${sample.stripId}:${sample.sourceLed}`),
+    brightness: 1,
+    speed: 1,
+  };
+}
+
 export function ledRgb(led = {}) {
   return {
     r: Math.max(0, Math.min(255, Math.round(Number(led.r ?? led.avgR ?? 0) || 0))),
