@@ -4,6 +4,49 @@ import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = 10;
 
+export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
+  maxPixels: 1024,
+  maxOutputs: 4,
+  supportedOutputPins: Object.freeze([16, 17, 18, 21, 38, 39, 40, 48]),
+  maxZones: 10,
+  maxRangesPerZone: 4,
+  assertSupported(config = {}) {
+    const led = config.led || config;
+    const outputs = Array.isArray(led.outputs) ? led.outputs.filter(output => Number(output?.pixels ?? output?.pixelCount ?? 0) > 0) : [];
+    const zones = Array.isArray(config.zones) ? config.zones : [];
+    const pixels = Number(led.pixels ?? outputs.reduce((sum, output) => sum + Number(output.pixels ?? output.pixelCount ?? 0), 0));
+    if (pixels > this.maxPixels) throw new RangeError(`Hardware supports at most ${this.maxPixels} pixels.`);
+    if (outputs.length > this.maxOutputs) throw new RangeError(`Hardware supports at most ${this.maxOutputs} outputs.`);
+    const ids = new Set();
+    const pins = new Set();
+    for (const output of outputs) {
+      const id = String(output.id || '');
+      const pin = Number(output.pin);
+      if (!id || ids.has(id)) throw new RangeError('Output IDs must be present and unique.');
+      if (!this.supportedOutputPins.includes(pin)) throw new RangeError(`Unsupported LED output pin: ${pin}.`);
+      if (pins.has(pin)) throw new RangeError(`Output pins must be unique: ${pin}.`);
+      ids.add(id);
+      pins.add(pin);
+    }
+    if (zones.length > this.maxZones) throw new RangeError(`Hardware supports at most ${this.maxZones} zones.`);
+    for (const zone of zones) {
+      if ((zone.ranges || []).length > this.maxRangesPerZone) {
+        throw new RangeError(`Hardware supports at most ${this.maxRangesPerZone} ranges per zone.`);
+      }
+    }
+    return true;
+  },
+});
+
+export function normalizeInclusiveRange(from, to) {
+  const first = Number(from);
+  const last = Number(to);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return { start: 0, count: 0, reversed: false };
+  const a = Math.trunc(first);
+  const b = Math.trunc(last);
+  return { start: Math.min(a, b), count: Math.abs(b - a) + 1, reversed: a > b };
+}
+
 export const DEFAULT_CARD_PATTERN_BANK = CARD_PATTERN_BANK;
 
 export const DEFAULT_CARD_CONTROLS = Object.freeze({
@@ -31,6 +74,7 @@ export const DEFAULT_CARD_LED = Object.freeze({
 });
 
 export function normalizeCardRuntimeConfig(config = {}) {
+  CARD_HARDWARE_CAPABILITIES.assertSupported(config);
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
   const requestedCycleIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
   const led = normalizeLed(config.led);
@@ -76,7 +120,7 @@ export function patchBoardToZones(patchBoard, strips = []) {
     const p = patchesById.get(rowId);
     if (!p || p.source?.type !== 'strip' || p.output?.mode === 'off') continue;
     const start = offsets.get(p.id) || 0;
-    const count = (p.source.endLed - p.source.startLed) + 1;
+    const range = normalizeInclusiveRange(p.source.startLed, p.source.endLed);
     const playback = p.playback || {};
     zones.push({
       id: sanitizeId(p.id || `zone-${start}`),
@@ -89,7 +133,8 @@ export function patchBoardToZones(patchBoard, strips = []) {
       customSaturation: clampInt(playback.customSaturation, 230, 0, 255),
       customBreathe: Boolean(playback.customBreathe),
       customDrift: Boolean(playback.customDrift),
-      ranges: [{ start, count }],
+      reversed: range.reversed,
+      ranges: [{ start, count: range.count }],
     });
   }
   return zones;
@@ -162,7 +207,7 @@ export function makeCardRuntimePackage(options = {}) {
 }
 
 function normalizeLed(led = {}) {
-  const requestedPixels = clampInt(led.pixels, DEFAULT_CARD_LED.pixels, 1, 4096);
+  const requestedPixels = clampInt(led.pixels, DEFAULT_CARD_LED.pixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels);
   const configuredOutputs = Array.isArray(led.outputs)
     ? led.outputs.filter(output => Number(output?.pixels || output?.pixelCount || 0) > 0)
     : [];
@@ -175,13 +220,13 @@ function normalizeLed(led = {}) {
       id: sanitizeId(output.id || `out${index + 1}`),
       name: String(output.name || `Output ${index + 1}`),
       pin: clampInt(output.pin, [16, 17, 18, 21][index] || 16, 0, 48),
-      pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, 2048),
+      pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
     }));
   const pixels = clampInt(
     led.pixels,
     normalizedOutputs.reduce((sum, output) => sum + output.pixels, 0),
     1,
-    4096,
+    CARD_HARDWARE_CAPABILITIES.maxPixels,
   );
   return {
     pixels,

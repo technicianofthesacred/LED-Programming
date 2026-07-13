@@ -3,6 +3,7 @@ import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips, normaliz
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
+import { chainAddressCount } from './patchBoard.js';
 import {
   derivePlaylistLookIds,
   isDefaultPatternCycle,
@@ -14,6 +15,11 @@ export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
 }
 
+export function totalPhysicalAddresses(patchBoard, strips = []) {
+  const sourcePixels = totalProjectPixels(strips);
+  return patchBoard ? Math.max(sourcePixels, chainAddressCount(patchBoard, strips)) : sourcePixels;
+}
+
 export function buildCardRuntimePackageFromProject({
   projectId = '',
   projectName = 'Lightweaver Piece',
@@ -21,7 +27,7 @@ export function buildCardRuntimePackageFromProject({
   patchBoard = null,
   standaloneController = {},
 } = {}) {
-  const totalPixels = totalProjectPixels(strips);
+  const totalPixels = totalPhysicalAddresses(patchBoard, strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
   const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;

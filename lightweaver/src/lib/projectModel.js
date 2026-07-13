@@ -272,9 +272,9 @@ export function migrateStripIdNamespace(project) {
   return project;
 }
 
-// Canonical migration choke point: rebuild the patch-board chain so its wire
-// order follows strips[] order (off rows preserved). After this, the chain is
-// the sole authority for pixel addressing and can never diverge from strips[].
+// Canonical migration choke point. A saved chain is physical truth and must
+// retain its order; normalization only removes invalid row references and
+// synthesizes strip order when no saved physical chain exists.
 function alignChainToStripOrder(project) {
   migrateStripIdNamespace(project);
   const layout = project?.layout;

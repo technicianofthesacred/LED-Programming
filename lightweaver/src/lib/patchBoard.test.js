@@ -962,7 +962,7 @@ test('moveStripRowsInChain is a no-op when dragging onto itself', () => {
   assert.deepEqual(next.chains[0].rowIds, ['patch-A', 'patch-B']);
 });
 
-test('migrateChainToStripOrder reorders to strips[] order, off row kept, splits intact', () => {
+test('migrateChainToStripOrder preserves saved order, off row, and split direction', () => {
   const stripA = makeStrip('A', 3);
   const stripB = makeStrip('B', 2, 10);
   const stripC = makeStrip('C', 4, 20);
@@ -974,7 +974,7 @@ test('migrateChainToStripOrder reorders to strips[] order, off row kept, splits 
 
   const next = migrateChainToStripOrder(board, strips);
 
-  assert.deepEqual(next.chains[0].rowIds, ['patch-A-0-0', off.id, 'patch-A-1-2', 'patch-B', 'patch-C']);
+  assert.deepEqual(next.chains[0].rowIds, ['patch-C', off.id, 'patch-B', 'patch-A-1-2', 'patch-A-0-0']);
 });
 
 test('migrateChainToStripOrder is idempotent', () => {
@@ -988,11 +988,11 @@ test('migrateChainToStripOrder is idempotent', () => {
   const once = migrateChainToStripOrder(board, strips);
   const twice = migrateChainToStripOrder(once, strips);
 
-  assert.deepEqual(once.chains[0].rowIds, ['patch-A-0-0', 'patch-A-1-2', 'patch-B']);
+  assert.deepEqual(once.chains[0].rowIds, ['patch-B', 'patch-A-1-2', 'patch-A-0-0']);
   assert.deepEqual(twice.chains[0].rowIds, once.chains[0].rowIds);
 });
 
-test('migrateChainToStripOrder reorders even when physicalLocked', () => {
+test('migrateChainToStripOrder preserves an existing saved chain even when physicalLocked', () => {
   const strips = [makeStrip('A', 2), makeStrip('B', 2, 10)];
   const board = createDefaultPatchBoard(strips);
   board.physicalLocked = true;
@@ -1000,6 +1000,20 @@ test('migrateChainToStripOrder reorders even when physicalLocked', () => {
 
   const next = migrateChainToStripOrder(board, strips);
 
-  assert.deepEqual(next.chains[0].rowIds, ['patch-A', 'patch-B']);
+  assert.deepEqual(next.chains[0].rowIds, ['patch-B', 'patch-A']);
   assert.equal(next.physicalLocked, true);
+});
+
+test('inactive address rows advance offsets for later physical runs', () => {
+  const strips = [makeStrip('A', 3), makeStrip('B', 2, 10)];
+  const board = createDefaultPatchBoard(strips);
+  const inactive = addOffPatch(board, 4);
+  board.chains[0].rowIds = ['patch-A', inactive.id, 'patch-B'];
+
+  const offsets = chainPixelOffsets(board, strips);
+
+  assert.equal(offsets.get('patch-A'), 0);
+  assert.equal(offsets.get(inactive.id), 3);
+  assert.equal(offsets.get('patch-B'), 7);
+  assert.equal(expandPatchBoard(board, strips).pixels.length, 9);
 });

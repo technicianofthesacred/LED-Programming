@@ -104,8 +104,8 @@ const targetAddressMap = targets =>
 const chainOrder = project => project.layout.patchBoard.chains[0].rowIds;
 
 // ─────────────────────────────────────────────────────────────────────────
-// 1. A v3 project whose chain order diverges from strips[] order is realigned.
-//    Off rows preserved, split segments intact.
+// 1. A v3 project whose chain order diverges from strips[] keeps its saved
+//    physical order. Off rows and split segment direction remain intact.
 // ─────────────────────────────────────────────────────────────────────────
 
 const divergentV3 = () => ({
@@ -115,7 +115,7 @@ const divergentV3 = () => ({
   layout: {
     strips: [makeStrip('A', 3), makeStrip('B', 2), makeStrip('C', 4)],
     patchBoard: {
-      physicalLocked: false,
+      physicalLocked: true,
       groups: [],
       chains: [{
         id: 'main',
@@ -138,11 +138,11 @@ const divergentV3 = () => ({
 {
   const migrated = migrateProject(divergentV3());
   // Strips A/B/C are re-homed onto the strip-<n> namespace (A→strip-1, …), so
-  // patch ids follow. Chain now follows strips[] order (strip-1's segments
-  // ascending), off row pinned to its slot (index 1).
+  // patch ids follow, while the saved C -> off -> B -> A route survives.
   assert.deepEqual(chainOrder(migrated), [
-    'patch-strip-1-0-0', 'off-1', 'patch-strip-1-1-2', 'patch-strip-2', 'patch-strip-3',
+    'patch-strip-3', 'off-1', 'patch-strip-2', 'patch-strip-1-1-2', 'patch-strip-1-0-0',
   ]);
+  assert.equal(migrated.layout.patchBoard.physicalLocked, true);
   assert.deepEqual(migrated.layout.strips.map(s => s.id), ['strip-1', 'strip-2', 'strip-3']);
 
   // Off row still present exactly once; both split segments retained.
@@ -213,17 +213,17 @@ const divergentNoOffV3 = () => ({
     .filter(t => t.kind !== 'all')
     .map(t => ({ start: t.start, end: t.end, pixelCount: t.pixelCount }));
 
-  // patchBoardToZones parity (address sequence, ids ignored).
+  // Migration is only an id remap; saved chain addressing stays byte-identical.
   assert.deepEqual(
     addrSeq(patchBoardToZones(postBoard, postStrips)),
-    addrSeq(oldPatchBoardToZones(preBoard, preStrips)),
+    addrSeq(patchBoardToZones(preBoard, preStrips)),
     'patchBoardToZones address parity',
   );
 
   // deriveSectionTargets parity (address sequence, ids ignored).
   assert.deepEqual(
     targetSeq(deriveSectionTargets({ strips: postStrips, patchBoard: postBoard })),
-    targetSeq(oldSectionTargets(preBoard, preStrips)),
+    targetSeq(deriveSectionTargets({ strips: preStrips, patchBoard: preBoard })),
     'deriveSectionTargets address parity',
   );
 }

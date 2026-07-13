@@ -5,6 +5,8 @@ import {
   buildCardRuntimeConfig,
   normalizeCardRuntimeConfig,
   makeCardRuntimePackage,
+  normalizeInclusiveRange,
+  patchBoardToZones,
 } from '../src/lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
 import {
@@ -47,6 +49,35 @@ assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.alternatePress, 6);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.brightnessStep, 18);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.brightness, -1);
 assert.equal(DEFAULT_STANDALONE_LED.colorOrder, 'RGB');
+
+assert.deepEqual(normalizeInclusiveRange(2, 0), { start: 0, count: 3, reversed: true });
+
+const inactiveAddressBoard = {
+  physicalLocked: true,
+  chains: [{ id: 'main', rowIds: ['reverse', 'inactive', 'later'] }],
+  patches: [
+    { id: 'reverse', name: 'Reverse', source: { type: 'strip', stripId: 'first', startLed: 2, endLed: 0 }, output: { mode: 'normal' }, playback: {} },
+    { id: 'inactive', name: 'Inactive', source: { type: 'off', ledCount: 4 }, output: { mode: 'off' }, playback: {} },
+    { id: 'later', name: 'Later', source: { type: 'strip', stripId: 'second', startLed: 0, endLed: 1 }, output: { mode: 'normal' }, playback: {} },
+  ],
+};
+assert.deepEqual(
+  patchBoardToZones(inactiveAddressBoard, [
+    { id: 'first', pixelCount: 3 },
+    { id: 'second', pixelCount: 2 },
+  ]).map(zone => zone.ranges[0]),
+  [{ start: 0, count: 3 }, { start: 7, count: 2 }],
+);
+
+const inactiveAddressPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Inactive addresses',
+  strips: [{ id: 'first', pixelCount: 3 }, { id: 'second', pixelCount: 2 }],
+  patchBoard: inactiveAddressBoard,
+  standaloneController: { outputs: [{ id: 'out1', pin: 16, pixels: 0 }] },
+});
+assert.equal(inactiveAddressPkg.config.led.pixels, 9);
+assert.equal(inactiveAddressPkg.config.led.outputs.reduce((sum, output) => sum + output.pixels, 0), 9);
+assert.equal(inactiveAddressPkg.config.zones.at(-1).ranges[0].start, 7);
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');

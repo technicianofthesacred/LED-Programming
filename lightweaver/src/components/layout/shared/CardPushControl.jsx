@@ -3,6 +3,7 @@ import {
   makeCardRuntimePackage,
   patchBoardToZones,
 } from '../../../lib/cardRuntimeContract.js';
+import { chainAddressCount } from '../../../lib/patchBoard.js';
 import {
   getCardHostname,
   setCardHostname,
@@ -48,7 +49,7 @@ export function CardPushControl({
       pin: o.pin,
       pixels: o.pixels,
     }));
-    const totalPixels = strips.reduce((sum, s) => sum + (s.pixelCount ?? s.pixels?.length ?? 0), 0);
+    const totalPixels = chainAddressCount(board, strips);
     const pkg = makeCardRuntimePackage({
       projectId,
       projectName,
