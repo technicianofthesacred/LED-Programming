@@ -26,6 +26,7 @@ import {
 } from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
 import { makeDefaultWiring, migrateWiring } from './wiringModel.js';
+import { isClosedPathData } from './pathClosure.js';
 import {
   deriveLegacyPatternCycleIds,
   isDefaultPatternCycle,
@@ -178,6 +179,10 @@ export function createDefaultProject() {
 export function migrateStripIdNamespace(project) {
   const layout = project?.layout;
   if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
+  layout.strips = layout.strips.map(strip => ({
+    ...strip,
+    closed: isClosedPathData(strip.pathData, strip.closed ?? strip.isClosed),
+  }));
 
   const strips = layout.strips;
   // The generated default circle layout owns a stable synthetic id namespace

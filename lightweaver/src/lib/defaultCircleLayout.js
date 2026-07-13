@@ -126,6 +126,7 @@ export function createDefaultCircleLayout({
       id,
       name: DEFAULT_SECTION_NAMES[index] || `Ring ${index + 1}`,
       pathData: circlePath(cx, cy, r),
+      closed: true,
       svgLength: Math.PI * 2 * r,
       pixelCount: pixels,
       pixels: circlePixels(cx, cy, r, pixels),

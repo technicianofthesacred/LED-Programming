@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 async function gotoWire(page: any) {
-  await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
 async function saveProject(page: any) {
@@ -16,6 +17,28 @@ async function saveProject(page: any) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lw-wire-save-')), 'project.json');
   await download.saveAs(file);
   return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+async function seedFourRunClosedFixture(page: any) {
+  const project = await saveProject(page);
+  project.layout.strips.forEach((strip: any) => { strip.closed = true; });
+  const runs: any[] = [];
+  const runIds: string[] = [];
+  for (const run of project.layout.wiring.runs.filter((item: any) => item.type === 'strip')) {
+    const middle = Math.floor((run.source.from + run.source.to) / 2);
+    const left = { ...run, id: `${run.id}-left`, source: { ...run.source, to: middle }, seamLed: middle, verified: false };
+    const right = { ...run, id: `${run.id}-right`, source: { ...run.source, from: middle + 1 }, seamLed: run.source.to, verified: false };
+    runs.push(left, right);
+    runIds.push(left.id, right.id);
+  }
+  project.layout.wiring.runs = runs;
+  project.layout.wiring.outputs = [{ id: 'out1', name: 'Output A', pin: 16, runIds }];
+  project.layout.wiring.controllerAnchor = { x: 320, y: 200 };
+  project.layout.wiring.verified = false;
+  project.layout.wiring.locked = false;
+  await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('wiring-run-row')).toHaveCount(4);
 }
 
 test('Wire is a compiler-derived physical output patch board', async ({ page }) => {
@@ -135,4 +158,121 @@ test('fixed-direction runs refuse reverse and self-connections do not create cyc
   const ids = await page.getByTestId('wiring-run-row').evaluateAll(rows => rows.map(row => row.getAttribute('data-run-id')));
   expect(new Set(ids).size).toBe(ids.length);
   await expect(page.getByText(/cycle|duplicate|branch/i)).toHaveCount(0);
+});
+
+test('controller placement and physical DATA IN controls feed a preview-only Auto Wire proposal', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await gotoWire(page);
+
+  const anchor = page.getByTestId('controller-anchor');
+  await expect(anchor).toBeVisible();
+  await anchor.hover();
+  const box = await anchor.boundingBox();
+  if (!box) throw new Error('controller anchor unavailable');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 45, box.y + box.height / 2 + 30, { steps: 4 });
+  await page.mouse.up();
+
+  await expect(page.getByLabel('Auto Wire output count')).toHaveValue('auto');
+  await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
+  await page.getByText('Edit LED range').click();
+  await expect(page.getByLabel('Direction policy')).toHaveValue('flexible');
+  await expect(page.getByLabel('Physical DATA IN')).toHaveValue('source-forward');
+
+  const before = (await saveProject(page)).layout.wiring;
+  await page.getByRole('button', { name: 'Auto Wire' }).click();
+  const preview = page.getByTestId('auto-wire-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText(/Output A|Output B/);
+  await expect(preview).toContainText(/jumper/i);
+  await expect(preview).toContainText(/assumption|physical estimate/i);
+  const whilePreviewing = (await saveProject(page)).layout.wiring;
+  expect(whilePreviewing).toEqual(before);
+
+  await page.getByRole('button', { name: 'Cancel Auto Wire' }).click();
+  await expect(preview).toHaveCount(0);
+  const afterCancel = (await saveProject(page)).layout.wiring;
+  expect(afterCancel).toEqual(before);
+});
+
+test('Auto Wire acceptance applies the displayed proposal while fixed or verified seams refuse movement', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await gotoWire(page);
+  const anchor = page.getByTestId('controller-anchor');
+  await anchor.hover();
+  const box = await anchor.boundingBox();
+  if (!box) throw new Error('controller anchor unavailable');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 3 });
+  await page.mouse.up();
+
+  await page.getByRole('button', { name: 'Auto Wire' }).click();
+  const preview = page.getByTestId('auto-wire-preview');
+  const displayedLane = await preview.getByTestId('auto-wire-lane').first().getAttribute('data-run-order');
+  await page.getByRole('button', { name: 'Accept routing' }).click();
+  await expect(preview).toHaveCount(0);
+  const accepted = (await saveProject(page)).layout.wiring;
+  expect(accepted.outputs[0].runIds.join(',')).toBe(displayedLane);
+
+  await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
+  await page.getByText('Edit LED range').click();
+  const seam = page.getByLabel('Connector seam LED');
+  if (await seam.count()) {
+    await page.getByLabel('Direction policy').selectOption('fixed');
+    await expect(seam).toBeDisabled();
+  }
+});
+
+test('Auto Wire honors each output constraint and exposes only solver-approved equivalent alternatives', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await gotoWire(page);
+  await seedFourRunClosedFixture(page);
+  const outputCount = page.getByLabel('Auto Wire output count');
+
+  for (const count of ['1', '2', '3', '4']) {
+    await outputCount.selectOption(count);
+    await page.getByRole('button', { name: 'Auto Wire' }).click();
+    const preview = page.getByTestId('auto-wire-preview');
+    await expect(preview.getByTestId('auto-wire-lane')).toHaveCount(Number(count));
+    await expect(preview).toContainText(/relative units|mm/);
+    await expect(preview).toContainText(/physical DATA IN reversal/i);
+    await expect(preview).toContainText(/seam move/i);
+    await expect(preview).toContainText(/Assumptions:/);
+    await page.getByRole('button', { name: 'Cancel Auto Wire' }).click();
+  }
+
+  await outputCount.selectOption('auto');
+  await page.getByRole('button', { name: 'Auto Wire' }).click();
+  await expect(page.getByTestId('auto-wire-preview').getByTestId('auto-wire-lane')).toHaveCount(1);
+  const alternative = page.getByRole('button', { name: 'Try alternative' });
+  await expect(alternative).toBeVisible();
+  const firstOrder = await page.getByTestId('auto-wire-lane').first().getAttribute('data-run-order');
+  await alternative.click();
+  await expect(page.getByTestId('auto-wire-lane').first()).not.toHaveAttribute('data-run-order', firstOrder || '');
+});
+
+test('closed-path seam and physical DATA IN are editable independently until fixed, then refuse movement', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await gotoWire(page);
+  await seedFourRunClosedFixture(page);
+  const row = page.getByTestId('wiring-run-row').first();
+  await row.locator('.lw-wiring-run-name').click();
+  await page.getByText('Edit LED range').click();
+  const policy = page.getByLabel('Direction policy');
+  const dataIn = page.getByLabel('Physical DATA IN');
+  const seam = page.getByLabel('Connector seam LED');
+  await expect(seam).toBeEnabled();
+  const originalSeam = Number(await seam.inputValue());
+  await seam.fill(String(originalSeam > 0 ? originalSeam - 1 : originalSeam + 1));
+  await seam.blur();
+  await dataIn.selectOption('source-reverse');
+  await expect(policy).toHaveValue('flexible');
+  await expect(dataIn).toHaveValue('source-reverse');
+  await policy.selectOption('fixed');
+  await expect(dataIn).toHaveValue('source-reverse');
+  await expect(dataIn).toBeDisabled();
+  await expect(seam).toBeDisabled();
+  await expect(page.getByTestId('connector-seam-handle')).toHaveAttribute('aria-disabled', 'true');
 });

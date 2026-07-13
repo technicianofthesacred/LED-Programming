@@ -8,6 +8,7 @@ import {
   sampleStripPixels,
 } from '../../../lib/layoutGeometry.js';
 import { orderedStripIdsFromChain } from '../../../lib/patchBoard.js';
+import { isClosedPathData } from '../../../lib/pathClosure.js';
 
 import { useLayoutSize } from './useLayoutSize.js';
 import { useLayoutStrips } from './useLayoutStrips.js';
@@ -131,6 +132,7 @@ export function useLayoutState() {
   // ── Shared entity helpers ──────────────────────────────────────────────────
   const rebuildStrip = (stripData) => ({
     ...stripData,
+    closed: isClosedPathData(stripData.pathData, stripData.closed ?? stripData.isClosed),
     pixels: sampleStripPixels(stripData.pathData, stripData.pixelCount, stripData.reversed, stripData.x || 0, stripData.y || 0),
   });
 
@@ -142,6 +144,7 @@ export function useLayoutState() {
       id, name: layer.name,
       sourceLayerId: layer.layerId, sourcePathId: null,
       pathData: layer.pathData, pixelCount: count,
+      closed: isClosedPathData(layer.pathData, layer.closed ?? layer.isClosed),
       pixels, color: layer._color,
       x: 0, y: 0,
       emit: layer._emit || 'dir', angle: layer._angle || 0,
