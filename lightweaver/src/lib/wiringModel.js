@@ -14,6 +14,7 @@ export function makeDefaultWiring(strips = [], options = {}) {
     directionPolicy: 'flexible',
     physicalDirection: 'source-forward',
     seamLed: null,
+    verified: false,
   }));
   return {
     version: WIRING_VERSION,
@@ -49,15 +50,53 @@ export function migrateWiring(wiring, strips = [], legacyPatchBoard = null, opti
       directionPolicy: 'flexible',
       physicalDirection: a > b ? 'source-reverse' : 'source-forward',
       seamLed: null,
+      verified: legacyPatchBoard.physicalLocked === true,
     });
+  }
+  const configuredOutputs = (options.outputs || []).filter(output => Number(output?.pixels) > 0).slice(0, 4);
+  const migrationWarnings = [];
+  const outputs = configuredOutputs.length
+    ? configuredOutputs.map((output, index) => ({
+        id: String(output.id || `out${index + 1}`),
+        name: String(output.name || `Output ${index + 1}`),
+        pin: integer(output.pin, [16, 17, 18, 21][index] ?? 16),
+        runIds: [],
+      }))
+    : [{ id: 'out1', name: 'Output 1', pin: options.pin ?? 16, runIds: [] }];
+  const boundaries = [];
+  let boundary = 0;
+  for (const output of configuredOutputs.slice(0, -1)) {
+    boundary += integer(output.pixels);
+    boundaries.push(boundary);
+  }
+  let outputIndex = 0;
+  let cursor = 0;
+  const addressCount = run => run.type === 'inactive'
+    ? Math.max(0, integer(run.count))
+    : run.type === 'strip'
+      ? Math.max(0, run.source.to - run.source.from + 1)
+      : 0;
+  for (const run of runs) {
+    const count = addressCount(run);
+    const nextBoundary = boundaries[outputIndex];
+    if (nextBoundary != null && cursor < nextBoundary && cursor + count > nextBoundary) {
+      migrationWarnings.push(error('output-boundary-inside-run', `Configured output boundary ${nextBoundary} falls inside run ${run.id}; review required.`, {
+        runId: run.id,
+        boundary: nextBoundary,
+      }));
+    }
+    outputs[Math.min(outputIndex, outputs.length - 1)].runIds.push(run.id);
+    cursor += count;
+    while (boundaries[outputIndex] != null && cursor >= boundaries[outputIndex] && outputIndex < outputs.length - 1) outputIndex += 1;
   }
   return normalizeWiring({
     version: WIRING_VERSION,
     locked: legacyPatchBoard.physicalLocked === true,
     verified: legacyPatchBoard.physicalLocked === true,
     controllerAnchor: options.controllerAnchor ?? null,
-    outputs: [{ id: 'out1', name: 'Output 1', pin: options.pin ?? 16, runIds: runs.map(run => run.id) }],
+    outputs,
     runs,
+    migrationWarnings,
   });
 }
 
@@ -67,6 +106,7 @@ export function normalizeWiring(input = {}) {
     locked: input.locked === true,
     verified: input.verified === true,
     controllerAnchor: input.controllerAnchor ?? null,
+    migrationWarnings: Array.isArray(input.migrationWarnings) ? clone(input.migrationWarnings) : [],
     outputs: (Array.isArray(input.outputs) ? input.outputs : []).map((output, index) => ({
       id: String(output?.id || `out${index + 1}`),
       ...(output?.name ? { name: String(output.name) } : {}),
@@ -75,7 +115,7 @@ export function normalizeWiring(input = {}) {
     })),
     runs: (Array.isArray(input.runs) ? input.runs : []).map((run, index) => {
       const type = ['strip', 'inactive', 'cable'].includes(run?.type) ? run.type : 'strip';
-      const normalized = { id: String(run?.id || `run-${index + 1}`), type };
+      const normalized = { id: String(run?.id || `run-${index + 1}`), type, verified: run?.verified === true };
       if (type === 'strip') {
         normalized.source = {
           stripId: String(run.source?.stripId || ''),
@@ -97,6 +137,7 @@ export function normalizeWiring(input = {}) {
 const error = (code, message, extra = {}) => ({ code, message, ...extra });
 
 export function validateWiring(wiring, strips = [], capabilities = CARD_HARDWARE_CAPABILITIES) {
+  const rawRuns = Array.isArray(wiring?.runs) ? wiring.runs : [];
   const model = normalizeWiring(wiring);
   const errors = [];
   const warnings = [];
@@ -126,13 +167,15 @@ export function validateWiring(wiring, strips = [], capabilities = CARD_HARDWARE
     if ((run.nextRunIds || []).length > 1) errors.push(error('run-branch', `Run ${run.id} branches.`, { runId: run.id }));
     if ((run.nextRunIds || []).includes(run.id)) errors.push(error('run-cycle', `Run ${run.id} cycles to itself.`, { runId: run.id }));
     if (run.type === 'inactive' && run.count <= 0) errors.push(error('inactive-count-invalid', `Inactive run ${run.id} needs a positive count.`, { runId: run.id }));
+    const rawRun = rawRuns.find(item => String(item?.id || '') === run.id);
+    if (rawRun?.verified != null && typeof rawRun.verified !== 'boolean') errors.push(error('run-verified-invalid', `Run ${run.id} verified state must be boolean.`, { runId: run.id }));
     if (run.type !== 'strip') continue;
     if (run.source.from > run.source.to) errors.push(error('source-range-descending', `Run ${run.id} source range must be ascending.`, { runId: run.id }));
     if (!['flexible', 'fixed'].includes(run.directionPolicy)) errors.push(error('direction-policy-invalid', `Run ${run.id} has an invalid direction policy.`, { runId: run.id }));
     if (!['source-forward', 'source-reverse'].includes(run.physicalDirection)) errors.push(error('physical-direction-invalid', `Run ${run.id} has an invalid physical direction.`, { runId: run.id }));
     const strip = stripById.get(run.source.stripId);
-    if (!strip) errors.push(error('source-strip-missing', `Run ${run.id} references missing strip ${run.source.stripId}.`, { runId: run.id }));
-    else if (run.source.from < 0 || run.source.to >= stripCount(strip)) errors.push(error('source-range-out-of-bounds', `Run ${run.id} is outside its strip.`, { runId: run.id }));
+    if (!strip && strips.length) errors.push(error('source-strip-missing', `Run ${run.id} references missing strip ${run.source.stripId}.`, { runId: run.id }));
+    else if (strip && (run.source.from < 0 || run.source.to >= stripCount(strip))) errors.push(error('source-range-out-of-bounds', `Run ${run.id} is outside its strip.`, { runId: run.id }));
     if (run.seamLed != null && (run.seamLed < run.source.from || run.seamLed > run.source.to)) errors.push(error('seam-out-of-range', `Run ${run.id} seam is outside its source range.`, { runId: run.id }));
   }
   const visiting = new Set();
@@ -156,12 +199,17 @@ export function updateWiring(wiring, mutate, options = {}) {
   const current = normalizeWiring(wiring);
   const draft = clone(current);
   try { mutate(draft); } catch (cause) { return { ok: false, wiring: current, errors: [error('mutation-failed', cause.message || String(cause))] }; }
-  const next = normalizeWiring(draft);
+  let next = normalizeWiring(draft);
   if (current.locked && wiringFingerprint(current) !== wiringFingerprint(next)) {
     return { ok: false, wiring: current, errors: [error('wiring-locked', 'Unlock verified wiring before changing physical configuration.')] };
   }
   const validation = validateWiring(next, options.strips || [], options.capabilities || CARD_HARDWARE_CAPABILITIES);
-  if (options.validate === true && !validation.ok) return { ok: false, wiring: current, errors: validation.errors };
+  if (!validation.ok) return { ok: false, wiring: current, errors: validation.errors };
+  if (wiringFingerprint(current) !== wiringFingerprint(next) && invalidatesVerifiedWiring(options.changeKind || 'route')) {
+    const invalidation = invalidateWiringVerification(next, { kind: options.changeKind || 'route', runIds: options.runIds });
+    if (!invalidation.ok) return { ok: false, wiring: current, errors: invalidation.errors };
+    next = invalidation.wiring;
+  }
   return { ok: true, wiring: next, errors: [], warnings: validation.warnings };
 }
 
@@ -170,7 +218,36 @@ export function invalidatesVerifiedWiring(change) {
   return new Set(['geometry', 'led-count', 'direction', 'route', 'output', 'seam', 'controller-anchor', 'gpio']).has(kind);
 }
 
+export const PHYSICAL_COMPAT_FIELD_KINDS = Object.freeze({
+  strips: 'geometry',
+  density: 'led-count',
+  pxPerMm: 'geometry',
+  editCounts: 'led-count',
+  stripCountOverrides: 'led-count',
+});
+
+export function physicalChangeKindForCompatField(field) {
+  return PHYSICAL_COMPAT_FIELD_KINDS[field] || null;
+}
+
+export function invalidateWiringVerification(wiring, { kind, runIds } = {}) {
+  if (!invalidatesVerifiedWiring(kind)) return { ok: true, wiring, errors: [] };
+  const current = normalizeWiring(wiring);
+  if (current.locked) return { ok: false, wiring: current, errors: [error('wiring-locked', 'Unlock verified wiring before changing physical configuration.')] };
+  const affected = Array.isArray(runIds) && runIds.length ? new Set(runIds) : null;
+  return {
+    ok: true,
+    wiring: {
+      ...current,
+      verified: false,
+      runs: current.runs.map(run => affected && !affected.has(run.id) ? run : { ...run, verified: false }),
+    },
+    errors: [],
+  };
+}
+
 export function wiringFingerprint(wiring) {
   const model = normalizeWiring(wiring);
-  return JSON.stringify({ controllerAnchor: model.controllerAnchor, outputs: model.outputs, runs: model.runs });
+  const runs = model.runs.map(({ verified, ...run }) => run);
+  return JSON.stringify({ controllerAnchor: model.controllerAnchor, outputs: model.outputs, runs });
 }

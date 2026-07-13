@@ -79,6 +79,52 @@ assert.equal(inactiveAddressPkg.config.led.pixels, 9);
 assert.equal(inactiveAddressPkg.config.led.outputs.reduce((sum, output) => sum + output.pixels, 0), 9);
 assert.equal(inactiveAddressPkg.config.zones.at(-1).ranges[0].start, 7);
 
+const compiledRuntime = {
+  ok: true,
+  totalPixels: 5,
+  outputs: [
+    { id: 'wire-a', name: 'Wire A', pin: 16, pixels: 3, start: 0, count: 3 },
+    { id: 'wire-b', name: 'Wire B', pin: 17, pixels: 2, start: 3, count: 2 },
+  ],
+  zones: [
+    { id: 'outer', label: 'Outer', ranges: [{ start: 3, count: 2 }] },
+    { id: 'inner', label: 'Inner', ranges: [{ start: 0, count: 3 }] },
+  ],
+};
+const compiledWinsPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Compiled wins',
+  compiledWiring: compiledRuntime,
+  patchBoard: inactiveAddressBoard,
+  standaloneController: {
+    outputs: [
+      { id: 'stale1', pin: 38, pixels: 100 },
+      { id: 'stale2', pin: 39, pixels: 100 },
+      { id: 'stale3', pin: 40, pixels: 100 },
+      { id: 'stale4', pin: 48, pixels: 100 },
+    ],
+    looks: [{
+      id: 'combo', label: 'Combo', type: 'compound-pattern',
+      defaultLook: { patternId: 'aurora' },
+      sectionLooks: { outer: { patternId: 'ember' }, inner: { patternId: 'scanner' } },
+    }],
+    playlist: [{ id: 'combo', type: 'combo', lookId: 'combo', enabled: true }],
+  },
+});
+assert.equal(compiledWinsPkg.config.led.pixels, 5);
+assert.deepEqual(compiledWinsPkg.config.led.outputs.map(output => [output.id, output.pin, output.pixels]), [['wire-a', 16, 3], ['wire-b', 17, 2]]);
+assert.deepEqual(compiledWinsPkg.config.looks[0].zones.map(zone => zone.id), ['outer', 'inner']);
+assert.deepEqual(compiledWinsPkg.config.zones.map(zone => zone.ranges), [[{ start: 3, count: 2 }], [{ start: 0, count: 3 }]]);
+
+for (const badRange of [
+  { start: -1, count: 1 },
+  { start: 0.5, count: 1 },
+  { start: 0, count: 0 },
+  { start: 0, count: -1 },
+  { start: 4, count: 2 },
+]) {
+  assert.throws(() => makeCardRuntimePackage({ led: { pixels: 5 }, zones: [{ id: 'bad', ranges: [badRange] }] }), /range/i);
+}
+
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
 assert.equal(fallback.piece.id, 'bench-piece');

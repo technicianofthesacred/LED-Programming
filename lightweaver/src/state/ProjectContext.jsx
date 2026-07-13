@@ -22,7 +22,7 @@ import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { compileWiring } from '../lib/wiringCompiler.js';
-import { invalidatesVerifiedWiring, migrateWiring, updateWiring as mutateWiring } from '../lib/wiringModel.js';
+import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
   createLayoutState,
   createLayoutHistory,
@@ -114,16 +114,16 @@ function layoutRootReducer(state, action) {
     'layout/setDensity': 'led-count',
     'layout/setScale': 'geometry',
     'layout/calibrate': 'geometry',
+    'layout/updatePatchBoard': 'route',
   };
-  const physicalChangeKind = action.changeKind || physicalChangeKinds[action.type];
-  if (state.wiring?.locked && invalidatesVerifiedWiring(physicalChangeKind)) return state;
-  const invalidateWiring = next => invalidatesVerifiedWiring(physicalChangeKind) && state.wiring?.verified
-    ? { ...next, wiring: { ...state.wiring, verified: false } }
-    : next;
+  const physicalChangeKind = action.changeKind ||
+    (action.type === 'compat/set' ? physicalChangeKindForCompatField(action.field) : physicalChangeKinds[action.type]);
+  const boundary = invalidateWiringVerification(state.wiring, { kind: physicalChangeKind, runIds: action.runIds });
+  if (!boundary.ok) return state;
+  const invalidateWiring = next => boundary.wiring !== state.wiring ? { ...next, wiring: boundary.wiring } : next;
   switch (action.type) {
     // Compat setter — mirrors a single useState field; never records history.
     case 'compat/set': {
-      if (state.wiring?.locked && ['strips', 'density', 'pxPerMm'].includes(action.field)) return state;
       const current = state[action.field];
       const value = typeof action.value === 'function' ? action.value(current) : action.value;
       if (value === current) return state;
@@ -283,8 +283,8 @@ export function ProjectProvider({ children }) {
     dispatchLayout({ type: 'layout/pushHistory' });
     dispatchLayout({ type: 'layout/updatePatchBoard', mutate });
   }, []);
-  const updateWiring = useCallback((mutate) => {
-    const result = mutateWiring(wiring, mutate, { strips });
+  const updateWiring = useCallback((mutate, options = {}) => {
+    const result = mutateWiring(wiring, mutate, { strips, ...options });
     if (!result.ok) return result;
     dispatchLayout({ type: 'layout/pushHistory' });
     dispatchLayout({ type: 'layout/setWiring', wiring: result.wiring });
@@ -387,7 +387,18 @@ export function ProjectProvider({ children }) {
   const [physicalControls, setPhysicalControls] = useState(defaults.devices.physicalControls);
   const [controllerProfiles, setControllerProfiles] = useState(defaults.devices.controllerProfiles || []);
   const [activeControllerId, setActiveControllerId] = useState(defaults.devices.activeControllerId || '');
-  const [standaloneController, setStandaloneController] = useState(defaults.devices.standaloneController || defaultStandaloneController());
+  const [standaloneController, setStandaloneControllerRaw] = useState(defaults.devices.standaloneController || defaultStandaloneController());
+  const setStandaloneController = useCallback(value => {
+    const next = typeof value === 'function' ? value(standaloneController) : value;
+    const outputChanged = JSON.stringify(next?.outputs || []) !== JSON.stringify(standaloneController?.outputs || []);
+    const gpioChanged = JSON.stringify(next?.controls || {}) !== JSON.stringify(standaloneController?.controls || {});
+    const kind = outputChanged ? 'output' : gpioChanged ? 'gpio' : null;
+    const boundary = invalidateWiringVerification(wiring, { kind });
+    if (!boundary.ok) return boundary;
+    if (boundary.wiring !== wiring) dispatchLayout({ type: 'layout/setWiring', wiring: boundary.wiring });
+    setStandaloneControllerRaw(next);
+    return { ok: true, wiring: boundary.wiring, errors: [] };
+  }, [standaloneController, wiring]);
 
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
@@ -592,7 +603,7 @@ export function ProjectProvider({ children }) {
     setPhysicalControls(devices.physicalControls || defaults.devices.physicalControls);
     setControllerProfiles(devices.controllerProfiles || []);
     setActiveControllerId(devices.activeControllerId || '');
-    setStandaloneController(defaultStandaloneController(devices.standaloneController));
+    setStandaloneControllerRaw(defaultStandaloneController(devices.standaloneController));
     setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);

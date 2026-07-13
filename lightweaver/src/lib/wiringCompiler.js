@@ -39,22 +39,26 @@ export function compileWiring({ wiring, strips = [], groups = [], capabilities =
   for (const output of model.outputs) {
     const outputStart = pixels.length;
     let previousWasStrip = false;
+    let previousRun = null;
     for (const runId of output.runIds) {
       const run = runsById.get(runId);
       const start = pixels.length;
       if (run.type === 'cable') {
         runs.push({ ...run, outputId: output.id, start, count: 0 });
         previousWasStrip = false;
+        previousRun = null;
         continue;
       }
       if (run.type === 'inactive') {
         for (let index = 0; index < run.count; index++) pixels.push({ index: pixels.length, runId, outputId: output.id, stripId: null, sourceLed: null, x: 0, y: 0, inactive: true });
         runs.push({ ...run, outputId: output.id, start, count: run.count });
         previousWasStrip = false;
+        previousRun = null;
         continue;
       }
-      if (previousWasStrip && !model.verified) warnings.push({ code: 'boundary-unverified', runId, message: `Boundary before ${runId} has not been verified.` });
+      if (previousWasStrip && !(model.verified && previousRun?.verified && run.verified)) warnings.push({ code: 'boundary-unverified', runId, message: `Boundary before ${runId} has not been verified.` });
       previousWasStrip = true;
+      previousRun = run;
       const strip = stripsById.get(run.source.stripId);
       const order = sourceOrder(run);
       for (const sourceLed of order) {

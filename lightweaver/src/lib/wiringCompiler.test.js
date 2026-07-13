@@ -86,6 +86,16 @@ test('compiler warns about ambiguous adjacent strip boundaries', () => {
   assert.ok(result.warnings.some(warning => warning.code === 'boundary-unverified'));
 });
 
+test('compiler honors precise per-run verification after downstream invalidation', () => {
+  const model = wiring({
+    verified: true,
+    outputs: [{ id: 'o', pin: 16, runIds: ['a', 'b'] }],
+    runs: wiring().runs.filter(run => run.id === 'a' || run.id === 'b').map(run => ({ ...run, verified: run.id === 'a' })),
+  });
+  const result = compileWiring({ wiring: model, strips, capabilities });
+  assert.ok(result.warnings.some(warning => warning.code === 'boundary-unverified' && warning.runId === 'b'));
+});
+
 test('compiler groups discontinuous strip runs into one multi-range zone', () => {
   const model = wiring({ outputs: [{ id: 'o', pin: 16, runIds: ['a', 'gap', 'b'] }], runs: wiring().runs.filter(run => run.id !== 'jump') });
   const result = compileWiring({

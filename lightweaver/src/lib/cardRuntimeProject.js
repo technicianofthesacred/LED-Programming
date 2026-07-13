@@ -36,7 +36,9 @@ export function buildCardRuntimePackageFromProject({
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
   const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
-  const resolvedPixels = explicitOutputLayout
+  const resolvedPixels = compiled
+    ? compiled.totalPixels
+    : explicitOutputLayout
     ? configuredOutputPixels
     : (totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels);
   const outputs = compiled?.outputs || resolveCardOutputs({
@@ -81,6 +83,7 @@ export function buildCardRuntimePackageFromProject({
     strips,
     runtimeZones,
     visualLook,
+    compiled: Boolean(compiled),
   });
   const requestedPatternIds = [
     visualLook.patternId,
@@ -177,6 +180,7 @@ function buildRuntimeLooksFromPlaylist({
   strips = [],
   runtimeZones = [],
   visualLook = {},
+  compiled = false,
 } = {}) {
   const savedLookById = new Map(savedLooks.map(look => [look.id, look]));
   return (playlist || [])
@@ -186,11 +190,18 @@ function buildRuntimeLooksFromPlaylist({
         const savedLook = savedLookById.get(item.lookId);
         if (!savedLook) return null;
         const comboDefault = normalizeCardVisualLook(savedLook.defaultLook);
-        const comboBoard = applySavedLookToPatchBoard({ patchBoard, strips, savedLook });
-        const comboZones = patchBoardToZones(comboBoard, strips);
-        const effectiveZones = comboZones.length
-          ? applyVisualLookDefaultsToZones(comboZones, comboBoard, comboDefault)
-          : runtimeZones.map(zone => applyLookFieldsToZone(zone, comboDefault));
+        const effectiveZones = compiled
+          ? runtimeZones.map(zone => applyLookFieldsToZone(
+              zone,
+              normalizeCardVisualLook(savedLook.sectionLooks?.[zone.id] || comboDefault),
+            ))
+          : (() => {
+              const comboBoard = applySavedLookToPatchBoard({ patchBoard, strips, savedLook });
+              const comboZones = patchBoardToZones(comboBoard, strips);
+              return comboZones.length
+                ? applyVisualLookDefaultsToZones(comboZones, comboBoard, comboDefault)
+                : runtimeZones.map(zone => applyLookFieldsToZone(zone, comboDefault));
+            })();
         return {
           id: item.id,
           label: item.label || savedLook.label,

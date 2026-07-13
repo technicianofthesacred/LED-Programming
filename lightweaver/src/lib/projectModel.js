@@ -295,6 +295,7 @@ function alignChainToStripOrder(project) {
   }
   layout.wiring = migrateWiring(layout.wiring, layout.strips, layout.patchBoard, {
     pin: project.devices?.standaloneController?.outputs?.[0]?.pin,
+    outputs: project.devices?.standaloneController?.outputs,
   });
   return project;
 }

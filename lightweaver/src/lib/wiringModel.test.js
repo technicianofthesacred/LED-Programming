@@ -10,7 +10,10 @@ import {
   updateWiring,
   invalidatesVerifiedWiring,
   wiringFingerprint,
+  invalidateWiringVerification,
+  physicalChangeKindForCompatField,
 } from './wiringModel.js';
+import { createDefaultProject, migrateProject } from './projectModel.js';
 
 const strips = [
   { id: 'a', name: 'A', pixelCount: 3 },
@@ -71,6 +74,14 @@ test('validation rejects branches/cycles and non-positive inactive counts', () =
   assert.ok(codes.includes('inactive-count-invalid'));
 });
 
+test('validation rejects non-boolean verification on every run type', () => {
+  const wiring = {
+    outputs: [{ id: 'o', pin: 16, runIds: ['off'] }],
+    runs: [{ id: 'off', type: 'inactive', count: 1, verified: 'yes' }],
+  };
+  assert.ok(validateWiring(wiring).errors.some(error => error.code === 'run-verified-invalid'));
+});
+
 test('locked verified wiring mutations return structured errors without partial mutation', () => {
   const wiring = { ...makeDefaultWiring(strips), locked: true, verified: true };
   const before = wiringFingerprint(wiring);
@@ -85,6 +96,94 @@ test('locked verified wiring mutations return structured errors without partial 
 
   const smuggled = updateWiring(wiring, draft => { draft.locked = false; draft.outputs[0].pin = 17; });
   assert.equal(smuggled.ok, false);
+});
+
+test('mutation validation is mandatory and returns the original model at the context boundary', () => {
+  const wiring = makeDefaultWiring(strips);
+  const result = updateWiring(wiring, draft => {
+    draft.outputs.push({ id: 'duplicate-pin', pin: 16, runIds: [] });
+  }, { strips });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(error => error.code === 'output-pin-duplicate'));
+  assert.equal(wiringFingerprint(result.wiring), wiringFingerprint(wiring));
+});
+
+test('legacy configured outputs split only at complete run boundaries', () => {
+  const board = {
+    chains: [{ rowIds: ['a', 'b'] }],
+    patches: [
+      { id: 'a', source: { type: 'strip', stripId: 'a', startLed: 0, endLed: 2 } },
+      { id: 'b', source: { type: 'strip', stripId: 'b', startLed: 0, endLed: 1 } },
+    ],
+  };
+  const exact = migrateWiring(null, strips, board, { outputs: [
+    { id: 'left', name: 'Left', pin: 16, pixels: 3 },
+    { id: 'right', name: 'Right', pin: 17, pixels: 2 },
+  ] });
+  assert.deepEqual(exact.outputs, [
+    { id: 'left', name: 'Left', pin: 16, runIds: ['a'] },
+    { id: 'right', name: 'Right', pin: 17, runIds: ['b'] },
+  ]);
+  assert.deepEqual(exact.migrationWarnings, []);
+
+  const ambiguous = migrateWiring(null, strips, board, { outputs: [
+    { id: 'left', name: 'Left', pin: 16, pixels: 2 },
+    { id: 'right', name: 'Right', pin: 17, pixels: 3 },
+  ] });
+  assert.equal(ambiguous.migrationWarnings[0].code, 'output-boundary-inside-run');
+  assert.equal(ambiguous.migrationWarnings[0].runId, 'a');
+});
+
+test('physical reducer boundary maps all compat fields and invalidates precise verification', () => {
+  assert.equal(physicalChangeKindForCompatField('strips'), 'geometry');
+  assert.equal(physicalChangeKindForCompatField('editCounts'), 'led-count');
+  assert.equal(physicalChangeKindForCompatField('stripCountOverrides'), 'led-count');
+  assert.equal(physicalChangeKindForCompatField('palette'), null);
+
+  const verified = {
+    ...makeDefaultWiring(strips),
+    verified: true,
+    runs: makeDefaultWiring(strips).runs.map(run => ({ ...run, verified: true })),
+  };
+  for (const kind of ['geometry', 'led-count', 'direction', 'route', 'output', 'seam', 'controller-anchor', 'gpio']) {
+    const result = invalidateWiringVerification(verified, { kind, runIds: ['run-a'] });
+    assert.equal(result.ok, true, kind);
+    assert.equal(result.wiring.verified, false, kind);
+    assert.equal(result.wiring.runs.find(run => run.id === 'run-a').verified, false, kind);
+    assert.equal(result.wiring.runs.find(run => run.id === 'run-b').verified, true, kind);
+  }
+  assert.equal(invalidateWiringVerification(verified, { kind: 'color' }).wiring.verified, true);
+  const locked = invalidateWiringVerification({ ...verified, locked: true }, { kind: 'geometry' });
+  assert.equal(locked.ok, false);
+  assert.equal(locked.errors[0].code, 'wiring-locked');
+});
+
+test('per-run verification survives normalize, JSON save/load, and history-style cloning', () => {
+  const wiring = makeDefaultWiring(strips);
+  wiring.verified = true;
+  wiring.runs[0].verified = true;
+  wiring.runs[1].verified = false;
+  const normalized = normalizeWiring(wiring);
+  const loaded = normalizeWiring(JSON.parse(JSON.stringify(normalized)));
+  const undoSnapshot = JSON.parse(JSON.stringify(loaded));
+  assert.deepEqual(undoSnapshot.runs.map(run => run.verified), [true, false]);
+  assert.equal(undoSnapshot.verified, true);
+
+  const project = createDefaultProject();
+  project.layout.wiring.runs[0].verified = true;
+  const loadedProject = migrateProject(JSON.parse(JSON.stringify(project)));
+  assert.equal(loadedProject.layout.wiring.runs[0].verified, true);
+
+  const verifiedMutation = updateWiring(makeDefaultWiring(strips), draft => {
+    draft.runs[0].verified = true;
+  }, { strips, changeKind: 'verification' });
+  assert.equal(verifiedMutation.ok, true);
+  assert.equal(verifiedMutation.wiring.runs[0].verified, true);
+
+  const lockedMetadata = updateWiring({ ...verifiedMutation.wiring, locked: true }, draft => {
+    draft.runs[1].verified = true;
+  }, { strips, changeKind: 'verification' });
+  assert.equal(lockedMetadata.ok, true);
 });
 
 test('single invalidation guard distinguishes physical edits from creative edits', () => {
@@ -102,7 +201,7 @@ test('normalization preserves independent direction policy, direction, seam, and
     runs: [{ id: 'r', type: 'strip', source: { stripId: 'a', from: 0, to: 2 }, directionPolicy: 'fixed', physicalDirection: 'source-reverse', seamLed: 1 }],
   });
   assert.deepEqual(wiring.runs[0], {
-    id: 'r', type: 'strip', source: { stripId: 'a', from: 0, to: 2 }, directionPolicy: 'fixed', physicalDirection: 'source-reverse', seamLed: 1,
+    id: 'r', type: 'strip', source: { stripId: 'a', from: 0, to: 2 }, directionPolicy: 'fixed', physicalDirection: 'source-reverse', seamLed: 1, verified: false,
   });
   assert.equal(wiring.locked, true);
   assert.equal(wiring.verified, true);

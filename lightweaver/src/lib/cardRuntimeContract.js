@@ -14,7 +14,9 @@ export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
     const led = config.led || config;
     const outputs = Array.isArray(led.outputs) ? led.outputs.filter(output => Number(output?.pixels ?? output?.pixelCount ?? 0) > 0) : [];
     const zones = Array.isArray(config.zones) ? config.zones : [];
-    const pixels = Number(led.pixels ?? outputs.reduce((sum, output) => sum + Number(output.pixels ?? output.pixelCount ?? 0), 0));
+    const outputPixels = outputs.reduce((sum, output) => sum + Number(output.pixels ?? output.pixelCount ?? 0), 0);
+    const pixels = Number(led.pixels ?? (outputPixels || 44));
+    if (!Number.isInteger(pixels) || pixels <= 0) throw new RangeError('LED pixel total must be a positive integer.');
     if (pixels > this.maxPixels) throw new RangeError(`Hardware supports at most ${this.maxPixels} pixels.`);
     if (outputs.length > this.maxOutputs) throw new RangeError(`Hardware supports at most ${this.maxOutputs} outputs.`);
     const ids = new Set();
@@ -32,6 +34,13 @@ export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
     for (const zone of zones) {
       if ((zone.ranges || []).length > this.maxRangesPerZone) {
         throw new RangeError(`Hardware supports at most ${this.maxRangesPerZone} ranges per zone.`);
+      }
+      for (const range of zone.ranges || []) {
+        const start = Number(range?.start);
+        const count = Number(range?.count);
+        if (!Number.isInteger(start) || start < 0) throw new RangeError('Zone range start must be a non-negative integer.');
+        if (!Number.isInteger(count) || count <= 0) throw new RangeError('Zone range count must be a positive integer.');
+        if (start + count > pixels) throw new RangeError('Zone range must not exceed the configured pixel total.');
       }
     }
     return true;
