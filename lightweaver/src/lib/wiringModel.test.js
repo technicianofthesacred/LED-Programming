@@ -12,6 +12,7 @@ import {
   wiringFingerprint,
   invalidateWiringVerification,
   physicalChangeKindForCompatField,
+  standaloneControllerPhysicalChangeKind,
 } from './wiringModel.js';
 import { createDefaultProject, migrateProject } from './projectModel.js';
 
@@ -90,7 +91,7 @@ test('locked verified wiring mutations return structured errors without partial 
   assert.equal(result.errors[0].code, 'wiring-locked');
   assert.equal(wiringFingerprint(wiring), before);
 
-  const unlocked = updateWiring(wiring, draft => { draft.locked = false; });
+  const unlocked = updateWiring(wiring, draft => { draft.locked = false; }, { strips });
   assert.equal(unlocked.ok, true);
   assert.equal(unlocked.wiring.locked, false);
 
@@ -110,6 +111,7 @@ test('mutation validation is mandatory and returns the original model at the con
 
 test('legacy configured outputs split only at complete run boundaries', () => {
   const board = {
+    physicalLocked: true,
     chains: [{ rowIds: ['a', 'b'] }],
     patches: [
       { id: 'a', source: { type: 'strip', stripId: 'a', startLed: 0, endLed: 2 } },
@@ -125,6 +127,8 @@ test('legacy configured outputs split only at complete run boundaries', () => {
     { id: 'right', name: 'Right', pin: 17, runIds: ['b'] },
   ]);
   assert.deepEqual(exact.migrationWarnings, []);
+  assert.equal(exact.locked, true);
+  assert.equal(exact.verified, true);
 
   const ambiguous = migrateWiring(null, strips, board, { outputs: [
     { id: 'left', name: 'Left', pin: 16, pixels: 2 },
@@ -132,6 +136,17 @@ test('legacy configured outputs split only at complete run boundaries', () => {
   ] });
   assert.equal(ambiguous.migrationWarnings[0].code, 'output-boundary-inside-run');
   assert.equal(ambiguous.migrationWarnings[0].runId, 'a');
+  assert.equal(ambiguous.locked, false);
+  assert.equal(ambiguous.verified, false);
+  assert.ok(ambiguous.runs.every(run => run.verified === false));
+
+  const beyond = migrateWiring(null, strips, board, { outputs: [
+    { id: 'left', pin: 16, pixels: 3 },
+    { id: 'right', pin: 17, pixels: 99 },
+  ] });
+  assert.ok(beyond.migrationWarnings.some(warning => warning.code === 'output-total-beyond-wiring'));
+  assert.equal(beyond.locked, false);
+  assert.equal(beyond.verified, false);
 });
 
 test('physical reducer boundary maps all compat fields and invalidates precise verification', () => {
@@ -156,6 +171,35 @@ test('physical reducer boundary maps all compat fields and invalidates precise v
   const locked = invalidateWiringVerification({ ...verified, locked: true }, { kind: 'geometry' });
   assert.equal(locked.ok, false);
   assert.equal(locked.errors[0].code, 'wiring-locked');
+});
+
+test('controller boundary compares only output and GPIO pin fields', () => {
+  const previous = {
+    outputs: [{ id: 'out1', pin: 16, pixels: 10 }],
+    controls: {
+      encoder: { a: 4, b: 5, press: 0, alternatePress: 6, rotateDirection: 'clockwise-brighter', brightnessStep: 18, patternCycleIds: ['aurora'] },
+      previous: 7, next: 8, blackout: 9, brightness: -1, statusLed: 2,
+    },
+    playlist: [], looks: [],
+  };
+  const creative = JSON.parse(JSON.stringify(previous));
+  creative.controls.encoder.rotateDirection = 'clockwise-dimmer';
+  creative.controls.encoder.brightnessStep = 32;
+  creative.controls.encoder.patternCycleIds = ['ember'];
+  creative.playlist = [{ id: 'ember' }];
+  creative.looks = [{ id: 'warm' }];
+  const creativeKind = standaloneControllerPhysicalChangeKind(previous, creative);
+  assert.equal(creativeKind, null);
+  assert.equal(invalidateWiringVerification({ ...makeDefaultWiring(strips), locked: true }, { kind: creativeKind }).ok, true);
+
+  const gpio = JSON.parse(JSON.stringify(previous));
+  gpio.controls.encoder.a = 12;
+  const gpioKind = standaloneControllerPhysicalChangeKind(previous, gpio);
+  assert.equal(gpioKind, 'gpio');
+  assert.equal(invalidateWiringVerification({ ...makeDefaultWiring(strips), locked: true }, { kind: gpioKind }).ok, false);
+  const output = JSON.parse(JSON.stringify(previous));
+  output.outputs[0].pin = 17;
+  assert.equal(standaloneControllerPhysicalChangeKind(previous, output), 'output');
 });
 
 test('per-run verification survives normalize, JSON save/load, and history-style cloning', () => {

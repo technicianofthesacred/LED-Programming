@@ -37,7 +37,7 @@ export function migrateWiring(wiring, strips = [], legacyPatchBoard = null, opti
     const patch = patchesById.get(id);
     if (!patch) continue;
     if (patch.source?.type === 'off') {
-      runs.push({ id, type: 'inactive', count: integer(patch.source.ledCount) });
+      runs.push({ id, type: 'inactive', count: integer(patch.source.ledCount), verified: legacyPatchBoard.physicalLocked === true });
       continue;
     }
     if (patch.source?.type !== 'strip') continue;
@@ -89,10 +89,23 @@ export function migrateWiring(wiring, strips = [], legacyPatchBoard = null, opti
     cursor += count;
     while (boundaries[outputIndex] != null && cursor >= boundaries[outputIndex] && outputIndex < outputs.length - 1) outputIndex += 1;
   }
+  for (const configuredBoundary of boundaries) {
+    if (configuredBoundary > cursor) migrationWarnings.push(error('output-boundary-beyond-wiring', `Configured output boundary ${configuredBoundary} exceeds migrated wiring total ${cursor}; review required.`, {
+      boundary: configuredBoundary,
+      totalPixels: cursor,
+    }));
+  }
+  const configuredTotal = configuredOutputs.reduce((sum, output) => sum + integer(output.pixels), 0);
+  if (configuredTotal > cursor) migrationWarnings.push(error('output-total-beyond-wiring', `Configured output total ${configuredTotal} exceeds migrated wiring total ${cursor}; review required.`, {
+    configuredTotal,
+    totalPixels: cursor,
+  }));
+  const migrationNeedsReview = migrationWarnings.length > 0;
+  if (migrationNeedsReview) for (const run of runs) run.verified = false;
   return normalizeWiring({
     version: WIRING_VERSION,
-    locked: legacyPatchBoard.physicalLocked === true,
-    verified: legacyPatchBoard.physicalLocked === true,
+    locked: legacyPatchBoard.physicalLocked === true && !migrationNeedsReview,
+    verified: legacyPatchBoard.physicalLocked === true && !migrationNeedsReview,
     controllerAnchor: options.controllerAnchor ?? null,
     outputs,
     runs,
@@ -136,11 +149,12 @@ export function normalizeWiring(input = {}) {
 
 const error = (code, message, extra = {}) => ({ code, message, ...extra });
 
-export function validateWiring(wiring, strips = [], capabilities = CARD_HARDWARE_CAPABILITIES) {
+export function validateWiring(wiring, strips = [], capabilities = CARD_HARDWARE_CAPABILITIES, options = {}) {
   const rawRuns = Array.isArray(wiring?.runs) ? wiring.runs : [];
   const model = normalizeWiring(wiring);
   const errors = [];
-  const warnings = [];
+  const warnings = [...model.migrationWarnings];
+  const validateSources = options.validateSources !== false;
   if (model.outputs.length < 1 || model.outputs.length > capabilities.maxOutputs) errors.push(error('output-count', `Wiring requires one to ${capabilities.maxOutputs} outputs.`));
   const outputIds = new Set();
   const pins = new Set();
@@ -174,7 +188,7 @@ export function validateWiring(wiring, strips = [], capabilities = CARD_HARDWARE
     if (!['flexible', 'fixed'].includes(run.directionPolicy)) errors.push(error('direction-policy-invalid', `Run ${run.id} has an invalid direction policy.`, { runId: run.id }));
     if (!['source-forward', 'source-reverse'].includes(run.physicalDirection)) errors.push(error('physical-direction-invalid', `Run ${run.id} has an invalid physical direction.`, { runId: run.id }));
     const strip = stripById.get(run.source.stripId);
-    if (!strip && strips.length) errors.push(error('source-strip-missing', `Run ${run.id} references missing strip ${run.source.stripId}.`, { runId: run.id }));
+    if (!strip && validateSources) errors.push(error('source-strip-missing', `Run ${run.id} references missing strip ${run.source.stripId}.`, { runId: run.id }));
     else if (strip && (run.source.from < 0 || run.source.to >= stripCount(strip))) errors.push(error('source-range-out-of-bounds', `Run ${run.id} is outside its strip.`, { runId: run.id }));
     if (run.seamLed != null && (run.seamLed < run.source.from || run.seamLed > run.source.to)) errors.push(error('seam-out-of-range', `Run ${run.id} seam is outside its source range.`, { runId: run.id }));
   }
@@ -203,7 +217,9 @@ export function updateWiring(wiring, mutate, options = {}) {
   if (current.locked && wiringFingerprint(current) !== wiringFingerprint(next)) {
     return { ok: false, wiring: current, errors: [error('wiring-locked', 'Unlock verified wiring before changing physical configuration.')] };
   }
-  const validation = validateWiring(next, options.strips || [], options.capabilities || CARD_HARDWARE_CAPABILITIES);
+  const validation = validateWiring(next, options.strips || [], options.capabilities || CARD_HARDWARE_CAPABILITIES, {
+    validateSources: options.validateSources,
+  });
   if (!validation.ok) return { ok: false, wiring: current, errors: validation.errors };
   if (wiringFingerprint(current) !== wiringFingerprint(next) && invalidatesVerifiedWiring(options.changeKind || 'route')) {
     const invalidation = invalidateWiringVerification(next, { kind: options.changeKind || 'route', runIds: options.runIds });
@@ -228,6 +244,24 @@ export const PHYSICAL_COMPAT_FIELD_KINDS = Object.freeze({
 
 export function physicalChangeKindForCompatField(field) {
   return PHYSICAL_COMPAT_FIELD_KINDS[field] || null;
+}
+
+const physicalControllerPins = controller => ({
+  encoderA: controller?.controls?.encoder?.a,
+  encoderB: controller?.controls?.encoder?.b,
+  encoderPress: controller?.controls?.encoder?.press,
+  encoderAlternatePress: controller?.controls?.encoder?.alternatePress,
+  previous: controller?.controls?.previous,
+  next: controller?.controls?.next,
+  blackout: controller?.controls?.blackout,
+  brightness: controller?.controls?.brightness,
+  statusLed: controller?.controls?.statusLed,
+});
+
+export function standaloneControllerPhysicalChangeKind(previous, next) {
+  if (JSON.stringify(previous?.outputs || []) !== JSON.stringify(next?.outputs || [])) return 'output';
+  if (JSON.stringify(physicalControllerPins(previous)) !== JSON.stringify(physicalControllerPins(next))) return 'gpio';
+  return null;
 }
 
 export function invalidateWiringVerification(wiring, { kind, runIds } = {}) {

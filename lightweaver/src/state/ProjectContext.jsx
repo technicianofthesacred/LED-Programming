@@ -22,7 +22,7 @@ import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { compileWiring } from '../lib/wiringCompiler.js';
-import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, updateWiring as mutateWiring } from '../lib/wiringModel.js';
+import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
   createLayoutState,
   createLayoutHistory,
@@ -390,9 +390,7 @@ export function ProjectProvider({ children }) {
   const [standaloneController, setStandaloneControllerRaw] = useState(defaults.devices.standaloneController || defaultStandaloneController());
   const setStandaloneController = useCallback(value => {
     const next = typeof value === 'function' ? value(standaloneController) : value;
-    const outputChanged = JSON.stringify(next?.outputs || []) !== JSON.stringify(standaloneController?.outputs || []);
-    const gpioChanged = JSON.stringify(next?.controls || {}) !== JSON.stringify(standaloneController?.controls || {});
-    const kind = outputChanged ? 'output' : gpioChanged ? 'gpio' : null;
+    const kind = standaloneControllerPhysicalChangeKind(standaloneController, next);
     const boundary = invalidateWiringVerification(wiring, { kind });
     if (!boundary.ok) return boundary;
     if (boundary.wiring !== wiring) dispatchLayout({ type: 'layout/setWiring', wiring: boundary.wiring });

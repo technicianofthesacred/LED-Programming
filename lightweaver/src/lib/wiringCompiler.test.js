@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { CARD_HARDWARE_CAPABILITIES } from './cardRuntimeContract.js';
 import { compileWiring } from './wiringCompiler.js';
+import { validateWiring } from './wiringModel.js';
 
 const strips = [
   { id: 'a', name: 'A', pixelCount: 4, reversed: true, pixels: Array.from({ length: 4 }, (_, i) => ({ x: i, y: 0 })) },
@@ -88,12 +89,14 @@ test('compiler warns about ambiguous adjacent strip boundaries', () => {
 
 test('compiler honors precise per-run verification after downstream invalidation', () => {
   const model = wiring({
+    locked: true,
     verified: true,
     outputs: [{ id: 'o', pin: 16, runIds: ['a', 'b'] }],
     runs: wiring().runs.filter(run => run.id === 'a' || run.id === 'b').map(run => ({ ...run, verified: run.id === 'a' })),
   });
   const result = compileWiring({ wiring: model, strips, capabilities });
   assert.ok(result.warnings.some(warning => warning.code === 'boundary-unverified' && warning.runId === 'b'));
+  assert.equal(result.sendReady, false);
 });
 
 test('compiler groups discontinuous strip runs into one multi-range zone', () => {
@@ -105,4 +108,23 @@ test('compiler groups discontinuous strip runs into one multi-range zone', () =>
     capabilities,
   });
   assert.deepEqual(result.zones, [{ id: 'rings', label: 'Rings', ranges: [{ start: 0, count: 4 }, { start: 7, count: 2 }] }]);
+});
+
+test('compiler returns structured missing-strip errors without throwing for empty geometry', () => {
+  const missingModel = { outputs: [{ id: 'o', pin: 16, runIds: ['missing'] }], runs: [{ id: 'missing', type: 'strip', source: { stripId: 'gone', from: 0, to: 1 } }] };
+  const result = compileWiring({
+    wiring: missingModel,
+    strips: [],
+    capabilities,
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(error => error.code === 'source-strip-missing'));
+  assert.equal(validateWiring(missingModel, [], capabilities, { validateSources: false }).ok, true);
+});
+
+test('compiler propagates migration warnings into preflight output', () => {
+  const model = wiring({ migrationWarnings: [{ code: 'output-boundary-inside-run', runId: 'a', message: 'Review boundary.' }] });
+  const result = compileWiring({ wiring: model, strips, capabilities });
+  assert.ok(result.warnings.some(warning => warning.code === 'output-boundary-inside-run'));
+  assert.equal(result.sendReady, false);
 });
