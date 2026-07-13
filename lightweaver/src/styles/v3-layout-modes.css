@@ -7,6 +7,7 @@
   margin-right: 4px;
 }
 .tb-group { display: inline-flex; align-items: center; gap: 4px; }
+.la-sheet-handle { display: none; }
 
 /* ── Size mode — the artwork-size → density → per-strip-count chain ─────── */
 
@@ -292,19 +293,43 @@
 .lw-wire-recovery { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 
 @media (max-width: 600px) {
-  .la { padding-bottom: 38vh; }
+  .la {
+    --mobile-sheet-height: clamp(180px, 28vh, 240px);
+    padding-bottom: var(--mobile-sheet-height);
+  }
   .la .side {
     position: fixed;
     z-index: 35;
     left: 0;
     right: 0;
     bottom: 0;
-    height: 36vh;
-    max-height: 360px;
+    height: var(--mobile-sheet-height);
     border-top: 1px solid var(--border);
     border-left: 0;
     background: var(--bg-panel);
     box-shadow: 0 -10px 30px color-mix(in oklab, var(--bg-app) 75%, transparent);
+  }
+  .la-sheet-handle {
+    position: sticky;
+    z-index: 2;
+    top: 0;
+    display: flex;
+    min-height: 28px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border-hair);
+    background: var(--bg-panel);
+    color: var(--text-faint);
+    font-size: 10px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .la-sheet-handle > span {
+    width: 32px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--border);
   }
   .la .toolbar { max-height: 110px; overflow-y: auto; }
   .lw-wiring-run { min-height: 40px; }
