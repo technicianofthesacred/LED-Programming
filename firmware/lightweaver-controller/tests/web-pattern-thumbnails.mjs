@@ -29,4 +29,10 @@ assert.match(
   'compound looks should render a multi-section thumbnail instead of a blank swatch',
 );
 
+assert.match(
+  source,
+  /sceneControl=makeConfirmedControl\(\{[^\n]*render:value=>\{currentId=value;renderPat\(\)/,
+  'confirmed and rolled-back scene values should redraw through the thumbnail-aware renderer',
+);
+
 console.log('web-pattern-thumbnails tests passed');
