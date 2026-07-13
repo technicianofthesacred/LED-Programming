@@ -7,6 +7,7 @@ import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
+import { useProject } from '../state/ProjectContext.jsx';
 
 // ── Main component ─────────────────────────────────────────────────────────
 // All state, handlers, derived memos and effects live in useLayoutState() and
@@ -17,6 +18,7 @@ import { useLayoutState } from './layout/hooks/useLayoutState.js';
 
 export function LayoutScreen({ connected }) {
   const state = useLayoutState();
+  const { wiring, compiledWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
     strips, layers, hidden,
@@ -69,7 +71,11 @@ export function LayoutScreen({ connected }) {
       effectiveShowLight, effectiveGlowMode, glowStdDev, directedGlow,
       showHeat, showLeds, layoutPatternFrame, stripSamples, stripArrows,
     },
-    wire: { wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers },
+    wire: {
+      wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
+      compiledWiring,
+      selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
+    },
     draw: { mode, drawMode, waypoints, ghostPt, ghostD },
     interaction: {
       isEditingGesture, isPanning, rubberBand, movingStripIds,
@@ -94,7 +100,9 @@ export function LayoutScreen({ connected }) {
 
       {/* ── Toolbar (mockup .toolbar) ──────────────────────────────── */}
         <div className="toolbar">
-          <ModeSwitch mode={mode} setMode={setMode}/>
+          <div className="tb-group" role="group" aria-label="Mode actions">
+            <ModeSwitch mode={mode} setMode={setMode}/>
+          </div>
 
           <div className="tb-div"/>
 
@@ -116,7 +124,7 @@ export function LayoutScreen({ connected }) {
           <button
             className={`tb-btn${drawMode ? ' active' : ''}`}
             title="Draw a new LED strip path on the artwork."
-            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setWaypoints([]); setGhostPt(null); }}>
+            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setGhostPt(null); }}>
             {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
           </button>
           {/* Split / Link are wire concerns — surfaced only in Wire mode
@@ -177,7 +185,7 @@ export function LayoutScreen({ connected }) {
           <div className="tb-spring"/>
 
           {/* Zoom cluster */}
-          <div className="la-zoom">
+          <div className="la-zoom" role="group" aria-label="Card calibration">
             <button onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
             <button className="zv" onClick={resetView} title="Reset view (F)">{Math.round(zoom * 100)}%</button>
             <button onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
@@ -186,12 +194,14 @@ export function LayoutScreen({ connected }) {
           <div className="tb-div"/>
 
           {/* Save / Load */}
-          <button className="tb-btn" onClick={saveProject} title="Save project file">
-            {TbIcon.save}Save
-          </button>
-          <button className="tb-btn" onClick={() => loadRef.current?.click()} title="Load project file">
-            {TbIcon.load}Load
-          </button>
+          <div className="tb-group" role="group" aria-label="Project">
+            <button className="tb-btn" onClick={saveProject} title="Save project file">
+              {TbIcon.save}Save
+            </button>
+            <button className="tb-btn" onClick={() => loadRef.current?.click()} title="Load project file">
+              {TbIcon.load}Load
+            </button>
+          </div>
 
           <div className="tb-div"/>
 

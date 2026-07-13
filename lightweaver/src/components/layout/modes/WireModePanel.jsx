@@ -1,430 +1,226 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
-import {
-  addOffPatch,
-  cutsForStrip,
-  expandPatchBoard,
-  mainChain,
-  movePatch,
-  normalizePatchBoard,
-  sliceStripIntoPatchesPreservingRoute,
-  updatePatchRange,
-} from '../../../lib/patchBoard.js';
-import {
-  toWLEDLedmap,
-  pixelsFromPatchBoard,
-  download,
-} from '../../../lib/export.js';
-import { DragHandleIcon, InlineRename } from '../shared/InspectorPrimitives.jsx';
+import { download } from '../../../lib/export.js';
+import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
+import { WiringOutputLane } from '../wire/WiringOutputLane.jsx';
+import { WiringPreflight } from '../wire/WiringPreflight.jsx';
 
-// ── Wire-mode side panel (Phase 2 step 9) ────────────────────────────────────
-// Absorbs the entire embedded PatchBoardScreen (which no longer exists) plus the
-// strip list rendered AS the wiring chain, and ends with the screen's finish
-// line: Send to card + Export ledmap.json. The wire content is a verbatim lift
-// of PatchBoardScreen's embedded body — same handlers, same `.lw-wire-*` DOM,
-// always expanded (no `<details>` disclosure). The chain rows on top replace the
-// old source-path selector: clicking a row selects the strip (which the cut
-// summary + selected-split editor + advanced range editor target).
-
-function patchLength(patch) {
-  if (patch.source?.type === 'off') return Math.max(0, Math.trunc(patch.source.ledCount || 0));
-  const start = Number(patch.source?.startLed);
-  const end = Number(patch.source?.endLed);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
-  return Math.abs(Math.trunc(end) - Math.trunc(start)) + 1;
-}
-
-function friendlyName(value) {
-  return (value || 'Source path')
-    .replace(/_/g, ' ')
-    .replace(/\s*:\s*/g, ' · ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function pluralize(value, singular, plural = `${singular}s`) {
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function patchDirection(patch) {
-  if (patch.source?.type === 'off') return '';
-  return Number(patch.source.startLed) <= Number(patch.source.endLed) ? '->' : '<-';
-}
-
-function startedFromDragHandle(e) {
-  return !!e.target?.closest?.('[data-drag-handle="true"]');
-}
+const PINS = [16, 17, 18, 21];
 
 export function WireModePanel({ state, connected }) {
+  const { strips, selectStrip, selStripId } = state;
   const {
-    strips, patchBoard, hidden,
-    orderedStrips, reorderStripRows, renameStrip,
-    selectStrip, selStripId, selectedStripIds,
-    readDraggedStripIds, stripGroupDragOver, setStripGroupDragOver,
-    // wire-cut selection (from useLayoutWire)
-    selectedWireCut, setSelectedWireCut,
-    nudgeSelectedWireCut, deleteSelectedWireCut,
-  } = state;
+    wiring, updateWiring, compiledWiring,
+    projectId, projectName, standaloneController,
+  } = useProject();
+  const [selectedRunId, setSelectedRunId] = useState(null);
+  const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
+  const [advanced, setAdvanced] = useState(false);
+  const [mutationError, setMutationError] = useState('');
+  const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
+  const runsById = useMemo(() => new Map(wiring.runs.map(run => [run.id, run])), [wiring.runs]);
+  // CardPushControl still accepts the legacy transport shape. Build that shape
+  // from canonical wiring at the boundary; patchBoard is never read or mutated.
+  const cardTransportBoard = useMemo(() => normalizePatchBoard({
+    physicalLocked: wiring.locked,
+    patches: wiring.runs.filter(run => run.type !== 'cable').map(run => run.type === 'inactive'
+      ? { id: run.id, name: 'Reserved · unlit', source: { type: 'off', ledCount: run.count }, output: { mode: 'off' } }
+      : {
+          id: run.id,
+          name: stripsById.get(run.source.stripId)?.name || run.id,
+          source: {
+            type: 'strip', stripId: run.source.stripId,
+            startLed: run.physicalDirection === 'source-reverse' ? run.source.to : run.source.from,
+            endLed: run.physicalDirection === 'source-reverse' ? run.source.from : run.source.to,
+          },
+          output: { mode: 'normal' },
+        }),
+    chains: wiring.outputs.map(output => ({ id: output.id, name: output.name || output.id, rowIds: output.runIds.filter(id => runsById.get(id)?.type !== 'cable') })),
+  }, strips), [wiring, strips, stripsById, runsById]);
+  const selectedFromCanvas = wiring.runs.find(item => item.type === 'strip' && item.source.stripId === selStripId)?.id;
+  const effectiveSelectedRunId = selectedFromCanvas || selectedRunId;
+  useEffect(() => {
+    const run = wiring.runs.find(item => item.type === 'strip' && item.source.stripId === selStripId);
+    if (run) setSelectedRunId(run.id);
+  }, [selStripId, wiring.runs]);
 
-  // `updatePatchBoard` (the history-aware patch-board mutator) + the project
-  // identity/controller fields that CardPushControl needs are not surfaced
-  // through useLayoutState, so read them from the project context directly.
-  const { updatePatchBoard, projectId, projectName, standaloneController } = useProject();
-
-  const [selectedPatchId, setSelectedPatchId] = useState(null);
-  const [offCount, setOffCount] = useState(1);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-
-  const board = normalizePatchBoard(patchBoard, strips);
-  const expanded = expandPatchBoard(board, strips);
-  const chain = mainChain(board);
-
-  // The active strip = the current single strip selection (chain-row click /
-  // canvas chop both drive it), falling back to the first strip.
-  const activeStrip = strips.find(s => s.id === selStripId) || strips[0] || null;
-
-  const patchesById = new Map(board.patches.map(patch => [patch.id, patch]));
-  const rowsByPatchId = new Map(expanded.rows.map(row => [row.patchId, row]));
-  const orderedPatches = chain.rowIds.map(id => patchesById.get(id)).filter(Boolean);
-  const activeStripPatches = orderedPatches.filter(
-    patch => patch.source?.type === 'strip' && patch.source.stripId === activeStrip?.id,
-  );
-  const selectedPatch = patchesById.get(selectedPatchId) || activeStripPatches[0] || orderedPatches[0] || null;
-  const activeCuts = activeStrip ? cutsForStrip(board, activeStrip.id) : [];
-
-  // Patch-board edits route through the context's history-aware mutation so
-  // they join the shared undo stack (interleaved with strip edits).
-  const updateBoard = updatePatchBoard;
-
-  const reversePatch = (patch) => {
-    if (!patch || patch.source?.type !== 'strip') return;
-    updateBoard(next => updatePatchRange(next, patch.id, patch.source.endLed, patch.source.startLed));
+  const mutate = (callback, options = {}) => {
+    const result = updateWiring(callback, options);
+    if (!result.ok) setMutationError(result.errors?.[0]?.message || 'Wiring change rejected.');
+    else setMutationError('');
+    return result;
   };
 
-  const removePatch = (patchId) => updateBoard(next => {
-    next.patches = next.patches.filter(patch => patch.id !== patchId);
-    next.chains.forEach(item => {
-      item.rowIds = item.rowIds.filter(rowId => rowId !== patchId);
-    });
-  });
-
-  const setPatchMode = (patchId, mode) => updateBoard(next => {
-    const patch = next.patches.find(item => item.id === patchId);
-    if (patch) patch.output = { ...(patch.output || {}), mode };
-  });
-
-  const resetActivePath = () => {
-    if (!activeStrip || board.physicalLocked) return;
-    updateBoard(next => sliceStripIntoPatchesPreservingRoute(next, activeStrip, []));
-    setSelectedPatchId(null);
-    if (selectedWireCut?.stripId === activeStrip.id) setSelectedWireCut(null);
+  const selectRun = run => {
+    setSelectedRunId(run.id);
+    if (run.type === 'strip') selectStrip(run.source.stripId);
   };
 
-  const addOffBlock = () => {
-    let newPatchId = null;
-    updateBoard(next => { newPatchId = addOffPatch(next, offCount).id; });
-    if (newPatchId) setSelectedPatchId(newPatchId);
+  const moveRun = (outputId, runId, delta) => mutate(draft => {
+    const output = draft.outputs.find(item => item.id === outputId);
+    const index = output?.runIds.indexOf(runId) ?? -1;
+    if (!output || index < 0) return;
+    const next = Math.max(0, Math.min(output.runIds.length - 1, index + delta));
+    output.runIds.splice(index, 1);
+    output.runIds.splice(next, 0, runId);
+  }, { changeKind: 'route' });
+
+  const connectFrom = (sourceId, targetId) => {
+    if (!sourceId || sourceId === targetId) { setConnectionState({ mode: 'idle', sourceId: null }); return; }
+    mutate(draft => {
+      const targetOutput = sourceId.startsWith('output:')
+        ? draft.outputs.find(item => item.id === sourceId.slice(7))
+        : draft.outputs.find(item => item.runIds.includes(sourceId));
+      if (!targetOutput) throw new Error('Choose an output or run OUT port first.');
+      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => id !== targetId); });
+      const sourceIndex = sourceId.startsWith('output:') ? -1 : targetOutput.runIds.indexOf(sourceId);
+      targetOutput.runIds.splice(sourceIndex + 1, 0, targetId);
+    }, { changeKind: 'route' });
+    setConnectionState({ mode: 'idle', sourceId: null });
+  };
+  const connect = targetId => connectFrom(connectionState.sourceId, targetId);
+
+  const startCordPointer = (sourceId, event) => {
+    if (wiring.locked) return;
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    setConnectionState({ mode: 'draggingCord', sourceId });
+    const finish = pointerEvent => {
+      window.removeEventListener('pointerup', finish);
+      const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)?.closest?.('[data-wire-in]');
+      if (target?.dataset.wireIn) connectFrom(sourceId, target.dataset.wireIn);
+      else setConnectionState({ mode: 'idle', sourceId: null });
+    };
+    window.addEventListener('pointerup', finish, { once: true });
+  };
+
+  const handlePort = (id, port) => {
+    if (port === 'out') {
+      setConnectionState(current => current.sourceId === id
+        ? { mode: 'idle', sourceId: null }
+        : { mode: 'sourcePortSelected', sourceId: id });
+    } else connect(id);
+  };
+
+  const addInactive = () => mutate(draft => {
+    const id = `reserved-${Date.now()}`;
+    draft.runs.push({ id, type: 'inactive', count: 1, verified: false });
+    draft.outputs[0].runIds.push(id);
+  }, { changeKind: 'route' });
+
+  const addCable = () => mutate(draft => {
+    const id = `cable-${Date.now()}`;
+    draft.runs.push({ id, type: 'cable', verified: false });
+    draft.outputs[0].runIds.push(id);
+  }, { changeKind: 'route' });
+
+  const removeRun = (outputId, runId) => mutate(draft => {
+    const output = draft.outputs.find(item => item.id === outputId);
+    if (output) output.runIds = output.runIds.filter(id => id !== runId);
+    draft.runs = draft.runs.filter(run => run.id !== runId);
+  }, { changeKind: 'route' });
+
+  const reverseRun = runId => mutate(draft => {
+    const run = draft.runs.find(item => item.id === runId);
+    if (!run || run.type !== 'strip') return;
+    if (run.directionPolicy === 'fixed') throw new Error('This run has a fixed physical direction.');
+    run.physicalDirection = run.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
+  }, { changeKind: 'direction', runIds: [runId] });
+
+  const addOutput = () => mutate(draft => {
+    if (draft.outputs.length >= 4) throw new Error('The card supports at most four outputs.');
+    const index = draft.outputs.length;
+    draft.outputs.push({ id: `out${index + 1}`, name: `Output ${index + 1}`, pin: PINS[index], runIds: [] });
+  }, { changeKind: 'output' });
+
+  const toggleLock = () => {
+    if (wiring.locked) {
+      mutate(draft => { draft.locked = false; draft.verified = false; draft.runs.forEach(run => { run.verified = false; }); }, { changeKind: null });
+      return;
+    }
+    if (!compiledWiring.ok) { setMutationError('Resolve compiler errors before locking wiring.'); return; }
+    mutate(draft => { draft.locked = true; draft.verified = true; draft.runs.forEach(run => { run.verified = true; }); }, { changeKind: null });
   };
 
   const exportLedmap = () => {
-    const pixels = pixelsFromPatchBoard(patchBoard, strips);
-    download(toWLEDLedmap(pixels), 'ledmap.json', 'application/json');
+    const map = compiledWiring.pixels.map(pixel => pixel.inactive ? [-1, -1] : [pixel.x, pixel.y]);
+    download(JSON.stringify({ n: map.length, map }, null, 2), 'ledmap.json', 'application/json');
   };
 
-  const selectedRow = selectedPatch ? rowsByPatchId.get(selectedPatch.id) : null;
-  const selectedIsOff = selectedPatch?.source?.type === 'off';
-
-  // Chain-row drag reorder (reuses the Draw-mode strip-list drag semantics, but
-  // here a drop IS a chain mutation via reorderStripRows).
-  const onRowDragStart = (e, id) => {
-    if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
-    const ids = selectedStripIds.includes(id) ? selectedStripIds : [id];
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
-    e.dataTransfer.setData('text/plain', ids.join(','));
-  };
+  const selectedRun = runsById.get(effectiveSelectedRunId);
+  const updateSelectedRange = (field, value) => mutate(draft => {
+    const run = draft.runs.find(item => item.id === selectedRun?.id);
+    if (run?.type === 'strip') run.source[field] = Math.max(0, Math.trunc(Number(value) || 0));
+  }, { changeKind: 'seam', runIds: selectedRun ? [selectedRun.id] : [] });
 
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
-
-      {/* ── Chain: the strip list IS the wiring order ─────────────────────── */}
-      <section className="lw-wire-chain">
-        <div className="lw-wire-section-title">
-          <span>Wiring chain</span>
-          <strong>{pluralize(orderedStrips.length, 'strip')}</strong>
-        </div>
-        {orderedStrips.length === 0 ? (
-          <p className="la-wire-chain-empty">
-            Add strips in Draw mode — their order here is the order LEDs light along the wire.
-          </p>
-        ) : (
-          <div className="la-wire-chain-list">
-            {orderedStrips.map((s, i) => {
-              const cuts = cutsForStrip(board, s.id);
-              const isActive = s.id === selStripId;
-              const isBatch = selectedStripIds.includes(s.id);
-              return (
-                <div
-                  key={s.id}
-                  data-strip-id={s.id}
-                  data-testid="layout-wire-chain-row"
-                  className={`la-wire-chain-row${isActive ? ' active' : ''}`}
-                  draggable
-                  onDragStart={e => onRowDragStart(e, s.id)}
-                  onDragOver={e => {
-                    if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
-                    e.preventDefault();
-                    setStripGroupDragOver(`strip:${s.id}`);
-                  }}
-                  onDragLeave={() => setStripGroupDragOver(null)}
-                  onDrop={e => {
-                    const draggedStripIds = readDraggedStripIds(e);
-                    if (!draggedStripIds.length) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    reorderStripRows(draggedStripIds, s.id);
-                    setStripGroupDragOver(null);
-                  }}
-                  onDragEnd={() => setStripGroupDragOver(null)}
-                  style={{ opacity: hidden[s.id] ? 0.4 : 1,
-                           outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
-                           outlineOffset: -1 }}
-                  onClick={() => { selectStrip(s.id); setSelectedPatchId(null); }}>
-                  <span data-drag-handle="true" className="la-wire-chain-grip" title="Drag to reorder the wire chain"
-                        style={{ color: isBatch ? 'var(--accent)' : undefined }}>
-                    <span className="la-wire-chain-n">{String(i + 1).padStart(2, '0')}</span>
-                    <DragHandleIcon/>
-                  </span>
-                  <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
-                                 boxShadow: isActive ? `0 0 8px ${s.color}` : undefined }}/>
-                  <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
-                                className="nm" style={{ flex: 1, minWidth: 0 }}/>
-                  {s.reversed && <span className="la-strip-rev">REV</span>}
-                  {cuts.length > 0 && (
-                    <span className="la-wire-chain-splits" title={`${cuts.length} split${cuts.length === 1 ? '' : 's'}`}>
-                      {pluralize(cuts.length + 1, 'run')}
-                    </span>
-                  )}
-                  <span className="layer-len">{s.pixelCount} px</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* ── Selected split (mini-editor) ──────────────────────────────────── */}
-      {selectedWireCut && (
-        <section className="lw-wire-selected-detail">
-          <div className="lw-wire-section-title">
-            <span>Selected split</span>
-            <strong>LED {selectedWireCut.cutLed}</strong>
-          </div>
-          <div className="lw-wire-tool-row">
-            <button
-              className="btn btn-ghost"
-              aria-label="Move cut earlier"
-              disabled={board.physicalLocked}
-              onClick={() => nudgeSelectedWireCut(-1)}
-            >
-              -
-            </button>
-            <button
-              className="btn btn-ghost"
-              aria-label="Move cut later"
-              disabled={board.physicalLocked}
-              onClick={() => nudgeSelectedWireCut(1)}
-            >
-              +
-            </button>
-            <button
-              className="btn btn-ghost lw-btn-danger"
-              aria-label="Delete cut"
-              disabled={board.physicalLocked}
-              onClick={() => deleteSelectedWireCut()}
-            >
-              Delete
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* ── Cut summary + merge-back ──────────────────────────────────────── */}
-      <section className="lw-wire-cut-summary">
-        <div className="lw-wire-section-title">
-          <span>Splits</span>
-          <strong>{pluralize(activeCuts.length, 'cut')}</strong>
-        </div>
-        <div className="lw-wire-cut-summary-row">
-          <span className="lw-wire-cut-summary-name">{friendlyName(activeStrip?.name)}</span>
-          <button className="btn btn-ghost" disabled={!activeStrip || board.physicalLocked || activeCuts.length === 0} onClick={resetActivePath}>
-            Merge back into one strip
-          </button>
-        </div>
-      </section>
-
-      {/* ── Wiring-order chips + segment tools (only once split into runs) ─── */}
-      {orderedPatches.length > strips.length && (<>
-      <section className="lw-wire-order">
-        <div className="lw-wire-section-title">
-          <span>Wiring order</span>
-          <strong>{orderedPatches.length} segments</strong>
-        </div>
-        <div className="lw-wire-chip-row">
-          {orderedPatches.map((patch, index) => {
-            const isOff = patch.source?.type === 'off';
-            const active = patch.id === selectedPatch?.id;
-            return (
-              <button
-                key={patch.id}
-                className={`lw-wire-segment-chip ${active ? 'active' : ''} ${isOff ? 'lw-wire-off-chip' : ''}`}
-                onClick={() => setSelectedPatchId(patch.id)}
-                title={isOff ? `${patchLength(patch)} unlit LEDs` : `${patchLength(patch)} LEDs`}
-              >
-                <span>{String(index + 1).padStart(2, '0')}</span>
-                <strong>
-                  {isOff ? 'Gap' : friendlyName(patch.name)}
-                  {!isOff && <small> part {index + 1}</small>}
-                </strong>
-                <em>{isOff ? `x${patchLength(patch)}` : patchDirection(patch)}</em>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="lw-wire-tools">
-        <div className="lw-wire-tool-row">
-          <button
-            className="btn btn-ghost"
-            disabled={!selectedPatch || selectedIsOff || board.physicalLocked}
-            onClick={() => reversePatch(selectedPatch)}
-          >
-            Reverse
-          </button>
-          <button
-            className="btn btn-ghost"
-            disabled={!selectedPatch || board.physicalLocked}
-            onClick={() => updateBoard(next => movePatch(next, selectedPatch.id, 'up'))}
-          >
-            Earlier
-          </button>
-          <button
-            className="btn btn-ghost"
-            disabled={!selectedPatch || board.physicalLocked}
-            onClick={() => updateBoard(next => movePatch(next, selectedPatch.id, 'down'))}
-          >
-            Later
-          </button>
-          <button
-            className="btn btn-ghost lw-btn-danger"
-            disabled={!selectedPatch || board.physicalLocked}
-            onClick={() => removePatch(selectedPatch.id)}
-          >
-            Delete
-          </button>
-        </div>
-        <div className="lw-wire-tool-row">
-          <input
-            className="lw-wire-off-input"
-            type="number"
-            min="1"
-            value={offCount}
-            onChange={event => setOffCount(Math.max(1, Math.trunc(Number(event.target.value) || 1)))}
-            aria-label="Off LED count"
+      <div className="lw-wiring-toolbar">
+        <strong>Physical outputs</strong>
+        <button className="btn" disabled={wiring.locked || wiring.outputs.length >= 4} onClick={addOutput}>Add output</button>
+        <button className="btn" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>Advanced</button>
+      </div>
+      <p className="lw-wire-scaffold">Connect each physical run from an output’s OUT port to a run’s IN port. Cable jumps use no LED addresses.</p>
+      <div className="lw-wiring-lanes">
+        {wiring.outputs.map(output => (
+          <WiringOutputLane
+            key={output.id}
+            output={output}
+            runs={output.runIds.map(id => runsById.get(id)).filter(Boolean)}
+            compiledRuns={compiledWiring.runs}
+            stripsById={stripsById}
+            selectedRunId={effectiveSelectedRunId}
+            connectionState={connectionState}
+            advanced={advanced}
+            locked={wiring.locked}
+            onSelectRun={selectRun}
+            onPort={handlePort}
+            onCordPointerDown={startCordPointer}
+            onMove={moveRun}
+            onRemove={removeRun}
+            onReverse={reverseRun}
           />
-          <button className="btn" disabled={board.physicalLocked} onClick={addOffBlock}>
-            Add a gap
-          </button>
-          <button
-            className="btn btn-ghost"
-            disabled={!selectedPatch}
-            onClick={() => setAdvancedOpen(open => !open)}
-          >
-            Edit LED range
-          </button>
-        </div>
-      </section>
-      </>)}
-
-      {/* ── Advanced LED-range editor ─────────────────────────────────────── */}
-      {advancedOpen && selectedPatch && (
-        <section className="lw-wire-advanced">
-          <div className="lw-wire-section-title">
-            <span>Advanced</span>
-            <strong>{selectedRow?.count ?? patchLength(selectedPatch)} exported</strong>
-          </div>
-          {selectedIsOff ? (
-            <label>
-              Off LEDs
-              <input
-                type="number"
-                min="1"
-                disabled={board.physicalLocked}
-                value={selectedPatch.source.ledCount}
-                onChange={event => updateBoard(next => {
-                  const patch = next.patches.find(item => item.id === selectedPatch.id);
-                  if (!patch) return;
-                  patch.source.ledCount = Math.max(1, Math.trunc(Number(event.target.value) || 1));
-                  patch.name = `Off ${patch.source.ledCount} LEDs`;
-                })}
-              />
-            </label>
-          ) : (
-            <>
-              <label>
-                Start LED
-                <input
-                  type="number"
-                  disabled={board.physicalLocked}
-                  value={selectedPatch.source.startLed}
-                  onChange={event => updateBoard(next => updatePatchRange(next, selectedPatch.id, event.target.value, selectedPatch.source.endLed))}
-                />
-              </label>
-              <label>
-                End LED
-                <input
-                  type="number"
-                  disabled={board.physicalLocked}
-                  value={selectedPatch.source.endLed}
-                  onChange={event => updateBoard(next => updatePatchRange(next, selectedPatch.id, selectedPatch.source.startLed, event.target.value))}
-                />
-              </label>
-              <label>
-                Output
-                <select
-                  value={selectedPatch.output?.mode || 'normal'}
-                  onChange={event => setPatchMode(selectedPatch.id, event.target.value)}
-                >
-                  <option value="normal">On</option>
-                  <option value="off">Off</option>
-                </select>
-              </label>
-            </>
-          )}
-        </section>
+        ))}
+      </div>
+      <div className="lw-wiring-additions">
+        <button className="btn" disabled={wiring.locked} aria-label="Add reserved-unlit LEDs" onClick={addInactive}>+ Reserved · unlit</button>
+        <button className="btn" disabled={wiring.locked} aria-label="Add cable jump" onClick={addCable}>+ Cable jump</button>
+      </div>
+      {selectedRun?.type === 'strip' && (
+        <details className="lw-wiring-range">
+          <summary>Edit LED range</summary>
+          <label>Start LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.from} onChange={event => updateSelectedRange('from', event.target.value)}/></label>
+          <label>End LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.to} onChange={event => updateSelectedRange('to', event.target.value)}/></label>
+          <label>Direction
+            <select disabled={wiring.locked} value={selectedRun.directionPolicy} onChange={event => mutate(draft => {
+              const run = draft.runs.find(item => item.id === selectedRun.id);
+              if (run?.type === 'strip') run.directionPolicy = event.target.value;
+            }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
+              <option value="flexible">Flexible</option>
+              <option value="fixed">Fixed by strip</option>
+            </select>
+          </label>
+        </details>
       )}
-
-      {/* ── Finish line: Send to card + Export ledmap.json ────────────────── */}
+      <WiringPreflight compiled={compiledWiring} locked={wiring.locked} onToggleLock={toggleLock} mutationError={mutationError}/>
       <section className="lw-wire-finish">
-        <CardPushControl
-          connected={connected}
-          board={board}
-          strips={strips}
-          projectId={projectId}
-          projectName={projectName}
-          standaloneController={standaloneController}
-        >
-          <button
-            className="btn la-export-ledmap"
-            data-testid="layout-export-ledmap"
-            onClick={exportLedmap}
-            title="Download a WLED ledmap.json for this layout"
+        <fieldset disabled={!compiledWiring.ok} className="lw-send-gate">
+          <CardPushControl
+            connected={connected}
+            board={cardTransportBoard}
+            strips={strips}
+            projectId={projectId}
+            projectName={projectName}
+            standaloneController={standaloneController}
           >
-            Export ledmap.json
-          </button>
-        </CardPushControl>
+            <button className="btn la-export-ledmap" data-testid="layout-export-ledmap" onClick={exportLedmap}>Export ledmap.json</button>
+          </CardPushControl>
+        </fieldset>
+        <div className="lw-wire-recovery" aria-label="Local card recovery actions">
+          <button className="btn" onClick={() => navigator.clipboard?.writeText(JSON.stringify({ wiring, compiled: compiledWiring }, null, 2))}>Copy payload</button>
+          <button className="btn" onClick={() => { window.location.hash = 'screen=installer'; }}>Open installer</button>
+          <button className="btn" onClick={() => document.querySelector('[data-testid="layout-send-to-card"]')?.click()}>Retry</button>
+        </div>
       </section>
     </div>
   );
