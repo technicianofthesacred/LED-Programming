@@ -1,4 +1,18 @@
+import { createConnectedSpatialTemplate } from './showSpatialTemplate.js';
+
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+export function createProjectPreviewStrip({ strips = [], hidden = {}, patchBoard = null } = {}) {
+  const samples = createConnectedSpatialTemplate({ strips, hidden, patchBoard });
+  return {
+    id: 'project-preview',
+    pts: samples.map((sample, index) => ({ x: sample.x, y: sample.y, p: samples.length > 1 ? index / (samples.length - 1) : 0.5 })),
+    offIndexes: samples.map((sample, index) => sample.stripId === null ? index : -1).filter(index => index >= 0),
+    order: samples.map(sample => sample.stripId ?? 'off'),
+    brightness: 1,
+    speed: 1,
+  };
+}
 
 export function ledRgb(led = {}) {
   return {

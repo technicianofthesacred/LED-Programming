@@ -5,7 +5,7 @@
    drove the mockup are replaced with the live pattern bank, ProjectContext, and
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { I, PATTERN_CATS, STRIP_TESTS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
@@ -56,6 +56,8 @@ import {
   recoverCardLights,
 } from '../lib/cardLiveControl.js';
 import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
+import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
+import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
   readLocalChipDefault,
   writeLocalChipDefault,
@@ -212,14 +214,15 @@ import {
   // each bead per frame — so Sparkle sparkles, Fire flickers, and every slider
   // recolors the preview the way the card will. Falls back to the static palette
   // strand only when a pattern has no runnable code.
-  function LivePreviewRow({ patternId, pal, look, n = 22, big = false }) {
+  function LivePreviewRow({ patternId, pal, look, previewStrip, n = 22, big = false, symSettings }) {
     const codeId = useMemo(() => resolveCodePatternId(patternId), [patternId]);
     const fn = useMemo(() => (codeId ? compilePattern(codeId) : null), [codeId]);
     const paletteNorm = useMemo(() => normalizePalette(pal), [pal]);
-    const strip = useMemo(() => buildPreviewStrip(n), [n]);
+    const strip = previewStrip || buildPreviewStrip(n);
+    n = strip.pts.length || n;
     const beadRefs = useRef([]);
     const live = useRef({});
-    live.current = { fn, codeId, paletteNorm, strip, look, n, big };
+    live.current = { fn, codeId, paletteNorm, strip, look, n, big, symSettings };
 
     useEffect(() => {
       if (!fn) return undefined;
@@ -237,6 +240,7 @@ import {
           paletteNorm: s.paletteNorm,
           masterBrightness: s.look?.brightness ?? 1,
           masterSpeed: s.look?.speed ?? 1,
+          symSettings: s.symSettings,
         });
         const px = applyLookColorModifiers(frame.pixels, tMs, s.look || {});
         for (let i = 0; i < s.n; i++) {
@@ -264,10 +268,10 @@ import {
       </div>);
   }
 
-  function LedStage({ patternId, pal, look }) {
+  function LedStage({ patternId, pal, look, previewStrip, symSettings }) {
     return (
-      <div className="pm-led-stage">
-        <LivePreviewRow patternId={patternId} pal={pal} look={look} n={22} big />
+      <div className="pm-led-stage" data-testid="pattern-project-preview" data-preview-led-count={previewStrip?.pts?.length || 22} data-preview-order={(previewStrip?.order || []).join(',')} data-preview-symmetry={symSettings?.enabled ? symSettings.type : 'none'}>
+        <LivePreviewRow patternId={patternId} pal={pal} look={look} previewStrip={previewStrip} n={22} big symSettings={symSettings} />
         <span className="sheen" />
       </div>);
   }
@@ -278,6 +282,7 @@ import {
       projectName,
       projectRevision,
       strips,
+      hidden,
       setStrips,
       viewBox,
       svgText,
@@ -286,9 +291,14 @@ import {
       standaloneController,
       setStandaloneController,
       registerProjectSnapshotContributor,
+      markProjectInstalled,
       symSettings,
       setSymSettings,
     } = useProject();
+    const projectPreviewStrip = useMemo(
+      () => createProjectPreviewStrip({ strips, hidden, patchBoard }),
+      [projectRevision, strips, hidden, patchBoard],
+    );
 
     // ── browse / ui state ───────────────────────────────────────────────
     const [q, setQ] = useState("");
@@ -303,12 +313,14 @@ import {
     // preview on narrow screens). Resets whenever the filter or search changes.
     const PATTERN_PAGE = 24;
     const [visibleCount, setVisibleCount] = useState(PATTERN_PAGE);
+    const patternSentinelRef = useRef(null);
     useEffect(() => { setVisibleCount(PATTERN_PAGE); }, [cat, q]);
 
     // ── real engine state ───────────────────────────────────────────────
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState("");
     const [statusKind, setStatusKind] = useState("");
+    const [cardSave, dispatchCardSave] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
@@ -416,6 +428,17 @@ import {
       if (q && !p.label.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
+    useEffect(() => {
+      const node = patternSentinelRef.current;
+      if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setVisibleCount(count => Math.min(filtered.length, count + PATTERN_PAGE));
+        }
+      }, { rootMargin: '600px 0px' });
+      observer.observe(node);
+      return () => observer.disconnect();
+    }, [cat, q, filtered.length]);
     const playlistSize = playlist.length;
 
     // ── controller / preview helpers (ported from PatternsScreen) ───────
@@ -653,6 +676,7 @@ import {
       try {
         const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
+        dispatchCardSave({ type: 'start', revision: projectRevision });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
@@ -664,6 +688,8 @@ import {
           allowLayoutChange: testStrip.enabled || undefined,
           allowProjectChange: testStrip.enabled || undefined,
         });
+        dispatchCardSave({ type: 'confirm' });
+        markProjectInstalled();
         if (!response.rebooting) {
           // A test-strip card only has the one collapsed zone, so there is no
           // real per-section target to preview against — just sync the whole
@@ -679,6 +705,7 @@ import {
         setStatusKind('');
         setStatus('');
       } catch (error) {
+        dispatchCardSave({ type: 'fail', error: error?.message });
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(packageForCard, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
         } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
@@ -962,7 +989,7 @@ import {
                 <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard}>{I.bolt}Save to card</button>
+                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
                 {connected &&
                   <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed}>{I.wrench}Recover lights</button>
                 }
@@ -989,7 +1016,7 @@ import {
             </header>
 
             {status &&
-              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')}>
+              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')} role={statusKind === 'err' ? 'alert' : 'status'} aria-live="polite">
                 {status}
                 {handoffUrl &&
                   <div className="pmx-status-actions">
@@ -1068,24 +1095,24 @@ import {
                     {filtered.slice(0, visibleCount).map((p) => {
                       const cardInPlaylist = inPlaylist(p.id);
                       return (
-                    <div key={p.id} className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} onClick={() => selectCard(p)}>
+                    <button type="button" key={p.id} className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} aria-pressed={p.id === selId} onClick={() => selectCard(p)}>
                         <div className="pmcard-led"><LedRow pal={p.pal} n={9} /></div>
                         <div className="pmcard-row">
                           <span className="pmcard-nm">{p.label}</span>
                           {p.mix && <span className="mixtag">mix</span>}
                           <span className="pmcard-sp">{p.sp}</span>
                         </div>
-                        <button className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
+                        <span role="button" tabIndex={0} aria-pressed={cardInPlaylist} className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') togglePl(p.id, e); }}>
                           <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z" /></svg>
                           {cardInPlaylist ? "In playlist" : "Add to playlist"}
-                        </button>
-                      </div>
+                        </span>
+                      </button>
                       );
                     })}
                     {!filtered.length && <p style={{ color: "var(--text-faint)", fontSize: 13, gridColumn: "1 / -1", padding: 20 }}>No chip patterns match this search.</p>}
                   </div>
                   {filtered.length > visibleCount &&
-                    <div className="pm-showmore">
+                    <div className="pm-showmore" ref={patternSentinelRef} data-testid="patterns-sentinel">
                       <button type="button" className="btn ghost-sm" data-testid="patterns-show-more" onClick={() => setVisibleCount((c) => c + PATTERN_PAGE)}>
                         Show {Math.min(PATTERN_PAGE, filtered.length - visibleCount)} more
                       </button>
@@ -1101,7 +1128,7 @@ import {
               <aside className="pm-aside">
                 <div className="card pm-pane pm-preview-pane">
                   <div className="sec-h"><span className="t">Preview</span><span className="m">{selectedTargetName} · {sel.label}</span></div>
-                  <LedStage patternId={sel.id} pal={sel.pal} look={look} />
+                  <LedStage patternId={sel.id} pal={sel.pal} look={look} previewStrip={projectPreviewStrip} symSettings={symSettings} />
                 </div>
 
                 <div className="card pm-pane">

@@ -10,7 +10,7 @@
    advanced JSON, autosave, and the relocated encoder controls) is appended as
    additional .card.set-card sections in the same mockup idiom so it reads as
    native, not bolted on. */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { I, SWATCHES } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useTweaks } from '../components/Tweaks.jsx';
@@ -54,6 +54,7 @@ import {
   saveProjectLibraryRecord,
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
+import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
@@ -106,8 +107,8 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   const COLOR_ORDER_LABELS = ['RGB', 'GRB', 'BRG'];
 
   function formatSavedTime(lastSaved) {
-    if (!lastSaved) return 'not saved this session';
-    return `autosaved ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    if (!lastSaved) return 'no recovery copy yet';
+    return `recovery copy ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   }
 
   function formatLibraryTime(updatedAt) {
@@ -169,11 +170,15 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       lastSaved,
     } = useProject();
     const { tweaks, set: setTweak } = useTweaks();
+    useEffect(() => {
+      document.documentElement.dataset.theme = tweaks.theme === 'daylight' ? 'daylight' : 'studio';
+    }, [tweaks.theme]);
 
     const importRef = useRef(null);
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState('');
     const [statusKind, setStatusKind] = useState('');
+    const [cardWrite, dispatchCardWrite] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [projectLibrary, setProjectLibrary] = useState(() => listProjectLibraryRecords());
     const [activeProjectRecordId, setActiveProjectRecordId] = useState(() => readActiveProjectLibraryRecordId());
@@ -362,16 +367,19 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     };
 
     const pushDirect = async () => {
+      dispatchCardWrite({ type: 'start', revision: projectId });
       setStatusKind('');
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
       try {
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
         markProjectInstalled();
+        dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');
         setStatus(response.rebooting
           ? 'Saved on card. Rebooting now so the LED output layout takes effect.'
           : 'Saved on card.');
       } catch (error) {
+        dispatchCardWrite({ type: 'fail', error: error?.message });
         setStatusKind('err');
         setStatus(error?.reason === 'project-mismatch'
           ? error.message
@@ -544,7 +552,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   </Row>
                   <Row label="Write to card" hint="Save this setup onto the chip" stack>
                     <div className="set-actions">
-                      {directPushAvailable && <button className="btn" onClick={pushDirect}>Save to card</button>}
+                      {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Saving…' : cardWrite.status === 'failed' ? 'Retry save' : 'Save to card'}</button>}
                       {!directPushAvailable && <a className="btn" href={handoffUrl} target="_blank" rel="noopener noreferrer">{I.open}Open card installer</a>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
                       <button className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>{I.open}Open card page</button>

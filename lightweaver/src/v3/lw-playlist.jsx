@@ -181,8 +181,9 @@ function realPatternShape(patternId) {
           if (sequence !== previewSequence.current) return;
         }
         await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-        if (sequence === previewSequence.current) setPlaylistStatus(null);
+        if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
       } catch { /* preview is best-effort; connection state lives in the footer */ }
+      return false;
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
@@ -201,8 +202,8 @@ function realPatternShape(patternId) {
             { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true },
             { host, timeoutMs: 2600 },
           );
-          if (sequence === previewSequence.current) setPlaylistStatus(null);
-          return;
+          if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
+          return false;
         }
         const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
         const requiredZoneIds = targets
@@ -219,20 +220,22 @@ function realPatternShape(patternId) {
           targets,
           { host, timeoutMs: 2600 },
         );
-        if (sequence === previewSequence.current) setPlaylistStatus(null);
+        if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
       } catch (error) {
         if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
         setPlaylistStatus(nextStatus);
         setHandoffUrl(nextStatus.handoffUrl || '');
       }
+      return false;
     };
 
-    const setLiveItem = (item) => {
+    const setLiveItem = async (item) => {
       if (!item) return;
-      setLive(item.id);
-      if (item.type === 'combo') { void previewSavedLookOnCard(savedLookById.get(item.lookId)); return; }
-      void previewPatternOnCard(item.patternId);
+      const confirmed = item.type === 'combo'
+        ? await previewSavedLookOnCard(savedLookById.get(item.lookId))
+        : await previewPatternOnCard(item.patternId);
+      if (confirmed) setLive(item.id);
     };
 
     const fallbackLiveLook = () => {
