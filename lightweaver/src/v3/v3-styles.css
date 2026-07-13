@@ -106,6 +106,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 }
 
 .pm-target > .chips { max-width: 480px; }
+.pmcard-wrap { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.pmcard-wrap > .pmcard { flex: 1; width: 100%; }
+.pmcard-wrap > .pmcard-pl { min-height: 28px; padding: 2px 8px; }
 
 /* ============================================================
    App shell — single continuous grid

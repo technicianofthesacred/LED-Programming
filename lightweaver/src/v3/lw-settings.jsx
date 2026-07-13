@@ -69,7 +69,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   function Seg({ opts, val, set }) {
     return (
       <div className="mini-seg">
-        {opts.map((o) => <button key={o} className={val === o ? "on" : ""} onClick={() => set(o)}>{o}</button>)}
+        {opts.map((o) => <button type="button" key={o} className={val === o ? "on" : ""} aria-pressed={val === o} onClick={() => set(o)}>{o}</button>)}
       </div>
     );
   }
@@ -150,6 +150,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   function SettingsScreen() {
     const {
       projectId,
+      projectLifecycle,
       projectName, setProjectName,
       bpm, setBpm,
       showDuration, setShowDuration,
@@ -367,12 +368,13 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     };
 
     const pushDirect = async () => {
-      dispatchCardWrite({ type: 'start', revision: projectId });
+      const requestedRevision = projectLifecycle.editedRevision;
+      dispatchCardWrite({ type: 'start', revision: requestedRevision });
       setStatusKind('');
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
       try {
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
-        markProjectInstalled();
+        markProjectInstalled(requestedRevision);
         dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');
         setStatus(response.rebooting

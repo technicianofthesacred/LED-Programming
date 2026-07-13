@@ -375,6 +375,8 @@ function realPatternShape(patternId) {
               <div
                 className={"pmx-status" + (playlistStatus.kind === 'ok' ? ' is-ok' : playlistStatus.kind === 'err' ? ' is-err' : '')}
                 data-testid="playlist-card-status"
+                role={playlistStatus.kind === 'err' ? 'alert' : 'status'}
+                aria-live="polite"
               >
                 {playlistStatus.message}
                 {playlistStatus.action?.hint &&
@@ -408,7 +410,7 @@ function realPatternShape(patternId) {
               <section className="pm-main">
                 <div className="pl-hostrow">
                   <span className="sf-l">Card address</span>
-                  <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} />
+                  <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} aria-label="Card address" />
                   <span className="pl-count">{playlist.length} looks · dial press to advance</span>
                 </div>
 
@@ -442,7 +444,7 @@ function realPatternShape(patternId) {
                           <span>{item.type === 'combo' ? "section mix" : `${p.label} across the piece`}</span>
                         </div>
                         <div className="pl-actions">
-                          <button className={"plbtn" + (live === id ? " on" : "")} onClick={() => setLiveItem(item)}>Live</button>
+                          <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} onClick={() => setLiveItem(item)}>Live</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
                           <button className="plbtn" disabled={i === playlist.length - 1} onClick={() => move(i, 1)}>Down</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => first(i)}>Make first</button>

@@ -1,23 +1,24 @@
 import { test, expect } from '@playwright/test';
 
-test('export dialog closes when navigating from the rail', async ({ page }) => {
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await page.locator('.lw-rail-btn', { hasText: 'Show' }).click();
-  await page.getByRole('button', { name: 'Export Show →' }).click();
+test('card tools menu closes when navigating from the current rail', async ({ page }) => {
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Card tools/ }).click();
 
-  await expect(page.locator('.lw-export-backdrop')).toBeVisible();
-  await page.locator('.lw-rail-btn', { hasText: 'Settings' }).click();
+  await expect(page.getByRole('menu', { name: 'Card tools' })).toBeVisible();
+  await page.evaluate(() => { window.location.hash = 'screen=settings'; });
 
-  await expect(page.locator('.lw-export-backdrop')).toHaveCount(0);
-  await expect(page.locator('.lw-rail-btn.active', { hasText: 'Settings' })).toBeVisible();
+  await expect(page.getByRole('menu', { name: 'Card tools' })).toHaveCount(0);
+  await expect(page.locator('.rail-item.active', { hasText: 'Settings' })).toBeVisible();
 });
 
-test('export dialog closes with Escape', async ({ page }) => {
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await page.locator('.lw-rail-btn', { hasText: 'Show' }).click();
-  await page.getByRole('button', { name: 'Export Show →' }).click();
+test('card tools menu closes with Escape and returns focus to its trigger', async ({ page }) => {
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  const trigger = page.getByRole('button', { name: /Card tools/ });
+  await trigger.click();
 
-  await expect(page.locator('.lw-export-backdrop')).toBeVisible();
+  await expect(page.getByRole('menu', { name: 'Card tools' })).toBeVisible();
+  await expect(page.getByRole('menuitem').first()).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(page.locator('.lw-export-backdrop')).toHaveCount(0);
+  await expect(page.getByRole('menu', { name: 'Card tools' })).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });

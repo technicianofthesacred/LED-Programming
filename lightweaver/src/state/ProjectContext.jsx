@@ -248,7 +248,7 @@ export function ProjectProvider({ children }) {
   const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
     if (action.type === 'edited') return markEdited(state);
     if (action.type === 'persisted') return markPersisted(state, action.destination);
-    if (action.type === 'installed') return markInstalled(state);
+    if (action.type === 'installed') return markInstalled(state, action.revision);
     if (action.type === 'replaced') return createProjectLifecycle();
     return state;
   }, undefined, createProjectLifecycle);
@@ -761,7 +761,8 @@ export function ProjectProvider({ children }) {
 
   const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
-  const markProjectInstalled = useCallback(() => dispatchProjectLifecycle({ type: 'installed' }), []);
+  const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
+  const markProjectInstalled = useCallback(revision => dispatchProjectLifecycle({ type: 'installed', revision }), []);
 
   return (
     <ProjectContext.Provider value={{
@@ -855,6 +856,7 @@ export function ProjectProvider({ children }) {
       replaceProject,
       replaceWithNewProject,
       markProjectPersisted,
+      markProjectEdited,
       markProjectInstalled,
       registerProjectSnapshotContributor,
       newProject,

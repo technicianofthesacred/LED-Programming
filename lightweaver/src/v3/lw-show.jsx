@@ -751,6 +751,7 @@ function ShowScreen({ go }) {
             className={'btn' + (onLights ? ' primary' : '')}
             onClick={toggleLights}
             disabled={lightsBusy}
+            aria-pressed={onLights}
           >
             {onLights ? 'Stop playing on the lights' : 'Play on the lights'}
           </button>

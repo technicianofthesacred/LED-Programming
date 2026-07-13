@@ -50,6 +50,16 @@ test('failed validation leaves the project and undo history untouched', async ()
   assert.deepEqual(history, ['edit']);
 });
 
+test('card acknowledgement installs the requested revision, not a newer edit', () => {
+  let state = markEdited(createProjectLifecycle());
+  const requestedRevision = state.editedRevision;
+  state = markEdited(state);
+  state = markInstalled(state, requestedRevision);
+  assert.equal(state.installedRevision, 1);
+  assert.equal(state.editedRevision, 2);
+  assert.equal(lifecycleLabel(state), 'Unsaved changes');
+});
+
 test('unsaved cancel preserves state and successful replace applies only after validation', async () => {
   const calls = [];
   const base = {

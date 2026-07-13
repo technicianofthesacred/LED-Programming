@@ -23,4 +23,5 @@ test('failure preserves the prior confirmed revision and can retry', () => {
   state = cardActionReducer(state, { type: 'retry' });
   assert.equal(state.status, 'pending');
   assert.equal(state.pendingRevision, 8);
+  assert.equal(state.conflictsDisabled, true);
 });
