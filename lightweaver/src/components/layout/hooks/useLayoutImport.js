@@ -22,7 +22,7 @@ export function useLayoutImport(ctx, deps) {
     setPatchBoard,
     pushLayoutHistory,
     clearLayoutSelection,
-    serializeProject, loadProject,
+    serializeProject, loadProject: replaceProject,
     colorIdxRef, nextColor,
   } = ctx;
 
@@ -127,14 +127,11 @@ export function useLayoutImport(ctx, deps) {
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = '';
-    if (strips.length > 0) {
-      const ok = window.confirm('Loading a project will replace your current strips. Continue?');
-      if (!ok) return;
-    }
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      if (!loadProject(data)) { alert('Unrecognised file format.'); return; }
+      const result = await replaceProject(data);
+      if (result.reason === 'invalid') alert('Unrecognised file format.');
     } catch (err) {
       alert('Could not load file: ' + err.message);
     }
