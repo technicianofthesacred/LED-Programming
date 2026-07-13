@@ -7,7 +7,7 @@ function runLabel(run, stripsById) {
 
 export function WiringRunRow({
   run, compiledRun, stripsById, selected, connectionState,
-  onSelect, onPort, onCordPointerDown, onMove, onRemove, onReverse, locked,
+  onSelect, onPort, onCordPointerDown, onCordPointerUp, onCordTargetEnter, onRowPointerDown, onMove, onRemove, onReverse, locked,
 }) {
   const label = runLabel(run, stripsById);
   const sourceSelected = connectionState.sourceId === run.id;
@@ -28,7 +28,8 @@ export function WiringRunRow({
         if (event.key === 'Delete') { event.preventDefault(); onRemove(); }
       }}
     >
-      <button className="lw-wire-port" data-wire-in={run.id} aria-label={`${label} IN port`} onClick={event => { event.stopPropagation(); onPort('in'); }}>IN</button>
+      <button className="lw-wire-drag" aria-label={`Drag ${label}`} disabled={locked} onPointerDown={event => { event.stopPropagation(); onRowPointerDown(run.id, event); }}>⋮⋮</button>
+      <button className="lw-wire-port" data-wire-in={run.id} aria-label={`${label} IN port`} onPointerEnter={() => onCordTargetEnter(run.id)} onClick={event => { event.stopPropagation(); onPort('in'); }}>IN</button>
       <span className="lw-wiring-run-index">{String((compiledRun?.start ?? 0) + 1).padStart(3, '0')}</span>
       <span className="lw-wiring-run-name">{label}</span>
       <span className="lw-wiring-run-count">{run.type === 'cable' ? '0 addr' : `${count} px`}</span>
@@ -42,6 +43,7 @@ export function WiringRunRow({
         aria-pressed={sourceSelected}
         disabled={locked}
         onPointerDown={event => { event.stopPropagation(); onCordPointerDown(run.id, event); }}
+        onPointerUp={event => { event.stopPropagation(); onCordPointerUp(run.id, event); }}
         onClick={event => { event.stopPropagation(); onPort('out'); }}
       >OUT</button>
     </div>

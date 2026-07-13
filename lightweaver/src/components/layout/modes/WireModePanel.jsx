@@ -1,15 +1,25 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
-import { download } from '../../../lib/export.js';
+import { download, toWLEDLedmap } from '../../../lib/export.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
 import { WiringOutputLane } from '../wire/WiringOutputLane.jsx';
 import { WiringPreflight } from '../wire/WiringPreflight.jsx';
 
 const PINS = [16, 17, 18, 21];
+const outputName = index => `Output ${String.fromCharCode(65 + index)}`;
+const nextRunId = (runs, prefix) => {
+  const ids = new Set(runs.map(run => run.id));
+  let index = 1;
+  while (ids.has(`${prefix}-${index}`)) index += 1;
+  return `${prefix}-${index}`;
+};
 
 export function WireModePanel({ state, connected }) {
-  const { strips, selectStrip, selStripId } = state;
+  const {
+    strips, selectStrip, selStripId,
+    selectedWireCut, nudgeSelectedWireCut, deleteSelectedWireCut,
+  } = state;
   const {
     wiring, updateWiring, compiledWiring,
     projectId, projectName, standaloneController,
@@ -18,6 +28,8 @@ export function WireModePanel({ state, connected }) {
   const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
   const [advanced, setAdvanced] = useState(false);
   const [mutationError, setMutationError] = useState('');
+  const connectedCordRef = useRef(null);
+  const suppressPortClickRef = useRef(null);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
   const runsById = useMemo(() => new Map(wiring.runs.map(run => [run.id, run])), [wiring.runs]);
   // CardPushControl still accepts the legacy transport shape. Build that shape
@@ -44,6 +56,27 @@ export function WireModePanel({ state, connected }) {
     const run = wiring.runs.find(item => item.type === 'strip' && item.source.stripId === selStripId);
     if (run) setSelectedRunId(run.id);
   }, [selStripId, wiring.runs]);
+  useEffect(() => {
+    if (wiring.locked) return;
+    const stripIds = new Set(strips.map(strip => strip.id));
+    const stale = wiring.runs.some(run => run.type === 'strip' && !stripIds.has(run.source.stripId));
+    const covered = new Set(wiring.runs.filter(run => run.type === 'strip' && stripIds.has(run.source.stripId)).map(run => run.source.stripId));
+    const missing = strips.filter(strip => !covered.has(strip.id));
+    if (!stale && !missing.length) return;
+    updateWiring(draft => {
+      const staleIds = new Set(draft.runs.filter(run => run.type === 'strip' && !stripIds.has(run.source.stripId)).map(run => run.id));
+      draft.runs = draft.runs.filter(run => !staleIds.has(run.id));
+      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => !staleIds.has(id)); });
+      for (const strip of missing) {
+        const id = nextRunId(draft.runs, `run-${strip.id}`);
+        draft.runs.push({
+          id, type: 'strip', source: { stripId: strip.id, from: 0, to: Math.max(0, strip.pixelCount - 1) },
+          directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null, verified: false,
+        });
+        draft.outputs[0].runIds.push(id);
+      }
+    }, { changeKind: 'geometry' });
+  }, [strips, updateWiring, wiring]);
 
   const mutate = (callback, options = {}) => {
     const result = updateWiring(callback, options);
@@ -67,50 +100,108 @@ export function WireModePanel({ state, connected }) {
   }, { changeKind: 'route' });
 
   const connectFrom = (sourceId, targetId) => {
-    if (!sourceId || sourceId === targetId) { setConnectionState({ mode: 'idle', sourceId: null }); return; }
+    if (!sourceId || sourceId === targetId) {
+      setMutationError(sourceId === targetId ? 'A run cannot connect to itself.' : 'Choose an OUT port first.');
+      setConnectionState({ mode: 'idle', sourceId: null });
+      return;
+    }
     mutate(draft => {
+      const targetRun = draft.runs.find(item => item.id === targetId);
+      if (!targetRun) throw new Error('The target run no longer exists.');
       const targetOutput = sourceId.startsWith('output:')
         ? draft.outputs.find(item => item.id === sourceId.slice(7))
         : draft.outputs.find(item => item.runIds.includes(sourceId));
       if (!targetOutput) throw new Error('Choose an output or run OUT port first.');
-      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => id !== targetId); });
+      const sourceRun = sourceId.startsWith('output:') ? null : draft.runs.find(item => item.id === sourceId);
+      if (sourceRun?.type === 'cable') throw new Error('Connect from a physical run endpoint, not a cable jump.');
+      const orphanCableIds = [];
+      draft.outputs.forEach(output => {
+        const targetIndex = output.runIds.indexOf(targetId);
+        const previousId = targetIndex > 0 ? output.runIds[targetIndex - 1] : null;
+        if (previousId && draft.runs.find(run => run.id === previousId)?.type === 'cable') orphanCableIds.push(previousId);
+        output.runIds = output.runIds.filter(id => id !== targetId && !orphanCableIds.includes(id));
+      });
+      if (orphanCableIds.length) draft.runs = draft.runs.filter(run => !orphanCableIds.includes(run.id));
       const sourceIndex = sourceId.startsWith('output:') ? -1 : targetOutput.runIds.indexOf(sourceId);
-      targetOutput.runIds.splice(sourceIndex + 1, 0, targetId);
+      if (sourceRun && sourceIndex < 0) throw new Error('The source endpoint no longer exists.');
+      if (sourceRun) {
+        const cableId = nextRunId(draft.runs, 'cable');
+        draft.runs.push({ id: cableId, type: 'cable', verified: false });
+        targetOutput.runIds.splice(sourceIndex + 1, 0, cableId, targetId);
+      } else {
+        targetOutput.runIds.splice(0, 0, targetId);
+      }
     }, { changeKind: 'route' });
     setConnectionState({ mode: 'idle', sourceId: null });
   };
   const connect = targetId => connectFrom(connectionState.sourceId, targetId);
 
+  const wireTargetAt = (clientX, clientY) => [...document.querySelectorAll('[data-wire-in]')].find(element => {
+    const rect = element.getBoundingClientRect();
+    return clientX >= rect.left && clientX <= rect.right
+      && clientY >= rect.top && clientY <= rect.bottom;
+  });
+
   const startCordPointer = (sourceId, event) => {
     if (wiring.locked) return;
+    connectedCordRef.current = null;
     event.currentTarget?.setPointerCapture?.(event.pointerId);
     setConnectionState({ mode: 'draggingCord', sourceId });
+  };
+
+  const finishCordPointer = (sourceId, event) => {
+    const target = wireTargetAt(event.clientX, event.clientY);
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    if (connectedCordRef.current === sourceId) {
+      suppressPortClickRef.current = sourceId;
+      setConnectionState({ mode: 'idle', sourceId: null });
+    } else if (target?.dataset.wireIn) {
+      connectedCordRef.current = sourceId;
+      suppressPortClickRef.current = sourceId;
+      connectFrom(sourceId, target.dataset.wireIn);
+    } else setConnectionState({ mode: 'idle', sourceId: null });
+  };
+
+  const startRowPointer = (runId, event) => {
+    if (wiring.locked) return;
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
     const finish = pointerEvent => {
-      window.removeEventListener('pointerup', finish);
-      const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY)?.closest?.('[data-wire-in]');
-      if (target?.dataset.wireIn) connectFrom(sourceId, target.dataset.wireIn);
-      else setConnectionState({ mode: 'idle', sourceId: null });
+      const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+      const targetRowId = target?.closest?.('[data-run-id]')?.dataset.runId;
+      const targetOutputId = target?.closest?.('[data-output-id]')?.dataset.outputId;
+      if (!targetOutputId || targetRowId === runId) return;
+      mutate(draft => {
+        const targetOutput = draft.outputs.find(output => output.id === targetOutputId);
+        if (!targetOutput) throw new Error('Drop onto an output lane.');
+        draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => id !== runId); });
+        const targetIndex = targetRowId ? targetOutput.runIds.indexOf(targetRowId) : -1;
+        targetOutput.runIds.splice(targetIndex < 0 ? targetOutput.runIds.length : targetIndex, 0, runId);
+      }, { changeKind: 'route' });
     };
     window.addEventListener('pointerup', finish, { once: true });
   };
 
   const handlePort = (id, port) => {
     if (port === 'out') {
+      if (suppressPortClickRef.current === id) {
+        suppressPortClickRef.current = null;
+        return;
+      }
       setConnectionState(current => current.sourceId === id
         ? { mode: 'idle', sourceId: null }
         : { mode: 'sourcePortSelected', sourceId: id });
     } else connect(id);
   };
+  const enterCordTarget = targetId => {
+    if (connectionState.mode === 'draggingCord' && connectionState.sourceId && !connectedCordRef.current) {
+      connectedCordRef.current = connectionState.sourceId;
+      connectFrom(connectionState.sourceId, targetId);
+    }
+  };
 
   const addInactive = () => mutate(draft => {
-    const id = `reserved-${Date.now()}`;
+    const id = nextRunId(draft.runs, 'reserved');
     draft.runs.push({ id, type: 'inactive', count: 1, verified: false });
-    draft.outputs[0].runIds.push(id);
-  }, { changeKind: 'route' });
-
-  const addCable = () => mutate(draft => {
-    const id = `cable-${Date.now()}`;
-    draft.runs.push({ id, type: 'cable', verified: false });
     draft.outputs[0].runIds.push(id);
   }, { changeKind: 'route' });
 
@@ -130,7 +221,7 @@ export function WireModePanel({ state, connected }) {
   const addOutput = () => mutate(draft => {
     if (draft.outputs.length >= 4) throw new Error('The card supports at most four outputs.');
     const index = draft.outputs.length;
-    draft.outputs.push({ id: `out${index + 1}`, name: `Output ${index + 1}`, pin: PINS[index], runIds: [] });
+    draft.outputs.push({ id: `out${index + 1}`, name: outputName(index), pin: PINS[index], runIds: [] });
   }, { changeKind: 'output' });
 
   const toggleLock = () => {
@@ -138,16 +229,26 @@ export function WireModePanel({ state, connected }) {
       mutate(draft => { draft.locked = false; draft.verified = false; draft.runs.forEach(run => { run.verified = false; }); }, { changeKind: null });
       return;
     }
-    if (!compiledWiring.ok) { setMutationError('Resolve compiler errors before locking wiring.'); return; }
-    mutate(draft => { draft.locked = true; draft.verified = true; draft.runs.forEach(run => { run.verified = true; }); }, { changeKind: null });
+    if (!compiledWiring.ok || !wiring.verified || wiring.runs.some(run => !run.verified)) {
+      setMutationError('Bench verification is required for every run before wiring can be locked.');
+      return;
+    }
+    mutate(draft => { draft.locked = true; }, { changeKind: null });
   };
 
   const exportLedmap = () => {
-    const map = compiledWiring.pixels.map(pixel => pixel.inactive ? [-1, -1] : [pixel.x, pixel.y]);
-    download(JSON.stringify({ n: map.length, map }, null, 2), 'ledmap.json', 'application/json');
+    download(toWLEDLedmap(compiledWiring.pixels), 'ledmap.json', 'application/json');
   };
 
   const selectedRun = runsById.get(effectiveSelectedRunId);
+  const derivedCut = selectedWireCut || (() => {
+    const cuts = wiring.runs
+      .filter(run => run.type === 'strip')
+      .map(run => ({ stripId: run.source.stripId, cutLed: run.source.to }))
+      .filter(cut => stripsById.get(cut.stripId) && cut.cutLed < stripsById.get(cut.stripId).pixelCount - 1)
+      .sort((a, b) => a.cutLed - b.cutLed);
+    return cuts[0] || null;
+  })();
   const updateSelectedRange = (field, value) => mutate(draft => {
     const run = draft.runs.find(item => item.id === selectedRun?.id);
     if (run?.type === 'strip') run.source[field] = Math.max(0, Math.trunc(Number(value) || 0));
@@ -162,10 +263,10 @@ export function WireModePanel({ state, connected }) {
       </div>
       <p className="lw-wire-scaffold">Connect each physical run from an output’s OUT port to a run’s IN port. Cable jumps use no LED addresses.</p>
       <div className="lw-wiring-lanes">
-        {wiring.outputs.map(output => (
+        {wiring.outputs.map((output, outputIndex) => (
           <WiringOutputLane
             key={output.id}
-            output={output}
+            output={{ ...output, name: outputName(outputIndex) }}
             runs={output.runIds.map(id => runsById.get(id)).filter(Boolean)}
             compiledRuns={compiledWiring.runs}
             stripsById={stripsById}
@@ -176,6 +277,9 @@ export function WireModePanel({ state, connected }) {
             onSelectRun={selectRun}
             onPort={handlePort}
             onCordPointerDown={startCordPointer}
+            onCordPointerUp={finishCordPointer}
+            onCordTargetEnter={enterCordTarget}
+            onRowPointerDown={startRowPointer}
             onMove={moveRun}
             onRemove={removeRun}
             onReverse={reverseRun}
@@ -184,8 +288,18 @@ export function WireModePanel({ state, connected }) {
       </div>
       <div className="lw-wiring-additions">
         <button className="btn" disabled={wiring.locked} aria-label="Add reserved-unlit LEDs" onClick={addInactive}>+ Reserved · unlit</button>
-        <button className="btn" disabled={wiring.locked} aria-label="Add cable jump" onClick={addCable}>+ Cable jump</button>
       </div>
+      {derivedCut && (
+        <section className="lw-wire-selected-detail">
+          <div className="lw-wire-section-title"><span>Selected split</span><strong>LED {derivedCut.cutLed}</strong></div>
+          <div className="lw-wire-tool-row">
+            <button className="btn" disabled={wiring.locked} aria-label="Move split earlier" onClick={() => nudgeSelectedWireCut(-1, derivedCut)}>−</button>
+            <button className="btn" disabled={wiring.locked} aria-label="Move split later" onClick={() => nudgeSelectedWireCut(1, derivedCut)}>+</button>
+            <button className="btn" disabled={wiring.locked} aria-label="Merge split runs" onClick={() => deleteSelectedWireCut(derivedCut)}>Merge</button>
+            <button className="btn lw-btn-danger" disabled={wiring.locked} aria-label="Delete split" onClick={() => deleteSelectedWireCut(derivedCut)}>Delete</button>
+          </div>
+        </section>
+      )}
       {selectedRun?.type === 'strip' && (
         <details className="lw-wiring-range">
           <summary>Edit LED range</summary>
@@ -202,9 +316,14 @@ export function WireModePanel({ state, connected }) {
           </label>
         </details>
       )}
-      <WiringPreflight compiled={compiledWiring} locked={wiring.locked} onToggleLock={toggleLock} mutationError={mutationError}/>
+      <WiringPreflight
+        compiled={compiledWiring}
+        locked={wiring.locked}
+        canLock={compiledWiring.ok && wiring.verified && wiring.runs.every(run => run.verified)}
+        onToggleLock={toggleLock}
+        mutationError={mutationError}
+      />
       <section className="lw-wire-finish">
-        <fieldset disabled={!compiledWiring.ok} className="lw-send-gate">
           <CardPushControl
             connected={connected}
             board={cardTransportBoard}
@@ -212,15 +331,10 @@ export function WireModePanel({ state, connected }) {
             projectId={projectId}
             projectName={projectName}
             standaloneController={standaloneController}
+            disabled={!compiledWiring.sendReady}
           >
             <button className="btn la-export-ledmap" data-testid="layout-export-ledmap" onClick={exportLedmap}>Export ledmap.json</button>
           </CardPushControl>
-        </fieldset>
-        <div className="lw-wire-recovery" aria-label="Local card recovery actions">
-          <button className="btn" onClick={() => navigator.clipboard?.writeText(JSON.stringify({ wiring, compiled: compiledWiring }, null, 2))}>Copy payload</button>
-          <button className="btn" onClick={() => { window.location.hash = 'screen=installer'; }}>Open installer</button>
-          <button className="btn" onClick={() => document.querySelector('[data-testid="layout-send-to-card"]')?.click()}>Retry</button>
-        </div>
       </section>
     </div>
   );

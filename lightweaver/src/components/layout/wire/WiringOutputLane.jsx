@@ -2,7 +2,7 @@ import { WiringRunRow } from './WiringRunRow.jsx';
 
 export function WiringOutputLane({
   output, runs, compiledRuns, stripsById, selectedRunId, connectionState,
-  advanced, locked, onSelectRun, onPort, onCordPointerDown, onMove, onRemove, onReverse,
+  advanced, locked, onSelectRun, onPort, onCordPointerDown, onCordPointerUp, onCordTargetEnter, onRowPointerDown, onMove, onRemove, onReverse,
 }) {
   const compiledById = new Map(compiledRuns.map(run => [run.id, run]));
   return (
@@ -13,6 +13,8 @@ export function WiringOutputLane({
           aria-label={`${output.name || output.id} OUT port`}
           aria-pressed={connectionState.sourceId === `output:${output.id}`}
           disabled={locked}
+          onPointerDown={event => onCordPointerDown(`output:${output.id}`, event)}
+          onPointerUp={event => onCordPointerUp(`output:${output.id}`, event)}
           onClick={() => onPort(`output:${output.id}`, 'out')}
         >OUT</button>
         <h3>{output.name || output.id}</h3>
@@ -33,6 +35,9 @@ export function WiringOutputLane({
             onSelect={() => onSelectRun(run)}
             onPort={port => onPort(run.id, port)}
             onCordPointerDown={onCordPointerDown}
+            onCordPointerUp={onCordPointerUp}
+            onCordTargetEnter={onCordTargetEnter}
+            onRowPointerDown={onRowPointerDown}
             onMove={delta => onMove(output.id, run.id, delta)}
             onRemove={() => onRemove(output.id, run.id)}
             onReverse={() => onReverse(run.id)}

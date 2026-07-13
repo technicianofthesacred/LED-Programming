@@ -276,6 +276,12 @@ export function LayoutCanvas({
                         tabIndex="0"
                         role="button"
                         aria-label={`Select ${s.name} strip`}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectStrip(s.id);
+                          }
+                        }}
                         fill="none"
                         stroke="white"
                         strokeOpacity="0.001"

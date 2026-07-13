@@ -2,6 +2,14 @@ import { useState, useRef, useCallback } from 'react';
 import { svgPt } from '../../../lib/layoutGeometry.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 
+function uniqueRunId(runs, base) {
+  const ids = new Set(runs.map(run => run.id));
+  if (!ids.has(base)) return base;
+  let suffix = 2;
+  while (ids.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
 export function useLayoutWire(ctx) {
   const { strips, selectStrip, svgRef } = ctx;
   const { wiring, updateWiring } = useProject();
@@ -30,8 +38,10 @@ export function useLayoutWire(ctx) {
     const result = updateWiring(draft => {
       const run = draft.runs.find(item => item.type === 'strip' && item.source.stripId === strip.id && cutLed >= item.source.from && cutLed < item.source.to);
       if (!run) throw new Error('Choose a point inside a physical run.');
-      const left = { ...run, id: `${run.id}-a-${cutLed}`, source: { ...run.source, to: cutLed }, verified: false };
-      const right = { ...run, id: `${run.id}-b-${cutLed + 1}`, source: { ...run.source, from: cutLed + 1 }, verified: false };
+      const leftId = uniqueRunId(draft.runs, `${run.id}-a-${cutLed}`);
+      const rightId = uniqueRunId([...draft.runs, { id: leftId }], `${run.id}-b-${cutLed + 1}`);
+      const left = { ...run, id: leftId, source: { ...run.source, to: cutLed }, verified: false };
+      const right = { ...run, id: rightId, source: { ...run.source, from: cutLed + 1 }, verified: false };
       draft.runs.splice(draft.runs.indexOf(run), 1, left, right);
       draft.outputs.forEach(output => {
         const index = output.runIds.indexOf(run.id);
@@ -43,14 +53,16 @@ export function useLayoutWire(ctx) {
     setSelectedWireCut({ stripId: strip.id, cutLed });
   }, [nearestLedIndex, selectStrip, updateWiring, wiring.locked]);
 
-  const deleteSelectedWireCut = useCallback(() => {
-    if (!selectedWireCut || wiring.locked) return;
-    const { stripId, cutLed } = selectedWireCut;
+  const deleteSelectedWireCut = useCallback((requestedCut = null) => {
+    const activeCut = requestedCut || selectedWireCut;
+    if (!activeCut || wiring.locked) return;
+    const { stripId, cutLed } = activeCut;
     updateWiring(draft => {
       const left = draft.runs.find(run => run.type === 'strip' && run.source.stripId === stripId && run.source.to === cutLed);
       const right = draft.runs.find(run => run.type === 'strip' && run.source.stripId === stripId && run.source.from === cutLed + 1);
       if (!left || !right) throw new Error('The selected split no longer exists.');
-      const merged = { ...left, id: `run-${stripId}-${left.source.from}-${right.source.to}`, source: { ...left.source, to: right.source.to }, verified: false };
+      const mergedId = uniqueRunId(draft.runs.filter(run => run.id !== left.id && run.id !== right.id), `run-${stripId}-${left.source.from}-${right.source.to}`);
+      const merged = { ...left, id: mergedId, source: { ...left.source, to: right.source.to }, verified: false };
       draft.runs = draft.runs.filter(run => run.id !== left.id && run.id !== right.id);
       draft.runs.push(merged);
       draft.outputs.forEach(output => {
@@ -62,17 +74,18 @@ export function useLayoutWire(ctx) {
     setSelectedWireCut(null);
   }, [selectedWireCut, updateWiring, wiring.locked]);
 
-  const nudgeSelectedWireCut = useCallback(delta => {
-    if (!selectedWireCut || wiring.locked) return;
-    const next = selectedWireCut.cutLed + Math.sign(delta);
-    updateWiring(draft => {
-      const left = draft.runs.find(run => run.type === 'strip' && run.source.stripId === selectedWireCut.stripId && run.source.to === selectedWireCut.cutLed);
-      const right = draft.runs.find(run => run.type === 'strip' && run.source.stripId === selectedWireCut.stripId && run.source.from === selectedWireCut.cutLed + 1);
+  const nudgeSelectedWireCut = useCallback((delta, requestedCut = null) => {
+    const activeCut = requestedCut || selectedWireCut;
+    if (!activeCut || wiring.locked) return;
+    const next = activeCut.cutLed + Math.sign(delta);
+    const result = updateWiring(draft => {
+      const left = draft.runs.find(run => run.type === 'strip' && run.source.stripId === activeCut.stripId && run.source.to === activeCut.cutLed);
+      const right = draft.runs.find(run => run.type === 'strip' && run.source.stripId === activeCut.stripId && run.source.from === activeCut.cutLed + 1);
       if (!left || !right || next < left.source.from || next >= right.source.to) throw new Error('Split cannot move beyond its neighboring run.');
       left.source.to = next;
       right.source.from = next + 1;
     }, { changeKind: 'seam' });
-    setSelectedWireCut({ ...selectedWireCut, cutLed: next });
+    if (result.ok) setSelectedWireCut({ ...activeCut, cutLed: next });
   }, [selectedWireCut, updateWiring, wiring.locked]);
 
   const toggleRoutePatch = useCallback(runId => {

@@ -53,3 +53,25 @@ test('toolbar names mode actions before Project and Card calibration groups', as
   await expect(toolbar.getByRole('group', { name: 'Project' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Card calibration' })).toBeVisible();
 });
+
+test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ page }) => {
+  await gotoLayout(page);
+  const strip = page.locator('path[data-strip-path]').first();
+  await strip.focus();
+  await page.keyboard.press('Enter');
+  const parent = strip.locator('..');
+  const before = await parent.getAttribute('transform');
+  await page.keyboard.press('ArrowRight');
+  await expect(parent).not.toHaveAttribute('transform', before || '');
+  const count = await page.locator('path[data-strip-path]').count();
+  await page.keyboard.press('Delete');
+  await expect(page.locator('path[data-strip-path]')).toHaveCount(count - 1);
+});
+
+test('wire scaffold is concise and recovery actions stay hidden without a mixed-content failure', async ({ page }) => {
+  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(/Connect each physical run/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+});
