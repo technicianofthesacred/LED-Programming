@@ -167,7 +167,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       patchBoard, setPatchBoard,
       standaloneController, setStandaloneController,
       serializeProject, replaceProject, replaceWithNewProject,
-      markProjectPersisted, markProjectInstalled,
+      markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
       lastSaved,
     } = useProject();
     const { tweaks, set: setTweak } = useTweaks();
@@ -375,6 +375,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       try {
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
         markProjectInstalled(requestedRevision);
+        markCardLookConfirmed({ ...defaultLook, syncZones: true });
         dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');
         setStatus(response.rebooting

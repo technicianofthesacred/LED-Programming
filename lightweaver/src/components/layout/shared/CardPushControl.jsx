@@ -31,7 +31,7 @@ export function CardPushControl({
   disabled = false,
   children,
 }) {
-  const { projectLifecycle, markProjectInstalled } = useProject();
+  const { projectLifecycle, markProjectInstalled, markCardLookConfirmed } = useProject();
   const [pushHost, setPushHost] = useState(() => getCardHostname());
   const [pushStatus, setPushStatus] = useState('');
   const [action, dispatchAction] = useReducer(cardActionReducer, { confirmedRevision: projectLifecycle.installedRevision }, createCardActionState);
@@ -68,6 +68,7 @@ export function CardPushControl({
       await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
       dispatchAction({ type: 'confirm' });
       markProjectInstalled(attempt.revision);
+      markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
       failedAttemptRef.current = null;
       setPushStatus(`Installed revision ${attempt.revision} on card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
     } catch (err) {

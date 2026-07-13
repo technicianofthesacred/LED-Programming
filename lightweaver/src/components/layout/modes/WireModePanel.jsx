@@ -26,7 +26,7 @@ export function WireModePanel({ state, connected }) {
   } = state;
   const {
     wiring, updateWiring, compiledWiring,
-    projectId, projectName, standaloneController,
+    projectId, projectName, standaloneController, confirmedCardLook,
   } = useProject();
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
@@ -418,7 +418,7 @@ export function WireModePanel({ state, connected }) {
         wiring={wiring}
         compiled={compiledWiring}
         updateWiring={updateWiring}
-        priorConfirmedLook={null}
+        priorConfirmedLook={confirmedCardLook}
       />
       {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
       {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}

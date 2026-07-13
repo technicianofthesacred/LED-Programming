@@ -118,6 +118,45 @@ test('Pattern acknowledgement does not install an unrelated edit made while pend
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
 });
 
+test('bench chase restores the last Studio-confirmed look after transport failure', async ({ page }) => {
+  const controls: any[] = [];
+  await page.route('**/api/status', route => route.fulfill({ json: { ok: true, led: { pixels: 44 } } }));
+  await page.route('**/api/config', route => route.fulfill({ json: { ok: true, requiresReboot: false } }));
+  await page.route('**/api/control', async route => {
+    controls.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  await page.getByPlaceholder('Search chip patterns').fill('ocean');
+  await page.locator('[data-pattern-id="ocean"]').click();
+  await page.getByTitle('Save the current look to the card').click();
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => controls.length).toBeGreaterThan(0);
+  controls.length = 0;
+
+  await page.evaluate(() => {
+    class FailedSocket {
+      static OPEN = 1;
+      readyState = 0;
+      bufferedAmount = 0;
+      onopen = null;
+      onclose = null;
+      onerror = null;
+      constructor() { setTimeout(() => { this.onerror?.(); this.onclose?.(); }, 0); }
+      send() {}
+      close() {}
+    }
+    window.WebSocket = FailedSocket as any;
+    window.location.hash = 'screen=layout&mode=wire';
+  });
+  const bench = page.getByTestId('wiring-bench-test');
+  await expect(bench).toBeVisible();
+  await bench.getByRole('checkbox').check();
+  await bench.getByRole('button', { name: 'Start wiring test' }).click();
+  await expect(bench).toContainText('Delivery failed');
+  await expect.poll(() => controls.some(body => body.cancelStream === true && body.patternId === 'ocean')).toBe(true);
+});
+
 test('Playlist marks a row live only after the card acknowledges it', async ({ page }) => {
   await page.route('**/api/control', async route => {
     await new Promise(resolve => setTimeout(resolve, 300));

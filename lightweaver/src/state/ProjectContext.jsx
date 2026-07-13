@@ -245,6 +245,7 @@ export function ProjectProvider({ children }) {
   //    snapshot stack across strip + patch-board edits) ────────────────────
   const [layout, dispatchLayout] = useReducer(layoutRootReducer, defaults.layout, makeInitialLayoutState);
   const [projectRevision,   setProjectRevision]   = useState(0);
+  const [confirmedCardLook, setConfirmedCardLook] = useState(null);
   const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
     if (action.type === 'edited') return markEdited(state);
     if (action.type === 'persisted') return markPersisted(state, action.destination);
@@ -763,6 +764,9 @@ export function ProjectProvider({ children }) {
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
   const markProjectInstalled = useCallback(revision => dispatchProjectLifecycle({ type: 'installed', revision }), []);
+  const markCardLookConfirmed = useCallback(look => {
+    setConfirmedCardLook(look ? JSON.parse(JSON.stringify(look)) : null);
+  }, []);
 
   return (
     <ProjectContext.Provider value={{
@@ -795,6 +799,7 @@ export function ProjectProvider({ children }) {
       projectLifecycle,
       projectLifecycleLabel: lifecycleLabel(projectLifecycle),
       projectHasUnsavedChanges: hasUnsavedChanges(projectLifecycle),
+      confirmedCardLook,
       // Pattern
       activePatternId, setActivePatternId,
       palette,         setPalette,
@@ -858,6 +863,7 @@ export function ProjectProvider({ children }) {
       markProjectPersisted,
       markProjectEdited,
       markProjectInstalled,
+      markCardLookConfirmed,
       registerProjectSnapshotContributor,
       newProject,
       lastSaved,

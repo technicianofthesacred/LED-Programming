@@ -296,6 +296,7 @@ import {
       registerProjectSnapshotContributor,
       markProjectEdited,
       markProjectInstalled,
+      markCardLookConfirmed,
       symSettings,
       setSymSettings,
     } = useProject();
@@ -516,6 +517,7 @@ import {
             { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: false },
           );
           if (sequence === livePreviewSeq.current) {
+            markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
             setStatusKind('');
             setStatus('');
           }
@@ -535,7 +537,7 @@ import {
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, runtimePackage, selectedTarget]);
+    }, [cardHost, livePreview, markCardLookConfirmed, runtimePackage, selectedTarget]);
 
     useEffect(() => () => {
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
@@ -706,6 +708,11 @@ import {
         });
         dispatchCardSave({ type: 'confirm' });
         markProjectInstalled(requestedRevision);
+        markCardLookConfirmed({
+          ...nextLook,
+          zone: testStrip.enabled ? '' : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : ''),
+          syncZones: testStrip.enabled || selectedTarget?.kind !== 'section',
+        });
         if (!response.rebooting) {
           // A test-strip card only has the one collapsed zone, so there is no
           // real per-section target to preview against — just sync the whole
@@ -937,6 +944,7 @@ import {
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
         if (!safety.ok) return;
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        markCardLookConfirmed({ ...nextLook, zone: selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '', syncZones: selectedTarget?.kind !== 'section' });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});

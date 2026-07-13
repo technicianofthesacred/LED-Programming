@@ -94,6 +94,7 @@ function realPatternShape(patternId) {
       patchBoard,
       standaloneController,
       setStandaloneController,
+      markCardLookConfirmed,
     } = useProject();
 
     const [host, setHost] = useState(readStoredCardHost);
@@ -180,8 +181,13 @@ function realPatternShape(patternId) {
           await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
           if (sequence !== previewSequence.current) return;
         }
-        await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-        if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
+        const confirmedLook = buildPatternPlaylistPreview(patternId);
+        await pushLivePreviewToCard(confirmedLook, { host, timeoutMs: 2200 });
+        if (sequence === previewSequence.current) {
+          markCardLookConfirmed(confirmedLook);
+          setPlaylistStatus(null);
+          return true;
+        }
       } catch { /* preview is best-effort; connection state lives in the footer */ }
       return false;
     };
@@ -198,11 +204,16 @@ function realPatternShape(patternId) {
           // mix's own default look across the whole (collapsed) strip.
           await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
           if (sequence !== previewSequence.current) return;
+          const confirmedLook = { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true };
           await pushLivePreviewToCard(
-            { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true },
+            confirmedLook,
             { host, timeoutMs: 2600 },
           );
-          if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
+          if (sequence === previewSequence.current) {
+            markCardLookConfirmed(confirmedLook);
+            setPlaylistStatus(null);
+            return true;
+          }
           return false;
         }
         const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
