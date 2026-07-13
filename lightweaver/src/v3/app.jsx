@@ -54,7 +54,7 @@ const I = {
 function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
   return (
     <header className="topbar">
-      <div className="brand"><span className="glyph" /><span className="name">Light Weaver</span></div>
+      <div className="brand"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
         <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
         {saveLabel && <span className="savechip"><span className="dot" />{saveLabel}</span>}
@@ -170,7 +170,8 @@ function readPushFps() {
 function Shell() {
   const [view, setView] = useState(viewFromHash);
   const {
-    projectName, serializeProject, loadProject, newProject,
+    projectName, serializeProject, replaceProject, replaceWithNewProject,
+    projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
   const [saveLabel, setSaveLabel] = useState('');
@@ -258,39 +259,41 @@ function Shell() {
   const onSave = useCallback(() => {
     try {
       const record = saveCurrentProjectToLibrary(serializeProject());
+      markProjectPersisted('browser');
       setSaveLabel(formatBrowserProjectSaveLabel(record));
     }
     catch { setSaveLabel('save failed'); }
-  }, [serializeProject]);
+  }, [markProjectPersisted, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
       `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`,
       serializeProject(),
     );
-    setSaveLabel(ok ? 'file downloaded' : 'download failed');
-  }, [projectName, serializeProject]);
+    if (ok) markProjectPersisted('file');
+    else setSaveLabel('Download failed');
+  }, [markProjectPersisted, projectName, serializeProject]);
   const onLoad = useCallback(() => fileInputRef.current?.click(), []);
-  const onNew = useCallback(() => {
-    if (window.confirm('Start a new project? Unsaved changes will be lost.')) {
+  const onNew = useCallback(async () => {
+    const result = await replaceWithNewProject();
+    if (result.ok) {
       writeActiveProjectLibraryRecordId('');
-      newProject();
     }
-  }, [newProject]);
+  }, [replaceWithNewProject]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target.result);
-        const ok = loadProject(data);
-        if (ok) writeActiveProjectLibraryRecordId('');
-        if (!ok) alert('Invalid project file (version mismatch).');
+        const result = await replaceProject(data);
+        if (result.ok) writeActiveProjectLibraryRecordId('');
+        if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       } catch { alert('Could not parse project file.'); }
     };
     reader.readAsText(file);
     e.target.value = '';
-  }, [loadProject]);
+  }, [replaceProject]);
 
   const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, flash: FlashScreen, settings: SettingsScreen, installer: InstallerScreen }[view];
 
@@ -298,7 +301,7 @@ function Shell() {
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
-        saveLabel={saveLabel}
+        saveLabel={saveLabel || projectLifecycleLabel}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
       />
       <Rail view={view} setView={setView} />

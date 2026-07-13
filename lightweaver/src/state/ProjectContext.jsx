@@ -37,6 +37,15 @@ import {
   readStorageJsonWithBackup,
   writeStorageJsonWithBackup,
 } from '../lib/projectStorage.js';
+import {
+  createProjectLifecycle,
+  hasUnsavedChanges,
+  lifecycleLabel,
+  markEdited,
+  markInstalled,
+  markPersisted,
+  replaceProjectSafely,
+} from '../lib/projectLifecycle.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
 const LS_AUTOSAVE_BACKUP_KEY = 'lw_autosave_v3_backup';
@@ -236,6 +245,15 @@ export function ProjectProvider({ children }) {
   //    snapshot stack across strip + patch-board edits) ────────────────────
   const [layout, dispatchLayout] = useReducer(layoutRootReducer, defaults.layout, makeInitialLayoutState);
   const [projectRevision,   setProjectRevision]   = useState(0);
+  const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
+    if (action.type === 'edited') return markEdited(state);
+    if (action.type === 'persisted') return markPersisted(state, action.destination);
+    if (action.type === 'installed') return markInstalled(state);
+    if (action.type === 'replaced') return createProjectLifecycle();
+    return state;
+  }, undefined, createProjectLifecycle);
+  const projectFingerprintRef = useRef('');
+  const suppressNextLifecycleEditRef = useRef(true);
 
   // Live values read straight off the reducer state.
   const {
@@ -695,6 +713,19 @@ export function ProjectProvider({ children }) {
   ]);
 
   useEffect(() => {
+    const fingerprint = JSON.stringify(serializeProject());
+    if (!projectFingerprintRef.current || suppressNextLifecycleEditRef.current) {
+      projectFingerprintRef.current = fingerprint;
+      suppressNextLifecycleEditRef.current = false;
+      return;
+    }
+    if (projectFingerprintRef.current !== fingerprint) {
+      projectFingerprintRef.current = fingerprint;
+      dispatchProjectLifecycle({ type: 'edited' });
+    }
+  }, [serializeProject]);
+
+  useEffect(() => {
     clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       try {
@@ -713,6 +744,24 @@ export function ProjectProvider({ children }) {
   const newProject = useCallback(() => {
     applyProject(createDefaultProject());
   }, [applyProject]);
+
+  const replaceProject = useCallback(async (candidate, options = {}) => {
+    return replaceProjectSafely({
+      candidate,
+      validate: value => migrateProject(value),
+      dirty: hasUnsavedChanges(projectLifecycle),
+      confirmDiscard: options.confirmDiscard || (() => window.confirm('Replace this project? Unsaved changes will be lost.')),
+      apply: validated => {
+        suppressNextLifecycleEditRef.current = true;
+        applyProject(validated);
+        dispatchProjectLifecycle({ type: 'replaced' });
+      },
+    });
+  }, [applyProject, projectLifecycle]);
+
+  const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
+  const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
+  const markProjectInstalled = useCallback(() => dispatchProjectLifecycle({ type: 'installed' }), []);
 
   return (
     <ProjectContext.Provider value={{
@@ -742,6 +791,9 @@ export function ProjectProvider({ children }) {
       togglePathSel,     clearLayoutSelection,
       renameLayoutSelection,
       projectRevision,
+      projectLifecycle,
+      projectLifecycleLabel: lifecycleLabel(projectLifecycle),
+      projectHasUnsavedChanges: hasUnsavedChanges(projectLifecycle),
       // Pattern
       activePatternId, setActivePatternId,
       palette,         setPalette,
@@ -799,7 +851,11 @@ export function ProjectProvider({ children }) {
       standaloneController, setStandaloneController,
       // Project persistence
       serializeProject,
-      loadProject,
+      loadProject: replaceProject,
+      replaceProject,
+      replaceWithNewProject,
+      markProjectPersisted,
+      markProjectInstalled,
       registerProjectSnapshotContributor,
       newProject,
       lastSaved,

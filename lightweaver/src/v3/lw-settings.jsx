@@ -83,9 +83,9 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
   // ── Live wiring helpers ───────────────────────────────────────────────
   // Mockup Seg labels stay verbatim; these map them to the real enum values.
-  const THEME_LABELS = ['Studio', 'Lab', 'Neon'];
-  const THEME_VALUE = { Studio: 'studio', Lab: 'lab', Neon: 'neon' };
-  const THEME_LABEL = { studio: 'Studio', lab: 'Lab', neon: 'Neon' };
+  const THEME_LABELS = ['Studio', 'Daylight'];
+  const THEME_VALUE = { Studio: 'studio', Daylight: 'daylight' };
+  const THEME_LABEL = { studio: 'Studio', daylight: 'Daylight' };
 
   const SMOOTH_LABELS = ['Off', 'Soft', 'Smooth'];
   // real MOTION_SMOOTHING_MODES = ['off','soft','silk']; map by index, label stays mockup-native
@@ -164,7 +164,8 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       svgText,
       patchBoard, setPatchBoard,
       standaloneController, setStandaloneController,
-      serializeProject, loadProject, newProject,
+      serializeProject, replaceProject, replaceWithNewProject,
+      markProjectPersisted, markProjectInstalled,
       lastSaved,
     } = useProject();
     const { tweaks, set: setTweak } = useTweaks();
@@ -365,6 +366,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
       try {
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        markProjectInstalled();
         setStatusKind('ok');
         setStatus(response.rebooting
           ? 'Saved on card. Rebooting now so the LED output layout takes effect.'
@@ -392,6 +394,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     const saveProjectFile = async () => {
       const data = serializeProject();
       const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-studio-project.lwproj.json`, data);
+      if (ok) markProjectPersisted('file');
       setStatusKind(ok ? 'ok' : 'err');
       setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
     };
@@ -400,14 +403,16 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       const file = event.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = async (ev) => {
         try {
           const data = JSON.parse(ev.target.result);
-          if (!loadProject(data)) {
+          const result = await replaceProject(data);
+          if (result.reason === 'invalid') {
             setStatusKind('err');
             setStatus('That project file does not look like a Lightweaver Studio project.');
             return;
           }
+          if (!result.ok) return;
           writeActiveProjectLibraryRecordId('');
           setActiveProjectRecordId('');
           setStatusKind('ok');
@@ -429,6 +434,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     const saveProjectToLibrary = () => {
       try {
         const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject()));
+        markProjectPersisted('browser');
         writeActiveProjectLibraryRecordId(record.id);
         setActiveProjectRecordId(record.id);
         refreshProjectLibrary();
@@ -444,6 +450,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       if (!activeProjectRecordId) { saveProjectToLibrary(); return; }
       try {
         const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject(), { id: activeProjectRecordId }));
+        markProjectPersisted('browser');
         writeActiveProjectLibraryRecordId(record.id);
         refreshProjectLibrary();
         setStatusKind('ok');
@@ -454,10 +461,10 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       }
     };
 
-    const openProjectFromLibrary = (record) => {
+    const openProjectFromLibrary = async (record) => {
       if (!record) return;
-      if (!window.confirm(`Open ${record.name}? The current Studio workspace will be replaced.`)) return;
-      if (!loadProject(record.project)) {
+      const result = await replaceProject(record.project);
+      if (result.reason === 'invalid') {
         setStatusKind('err');
         setStatus('That saved project could not be opened.');
         return;
@@ -494,11 +501,11 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       setStatus(`Deleted ${record.name} from this browser.`);
     };
 
-    const startNewProject = () => {
-      if (!window.confirm('Discard this Studio project and start over?')) return;
+    const startNewProject = async () => {
+      const result = await replaceWithNewProject();
+      if (!result.ok) return;
       writeActiveProjectLibraryRecordId('');
       setActiveProjectRecordId('');
-      newProject();
     };
 
     useEffect(() => {
