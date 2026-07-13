@@ -5,12 +5,16 @@
    drove the mockup are replaced with the live pattern bank, ProjectContext, and
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { I, PATTERN_CATS, STRIP_TESTS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
+import { getPatternById } from '../lib/patternRegistry.js';
+import { compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
+import { applyLookColorModifiers } from '../lib/previewColorModifiers.js';
 import {
+  DEFAULT_CARD_VISUAL_LOOK,
   cardColorToHex,
   cardHueToDegrees,
   cardSaturationToChroma,
@@ -100,6 +104,67 @@ import {
 
   }
 
+  // Live version of the Color & motion strand: paints a flowing gradient sampled
+  // from the REAL pattern frame, so switching patterns and tuning the sliders is
+  // reflected here too. Falls back to the static strand when there's no code.
+  function LiveStrand({ patternId, pal, tint, look }) {
+    const gradId = useId();
+    const codeId = useMemo(() => resolveCodePatternId(patternId), [patternId]);
+    const fn = useMemo(() => (codeId ? compilePattern(codeId) : null), [codeId]);
+    const paletteNorm = useMemo(() => normalizePalette(pal), [pal]);
+    const N = 16;
+    const strip = useMemo(() => buildPreviewStrip(N), []);
+    const stopRefs = useRef([]);
+    const live = useRef({});
+    live.current = { fn, codeId, paletteNorm, strip, look };
+
+    useEffect(() => {
+      if (!fn) return undefined;
+      let raf = 0;
+      let start = null;
+      const tick = (now) => {
+        if (start === null) start = now;
+        const s = live.current;
+        const tMs = now - start;
+        const px = applyLookColorModifiers(renderPixelFrame({
+          t: tMs / 1000,
+          strips: [s.strip],
+          patternId: s.codeId,
+          activeFn: s.fn,
+          paletteNorm: s.paletteNorm,
+          masterBrightness: s.look?.brightness ?? 1,
+          masterSpeed: s.look?.speed ?? 1,
+        }).pixels, tMs, s.look || {});
+        for (let i = 0; i < N; i++) {
+          const el = stopRefs.current[i];
+          if (!el) continue;
+          const c = px[i] || { r: 0, g: 0, b: 0 };
+          el.setAttribute('stop-color', `rgb(${c.r},${c.g},${c.b})`);
+        }
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(raf);
+    }, [fn]);
+
+    if (!fn) return <Strand tint={tint} />;
+
+    return (
+      <svg viewBox="0 0 320 96" preserveAspectRatio="xMidYMid meet" style={{ width: "100%", height: "100%" }}>
+        <defs>
+          <filter id={`glow-${gradId}`} x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="3.4" /></filter>
+          <linearGradient id={gradId} gradientUnits="userSpaceOnUse" x1="14" y1="0" x2="306" y2="0">
+            {Array.from({ length: N }, (_, i) =>
+              <stop key={i} ref={(el) => { stopRefs.current[i] = el; }} offset={`${(i / (N - 1)) * 100}%`} stopColor="#000" />
+            )}
+          </linearGradient>
+        </defs>
+        <path d="M14 58 C 70 22, 110 22, 160 50 C 210 78, 250 78, 306 42" fill="none" stroke={`url(#${gradId})`} strokeWidth="6"
+        strokeLinecap="round" strokeDasharray="0.1 9.2" opacity="0.95" filter={`url(#glow-${gradId})`} />
+      </svg>);
+
+  }
+
   // colors interpolated across a palette → glowing LED beads
   function ledColors(pal, n) {
     const rgb = (h) => { h = h.replace("#", ""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)); };
@@ -120,10 +185,89 @@ import {
         )}
       </div>);
   }
-  function LedStage({ pal }) {
+  // Resolve a card-bank pattern id to the real library pattern that actually
+  // has runnable per-pixel code. Card ids either match a library pattern
+  // directly (sparkle, aurora…) or point at one via previewPatternId/preset.
+  function resolveCodePatternId(patternId) {
+    if (!patternId) return null;
+    if (getPatternById(patternId)) return patternId;
+    const card = getCardPatternById(patternId);
+    const candidate = card?.previewPatternId || card?.preset;
+    if (candidate && getPatternById(candidate)) return candidate;
+    return null;
+  }
+
+  // Synthetic horizontal strip so the frame engine has geometry to render onto.
+  function buildPreviewStrip(n) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const p = n > 1 ? i / (n - 1) : 0.5;
+      pts.push({ x: p, y: 0.5, p });
+    }
+    return { id: 'preview', pts, brightness: 1, speed: 1 };
+  }
+
+  // Runs the REAL compiled pattern through the frame engine on a rAF loop, applies
+  // the card's exact color post-pass (hue/saturation/breathe/drift), and paints
+  // each bead per frame — so Sparkle sparkles, Fire flickers, and every slider
+  // recolors the preview the way the card will. Falls back to the static palette
+  // strand only when a pattern has no runnable code.
+  function LivePreviewRow({ patternId, pal, look, n = 22, big = false }) {
+    const codeId = useMemo(() => resolveCodePatternId(patternId), [patternId]);
+    const fn = useMemo(() => (codeId ? compilePattern(codeId) : null), [codeId]);
+    const paletteNorm = useMemo(() => normalizePalette(pal), [pal]);
+    const strip = useMemo(() => buildPreviewStrip(n), [n]);
+    const beadRefs = useRef([]);
+    const live = useRef({});
+    live.current = { fn, codeId, paletteNorm, strip, look, n, big };
+
+    useEffect(() => {
+      if (!fn) return undefined;
+      let raf = 0;
+      let start = null;
+      const tick = (now) => {
+        if (start === null) start = now;
+        const s = live.current;
+        const tMs = now - start;
+        const frame = renderPixelFrame({
+          t: tMs / 1000,
+          strips: [s.strip],
+          patternId: s.codeId,
+          activeFn: s.fn,
+          paletteNorm: s.paletteNorm,
+          masterBrightness: s.look?.brightness ?? 1,
+          masterSpeed: s.look?.speed ?? 1,
+        });
+        const px = applyLookColorModifiers(frame.pixels, tMs, s.look || {});
+        for (let i = 0; i < s.n; i++) {
+          const el = beadRefs.current[i];
+          if (!el) continue;
+          const c = px[i] || { r: 0, g: 0, b: 0 };
+          const col = `rgb(${c.r},${c.g},${c.b})`;
+          el.style.background = col;
+          el.style.boxShadow = `0 0 ${s.big ? 9 : 5}px ${col}, 0 0 ${s.big ? 20 : 11}px ${col}`;
+        }
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(raf);
+    }, [fn]);
+
+    // No runnable code for this pattern → keep the old palette strand.
+    if (!fn) return <LedRow pal={pal} n={n} big={big} wave />;
+
+    return (
+      <div className={"ledrow" + (big ? " big" : "")}>
+        {Array.from({ length: n }, (_, i) =>
+          <span key={i} ref={(el) => { beadRefs.current[i] = el; }} className="led" style={{ background: "#000" }} />
+        )}
+      </div>);
+  }
+
+  function LedStage({ patternId, pal, look }) {
     return (
       <div className="pm-led-stage">
-        <LedRow pal={pal} n={22} big wave />
+        <LivePreviewRow patternId={patternId} pal={pal} look={look} n={22} big />
         <span className="sheen" />
       </div>);
   }
@@ -154,6 +298,12 @@ import {
     const [stripTest, setStripTest] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
     const [mixName, setMixName] = useState("");
+
+    // Show-more pagination so the browser isn't 130+ cards tall (which buries the
+    // preview on narrow screens). Resets whenever the filter or search changes.
+    const PATTERN_PAGE = 24;
+    const [visibleCount, setVisibleCount] = useState(PATTERN_PAGE);
+    useEffect(() => { setVisibleCount(PATTERN_PAGE); }, [cat, q]);
 
     // ── real engine state ───────────────────────────────────────────────
     const [cardHost, setCardHost] = useState(readStoredCardHost);
@@ -557,6 +707,25 @@ import {
       setStatus('');
     };
 
+    // Save the current pattern + all its tuned color/motion settings as a named,
+    // recallable look. Same save path as "Save mix", surfaced next to the tuning
+    // controls so a single tuned pattern (e.g. a custom Lava Lamp) can be kept.
+    const savePreset = () => {
+      const label = mixName.trim() || `${sel.label} · ${cardHueToDegrees(look.customHue)}°`;
+      const { nextController } = buildCurrentHardwareState({
+        saveNamedLook: true,
+        label,
+        uniqueLookId: true,
+      });
+      const nextLooks = normalizeSavedLooks(nextController.looks);
+      const saved = nextLooks[0];
+      setPatchBoard(applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook: saved }));
+      setStandaloneController(nextController);
+      setDraftLooks({});
+      setStatusKind('');
+      setStatus(`Saved “${label}”. Find it under the Mixes filter.`);
+    };
+
     const playStripColorTest = async (testId, colorOrder = stripColorOrder) => {
       const patternId = STRIP_TEST_TO_PATTERN[testId] || 'test-red';
       const brightness = STRIP_TEST_BRIGHTNESS[testId] ?? 1;
@@ -893,10 +1062,10 @@ import {
                     <div className="chips">
                       {PATTERN_CATS.map((c) => <button key={c.id} className={"chip" + (cat === c.id ? " on" : "")} onClick={() => setCat(c.id)}>{c.label}</button>)}
                     </div>
-                    <span className="pt-count">{filtered.length} of {REAL_PATTERNS.length} shown</span>
+                    <span className="pt-count">{Math.min(visibleCount, filtered.length)} of {filtered.length} shown</span>
                   </div>
                   <div className="pm-cards">
-                    {filtered.map((p) => {
+                    {filtered.slice(0, visibleCount).map((p) => {
                       const cardInPlaylist = inPlaylist(p.id);
                       return (
                     <div key={p.id} className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} onClick={() => selectCard(p)}>
@@ -915,22 +1084,36 @@ import {
                     })}
                     {!filtered.length && <p style={{ color: "var(--text-faint)", fontSize: 13, gridColumn: "1 / -1", padding: 20 }}>No chip patterns match this search.</p>}
                   </div>
+                  {filtered.length > visibleCount &&
+                    <div className="pm-showmore">
+                      <button type="button" className="btn ghost-sm" data-testid="patterns-show-more" onClick={() => setVisibleCount((c) => c + PATTERN_PAGE)}>
+                        Show {Math.min(PATTERN_PAGE, filtered.length - visibleCount)} more
+                      </button>
+                      <button type="button" className="pm-showall" data-testid="patterns-show-all" onClick={() => setVisibleCount(filtered.length)}>
+                        Show all {filtered.length}
+                      </button>
+                    </div>
+                  }
                 </div>
               </section>
 
               {/* ASIDE */}
               <aside className="pm-aside">
-                <div className="card pm-pane">
+                <div className="card pm-pane pm-preview-pane">
                   <div className="sec-h"><span className="t">Preview</span><span className="m">{selectedTargetName} · {sel.label}</span></div>
-                  <LedStage pal={sel.pal} />
-                  <p className="pt-desc">{sel.desc}</p>
+                  <LedStage patternId={sel.id} pal={sel.pal} look={look} />
                 </div>
 
                 <div className="card pm-pane">
-                  <div className="sec-h"><span className="t">Color &amp; motion</span><span className="m">{selectedTargetName}</span></div>
-                  <div className="pm-motion"><Strand tint={tint} /></div>
+                  <div className="sec-h"><span className="t">Color</span><button type="button" className="pm-save" data-testid="look-save-preset" onClick={savePreset}>Save look</button><button type="button" className="pm-reset" data-testid="look-reset" onClick={() => updatePreviewLook({ brightness: DEFAULT_CARD_VISUAL_LOOK.brightness, speed: DEFAULT_CARD_VISUAL_LOOK.speed, customHue: DEFAULT_CARD_VISUAL_LOOK.customHue, customSaturation: DEFAULT_CARD_VISUAL_LOOK.customSaturation, hueShift: DEFAULT_CARD_VISUAL_LOOK.hueShift, customBreathe: false, customDrift: false })}>Reset</button></div>
                   <div className="pm-palette">
-                    <span className="pm-palrow">{sel.pal.map((c, i) => <span key={i} style={{ background: c }} />)}</span>
+                    <span className="pm-palrow">{sel.pal.map((c, i) => {
+                      const h = c.replace('#', '');
+                      const px = [{ r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) }];
+                      applyLookColorModifiers(px, 0, look);
+                      const cc = px[0];
+                      return <span key={i} style={{ background: `rgb(${cc.r},${cc.g},${cc.b})` }} />;
+                    })}</span>
                     <div className="pm-palmeta"><strong>{sel.label}</strong><span>{sel.sp} · {sel.cat.toUpperCase()}</span></div>
                   </div>
 
