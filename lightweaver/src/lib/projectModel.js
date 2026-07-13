@@ -25,6 +25,7 @@ import {
   normalizePatchBoard,
 } from './patchBoard.js';
 import { createDefaultCircleLayout, isDefaultCircleLayout } from './defaultCircleLayout.js';
+import { makeDefaultWiring, migrateWiring } from './wiringModel.js';
 import {
   deriveLegacyPatternCycleIds,
   isDefaultPatternCycle,
@@ -127,6 +128,7 @@ export function createDefaultProject() {
       layerGroups: [],
       layerOrder: [],
       patchBoard: createDefaultPatchBoard(defaultStrips),
+      wiring: makeDefaultWiring(defaultStrips),
     },
     pattern: {
       activePatternId: 'aurora',
@@ -242,6 +244,12 @@ export function migrateStripIdNamespace(project) {
       }
     }
   }
+  const wiring = layout.wiring;
+  if (wiring && Array.isArray(wiring.runs)) {
+    for (const run of wiring.runs) {
+      if (run?.type === 'strip' && oldToNew.has(run.source?.stripId)) run.source.stripId = oldToNew.get(run.source.stripId);
+    }
+  }
 
   // 3. Strip group members reference a strip by `stripId`; path members carry no
   //    stripId, so only strip members are remapped. (Their `pathId`/`layerId`
@@ -279,11 +287,15 @@ function alignChainToStripOrder(project) {
   migrateStripIdNamespace(project);
   const layout = project?.layout;
   if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
-  if (!layout.patchBoard) return project;
-  layout.patchBoard = migrateChainToStripOrder(
-    normalizePatchBoard(layout.patchBoard, layout.strips),
-    layout.strips,
-  );
+  if (layout.patchBoard) {
+    layout.patchBoard = migrateChainToStripOrder(
+      normalizePatchBoard(layout.patchBoard, layout.strips),
+      layout.strips,
+    );
+  }
+  layout.wiring = migrateWiring(layout.wiring, layout.strips, layout.patchBoard, {
+    pin: project.devices?.standaloneController?.outputs?.[0]?.pin,
+  });
   return project;
 }
 
@@ -298,7 +310,7 @@ export function migrateProject(data) {
       ...base,
       ...data,
       id: normalizeProjectId(data.id || data.projectId, base.id),
-      layout: { ...base.layout, ...(data.layout || {}) },
+      layout: { ...base.layout, ...(data.layout || {}), wiring: data.layout?.wiring ?? null },
       pattern: { ...pattern, symSettings: { ...base.pattern.symSettings, ...(pattern.symSettings || {}) } },
       show: { ...base.show, ...(data.show || {}) },
       live: { ...base.live, ...(data.live || {}) },
@@ -328,6 +340,7 @@ export function migrateProject(data) {
         pxPerMm: data.pxPerMm || base.layout.pxPerMm,
         editCounts: data.editCounts || {},
         layerGroups: data.layerGroups || [],
+        wiring: null,
         layerOrder: data.layerOrder || (data.layers || []).map(l => ({ type: 'layer', id: l.layerId })),
         patchBoard: data.patchBoard || null,
       },

@@ -4,6 +4,7 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
 import { chainAddressCount } from './patchBoard.js';
+import { compileWiring } from './wiringCompiler.js';
 import {
   derivePlaylistLookIds,
   isDefaultPatternCycle,
@@ -25,16 +26,20 @@ export function buildCardRuntimePackageFromProject({
   projectName = 'Lightweaver Piece',
   strips = [],
   patchBoard = null,
+  wiring = null,
+  compiledWiring = null,
   standaloneController = {},
 } = {}) {
-  const totalPixels = totalPhysicalAddresses(patchBoard, strips);
+  const compiled = compiledWiring || (wiring ? compileWiring({ wiring, strips }) : null);
+  if (compiled && !compiled.ok) throw new Error(compiled.errors.map(error => error.message).join(' '));
+  const totalPixels = compiled?.totalPixels ?? totalPhysicalAddresses(patchBoard, strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
   const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
   const resolvedPixels = explicitOutputLayout
     ? configuredOutputPixels
     : (totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels);
-  const outputs = resolveCardOutputs({
+  const outputs = compiled?.outputs || resolveCardOutputs({
     strips,
     configuredOutputs,
     resolvedPixels,
@@ -55,7 +60,7 @@ export function buildCardRuntimePackageFromProject({
       ...legacyCycleIds,
     ],
   });
-  const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
+  const zones = compiled?.zones || (patchBoard ? patchBoardToZones(patchBoard, strips) : []);
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
     label: 'Full Piece',
