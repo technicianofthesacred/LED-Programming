@@ -9,6 +9,7 @@
  */
 
 import { expandPatchBoard } from './patchBoard.js';
+import { compileWiring } from './wiringCompiler.js';
 
 /**
  * @typedef {{ x: number, y: number, index: number }} Pixel
@@ -103,6 +104,12 @@ export function pixelsFromPatchBoard(patchBoard, strips = []) {
   return expandPatchBoard(patchBoard, strips).pixels;
 }
 
+export function pixelsFromWiring(wiring, strips = [], groups = [], capabilities) {
+  const compiled = compileWiring({ wiring, strips, groups, capabilities });
+  if (!compiled.ok) throw new Error(compiled.errors.map(error => error.message).join(' '));
+  return compiled.pixels;
+}
+
 export function remapFrameToPatchBoard(framePixels = [], patchPixels = [], strips = []) {
   if (!patchPixels.length) return framePixels;
   const offsets = new Map();
@@ -118,6 +125,10 @@ export function remapFrameToPatchBoard(framePixels = [], patchPixels = [], strip
     if (!Number.isFinite(sourceOffset)) return black;
     return framePixels[sourceOffset + pixel.sourceLed] || black;
   });
+}
+
+export function remapFrameToWiring(framePixels = [], compiledWiring, strips = []) {
+  return remapFrameToPatchBoard(framePixels, compiledWiring?.pixels || [], strips);
 }
 
 export function toDmxCsv(frames = []) {
@@ -143,7 +154,9 @@ export function toRawFrameDump(frames = []) {
 
 export function makeManifest(project, opts = {}) {
   const strips = project.layout?.strips || [];
-  const totalLeds = pixelsFromPatchBoard(project.layout?.patchBoard, strips).length;
+  const totalLeds = project.layout?.wiring
+    ? pixelsFromWiring(project.layout.wiring, strips, project.layout?.layerGroups).length
+    : pixelsFromPatchBoard(project.layout?.patchBoard, strips).length;
   return JSON.stringify({
     app: 'Lightweaver',
     version: project.version,

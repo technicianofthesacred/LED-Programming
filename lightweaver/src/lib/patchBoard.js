@@ -699,6 +699,21 @@ export function chainPixelOffsets(board, strips = []) {
   return offsets;
 }
 
+export function chainAddressCount(board, strips = []) {
+  const patchesById = byId(Array.isArray(board?.patches) ? board.patches : []);
+  const stripsById = byId(strips);
+  let total = 0;
+  for (const rowId of chainRowIds(board)) {
+    const patch = patchesById.get(rowId);
+    if (patch?.source?.type === 'off') {
+      total += Math.max(0, Math.trunc(numberOr(patch.source.ledCount, 0)));
+    } else if (patch?.source?.type === 'strip') {
+      total += stripPatchAddressSpan(patch, stripsById.get(patch.source.stripId));
+    }
+  }
+  return total;
+}
+
 // Strip ids in chain order, deduped (a split strip appears once, at its first
 // occurrence). Any strip with no patch in the chain is appended at the end so
 // UI lists never lose a strip.
@@ -785,27 +800,12 @@ export function migrateChainToStripOrder(board, strips = []) {
   const next = normalizePatchBoard(board, strips);
   const chain = mutableMainChain(next);
   const patchesById = byId(next.patches);
-  const rowIds = [...chain.rowIds];
-
-  const desiredStripPatchIds = [];
   const seen = new Set();
-  for (const strip of strips) {
-    for (const patch of stripPatchesInVisualOrder(next, strip.id)) {
-      if (seen.has(patch.id)) continue;
-      seen.add(patch.id);
-      desiredStripPatchIds.push(patch.id);
-    }
-  }
-  // Preserve any strip patches whose strip isn't in strips[] (orphans), in
-  // their current chain order, appended after the known strips.
-  for (const rowId of rowIds) {
-    if (stripIdForRow(patchesById, rowId) === null) continue;
-    if (seen.has(rowId)) continue;
+  chain.rowIds = chain.rowIds.filter(rowId => {
+    if (!patchesById.has(rowId) || seen.has(rowId)) return false;
     seen.add(rowId);
-    desiredStripPatchIds.push(rowId);
-  }
-
-  chain.rowIds = relayStripSlots(rowIds, patchesById, desiredStripPatchIds);
+    return true;
+  });
   return next;
 }
 
