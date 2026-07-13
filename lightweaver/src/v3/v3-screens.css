@@ -97,7 +97,7 @@ input[type=range].lw::-webkit-slider-thumb { -webkit-appearance: none; width: 14
 input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg-panel); }
 
 .geo-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 3px; }
-.geo-seg button { height: 28px; border-radius: 4px; font-size: 11.5px; font-weight: 500; color: var(--text-lo); display: flex; align-items: center; justify-content: center; gap: 5px; transition: background .12s, color .12s; }
+.geo-seg button { height: 24px; border-radius: 4px; font-size: 11px; font-weight: 500; color: var(--text-lo); display: flex; align-items: center; justify-content: center; gap: 5px; transition: background .12s, color .12s; }
 .geo-seg button svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; }
 .geo-seg button:hover { color: var(--text-hi); }
 .geo-seg button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
@@ -277,11 +277,17 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* ============================================================
    PATTERNS & MIXES screen
    ============================================================ */
-.pm { padding: 26px 32px 40px; max-width: 1400px; margin: 0 auto; }
-.pm-hero { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; margin-bottom: 22px; }
-.pm-title h1 { font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }
-.pm-title p { font-size: 13.5px; color: var(--text-lo); margin-top: 6px; max-width: 540px; line-height: 1.5; }
-.pm-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pm { padding: 14px 20px 24px; max-width: 1400px; margin: 0 auto; }
+.pm-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.pm-title h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+.pm-title p { font-size: 12px; color: var(--text-lo); margin-top: 2px; max-width: 540px; line-height: 1.45; }
+.pm-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* Compact Patterns screen: tighten shared controls only within .pm. */
+.pm .btn { padding: 4px 10px; font-size: 11.5px; gap: 6px; }
+.pm .btn svg { width: 13px; height: 13px; }
+.pm .slider-row { margin-bottom: 8px; gap: 3px; }
+.pm .slider-row .lab { font-size: 11px; }
+.pm .sec-h { margin-bottom: 8px; }
 .ag-conn { display: flex; align-items: center; gap: 4px; padding: 3px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-md); }
 .ag-conn .btn { border: none; background: transparent; height: 28px; }
 .ag-conn .btn:hover { background: var(--bg-elev-2); }
@@ -300,7 +306,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .btn.ghost-sm { height: 30px; padding: 0 11px; font-size: 12px; background: var(--bg-elev); border: 1px solid var(--border-soft); color: var(--text-mid); }
 .btn.ghost-sm:hover { background: var(--bg-elev-2); color: var(--text-hi); }
 
-.pm-grid { display: grid; grid-template-columns: minmax(0, 1fr) 372px; gap: 22px; align-items: start; }
+.pm-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
 .pm-main { min-width: 0; }
 
 /* checkbox box (shared) */
@@ -323,8 +329,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pm-stripfinder .btn { margin-left: auto; }
 
 /* design target */
-.pm-target { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-lg); padding: 14px 16px 16px; margin-bottom: 18px; }
-.pm-mixbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.pm-target { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-lg); padding: 10px 12px 12px; margin-bottom: 12px; }
+.pm-mixbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .pm-mixlabel { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; min-width: 0; }
 .pm-mixlabel span { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
 .pm-mixlabel strong { font-size: 13.5px; font-weight: 600; color: var(--text-hi); overflow: hidden; text-overflow: ellipsis; }
@@ -357,8 +363,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 }
 
 /* browse cards */
-.pm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 10px; }
-.pmcard { text-align: left; padding: 10px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); transition: border-color .12s; display: flex; flex-direction: column; gap: 9px; }
+.pm-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.pmcard { text-align: left; padding: 8px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); transition: border-color .12s; display: flex; flex-direction: column; gap: 8px; }
 .pmcard:hover { border-color: var(--border); }
 .pmcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .pmcard.in-playlist {
@@ -379,16 +385,20 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pmcard-pl .pm-box { width: 15px; height: 15px; }
 
 /* aside */
-.pm-aside { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 14px; }
-.pm-pane { padding: 14px 16px 16px; }
-.pm-pane .sec-h { margin-bottom: 12px; }
+.pm-aside { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+.pm-save { margin-left: auto; font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.04em; color: var(--on-accent); background: var(--accent); border: 1px solid transparent; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-weight: 600; transition: background .12s; }
+.pm-save:hover { background: var(--accent-hi); }
+.pm-reset { font-size: 11px; font-family: var(--font-mono); letter-spacing: 0.04em; color: var(--text-lo); background: transparent; border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 9px; cursor: pointer; transition: color .12s, border-color .12s; }
+.pm-reset:hover { color: var(--text-hi); border-color: var(--border); }
+.pm-pane { padding: 10px 12px 12px; }
+.pm-pane .sec-h { margin-bottom: 8px; }
 .pm-cardleds { height: 90px; border-radius: var(--r-md); background: radial-gradient(circle at center, oklch(0.20 0.01 40), var(--bg-canvas)); display: flex; align-items: center; justify-content: center; gap: 30px; position: relative; }
 .pm-cardleds::before { content: ""; position: absolute; left: 14%; right: 14%; height: 2px; background: var(--border-hair); }
 .cardled { width: 13px; height: 13px; border-radius: 50%; position: relative; z-index: 1; }
 .pm-motion { height: 120px; border-radius: var(--r-md); background: radial-gradient(circle at 50% 60%, oklch(0.24 0.04 40), oklch(0.13 0.01 40)); overflow: hidden; }
-.pm-palette { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.pm-palette { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .pm-palrow { display: flex; gap: 4px; }
-.pm-palrow span { width: 22px; height: 22px; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
+.pm-palrow span { width: 17px; height: 17px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.05); }
 .pm-palmeta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .pm-palmeta strong { font-size: 12.5px; font-weight: 500; color: var(--text-hi); white-space: nowrap; }
 .pm-palmeta span { font-size: 10px; font-family: var(--font-mono); letter-spacing: 0.05em; color: var(--text-faint); white-space: nowrap; }
@@ -397,8 +407,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pm-picklab { font-size: 12.5px; color: var(--text-mid); white-space: nowrap; }
 .pm-pickbar { flex: 1; height: 30px; border-radius: var(--r-sm); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
 .pm-angle { font-family: var(--font-mono); font-size: 11px; line-height: 1.25; color: var(--accent); text-align: right; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 4px 9px; }
-.pm-swatches { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; margin-top: 12px; }
-.pm-sw { aspect-ratio: 1; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); transition: transform .08s; }
+.pm-swatches { display: grid; grid-template-columns: repeat(12, 1fr); gap: 5px; margin-top: 8px; }
+.pm-sw { aspect-ratio: 1; max-width: 22px; justify-self: center; width: 100%; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); transition: transform .08s; }
 .pm-sw:hover { transform: scale(1.12); }
 .pm-sw.on { box-shadow: 0 0 0 2px var(--accent), 0 0 0 4px var(--bg-panel); }
 
@@ -406,9 +416,9 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
    LED display rendering (Preview + cards)
    ============================================================ */
 .ledrow { display: flex; align-items: center; justify-content: center; gap: 7px; }
-.ledrow.big { gap: 9px; flex-wrap: nowrap; }
+.ledrow.big { gap: 6px; flex-wrap: nowrap; }
 .led { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.ledrow.big .led { width: 11px; height: 11px; }
+.ledrow.big .led { width: 8px; height: 8px; }
 .led.wave { animation: ledwave 2.6s ease-in-out infinite; }
 @keyframes ledwave { 0%, 100% { opacity: 0.62; transform: scale(0.9); } 46% { opacity: 1; transform: scale(1.08); } }
 @media (prefers-reduced-motion: reduce) { .led.wave { animation: none; } }
@@ -422,9 +432,9 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
   .ledrow.big .led { width: 6px; height: 6px; }
 }
 
-.pm-led-stage { position: relative; height: 134px; border-radius: var(--r-md); overflow: hidden; display: grid; place-items: center; padding: 0 14px;
-  background: radial-gradient(130% 100% at 50% 125%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 72%); border: 1px solid var(--border-soft); }
-.pm-led-stage::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 64px 16px rgba(0,0,0,.5); pointer-events: none; }
+.pm-led-stage { position: relative; height: 44px; border-radius: var(--r-md); overflow: hidden; display: grid; place-items: center; padding: 0 12px;
+  background: radial-gradient(130% 130% at 50% 115%, oklch(0.23 0.025 50), oklch(0.105 0.008 45) 78%); border: 1px solid var(--border-soft); }
+.pm-led-stage::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 26px 6px rgba(0,0,0,.42); pointer-events: none; }
 .pm-led-stage .sheen { position: absolute; top: 0; bottom: 0; left: 0; width: 38%; pointer-events: none;
   background: linear-gradient(90deg, transparent, rgba(255,255,255,.045), transparent); animation: pmsheen 5s ease-in-out infinite; }
 @keyframes pmsheen { 0% { transform: translateX(-130%); } 60%, 100% { transform: translateX(360%); } }
@@ -433,14 +443,14 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* ============================================================
    PATTERN cards (refined LED look)
    ============================================================ */
-.pm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr)); gap: 10px; }
-.pmcard { text-align: left; padding: 9px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); transition: border-color .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 9px; cursor: pointer; }
+.pm-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.pmcard { text-align: left; padding: 8px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); transition: border-color .12s, box-shadow .12s; display: flex; flex-direction: column; gap: 8px; cursor: pointer; }
 .pmcard:hover { border-color: var(--border); }
 .pmcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.pmcard-led { height: 48px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; padding: 0 8px;
+.pmcard-led { height: 40px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; padding: 0 7px;
   background: radial-gradient(110% 130% at 50% 135%, oklch(0.2 0.018 50), oklch(0.095 0.006 45)); }
-.pmcard-led .ledrow { gap: 6px; }
-.pmcard-led .led { width: 8px; height: 8px; }
+.pmcard-led .ledrow { gap: 5px; }
+.pmcard-led .led { width: 7px; height: 7px; }
 .pmcard-row { display: flex; align-items: center; gap: 7px; }
 .pmcard-nm { font-size: 13px; font-weight: 500; color: var(--text-hi); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pmcard-sp { font-size: 9px; font-family: var(--font-mono); letter-spacing: 0.06em; color: var(--text-faint); }
@@ -453,8 +463,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* ============================================================
    Hue spectrum (replaces rainbow swatch wheel)
    ============================================================ */
-.pm-hue { margin: 16px 0 14px; }
-.pm-hue-lab { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.pm-hue { margin: 10px 0 9px; }
+.pm-hue-lab { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 5px; }
 .pm-hue-lab span { font-size: 12.5px; color: var(--text-mid); }
 .pm-hue-lab .hv { font-family: var(--font-mono); font-size: 12px; color: var(--text-hi); }
 .pm-huerange { width: 100%; height: 12px; border-radius: 99px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
@@ -465,10 +475,17 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* refined palette chip */
 .pm-palrow span { width: 18px; height: 18px; border-radius: 4px; }
 
-@media (max-width: 1180px) {
+@media (max-width: 900px) {
   .pm-grid { grid-template-columns: 1fr; }
-  .pm-aside { position: static; }
+  /* Move the preview + its controls above the pattern list (so they aren't
+     buried) and keep the small preview pinned while you tune — attached to,
+     not detached from, the controls that change it. */
+  .pm-aside { position: static; max-height: none; overflow: visible; padding-right: 0; order: -1; }
+  .pm-preview-pane { position: sticky; top: 0; z-index: 10; }
 }
+.pm-showmore { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; }
+.pm-showall { font-size: 12px; font-family: var(--font-mono); color: var(--text-lo); background: transparent; border: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.pm-showall:hover { color: var(--text-hi); }
 
 /* ============================================================
    PLAYLIST screen

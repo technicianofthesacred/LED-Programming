@@ -71,7 +71,7 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
 
 /* ---------- Left rail ---------- */
 function Rail({ view, setView }) {
-  const main = [["pattern", "Patterns"], ["playlist", "Playlist"], ["layout", "Layout"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
+  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
   const foot = [["settings", "Settings"]];
   const item = ([id, label]) => (
     <button key={id} className={"rail-item" + (view === id ? " active" : "")} onClick={() => setView(id)}>
