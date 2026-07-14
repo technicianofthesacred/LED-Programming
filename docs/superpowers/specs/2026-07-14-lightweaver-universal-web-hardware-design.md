@@ -122,7 +122,7 @@ If the environment lacks USB capability, the website presents one valid next act
 
 The Connector is not a second Studio and is not required for ordinary customers. It is a narrow recovery and hardware-access component launched from the website.
 
-Platform packages are built separately for supported macOS, Windows, and Linux targets. The website selects the package automatically. On macOS the application is Developer ID signed, notarized, built for Apple Silicon and Intel, and uses the hardened runtime. It requires no kernel extension, custom USB driver for native ESP32-S3 USB, administrator privileges, Accessibility, Full Disk Access, screen recording, contacts, or location permission.
+Platform packages are built separately for supported macOS, Windows, and Linux targets. The website selects the package automatically. The first implementation is a narrow Electron shell so it can reuse the verified `esptool-js` ESP32-S3 transport inside one consistent Chromium serial environment; it loads local packaged UI only and does not embed the remote Studio. On macOS the application is Developer ID signed, notarized, built for Apple Silicon and Intel, and uses the hardened runtime. It requires no kernel extension, custom USB driver for native ESP32-S3 USB, administrator privileges, Accessibility, Full Disk Access, screen recording, contacts, or location permission.
 
 The Connector exposes only these operations:
 
@@ -133,9 +133,9 @@ The Connector exposes only these operations:
 - restore a known-good configuration or firmware slot;
 - restart the card and report whether it returned healthy.
 
-It cannot execute arbitrary shell commands, browse the general filesystem, proxy arbitrary network requests, accept arbitrary firmware in the normal flow, or run a local web server. Launch authorization is limited to the canonical production origin and explicit allowed preview origins. One-time nonces bind each launch to the requesting operation, expire after inactivity, and are consumed by the first valid website callback.
+It cannot execute arbitrary shell commands, browse the general filesystem, proxy arbitrary network requests, accept arbitrary firmware in the normal flow, or run a local web server. Custom URL schemes do not prove which application or website invoked them, so the Connector never treats the launch source as authorization. It accepts only a closed operation vocabulary, fetches only the fixed Lightweaver release manifest, verifies the publisher signature, validates the target card, and requires its own explicit user confirmation before writing. One-time nonces correlate a callback with the originating browser workflow but grant no hardware authority.
 
-The Connector registers a `lightweaver://` launch link and opens a minimal native USB install/recovery window. The website initiates that window with a bounded operation name and one-time nonce; it does not send project content or arbitrary commands. When the operation finishes, the Connector opens a callback at `https://led.mandalacodes.com` containing the nonce, non-secret card identity, installed firmware version, and success or structured failure code. Studio validates the nonce, discards it after one use, reconnects to the card through the normal local path, and treats the card's own status as authoritative. The Connector never runs a background HTTP server and never becomes a general bridge for routine Studio control.
+The Connector registers a `lightweaver://` launch link and opens a minimal native USB install/recovery window. The website initiates that window with a bounded operation name and one-time nonce; it does not send project content, firmware URLs, callback origins, or arbitrary commands. When the operation finishes, the Connector opens a fixed callback at `https://led.mandalacodes.com` containing the nonce, non-secret card identity, installed firmware version, and success or structured failure code. Studio validates the nonce, discards it after one use, uses the callback only to resume the interface, reconnects to the card through the normal local path, and treats the card's own status as authoritative. The Connector never runs a background HTTP server and never becomes a general bridge for routine Studio control.
 
 ## Card identity and pairing
 
@@ -218,7 +218,7 @@ Recovery does not erase the current Studio project. When a project caused the fa
 - Release manifests and firmware images are signed; a digest alone is not treated as publisher authorization.
 - Wi-Fi credentials remain between the person and the local card page.
 - Local bridge messages use an explicit origin allowlist, versioned features, card identity, request IDs, deadlines, and bounded payload sizes.
-- Connector launch and callback are native, short-lived, origin-restricted, operation-restricted, and never a general local proxy.
+- Connector launch and callback are native, short-lived, fixed-destination, operation-restricted, independently confirmed, and never a general local proxy.
 - Card endpoints enforce payload, playlist, zone, pixel, output, storage, and frame-rate limits independently of Studio validation.
 - Firmware and configuration probation survive browser closure and power interruption.
 - Diagnostics redact Wi-Fi credentials, tokens, private project data, and unrelated serial devices.
