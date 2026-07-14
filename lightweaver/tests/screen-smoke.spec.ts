@@ -568,7 +568,7 @@ test('flash screen is reachable for public chip setup', async ({ page }) => {
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  // "Connection mode" was renamed to "Bootloader mode" (src/v3/lw-flash.jsx).
+  await page.getByText('Technician diagnostics', { exact: true }).click();
   await expect(page.getByText('Bootloader mode')).toBeVisible();
   await expect(page.getByText('Lightweaver firmware', { exact: true })).toBeVisible();
   await expect(page.getByText('Fetch latest WLED')).toHaveCount(0);

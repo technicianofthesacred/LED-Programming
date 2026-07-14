@@ -3,6 +3,7 @@ import {
   connectEspWithResetSequence,
   makeEspConnectTerminal,
 } from './flashConnection.js';
+import { writeVerifiedFlash } from './flashPlan.js';
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
@@ -39,7 +40,7 @@ export async function disconnectESP(loader, transport) {
 
 export async function flashFirmware(loader, file, address, eraseAll, onProgress) {
   const data = new Uint8Array(await file.arrayBuffer());
-  await loader.writeFlash({
+  await writeVerifiedFlash(loader, {
     fileArray: [{ data, address }],
     flashMode: 'keep',
     flashFreq: 'keep',

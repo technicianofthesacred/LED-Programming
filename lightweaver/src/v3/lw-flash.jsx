@@ -14,6 +14,8 @@ import {
   validateFirmwareImage,
   validateFlashPlan,
   validateInstallHardware,
+  validateProductionInstallRelease,
+  replaceInstallConnection,
 } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
@@ -187,10 +189,12 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     return (
       <div className="screen">
         <div className="screen-scroll">
-          <div className="fl">
+          <details className="technician-disclosure">
+            <summary>Technician diagnostics</summary>
+            <div className="fl">
             <div>
               <div className="eyebrow">Advanced tools</div>
-              <h1 className="flash-screen-title">Technician diagnostics</h1>
+              <h1 className="flash-screen-title">Manual firmware tools</h1>
               <p className="flash-screen-intro">Manual firmware files, offsets, erase controls, and the serial log are kept here for trained repair work.</p>
             </div>
             <div className={"fl-warn " + (hasWebSerial ? "ok" : "warn")}>
@@ -268,7 +272,8 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
               <div className="sec-h"><span className="t">Log</span><span className="m">{Math.round(progress * 100)}%</span><span className="line" /></div>
               <textarea ref={logRef} className="fl-log" readOnly value={log} placeholder="Connect the card to begin…" />
             </div>
-          </div>
+            </div>
+          </details>
         </div>
       </div>
     );
@@ -308,61 +313,93 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     const [eraseConfirmed, setEraseConfirmed] = useState(false);
     const [progress, setProgress] = useState(0);
     const [installState, setInstallState] = useState('idle');
+    const [releaseAttempt, setReleaseAttempt] = useState(0);
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const mountedRef = useRef(true);
+    const findingRef = useRef(false);
+    const installingRef = useRef(false);
 
     useEffect(() => {
       if (!capabilities.canWebSerialInstall) return undefined;
       let active = true;
+      setReleaseState({ state: 'loading', release: null, error: '' });
       loadProductionFirmwareRelease()
         .then((release) => {
+          validateProductionInstallRelease(release);
           if (active) setReleaseState({ state: 'ready', release, error: '' });
         })
         .catch((error) => {
           if (active) setReleaseState({ state: 'error', release: null, error: error?.message || String(error) });
         });
       return () => { active = false; };
-    }, [capabilities.canWebSerialInstall]);
+    }, [capabilities.canWebSerialInstall, releaseAttempt]);
 
     useEffect(() => {
       mountedRef.current = true;
       return () => {
         mountedRef.current = false;
-        disconnectESP(loaderRef.current, transportRef.current);
+        if (!installingRef.current) disconnectESP(loaderRef.current, transportRef.current);
         loaderRef.current = null;
         transportRef.current = null;
       };
     }, []);
 
+    useEffect(() => {
+      if (installState !== 'installing') return undefined;
+      const preventUnload = (event) => {
+        event.preventDefault();
+        event.returnValue = '';
+      };
+      window.addEventListener('beforeunload', preventUnload);
+      window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } }));
+      return () => {
+        window.removeEventListener('beforeunload', preventUnload);
+        window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } }));
+      };
+    }, [installState]);
+
     if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} />;
 
     const findCard = async () => {
-      if (cardState.state === 'finding' || installState === 'installing') return;
+      if (findingRef.current || installingRef.current) return;
+      findingRef.current = true;
       setCardState({ state: 'finding', hardware: null, error: '' });
       setEraseConfirmed(false);
-      let connection = null;
       try {
-        connection = await connectESP();
-        const inspected = await inspectConnectedESP(connection.loader, connection.chip);
-        const verified = validateInstallHardware(inspected);
+        const previous = transportRef.current
+          ? { loader: loaderRef.current, transport: transportRef.current }
+          : null;
+        loaderRef.current = null;
+        transportRef.current = null;
+        const { connection, hardware } = await replaceInstallConnection({
+          previous,
+          connect: () => connectESP(),
+          verify: async candidate => {
+            const inspected = await inspectConnectedESP(candidate.loader, candidate.chip);
+            return { ...inspected, ...validateInstallHardware(inspected) };
+          },
+          disconnect: candidate => disconnectESP(candidate?.loader, candidate?.transport),
+        });
         if (!mountedRef.current) {
           await disconnectESP(connection.loader, connection.transport);
           return;
         }
         loaderRef.current = connection.loader;
         transportRef.current = connection.transport;
-        setCardState({ state: 'ready', hardware: { ...inspected, ...verified }, error: '' });
+        setCardState({ state: 'ready', hardware, error: '' });
       } catch (error) {
-        await disconnectESP(connection?.loader, connection?.transport);
         loaderRef.current = null;
         transportRef.current = null;
         setCardState({ state: 'error', hardware: null, error: error?.message || String(error) });
+      } finally {
+        findingRef.current = false;
       }
     };
 
     const install = async () => {
-      if (!eraseConfirmed || cardState.state !== 'ready' || releaseState.state !== 'ready' || installState === 'installing') return;
+      if (!eraseConfirmed || cardState.state !== 'ready' || releaseState.state !== 'ready' || installingRef.current) return;
+      installingRef.current = true;
       const { manifest, bytes } = releaseState.release;
       const file = new File([bytes], `lightweaver-${manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
       setInstallState('installing');
@@ -379,11 +416,13 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
         });
         loaderRef.current = null;
         transportRef.current = null;
+        installingRef.current = false;
         setProgress(1);
         setInstallState('complete');
       } catch (error) {
         loaderRef.current = null;
         transportRef.current = null;
+        installingRef.current = false;
         setInstallState('error');
         setCardState({ state: 'error', hardware: null, error: `Installation stopped: ${error?.message || String(error)}. USB was released.` });
       }
@@ -415,14 +454,17 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
           {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} verified and ready.`}
           {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
         </div>
+        {releaseState.state === 'error' && (
+          <button className="btn" type="button" onClick={() => setReleaseAttempt(attempt => attempt + 1)}>Retry official firmware</button>
+        )}
 
         <div className="card install-card-check">
           <div>
             <h2>1. Find your connected card</h2>
             <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
           </div>
-          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding'}>
-            {cardState.state === 'finding' ? 'Checking card…' : 'Find connected card'}
+          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing'}>
+            {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
           </button>
           {cardState.state === 'ready' && (
             <div className="install-check-ok">Correct card found · ESP32-S3 · 16 MB</div>

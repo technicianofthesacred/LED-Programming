@@ -1,5 +1,9 @@
 export const EXPECTED_FIRMWARE_TARGET = 'esp32-s3-n16r8';
 export const FIRMWARE_INSTALLER_VERSION = '1.4.0';
+// Bump this only after a release is known unsafe to replay. It is installer
+// policy applied after signature verification, so an older valid signature
+// cannot silently downgrade a card through the normal installer.
+export const MINIMUM_PRODUCTION_FIRMWARE_VERSION = '1.0.0';
 // default_16MB.csv starts ota_1 at 0x650000. A merged factory image must end
 // before that boundary or flashing it could overwrite the rollback slot.
 export const MAX_FACTORY_IMAGE_SIZE = 0x650000;
@@ -69,7 +73,10 @@ function isPositiveSafeInteger(value) {
 
 export function validateFirmwareManifest(
   manifest,
-  { installerVersion = FIRMWARE_INSTALLER_VERSION } = {},
+  {
+    installerVersion = FIRMWARE_INSTALLER_VERSION,
+    minimumFirmwareVersion = MINIMUM_PRODUCTION_FIRMWARE_VERSION,
+  } = {},
 ) {
   assertExactKeys(manifest, MANIFEST_KEYS, 'firmware manifest');
   assertExactKeys(manifest.image, ['sha256', 'size', 'url'], 'firmware image');
@@ -77,7 +84,11 @@ export function validateFirmwareManifest(
 
   if (manifest.schemaVersion !== 1) throw new Error('Unsupported firmware manifest schema');
   if (manifest.target !== EXPECTED_FIRMWARE_TARGET) throw new Error('Firmware target is not ESP32-S3 16MB');
-  parseSemver(manifest.firmwareVersion, 'firmwareVersion');
+  const firmwareVersion = parseSemver(manifest.firmwareVersion, 'firmwareVersion');
+  const minimumFirmware = parseSemver(minimumFirmwareVersion, 'minimumFirmwareVersion');
+  if (compareSemver(firmwareVersion, minimumFirmware) < 0) {
+    throw new Error(`Firmware ${manifest.firmwareVersion} is older than the minimum trusted release ${minimumFirmwareVersion}`);
+  }
   if (!/^[a-f0-9]{40}$/.test(manifest.buildId)) {
     throw new Error('buildId must be the immutable source revision');
   }

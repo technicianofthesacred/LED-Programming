@@ -163,6 +163,8 @@ function applyStoredStudioTheme() {
 
 function Shell() {
   const [view, setView] = useState(viewFromHash);
+  const [installActive, setInstallActive] = useState(false);
+  const installActiveRef = useRef(false);
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, replaceProject, replaceWithNewProject,
@@ -176,6 +178,18 @@ function Shell() {
     window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
     return () => window.removeEventListener('lw-preview-settings', applyStoredStudioTheme);
   }, []);
+  useEffect(() => {
+    const onInstallActive = event => {
+      const active = event.detail?.active === true;
+      installActiveRef.current = active;
+      setInstallActive(active);
+    };
+    window.addEventListener('lw-install-active', onInstallActive);
+    return () => window.removeEventListener('lw-install-active', onInstallActive);
+  }, []);
+  const navigateStudio = useCallback((nextView) => {
+    if (!installActiveRef.current) setView(nextView);
+  }, []);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
@@ -184,16 +198,24 @@ function Shell() {
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', view);
     if (view !== 'layout' && !(view === 'flash' && params.get('mode') === 'install')) params.delete('mode');
+    if (view === 'layout' && params.get('mode') === 'install') params.delete('mode');
     const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
     }
   }, [view]);
   useEffect(() => {
-    const onHash = () => setView(viewFromHash());
+    const onHash = () => {
+      if (installActiveRef.current) {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#screen=flash&mode=install`);
+        setView('flash');
+        return;
+      }
+      setView(viewFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+  }, [installActive]);
 
   useEffect(() => {
     if (!saveLabel) return undefined;
@@ -316,10 +338,10 @@ function Shell() {
         saveLabel={saveLabel || projectLifecycleLabel}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
       />
-      <Rail view={view} setView={setView} />
+      <Rail view={view} setView={navigateStudio} />
 
       <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={setView} /> : null}
+        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={navigateStudio} /> : null}
       </Suspense>
 
       <StatusBar

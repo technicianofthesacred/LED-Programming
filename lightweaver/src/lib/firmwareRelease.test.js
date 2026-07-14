@@ -11,6 +11,7 @@ import {
   EXPECTED_FIRMWARE_TARGET,
   MAX_FACTORY_IMAGE_SIZE,
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
+  MINIMUM_PRODUCTION_FIRMWARE_VERSION,
   canonicalFirmwareManifestBytes,
   loadProductionFirmwareRelease,
   validateFirmwareManifest,
@@ -102,6 +103,16 @@ test('validates the exact supported target, immutable URL, and installer floor',
     () => validateFirmwareManifest({ ...manifest, image: { ...manifest.image, size: MAX_FACTORY_IMAGE_SIZE + 1 } }),
     /maximum safe factory image size/i,
   );
+  const stale = {
+    ...manifest,
+    firmwareVersion: '0.9.9',
+    image: {
+      ...manifest.image,
+      url: manifest.image.url.replace('/1.2.3/', '/0.9.9/'),
+    },
+  };
+  assert.equal(MINIMUM_PRODUCTION_FIRMWARE_VERSION, '1.0.0');
+  assert.throws(() => validateFirmwareManifest(stale), /older than the minimum trusted release/i);
 });
 
 test('verifies a fixed signed manifest before fetching and hashing its image', async () => {
@@ -132,6 +143,39 @@ test('rejects a tampered manifest before requesting any image', async () => {
     /signature/i,
   );
   assert.equal(calls.length, 2, 'unverified manifests must never cause an image request');
+});
+
+test('rejects an older but cryptographically valid signed release before requesting its image', async () => {
+  const base = JSON.parse(await fixture('valid-manifest.json'));
+  const manifest = {
+    ...base,
+    firmwareVersion: '0.9.9',
+    image: { ...base.image, url: base.image.url.replace('/1.2.3/', '/0.9.9/') },
+  };
+  const keys = await webcrypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const signature = new Uint8Array(await webcrypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    keys.privateKey,
+    canonicalFirmwareManifestBytes(manifest),
+  ));
+  const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey));
+  const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${spki.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END PUBLIC KEY-----`;
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(String(url));
+    if (String(url).endsWith('release-manifest.json')) return response(JSON.stringify(manifest));
+    if (String(url).endsWith('release-manifest.sig')) return response(Buffer.from(signature).toString('base64url'));
+    return response(await fixture('test-firmware.bin', null));
+  };
+  await assert.rejects(
+    loadProductionFirmwareRelease(fetchImpl, webcrypto, { publicKeyPem }),
+    /older than the minimum trusted release/i,
+  );
+  assert.equal(calls.length, 2, 'stale signed releases must be rejected before their image is fetched');
 });
 
 test('rejects an image with the wrong size or SHA-256 after signature verification', async () => {
