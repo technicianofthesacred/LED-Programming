@@ -13,6 +13,7 @@ import {
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 import { requestCardReboot } from '../src/lib/cardPushClient.js';
+import { bootstrapCardBridgeFromOpener, verifyCardBridgeIdentity } from '../src/lib/cardBridge.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -26,6 +27,33 @@ const payload = buildLivePreviewControlPayload({
   zone: 'patch-inner',
   syncZones: false,
 });
+
+// A remembered address is only a route hint. Direct mutations must verify the
+// stable card ID at that exact host before issuing POST requests.
+{
+  const calls = [];
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    location: { protocol: 'http:' },
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  globalThis.localStorage = globalThis.window.localStorage;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, json: async () => ({ cardId: 'lw-wrong', firmwareVersion: '1.0.0' }) };
+  };
+  await assert.rejects(
+    pushLiveHardwareToCard({ colorOrder: 'RGB' }, { host: '192.168.18.70', autoDiscover: false }),
+    error => error?.reason === 'wrong-card',
+  );
+  assert.deepEqual(calls.map(call => call.url), ['http://192.168.18.70/api/firmware-info']);
+  delete globalThis.window;
+  delete globalThis.localStorage;
+}
 
 assert.deepEqual(payload, {
   cancelStream: true,
@@ -598,7 +626,9 @@ const bridgeWindow = {
           app: 'LightweaverCardBridge',
           id: message.id,
           ok: true,
-          response: { ok: true, bridged: true, patternId: message.payload?.patternId },
+          response: message.type === 'firmware-info'
+            ? { cardId: 'lw-live-preview', firmwareVersion: '1.0.0' }
+            : { ok: true, bridged: true, patternId: message.payload?.patternId },
         },
       });
     }, 0);
@@ -612,7 +642,9 @@ globalThis.window = {
   },
   opener: bridgeWindow,
   localStorage: {
-    getItem: () => 'lightweaver.local',
+    getItem: key => key === 'lw_card_identity_v1'
+      ? JSON.stringify({ version: 1, id: 'lw-live-preview' })
+      : 'lightweaver.local',
     setItem: () => {},
   },
   addEventListener(type, listener) {
@@ -629,6 +661,9 @@ globalThis.CustomEvent = class CustomEvent {
     this.detail = init.detail;
   }
 };
+bootstrapCardBridgeFromOpener();
+await verifyCardBridgeIdentity('lightweaver.local');
+bridgeMessages.length = 0;
 
 const bridgedPreview = await pushLivePreviewToCard({
   patternId: 'ocean',

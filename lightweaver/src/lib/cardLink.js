@@ -415,6 +415,14 @@ export function reportDirectCardStatus({ connected = false, checking = false, ho
 // from the card page; otherwise, if a bridge was live last session, try one
 // re-ping. Any failure lands in an honest disconnected state whose fix is the
 // one-click connect below.
+export function cardLinkBootstrapFailureReason(error) {
+  const reason = error?.reason;
+  if (reason === 'identity-missing' || reason === 'firmware-too-old' || reason === 'wrong-card') {
+    return reason;
+  }
+  return reason === 'bridge-missing' ? 'bridge-missing' : 'no-answer';
+}
+
 export async function bootstrapCardLink() {
   const link = getSharedCardLink();
   const hasOpenerBridge = bootstrapCardBridgeFromOpener();
@@ -435,7 +443,7 @@ export async function bootstrapCardLink() {
     writeBridgeWasActive(false);
     link.dispatch({
       type: 'bridge-lost',
-      reason: error?.reason === 'bridge-missing' ? 'bridge-missing' : 'no-answer',
+      reason: cardLinkBootstrapFailureReason(error),
     });
   }
   return link.getState();

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   CARD_IDENTITY_STORAGE_KEY,
   compareCardIdentity,
+  adoptExpectedCardIdentity,
+  forgetExpectedCardIdentity,
   normalizeCardIdentity,
   persistCardIdentity,
   readPersistedCardIdentity,
@@ -91,4 +93,19 @@ test('persists only stable nonsecret identity and connection hints under a versi
 test('storage helpers are safe without a browser', () => {
   assert.equal(readPersistedCardIdentity({ storage: null }), null);
   assert.equal(persistCardIdentity({ id: 'lw-a' }, { storage: null }), false);
+});
+
+test('explicit adoption and forgetting re-pairs without silent replacement', () => {
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  assert.equal(adoptExpectedCardIdentity({ id: 'lw-first', name: 'First' }, { storage }), true);
+  assert.equal(readPersistedCardIdentity({ storage }).id, 'lw-first');
+  assert.equal(forgetExpectedCardIdentity({ storage }), true);
+  assert.equal(readPersistedCardIdentity({ storage }), null);
+  assert.equal(adoptExpectedCardIdentity({ id: 'lw-second', name: 'Second' }, { storage }), true);
+  assert.equal(readPersistedCardIdentity({ storage }).id, 'lw-second');
 });

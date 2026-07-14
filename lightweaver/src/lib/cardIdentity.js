@@ -65,10 +65,16 @@ export function compareCardIdentity(expected = {}, actual = {}) {
 
 function defaultStorage() {
   try {
-    return globalThis?.localStorage || null;
+    return globalThis?.window?.localStorage || globalThis?.localStorage || null;
   } catch {
     return null;
   }
+}
+
+function cardIdentityError(reason, message) {
+  const error = new Error(message);
+  error.reason = reason;
+  return error;
 }
 
 export function persistCardIdentity(identity = {}, {
@@ -102,4 +108,73 @@ export function readPersistedCardIdentity({ storage = defaultStorage() } = {}) {
   } catch {
     return null;
   }
+}
+
+export function adoptExpectedCardIdentity(identity = {}, options = {}) {
+  return persistCardIdentity(identity, options);
+}
+
+export function forgetExpectedCardIdentity({ storage = defaultStorage() } = {}) {
+  if (!storage?.removeItem) return false;
+  try {
+    storage.removeItem(CARD_IDENTITY_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function requireExpectedCardIdentity(actual = {}, {
+  expected = null,
+  storage = defaultStorage(),
+} = {}) {
+  const remembered = expected || readPersistedCardIdentity({ storage });
+  if (!remembered?.id) {
+    throw cardIdentityError('identity-missing', 'Pair this Lightweaver card before sending hardware commands.');
+  }
+  const comparison = compareCardIdentity(remembered, actual);
+  if (!comparison.ok) {
+    throw cardIdentityError(
+      comparison.reason,
+      comparison.reason === 'wrong-card'
+        ? 'The card at this address is not the Lightweaver paired with this Studio.'
+        : 'The card did not report a stable identity.',
+    );
+  }
+  return actual;
+}
+
+export async function verifyExpectedCardAtHost(host, {
+  fetchImpl = (...args) => fetch(...args),
+  storage = defaultStorage(),
+  expected = null,
+  timeoutMs = 1500,
+} = {}) {
+  const resolvedHost = normalizeHost(host);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    let lastPayload = null;
+    for (const endpoint of ['firmware-info', 'status']) {
+      const response = await fetchImpl(`http://${resolvedHost}/api/${endpoint}`, { signal: ctrl.signal });
+      if (!response?.ok) continue;
+      lastPayload = await response.json().catch(() => null);
+      const identity = normalizeCardIdentity(lastPayload || {}, resolvedHost);
+      if (identity.id) return requireExpectedCardIdentity(identity, { expected, storage });
+    }
+    throw cardIdentityError(
+      lastPayload ? 'identity-missing' : 'firmware-too-old',
+      'This card firmware cannot provide the stable identity required for hardware commands.',
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function guardDirectCardMutation(host, options = {}) {
+  // Pure Node contract tests inject transports without a browser identity
+  // store. Browser hardware paths always have window/localStorage and enforce.
+  const storage = options.storage ?? defaultStorage();
+  if (!storage && typeof window === 'undefined') return null;
+  return verifyExpectedCardAtHost(host, { ...options, storage });
 }

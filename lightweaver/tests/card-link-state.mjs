@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   CARD_LINK_PING_MISS_LIMIT,
   bootstrapCardLink,
+  cardLinkBootstrapFailureReason,
   cardLinkReasonText,
   cardLinkStatusText,
   createCardLink,
@@ -18,6 +19,11 @@ import {
 } from '../src/lib/cardLiveControl.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+for (const reason of ['identity-missing', 'firmware-too-old', 'wrong-card', 'bridge-missing']) {
+  assert.equal(cardLinkBootstrapFailureReason({ reason }), reason, `bootstrap preserves ${reason}`);
+}
+assert.equal(cardLinkBootstrapFailureReason({ reason: 'bridge-timeout' }), 'no-answer');
 async function waitFor(predicate, timeoutMs = 2000, label = 'condition') {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -370,6 +376,9 @@ listeners.get('lightweaver-card-bridge-changed')?.({
 assert.equal(getCardLinkState().state, 'disconnected');
 assert.equal(getCardLinkState().reason, 'wrong-card');
 assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+
+await bootstrapCardLink();
+assert.equal(getCardLinkState().state, 'connected-bridge', 'bootstrap verifies the real bridge before commands');
 
 const fallbackResponse = await pushLivePreviewToCard(
   { patternId: 'ocean', brightness: 0.8, zone: 'zone-b', syncZones: false },

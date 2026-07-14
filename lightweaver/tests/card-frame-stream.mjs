@@ -446,6 +446,27 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   transport.close();
 }
 
+// A direct stream verifies stable identity before opening its WebSocket.
+{
+  let socketAttempts = 0;
+  class CountingWS { constructor() { socketAttempts += 1; } }
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: CountingWS,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ cardId: 'lw-wrong' }) }),
+  });
+  await assert.rejects(transport.sendFrame(['FF0000']), error => error?.reason === 'wrong-card');
+  assert.equal(socketAttempts, 0, 'wrong-card stream opens no WebSocket');
+  delete globalThis.window;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 //  Studio bridge side: 'frame' rides the privileged postMessage channel and
 //  the reported bridge version gates it.
@@ -465,7 +486,9 @@ const parentBridge = {
           id: message.id,
           type: message.type,
           ok: true,
-          response: { ok: true, relayed: message.type === 'frame' },
+          response: message.type === 'firmware-info'
+            ? { cardId: 'lw-frame-test', firmwareVersion: '1.0.0' }
+            : { ok: true, relayed: message.type === 'frame' },
         },
       });
     }, 0);
@@ -475,7 +498,12 @@ globalThis.window = {
   location: { search: '?cardBridge=1&cardHost=192.168.18.70' },
   opener: null,
   parent: parentBridge,
-  localStorage: { getItem: () => '192.168.18.70', setItem: () => {} },
+  localStorage: {
+    getItem: key => key === 'lw_card_identity_v1'
+      ? JSON.stringify({ version: 1, id: 'lw-frame-test' })
+      : '192.168.18.70',
+    setItem: () => {},
+  },
   addEventListener(type, listener) { listeners.set(type, listener); },
   removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
   dispatchEvent: () => {},
@@ -486,6 +514,7 @@ const {
   cardBridgeFeatureGap,
   getCardBridgeVersion,
   sendCardBridgeRequest,
+  verifyCardBridgeIdentity,
 } = await import('../src/lib/cardBridge.js');
 
 assert.equal(bootstrapCardBridgeFromOpener(), true);
@@ -499,6 +528,14 @@ assert.equal(getCardBridgeVersion(), 0, 'no handshake yet reads as legacy');
   assert.equal(gap.action, 'open-flash', 'the fix is a firmware update via Flash');
   assert.match(gap.message, /firmware/i, 'the gap message talks about firmware');
 }
+
+await assert.rejects(
+  sendCardBridgeRequest('frame', { pixels: ['FF0000'] }, { host: '192.168.18.70', timeoutMs: 200 }),
+  error => error?.reason === 'identity-missing',
+  'transport-ready bridge refuses frames before identity verification',
+);
+await verifyCardBridgeIdentity('192.168.18.70');
+posted.length = 0;
 
 // A frame request relays through the bridge and its versioned reply clears the gap.
 const frameResponse = await sendCardBridgeRequest('frame', { pixels: ['FF8800', '331100'], seg: 1 }, {

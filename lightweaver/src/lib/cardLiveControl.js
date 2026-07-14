@@ -10,6 +10,7 @@ import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { guardDirectCardMutation } from './cardIdentity.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
 import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
 
@@ -266,6 +267,7 @@ export function buildMirroredLedRepairPackage(runtimePackage = {}, options = {})
 }
 
 async function postControlPayloadToHost(host, payload, options = {}) {
+  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify(payload);
   const ctrl = new AbortController();
@@ -288,6 +290,7 @@ async function postControlPayloadToHost(host, payload, options = {}) {
 }
 
 async function postRecoverLightsToHost(host, payload, options = {}) {
+  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 3000 });
   const url = `${cardHostToUrl(host)}/api/recover-lights`;
   const body = JSON.stringify(payload);
   const ctrl = new AbortController();
@@ -310,6 +313,7 @@ async function postRecoverLightsToHost(host, payload, options = {}) {
 }
 
 async function postIdentifyToHost(host, options = {}) {
+  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 1200 });
   const url = `${cardHostToUrl(host)}/api/identify`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 1200);
@@ -398,6 +402,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   if (options.preferBridge || isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
   }
+  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
   let previewLook = look;
   let previewZoneFallback = null;
   if (options.fallbackMissingZoneToAll && look?.zone) {
@@ -584,6 +589,9 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
 
 function normalizePreviewError(host, error) {
   if (error instanceof CardPushError) return error;
+  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host'].includes(error?.reason)) {
+    return new CardPushError(error.reason, error.message, error);
+  }
   if (isMixedContentBlocked()) {
     return new CardPushError(
       'mixed-content',
@@ -686,6 +694,9 @@ export async function identifyCardLights(options = {}) {
 
 export async function recoverCardLights(look = {}, options = {}) {
   const host = options.host || readStoredCardHost();
+  if (!isMixedContentBlocked()) {
+    await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 3000 });
+  }
   const payload = buildRecoverLightsPayload(look);
   const reclaim = options.reclaimFrameStreams || reclaimCardFrameStreams;
   await reclaim(host, {
@@ -779,6 +790,9 @@ export async function pushSectionPreviewToCard(targets, options = {}) {
 
 export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
   const host = options.host || readStoredCardHost();
+  if (!isMixedContentBlocked()) {
+    await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 3000 });
+  }
   try {
     const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 3000, 1400)).catch(() => null);
     const targets = liveTargetsFromZones(zonesPayload, fallbackLook);

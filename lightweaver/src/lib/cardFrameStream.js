@@ -18,6 +18,7 @@
 // ({cancelStream:true}), not a new message type.
 
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { guardDirectCardMutation } from './cardIdentity.js';
 import {
   canPushDirectlyToCard,
   cardHostToUrl,
@@ -87,13 +88,23 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
   let opening = null;
   let backoffMs = 0;
   let retryAt = 0;
+  let identityReady = null;
 
   function noteOpenFailure() {
     backoffMs = backoffMs ? Math.min(DIRECT_BACKOFF_MAX_MS, backoffMs * 2) : DIRECT_BACKOFF_MIN_MS;
     retryAt = nowFn() + backoffMs;
   }
 
-  function openSocket() {
+  async function ensureIdentity() {
+    if (!identityReady) {
+      identityReady = guardDirectCardMutation(resolvedHost, { fetchImpl: doFetch })
+        .catch(error => { identityReady = null; throw error; });
+    }
+    return identityReady;
+  }
+
+  async function openSocket() {
+    await ensureIdentity();
     if (ws && ws.readyState === 1) return Promise.resolve(ws);
     if (opening) return opening;
     if (!WS) return Promise.reject(new Error('WebSocket is not available here.'));
@@ -143,6 +154,7 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
       return { ok: true };
     },
     async sendCancel() {
+      await ensureIdentity();
       const response = await doFetch(`${cardHostToUrl(resolvedHost)}/api/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

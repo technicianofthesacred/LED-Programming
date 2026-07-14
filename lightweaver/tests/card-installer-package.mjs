@@ -46,6 +46,29 @@ assert.equal(decodeCardConfigHandoffPayload(handoffPayload), prepared.json);
 assert.deepEqual(JSON.parse(decodeCardConfigHandoffPayload(handoffPayload)), prepared.config);
 assert.equal(new URLSearchParams(handoffParams).get('reboot'), '1');
 
+{
+  const calls = [];
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-config-expected' })]]);
+  globalThis.window = {
+    location: { protocol: 'http:' },
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, json: async () => ({ cardId: 'lw-config-wrong' }) };
+  };
+  await assert.rejects(
+    pushConfigToCard(pkg, { host: '192.168.18.70', autoDiscover: false }),
+    error => error?.reason === 'wrong-card',
+  );
+  assert.deepEqual(calls.map(call => call.url), ['http://192.168.18.70/api/firmware-info']);
+  delete globalThis.window;
+}
+
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {
   requests.push({ url, options });
@@ -192,7 +215,7 @@ const bridgeWindow = {
           id: message.id,
           ok: true,
           response: message.type === 'firmware-info'
-            ? { ok: true, outputs: bridgeCurrentOutputs }
+            ? { ok: true, cardId: 'lw-installer-test', firmwareVersion: '1.0.0', outputs: bridgeCurrentOutputs }
             : { ok: true, saved: true },
         },
       });
@@ -206,7 +229,9 @@ globalThis.window = {
   },
   opener: bridgeWindow,
   localStorage: {
-    getItem: () => 'lightweaver.local',
+    getItem: key => key === 'lw_card_identity_v1'
+      ? JSON.stringify({ version: 1, id: 'lw-installer-test' })
+      : 'lightweaver.local',
     setItem: () => {},
   },
   addEventListener(type, listener) {
