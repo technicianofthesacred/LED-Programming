@@ -1274,7 +1274,7 @@ bool runtimeSelectPatternById(const String& id) {
       return true;
     }
   }
-  if (id.length() == 0) return false;
+  if (!isSupportedCompiledPattern(id)) return false;
   applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
   return true;
 }
@@ -1284,6 +1284,7 @@ bool runtimeSelectPatternById(const String& id) {
 // a section removed by a newer wiring config cannot leave a partial preview.
 bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId) {
   if (patternId.length() == 0 || runtimeConfig.zoneCount == 0) return false;
+  if (!findLookById(patternId) && !isSupportedCompiledPattern(patternId)) return false;
   if (targetId.length() == 0) return true;
   for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
     if (runtimeConfig.zones[i].id == targetId) return true;
@@ -1293,8 +1294,8 @@ bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternI
 
 // Zone-targeted pattern selection. Used by the per-zone designer flow.
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
+  if (!runtimeCanSelectPatternByIdZ(targetId, patternId)) return false;
   if (targetId.length() == 0) return runtimeSelectPatternById(patternId);
-  if (patternId.length() == 0) return false;
   uint8_t touched = applyToZones(targetId, [&](ZoneConfig& z) { z.patternId = patternId; });
   return touched > 0;
 }
