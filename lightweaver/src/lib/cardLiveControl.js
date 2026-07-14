@@ -126,7 +126,7 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
 
   const expectedId = expectedPreviewCardId(options);
-  const actualId = String(response.cardId || response.card?.id || verifiedCard?.id || '').trim();
+  const actualId = String(response.cardId || response.card?.id || '').trim();
   if (expectedId) {
     const comparison = compareCardIdentity({ id: expectedId }, { id: actualId });
     if (!comparison.ok) {

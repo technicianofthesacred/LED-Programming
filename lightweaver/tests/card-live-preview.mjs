@@ -5,6 +5,7 @@ import {
   buildLivePreviewControlPayload,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
+  requireLivePreviewAcknowledgement,
   recoverCardLights,
   repairMirroredLedOutputOnCard,
   resetLiveOutputOnCard,
@@ -27,6 +28,27 @@ const payload = buildLivePreviewControlPayload({
   zone: 'patch-inner',
   syncZones: false,
 });
+
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true, patternId: 'ocean' },
+    { patternId: 'ocean' },
+    { expectedCardId: 'lw-expected' },
+    { id: 'lw-expected' },
+  ),
+  error => error?.reason === 'identity-missing',
+  'a matching preflight identity must not substitute for a missing mutation acknowledgement identity',
+);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true },
+    { patternId: 'ocean' },
+    { expectedCardId: 'lw-expected', previewAcknowledgementCapability: 'legacy-ok-only' },
+    { id: 'lw-expected' },
+  ),
+  error => error?.reason === 'identity-missing',
+  'legacy acknowledgement mode must not silently waive mutation-response identity proof',
+);
 
 // A remembered address is only a route hint. Direct mutations must verify the
 // stable card ID at that exact host before issuing POST requests.
@@ -851,7 +873,7 @@ const bridgeWindow = {
           ok: true,
           response: message.type === 'firmware-info'
             ? { cardId: 'lw-live-preview', firmwareVersion: '1.0.0' }
-            : { ok: true, bridged: true, patternId: message.payload?.patternId, padding: bridgeControlPadding },
+            : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
     }, 0);
