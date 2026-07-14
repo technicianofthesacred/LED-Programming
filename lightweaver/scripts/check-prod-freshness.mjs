@@ -1,11 +1,9 @@
 // Deploy-time check: does LIVE production serve the firmware this repo built?
 //
-// Production (led.mandalacodes.com) is a MANUAL wrangler deploy of the
-// mandalacodes bundle (a different repo) — LED-repo pushes only reach the
-// studio preview branch. So the committed factory binary can be perfectly
-// fresh against firmware source (factory-bin-freshness.mjs guards that) while
-// the live site still flashes an OLD binary. This script closes that gap by
-// hashing what production actually serves.
+// Production (led.mandalacodes.com) is the root artifact deployed by this
+// repository. The committed factory binary can still be fresh against firmware
+// source while a failed or stale Pages deploy serves an older image. This
+// script closes that gap by hashing what production actually serves.
 //
 // Run manually or after a production publish:
 //   npm run check:prod          (from lightweaver/)
@@ -27,9 +25,12 @@ import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js'
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
-// Production serves the Studio embedded at /design/, so the bin lives there.
+const studioUrl = process.env.PROD_STUDIO_URL
+  || 'https://led.mandalacodes.com/';
+const legacyDesignUrl = process.env.PROD_LEGACY_DESIGN_URL
+  || 'https://led.mandalacodes.com/design';
 const url = process.env.PROD_FIRMWARE_URL
-  || 'https://led.mandalacodes.com/design/firmware/lightweaver-controller-esp32s3-factory.bin';
+  || 'https://led.mandalacodes.com/firmware/lightweaver-controller-esp32s3-factory.bin';
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -49,6 +50,43 @@ try {
   );
 }
 const localHash = sha256(local);
+
+let studioResponse;
+try {
+  studioResponse = await fetch(studioUrl, {
+    cache: 'no-store',
+    redirect: 'follow',
+    signal: AbortSignal.timeout(20_000),
+  });
+} catch (err) {
+  console.log(`check-prod-freshness SKIPPED (could not reach ${studioUrl}: ${err?.cause?.code ?? err?.name ?? err?.message ?? err})`);
+  process.exit(0);
+}
+
+if (!studioResponse.ok) {
+  fail(`Production Studio root answered HTTP ${studioResponse.status} at\n  ${studioUrl}`);
+}
+const studioHtml = await studioResponse.text();
+if (!/id=["']root["']/.test(studioHtml)) {
+  fail(`Production root does not contain the Lightweaver Studio shell at\n  ${studioUrl}`);
+}
+
+let legacyResponse;
+try {
+  legacyResponse = await fetch(legacyDesignUrl, {
+    cache: 'no-store',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(20_000),
+  });
+} catch (err) {
+  fail(`Production root is reachable, but the removed route could not be checked at\n  ${legacyDesignUrl}\n  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`);
+}
+if (legacyResponse.ok || (legacyResponse.status >= 300 && legacyResponse.status < 400)) {
+  fail(
+    `Legacy Studio route is still live (HTTP ${legacyResponse.status}) at\n  ${legacyDesignUrl}\n` +
+      'The production artifact must contain a top-level 404.html and no wildcard Studio rewrite.',
+  );
+}
 
 let response;
 try {
@@ -91,7 +129,7 @@ if (remoteHash !== localHash) {
       `  live  ${url}\n        sha256 ${remoteHash}  (${remote.length} bytes)\n` +
       `  repo  ${localBinPath}\n        sha256 ${localHash}  (${local.length} bytes)\n` +
       'Cards flashed from the website get different firmware than this checkout expects.\n' +
-      'Fix: rebuild + manually publish the mandalacodes bundle (see docs/led-mandalacodes-setup.md, "Deploy").',
+      'Fix: rebuild and deploy this repository\'s root Pages artifact (see docs/led-mandalacodes-setup.md, "Deploy").',
   );
 }
 

@@ -1,7 +1,7 @@
 # Lightweaver card — flash & run (worker runbook)
 
 A code-free checklist for getting a Lightweaver card running by flashing it from
-**led.mandalacodes.com**. No programming needed. If a step doesn't match what you
+**led.mandalacodes.com** (Studio opens directly at the root). No programming needed. If a step doesn't match what you
 see, **stop and report exactly what's on screen** — don't guess.
 
 > **Before the worker starts (owner check):** make sure the website is serving the

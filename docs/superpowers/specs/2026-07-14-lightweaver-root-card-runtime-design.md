@@ -28,7 +28,7 @@ The hosted Studio is HTTPS while the card is a private-network HTTP origin. Brow
 ### 1. Root-domain Studio
 
 - Build the production Studio with base `/` and stage the Vite output at the Pages artifact root.
-- Route `/*` to the root `index.html` so hash-based Studio screens work at the canonical domain.
+- Keep Studio navigation hash-based at `/`, add a top-level `404.html`, and do not add a wildcard SPA rewrite. This makes the removed `/design` path return a real not-found response on Cloudflare Pages.
 - Remove `/design`, `/design/`, and `/design/*` deployment routes. They are not a supported compatibility surface.
 - Serve the visitor page and factory firmware from root-relative paths.
 - Update deployment tests, production-freshness checks, runbooks, firmware links, fallback links, and workflow comments so `/` is the only source of truth.

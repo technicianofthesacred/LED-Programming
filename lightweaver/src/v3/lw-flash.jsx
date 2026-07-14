@@ -25,9 +25,8 @@ import {
     { n: 3, label: "Release BOOT", sub: "then click Connect", kbd: "BOOT ↑" },
   ];
 
-  // Base-relative so the same code works at the standalone Studio root ('/')
-  // AND embedded in the mandalacodes bundle at led.mandalacodes.com/design/
-  // ('/design/'). A hardcoded '/firmware/...' 404s to the SPA fallback there.
+  // Base-relative so local previews and the canonical root deployment resolve
+  // the firmware from the same Vite base.
   const LIGHTWEAVER_FIRMWARE_URL = `${import.meta.env.BASE_URL}firmware/lightweaver-controller-esp32s3-factory.bin`;
   const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 

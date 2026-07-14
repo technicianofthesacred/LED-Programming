@@ -2,8 +2,8 @@
 // card. Mirrors the firmware's /api/config POST endpoint.
 //
 // Hostname resolution: the designer remembers the most recently used card.
-// Mixed-content is a real concern when the designer runs on HTTPS (it does,
-// at led.mandalacodes.com/design) - fetches to plain HTTP local hosts will
+// Mixed-content is a real concern when the designer runs on HTTPS (it does at
+// led.mandalacodes.com) - fetches to plain HTTP local hosts will
 // be blocked by the browser. The client surfaces that as a typed error the
 // UI handles by showing a copy-paste fallback.
 

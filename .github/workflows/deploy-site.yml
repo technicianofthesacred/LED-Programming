@@ -5,8 +5,8 @@ name: Deploy site
 # Deploy ownership (updated 2026-07-13, see docs/led-mandalacodes-setup.md):
 # led.mandalacodes.com is the custom domain on the `lightweaver` Cloudflare
 # Pages project, whose production branch is `main`. `npm run deploy:pages`
-# stages this repo's Studio (Show screen included) with `/` → `/design/` and
-# deploys it to `--branch main`, i.e. the live domain. So a push to this repo's
+# stages this repo's Studio (Show screen included) directly at `/` and deploys
+# it to `--branch main`, i.e. the live domain. So a push to this repo's
 # main IS the live deploy — there is no separate mandalacodes step for the LED
 # surface. (mandalacodes.com itself stays a different project; it must NOT also
 # publish to `lightweaver`, or the two would overwrite each other.)

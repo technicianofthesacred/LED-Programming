@@ -276,6 +276,7 @@ git commit -m "fix: connect local card from the first pattern click"
 **Files:**
 - Modify: `lightweaver/package.json`
 - Modify: `lightweaver/public/_redirects`
+- Create: `lightweaver/public/404.html`
 - Modify: `lightweaver/index.html`
 - Modify: `lightweaver/scripts/check-prod-freshness.mjs`
 - Create: `lightweaver/tests/pages-staging.mjs`
@@ -295,7 +296,8 @@ assert.match(pkg.scripts['stage:pages'], /cp -R dist\/. \.pages\/lightweaver\//)
 assert.doesNotMatch(pkg.scripts['stage:pages'], /lightweaver\/design/);
 assert.doesNotMatch(redirects, /^\/design/m);
 assert.match(redirects, /^\/visitor \/src\/visitor\/visitor\.html 200$/m);
-assert.match(redirects, /^\/\* \/index\.html 200$/m);
+assert.doesNotMatch(redirects, /^\/\*/m);
+assert.ok(existsSync(resolve(root, 'public/404.html')));
 ```
 
 Add source scans proving current generated links, freshness URLs, and workflow comments do not claim `/design` is canonical.
@@ -315,15 +317,14 @@ Use root base and root artifact:
 "deploy:pages": "npm run build && npm run stage:pages && npx --yes wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main"
 ```
 
-Make `public/_redirects` contain only root paths:
+Make `public/_redirects` contain only the explicit visitor paths:
 
 ```text
 /visitor /src/visitor/visitor.html 200
 /visitor/ /src/visitor/visitor.html 200
-/* /index.html 200
 ```
 
-Update the live fallback URL, firmware freshness URL to `/firmware/...`, and deployment documentation/comments. Do not add a `/design` redirect or second artifact copy.
+Add a top-level `public/404.html`; Cloudflare Pages uses it to disable implicit SPA fallback, so `/design` is genuinely not an app route. Update the live fallback URL, firmware freshness URL to `/firmware/...`, production root/legacy-route checks, and deployment documentation/comments. Do not add a `/design` redirect or second artifact copy.
 
 - [ ] **Step 4: Build, stage, and inspect the artifact**
 
@@ -336,12 +337,13 @@ node tests/pages-staging.mjs
 npm run build
 npm run stage:pages
 test -f .pages/lightweaver/index.html
+test -f .pages/lightweaver/404.html
 test -f .pages/lightweaver/firmware/lightweaver-controller-esp32s3-factory.bin
 test ! -e .pages/lightweaver/design
 rg -n '/design/' .pages/lightweaver/index.html .pages/lightweaver/_redirects && exit 1 || true
 ```
 
-Expected: tests and build pass; root files exist; no staged `design` directory or generated `/design/` reference exists.
+Expected: tests and build pass; root files and the top-level 404 exist; no staged `design` directory, wildcard SPA fallback, or generated `/design/` reference exists.
 
 - [ ] **Step 5: Commit Task 4**
 

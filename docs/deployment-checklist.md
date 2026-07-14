@@ -8,12 +8,12 @@ Bench-to-gallery checklist for taking a Lightweaver installation from a working 
 
 ## How production actually ships
 
-Pushing to this repo does **not** update `led.mandalacodes.com`. The real path:
+This repo owns `led.mandalacodes.com`:
 
-- **Push to this repo (main)** → CI runs tests (`Tests` workflow + the `test` job in `Deploy site`) and, when the Cloudflare secrets are set, publishes the Studio bundle to the **`studio` preview branch only** (`https://studio.lightweaver-edw.pages.dev`). It never touches production.
-- **Production (`led.mandalacodes.com`)** = a **manual** rebuild + wrangler deploy of the **mandalacodes repo's bundle** (which embeds this repo's Studio dist and the factory firmware binary). Exact commands: `docs/led-mandalacodes-setup.md`, "Deploy".
-- **Firmware on the live site** only updates with that manual publish — a fresh binary committed here sits in preview until the mandalacodes bundle is republished.
-- **Cards already in the field** only update by **USB reflash** (there is no OTA). Reflash from the Flash screen at `led.mandalacodes.com/design/` or the studio preview.
+- **Push to this repo (`main`)** → CI runs the launch gate and, when the Cloudflare secrets are set, deploys this repo's root Studio artifact to the production branch of the `lightweaver` Pages project.
+- **Production (`led.mandalacodes.com/`)** opens Studio directly. There is no second mount or parent-site build step.
+- **Firmware on the live site** comes from `lightweaver/public/firmware/` in the same deployment.
+- **Cards already in the field** only update by **USB reflash** (there is no OTA). Reflash from the Flash screen at `led.mandalacodes.com/` or a verified preview deployment.
 
 After any production publish, verify the live site serves the firmware this repo built:
 
