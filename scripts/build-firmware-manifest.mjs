@@ -46,6 +46,8 @@ const minimumInstallerVersion = required(
   'minimum-installer',
   process.env.LW_MINIMUM_INSTALLER_VERSION ?? FIRMWARE_INSTALLER_VERSION,
 );
+const sourceRevision = required(args, 'source-revision', process.env.GITHUB_SHA ?? buildId);
+if (sourceRevision !== buildId) throw new Error('source revision must exactly match build ID');
 
 const imageBytes = await readFile(imagePath);
 const imageName = 'lightweaver-controller-esp32s3-factory.bin';
@@ -64,6 +66,17 @@ const manifest = {
   },
   configSchema: { min: configMin, max: configMax },
   minimumInstallerVersion,
+  provenance: {
+    sourceRevision,
+    platformio: '6.1.19',
+    platform: 'espressif32@7.0.1',
+    framework: 'framework-arduinoespressif32@3.20017.241212+sha.dcc1105b',
+    libraries: {
+      FastLED: '3.10.3',
+      ArduinoJson: '7.4.3',
+      WebSockets: '2.7.3',
+    },
+  },
 };
 
 validateFirmwareManifest(manifest, { installerVersion: FIRMWARE_INSTALLER_VERSION });
@@ -88,12 +101,13 @@ await writeFile(manifestPath, Buffer.concat([
 ]));
 await writeFile(provenancePath, `${JSON.stringify({
   schemaVersion: 1,
-  sourceRevision: process.env.GITHUB_SHA ?? buildId,
+  sourceRevision,
   workflowRun: process.env.GITHUB_RUN_ID ?? null,
   target: EXPECTED_FIRMWARE_TARGET,
   firmwareVersion,
   buildId,
   image: manifest.image,
+  toolchain: manifest.provenance,
 }, null, 2)}\n`);
 
 console.log(JSON.stringify({ manifestPath, immutableImagePath, provenancePath }));

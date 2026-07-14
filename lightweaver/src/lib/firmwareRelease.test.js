@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 
 import {
   EXPECTED_FIRMWARE_TARGET,
+  MAX_FACTORY_IMAGE_SIZE,
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
   canonicalFirmwareManifestBytes,
   loadProductionFirmwareRelease,
@@ -17,19 +18,37 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const fixtureRoot = resolve(repoRoot, 'release/test-vectors');
+const TEST_BUILD_ID = '0123456789abcdef0123456789abcdef01234567';
 
 async function fixture(name, encoding = 'utf8') {
   return readFile(resolve(fixtureRoot, name), encoding);
 }
 
-function response(body, ok = true) {
+function response(body, ok = true, { contentLength, chunks } = {}) {
+  const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body);
+  let index = 0;
+  const streamChunks = chunks ?? [bytes];
   return {
     ok,
     status: ok ? 200 : 404,
     async text() { return typeof body === 'string' ? body : Buffer.from(body).toString('utf8'); },
-    async arrayBuffer() {
-      const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body);
-      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    headers: {
+      get(name) {
+        if (String(name).toLowerCase() !== 'content-length') return null;
+        return contentLength == null ? null : String(contentLength);
+      },
+    },
+    body: {
+      getReader() {
+        return {
+          async read() {
+            if (index >= streamChunks.length) return { done: true, value: undefined };
+            return { done: false, value: new Uint8Array(streamChunks[index++]) };
+          },
+          async cancel() {},
+          releaseLock() {},
+        };
+      },
     },
   };
 }
@@ -59,6 +78,7 @@ test('canonical manifest bytes are stable across object key order', async () => 
     firmwareVersion: manifest.firmwareVersion,
     schemaVersion: manifest.schemaVersion,
     configSchema: { max: manifest.configSchema.max, min: manifest.configSchema.min },
+    provenance: manifest.provenance,
   };
   assert.deepEqual(canonicalFirmwareManifestBytes(reordered), canonicalFirmwareManifestBytes(manifest));
 });
@@ -77,6 +97,10 @@ test('validates the exact supported target, immutable URL, and installer floor',
   assert.throws(
     () => validateFirmwareManifest(manifest, { installerVersion: '1.3.9' }),
     /installer/i,
+  );
+  assert.throws(
+    () => validateFirmwareManifest({ ...manifest, image: { ...manifest.image, size: MAX_FACTORY_IMAGE_SIZE + 1 } }),
+    /maximum safe factory image size/i,
   );
 });
 
@@ -127,6 +151,42 @@ test('rejects an image with the wrong size or SHA-256 after signature verificati
   );
 });
 
+test('uses Content-Length and bounded streaming instead of unbounded response buffering', async () => {
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const manifest = await fixture('valid-manifest.json');
+  const signature = await fixture('valid-manifest.sig');
+  const image = await fixture('test-firmware.bin', null);
+  const oversizedFetch = async (url) => {
+    if (String(url).endsWith('release-manifest.json')) return response(manifest);
+    if (String(url).endsWith('release-manifest.sig')) return response(signature);
+    return response(image, true, { contentLength: MAX_FACTORY_IMAGE_SIZE + 1 });
+  };
+  await assert.rejects(
+    loadProductionFirmwareRelease(oversizedFetch, webcrypto, { publicKeyPem }),
+    /maximum safe factory image size/i,
+  );
+
+  let cancelled = false;
+  const extraChunk = Buffer.alloc(MAX_FACTORY_IMAGE_SIZE + 1, 0);
+  const streamingFetch = async (url) => {
+    if (String(url).endsWith('release-manifest.json')) return response(manifest);
+    if (String(url).endsWith('release-manifest.sig')) return response(signature);
+    const streamed = response(image, true, { chunks: [extraChunk, Buffer.from('overflow')] });
+    const original = streamed.body.getReader;
+    streamed.body.getReader = () => {
+      const reader = original();
+      reader.cancel = async () => { cancelled = true; };
+      return reader;
+    };
+    return streamed;
+  };
+  await assert.rejects(
+    loadProductionFirmwareRelease(streamingFetch, webcrypto, { publicKeyPem }),
+    /maximum safe factory image size/i,
+  );
+  assert.equal(cancelled, true, 'oversized streams must be cancelled immediately');
+});
+
 test('fails closed when manifest, signature, or WebCrypto support is unavailable', async () => {
   const publicKeyPem = await fixture('test-only-release-public.pem');
   await assert.rejects(
@@ -156,7 +216,8 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--image', imagePath,
     '--public-root', publicRoot,
     '--firmware-version', '1.2.3',
-    '--build-id', 'test-build',
+    '--build-id', TEST_BUILD_ID,
+    '--source-revision', TEST_BUILD_ID,
     '--config-min', '1',
     '--config-max', '2',
     '--minimum-installer', '1.4.0',
@@ -168,7 +229,7 @@ test('manifest builder creates a versioned immutable image and canonical manifes
   const manifest = JSON.parse(manifestText);
   assert.equal(
     manifest.image.url,
-    '/firmware/releases/1.2.3/test-build/lightweaver-controller-esp32s3-factory.bin',
+    `/firmware/releases/1.2.3/${TEST_BUILD_ID}/lightweaver-controller-esp32s3-factory.bin`,
   );
   assert.equal(manifestText, `${new TextDecoder().decode(canonicalFirmwareManifestBytes(manifest))}\n`);
   assert.deepEqual(
@@ -182,7 +243,8 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--image', imagePath,
     '--public-root', publicRoot,
     '--firmware-version', '1.2.3',
-    '--build-id', 'test-build',
+    '--build-id', TEST_BUILD_ID,
+    '--source-revision', TEST_BUILD_ID,
     '--config-min', '1',
     '--config-max', '2',
     '--minimum-installer', '1.4.0',
@@ -243,6 +305,7 @@ test('committed production release is signed and content-addressed by the pinned
 
 test('firmware workflow builds, signs, commits, and uploads one release set', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/build-firmware.yml'), 'utf8');
+  const deployWorkflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
   assert.match(workflow, /scripts\/build-firmware-manifest\.mjs/);
   assert.match(workflow, /scripts\/sign-release-artifacts\.mjs/);
   assert.match(workflow, /secrets\.LIGHTWEAVER_RELEASE_SIGNING_KEY/);
@@ -250,4 +313,28 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.match(workflow, /release-manifest\.sig/);
   assert.match(workflow, /release-provenance\.json/);
   assert.match(workflow, /firmware\/releases/);
+  assert.doesNotMatch(workflow, /workflow_dispatch/);
+  assert.match(workflow, /environment:\s*firmware-release/);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /gh workflow run deploy-site\.yml --ref main/);
+  assert.doesNotMatch(workflow, /uses:\s*actions\/[^@]+@v\d/);
+  assert.match(workflow, /platformio==6\.1\.19/);
+  assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.sha \}\}/);
+  assert.match(deployWorkflow, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.doesNotMatch(deployWorkflow, /uses:\s*actions\/[^@]+@v\d/);
+});
+
+test('firmware dependencies are exactly pinned and provenance is signature-bound', async () => {
+  const platformio = await readFile(resolve(repoRoot, 'firmware/lightweaver-controller/platformio.ini'), 'utf8');
+  assert.match(platformio, /^platform = espressif32@7\.0\.1$/m);
+  assert.match(platformio, /fastled\/FastLED@3\.10\.3/);
+  assert.match(platformio, /bblanchon\/ArduinoJson@7\.4\.3/);
+  assert.match(platformio, /links2004\/WebSockets@2\.7\.3/);
+  assert.doesNotMatch(platformio, /@\^/);
+  assert.match(platformio, /extra_scripts = pre:scripts\/inject-build-identity\.py/);
+
+  const manifest = JSON.parse(await fixture('valid-manifest.json'));
+  assert.equal(manifest.provenance.platformio, '6.1.19');
+  assert.equal(manifest.provenance.platform, 'espressif32@7.0.1');
+  assert.match(manifest.provenance.sourceRevision, /^[a-f0-9]{40}$/);
 });

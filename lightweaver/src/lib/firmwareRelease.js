@@ -1,5 +1,8 @@
 export const EXPECTED_FIRMWARE_TARGET = 'esp32-s3-n16r8';
 export const FIRMWARE_INSTALLER_VERSION = '1.4.0';
+// default_16MB.csv starts ota_1 at 0x650000. A merged factory image must end
+// before that boundary or flashing it could overwrite the rollback slot.
+export const MAX_FACTORY_IMAGE_SIZE = 0x650000;
 export const PRODUCTION_MANIFEST_URL = '/firmware/release-manifest.json';
 export const PRODUCTION_SIGNATURE_URL = '/firmware/release-manifest.sig';
 
@@ -17,6 +20,7 @@ const MANIFEST_KEYS = [
   'firmwareVersion',
   'image',
   'minimumInstallerVersion',
+  'provenance',
   'schemaVersion',
   'target',
 ];
@@ -74,8 +78,8 @@ export function validateFirmwareManifest(
   if (manifest.schemaVersion !== 1) throw new Error('Unsupported firmware manifest schema');
   if (manifest.target !== EXPECTED_FIRMWARE_TARGET) throw new Error('Firmware target is not ESP32-S3 16MB');
   parseSemver(manifest.firmwareVersion, 'firmwareVersion');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(manifest.buildId)) {
-    throw new Error('buildId is invalid');
+  if (!/^[a-f0-9]{40}$/.test(manifest.buildId)) {
+    throw new Error('buildId must be the immutable source revision');
   }
   parseSemver(manifest.minimumInstallerVersion, 'minimumInstallerVersion');
   const currentInstaller = parseSemver(installerVersion, 'installerVersion');
@@ -85,6 +89,9 @@ export function validateFirmwareManifest(
   }
 
   if (!isPositiveSafeInteger(manifest.image.size)) throw new Error('Firmware image size is invalid');
+  if (manifest.image.size > MAX_FACTORY_IMAGE_SIZE) {
+    throw new Error(`Firmware exceeds the maximum safe factory image size (${MAX_FACTORY_IMAGE_SIZE} bytes)`);
+  }
   if (!/^[a-f0-9]{64}$/.test(manifest.image.sha256)) throw new Error('Firmware image SHA-256 is invalid');
   const version = manifest.firmwareVersion.replaceAll('.', '\\.');
   const build = manifest.buildId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -98,6 +105,25 @@ export function validateFirmwareManifest(
   const { min, max } = manifest.configSchema;
   if (!isPositiveSafeInteger(min) || !isPositiveSafeInteger(max) || min > max) {
     throw new Error('Config schema range is invalid');
+  }
+  assertExactKeys(
+    manifest.provenance,
+    ['framework', 'libraries', 'platform', 'platformio', 'sourceRevision'],
+    'firmware provenance',
+  );
+  assertExactKeys(manifest.provenance.libraries, ['ArduinoJson', 'FastLED', 'WebSockets'], 'firmware libraries');
+  if (manifest.provenance.sourceRevision !== manifest.buildId) {
+    throw new Error('Firmware provenance source revision must equal buildId');
+  }
+  for (const [label, value] of Object.entries({
+    platformio: manifest.provenance.platformio,
+    platform: manifest.provenance.platform,
+    framework: manifest.provenance.framework,
+    ...manifest.provenance.libraries,
+  })) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9.+@_-]{1,96}$/.test(value)) {
+      throw new Error(`Firmware provenance ${label} is invalid`);
+    }
   }
   return manifest;
 }
@@ -125,6 +151,55 @@ async function fetchRequired(fetchImpl, url, label) {
   const response = await fetchImpl(url, { cache: 'no-store', credentials: 'omit' });
   if (!response?.ok) throw new Error(`Unable to load firmware ${label}`);
   return response;
+}
+
+async function readBoundedFirmwareImage(response, expectedSize) {
+  const lengthHeader = response.headers?.get?.('content-length');
+  if (lengthHeader != null) {
+    const declaredSize = Number(lengthHeader);
+    if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+      throw new Error('Firmware image Content-Length is invalid');
+    }
+    if (declaredSize > MAX_FACTORY_IMAGE_SIZE) {
+      throw new Error(`Firmware exceeds the maximum safe factory image size (${MAX_FACTORY_IMAGE_SIZE} bytes)`);
+    }
+    if (declaredSize !== expectedSize) {
+      throw new Error(`Firmware image size mismatch: expected ${expectedSize}, received ${declaredSize}`);
+    }
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error('Firmware image cannot be read as a bounded stream');
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > MAX_FACTORY_IMAGE_SIZE) {
+        await reader.cancel();
+        throw new Error(`Firmware exceeds the maximum safe factory image size (${MAX_FACTORY_IMAGE_SIZE} bytes)`);
+      }
+      if (total > expectedSize) {
+        await reader.cancel();
+        throw new Error(`Firmware image size mismatch: expected ${expectedSize}, received more data`);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  if (total !== expectedSize) {
+    throw new Error(`Firmware image size mismatch: expected ${expectedSize}, received ${total}`);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 export async function loadProductionFirmwareRelease(
@@ -172,10 +247,7 @@ export async function loadProductionFirmwareRelease(
 
   validateFirmwareManifest(manifest, { installerVersion });
   const imageResponse = await fetchRequired(fetchImpl, manifest.image.url, 'image');
-  const bytes = new Uint8Array(await imageResponse.arrayBuffer());
-  if (bytes.byteLength !== manifest.image.size) {
-    throw new Error(`Firmware image size mismatch: expected ${manifest.image.size}, received ${bytes.byteLength}`);
-  }
+  const bytes = await readBoundedFirmwareImage(imageResponse, manifest.image.size);
   const digest = new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes));
   const sha256 = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
   if (sha256 !== manifest.image.sha256) throw new Error('Firmware image SHA-256 mismatch');
