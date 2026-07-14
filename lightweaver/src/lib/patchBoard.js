@@ -1,4 +1,6 @@
 const DEFAULT_CHAIN_ID = 'main';
+export const DEFAULT_DATA_WIRE_COUNT = 1;
+const MAX_DATA_WIRE_COUNT = 4;
 
 export const DEFAULT_PLAYBACK = Object.freeze({
   patternId: null,
@@ -58,6 +60,8 @@ export function createDefaultPatchBoard(strips = []) {
 
   return {
     physicalLocked: false,
+    dataWireCount: DEFAULT_DATA_WIRE_COUNT,
+    dataWireCountNeedsReview: false,
     chains: [{
       id: DEFAULT_CHAIN_ID,
       name: 'Main physical strip',
@@ -117,6 +121,13 @@ export function normalizePatchBoard(board, strips = []) {
   }
 
   const copy = clone(board);
+  const rawDataWireCount = Number(copy.dataWireCount);
+  const hasExplicitDataWireCount = Number.isInteger(rawDataWireCount) &&
+    rawDataWireCount >= 1 && rawDataWireCount <= MAX_DATA_WIRE_COUNT;
+  copy.dataWireCount = hasExplicitDataWireCount
+    ? rawDataWireCount
+    : DEFAULT_DATA_WIRE_COUNT;
+  copy.dataWireCountNeedsReview = copy.dataWireCountNeedsReview === true || !hasExplicitDataWireCount;
   copy.physicalLocked = copy.physicalLocked === true;
   copy.groups = Array.isArray(copy.groups) ? copy.groups : [];
   copy.patches = Array.isArray(copy.patches) ? copy.patches : [];

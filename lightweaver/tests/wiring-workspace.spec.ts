@@ -7,6 +7,7 @@ async function gotoWire(page: any) {
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => { await document.fonts?.ready; });
 }
 
 async function openAdvanced(page: any) {
@@ -72,11 +73,38 @@ test('Wire is a compiler-derived physical output patch board', async ({ page }) 
   await expect(page.getByRole('heading', { name: 'Output A' })).toBeVisible();
   await expect(page.getByTestId('wiring-run-row')).toHaveCount(2);
   await expect(page.locator('.lw-wiring-run-index')).toHaveCount(0);
-  await expect(page.getByLabel('Output A GPIO')).toHaveValue('16');
+  await expect(page.getByText('How many LED data wires leave the card?')).toBeVisible();
+  await expect(page.getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('GPIO 16', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Output A GPIO')).toHaveCount(0);
   await expect(page.getByText('Compiler preflight')).toHaveCount(0);
   await expect(page.getByText('Physical check required')).toBeVisible();
   await expect(page.getByText('Edit LED range')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toHaveCount(0);
+});
+
+test('closing wire discovery stops the persistent card test before hiding it', async ({ page }) => {
+  const discoveryBodies: any[] = [];
+  await page.route('**/api/wiring/discover', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    discoveryBodies.push(body);
+    await route.fulfill({ json: body.stop
+      ? { ok: true, state: 'known-good', assignments: [], requiresReboot: true }
+      : { ok: true, state: 'rebooting-for-discovery', batch: 0, assignments: [{ pin: 16, color: '#ff0000', label: 'Red' }] } });
+  });
+  await gotoWire(page);
+
+  await page.getByRole('button', { name: 'Find my LED wire' }).click();
+  await expect(page.getByRole('region', { name: 'Find my LED wire' }).getByRole('button', { name: /Red/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Close wire finder' }).click();
+
+  await expect.poll(() => discoveryBodies.some(body => body.stop === true)).toBe(true);
+  await expect(page.getByRole('region', { name: 'Find my LED wire' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Find my LED wire' }).click();
+  await expect.poll(() => discoveryBodies.filter(body => body.stop !== true).length).toBe(2);
+  await page.evaluate(() => { window.location.hash = '#screen=patterns'; });
+  await expect.poll(() => discoveryBodies.filter(body => body.stop === true).length).toBe(2);
 });
 
 test('optional Auto Wire follows the physical check and precedes installation', async ({ page }) => {
@@ -86,6 +114,8 @@ test('optional Auto Wire follows the physical check and precedes installation', 
   const install = page.locator('.lw-wire-finish');
 
   await expect(autoWire).toContainText('Optional');
+  await expect(autoWire).toContainText('Uses your 1 data wire');
+  await expect(autoWire.getByRole('combobox', { name: 'Auto Wire output count' })).toHaveCount(0);
   await expect(autoWire.getByText('Preview only. Applying this route resets the physical check.', { exact: true })).toHaveCount(1);
   await expect(autoWire.getByRole('button', { name: 'Place card' })).toBeVisible();
   await expect(autoWire.getByRole('button', { name: 'Preview route' })).toHaveCount(0);
@@ -139,14 +169,14 @@ test('LED color order check lives beside the physical check and sends real card 
 
 test('output GPIO and board controls reject conflicts while Expert mapping stays behind Advanced', async ({ page }) => {
   await gotoWire(page);
-  await page.getByRole('button', { name: 'Add output' }).click();
+  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
+  await page.getByRole('button', { name: 'Advanced wiring settings' }).click();
   const gpioA = page.getByLabel('Output A GPIO');
   const gpioB = page.getByLabel('Output B GPIO');
   await expect(gpioB).toHaveValue('17');
   await expect(gpioB.locator('option[value="16"]')).toBeDisabled();
   await gpioA.selectOption('38');
   await expect(gpioA).toHaveValue('38');
-  await page.getByRole('button', { name: 'Advanced wiring settings' }).click();
   await expect(page.getByText('Board pins')).toBeVisible();
   await expect(page.getByText('Expert mapping')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeVisible();
@@ -158,7 +188,8 @@ test('output GPIO and board controls reject conflicts while Expert mapping stays
 
 test('entire output lanes drag with their GPIO, support keyboard reorder, and only empty lanes remove', async ({ page }) => {
   await gotoWire(page);
-  await page.getByRole('button', { name: 'Add output' }).click();
+  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
+  await page.getByRole('button', { name: 'Advanced wiring settings' }).click();
   const lanes = page.getByTestId('wiring-output-lane');
   await expect(lanes.nth(0).getByRole('button', { name: /Remove Output/ })).toBeDisabled();
   const handle = lanes.nth(0).getByRole('button', { name: 'Drag Output A' });
@@ -176,8 +207,41 @@ test('entire output lanes drag with their GPIO, support keyboard reorder, and on
   await lanes.nth(1).getByRole('button', { name: 'Drag Output B' }).focus();
   await page.keyboard.press('Alt+ArrowUp');
   await expect(lanes.nth(0)).toHaveAttribute('data-output-id', 'out1');
-  await lanes.nth(1).getByRole('button', { name: /Remove Output/ }).click();
+  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '1', exact: true }).click();
   await expect(lanes).toHaveCount(1);
+});
+
+test('changing logical sections never changes the explicit physical data-wire count', async ({ page }) => {
+  await gotoWire(page);
+  const outputs = page.getByTestId('wiring-output-lane');
+  await expect(outputs).toHaveCount(1);
+  const firstRun = page.getByTestId('wiring-run-row').first();
+  await firstRun.getByRole('button', { name: 'Remove one pixel from Outer circle' }).click();
+  await expect(outputs).toHaveCount(1);
+  await firstRun.getByRole('button', { name: 'Flip' }).click();
+  await expect(outputs).toHaveCount(1);
+  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
+  await expect(outputs).toHaveCount(2);
+  await firstRun.getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
+  await expect(outputs).toHaveCount(2);
+});
+
+test('Find my LED wire maps a visible discovery color to the selected GPIO', async ({ page }) => {
+  await page.route('**/api/wiring/discover', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, assignments: [
+      { pin: 16, color: '#e35b4f', label: 'Red' },
+      { pin: 17, color: '#4e78d6', label: 'Blue' },
+    ] }),
+  }));
+  await gotoWire(page);
+  await page.getByRole('button', { name: 'Find my LED wire' }).click();
+  const finder = page.getByRole('region', { name: 'Find my LED wire' });
+  await expect(finder.getByText('Choose the color you see on the real LEDs.')).toBeVisible();
+  await finder.getByRole('button', { name: /Blue GPIO 17/ }).click();
+  await expect(page.getByText('GPIO 17', { exact: true })).toBeVisible();
+  await expect(finder).toContainText('uses GPIO 17');
 });
 
 test('Wire panel and Auto Wire never scroll horizontally at phone width', async ({ page }) => {
@@ -268,7 +332,7 @@ test('pointer row drag captures the pointer and moves a canonical run between ou
     };
   });
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Add output' }).click();
+  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
   const run = page.getByTestId('wiring-run-row').first();
   const runId = await run.getAttribute('data-run-id');
   const handle = run.getByRole('button', { name: /Drag/ });
@@ -402,7 +466,7 @@ test('controller placement and physical DATA IN controls feed a preview-only Aut
   await page.mouse.move(box.x + box.width / 2 + 45, box.y + box.height / 2 + 30, { steps: 4 });
   await page.mouse.up();
 
-  await expect(page.getByLabel('Auto Wire output count')).toHaveValue('auto');
+  await expect(page.getByRole('region', { name: 'Optional Auto Wire' })).toContainText('Uses your 1 data wire');
   await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
   await openAdvanced(page);
   await expect(page.getByLabel('Direction policy')).toHaveValue('flexible');
@@ -468,10 +532,10 @@ test('Auto Wire honors each output constraint and exposes only solver-approved e
   await page.setViewportSize({ width: 1440, height: 1100 });
   await gotoWire(page);
   await seedFourRunClosedFixture(page);
-  const outputCount = page.getByLabel('Auto Wire output count');
+  const outputCount = page.getByRole('group', { name: 'LED data wire count' });
 
   for (const count of ['1', '2', '3', '4']) {
-    await outputCount.selectOption(count);
+    await outputCount.getByRole('button', { name: count, exact: true }).click();
     await page.getByRole('button', { name: 'Preview route' }).click();
     const preview = page.getByTestId('auto-wire-preview');
     await expect(preview.getByTestId('auto-wire-lane')).toHaveCount(Number(count));
@@ -483,7 +547,7 @@ test('Auto Wire honors each output constraint and exposes only solver-approved e
     await page.getByRole('button', { name: 'Close' }).click();
   }
 
-  await outputCount.selectOption('auto');
+  await outputCount.getByRole('button', { name: '1', exact: true }).click();
   await page.getByRole('button', { name: 'Preview route' }).click();
   await expect(page.getByTestId('auto-wire-preview').getByTestId('auto-wire-lane')).toHaveCount(1);
   const alternative = page.getByRole('button', { name: 'Try another' });

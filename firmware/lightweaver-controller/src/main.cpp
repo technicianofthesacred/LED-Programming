@@ -44,8 +44,11 @@ CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 
-constexpr uint8_t MIRROR_OUTPUT_PINS[] = {16, 17, 18, 21, 38, 39, 40, 48};
-constexpr uint8_t MIRROR_OUTPUT_PIN_COUNT = sizeof(MIRROR_OUTPUT_PINS) / sizeof(MIRROR_OUTPUT_PINS[0]);
+constexpr uint8_t LW_DISCOVERY_BATCH_SIZE = 4;
+constexpr uint16_t LW_DISCOVERY_PIXELS_PER_OUTPUT = 32;
+constexpr uint8_t LW_DISCOVERY_BRIGHTNESS = 24;
+constexpr uint8_t DISCOVERY_OUTPUT_PINS[] = {16, 17, 18, 21, 38, 39, 40, 48};
+constexpr uint8_t DISCOVERY_OUTPUT_PIN_COUNT = sizeof(DISCOVERY_OUTPUT_PINS) / sizeof(DISCOVERY_OUTPUT_PINS[0]);
 
 OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
@@ -71,6 +74,12 @@ float fadeScale = 1.0f;
 
 uint8_t currentLookIndex = 0;
 bool blackedOut = false;
+bool ledOutputsReady = false;
+bool wiringProbationActive = false;
+uint32_t wiringProbationDeadlineMs = 0;
+bool safeDiscoveryMode = false;
+uint8_t safeDiscoveryBatchIndex = 0;
+bool runtimeSafeMode = false;
 ErrorCode errorCode = ERROR_NONE;
 
 File sequenceFile;
@@ -105,6 +114,10 @@ uint8_t driftHueMax = 255;
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
+bool setupSafeDiscoveryOutputs(uint8_t batchIndex);
+void showSafeDiscoveryFrame();
+void appendDiscoveryAssignments(JsonArray assignments, uint8_t batchIndex);
+bool discoveryPinAvailable(uint8_t pin);
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
 void handleControlEvent(ControlEventType event);
 void selectLook(int index);
@@ -138,6 +151,8 @@ uint16_t readLe16(const uint8_t* bytes);
 uint32_t readLe32(const uint8_t* bytes);
 uint16_t clampPixels(int value);
 float clampUnit(float value);
+void startWiringProbation(bool bootedCandidate);
+void rollbackCandidateBeforeRestart(const char* reason);
 
 template<uint8_t DATA_PIN>
 bool addLedsForOrder(CRGB* start, uint16_t count) {
@@ -161,6 +176,7 @@ void setup() {
   }
   SPI.begin(LW_SPI_SCK, LW_SPI_MISO, LW_SPI_MOSI, LW_SD_CS);
   RuntimeLoadResult loadResult = loadRuntimeConfig(runtimeConfig);
+  runtimeSafeMode = loadResult.safeMode;
   if (Serial) {
     Serial.print("Runtime source: ");
     Serial.print(loadResult.source == SOURCE_SD ? "sd" : loadResult.source == SOURCE_NVS ? "internal-flash" : "defaults");
@@ -172,27 +188,53 @@ void setup() {
     return;
   }
   applyRuntimeConfig(runtimeConfig);
+  WiringSafetyStatus wiringSafety = getRuntimeWiringSafetyStatus();
+  safeDiscoveryMode = wiringSafety.discoveryActive;
+  safeDiscoveryBatchIndex = wiringSafety.discoveryBatchIndex;
   setupLightweaverControls(controls, controlState);
   setupLightweaverWeb(runtimeConfig, errorCode, totalPixels, currentLookIndex);
-  setupWledRealtime(leds, totalPixels);
 
-  if (!setupLedOutputs()) return;
-  currentLookIndex = findStartupLook();
-  fadeScale = 0.0f;
+  if (safeDiscoveryMode) {
+    if (!setupSafeDiscoveryOutputs(wiringSafety.discoveryBatchIndex)) {
+      String clearMessage;
+      clearRuntimeWiringDiscovery(clearMessage);
+      safeDiscoveryMode = false;
+      fail(ERROR_PIN, "safe discovery output setup failed");
+      return;
+    }
+  } else {
+    setupWledRealtime(leds, totalPixels);
+    if (!setupLedOutputs()) {
+      if (loadResult.bootedCandidate) rollbackCandidateBeforeRestart("candidate LED output setup failed");
+      return;
+    }
+    currentLookIndex = findStartupLook();
+    fadeScale = 0.0f;
 
-  if (!startLook(currentLookIndex)) return;
-  fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
+    if (!startLook(currentLookIndex)) {
+      if (loadResult.bootedCandidate) rollbackCandidateBeforeRestart("candidate startup frame failed");
+      return;
+    }
+    fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
+    startWiringProbation(loadResult.bootedCandidate);
 
-  setupArtnet(leds, totalPixels);
-  setupWledWebSocket();
+    setupArtnet(leds, totalPixels);
+    setupWledWebSocket();
+
+    if (runtimeRecoveryAfterRestartPending()) {
+      runtimeRecoverLights("warm-white", 0.65f, true);
+      String recoveryMessage;
+      clearRuntimeRecoveryAfterRestart(recoveryMessage);
+    }
+  }
 
   // If the previous boot ended in a crash/brownout/watchdog reset, come up in
   // the visible low-brightness known-good state instead of silently re-entering
   // whatever failed — a homeowner sees the piece is alive and can recover it.
   esp_reset_reason_t resetReason = esp_reset_reason();
-  if (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
+  if (!safeDiscoveryMode && (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT ||
-      resetReason == ESP_RST_WDT) {
+      resetReason == ESP_RST_WDT)) {
     if (Serial) {
       Serial.print("Recovering after abnormal reset (reason ");
       Serial.print((int)resetReason);
@@ -229,11 +271,38 @@ void loop() {
   esp_task_wdt_reset();  // pet the watchdog every iteration, before any early return
   bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
-  if (!recoveryHoldActive) {
-    handleWledRealtime();
-    handleArtnet();
-    handleWledWebSocket();
+  // A web request can arm recovery inside handleLightweaverWeb(). Re-read the
+  // deadline in this same loop tick so no stale stream/error/AP frame can
+  // overwrite the recovery frame before the user sees it.
+  recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
+
+  if (safeDiscoveryMode) {
+    showSafeDiscoveryFrame();
+    delay(10);
+    return;
   }
+
+  if (wiringProbationActive && int32_t(millis() - wiringProbationDeadlineMs) >= 0) {
+    rollbackCandidateBeforeRestart("candidate confirmation timed out");
+    return;
+  }
+
+  if (recoveryHoldActive && ledOutputsReady) {
+    PatternModifiers mods;
+    mods.speed = 1.0f;
+    mods.customHue = 32;
+    mods.customSaturation = 230;
+    bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
+    if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
+    FastLED.setBrightness(computeBrightnessByte());
+    showLeds();
+    delay(10);
+    return;
+  }
+
+  handleWledRealtime();
+  handleArtnet();
+  handleWledWebSocket();
   frameSourceTick();
 
   if (errorCode != ERROR_NONE) {
@@ -275,19 +344,6 @@ void loop() {
   }
 
   if (blackedOut) {
-    delay(10);
-    return;
-  }
-
-  if (recoveryHoldActive) {
-    PatternModifiers mods;
-    mods.speed = 1.0f;
-    mods.customHue = 32;
-    mods.customSaturation = 230;
-    bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
-    if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
-    FastLED.setBrightness(computeBrightnessByte());
-    showLeds();
     delay(10);
     return;
   }
@@ -423,6 +479,7 @@ bool loadProfile() {
 }
 
 bool setupLedOutputs() {
+  ledOutputsReady = false;
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   // Automatic brightness limiter: when a current ceiling is configured, FastLED
@@ -432,7 +489,7 @@ bool setupLedOutputs() {
   if (ledMaxMilliamps > 0) {
     FastLED.setMaxPowerInVoltsAndMilliamps(5, ledMaxMilliamps);
   }
-  uint8_t addedPins[LW_MAX_OUTPUTS + MIRROR_OUTPUT_PIN_COUNT] = {};
+  uint8_t addedPins[LW_MAX_OUTPUTS] = {};
   uint8_t addedPinCount = 0;
   auto wasAdded = [&](uint8_t pin) {
     for (uint8_t j = 0; j < addedPinCount; j++) {
@@ -466,34 +523,83 @@ bool setupLedOutputs() {
     }
   }
 
-  if (outputCount == 1) {
-    OutputConfig& output = outputs[0];
-    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) {
-      uint8_t pin = MIRROR_OUTPUT_PINS[i];
-      if (wasAdded(pin)) continue;
-      if (!addLedsForPin(pin, physicalLeds + output.start, output.pixels)) continue;
-      markAdded(pin);
-      if (Serial) {
-        Serial.print("Mirroring LED frame on GPIO ");
-        Serial.println(pin);
-      }
-    }
-  }
-
-  // ESP32-S3 has 4 RMT TX channels; FastLED drives each WS2812 output on one.
-  // Driving more parallel outputs than channels can silently drop outputs or
-  // fall back to a bit-bang path that disables interrupts during show() (which
-  // can cost encoder edges on long strips). Warn so a bench operator can catch
-  // an over-subscribed config rather than chasing a mystery later.
-  if (Serial && addedPinCount > 4) {
-    Serial.print("WARNING: ");
-    Serial.print(addedPinCount);
-    Serial.println(" LED outputs exceed the 4 RMT channels on ESP32-S3; verify "
-                   "every strip drives and that show() timing stays stable.");
-  }
-
   FastLED.setBrightness(0);
   FastLED.clear(true);
+  ledOutputsReady = true;
+  return true;
+}
+
+bool setupSafeDiscoveryOutputs(uint8_t batchIndex) {
+  ledOutputsReady = false;
+  uint8_t batchCount = (DISCOVERY_OUTPUT_PIN_COUNT + LW_DISCOVERY_BATCH_SIZE - 1) /
+                       LW_DISCOVERY_BATCH_SIZE;
+  if (batchIndex >= batchCount) return false;
+
+  FastLED.setDither(false);
+  FastLED.setCorrection(TypicalLEDStrip);
+  uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
+  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
+  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
+  uint8_t registered = 0;
+  for (uint8_t i = start; i < end; i++) {
+    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
+    uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
+    if (!addLedsForPin(DISCOVERY_OUTPUT_PINS[i], physicalLeds + bufferStart,
+                       LW_DISCOVERY_PIXELS_PER_OUTPUT)) {
+      return false;
+    }
+    registered++;
+  }
+  if (registered == 0) return false;
+  FastLED.clear(false);
+  FastLED.setBrightness(LW_DISCOVERY_BRIGHTNESS);
+  ledOutputsReady = true;
+  showSafeDiscoveryFrame();
+  return true;
+}
+
+void showSafeDiscoveryFrame() {
+  if (!ledOutputsReady) return;
+  static const CRGB colors[LW_DISCOVERY_BATCH_SIZE] = {
+    CRGB::Red, CRGB::Green, CRGB::Blue, CRGB(255, 96, 0)
+  };
+  uint8_t start = safeDiscoveryBatchIndex * LW_DISCOVERY_BATCH_SIZE;
+  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
+  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
+  for (uint8_t i = start; i < end; i++) {
+    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
+    uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
+    CRGB physicalColor = mapLogicalToPhysicalColor(colors[i - start]);
+    fill_solid(physicalLeds + bufferStart, LW_DISCOVERY_PIXELS_PER_OUTPUT, physicalColor);
+  }
+  FastLED.setBrightness(LW_DISCOVERY_BRIGHTNESS);
+  FastLED.show();
+}
+
+void appendDiscoveryAssignments(JsonArray assignments, uint8_t batchIndex) {
+  static const char* colors[LW_DISCOVERY_BATCH_SIZE] = {
+    "red", "green", "blue", "amber"
+  };
+  uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
+  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
+  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
+  for (uint8_t i = start; i < end; i++) {
+    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
+    JsonObject assignment = assignments.add<JsonObject>();
+    assignment["pin"] = DISCOVERY_OUTPUT_PINS[i];
+    assignment["color"] = colors[i - start];
+  }
+}
+
+bool discoveryPinAvailable(uint8_t pin) {
+  const int controlPins[] = {
+    controls.encoderA, controls.encoderB, controls.encoderPress,
+    controls.encoderPressAlt, controls.previous, controls.next,
+    controls.blackout, controls.brightness, controls.statusLed,
+  };
+  for (int controlPin : controlPins) {
+    if (controlPin >= 0 && pin == controlPin) return false;
+  }
   return true;
 }
 
@@ -1019,6 +1125,29 @@ float clampUnit(float value) {
   return value;
 }
 
+void startWiringProbation(bool bootedCandidate) {
+  if (!bootedCandidate || !ledOutputsReady) return;
+  wiringProbationActive = true;
+  wiringProbationDeadlineMs = millis() + LW_WIRING_PROBATION_MS;
+}
+
+void rollbackCandidateBeforeRestart(const char* reason) {
+  WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
+  String message;
+  if (!rollbackCandidateRuntimeConfig(status.activationId, message)) {
+    wiringProbationActive = false;
+    fail(ERROR_CONFIG, message.c_str());
+    return;
+  }
+  wiringProbationActive = false;
+  if (Serial) {
+    Serial.print("Wiring candidate rolled back: ");
+    Serial.println(reason);
+  }
+  delay(150);
+  ESP.restart();
+}
+
 // ---- Runtime control API (called by LightweaverWeb endpoints) ----
 
 // Apply a closure to one zone (when targetId matches) or all zones (when
@@ -1179,10 +1308,6 @@ String runtimeFirmwareInfo() {
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
   }
-  JsonArray mirrors = doc["mirrorPins"].to<JsonArray>();
-  if (outputCount == 1) {
-    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) mirrors.add(MIRROR_OUTPUT_PINS[i]);
-  }
   int altPress = effectiveEncoderPressAltPin(controls);
   doc["controls"]["encoder"]["a"] = controls.encoderA;
   doc["controls"]["encoder"]["b"] = controls.encoderB;
@@ -1331,6 +1456,123 @@ bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
 
+String runtimeWiringSafetyStatus() {
+  String stored = runtimeWiringSafetyStatusJson();
+  JsonDocument doc;
+  if (deserializeJson(doc, stored)) doc["ok"] = false;
+  WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+  const char* state = runtimeSafeMode ? "safe-mode" : "known-good";
+  const char* nextStep = "stage-candidate";
+  if (safety.candidateState == WIRING_CANDIDATE_STAGED) {
+    state = "staged";
+    nextStep = "activate";
+  } else if (safety.candidateState == WIRING_CANDIDATE_BOOTING ||
+             safety.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION) {
+    state = "testing";
+    nextStep = "confirm-or-rollback";
+  }
+  if (safety.discoveryActive) nextStep = "choose-discovery-result-or-next-batch";
+  doc["state"] = state;
+  doc["testing"] = wiringProbationActive;
+  uint32_t remaining = 0;
+  if (wiringProbationActive && int32_t(wiringProbationDeadlineMs - millis()) > 0) {
+    remaining = wiringProbationDeadlineMs - millis();
+  }
+  doc["remainingProbationMs"] = remaining;
+  doc["nextStep"] = nextStep;
+  doc["outputsReady"] = ledOutputsReady;
+  JsonArray currentOutputs = doc["currentOutputs"].to<JsonArray>();
+  for (uint8_t i = 0; i < outputCount; i++) {
+    JsonObject output = currentOutputs.add<JsonObject>();
+    output["id"] = outputs[i].id;
+    output["pin"] = outputs[i].pin;
+    output["pixels"] = outputs[i].pixels;
+  }
+  if (safety.discoveryActive) {
+    JsonObject discovery = doc["discovery"].to<JsonObject>();
+    discovery["active"] = true;
+    discovery["batchIndex"] = safety.discoveryBatchIndex;
+    discovery["maxBatch"] = LW_DISCOVERY_BATCH_SIZE;
+    JsonArray assignments = discovery["assignments"].to<JsonArray>();
+    appendDiscoveryAssignments(assignments, safety.discoveryBatchIndex);
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool runtimeActivateWiringCandidate(const String& activationId, String& message) {
+  return activateStagedRuntimeConfig(activationId, message);
+}
+
+bool runtimeConfirmWiringCandidate(const String& activationId, String& message) {
+  bool confirmed = confirmCandidateRuntimeConfig(activationId, message);
+  if (confirmed) {
+    wiringProbationActive = false;
+    wiringProbationDeadlineMs = 0;
+  }
+  return confirmed;
+}
+
+bool runtimeRollbackWiringCandidate(const String& activationId, String& message) {
+  bool rolledBack = rollbackCandidateRuntimeConfig(activationId, message);
+  if (rolledBack) {
+    wiringProbationActive = false;
+    wiringProbationDeadlineMs = 0;
+  }
+  return rolledBack;
+}
+
+String runtimeSafeDiscoveryOutput(uint8_t batchIndex) {
+  JsonDocument doc;
+  uint8_t batchCount = (DISCOVERY_OUTPUT_PIN_COUNT + LW_DISCOVERY_BATCH_SIZE - 1) /
+                       LW_DISCOVERY_BATCH_SIZE;
+  if (batchIndex >= batchCount) {
+    doc["ok"] = false;
+    doc["error"] = "discovery batch out of range";
+  } else if (wiringProbationActive) {
+    doc["ok"] = false;
+    doc["error"] = "confirm or roll back the wiring candidate before discovery";
+  } else {
+    uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
+    uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
+    if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
+    uint8_t available = 0;
+    for (uint8_t i = start; i < end; i++) {
+      if (discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) available++;
+    }
+    if (available == 0) {
+      doc["ok"] = false;
+      doc["error"] = "every GPIO in this discovery batch is assigned to a control";
+      String out;
+      serializeJson(doc, out);
+      return out;
+    }
+    String message;
+    if (!setRuntimeWiringDiscoveryBatch(batchIndex, message)) {
+      doc["ok"] = false;
+      doc["error"] = message;
+    } else {
+      doc["ok"] = true;
+      doc["state"] = "rebooting-for-discovery";
+      doc["batchIndex"] = batchIndex;
+      doc["batchCount"] = batchCount;
+      doc["maxBatch"] = LW_DISCOVERY_BATCH_SIZE;
+      doc["requiresReboot"] = true;
+      doc["nextStep"] = "reboot-and-reconnect";
+      JsonArray assignments = doc["assignments"].to<JsonArray>();
+      appendDiscoveryAssignments(assignments, batchIndex);
+    }
+  }
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool runtimeStopSafeDiscovery(String& message) {
+  return clearRuntimeWiringDiscovery(message);
+}
+
 String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones) {
   String id = patternId.length() ? patternId : String("warm-white");
   bool isWhiteTestRecovery = id == "test-white" || id == "white";
@@ -1389,7 +1631,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     brightnessByte = computeBrightnessByte();
   }
   FastLED.setBrightness(brightnessByte);
-  showLeds();
+  if (ledOutputsReady) showLeds();
 
   uint16_t nonBlackPixels = 0;
   for (uint16_t i = 0; i < totalPixels && i < LW_MAX_PIXELS; i++) {
@@ -1398,10 +1640,15 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
 
   JsonDocument doc;
   doc["ok"] = true;
-  doc["recovered"] = true;
+  // FastLED exposes no electrical acknowledgement from the strip. Report
+  // exactly what firmware can prove: the command was accepted and a visible
+  // frame was prepared/submitted to the configured output controllers.
+  doc["accepted"] = true;
   doc["patternId"] = id;
   JsonObject diagnostics = doc["diagnostics"].to<JsonObject>();
   diagnostics["rendered"] = rendered;
+  diagnostics["framePrepared"] = totalPixels > 0;
+  diagnostics["frameSubmitted"] = ledOutputsReady;
   diagnostics["pixels"] = totalPixels;
   diagnostics["nonBlackPixels"] = nonBlackPixels;
   diagnostics["brightnessByte"] = brightnessByte;
@@ -1430,10 +1677,6 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     output["id"] = outputs[i].id;
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
-  }
-  JsonArray mirrors = diagnostics["mirrorPins"].to<JsonArray>();
-  if (outputCount == 1) {
-    for (uint8_t i = 0; i < MIRROR_OUTPUT_PIN_COUNT; i++) mirrors.add(MIRROR_OUTPUT_PINS[i]);
   }
   String out;
   serializeJson(doc, out);

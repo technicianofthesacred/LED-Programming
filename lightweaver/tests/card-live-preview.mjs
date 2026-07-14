@@ -12,6 +12,7 @@ import {
   readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
+import { requestCardReboot } from '../src/lib/cardPushClient.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -101,15 +102,20 @@ assert.deepEqual(JSON.parse(hardwareRequests[0].options.body), { colorOrder: 'GB
 const recoveryRequests = [];
 const recoveryOrder = [];
 globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/api/wiring/status')) {
+    recoveryOrder.push('safety-status');
+    return { ok: true, json: async () => ({ ok: true, state: 'known-good', currentOutputs: [] }) };
+  }
   recoveryOrder.push('recover-post');
   recoveryRequests.push({ url, options });
   return {
     ok: true,
     json: async () => ({
       ok: true,
-      recovered: true,
+      accepted: true,
       diagnostics: {
         brightnessByte: 220,
+        nonBlackPixels: 44,
         firstLogicalPixel: { r: 255, g: 244, b: 220 },
       },
     }),
@@ -131,8 +137,8 @@ const recoveryResponse = await recoverCardLights({
   },
 });
 
-assert.equal(recoveryResponse.recovered, true);
-assert.deepEqual(recoveryOrder, ['browser-reclaimed', 'recover-post'], 'browser producers stop before card recovery is posted');
+assert.equal(recoveryResponse.accepted, true);
+assert.deepEqual(recoveryOrder, ['browser-reclaimed', 'safety-status', 'recover-post'], 'browser producers stop and wiring safety is checked before card recovery is posted');
 assert.equal(recoveryRequests[0].url, 'http://192.168.18.70/api/recover-lights');
 assert.equal(recoveryRequests[0].options.method, 'POST');
 assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
@@ -140,6 +146,55 @@ assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
   brightness: 1,
   syncZones: true,
 });
+
+const hardRecoveryOrder = [];
+globalThis.fetch = async (url) => {
+  if (String(url).endsWith('/api/wiring/status')) {
+    hardRecoveryOrder.push('safety-status');
+    return { ok: true, json: async () => ({ ok: true, state: 'known-good', currentOutputs: [] }) };
+  }
+  hardRecoveryOrder.push(String(url).endsWith('/api/reboot') ? 'reboot' : 'recover');
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      accepted: true,
+      diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+    }),
+  };
+};
+const hardRecovery = await recoverCardLights(
+  { patternId: 'warm-white', brightness: 1, syncZones: true },
+  {
+    host: '192.168.18.70',
+    restartCard: true,
+    restartSettleMs: 0,
+    setTimeoutImpl: callback => { callback(); return 0; },
+    reclaimFrameStreams: async () => hardRecoveryOrder.push('reclaim'),
+  },
+);
+assert.deepEqual(hardRecoveryOrder, ['reclaim', 'safety-status', 'recover', 'reboot', 'recover']);
+assert.equal(hardRecovery.restarted, true, 'hard recovery reports the completed LED driver restart');
+
+globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => 'restart failed' });
+await assert.rejects(
+  requestCardReboot('192.168.18.70'),
+  error => error?.reason === 'http',
+  'an HTTP failure must not be reported as an accepted restart',
+);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, recovered: true }),
+});
+await assert.rejects(
+  recoverCardLights(
+    { patternId: 'warm-white', brightness: 1, syncZones: true },
+    { host: '192.168.18.70', autoDiscover: false, reclaimFrameStreams: async () => {} },
+  ),
+  error => error?.reason === 'recovery-unconfirmed',
+  'a transport-level 200 without frame diagnostics must not be presented as recovered lights',
+);
 
 const repairPackage = buildMirroredLedRepairPackage({
   app: 'Lightweaver',
@@ -191,6 +246,12 @@ globalThis.fetch = async (url, options = {}) => {
       }),
     };
   }
+  if (String(url).endsWith('/api/wiring/candidate')) {
+    return {
+      ok: true,
+      json: async () => ({ ok: true, state: 'staged', activationId: 'card-issued-repair', currentOutputs: [] }),
+    };
+  }
   return {
     ok: true,
     json: async () => ({ ok: true }),
@@ -202,17 +263,17 @@ const repairResponse = await repairMirroredLedOutputOnCard(repairPackage, {
   timeoutMs: 1000,
 });
 
-assert.equal(repairResponse.rebooting, true);
+assert.equal(repairResponse.state, 'staged');
+assert.equal(repairResponse.activationId, 'card-issued-repair');
 assert.deepEqual(repairRequests.map(item => item.url), [
   'http://192.168.18.70/api/firmware-info',
-  'http://192.168.18.70/api/config',
-  'http://192.168.18.70/api/reboot',
+  'http://192.168.18.70/api/wiring/candidate',
 ]);
-assert.deepEqual(JSON.parse(repairRequests[1].options.body).led.outputs, [
+assert.deepEqual(JSON.parse(repairRequests[1].options.body).candidate.led.outputs, [
   { id: 'out1', name: 'Output 1 mirrored', pin: 16, pixels: 44 },
 ]);
 assert.equal(
-  repairRequests[1].options.body,
+  JSON.stringify(JSON.parse(repairRequests[1].options.body).candidate),
   prepareCardStoragePayload(repairPackage).json,
 );
 

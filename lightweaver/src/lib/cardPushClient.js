@@ -20,6 +20,7 @@ import {
   CardConfigCapacityError,
   prepareCardStoragePayload,
 } from './cardStoragePayload.js';
+import { stageCardWiringCandidate } from './cardWiringSafety.js';
 
 export function getCardHostname() {
   return readStoredCardHost();
@@ -217,19 +218,20 @@ async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
   return { reboot, current, layoutChanged, projectChanged };
 }
 
-async function requestCardReboot(host, options = {}) {
+export async function requestCardReboot(host, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
   try {
-    await fetch(`${cardHostToUrl(host)}/api/reboot`, {
+    const response = await fetch(`${cardHostToUrl(host)}/api/reboot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
       signal: ctrl.signal,
     });
-  } catch {
-    // The card may close the HTTP connection as it reboots; the config is
-    // already saved, so treat this as an accepted reboot request.
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CardPushError('http', `card returned ${response.status}: ${text || 'reboot was rejected'}`);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -264,6 +266,19 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   }
   if (rebootPlan.layoutChanged && options.allowLayoutChange !== true) {
     throw layoutMismatchError(rebootPlan.current, runtimePackage);
+  }
+  // Physical output changes are never written over the running/known-good
+  // layout. The card owns a separate candidate slot and issues the activation
+  // identifier that the UI must use for test, confirmation, or rollback.
+  if (rebootPlan.layoutChanged) {
+    try {
+      return await stageCardWiringCandidate(preparedPayload.config, {
+        host,
+        timeoutMs: options.timeoutMs || 6000,
+      });
+    } catch (err) {
+      throw normalizeConfigPushError(host, err);
+    }
   }
   const pushOptions = {
     ...options,

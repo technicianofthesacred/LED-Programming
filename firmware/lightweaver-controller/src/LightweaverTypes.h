@@ -34,6 +34,7 @@ constexpr uint16_t LWSEQ_HEADER_BYTES = 64;
 constexpr uint8_t DEFAULT_STATUS_LED_PIN = 2;
 constexpr uint16_t DEFAULT_RENDER_FPS = 30;
 constexpr uint16_t BUTTON_DEBOUNCE_MS = 45;
+constexpr uint32_t LW_WIRING_PROBATION_MS = 90000;
 
 enum ErrorCode : uint8_t {
   ERROR_NONE = 0,
@@ -54,6 +55,24 @@ enum RuntimeSource : uint8_t {
 enum WifiTransport : uint8_t {
   WIFI_TRANSPORT_AP = 0,
   WIFI_TRANSPORT_STATION = 1
+};
+
+enum WiringCandidateState : uint8_t {
+  WIRING_CANDIDATE_NONE = 0,
+  WIRING_CANDIDATE_STAGED = 1,
+  WIRING_CANDIDATE_BOOTING = 2,
+  WIRING_CANDIDATE_AWAITING_CONFIRMATION = 3
+};
+
+struct WiringSafetyStatus {
+  WiringCandidateState candidateState = WIRING_CANDIDATE_NONE;
+  String activationId;
+  bool hasKnownGood = false;
+  bool hasCandidate = false;
+  bool bootedCandidate = false;
+  bool discoveryActive = false;
+  uint8_t discoveryBatchIndex = 0;
+  uint32_t remainingProbationMs = 0;
 };
 
 struct OutputConfig {

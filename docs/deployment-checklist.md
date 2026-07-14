@@ -45,12 +45,16 @@ Run this before the controller leaves the bench, and again after any code, firmw
 Studio's automated tests prove the wiring compiler, drag/drop interactions, Auto Wire determinism, delivery acknowledgement, rollback, and assembly-map generation. They do **not** prove the installation's physical wires. Complete every item below beside the powered artwork; do not mark these passed from a mocked browser run.
 
 - [ ] **Output identity:** run Wire → Bench test and confirm each connector label/GPIO lights only its intended physical output.
-- [ ] **First pixel:** confirm the red DATA IN marker appears at the actual first LED for every strip run.
-- [ ] **Direction and order:** follow the low-brightness green chase through every run and confirm its physical direction and lane order; record corrections in Studio.
+- [ ] **Pixel boundary:** for every output/run, confirm pixel 1 is blue, the proposed final pixel is red, and every pixel outside that boundary stays dark. Use the inline +/− controls until the physical endpoint is exact.
+- [ ] **Direction and order:** confirm the blue-to-red boundary follows every run in its physical direction and lane order; record corrections in Studio.
 - [ ] **Jumper routing:** compare every cable-jump prompt and assembly-map destination with the installed wire, including estimated length and strain relief.
 - [ ] **Reserved addresses:** confirm every reserved-unlit block stays dark and consumes the documented address count.
 - [ ] **Color order:** run a red/green/blue check on every output and correct RGB/GRB/etc. before signoff.
 - [ ] **Brightness cap:** verify the configured current/brightness limit against the real PSU and wiring gauge.
+- [ ] **Automatic rollback:** stage a deliberately wrong GPIO, start the 90-second test, do not confirm it, and verify the card returns to the last confirmed GPIO/pixel count without Studio.
+- [ ] **Reset during test:** restart or power-cycle during an unconfirmed wiring test and verify the card boots the last confirmed wiring instead of re-arming the candidate.
+- [ ] **Wire discovery exit:** start Find my LED wire, confirm no more than four color/GPIO choices are active, then close it and verify the card returns to normal playback.
+- [ ] **Recover Lights:** while a wiring candidate or diagnostic output is active, invoke Recover Lights and verify the card cancels it, restores confirmed wiring, reconnects, and produces visible output. The UI must still ask the person whether light is visible.
 - [ ] **Locked wiring saved:** complete verification, lock the canonical wiring, save the project file, install that exact revision on the card, and archive the printed assembly map with the controller record.
 
 ---

@@ -155,6 +155,76 @@ const retryResponse = await sendCardBridgeRequest('status', {}, {
 assert.equal(retryResponse.recoveredAfterDrop, true);
 assert.equal(retryMessages.length, 2);
 
+// Wiring status is safe to retry through a reboot; staging is deliberately not
+// retried because only the card may mint a transaction activationId.
+const wiringRetryMessages = [];
+const wiringRetryListeners = new Map();
+const wiringRetryParent = {
+  postMessage(message, targetOrigin) {
+    wiringRetryMessages.push({ message, targetOrigin });
+    if (wiringRetryMessages.length === 1) return;
+    setTimeout(() => {
+      wiringRetryListeners.get('message')?.({
+        origin: 'http://192.168.18.70',
+        source: wiringRetryParent,
+        data: {
+          app: 'LightweaverCardBridge',
+          id: message.id,
+          ok: true,
+          response: { ok: true, state: 'testing', activationId: 'card-issued-1' },
+        },
+      });
+    }, 0);
+  },
+};
+globalThis.window = {
+  location: { search: '?cardBridge=1&cardHost=192.168.18.70' },
+  opener: null,
+  parent: wiringRetryParent,
+  localStorage: { getItem: () => '192.168.18.70', setItem: () => {} },
+  addEventListener(type, listener) { wiringRetryListeners.set(type, listener); },
+  removeEventListener(type, listener) {
+    if (wiringRetryListeners.get(type) === listener) wiringRetryListeners.delete(type);
+  },
+  dispatchEvent: () => {},
+};
+assert.equal(bootstrapCardBridgeFromOpener(), true);
+const wiringRetryResponse = await sendCardBridgeRequest('wiring-status', {}, {
+  host: '192.168.18.70',
+  timeoutMs: 10,
+});
+assert.equal(wiringRetryResponse.activationId, 'card-issued-1');
+assert.equal(wiringRetryMessages.length, 2);
+
+const stageTimeoutMessages = [];
+const stageTimeoutParent = {
+  postMessage(message, targetOrigin) { stageTimeoutMessages.push({ message, targetOrigin }); },
+};
+globalThis.window.parent = stageTimeoutParent;
+assert.equal(bootstrapCardBridgeFromOpener(), true);
+await assert.rejects(
+  sendCardBridgeRequest('wiring-candidate', { candidate: {} }, {
+    host: '192.168.18.70',
+    timeoutMs: 10,
+  }),
+  error => error?.reason === 'bridge-timeout',
+);
+assert.equal(stageTimeoutMessages.length, 1, 'candidate staging must not create two activation ids');
+
+for (const type of [
+  'wiring-candidate',
+  'wiring-activate',
+  'wiring-confirm',
+  'wiring-rollback',
+  'wiring-discover',
+]) {
+  await assert.rejects(
+    sendCardBridgeRequest(type, {}, { host: 'evil.example.com', timeoutMs: 10 }),
+    error => error?.reason === 'bridge-untrusted-origin',
+    `${type} must be restricted to a verified local card origin`,
+  );
+}
+
 function bridgeWindowHarness({
   host,
   opener = null,

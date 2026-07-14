@@ -10,6 +10,7 @@ import { WiringPreflight } from '../wire/WiringPreflight.jsx';
 import { WiringBenchTest } from '../wire/WiringBenchTest.jsx';
 import { StripColorOrderCheck } from '../wire/StripColorOrderCheck.jsx';
 import { WiringAssemblyMap } from '../wire/WiringAssemblyMap.jsx';
+import { WireDiscovery } from '../wire/WireDiscovery.jsx';
 import { planAdjacentStripBoundary, planOutputPixelCountAdjustment, planStripPixelCountAdjustment } from '../../../lib/wiringChase.js';
 import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from '../../../lib/gpioAssignments.js';
 import { parsedVb } from '../../../lib/layoutGeometry.js';
@@ -46,14 +47,13 @@ export function WireModePanel({ state, connected, cardHost }) {
     selectedWireCut, nudgeSelectedWireCut, deleteSelectedWireCut, setStripCounts,
   } = state;
   const {
-    wiring, updateWiring, compiledWiring,
+    wiring, updateWiring, compiledWiring, patchBoard, setPatchBoard,
     projectId, projectName, standaloneController, setStandaloneController, confirmedCardLook,
   } = useProject();
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
   const [advanced, setAdvanced] = useState(false);
   const [mutationError, setMutationError] = useState('');
-  const [autoOutputCount, setAutoOutputCount] = useState('auto');
   const [autoResult, setAutoResult] = useState(null);
   const [proposalIndex, setProposalIndex] = useState(0);
   const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
@@ -62,6 +62,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [outputDrag, setOutputDrag] = useState(null);
   const [pinError, setPinError] = useState('');
   const connectedCordRef = useRef(null);
+  const cordPointerRef = useRef(null);
   const suppressPortClickRef = useRef(null);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
   const runsById = useMemo(() => new Map(wiring.runs.map(run => [run.id, run])), [wiring.runs]);
@@ -207,29 +208,61 @@ export function WireModePanel({ state, connected, cardHost }) {
   };
   const connect = targetId => connectFrom(connectionState.sourceId, targetId);
 
-  const wireTargetAt = (clientX, clientY) => [...document.querySelectorAll('[data-wire-in]')].find(element => {
-    const rect = element.getBoundingClientRect();
-    return clientX >= rect.left && clientX <= rect.right
-      && clientY >= rect.top && clientY <= rect.bottom;
-  });
+  const wireTargetAt = (clientX, clientY) => [...document.querySelectorAll('[data-wire-in]')]
+    .map(element => {
+      const rect = element.getBoundingClientRect();
+      const dx = Math.max(rect.left - clientX, 0, clientX - rect.right);
+      const dy = Math.max(rect.top - clientY, 0, clientY - rect.bottom);
+      const distance = Math.hypot(dx, dy);
+      return { element, distance };
+    })
+    .filter(item => item.distance <= 28)
+    .sort((a, b) => a.distance - b.distance)[0]?.element || null;
 
   const startCordPointer = (sourceId, event) => {
     if (wiring.locked) return;
     connectedCordRef.current = null;
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    const sourceElement = event.currentTarget;
+    sourceElement?.setPointerCapture?.(event.pointerId);
     setConnectionState({ mode: 'draggingCord', sourceId });
+    const finish = pointerEvent => finishCordPointer(sourceId, pointerEvent);
+    const move = pointerEvent => {
+      const gesture = cordPointerRef.current;
+      if (!gesture || gesture.pointerId !== pointerEvent.pointerId) return;
+      if (Math.hypot(pointerEvent.clientX - gesture.startX, pointerEvent.clientY - gesture.startY) > 4) {
+        gesture.dragged = true;
+      }
+      const hoveredTarget = wireTargetAt(pointerEvent.clientX, pointerEvent.clientY);
+      if (hoveredTarget?.dataset.wireIn) gesture.targetId = hoveredTarget.dataset.wireIn;
+    };
+    cordPointerRef.current = {
+      sourceId, pointerId: event.pointerId, sourceElement, finish, move,
+      startX: event.clientX, startY: event.clientY, dragged: false, targetId: null,
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish, { once: true });
   };
 
   const finishCordPointer = (sourceId, event) => {
-    const target = wireTargetAt(event.clientX, event.clientY);
-    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    const gesture = cordPointerRef.current;
+    if (!gesture || gesture.sourceId !== sourceId || gesture.pointerId !== event.pointerId) return;
+    cordPointerRef.current = null;
+    window.removeEventListener('pointermove', gesture.move);
+    window.removeEventListener('pointerup', gesture.finish);
+    if (gesture.sourceElement?.hasPointerCapture?.(event.pointerId)) {
+      gesture.sourceElement.releasePointerCapture(event.pointerId);
+    }
+    // Chromium suppresses hit-testing outside the captured element while the
+    // pointer is captured. Release first, then resolve the real IN port.
+    const targetId = gesture.targetId || wireTargetAt(event.clientX, event.clientY)?.dataset.wireIn;
+    if (gesture.dragged) suppressPortClickRef.current = sourceId;
     if (connectedCordRef.current === sourceId) {
       suppressPortClickRef.current = sourceId;
       setConnectionState({ mode: 'idle', sourceId: null });
-    } else if (target?.dataset.wireIn) {
+    } else if (targetId) {
       connectedCordRef.current = sourceId;
       suppressPortClickRef.current = sourceId;
-      connectFrom(sourceId, target.dataset.wireIn);
+      connectFrom(sourceId, targetId);
     } else setConnectionState({ mode: 'idle', sourceId: null });
   };
 
@@ -270,8 +303,9 @@ export function WireModePanel({ state, connected, cardHost }) {
 
   const handlePort = (id, port) => {
     if (port === 'out') {
-      if (suppressPortClickRef.current === id) {
+      if (suppressPortClickRef.current === id || connectedCordRef.current === id) {
         suppressPortClickRef.current = null;
+        connectedCordRef.current = null;
         return;
       }
       setConnectionState(current => current.sourceId === id
@@ -376,7 +410,7 @@ export function WireModePanel({ state, connected, cardHost }) {
       strips,
       controllerAnchor: wiring.controllerAnchor,
       availableOutputs,
-      outputCount: autoOutputCount,
+      outputCount: wiring.outputs.length,
       physicalScale: Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null,
       capabilities: CARD_HARDWARE_CAPABILITIES,
     });
@@ -501,12 +535,59 @@ export function WireModePanel({ state, connected, cardHost }) {
     return applyStripCountUpdates([update]);
   };
 
+  const changeDataWireCount = value => {
+    const count = Math.max(1, Math.min(4, Math.trunc(Number(value) || 1)));
+    const result = mutate(draft => {
+      if (count === draft.outputs.length) return;
+      if (count < draft.outputs.length) {
+        const removed = draft.outputs.splice(count);
+        const destination = draft.outputs[count - 1];
+        destination.runIds.push(...removed.flatMap(output => output.runIds));
+      } else {
+        const ids = new Set(draft.outputs.map(output => output.id));
+        const usedPins = new Set(draft.outputs.map(output => output.pin));
+        while (draft.outputs.length < count) {
+          let number = draft.outputs.length + 1;
+          while (ids.has(`out${number}`)) number += 1;
+          const pin = CARD_HARDWARE_CAPABILITIES.supportedOutputPins.find(candidate => !usedPins.has(candidate));
+          if (pin == null) throw new Error('No unused LED output GPIO is available.');
+          const id = `out${number}`;
+          draft.outputs.push({ id, name: outputName(draft.outputs.length), pin, runIds: [] });
+          ids.add(id);
+          usedPins.add(pin);
+        }
+      }
+    }, { changeKind: 'output' });
+    if (result.ok) {
+      setPatchBoard(current => ({
+        ...current,
+        dataWireCount: count,
+        dataWireCountNeedsReview: false,
+      }));
+    }
+  };
+
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
+      <section className="lw-data-wire-count" aria-labelledby="data-wire-question">
+        <div>
+          <span className="lw-bench-kicker">Start here</span>
+          <strong id="data-wire-question">How many LED data wires leave the card?</strong>
+          <p>Count only the signal wires connected to LED outputs. Most pieces use one.</p>
+          {patchBoard?.dataWireCountNeedsReview && (
+            <p className="lw-inline-warning">This older project needs confirmation. Tap the correct number, even if it is already selected.</p>
+          )}
+        </div>
+        <div className="lw-data-wire-options" role="group" aria-label="LED data wire count">
+          {[1, 2, 3, 4].map(count => (
+            <button key={count} className={`btn${wiring.outputs.length === count ? ' primary' : ''}`} aria-pressed={wiring.outputs.length === count} disabled={wiring.locked} onClick={() => changeDataWireCount(count)}>{count}</button>
+          ))}
+        </div>
+      </section>
       <div className="lw-wiring-toolbar">
-        <strong>Physical outputs</strong>
-        <button className="btn" disabled={wiring.locked || wiring.outputs.length >= 4} onClick={addOutput}>Add output</button>
-        <button className="btn" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>Advanced</button>
+        <strong>{wiring.outputs.length} physical output{wiring.outputs.length === 1 ? '' : 's'}</strong>
+        <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
+        <button className="btn" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>{advanced ? 'Hide expert settings' : 'Expert settings'}</button>
       </div>
       <div className="lw-wiring-lanes">
         {wiring.outputs.map((output, outputIndex) => (
@@ -653,10 +734,7 @@ export function WireModePanel({ state, connected, cardHost }) {
         <section className="lw-auto-wire-controls" aria-label="Auto Wire controls">
           <label>
             <span>Outputs</span>
-            <select aria-label="Auto Wire output count" value={autoOutputCount} disabled={wiring.locked} onChange={event => setAutoOutputCount(event.target.value === 'auto' ? 'auto' : Number(event.target.value))}>
-              <option value="auto">Automatic</option>
-              {[1, 2, 3, 4].map(count => <option key={count} value={count}>{count}</option>)}
-            </select>
+            <span className="lw-auto-wire-fixed-count">Uses your {wiring.outputs.length} data wire{wiring.outputs.length === 1 ? '' : 's'}</span>
           </label>
           <button className="btn primary" title={wiring.controllerAnchor ? 'Preview a physical routing proposal' : 'Place the card at the artwork center, then drag it where it belongs'} disabled={wiring.locked} onClick={wiring.controllerAnchor ? runAutoWire : placeCard}>{wiring.controllerAnchor ? 'Preview route' : 'Place card'}</button>
         </section>

@@ -18,7 +18,7 @@ export function compileWiring({ wiring, strips = [], groups = [], capabilities =
   const model = validation.wiring;
   const errors = [...validation.errors];
   const warnings = [...validation.warnings];
-  const empty = { ok: false, sendReady: false, errors, warnings, totalPixels: 0, outputs: [], runs: [], pixels: [], zones: [] };
+  const empty = { ok: false, sendReady: false, errors, warnings, totalPixels: 0, physicalOutputCount: 0, outputs: [], runs: [], pixels: [], zones: [] };
   if (errors.length) return empty;
   const runsById = new Map(model.runs.map(run => [run.id, run]));
   const stripsById = new Map(strips.map(strip => [strip.id, strip]));
@@ -92,5 +92,5 @@ export function compileWiring({ wiring, strips = [], groups = [], capabilities =
   for (const zone of zones) if (zone.ranges.length > capabilities.maxRangesPerZone) errors.push({ code: 'zone-range-limit', zoneId: zone.id, message: `Zone ${zone.id} has too many ranges.` });
   const ok = errors.length === 0;
   const sendReady = ok && model.locked && model.verified && model.runs.every(run => run.verified) && model.migrationWarnings.length === 0;
-  return { ok, sendReady, errors, warnings, totalPixels: pixels.length, outputs, runs, pixels, zones, groups };
+  return { ok, sendReady, errors, warnings, totalPixels: pixels.length, physicalOutputCount: outputs.length, outputs, runs, pixels, zones, groups };
 }

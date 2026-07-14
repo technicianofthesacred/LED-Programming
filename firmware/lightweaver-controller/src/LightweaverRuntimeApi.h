@@ -36,6 +36,12 @@ void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();
 String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones);
+String runtimeWiringSafetyStatus();
+bool runtimeActivateWiringCandidate(const String& activationId, String& message);
+bool runtimeConfirmWiringCandidate(const String& activationId, String& message);
+bool runtimeRollbackWiringCandidate(const String& activationId, String& message);
+String runtimeSafeDiscoveryOutput(uint8_t batchIndex);
+bool runtimeStopSafeDiscovery(String& message);
 
 // Drift palette (min/max hue bounds for custom-color drift)
 void runtimeSetDriftRange(uint8_t lo, uint8_t hi);
