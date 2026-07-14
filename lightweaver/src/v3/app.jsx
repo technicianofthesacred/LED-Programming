@@ -4,11 +4,12 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
+import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
+import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
 import {
   bootstrapCardLink,
-  cardLinkStatusText,
   connectCardLink,
   getCardLinkState,
   isCardLinkConnected,
@@ -90,31 +91,14 @@ function Rail({ view, setView }) {
 }
 
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
-/* The connection indicator reads the cardLink state machine ONLY: green dot +
-   transport label when connected; otherwise the honest reason plus the
-   one-click fix (Connect to card opens the card page popup, which is the only
-   live path from the HTTPS Studio). */
-function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
+/* One compact status control opens the shared Connection Center. Transport and
+   host diagnostics stay out of routine chrome. */
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
   const connected = isCardLinkConnected(link);
-  const connecting = link.state === 'connecting';
   return (
     <footer className="status-bar">
       <div className="sb-card">
-        <span className={"sb-dot " + (connected ? "on" : "off")} />
-        <span className="sb-label">Card</span>
-        <input className="sb-host" value={link.host || 'lightweaver.local'} readOnly disabled aria-label="Card hostname or IP" />
-        {connected ? (
-          <span className="sb-stream" data-testid="card-link-status"><span className="pulse" />{cardLinkStatusText(link)}</span>
-        ) : (
-          <>
-            <span data-testid="card-link-status" style={{ color: 'var(--text-mid)', whiteSpace: 'nowrap' }}>
-              {cardLinkStatusText(link)}
-            </span>
-            {!connecting && (
-              <button className="sb-connect" onClick={onConnectCard}>Connect to card</button>
-            )}
-          </>
-        )}
+        <CardStatusControl link={link} onOpen={onOpenConnectionCenter} open={connectionCenterOpen} />
       </div>
 
       <div className="sb-div" />
@@ -149,7 +133,7 @@ function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps, t
         />
         <span>LEDs</span>
         {testStrip.enabled && (
-          <span className="sb-ts-note">Testing on {testStrip.length} LEDs — your design is unchanged.</span>
+          <span className="sb-ts-note">Testing on {testStrip.length} LEDs (your design is unchanged).</span>
         )}
       </div>
 
@@ -179,6 +163,9 @@ function applyStoredStudioTheme() {
 
 function Shell() {
   const [view, setView] = useState(viewFromHash);
+  const [installActive, setInstallActive] = useState(false);
+  const installActiveRef = useRef(false);
+  const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, replaceProject, replaceWithNewProject,
     projectLifecycleLabel, markProjectPersisted,
@@ -191,6 +178,18 @@ function Shell() {
     window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
     return () => window.removeEventListener('lw-preview-settings', applyStoredStudioTheme);
   }, []);
+  useEffect(() => {
+    const onInstallActive = event => {
+      const active = event.detail?.active === true;
+      installActiveRef.current = active;
+      setInstallActive(active);
+    };
+    window.addEventListener('lw-install-active', onInstallActive);
+    return () => window.removeEventListener('lw-install-active', onInstallActive);
+  }, []);
+  const navigateStudio = useCallback((nextView) => {
+    if (!installActiveRef.current) setView(nextView);
+  }, []);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
@@ -198,17 +197,25 @@ function Shell() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', view);
-    if (view !== 'layout') params.delete('mode');
+    if (view !== 'layout' && !(view === 'flash' && params.get('mode') === 'install')) params.delete('mode');
+    if (view === 'layout' && params.get('mode') === 'install') params.delete('mode');
     const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
     }
   }, [view]);
   useEffect(() => {
-    const onHash = () => setView(viewFromHash());
+    const onHash = () => {
+      if (installActiveRef.current) {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#screen=flash&mode=install`);
+        setView('flash');
+        return;
+      }
+      setView(viewFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
-  }, []);
+  }, [installActive]);
 
   useEffect(() => {
     if (!saveLabel) return undefined;
@@ -233,17 +240,29 @@ function Shell() {
       // guards established links against a direct 'connecting' event.
       checking: cardStatus.checking && !cardStatus.connected,
       host: cardStatus.host,
+      status: cardStatus.status,
+      detectedStatus: cardStatus.detectedStatus,
+      reason: cardStatus.reason,
+      allowAdopt: cardStatus.allowAdopt,
     });
-  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host]);
+  }, [
+    directCardControl,
+    cardStatus.connected,
+    cardStatus.checking,
+    cardStatus.host,
+    cardStatus.status,
+    cardStatus.detectedStatus,
+    cardStatus.reason,
+    cardStatus.allowAdopt,
+  ]);
   const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
-  const onConnectCard = useCallback(() => {
-    if (directCardControl) {
-      cardStatus.connect?.();
-      return;
-    }
-    connectCardLink();
-  }, [directCardControl, cardStatus]);
+  const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
+  const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const onConnectCard = useCallback((host = '') => {
+    if (directCardControl) return cardStatus.connect?.();
+    return connectCardLink(host);
+  }, [directCardControl, cardStatus.connect]);
 
   // configured push rate; Tweaks fires lw-preview-settings when it changes
   const [pushFps, setPushFps] = useState(readPushFps);
@@ -319,15 +338,16 @@ function Shell() {
         saveLabel={saveLabel || projectLifecycleLabel}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
       />
-      <Rail view={view} setView={setView} />
+      <Rail view={view} setView={navigateStudio} />
 
       <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={setView} /> : null}
+        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={navigateStudio} /> : null}
       </Suspense>
 
       <StatusBar
         link={cardLink}
-        onConnectCard={onConnectCard}
+        connectionCenterOpen={connectionCenterOpen}
+        onOpenConnectionCenter={openConnectionCenter}
         totalLeds={totalLeds}
         stripCount={strips.length}
         density={layoutDensity}
@@ -335,6 +355,17 @@ function Shell() {
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
+      />
+      <CardConnectionCenter
+        open={connectionCenterOpen}
+        link={cardLink}
+        onClose={closeConnectionCenter}
+        onConnectCard={onConnectCard}
+        setupEvidence={{
+          host: cardLink.host || cardStatus.host,
+          mode: cardStatus.status?.setupMode || cardStatus.status?.mode,
+          setupNetwork: cardStatus.status?.setupNetwork,
+        }}
       />
       <input ref={fileInputRef} type="file" accept=".lw.json,.json" style={{ display: 'none' }} onChange={onFile} />
     </div>

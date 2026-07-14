@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://led.mandalacodes.com/firmware/firmware-manifest.schema.json",
+  "title": "Lightweaver signed firmware release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "target",
+    "firmwareVersion",
+    "buildId",
+    "image",
+    "configSchema",
+    "minimumInstallerVersion",
+    "provenance"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "target": { "const": "esp32-s3-n16r8" },
+    "firmwareVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "buildId": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "sha256"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^/firmware/releases/[^/]+/[^/]+/lightweaver-controller-esp32s3-factory\\.bin$" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 6619136 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "configSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 1 },
+        "max": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "minimumInstallerVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceRevision", "platformio", "platform", "framework", "libraries"],
+      "properties": {
+        "sourceRevision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "platformio": { "const": "6.1.19" },
+        "platform": { "const": "espressif32@7.0.1" },
+        "framework": { "const": "framework-arduinoespressif32@3.20017.241212+sha.dcc1105b" },
+        "libraries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["FastLED", "ArduinoJson", "WebSockets"],
+          "properties": {
+            "FastLED": { "const": "3.10.3" },
+            "ArduinoJson": { "const": "7.4.3" },
+            "WebSockets": { "const": "2.7.3" }
+          }
+        }
+      }
+    }
+  }
+}

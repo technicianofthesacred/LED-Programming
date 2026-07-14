@@ -5,6 +5,7 @@ import {
   buildLivePreviewControlPayload,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
+  requireLivePreviewAcknowledgement,
   recoverCardLights,
   repairMirroredLedOutputOnCard,
   resetLiveOutputOnCard,
@@ -13,6 +14,7 @@ import {
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 import { requestCardReboot } from '../src/lib/cardPushClient.js';
+import { bootstrapCardBridgeFromOpener, verifyCardBridgeIdentity } from '../src/lib/cardBridge.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -26,6 +28,54 @@ const payload = buildLivePreviewControlPayload({
   zone: 'patch-inner',
   syncZones: false,
 });
+
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true, patternId: 'ocean' },
+    { patternId: 'ocean' },
+    { expectedCardId: 'lw-expected' },
+    { id: 'lw-expected' },
+  ),
+  error => error?.reason === 'identity-missing',
+  'a matching preflight identity must not substitute for a missing mutation acknowledgement identity',
+);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true },
+    { patternId: 'ocean' },
+    { expectedCardId: 'lw-expected', previewAcknowledgementCapability: 'legacy-ok-only' },
+    { id: 'lw-expected' },
+  ),
+  error => error?.reason === 'identity-missing',
+  'legacy acknowledgement mode must not silently waive mutation-response identity proof',
+);
+
+// A remembered address is only a route hint. Direct mutations must verify the
+// stable card ID at that exact host before issuing POST requests.
+{
+  const calls = [];
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    location: { protocol: 'http:' },
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  globalThis.localStorage = globalThis.window.localStorage;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    return { ok: true, json: async () => ({ cardId: 'lw-wrong', firmwareVersion: '1.0.0' }) };
+  };
+  await assert.rejects(
+    pushLiveHardwareToCard({ colorOrder: 'RGB' }, { host: '192.168.18.70', autoDiscover: false }),
+    error => error?.reason === 'wrong-card',
+  );
+  assert.deepEqual(calls.map(call => call.url), ['http://192.168.18.70/api/firmware-info']);
+  delete globalThis.window;
+  delete globalThis.localStorage;
+}
 
 assert.deepEqual(payload, {
   cancelStream: true,
@@ -68,6 +118,146 @@ assert.equal(request.options.method, 'POST');
 assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
+
+// A transport response is not a physical acknowledgement unless it is valid
+// JSON, says ok:true, belongs to the paired card, and does not contradict the
+// requested look/revision when the firmware echoes those fields.
+for (const [label, responseBody, reason] of [
+  ['malformed JSON', null, 'invalid-acknowledgement'],
+  ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed'],
+  ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card'],
+  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'preview-unconfirmed'],
+  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch'],
+  ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch'],
+]) {
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: responseBody === null
+      ? async () => { throw new SyntaxError('bad json'); }
+      : async () => responseBody,
+  });
+  await assert.rejects(
+    pushLivePreviewToCard(
+      { patternId: 'ocean' },
+      { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+    ),
+    error => {
+      assert.equal(error?.reason, reason, label);
+      return true;
+    },
+  );
+}
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', patternId: 'ocean', revision: 7 }),
+});
+const acknowledgedPreview = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(acknowledgedPreview.cardId, 'lw-expected');
+assert.equal(acknowledgedPreview.patternId, 'ocean');
+assert.equal(acknowledgedPreview.revision, 7);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected' }),
+});
+const explicitLegacyPreview = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  {
+    host: 'lightweaver.local',
+    expectedCardId: 'lw-expected',
+    revision: 7,
+    previewAcknowledgementCapability: 'legacy-ok-only',
+    autoDiscover: false,
+    latestOnly: false,
+  },
+);
+assert.equal(explicitLegacyPreview.ok, true, 'legacy acknowledgement is allowed only by an explicit compatibility decision');
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', confirmedRevision: 7 }),
+});
+const revisionOnlyProof = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(revisionOnlyProof.confirmedRevision, 7);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', confirmedLook: { patternId: 'ocean' } }),
+});
+const lookOnlyProof = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(lookOnlyProof.confirmedLook.patternId, 'ocean');
+
+let aliasRequestBody = null;
+globalThis.fetch = async (url, options = {}) => {
+  aliasRequestBody = JSON.parse(options.body || '{}');
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      cardId: 'lw-expected',
+      patternId: aliasRequestBody.patternId,
+      revision: aliasRequestBody.revision,
+    }),
+  };
+};
+const aliasAcknowledgement = await pushLivePreviewToCard(
+  { patternId: 'gradient' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 19, autoDiscover: false, latestOnly: false },
+);
+assert.equal(aliasRequestBody.patternId, 'aurora', 'display-only pattern ids must transmit their firmware runtime alias');
+assert.equal(aliasAcknowledgement.patternId, 'aurora', 'firmware echo is validated against the transmitted runtime id');
+assert.equal(aliasAcknowledgement.revision, 19, 'alias-aware acknowledgement must preserve physical preview revision proof');
+
+const controlResponseLimit = 8192;
+const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: '' });
+const exactLimitBody = exactLimitBase.slice(0, -2) + 'x'.repeat(controlResponseLimit - exactLimitBase.length) + '"}';
+assert.equal(new TextEncoder().encode(exactLimitBody).byteLength, controlResponseLimit);
+globalThis.fetch = async () => new Response(exactLimitBody, {
+  status: 200,
+  headers: { 'Content-Type': 'application/json', 'Content-Length': String(controlResponseLimit) },
+});
+const exactLimitAcknowledgement = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', autoDiscover: false, latestOnly: false },
+);
+assert.equal(exactLimitAcknowledgement.patternId, 'ocean', 'a response exactly at the ceiling remains valid');
+
+for (const [label, responseFactory] of [
+  ['declared oversized acknowledgement', () => new Response(
+    `${exactLimitBody} `,
+    { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(controlResponseLimit + 1) } },
+  )],
+  ['streamed oversized acknowledgement', () => new Response(
+    JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: 'x'.repeat(12000) }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )],
+  ['oversized error body', () => new Response('x'.repeat(controlResponseLimit + 1), {
+    status: 422,
+    headers: { 'Content-Type': 'text/plain' },
+  })],
+]) {
+  globalThis.fetch = async () => responseFactory();
+  await assert.rejects(
+    pushLivePreviewToCard(
+      { patternId: 'ocean' },
+      { host: 'lightweaver.local', expectedCardId: 'lw-expected', autoDiscover: false, latestOnly: false },
+    ),
+    error => {
+      assert.equal(error?.reason, 'response-too-large', label);
+      return true;
+    },
+  );
+}
 
 globalThis.fetch = async () => { throw new TypeError('network down'); };
 await assert.rejects(
@@ -291,7 +481,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -324,7 +514,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -357,7 +547,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -395,7 +585,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, recovered: true }),
+    json: async () => ({ ok: true, recovered: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -453,7 +643,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -511,7 +701,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, fallback: true }),
+    json: async () => ({ ok: true, fallback: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -544,6 +734,36 @@ assert.deepEqual(JSON.parse(resetFallbackRequests[1].options.body), {
 });
 
 delete globalThis.window;
+let releaseStaleZoneProbe;
+let staleZoneProbeStarted;
+const staleZoneProbeReady = new Promise(resolve => { staleZoneProbeStarted = resolve; });
+const arbitratedControlRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/api/zones')) {
+    staleZoneProbeStarted();
+    await new Promise(resolve => { releaseStaleZoneProbe = resolve; });
+    return { ok: true, json: async () => ({ zones: [{ id: 'zone-a' }] }) };
+  }
+  const body = JSON.parse(options.body || '{}');
+  arbitratedControlRequests.push(body.patternId);
+  return { ok: true, json: async () => ({ ok: true, patternId: body.patternId }) };
+};
+const staleAurora = pushLivePreviewToCard({ patternId: 'aurora', zone: 'zone-a' }, {
+  host: '192.168.18.69',
+  fallbackMissingZoneToAll: true,
+  autoDiscover: false,
+}).catch(error => error);
+await staleZoneProbeReady;
+const currentFire = pushLivePreviewToCard({ patternId: 'fire' }, {
+  host: '192.168.18.69',
+  autoDiscover: false,
+});
+releaseStaleZoneProbe();
+const [staleAuroraError, currentFireResponse] = await Promise.all([staleAurora, currentFire]);
+assert.equal(staleAuroraError.reason, 'superseded');
+assert.equal(currentFireResponse.patternId, 'fire');
+assert.deepEqual(arbitratedControlRequests, ['fire'], 'an obsolete preview must not POST after deferred preflight');
+
 let releaseFirstPreview;
 const latestPreviewRequests = [];
 globalThis.fetch = async (url, options = {}) => {
@@ -585,8 +805,61 @@ assert.equal(secondPreviewError.reason, 'superseded');
 assert.equal(thirdPreviewResponse.patternId, 'ocean');
 assert.deepEqual(latestPreviewRequests, ['aurora', 'ocean']);
 
+// Section combos and single-pattern taps share the same per-host arbitration.
+// Once the newer pattern intent exists, the older combo may finish its in-flight
+// zone but must never start another zone write.
+let releaseComboZoneOne;
+const interleavedPreviewRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/api/zones')) {
+    return {
+      ok: true,
+      json: async () => ({
+        zones: [
+          { id: 'zone-one', patternId: 'aurora' },
+          { id: 'zone-two', patternId: 'aurora' },
+        ],
+      }),
+    };
+  }
+  const body = JSON.parse(options.body || '{}');
+  interleavedPreviewRequests.push({ zone: body.zone || '', patternId: body.patternId });
+  if (body.zone === 'zone-one') {
+    await new Promise(resolve => { releaseComboZoneOne = resolve; });
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true, patternId: body.patternId, revision: body.revision }),
+  };
+};
+
+const olderCombo = pushSectionPreviewToCard([
+  { id: 'zone-one', zoneId: 'zone-one', kind: 'section', look: { patternId: 'ocean' } },
+  { id: 'zone-two', zoneId: 'zone-two', kind: 'section', look: { patternId: 'sparkle' } },
+], {
+  host: '192.168.18.71',
+  revision: 20,
+  autoDiscover: false,
+}).catch(error => error);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(interleavedPreviewRequests, [{ zone: 'zone-one', patternId: 'ocean' }]);
+const newerPattern = pushLivePreviewToCard({ patternId: 'fire' }, {
+  host: '192.168.18.71',
+  revision: 21,
+  autoDiscover: false,
+});
+releaseComboZoneOne();
+const [olderComboError, newerPatternResponse] = await Promise.all([olderCombo, newerPattern]);
+assert.equal(olderComboError.reason, 'superseded');
+assert.equal(newerPatternResponse.patternId, 'fire');
+assert.deepEqual(interleavedPreviewRequests, [
+  { zone: 'zone-one', patternId: 'ocean' },
+  { zone: '', patternId: 'fire' },
+]);
+
 const listeners = new Map();
 const bridgeMessages = [];
+let bridgeControlPadding = '';
 const bridgeWindow = {
   postMessage(message, targetOrigin) {
     bridgeMessages.push({ message, targetOrigin });
@@ -598,7 +871,9 @@ const bridgeWindow = {
           app: 'LightweaverCardBridge',
           id: message.id,
           ok: true,
-          response: { ok: true, bridged: true, patternId: message.payload?.patternId },
+          response: message.type === 'firmware-info'
+            ? { cardId: 'lw-live-preview', firmwareVersion: '1.0.0' }
+            : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
     }, 0);
@@ -612,7 +887,9 @@ globalThis.window = {
   },
   opener: bridgeWindow,
   localStorage: {
-    getItem: () => 'lightweaver.local',
+    getItem: key => key === 'lw_card_identity_v1'
+      ? JSON.stringify({ version: 1, id: 'lw-live-preview' })
+      : 'lightweaver.local',
     setItem: () => {},
   },
   addEventListener(type, listener) {
@@ -629,6 +906,9 @@ globalThis.CustomEvent = class CustomEvent {
     this.detail = init.detail;
   }
 };
+bootstrapCardBridgeFromOpener();
+await verifyCardBridgeIdentity('lightweaver.local');
+bridgeMessages.length = 0;
 
 const bridgedPreview = await pushLivePreviewToCard({
   patternId: 'ocean',
@@ -643,5 +923,15 @@ assert.equal(bridgeMessages[0].targetOrigin, 'http://lightweaver.local');
 assert.equal(bridgeMessages[0].message.app, 'LightweaverStudioBridge');
 assert.equal(bridgeMessages[0].message.type, 'control');
 assert.equal(bridgeMessages[0].message.payload.patternId, 'ocean');
+
+bridgeControlPadding = 'x'.repeat(controlResponseLimit + 1);
+await assert.rejects(
+  pushLivePreviewToCard(
+    { patternId: 'fire' },
+    { host: 'lightweaver.local', timeoutMs: 1000, latestOnly: false, autoDiscover: false },
+  ),
+  error => error?.reason === 'response-too-large',
+  'the HTTPS card-page bridge must enforce the same bounded acknowledgement contract',
+);
 
 console.log('card-live-preview tests passed');

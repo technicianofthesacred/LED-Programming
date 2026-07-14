@@ -18,6 +18,7 @@
 // ({cancelStream:true}), not a new message type.
 
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { guardDirectCardMutation } from './cardIdentity.js';
 import {
   canPushDirectlyToCard,
   cardHostToUrl,
@@ -93,10 +94,19 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
     retryAt = nowFn() + backoffMs;
   }
 
-  function openSocket() {
+  async function openSocket() {
     if (ws && ws.readyState === 1) return Promise.resolve(ws);
     if (opening) return opening;
     if (!WS) return Promise.reject(new Error('WebSocket is not available here.'));
+    if (nowFn() < retryAt) {
+      const error = new Error(`Waiting to retry ws://${resolvedHost}:81/ws`);
+      error.reason = 'ws-backoff';
+      return Promise.reject(error);
+    }
+    await guardDirectCardMutation(resolvedHost, { fetchImpl: doFetch });
+    // Another caller may have completed an open while identity was checked.
+    if (ws && ws.readyState === 1) return ws;
+    if (opening) return opening;
     if (nowFn() < retryAt) {
       // Still inside the backoff window: fail fast without opening a socket.
       // The pump counts this as an undelivered tick, which feeds the same
@@ -116,7 +126,11 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
         return;
       }
       socket.onopen = () => { ws = socket; opening = null; backoffMs = 0; retryAt = 0; resolve(socket); };
-      socket.onerror = () => { /* onclose follows and settles state */ };
+      socket.onerror = () => {
+        // Never keep using a socket after an error. Its replacement must pass
+        // the exact-host identity check again before construction.
+        if (ws === socket) ws = null;
+      };
       socket.onclose = () => {
         if (ws === socket) ws = null;
         if (opening) {
@@ -143,6 +157,7 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
       return { ok: true };
     },
     async sendCancel() {
+      await guardDirectCardMutation(resolvedHost, { fetchImpl: doFetch });
       const response = await doFetch(`${cardHostToUrl(resolvedHost)}/api/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

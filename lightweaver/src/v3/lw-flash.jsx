@@ -1,11 +1,7 @@
-/* Light Weaver v3 — Flash screen */
-/* Exact mockup file. The component BODY (JSX, class names, layout) is
-   unchanged from the design source; only the local SAMPLE flash simulation
-   was swapped for the real ESP32 Web Serial flashing engine. No visual
-   structure was altered. */
+/* Lightweaver v3 — safe automatic installer + technician diagnostics. */
 import React, { useState, useRef, useEffect } from 'react';
 import { I } from './lw-shared.jsx';
-import { connectESP, disconnectESP, flashFirmware } from '../lib/flash.js';
+import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
 import {
   FLASH_COMPLETE_RELEASED_LOG,
   FLASH_COMPLETE_RELEASED_STATUS,
@@ -17,7 +13,13 @@ import {
   MIN_FACTORY_IMAGE_BYTES,
   validateFirmwareImage,
   validateFlashPlan,
+  validateInstallHardware,
+  validateProductionInstallRelease,
+  replaceInstallConnection,
 } from '../lib/flashPlan.js';
+import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
+import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
+import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -40,7 +42,7 @@ import {
     return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
   }
 
-  function FlashScreen() {
+  function TechnicianFlashScreen() {
     const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
     const [connected, setConnected] = useState(false);
@@ -187,7 +189,14 @@ import {
     return (
       <div className="screen">
         <div className="screen-scroll">
-          <div className="fl">
+          <details className="technician-disclosure">
+            <summary>Technician diagnostics</summary>
+            <div className="fl">
+            <div>
+              <div className="eyebrow">Advanced tools</div>
+              <h1 className="flash-screen-title">Manual firmware tools</h1>
+              <p className="flash-screen-intro">Manual firmware files, offsets, erase controls, and the serial log are kept here for trained repair work.</p>
+            </div>
             <div className={"fl-warn " + (hasWebSerial ? "ok" : "warn")}>
               <span style={ICON16}>{I.info}</span>
               <div>
@@ -263,10 +272,232 @@ import {
               <div className="sec-h"><span className="t">Log</span><span className="m">{Math.round(progress * 100)}%</span><span className="line" /></div>
               <textarea ref={logRef} className="fl-log" readOnly value={log} placeholder="Connect the card to begin…" />
             </div>
-          </div>
+            </div>
+          </details>
         </div>
       </div>
     );
+  }
+
+  function detectInstallerCapabilities() {
+    if (typeof navigator === 'undefined') return detectPlatformCapabilities();
+    return detectPlatformCapabilities({
+      secureContext: globalThis.isSecureContext === true,
+      serial: navigator.serial,
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      maxTouchPoints: navigator.maxTouchPoints,
+    });
+  }
+
+  function UnsupportedInstall({ action }) {
+    return (
+      <div className="card install-handoff" role="status">
+        <div className="eyebrow">Your project is safe in Studio</div>
+        <h1>{action.title}</h1>
+        <p>{action.explanation}</p>
+        <ol>
+          <li>Open <strong>led.mandalacodes.com</strong> on the supported computer or browser.</li>
+          <li>Open this project, then choose <strong>Connect card</strong> and <strong>Blank or not responding</strong>.</li>
+          <li>Plug the Lightweaver card into that computer by USB.</li>
+        </ol>
+      </div>
+    );
+  }
+
+  function AutomaticInstallScreen() {
+    const capabilities = detectInstallerCapabilities();
+    const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
+    const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
+    const [cardState, setCardState] = useState({ state: 'idle', hardware: null, error: '' });
+    const [eraseConfirmed, setEraseConfirmed] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [installState, setInstallState] = useState('idle');
+    const [releaseAttempt, setReleaseAttempt] = useState(0);
+    const loaderRef = useRef(null);
+    const transportRef = useRef(null);
+    const mountedRef = useRef(true);
+    const findingRef = useRef(false);
+    const installingRef = useRef(false);
+
+    useEffect(() => {
+      if (!capabilities.canWebSerialInstall) return undefined;
+      let active = true;
+      setReleaseState({ state: 'loading', release: null, error: '' });
+      loadProductionFirmwareRelease()
+        .then((release) => {
+          validateProductionInstallRelease(release);
+          if (active) setReleaseState({ state: 'ready', release, error: '' });
+        })
+        .catch((error) => {
+          if (active) setReleaseState({ state: 'error', release: null, error: error?.message || String(error) });
+        });
+      return () => { active = false; };
+    }, [capabilities.canWebSerialInstall, releaseAttempt]);
+
+    useEffect(() => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        if (!installingRef.current) disconnectESP(loaderRef.current, transportRef.current);
+        loaderRef.current = null;
+        transportRef.current = null;
+      };
+    }, []);
+
+    useEffect(() => {
+      if (installState !== 'installing') return undefined;
+      const preventUnload = (event) => {
+        event.preventDefault();
+        event.returnValue = '';
+      };
+      window.addEventListener('beforeunload', preventUnload);
+      window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } }));
+      return () => {
+        window.removeEventListener('beforeunload', preventUnload);
+        window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } }));
+      };
+    }, [installState]);
+
+    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} />;
+
+    const findCard = async () => {
+      if (findingRef.current || installingRef.current) return;
+      findingRef.current = true;
+      setCardState({ state: 'finding', hardware: null, error: '' });
+      setEraseConfirmed(false);
+      try {
+        const previous = transportRef.current
+          ? { loader: loaderRef.current, transport: transportRef.current }
+          : null;
+        loaderRef.current = null;
+        transportRef.current = null;
+        const { connection, hardware } = await replaceInstallConnection({
+          previous,
+          connect: () => connectESP(),
+          verify: async candidate => {
+            const inspected = await inspectConnectedESP(candidate.loader, candidate.chip);
+            return { ...inspected, ...validateInstallHardware(inspected) };
+          },
+          disconnect: candidate => disconnectESP(candidate?.loader, candidate?.transport),
+        });
+        if (!mountedRef.current) {
+          await disconnectESP(connection.loader, connection.transport);
+          return;
+        }
+        loaderRef.current = connection.loader;
+        transportRef.current = connection.transport;
+        setCardState({ state: 'ready', hardware, error: '' });
+      } catch (error) {
+        loaderRef.current = null;
+        transportRef.current = null;
+        setCardState({ state: 'error', hardware: null, error: error?.message || String(error) });
+      } finally {
+        findingRef.current = false;
+      }
+    };
+
+    const install = async () => {
+      if (!eraseConfirmed || cardState.state !== 'ready' || releaseState.state !== 'ready' || installingRef.current) return;
+      installingRef.current = true;
+      const { manifest, bytes } = releaseState.release;
+      const file = new File([bytes], `lightweaver-${manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
+      setInstallState('installing');
+      setProgress(0);
+      try {
+        await flashFirmwareAndRelease({
+          loader: loaderRef.current,
+          transport: transportRef.current,
+          file,
+          address: 0,
+          eraseAll: true,
+          flashFirmware,
+          onProgress: setProgress,
+        });
+        loaderRef.current = null;
+        transportRef.current = null;
+        installingRef.current = false;
+        setProgress(1);
+        setInstallState('complete');
+      } catch (error) {
+        loaderRef.current = null;
+        transportRef.current = null;
+        installingRef.current = false;
+        setInstallState('error');
+        setCardState({ state: 'error', hardware: null, error: `Installation stopped: ${error?.message || String(error)}. USB was released.` });
+      }
+    };
+
+    if (installState === 'complete') {
+      return (
+        <div className="install-flow" aria-live="polite">
+          <div className="install-step-mark complete">Installation complete</div>
+          <h1>Connect your card to Wi-Fi</h1>
+          <p>USB has been released. Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network. Setup should open automatically.</p>
+          <p>If setup does not open, use the button below after joining the card network.</p>
+          <a className="btn-lg" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open card setup</a>
+        </div>
+      );
+    }
+
+    const releaseReady = releaseState.state === 'ready';
+    return (
+      <div className="install-flow" aria-live="polite">
+        <div>
+          <div className="eyebrow">Safe automatic installer</div>
+          <h1>Install Lightweaver</h1>
+          <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
+        </div>
+
+        <div className={`install-release ${releaseState.state}`} role="status">
+          {releaseState.state === 'loading' && 'Verifying the official Lightweaver release…'}
+          {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} verified and ready.`}
+          {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
+        </div>
+        {releaseState.state === 'error' && (
+          <button className="btn" type="button" onClick={() => setReleaseAttempt(attempt => attempt + 1)}>Retry official firmware</button>
+        )}
+
+        <div className="card install-card-check">
+          <div>
+            <h2>1. Find your connected card</h2>
+            <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
+          </div>
+          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing'}>
+            {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
+          </button>
+          {cardState.state === 'ready' && (
+            <div className="install-check-ok">Correct card found · ESP32-S3 · 16 MB</div>
+          )}
+          {cardState.state === 'error' && <div className="install-check-error" role="alert">{cardState.error}</div>}
+        </div>
+
+        {cardState.state === 'ready' && (
+          <div className="card install-confirm">
+            <h2>2. Confirm the reset</h2>
+            <p>Installing Lightweaver erases the card's current firmware, Wi-Fi details, patterns, and settings. Your Studio project stays here.</p>
+            <label>
+              <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
+              <span>I understand this will erase everything currently stored on this card.</span>
+            </label>
+            <button className="btn-lg" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing'}>
+              {installState === 'installing' ? `Installing… ${Math.round(progress * 100)}%` : 'Erase card and install Lightweaver'}
+            </button>
+          </div>
+        )}
+
+        {installState === 'installing' && (
+          <div className="fl-bar" role="progressbar" aria-label="Installing Lightweaver" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress * 100)}>
+            <div className="fill" style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function FlashScreen() {
+    const installMode = typeof window !== 'undefined' && new URLSearchParams(window.location.hash.slice(1)).get('mode') === 'install';
+    return installMode ? <AutomaticInstallScreen /> : <TechnicianFlashScreen />;
   }
 
 export { FlashScreen };

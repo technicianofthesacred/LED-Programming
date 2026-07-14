@@ -1,3 +1,5 @@
+export const PHYSICAL_PREVIEW_FAILURE_MESSAGE = 'The Studio preview changed, but the physical lights did not. Reconnect and retry.';
+
 export function createCardActionState({ confirmedRevision = null } = {}) {
   return {
     status: 'idle',
@@ -13,9 +15,11 @@ export function cardActionReducer(state, action) {
     case 'start':
       return { ...state, status: 'pending', pendingRevision: action.revision, error: '', conflictsDisabled: true };
     case 'confirm':
+      if (action.revision !== undefined && action.revision !== state.pendingRevision) return state;
       return { ...state, status: 'confirmed', confirmedRevision: state.pendingRevision, pendingRevision: null, error: '', conflictsDisabled: false };
     case 'fail':
-      return { ...state, status: 'failed', error: action.error || 'Card did not confirm the action.', conflictsDisabled: false };
+      if (action.revision !== undefined && action.revision !== state.pendingRevision) return state;
+      return { ...state, status: 'failed', error: action.error || PHYSICAL_PREVIEW_FAILURE_MESSAGE, conflictsDisabled: false };
     case 'retry':
       return state.status === 'failed' ? { ...state, status: 'pending', error: '', conflictsDisabled: true } : state;
     case 'reset':
@@ -23,4 +27,10 @@ export function cardActionReducer(state, action) {
     default:
       return state;
   }
+}
+
+export function cardActionStatusLabel(state = {}) {
+  if (state.status === 'pending') return 'Sending to Lightweaver';
+  if (state.status === 'confirmed') return 'Playing on Lightweaver';
+  return 'Previewing in Studio';
 }

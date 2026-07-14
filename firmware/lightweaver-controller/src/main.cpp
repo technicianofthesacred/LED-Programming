@@ -40,6 +40,19 @@
 #define LW_SPI_MISO 13
 #endif
 
+#ifndef LW_FIRMWARE_VERSION
+#define LW_FIRMWARE_VERSION "1.0.0"
+#endif
+#ifndef LW_BUILD_ID
+#define LW_BUILD_ID "dev"
+#endif
+#ifndef LW_CONFIG_SCHEMA_VERSION
+#define LW_CONFIG_SCHEMA_VERSION 1
+#endif
+#ifndef LW_CAPABILITIES_VERSION
+#define LW_CAPABILITIES_VERSION 1
+#endif
+
 CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
@@ -121,10 +134,12 @@ bool discoveryPinAvailable(uint8_t pin);
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
 void handleControlEvent(ControlEventType event);
 void selectLook(int index);
-void selectLookInstant(int index);
+bool selectLookInstant(int index);
 bool startLook(uint8_t index);
 void closeSequence();
 bool openSequence(const String& path);
+bool canOpenSequence(const String& path);
+bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted);
 bool renderCurrentLook(bool force = false);
 bool renderSequenceFrame(bool force = false);
 bool renderProceduralFrame(const String& preset);
@@ -655,6 +670,7 @@ void selectLook(int index) {
   if (lookCount == 0) return;
   uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
   if (nextIndex == currentLookIndex && !blackedOut) return;
+  if (!isLoadedLookRenderable(looks[nextIndex], false)) return;
 
   fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
   closeSequence();
@@ -664,18 +680,19 @@ void selectLook(int index) {
   fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
 }
 
-void selectLookInstant(int index) {
-  if (lookCount == 0) return;
+bool selectLookInstant(int index) {
+  if (lookCount == 0) return false;
   uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
-  if (nextIndex == currentLookIndex && !blackedOut) return;
+  if (!isLoadedLookRenderable(looks[nextIndex], false)) return false;
 
   closeSequence();
   currentLookIndex = nextIndex;
   blackedOut = false;
   fadeScale = 1.0f;
-  if (!startLook(currentLookIndex)) return;
+  if (!startLook(currentLookIndex)) return false;
   FastLED.setBrightness(computeBrightnessByte());
   showLeds();
+  return true;
 }
 
 bool startLook(uint8_t index) {
@@ -688,16 +705,16 @@ bool startLook(uint8_t index) {
     Serial.println(")");
   }
 
-  applyLookToRuntimeZones(look);
-
   if (look.mode == "sequence") {
     if (!openSequence(look.file)) {
       fail(ERROR_SEQUENCE, "sequence open failed");
       return false;
     }
+    applyLookToRuntimeZones(look);
     return renderSequenceFrame(true);
   }
 
+  applyLookToRuntimeZones(look);
   return renderCurrentLook(true);
 }
 
@@ -706,6 +723,37 @@ void closeSequence() {
     sequenceFile.close();
     sequenceOpen = false;
   }
+}
+
+bool readSequenceMetadata(File& file, uint32_t& frameCount, uint16_t& fps, uint32_t& frameBytes) {
+  uint8_t header[LWSEQ_HEADER_BYTES];
+  if (file.read(header, LWSEQ_HEADER_BYTES) != LWSEQ_HEADER_BYTES) return false;
+  if (memcmp(header, "LWSEQ1", 6) != 0) return false;
+
+  uint16_t version = readLe16(header + 8);
+  uint16_t channels = readLe16(header + 22);
+  uint32_t pixelCount = readLe32(header + 12);
+  frameCount = readLe32(header + 16);
+  fps = readLe16(header + 20);
+  frameBytes = pixelCount * channels;
+
+  if (version != 1 || channels != 3 || pixelCount != totalPixels ||
+      frameBytes > sizeof(frameBuffer) || frameCount == 0 || fps == 0) return false;
+  uint64_t requiredBytes = uint64_t(LWSEQ_HEADER_BYTES) + uint64_t(frameCount) * frameBytes;
+  if (requiredBytes > file.size()) return false;
+  return true;
+}
+
+bool canOpenSequence(const String& path) {
+  if (path.length() == 0) return false;
+  File candidate = SD.open(path.c_str(), FILE_READ);
+  if (!candidate) return false;
+  uint32_t frameCount = 0;
+  uint16_t fps = 0;
+  uint32_t frameBytes = 0;
+  bool valid = readSequenceMetadata(candidate, frameCount, fps, frameBytes);
+  candidate.close();
+  return valid;
 }
 
 bool openSequence(const String& path) {
@@ -720,26 +768,7 @@ bool openSequence(const String& path) {
     return false;
   }
 
-  uint8_t header[LWSEQ_HEADER_BYTES];
-  if (sequenceFile.read(header, LWSEQ_HEADER_BYTES) != LWSEQ_HEADER_BYTES) {
-    sequenceFile.close();
-    return false;
-  }
-
-  if (memcmp(header, "LWSEQ1", 6) != 0) {
-    sequenceFile.close();
-    return false;
-  }
-
-  uint16_t version = readLe16(header + 8);
-  uint16_t channels = readLe16(header + 22);
-  uint32_t pixelCount = readLe32(header + 12);
-  sequenceFrameCount = readLe32(header + 16);
-  sequenceFps = readLe16(header + 20);
-  sequenceFrameBytes = pixelCount * channels;
-
-  if (version != 1 || channels != 3 || pixelCount != totalPixels ||
-      sequenceFrameBytes > sizeof(frameBuffer) || sequenceFrameCount == 0 || sequenceFps == 0) {
+  if (!readSequenceMetadata(sequenceFile, sequenceFrameCount, sequenceFps, sequenceFrameBytes)) {
     sequenceFile.close();
     return false;
   }
@@ -796,17 +825,48 @@ void applyLookToRuntimeZones(const LookConfig& look) {
 
 // Find a look by id or preset in the loaded playlist. Missing ids fall back
 // to the compiled procedural pattern renderer inside renderZone().
-const LookConfig* findLookById(const String& id) {
-  if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
+const LookConfig* findLookByExactId(const String& id) {
   for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id || looks[i].preset == id) return &looks[i];
+    if (looks[i].id == id) return &looks[i];
   }
   return nullptr;
 }
 
+const LookConfig* findLookByPresetAlias(const String& preset) {
+  for (uint8_t i = 0; i < lookCount; i++) {
+    if (looks[i].preset == preset) return &looks[i];
+  }
+  return nullptr;
+}
+
+const LookConfig* findLookById(const String& id) {
+  if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
+  const LookConfig* exact = findLookByExactId(id);
+  return exact ? exact : findLookByPresetAlias(id);
+}
+
+bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
+  if (look.mode == "combo") {
+    if (zoneTargeted) return false;
+    if (!look.hasZoneLooks || look.zoneCount == 0) return false;
+    for (uint8_t i = 0; i < look.zoneCount; i++) {
+      if (!isSupportedCompiledPattern(look.zones[i].patternId)) return false;
+    }
+    return true;
+  }
+  if (look.hasZoneLooks) return false;
+  if (look.mode == "procedural") return isSupportedProceduralPattern(look.preset);
+  if (look.mode == "preset") return isSupportedPresetPattern(look.preset);
+  if (look.mode == "sequence") {
+    if (zoneTargeted) return false;
+    return canOpenSequence(look.file);
+  }
+  return false;
+}
+
 bool renderZone(const ZoneConfig& zone, uint32_t now) {
   if (zone.rangeCount == 0) return false;
-  const LookConfig* look = findLookById(zone.patternId);
+  const LookConfig* look = isSupportedCompiledPattern(zone.patternId) ? nullptr : findLookById(zone.patternId);
 
   PatternModifiers mods;
   mods.speed = zone.speed;
@@ -1255,21 +1315,48 @@ void runtimePreviousPattern() {
 }
 
 bool runtimeSelectPatternById(const String& id) {
-  for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id || looks[i].preset == id) {
-      selectLookInstant(i);
-      return true;
-    }
+  const LookConfig* look = findLookByExactId(id);
+  if (look) {
+    if (!isLoadedLookRenderable(*look, false)) return false;
+    return selectLookInstant(static_cast<int>(look - looks));
   }
-  if (id.length() == 0) return false;
-  applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
-  return true;
+  if (isSupportedCompiledPattern(id)) {
+    applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
+    return true;
+  }
+  look = findLookByPresetAlias(id);
+  if (!look || !isLoadedLookRenderable(*look, false)) return false;
+  return selectLookInstant(static_cast<int>(look - looks));
+}
+
+// Validate the complete pattern target without changing visible state. The web
+// control transaction calls this before applying sync, color, or brightness so
+// a section removed by a newer wiring config cannot leave a partial preview.
+bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId) {
+  if (patternId.length() == 0 || runtimeConfig.zoneCount == 0) return false;
+  bool zoneTargeted = targetId.length() > 0;
+  const LookConfig* look = zoneTargeted && isSupportedCompiledPattern(patternId)
+    ? nullptr
+    : findLookByExactId(patternId);
+  if (!look && !isSupportedCompiledPattern(patternId) && !zoneTargeted) {
+    look = findLookByPresetAlias(patternId);
+  }
+  if (look) {
+    if (!isLoadedLookRenderable(*look, zoneTargeted)) return false;
+  } else if (!isSupportedCompiledPattern(patternId)) {
+    return false;
+  }
+  if (targetId.length() == 0) return true;
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    if (runtimeConfig.zones[i].id == targetId) return true;
+  }
+  return false;
 }
 
 // Zone-targeted pattern selection. Used by the per-zone designer flow.
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
+  if (!runtimeCanSelectPatternByIdZ(targetId, patternId)) return false;
   if (targetId.length() == 0) return runtimeSelectPatternById(patternId);
-  if (patternId.length() == 0) return false;
   uint8_t touched = applyToZones(targetId, [&](ZoneConfig& z) { z.patternId = patternId; });
   return touched > 0;
 }
@@ -1284,13 +1371,41 @@ float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
 
+uint32_t runtimeWiringProbationRemainingMs() {
+  if (!wiringProbationActive) return 0;
+  int32_t remaining = int32_t(wiringProbationDeadlineMs - millis());
+  return remaining > 0 ? static_cast<uint32_t>(remaining) : 0;
+}
+
+String runtimeCardId() {
+  char cardId[16] = {};
+  snprintf(cardId, sizeof(cardId), "lw-%012llx",
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
+  return String(cardId);
+}
+
 String runtimeFirmwareInfo() {
   JsonDocument doc;
+  doc["cardId"] = runtimeCardId();
+  doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
+  doc["buildId"] = LW_BUILD_ID;
+  doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
+  doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["build"] = __DATE__ " " __TIME__;
   doc["pixels"] = totalPixels;
   doc["piece"]["id"] = runtimeConfig.pieceId;
   doc["piece"]["name"] = runtimeConfig.pieceName;
   doc["lookCount"] = lookCount;
+  doc["runtimeSource"] = runtimeConfig.source == SOURCE_SD ? "sd" : runtimeConfig.source == SOURCE_NVS ? "internal-flash" : "defaults";
+  doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
+  doc["wiringProbation"]["active"] = wiringProbationActive;
+  doc["wiringProbation"]["remainingMs"] = runtimeWiringProbationRemainingMs();
+  doc["limits"]["pixels"] = LW_MAX_PIXELS;
+  doc["limits"]["outputs"] = LW_MAX_OUTPUTS;
+  doc["limits"]["looks"] = LW_MAX_LOOKS;
+  doc["limits"]["zones"] = LW_MAX_ZONES;
+  doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
+  doc["limits"]["configStorageBytes"] = 3968;
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
@@ -1307,6 +1422,8 @@ String runtimeFirmwareInfo() {
     output["id"] = outputs[i].id;
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
+    output["gpio"] = outputs[i].pin;
+    output["count"] = outputs[i].pixels;
   }
   int altPress = effectiveEncoderPressAltPin(controls);
   doc["controls"]["encoder"]["a"] = controls.encoderA;

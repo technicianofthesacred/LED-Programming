@@ -5,6 +5,13 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
+import {
+  adoptExpectedCardIdentity,
+  compareCardIdentity,
+  normalizeCardIdentity,
+  readPersistedCardIdentity,
+  requireExpectedCardIdentity,
+} from './cardIdentity.js';
 
 // Message types that command the hardware (write state, push config, reboot,
 // repair the LED output, stream live frames). These require a card origin we've
@@ -22,6 +29,7 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wiring-rollback',
   'wiring-discover',
 ]);
+const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
 
 // Reads and idempotent transaction operations may safely cross one transient
 // bridge timeout. Candidate staging is intentionally absent: retrying it could
@@ -60,8 +68,12 @@ let bridgeReady = false;
 // The card page's reported bridge protocol version. 0 = legacy firmware that
 // predates versioning (no `version` field in its ready/replies).
 let bridgeVersion = 0;
+let bridgeCard = null;
+let bridgeDiscoveredCard = null;
+let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
+let bridgeLifecycle = 0;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
@@ -115,6 +127,10 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeConnected = false;
   bridgeReady = false;
   bridgeVersion = 0;
+  bridgeCard = null;
+  bridgeDiscoveredCard = null;
+  bridgeIdentityError = '';
+  bridgeLifecycle += 1;
   dispatchBridgeChange();
 }
 
@@ -125,10 +141,23 @@ function setBridgeState({
   connected = bridgeConnected,
   ready = undefined,
 } = {}) {
+  const normalizedHost = host ? normalizeCardHost(host) : bridgeHost;
+  const targetChanged = Boolean(
+    (source && bridgeWindow && source !== bridgeWindow) ||
+    (normalizedHost && bridgeHost && normalizedHost !== bridgeHost)
+  );
+  if (targetChanged) {
+    bridgeLifecycle += 1;
+    bridgeReady = false;
+    bridgeCard = null;
+    bridgeDiscoveredCard = null;
+    bridgeIdentityError = '';
+    bridgeVersion = 0;
+  }
   if (source) bridgeWindow = source;
   if (origin) bridgeOrigin = origin;
   if (host) {
-    bridgeHost = normalizeCardHost(host);
+    bridgeHost = normalizedHost;
     writeStoredCardHost(bridgeHost);
   }
   bridgeConnected = Boolean(connected);
@@ -185,6 +214,16 @@ function handleBridgeMessage(event) {
     const claimedHost = normalizeCardHost(data.host || hostFromOrigin(event.origin));
     const derivedOrigin = cardHostToUrl(claimedHost);
     if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
+    if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
+    if (bridgeOrigin && event.origin !== bridgeOrigin) return;
+    // A card-page reload may retain the exact same WindowProxy and host. Revoke
+    // the prior lifecycle synchronously before exposing transport readiness;
+    // fresh firmware identity is the only path back to command authority.
+    bridgeLifecycle += 1;
+    bridgeReady = false;
+    bridgeCard = null;
+    bridgeDiscoveredCard = null;
+    bridgeIdentityError = '';
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
       source: event.source,
@@ -193,11 +232,25 @@ function handleBridgeMessage(event) {
       connected: true,
       ready: true,
     });
+    void verifyCardBridgeIdentity(claimedHost).catch(() => {
+      // Identity failures are surfaced through bridge state; the ready message
+      // handler must never create an unhandled async rejection.
+    });
     return;
   }
 
   const request = pending.get(data.id);
   if (!request) return;
+  if (
+    request.lifecycle !== bridgeLifecycle ||
+    (bridgeOrigin && request.origin !== bridgeOrigin) ||
+    normalizeCardHost(request.host) !== normalizeCardHost(bridgeHost)
+  ) {
+    pending.delete(data.id);
+    clearTimeout(request.timer);
+    request.reject(bridgeError('Ignored a response from an older card target.', 'stale-host'));
+    return;
+  }
   if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
   if (request.origin && event.origin !== request.origin) return;
 
@@ -209,6 +262,32 @@ function handleBridgeMessage(event) {
     error.reason = data.reason || 'bridge';
     request.reject(error);
     return;
+  }
+
+  const responsePayload = data.response ?? data.status ?? { ok: true };
+  if (request.type === 'firmware-info') {
+    try {
+      const identity = normalizeCardIdentity(responsePayload, request.host || bridgeHost);
+      if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
+      bridgeDiscoveredCard = identity;
+      try {
+        requireExpectedCardIdentity(identity);
+        bridgeCard = identity;
+        bridgeIdentityError = '';
+      } catch (error) {
+        // Discovery is read-only and must still succeed. Keep commands locked
+        // until an explicit first-pair adoption or re-pair verifies this card.
+        bridgeCard = null;
+        bridgeIdentityError = error?.reason || 'identity-missing';
+      }
+    } catch (error) {
+      bridgeDiscoveredCard = null;
+      bridgeCard = null;
+      bridgeIdentityError = error?.reason || 'identity-missing';
+      dispatchBridgeChange();
+      request.reject(error);
+      return;
+    }
   }
 
   // A response whose origin matches a local card origin is a verified handshake
@@ -226,7 +305,7 @@ function handleBridgeMessage(event) {
     connected: true,
     ready: verifiedReady ? true : undefined,
   });
-  request.resolve(data.response ?? data.status ?? { ok: true });
+  request.resolve(responsePayload);
 }
 
 export function attachCardBridgeListener() {
@@ -308,6 +387,12 @@ export function openCardBridge(rawHost = '', {
 }
 
 export function getCardBridgeState() {
+  let identityVerified = false;
+  try {
+    identityVerified = Boolean(bridgeCard?.id && requireExpectedCardIdentity(bridgeCard));
+  } catch {
+    identityVerified = false;
+  }
   return {
     connected: bridgeConnected,
     // True once a handshake (ready event or verified response) confirmed the
@@ -315,11 +400,81 @@ export function getCardBridgeState() {
     verified: bridgeReady,
     // Bridge protocol version the card reported (0 = legacy firmware).
     version: bridgeVersion,
+    card: bridgeCard,
+    discoveredCard: bridgeDiscoveredCard,
+    identityError: bridgeIdentityError,
+    identityVerified,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
     open: Boolean(bridgeWindow),
   };
+}
+
+function requireDiscoveredBridgeCard(rawHost = bridgeHost) {
+  const host = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
+  if (!bridgeReady || normalizeCardHost(bridgeHost) !== host) {
+    throw bridgeError('The discovered card belongs to an older bridge host.', 'stale-host');
+  }
+  if (!bridgeDiscoveredCard?.id) {
+    throw bridgeError('Discover the card identity before pairing it.', 'identity-missing');
+  }
+  return bridgeDiscoveredCard;
+}
+
+export function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = requireDiscoveredBridgeCard(rawHost);
+  const expected = readPersistedCardIdentity();
+  if (expected?.id) {
+    const comparison = compareCardIdentity(expected, identity);
+    if (!comparison.ok) {
+      throw bridgeError('Use the explicit re-pair action to replace the expected Lightweaver card.', comparison.reason);
+    }
+  }
+  if (!adoptExpectedCardIdentity(identity)) {
+    throw bridgeError('Could not save the paired Lightweaver identity.', 'identity-storage');
+  }
+  bridgeCard = identity;
+  bridgeIdentityError = '';
+  dispatchBridgeChange();
+  return identity;
+}
+
+export function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = requireDiscoveredBridgeCard(rawHost);
+  if (!adoptExpectedCardIdentity(identity)) {
+    throw bridgeError('Could not replace the paired Lightweaver identity.', 'identity-storage');
+  }
+  bridgeCard = identity;
+  bridgeIdentityError = '';
+  dispatchBridgeChange();
+  return identity;
+}
+
+export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
+  const expectedHost = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
+  const expectedWindow = bridgeWindow;
+  const expectedLifecycle = bridgeLifecycle;
+  try {
+    const response = await sendCardBridgeRequest('firmware-info', {}, { host: expectedHost });
+    const identity = normalizeCardIdentity(response, expectedHost);
+    if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
+    if (bridgeWindow !== expectedWindow || normalizeCardHost(bridgeHost) !== expectedHost || bridgeLifecycle !== expectedLifecycle) {
+      throw bridgeError('Ignored identity from an older card connection.', 'stale-host');
+    }
+    requireExpectedCardIdentity(identity, { expected: readPersistedCardIdentity() });
+    bridgeCard = identity;
+    bridgeIdentityError = '';
+    dispatchBridgeChange();
+    return identity;
+  } catch (error) {
+    if (bridgeWindow === expectedWindow && normalizeCardHost(bridgeHost) === expectedHost && bridgeLifecycle === expectedLifecycle) {
+      bridgeCard = null;
+      bridgeIdentityError = error?.reason || 'identity-missing';
+      dispatchBridgeChange();
+    }
+    throw error;
+  }
 }
 
 export function getCardBridgeVersion() {
@@ -336,7 +491,7 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   bootstrapCardBridgeFromOpener();
 
   const current = getCardBridgeState();
-  if (current.verified && !bridgeTargetClosed() && normalizeCardHost(current.host) === host) {
+  if (current.identityVerified && !bridgeTargetClosed() && normalizeCardHost(current.host) === host) {
     return { window: bridgeWindow, ready: Promise.resolve(current) };
   }
 
@@ -357,7 +512,12 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
     if (bridgeAcquisitions.get(host) === attempt) bridgeAcquisitions.delete(host);
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
-    if (!state?.verified || normalizeCardHost(state.host) !== host) return false;
+    if (state?.identityError) {
+      cleanup();
+      settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
+      return true;
+    }
+    if (!state?.identityVerified || normalizeCardHost(state.host) !== host) return false;
     cleanup();
     try {
       win?.focus?.();
@@ -459,7 +619,10 @@ function bridgeRequestAttempt(type, payload, {
       markBridgeTimeout(startedAt);
       reject(bridgeError('Timed out waiting for the card bridge.', 'bridge-timeout'));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer, origin: targetOrigin });
+    pending.set(id, {
+      resolve, reject, timer, origin: targetOrigin, type, host: resolvedHost,
+      lifecycle: bridgeLifecycle,
+    });
     try {
       bridgeWindow.postMessage(message, targetOrigin);
     } catch (cause) {
@@ -482,6 +645,30 @@ export function sendCardBridgeRequest(type, payload = {}, {
   const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
   const targetOrigin = cardHostToUrl(resolvedHost);
 
+  if (PRIVILEGED_BRIDGE_TYPES.has(type) && !isLocalCardHost(resolvedHost)) {
+    return Promise.reject(bridgeError(
+      'Refused to send a privileged card command to a non-local origin.',
+      'bridge-untrusted-origin',
+    ));
+  }
+
+  if (!IDENTITY_FREE_BRIDGE_TYPES.has(type)) {
+    try {
+      if (!bridgeReady || !bridgeCard?.id) {
+        throw bridgeError(
+          'The card bridge transport is open, but card identity is not verified.',
+          bridgeIdentityError || 'identity-missing',
+        );
+      }
+      requireExpectedCardIdentity(bridgeCard);
+      if (normalizeCardHost(bridgeHost) !== resolvedHost) {
+        throw bridgeError('The verified card belongs to an older bridge host.', 'stale-host');
+      }
+    } catch (error) {
+      return Promise.reject(error?.reason ? error : bridgeError(error?.message || 'Card identity verification failed.', 'identity-missing', error));
+    }
+  }
+
   // Privileged messages (write hardware state / push config / reboot / repair)
   // must target a verified local card origin. This blocks the core threat: a
   // crafted page steering Studio into posting control commands to an
@@ -490,13 +677,6 @@ export function sendCardBridgeRequest(type, payload = {}, {
   // (parseBridgeParams) or from the stored/verified card host — so a public
   // origin can never be the target here. Status/ping/info reads stay
   // unrestricted so the handshake can complete and so discovery still works.
-  if (PRIVILEGED_BRIDGE_TYPES.has(type) && !isLocalCardHost(resolvedHost)) {
-    return Promise.reject(bridgeError(
-      'Refused to send a privileged card command to a non-local origin.',
-      'bridge-untrusted-origin',
-    ));
-  }
-
   if (!bridgeWindow || bridgeTargetClosed()) {
     clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
     // Return a rejected promise (rather than throwing synchronously) so callers

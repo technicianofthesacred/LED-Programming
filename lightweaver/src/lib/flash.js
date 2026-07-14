@@ -3,6 +3,7 @@ import {
   connectEspWithResetSequence,
   makeEspConnectTerminal,
 } from './flashConnection.js';
+import { writeVerifiedFlash } from './flashPlan.js';
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
@@ -21,6 +22,16 @@ export async function connectESP({ onAttempt, onLog } = {}) {
   });
 }
 
+export async function inspectConnectedESP(loader, chipDescription = '') {
+  if (!loader) throw new Error('The connected card could not be inspected');
+  const flashSize = await loader.detectFlashSize();
+  return {
+    chipDescription: String(chipDescription || loader.chip?.CHIP_NAME || 'Unknown chip'),
+    chipName: String(loader.chip?.CHIP_NAME || ''),
+    flashSize,
+  };
+}
+
 export async function disconnectESP(loader, transport) {
   try {
     if (transport) await transport.disconnect().catch(() => {});
@@ -29,7 +40,7 @@ export async function disconnectESP(loader, transport) {
 
 export async function flashFirmware(loader, file, address, eraseAll, onProgress) {
   const data = new Uint8Array(await file.arrayBuffer());
-  await loader.writeFlash({
+  await writeVerifiedFlash(loader, {
     fileArray: [{ data, address }],
     flashMode: 'keep',
     flashFreq: 'keep',

@@ -8,6 +8,11 @@ import { resolve } from 'node:path';
 
 assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_reset']);
 
+const flashSource = readFileSync(resolve(import.meta.dirname, '../src/lib/flash.js'), 'utf8');
+assert.match(flashSource, /export async function inspectConnectedESP/);
+assert.match(flashSource, /detectFlashSize\(\)/);
+assert.match(flashSource, /writeVerifiedFlash/);
+
 {
   const attempts = [];
   const disconnected = [];
@@ -157,6 +162,8 @@ assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_
     /FLASH_COMPLETE_RELEASED_LOG/,
     'Flash screen should log the concrete post-flash WiFi/IP next step',
   );
+  assert.match(screen, /findingRef\.current/, 'card selection should have a synchronous single-flight guard');
+  assert.match(screen, /beforeunload/, 'active erase/write should guard accidental page unload');
 }
 
 console.log('flash-connect tests passed');

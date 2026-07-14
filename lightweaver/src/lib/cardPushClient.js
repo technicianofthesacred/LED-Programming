@@ -16,6 +16,7 @@ import {
   writeStoredCardHost,
 } from './cardConnection.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { guardDirectCardMutation } from './cardIdentity.js';
 import {
   CardConfigCapacityError,
   prepareCardStoragePayload,
@@ -219,6 +220,7 @@ async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
 }
 
 export async function requestCardReboot(host, options = {}) {
+  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1200) });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
   try {
@@ -260,6 +262,9 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   // over-capacity configuration never causes an external side effect.
   const preparedPayload = prepareCardStoragePayload(runtimePackage);
   const host = options.host || getCardHostname();
+  if (!isMixedContentBlocked()) {
+    await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
+  }
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
   if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
     throw projectMismatchError(rebootPlan.current, runtimePackage);
@@ -313,6 +318,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       });
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
+          await guardDirectCardMutation(found.host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
           const retryRebootPlan = await resolveConfigRebootForCard(found.host, runtimePackage, options);
           if (retryRebootPlan.projectChanged && options.allowProjectChange !== true) {
             throw projectMismatchError(retryRebootPlan.current, runtimePackage);

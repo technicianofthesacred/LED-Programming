@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import {
   CARD_LINK_PING_MISS_LIMIT,
+  adoptDiscoveredDirectCard,
   bootstrapCardLink,
+  cardLinkBootstrapFailureReason,
   cardLinkReasonText,
   cardLinkStatusText,
+  connectCardLink,
   createCardLink,
   getCardLinkState,
   getSharedCardLink,
   initialCardLinkState,
   isCardLinkConnected,
+  reportDirectCardStatus,
   reduceCardLink,
 } from '../src/lib/cardLink.js';
 import {
@@ -17,6 +21,11 @@ import {
 } from '../src/lib/cardLiveControl.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+for (const reason of ['identity-missing', 'firmware-too-old', 'wrong-card', 'bridge-missing']) {
+  assert.equal(cardLinkBootstrapFailureReason({ reason }), reason, `bootstrap preserves ${reason}`);
+}
+assert.equal(cardLinkBootstrapFailureReason({ reason: 'bridge-timeout' }), 'no-answer');
 async function waitFor(predicate, timeoutMs = 2000, label = 'condition') {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -41,10 +50,32 @@ assert.equal(connecting.host, '192.168.4.1');
 // repeated identical connecting events do not create new state objects
 assert.equal(reduceCardLink(connecting, { type: 'connecting', via: 'bridge', host: '192.168.4.1' }), connecting);
 
-const bridged = reduceCardLink(connecting, { type: 'bridge-ready', host: '192.168.4.1' });
+const bridgeReadyOnly = reduceCardLink(connecting, { type: 'bridge-ready', host: '192.168.4.1' });
+assert.equal(bridgeReadyOnly.state, 'connecting', 'bridge transport readiness is not card verification');
+assert.equal(isCardLinkConnected(bridgeReadyOnly), false);
+const bridged = reduceCardLink(bridgeReadyOnly, {
+  type: 'card-verified',
+  via: 'bridge',
+  host: '192.168.4.1',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  acknowledgedAt: '2026-07-14T12:00:00.000Z',
+});
 assert.equal(bridged.state, 'connected-bridge');
 assert.equal(bridged.transport, 'bridge');
+assert.equal(bridged.card.id, 'lw-001122aabbcc');
+assert.equal(bridged.acknowledgedAt, '2026-07-14T12:00:00.000Z');
 assert.equal(isCardLinkConnected(bridged), true);
+
+const wrongBridgeCard = reduceCardLink(bridgeReadyOnly, {
+  type: 'card-verified',
+  via: 'bridge',
+  host: '192.168.4.1',
+  expectedCard: { id: 'lw-expected' },
+  card: { id: 'lw-different' },
+});
+assert.equal(wrongBridgeCard.state, 'disconnected');
+assert.equal(wrongBridgeCard.reason, 'wrong-card');
+assert.equal(isCardLinkConnected(wrongBridgeCard), false);
 // steady-state pings return the same reference (no re-render churn)
 assert.equal(reduceCardLink(bridged, { type: 'bridge-ping-ok' }), bridged);
 
@@ -78,11 +109,46 @@ const popupBlocked = reduceCardLink(closed, { type: 'bridge-lost', reason: 'popu
 assert.equal(popupBlocked.reason, 'popup-blocked');
 
 // ── reducer: direct transport ───────────────────────────────────────────────
-const direct = reduceCardLink(initial, { type: 'direct-status', connected: true, host: '192.168.18.70' });
+const missingDirectIdentity = reduceCardLink(initial, { type: 'direct-status', connected: true, host: '192.168.18.70' });
+assert.equal(missingDirectIdentity.state, 'disconnected');
+assert.equal(missingDirectIdentity.reason, 'identity-missing');
+assert.equal(isCardLinkConnected(missingDirectIdentity), false);
+const direct = reduceCardLink(initial, {
+  type: 'direct-status',
+  connected: true,
+  host: '192.168.18.70',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  allowAdopt: true,
+});
 assert.equal(direct.state, 'connected-direct');
 assert.equal(direct.transport, 'direct');
 assert.equal(isCardLinkConnected(direct), true);
-assert.equal(reduceCardLink(direct, { type: 'direct-status', connected: true, host: '192.168.18.70' }), direct);
+const wrongDirectCard = reduceCardLink(initial, {
+  type: 'direct-status',
+  connected: true,
+  host: '192.168.18.70',
+  expectedCard: { id: 'lw-expected' },
+  card: { id: 'lw-different' },
+});
+assert.equal(wrongDirectCard.state, 'disconnected');
+assert.equal(wrongDirectCard.reason, 'wrong-card');
+assert.equal(wrongDirectCard.transport, 'direct');
+assert.equal(wrongDirectCard.discoveredCard.id, 'lw-different');
+assert.equal(isCardLinkConnected(wrongDirectCard), false);
+const passiveUnpairedCard = reduceCardLink(initial, {
+  type: 'direct-status',
+  connected: true,
+  host: '192.168.18.71',
+  card: { id: 'lw-passive-discovery' },
+});
+assert.equal(passiveUnpairedCard.state, 'disconnected');
+assert.equal(passiveUnpairedCard.reason, 'never-connected');
+assert.equal(passiveUnpairedCard.discoveredCard.id, 'lw-passive-discovery');
+assert.equal(isCardLinkConnected(passiveUnpairedCard), false, 'background polling never adopts a first card');
+assert.equal(reduceCardLink(direct, {
+  type: 'direct-status', connected: true, host: '192.168.18.70', card: { id: 'lw-001122aabbcc' },
+  expectedCard: { id: 'lw-001122aabbcc' },
+}), direct);
 
 const directDown = reduceCardLink(direct, { type: 'direct-status', connected: false, host: '192.168.18.70' });
 assert.equal(directDown.state, 'disconnected');
@@ -101,6 +167,29 @@ assert.equal(reduceCardLink(connecting, { type: 'connecting', via: 'direct', hos
 // a bridge losing its window does not touch a live direct link
 assert.equal(reduceCardLink(direct, { type: 'bridge-lost' }), direct);
 
+// Identity from an old host/session cannot authenticate the newly selected card.
+const selectingB = reduceCardLink(bridged, { type: 'connecting', via: 'bridge', host: 'card-b.local' });
+assert.equal(reduceCardLink(selectingB, {
+  type: 'card-verified',
+  via: 'bridge',
+  host: 'card-a.local',
+  card: { id: 'lw-old' },
+}), selectingB);
+
+// Physical-operation activity is explicit and independent of transport state.
+const pendingActivity = reduceCardLink(bridged, { type: 'operation-started' });
+assert.equal(pendingActivity.activity, 'pending');
+const recoveringActivity = reduceCardLink(pendingActivity, { type: 'operation-recovering' });
+assert.equal(recoveringActivity.activity, 'recovering');
+const failedActivity = reduceCardLink(recoveringActivity, { type: 'operation-failed' });
+assert.equal(failedActivity.activity, 'failed');
+const confirmedActivity = reduceCardLink(failedActivity, {
+  type: 'operation-confirmed',
+  acknowledgedAt: '2026-07-14T12:01:00.000Z',
+});
+assert.equal(confirmedActivity.activity, 'idle');
+assert.equal(confirmedActivity.acknowledgedAt, '2026-07-14T12:01:00.000Z');
+
 // ── reducer: checking semantics for the footer's direct transport ───────────
 // an established direct link can never be demoted by a routine poll starting
 assert.equal(reduceCardLink(direct, { type: 'connecting', via: 'direct', host: '192.168.18.70' }), direct);
@@ -111,7 +200,7 @@ assert.equal(reprobe.transport, 'direct');
 assert.equal(cardLinkStatusText(reprobe), 'Looking for the card…');
 
 // ── friendly copy ───────────────────────────────────────────────────────────
-for (const reason of ['card-page-closed', 'card-stopped-answering', 'bridge-missing', 'popup-blocked', 'no-answer', 'card-unreachable', 'never-connected']) {
+for (const reason of ['card-page-closed', 'card-stopped-answering', 'bridge-missing', 'popup-blocked', 'no-answer', 'card-unreachable', 'identity-missing', 'wrong-card', 'firmware-too-old', 'never-connected']) {
   const text = cardLinkReasonText(reason);
   assert.ok(text && typeof text === 'string', `reason text for ${reason}`);
 }
@@ -140,7 +229,7 @@ const link = createCardLink({
 });
 const seen = [];
 const unsubscribe = link.subscribe(state => seen.push(state.state));
-link.dispatch({ type: 'bridge-ready', host: '192.168.4.1' });
+link.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' } });
 assert.equal(link.getState().state, 'connected-bridge');
 await waitFor(() => pingCount >= 2, 2000, 'two keepalive pings');
 assert.equal(link.getState().state, 'connected-bridge');
@@ -166,7 +255,7 @@ const deadLink = createCardLink({
   connectTimeoutMs: 35,
   missLimit: 2,
 });
-deadLink.dispatch({ type: 'bridge-ready', host: '192.168.4.1' });
+deadLink.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' } });
 await waitFor(() => deadLink.getState().state === 'disconnected', 2000, 'reconnect deadline');
 assert.equal(deadLink.getState().reason, 'no-answer');
 deadLink.destroy();
@@ -179,7 +268,7 @@ const hostSwitchLink = createCardLink({
   pingTimeoutMs: 50,
   connectTimeoutMs: 200,
 });
-hostSwitchLink.dispatch({ type: 'bridge-ready', host: 'card-a.local' });
+hostSwitchLink.dispatch({ type: 'card-verified', via: 'bridge', host: 'card-a.local', card: { id: 'lw-a' } });
 await waitFor(() => typeof resolveStalePing === 'function', 2000, 'old-host ping to start');
 hostSwitchLink.dispatch({ type: 'connecting', via: 'bridge', host: 'card-b.local' });
 resolveStalePing({ ok: true });
@@ -200,7 +289,7 @@ const goneLink = createCardLink({
   connectTimeoutMs: 0,
   missLimit: 3,
 });
-goneLink.dispatch({ type: 'bridge-ready', host: '192.168.4.1' });
+goneLink.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' } });
 await waitFor(() => goneLink.getState().state === 'disconnected', 2000, 'bridge-missing disconnect');
 assert.equal(goneLink.getState().reason, 'card-page-closed');
 goneLink.destroy();
@@ -240,6 +329,10 @@ guardedLink.destroy();
 // never silently collapsed to the whole strip.
 const sent = [];
 const listeners = new Map();
+const storedValues = new Map([
+  ['lw_chip_card_host', '192.168.18.70'],
+  ['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' })],
+]);
 const parentBridge = {
   postMessage(message, targetOrigin) {
     sent.push({ message, targetOrigin });
@@ -250,7 +343,20 @@ const parentBridge = {
         data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response },
       });
       if (message.type === 'zones') respond({ zones: [{ id: 'zone-a' }] });
-      else if (message.type === 'control') respond({ ok: true, applied: message.payload });
+      else if (message.type === 'control') respond({
+        ok: true,
+        cardId: 'lw-001122aabbcc',
+        patternId: message.payload.patternId,
+        revision: message.payload.revision,
+        applied: message.payload,
+      });
+      else if (message.type === 'firmware-info') respond({
+        cardId: 'lw-001122aabbcc',
+        firmwareVersion: '1.0.0',
+        buildId: 'test',
+        bridgeVersion: 1,
+        outputs: [{ gpio: 16, count: 44 }],
+      });
       else respond({ ok: true });
     }, 0);
   },
@@ -260,14 +366,140 @@ globalThis.window = {
   opener: null,
   parent: parentBridge,
   localStorage: {
-    getItem: () => '192.168.18.70',
-    setItem: () => {},
-    removeItem: () => {},
+    getItem: key => storedValues.get(key) ?? null,
+    setItem: (key, value) => storedValues.set(key, value),
+    removeItem: key => storedValues.delete(key),
   },
   addEventListener(type, listener) { listeners.set(type, listener); },
   removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
-  dispatchEvent: () => {},
+  dispatchEvent(event) { listeners.get(event?.type)?.(event); },
 };
+globalThis.localStorage = globalThis.window.localStorage;
+
+// Runtime connection paths compare stable identity before persistence. A card
+// at the remembered IP is still the wrong card when its eFuse-derived ID differs.
+reportDirectCardStatus({
+  connected: true,
+  host: '192.168.18.70',
+  status: { cardId: 'lw-different', firmwareVersion: '1.0.0' },
+});
+assert.equal(getCardLinkState().state, 'disconnected');
+assert.equal(getCardLinkState().reason, 'wrong-card');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+
+const isolatedDirectLink = createCardLink({ host: '192.168.18.70' });
+isolatedDirectLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  expectedCard: { id: 'lw-001122aabbcc' },
+  card: { id: 'lw-delayed-a', name: 'Delayed A' },
+});
+let releaseDirectVerification;
+const directVerificationGate = new Promise(resolve => { releaseDirectVerification = resolve; });
+const delayedDirectAdoption = adoptDiscoveredDirectCard({
+  link: isolatedDirectLink,
+  fetchImpl: async () => {
+    await directVerificationGate;
+    return {
+      ok: true,
+      json: async () => ({ cardId: 'lw-delayed-a', cardName: 'Delayed A' }),
+    };
+  },
+});
+isolatedDirectLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.71',
+  expectedCard: { id: 'lw-001122aabbcc' },
+  card: { id: 'lw-newer-b', name: 'Newer B' },
+});
+releaseDirectVerification();
+await assert.rejects(
+  delayedDirectAdoption,
+  error => error?.reason === 'stale-discovery',
+  'a delayed adoption of A cannot persist or connect after host/newer discovery B replaces it',
+);
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+assert.equal(isolatedDirectLink.getState().discoveredCard.id, 'lw-newer-b');
+assert.equal(isolatedDirectLink.getState().state, 'disconnected');
+
+async function assertPersistedAuthorityRace({ initialIdentity, nextIdentity, label }) {
+  if (initialIdentity) {
+    storedValues.set('lw_card_identity_v1', JSON.stringify(initialIdentity));
+  } else {
+    storedValues.delete('lw_card_identity_v1');
+  }
+  const link = createCardLink({ host: '192.168.18.72' });
+  link.dispatch({
+    type: 'direct-status', connected: true, host: '192.168.18.72',
+    expectedCard: { id: 'lw-authority-before' },
+    card: { id: 'lw-cross-tab-a', name: 'Cross-tab A' },
+  });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const adoption = adoptDiscoveredDirectCard({
+    link,
+    fetchImpl: async () => {
+      await gate;
+      return {
+        ok: true,
+        json: async () => ({ cardId: 'lw-cross-tab-a', cardName: 'Cross-tab A' }),
+      };
+    },
+  });
+  if (nextIdentity) {
+    storedValues.set('lw_card_identity_v1', JSON.stringify(nextIdentity));
+  } else {
+    storedValues.delete('lw_card_identity_v1');
+  }
+  release();
+  await assert.rejects(
+    adoption,
+    error => error?.reason === 'stale-identity',
+    label,
+  );
+  assert.deepEqual(
+    storedValues.has('lw_card_identity_v1')
+      ? JSON.parse(storedValues.get('lw_card_identity_v1'))
+      : null,
+    nextIdentity,
+    `${label}: the newer cross-tab authority remains untouched`,
+  );
+}
+
+await assertPersistedAuthorityRace({
+  initialIdentity: null,
+  nextIdentity: { version: 1, id: 'lw-cross-tab-b' },
+  label: 'null-to-card cross-tab pairing invalidates delayed direct adoption',
+});
+await assertPersistedAuthorityRace({
+  initialIdentity: { version: 1, id: 'lw-authority-before' },
+  nextIdentity: null,
+  label: 'card-to-null cross-tab forgetting invalidates delayed direct adoption',
+});
+await assertPersistedAuthorityRace({
+  initialIdentity: {
+    version: 1, id: 'lw-same-card', address: '192.168.18.72', acknowledgedAt: '2026-07-14T10:00:00.000Z',
+  },
+  nextIdentity: {
+    version: 1, id: 'lw-same-card', address: '192.168.18.73', acknowledgedAt: '2026-07-15T10:00:00.000Z',
+  },
+  label: 'same-ID generation/address change invalidates delayed direct adoption',
+});
+
+storedValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' }));
+
+listeners.get('lightweaver-card-bridge-changed')?.({
+  detail: {
+    connected: true,
+    verified: true,
+    host: '192.168.18.70',
+    card: { id: 'lw-different', firmwareVersion: '1.0.0' },
+  },
+});
+assert.equal(getCardLinkState().state, 'disconnected');
+assert.equal(getCardLinkState().reason, 'wrong-card');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+
+await bootstrapCardLink();
+assert.equal(getCardLinkState().state, 'connected-bridge', 'bootstrap verifies the real bridge before commands');
 
 const fallbackResponse = await pushLivePreviewToCard(
   { patternId: 'ocean', brightness: 0.8, zone: 'zone-b', syncZones: false },
@@ -294,6 +526,20 @@ const bootState = await bootstrapCardLink();
 assert.equal(bootState.state, 'connected-bridge');
 assert.equal(bootState.host, '192.168.18.70');
 assert.equal(getCardLinkState().state, 'connected-bridge');
+
+// A fresh browser adopts its first discovered identity only after the existing
+// Connect button's user gesture opens the card bridge.
+storedValues.delete('lw_card_identity_v1');
+globalThis.window.open = () => parentBridge;
+assert.equal(connectCardLink('192.168.18.70'), parentBridge);
+listeners.get('message')?.({
+  origin: 'http://192.168.18.70',
+  source: parentBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.18.70', version: 1 },
+});
+await waitFor(() => storedValues.has('lw_card_identity_v1'), 2000, 'explicit Connect first-pair adoption');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+await waitFor(() => getCardLinkState().state === 'connected-bridge', 2000, 'first-pair verified connection');
 getSharedCardLink().destroy();
 
 console.log('card-link-state tests passed');

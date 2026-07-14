@@ -5,6 +5,7 @@ import {
   readStoredCardHost,
 } from './cardConnection.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { guardDirectCardMutation } from './cardIdentity.js';
 
 export const CARD_WIRING_STATES = Object.freeze([
   'known-good',
@@ -100,6 +101,9 @@ function selectedTransport(options = {}) {
 
 function normalizeTransportError(error, transport) {
   if (error instanceof CardWiringSafetyError) return error;
+  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host'].includes(error?.reason)) {
+    return wiringError(error.reason, error.message, { cause: error });
+  }
   if (error?.name === 'AbortError') {
     return wiringError('timeout', 'Timed out waiting for the card wiring API.', { cause: error });
   }
@@ -114,6 +118,9 @@ async function directRequest(endpoint, payload, {
   timeoutMs,
   fetchImpl,
 }) {
+  if (endpoint.method !== 'GET') {
+    await guardDirectCardMutation(host, { fetchImpl, timeoutMs });
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {

@@ -87,7 +87,61 @@ static inline uint8_t hash8(uint16_t value, uint16_t salt = 0) {
   return uint8_t(x & 0xff);
 }
 
+bool isSupportedProceduralPattern(const String& patternId) {
+  return patternId == "aurora" ||
+         patternId == "custom-color" ||
+         patternId == "ember" ||
+         patternId == "plasma" ||
+         patternId == "fire" ||
+         patternId == "ocean" ||
+         patternId == "ripple" ||
+         patternId == "lava" ||
+         patternId == "rainbow" ||
+         patternId == "sparkle" ||
+         patternId == "breathe" ||
+         patternId == "meteor" ||
+         patternId == "chase" ||
+         patternId == "scanner" ||
+         patternId == "candle" ||
+         patternId == "lightning" ||
+         patternId == "neon" ||
+         patternId == "matrix" ||
+         patternId == "heartbeat" ||
+         patternId == "stained" ||
+         patternId == "confetti" ||
+         patternId == "warp" ||
+         patternId == "pulse-ring" ||
+         patternId == "blocks" ||
+         patternId == "bloom" ||
+         patternId == "calm" ||
+         patternId == "drift" ||
+         patternId == "sunset" ||
+         patternId == "twinkle" ||
+         patternId == "wave";
+}
+
+bool isSupportedPresetPattern(const String& patternId) {
+  return patternId == "warm-white" ||
+         patternId == "cool-white" ||
+         patternId == "photo-white" ||
+         patternId == "blackout" ||
+         patternId == "off" ||
+         patternId == "test-red" ||
+         patternId == "red" ||
+         patternId == "test-green" ||
+         patternId == "green" ||
+         patternId == "test-blue" ||
+         patternId == "blue" ||
+         patternId == "test-white" ||
+         patternId == "white";
+}
+
+bool isSupportedCompiledPattern(const String& patternId) {
+  return isSupportedProceduralPattern(patternId) || isSupportedPresetPattern(patternId);
+}
+
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
+  if (!isSupportedProceduralPattern(preset)) return false;
   uint32_t t = scaleTime(now, mods.speed);
   if (preset == "custom-color") {
     uint8_t hue = mods.customHue;
@@ -279,6 +333,7 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
 }
 
 bool renderPresetPattern(const String& preset, CRGB* leds, uint16_t totalPixels, const PatternModifiers& mods) {
+  if (!isSupportedPresetPattern(preset)) return false;
   if (preset == "blackout" || preset == "off") {
     fill_solid(leds, totalPixels, CRGB::Black);
     return true;

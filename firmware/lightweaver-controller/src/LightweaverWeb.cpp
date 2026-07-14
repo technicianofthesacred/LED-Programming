@@ -14,6 +14,11 @@ RuntimeConfig* runtimeConfigPtr = nullptr;
 ErrorCode* errorCodePtr = nullptr;
 uint16_t* totalPixelsPtr = nullptr;
 uint8_t* currentLookIndexPtr = nullptr;
+constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
+uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
+size_t controlRequestBodyLength = 0;
+bool controlRequestBodyReady = false;
+bool controlRequestBodyRejected = false;
 
 // Bridge protocol version — the card-page postMessage bridge contract shared
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
@@ -1176,20 +1181,130 @@ void handleReboot() {
   ESP.restart();
 }
 
+void handleControlPost();
+
+// Arduino-ESP32 WebServer normally allocates a Content-Length-sized plainBuf
+// before invoking a POST handler. Registering the custom RequestHandler below
+// selects its raw path immediately after headers instead: oversized requests
+// are closed at RAW_START, while accepted bodies use only this fixed buffer.
+void handleControlRaw(HTTPRaw& raw) {
+  if (raw.status == RAW_START) {
+    controlRequestBodyLength = 0;
+    controlRequestBodyReady = false;
+    controlRequestBodyRejected = false;
+    if (server.clientContentLength() > LW_MAX_CONTROL_BODY_BYTES) {
+      controlRequestBodyRejected = true;
+      sendCors();
+      server.send(413, "application/json", "{\"ok\":false,\"error\":\"control request too large\"}");
+      server.client().stop();
+    }
+    return;
+  }
+
+  if (raw.status == RAW_WRITE) {
+    if (controlRequestBodyRejected) return;
+    if (controlRequestBodyLength + raw.currentSize > LW_MAX_CONTROL_BODY_BYTES) {
+      controlRequestBodyRejected = true;
+      sendCors();
+      server.send(413, "application/json", "{\"ok\":false,\"error\":\"control request too large\"}");
+      server.client().stop();
+      return;
+    }
+    memcpy(controlRequestBody + controlRequestBodyLength, raw.buf, raw.currentSize);
+    controlRequestBodyLength += raw.currentSize;
+    return;
+  }
+
+  if (raw.status == RAW_END) {
+    if (controlRequestBodyRejected) return;
+    controlRequestBody[controlRequestBodyLength] = 0;
+    controlRequestBodyReady = true;
+    return;
+  }
+
+  if (raw.status == RAW_ABORTED) {
+    controlRequestBodyLength = 0;
+    controlRequestBodyReady = false;
+    controlRequestBodyRejected = false;
+  }
+}
+
+class BoundedControlRequestHandler final : public RequestHandler {
+ public:
+  bool canHandle(HTTPMethod method, String uri) override {
+    return method == HTTP_POST && uri == "/api/control";
+  }
+
+  bool canUpload(String uri) override {
+    (void)uri;
+    return false;
+  }
+
+  bool canRaw(String uri) override {
+    return uri == "/api/control";
+  }
+
+  bool handle(WebServer& webServer, HTTPMethod method, String uri) override {
+    (void)webServer;
+    if (!canHandle(method, uri)) return false;
+    handleControlPost();
+    return true;
+  }
+
+  void raw(WebServer& webServer, String uri, HTTPRaw& rawBody) override {
+    (void)webServer;
+    if (canRaw(uri)) handleControlRaw(rawBody);
+  }
+};
+
 void handleControlPost() {
   sendCors();
   JsonDocument doc;
-  if (server.hasArg("plain") && server.arg("plain").length()) {
-    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+  if (!controlRequestBodyReady || controlRequestBodyRejected) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"control request body unavailable\"}");
+    return;
+  }
+  if (controlRequestBodyLength > 0) {
+    DeserializationError err = deserializeJson(doc, controlRequestBody, controlRequestBodyLength);
+    controlRequestBodyReady = false;
+    controlRequestBodyLength = 0;
     if (err) {
       server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err.c_str() + "\"}");
       return;
     }
+  } else {
+    controlRequestBodyReady = false;
   }
   // Optional `zone` field targets a single zone. Empty / missing = broadcast
   // (under sync rules — see runtime API). Visitors using the basic page never
   // send `zone`; the designer surface does.
   String zoneTarget = hasControlField(doc, "zone") ? controlString(doc, "zone") : String("");
+  bool hasRevision = hasControlField(doc, "revision");
+  uint32_t confirmedRevision = 0;
+  if (hasRevision) {
+    if (!doc["revision"].is<uint32_t>()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"revision out of range\"}");
+      return;
+    }
+    confirmedRevision = doc["revision"].as<uint32_t>();
+  }
+  bool patternRequested = hasControlField(doc, "patternId");
+  bool patternApplied = !patternRequested;
+  String confirmedPatternId = patternRequested ? controlString(doc, "patternId") : String("");
+  if (patternRequested && (confirmedPatternId.length() == 0 || confirmedPatternId.length() > 64)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"pattern id out of range\"}");
+    return;
+  }
+  if (patternRequested && !runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)) {
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["cardId"] = runtimeCardId();
+    rejected["error"] = "pattern or zone is no longer available";
+    String body;
+    serializeJson(rejected, body);
+    server.send(422, "application/json", body);
+    return;
+  }
 
   // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
   // command sent while the card is in split preview mode updates only zone 0.
@@ -1201,9 +1316,8 @@ void handleControlPost() {
   if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
   if (hasControlField(doc, "next") && controlBool(doc, "next")) runtimeNextPattern();
   if (hasControlField(doc, "previous") && controlBool(doc, "previous")) runtimePreviousPattern();
-  if (hasControlField(doc, "patternId")) {
-    String id = controlString(doc, "patternId");
-    if (id.length()) runtimeSelectPatternByIdZ(zoneTarget, id);
+  if (patternRequested) {
+    patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
   }
   if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
   if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
@@ -1217,7 +1331,19 @@ void handleControlPost() {
   if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
   // Echo current state back
   JsonDocument out;
-  out["ok"] = true;
+  out["ok"] = !patternRequested || patternApplied;
+  out["cardId"] = runtimeCardId();
+  if (hasRevision) {
+    out["revision"] = confirmedRevision;
+    out["confirmedRevision"] = confirmedRevision;
+  }
+  if (patternRequested && patternApplied) {
+    out["patternId"] = confirmedPatternId;
+    JsonObject confirmedLook = out["confirmedLook"].to<JsonObject>();
+    confirmedLook["patternId"] = confirmedPatternId;
+    confirmedLook["zone"] = zoneTarget;
+    confirmedLook["syncZones"] = runtimeGetSyncZones();
+  }
   out["brightness"] = runtimeGetBrightness();
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
@@ -1231,7 +1357,7 @@ void handleControlPost() {
   out["driftMax"] = runtimeGetDriftHueMax();
   String body;
   serializeJson(out, body);
-  server.send(200, "application/json", body);
+  server.send(!patternRequested || patternApplied ? 200 : 422, "application/json", body);
 }
 
 void handleRecoverLights() {
@@ -1667,7 +1793,7 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/reboot", HTTP_OPTIONS, handleOptions);
   server.on("/api/reboot", HTTP_POST, handleReboot);
   server.on("/api/control", HTTP_OPTIONS, handleOptions);
-  server.on("/api/control", HTTP_POST, handleControlPost);
+  server.addHandler(new BoundedControlRequestHandler());
   server.on("/api/recover-lights", HTTP_OPTIONS, handleOptions);
   server.on("/api/recover-lights", HTTP_POST, handleRecoverLights);
   server.on("/api/identify", HTTP_OPTIONS, handleOptions);

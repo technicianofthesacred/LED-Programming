@@ -12,6 +12,34 @@ async function installShowStubs(page: any) {
       localStorage.clear();
       sessionStorage.setItem('show-test-initialized', 'true');
     }
+    // Show frame streaming is a hardware mutation. The real Studio requires a
+    // previously paired card and re-verifies that exact identity before it
+    // opens the direct WebSocket, so this fixture must model the same contract
+    // instead of relying on a socket stub alone.
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-show-test',
+      name: 'Show test card',
+      hostname: '',
+      address: '',
+      firmwareVersion: '1.0.0',
+      buildId: 'show-test',
+      acknowledgedAt: '2026-07-14T00:00:00.000Z',
+    }));
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (/^http:\/\/lightweaver\.local\/api\/(?:firmware-info|status)$/.test(url)) {
+        return Promise.resolve(new Response(JSON.stringify({
+          cardId: 'lw-show-test',
+          cardName: 'Show test card',
+          firmwareVersion: '1.0.0',
+          buildId: 'show-test',
+          led: { pixels: 44 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+      return nativeFetch(input, init);
+    };
     (window as any).__audioReads = 0;
     (window as any).__frames = [];
     (window as any).__micRequests = [];

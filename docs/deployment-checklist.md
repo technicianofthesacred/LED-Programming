@@ -15,6 +15,19 @@ This repo owns `led.mandalacodes.com`:
 - **Firmware on the live site** comes from `lightweaver/public/firmware/` in the same deployment.
 - **Cards already in the field** only update by **USB reflash** (there is no OTA). Reflash from the Flash screen at `led.mandalacodes.com/` or a verified preview deployment.
 
+**Customer entry policy:** every install, connection, configuration, update, and recovery flow starts at `https://led.mandalacodes.com/`. The root Studio is the product; `/design` is not required. `lightweaver.local`, `192.168.4.1`, and numeric card addresses are technician diagnostics only. Studio may open a card-local session as part of its guided connection flow, but customers are not instructed to type or remember those addresses.
+
+### Signed firmware handoff
+
+Firmware source and the production artifact land in two deliberate steps:
+
+1. A firmware/release-policy change lands on protected `main`.
+2. `.github/workflows/build-firmware.yml` verifies the source, then the protected `firmware-release` environment rebuilds the merged image, creates the immutable manifest and provenance, signs them with `LIGHTWEAVER_RELEASE_SIGNING_KEY`, commits the release set to `main`, and dispatches the site deployment.
+
+The manifest `buildId` and provenance source revision must equal the exact source commit used by CI. A firmware source commit makes `factory-bin-freshness` fail until that protected build/sign commit exists. This is an intentional deployment block: do not bypass it and do not deploy a source-only firmware change.
+
+`MINIMUM_PRODUCTION_FIRMWARE_VERSION` in `lightweaver/src/lib/firmwareRelease.js` is the oldest signed release the normal installer may replay. Raise it only when an older signed release is known unsafe, with a documented reason, updated policy tests, a safe replacement release, protected CI rebuild/signing, and bench verification. Ordinary releases do not raise the floor; never lower it to accept stale firmware.
+
 After any production publish, verify the live site serves the firmware this repo built:
 
 ```bash
@@ -33,10 +46,14 @@ same deployment.
 Run this before the controller leaves the bench, and again after any code, firmware, or exported config change.
 
 - [ ] **Runtime lane chosen and written down:** standalone Lightweaver card, WLED + Pi-hosted visitor UI, or advanced Madrix / Art-Net live host.
-- [ ] **Public/local split confirmed:** `led.mandalacodes.com` is the public Studio/setup surface. Actual LED commands must run through the local card page, WLED UI, Pi proxy, or another local bridge.
+- [ ] **Single entry confirmed:** customer instructions, QR codes, install, reconnect, configuration, update, and recovery all begin at `https://led.mandalacodes.com/`; no customer step requires a local hostname or IP.
 - [ ] **Launch check passes:** from `lightweaver/`, run `npm run launch:check`. This runs the core runtime contract tests and production Vite build.
-- [ ] **Launch package identified:** record the git commit SHA, firmware image/version, exported project package, and any microSD package used for this piece.
-- [ ] **Standalone card API sanity** (if using the custom firmware): connect to the card and confirm `GET http://192.168.4.1/api/status`, config apply through `/api/config`, and the low-brightness `/api/recover-lights` path.
+- [ ] **Signed release complete:** after firmware changes, confirm protected CI committed the rebuilt image, signed manifest/signature, immutable release, and provenance before running the deploy workflow.
+- [ ] **Launch package identified:** record the Studio git commit, firmware version, manifest `buildId`, provenance source revision, exported project package, and any microSD package used for this piece.
+- [ ] **Installer policy reviewed:** verify the production firmware floor was unchanged for an ordinary release, or record the safety reason and replacement release when deliberately raising it.
+- [ ] **Customer connection semantics:** verify Connect Lightweaver offers the working-card/blank-card choice, resumes a remembered stable card ID without asking for an IP, and refuses a different card until explicit adoption.
+- [ ] **Physical acknowledgement semantics:** verify Studio distinguishes Previewing, Sending, and Playing; malformed, rejected, wrong-card, or stale acknowledgements never change the confirmed physical selection.
+- [ ] **Standalone card API sanity — technician diagnostic only:** after confirming the stable card ID, inspect `/api/status`, `/api/config`, and `/api/recover-lights` at the card's confirmed local address. Never substitute this diagnostic for the customer website flow.
 - [ ] **Pi proxy sanity** (if Pi-hosted): on the Pi, confirm `curl http://localhost:3000/api/health` and `curl "http://localhost:3000/api/wled/info?ip=<wled-ip>"`.
 - [ ] **Controller record saved:** MAC address, final IP/hostname, pixel count, GPIO/output mapping, color order, brightness cap, and latest WLED/controller JSON snapshot.
 
@@ -135,14 +152,18 @@ Configure via the WLED web UI (`http://<wled-ip>` or `http://4.3.2.1` in AP mode
 
 This is the actual customer flow for the ESP32-only runtime. Run through end-to-end before the piece leaves the bench.
 
-1. **Power on** the card. The status LED pulses once on boot; the LEDs start playing the default pattern within ~2 s.
-2. **Turn the rotary control** — confirm brightness changes. Press it — confirm pattern cycles.
-3. **Join the card's AP** — on a phone, open WiFi settings and connect to `Lightweaver-XXXX` (XXXX = last 4 MAC digits printed on the card label or read from `GET /api/status`).
-4. **Captive portal** — on iOS/Android the setup page should open automatically. If not, open a browser to `http://192.168.4.1`. Confirm the card's branded scene-selector page loads.
-5. **Pick a scene** — tap a scene button. Confirm the strip changes within ~500 ms.
-6. **Cycle all scenes** — each button must produce a visibly different look. No dark frames, no stuck pixels.
-7. **Optional home-WiFi setup** — in the card page's settings, enter the customer's home WiFi credentials. After reboot the card joins that network and becomes reachable at `lightweaver.local` from any device on the same network.
-8. **Visitor rollback check** — while a scene/brightness command is pending, force one failed request and confirm the visitor page restores the prior visible selection/value instead of showing an optimistic success.
+1. **Start at Studio** — open `https://led.mandalacodes.com/` and select Connect Lightweaver.
+2. **Choose physical condition** — select My card already lights up or Blank or not responding. Confirm Studio presents one supported next action.
+3. **Install when needed** — use the one-button official installer. Confirm identity/target and signed release verification occur before destructive confirmation; do not choose a local firmware file.
+4. **Join setup Wi-Fi when instructed** — connect to `Lightweaver-XXXX`, return to Studio, and press Continue. Do not type a local IP.
+5. **Verify identity** — confirm Studio reports the expected stable card ID, firmware version, and build ID before hardware changes.
+6. **Power-on playback** — the status LED pulses once on boot and LEDs start the saved/default pattern within ~2 s.
+7. **Physical controls** — turn the rotary control to change brightness and press it to cycle the saved pattern order.
+8. **Acknowledged preview** — choose three patterns rapidly in Studio. Only the newest intent may become Playing on Lightweaver and the physical LEDs must match it.
+9. **Failure truth** — return malformed or rejected acknowledgement in a controlled bench test. Studio must preserve the prior physical selection and offer Reconnect and Retry with the standard failure message.
+10. **Reconnect** — close the card page/session. Studio must stop claiming live physical output, then reconnect the expected card from the Card Status control without asking for an IP.
+11. **Recovery** — start a temporary diagnostic/stream, invoke Recover Lights in Studio, and confirm it releases temporary ownership, restores confirmed state, receives acknowledgement, and asks whether light is physically visible.
+12. **Offline playback** — disconnect Studio/internet and confirm the card continues standalone playback and physical controls.
 
 If any step fails, see Section 7.
 
@@ -170,10 +191,11 @@ If any step fails, see Section 8.
 
 | Symptom | Likely cause | Recovery |
 |---|---|---|
-| No LED output on power-on | Firmware not flashed or bad GPIO config | Check `/api/status` returns correct LED count and GPIO. Reflash firmware. |
-| Captive portal doesn't trigger on iOS | Known iOS quirk | Tell visitor to open Safari and browse to `http://192.168.4.1`. Add a printed sign as fallback. |
-| Card page loads but lights don't change | Scene bank not loaded or LED count mismatch | Check `GET /api/status`. Use Studio to re-push config. Confirm LED count matches hardware. |
-| `lightweaver.local` not reachable after home-WiFi setup | mDNS blocked by router, or card not yet joined | Try the card's IP directly. Check that the card is on the same WiFi subnet. |
+| No LED output on power-on | Firmware not installed, unsafe/stale release, or bad GPIO config | Start at `led.mandalacodes.com`, use Recover Lights, then follow the guided signed install/recovery path. A technician may inspect status only after confirming card identity. |
+| Setup page does not open after joining `Lightweaver-XXXX` | Browser captive-portal or local-network permission | Return to Studio and press Continue/Retry from the Card Status flow. Escalate local-address inspection to a technician. |
+| Studio preview changes but lights do not | Card did not acknowledge the newest physical intent | Use the adjacent Reconnect action, then Retry. Do not accept the Studio preview as proof of physical output. |
+| Expected card does not reconnect | Different network, card page closed, or a different card answered | Use Card Status → Reconnect expected card. Adopt a different stable ID only through Use this card instead. |
+| Recovery does not produce visible light | Temporary owner, invalid wiring, firmware failure, power, or data path | Run Recover Lights from Studio and record its acknowledgement. If still dark, proceed to guided USB recovery and physical power/data diagnostics. |
 | Strip frozen mid-effect | Art-Net stream stalled (if Madrix in use) | Disable Art-Net input on the card briefly, then re-enable. Restart Madrix output. |
 | Visible stutter / dropped frames | WiFi sleep re-enabled, or interference | Re-check Config > WiFi > Disable WiFi sleep. Move the card off congested 2.4 GHz channels. |
 | Strip section dark | Loose data line, dead pixel, or PSU droop | Inspect physical connection. Check segment config didn't truncate the strip. Measure 5V/12V at the far end of the run. |

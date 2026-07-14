@@ -1,6 +1,20 @@
 #include "LightweaverStorage.h"
+#include "LightweaverRuntimeApi.h"
 #include <new>
 #include <esp_system.h>
+
+#ifndef LW_FIRMWARE_VERSION
+#define LW_FIRMWARE_VERSION "1.0.0"
+#endif
+#ifndef LW_BUILD_ID
+#define LW_BUILD_ID "dev"
+#endif
+#ifndef LW_CONFIG_SCHEMA_VERSION
+#define LW_CONFIG_SCHEMA_VERSION 1
+#endif
+#ifndef LW_CAPABILITIES_VERSION
+#define LW_CAPABILITIES_VERSION 1
+#endif
 
 namespace {
 constexpr const char* NVS_NAMESPACE = "lightweaver";
@@ -1116,10 +1130,29 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
 
 String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint16_t totalPixels, uint8_t currentLookIndex) {
   JsonDocument doc;
+  char cardId[16] = {};
+  snprintf(cardId, sizeof(cardId), "lw-%012llx",
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
+  doc["cardId"] = cardId;
+  doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
+  doc["buildId"] = LW_BUILD_ID;
+  doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
+  doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["ok"] = errorCode == ERROR_NONE;
   doc["errorCode"] = uint8_t(errorCode);
   doc["mode"] = config.mode;
   doc["source"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
+  doc["runtimeSource"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
+  doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
+  uint32_t remainingProbationMs = runtimeWiringProbationRemainingMs();
+  doc["wiringProbation"]["active"] = remainingProbationMs > 0;
+  doc["wiringProbation"]["remainingMs"] = remainingProbationMs;
+  doc["limits"]["pixels"] = LW_MAX_PIXELS;
+  doc["limits"]["outputs"] = LW_MAX_OUTPUTS;
+  doc["limits"]["looks"] = LW_MAX_LOOKS;
+  doc["limits"]["zones"] = LW_MAX_ZONES;
+  doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
+  doc["limits"]["configStorageBytes"] = NVS_STRING_LIMIT;
   doc["piece"]["name"] = config.pieceName;
   doc["led"]["pixels"] = totalPixels;
   doc["led"]["colorOrder"] = config.ledColorOrder;
@@ -1127,8 +1160,16 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
   doc["piece"]["hostname"] = config.activeHostname;
+  JsonArray outputArray = doc["outputs"].to<JsonArray>();
+  for (uint8_t i = 0; i < config.outputCount; i++) {
+    JsonObject output = outputArray.add<JsonObject>();
+    output["id"] = config.outputs[i].id;
+    output["pin"] = config.outputs[i].pin;
+    output["pixels"] = config.outputs[i].pixels;
+    output["gpio"] = config.outputs[i].pin;
+    output["count"] = config.outputs[i].pixels;
+  }
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
-  doc["wifi"]["ssid"] = config.activeTransport == WIFI_TRANSPORT_STATION ? config.wifi.ssid : "";
   doc["wifi"]["hostname"] = config.activeHostname;
   doc["wifi"]["ip"] = config.activeIp;
   doc["wifi"]["configured"] = config.wifi.ssid.length() > 0;

@@ -1,3 +1,5 @@
+import { persistCardIdentity, readPersistedCardIdentity } from './cardIdentity.js';
+
 export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
 export const CARD_HOST_HISTORY_STORAGE_KEY = 'lw_chip_card_host_history';
@@ -5,6 +7,7 @@ export const CARD_HOST_CHANGED_EVENT = 'lightweaver-card-host-changed';
 export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.4.1'];
 export const CARD_CONNECTION_MISS_LIMIT = 3;
 export const CARD_HOST_HISTORY_LIMIT = 8;
+export const CARD_SPECIFIC_DISCOVERY_HEAD_START_MS = 180;
 
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
@@ -88,7 +91,8 @@ export function isLocalCardHost(rawHost = '') {
 export function readStoredCardHost() {
   if (typeof window === 'undefined') return DEFAULT_CARD_HOST;
   try {
-    return normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
+    const host = normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
+    return isLocalCardHost(host) ? host : DEFAULT_CARD_HOST;
   } catch {
     return DEFAULT_CARD_HOST;
   }
@@ -96,6 +100,7 @@ export function readStoredCardHost() {
 
 export function writeStoredCardHost(rawHost = '') {
   const host = normalizeCardHost(rawHost);
+  if (!isLocalCardHost(host)) return readStoredCardHost();
   if (typeof window !== 'undefined') {
     try {
       const previous = normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
@@ -114,7 +119,7 @@ export function readStoredCardHostHistory() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(CARD_HOST_HISTORY_STORAGE_KEY) || '[]');
     return Array.isArray(parsed)
-      ? [...new Set(parsed.map(normalizeCardHost).filter(Boolean))].slice(0, CARD_HOST_HISTORY_LIMIT)
+      ? [...new Set(parsed.map(normalizeCardHost).filter(isLocalCardHost))].slice(0, CARD_HOST_HISTORY_LIMIT)
       : [];
   } catch {
     return [];
@@ -123,6 +128,7 @@ export function readStoredCardHostHistory() {
 
 export function rememberCardHost(rawHost = '') {
   const host = normalizeCardHost(rawHost);
+  if (!isLocalCardHost(host)) return readStoredCardHost();
   if (typeof window !== 'undefined') {
     try {
       const next = [host, ...readStoredCardHostHistory().filter(item => item !== host)]
@@ -135,23 +141,43 @@ export function rememberCardHost(rawHost = '') {
   return host;
 }
 
-export function candidateCardHosts(preferredHost = '') {
-  const preferred = normalizeCardHost(preferredHost || readStoredCardHost());
+function cardSpecificHosts(expectedCard = null) {
+  if (!expectedCard?.id) return [];
+  const normalizedHostname = expectedCard.hostname ? normalizeCardHost(expectedCard.hostname) : '';
+  const hostname = isLocalCardHost(normalizedHostname) ? normalizedHostname : '';
+  const normalizedAddress = expectedCard.address ? normalizeCardHost(expectedCard.address) : '';
+  const address = isIpv4(normalizedAddress) && isLocalCardHost(normalizedAddress) ? normalizedAddress : '';
+  return [...new Set([hostname, address].filter(Boolean))];
+}
+
+export function candidateCardHosts(preferredHost = '', expectedCard = readPersistedCardIdentity()) {
+  const normalizedPreferred = normalizeCardHost(preferredHost || readStoredCardHost());
+  const preferred = isLocalCardHost(normalizedPreferred) ? normalizedPreferred : DEFAULT_CARD_HOST;
   const history = readStoredCardHostHistory();
-  const hosts = [preferred, ...history, ...CARD_HOST_FALLBACKS.map(normalizeCardHost)];
+  const hosts = [
+    ...cardSpecificHosts(expectedCard),
+    preferred,
+    ...history,
+    ...CARD_HOST_FALLBACKS.map(normalizeCardHost),
+  ];
   return [...new Set(hosts.filter(Boolean))];
 }
 
 function hostFromStatus(status, fallbackHost) {
-  return normalizeCardHost(
+  const candidate = normalizeCardHost(
     status?.wifi?.ip ||
     status?.ip ||
     status?.network?.ip ||
     fallbackHost,
   );
+  return isLocalCardHost(candidate) ? candidate : normalizeCardHost(fallbackHost);
 }
 
-async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, controllers }) {
+function statusCardId(status = {}) {
+  return String(status?.cardId || status?.id || status?.pieceId || status?.piece?.cardId || '').trim();
+}
+
+async function probeCardStatusHost(host, { timeoutMs, fetchImpl, controllers, expectedCard }) {
   const ctrl = new AbortController();
   controllers.push(ctrl);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -161,9 +187,22 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
     const status = await response.json().catch(() => ({ ok: true }));
     if (status?.ok === false) throw new Error(status.error || 'card not ok');
     const connectedHost = hostFromStatus(status, host);
-    rememberCardHost(connectedHost);
-    if (host !== connectedHost) rememberCardHost(host);
-    if (persist) writeStoredCardHost(connectedHost);
+    const reportedId = statusCardId(status);
+    if (expectedCard?.id && reportedId !== expectedCard.id) {
+      const error = new Error(reportedId
+        ? 'A different Lightweaver card answered at this address.'
+        : 'This Lightweaver card did not report a stable identity.');
+      error.reason = reportedId ? 'wrong-card' : 'identity-missing';
+      error.discoveredResult = {
+        connected: false,
+        host: connectedHost,
+        url: cardHostToUrl(connectedHost),
+        reason: error.reason,
+        detectedStatus: status,
+        error,
+      };
+      throw error;
+    }
     return {
       connected: true,
       host: connectedHost,
@@ -175,27 +214,79 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
   }
 }
 
+function persistSelectedWinner(found, { persist, expectedCard }) {
+  if (!persist || !expectedCard?.id || statusCardId(found?.status) !== expectedCard.id) return found;
+  // Discovery spans network awaits. Re-read authority at commit time: a
+  // successful reply for card A must not write its address after the user has
+  // paired card B while A was still in flight.
+  const currentExpected = readPersistedCardIdentity();
+  if (!currentExpected?.id || currentExpected.id !== expectedCard.id) return found;
+  const host = normalizeCardHost(found.host);
+  if (!isLocalCardHost(host)) return found;
+  rememberCardHost(host);
+  writeStoredCardHost(host);
+  if (isIpv4(host)) {
+    persistCardIdentity({ ...currentExpected, address: host });
+  }
+  return found;
+}
+
 export async function discoverCardStatus({
   preferredHost = '',
+  expectedCard = readPersistedCardIdentity(),
   timeoutMs = 900,
   persist = true,
   fetchImpl = globalThis.fetch,
 } = {}) {
-  const hosts = candidateCardHosts(preferredHost);
+  const hosts = candidateCardHosts(preferredHost, expectedCard);
+  const specificHosts = cardSpecificHosts(expectedCard);
+  const fallbackHosts = hosts.filter(host => !specificHosts.includes(host));
   const controllers = [];
+  const priorErrors = [];
+  const probe = host => probeCardStatusHost(host, {
+    timeoutMs,
+    fetchImpl,
+    controllers,
+    expectedCard,
+  });
   try {
-    const found = await Promise.any(hosts.map(host => probeCardStatusHost(host, {
-      timeoutMs,
-      persist,
-      fetchImpl,
-      controllers,
-    })));
+    let attempts = specificHosts.map(probe);
+    if (attempts.length && fallbackHosts.length) {
+      let timer;
+      const firstTier = Promise.any(attempts);
+      const headStart = await Promise.race([
+        firstTier.then(found => ({ found }), error => ({ error })),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve({ fallback: true }), CARD_SPECIFIC_DISCOVERY_HEAD_START_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (headStart.found) {
+        controllers.forEach(ctrl => ctrl.abort());
+        return persistSelectedWinner(headStart.found, { persist, expectedCard });
+      }
+      if (headStart.error) {
+        priorErrors.push(...(Array.isArray(headStart.error?.errors) ? headStart.error.errors : [headStart.error]));
+      }
+      // A short head start preserves the preferred route without turning two
+      // stale remembered hints into a multi-second onboarding stall. If those
+      // probes are merely slow (rather than failed), keep them in the race.
+      attempts = headStart.fallback ? [...attempts, ...fallbackHosts.map(probe)] : fallbackHosts.map(probe);
+    } else if (!attempts.length) {
+      attempts = fallbackHosts.map(probe);
+    }
+    const found = await Promise.any(attempts);
     controllers.forEach(ctrl => ctrl.abort());
-    return found;
+    return persistSelectedWinner(found, { persist, expectedCard });
   } catch (error) {
     controllers.forEach(ctrl => ctrl.abort());
-    const errors = Array.isArray(error?.errors) ? error.errors : [error];
-    const lastError = errors.find(Boolean) || error;
+    const failures = [
+      ...priorErrors,
+      ...(Array.isArray(error?.errors) ? error.errors : [error]),
+    ];
+    const discoveredMismatch = failures.find(item => item?.discoveredResult)?.discoveredResult;
+    if (discoveredMismatch) return discoveredMismatch;
+    const lastError = failures.find(Boolean) || error;
     return {
       connected: false,
       host: hosts[0] || DEFAULT_CARD_HOST,
@@ -218,6 +309,9 @@ export function reduceCardConnectionState(previous = {}, result = {}, {
       reconnecting: false,
       host,
       status: result.status || previous.status || null,
+      detectedStatus: null,
+      reason: '',
+      allowAdopt: Boolean(result.allowAdopt),
       error: null,
       checkedAt: now,
       missCount: 0,
@@ -226,13 +320,17 @@ export function reduceCardConnectionState(previous = {}, result = {}, {
   }
 
   const misses = Math.max(0, Number(previous.missCount || 0)) + 1;
-  const stillInGrace = Boolean(previous.connected) && misses < Math.max(1, missLimit);
+  const identityFailure = result.reason === 'wrong-card' || result.reason === 'identity-missing';
+  const stillInGrace = !identityFailure && Boolean(previous.connected) && misses < Math.max(1, missLimit);
   return {
     checking: false,
     connected: stillInGrace,
     reconnecting: true,
     host: fallbackHost,
     status: previous.status || null,
+    detectedStatus: result.detectedStatus || previous.detectedStatus || null,
+    reason: result.reason || previous.reason || '',
+    allowAdopt: false,
     error: result.error || previous.error || null,
     checkedAt: now,
     missCount: misses,

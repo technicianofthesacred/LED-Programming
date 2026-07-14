@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import {
   acquireCardBridgeFromGesture,
+  adoptDiscoveredCardBridgeIdentity,
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
   getCardBridgeState,
   isCardBridgeLaunch,
+  openCardBridge,
   sendCardBridgeRequest,
+  rePairDiscoveredCardBridgeIdentity,
+  verifyCardBridgeIdentity,
 } from '../src/lib/cardBridge.js';
 
 globalThis.CustomEvent = class CustomEvent {
@@ -57,10 +61,14 @@ assert.equal(embeddedStudio.searchParams.get('studioTakeover'), '1');
 assert.equal(embeddedStudio.hash, '#screen=patterns');
 
 const messages = [];
+const storedIdentityValues = new Map([['lw_chip_card_host', '192.168.18.70']]);
+let firmwareCardId = 'lw-handoff-test';
+let delayFirmwareResponse = false;
+let releaseFirmwareResponse = null;
 const parentBridge = {
   postMessage(message, targetOrigin) {
     messages.push({ message, targetOrigin });
-    setTimeout(() => {
+    const respond = () => {
       listeners.get('message')?.({
         origin: 'http://192.168.18.70',
         source: parentBridge,
@@ -68,10 +76,17 @@ const parentBridge = {
           app: 'LightweaverCardBridge',
           id: message.id,
           ok: true,
-          response: { ok: true, fromParentBridge: true },
+          response: message.type === 'firmware-info'
+            ? { cardId: firmwareCardId, firmwareVersion: '1.0.0' }
+            : { ok: true, fromParentBridge: true },
         },
       });
-    }, 0);
+    };
+    if (message.type === 'firmware-info' && delayFirmwareResponse) {
+      releaseFirmwareResponse = respond;
+      return;
+    }
+    setTimeout(respond, 0);
   },
 };
 const listeners = new Map();
@@ -82,8 +97,9 @@ globalThis.window = {
   opener: null,
   parent: parentBridge,
   localStorage: {
-    getItem: () => '192.168.18.70',
-    setItem: () => {},
+    getItem: key => storedIdentityValues.get(key) ?? null,
+    setItem: (key, value) => storedIdentityValues.set(key, value),
+    removeItem: key => storedIdentityValues.delete(key),
   },
   addEventListener(type, listener) {
     listeners.set(type, listener);
@@ -107,6 +123,75 @@ const parentBridgeResponse = await sendCardBridgeRequest('status', {}, {
 assert.equal(parentBridgeResponse.fromParentBridge, true);
 assert.equal(messages[0].targetOrigin, 'http://192.168.18.70');
 assert.equal(messages[0].message.app, 'LightweaverStudioBridge');
+
+const discoveredResponse = await sendCardBridgeRequest('firmware-info', {}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+assert.equal(discoveredResponse.cardId, 'lw-handoff-test', 'read-only identity discovery succeeds before pairing');
+assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-handoff-test', 'pending discovered identity is exposed');
+assert.equal(storedIdentityValues.has('lw_card_identity_v1'), false, 'background discovery never adopts a card');
+await assert.rejects(
+  verifyCardBridgeIdentity('192.168.18.70'),
+  error => error?.reason === 'identity-missing',
+  'background verification cannot adopt the first discovered card',
+);
+assert.equal(storedIdentityValues.has('lw_card_identity_v1'), false, 'background verification leaves fresh storage untouched');
+
+const messagesBeforeUnverifiedControl = messages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+  'transport readiness must not authorize a privileged bridge command',
+);
+assert.equal(messages.length, messagesBeforeUnverifiedControl, 'unverified privileged command never reaches postMessage');
+globalThis.localStorage = globalThis.window.localStorage;
+await adoptDiscoveredCardBridgeIdentity('192.168.18.70');
+assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 'explicit first-pair adoption persists identity');
+await verifyCardBridgeIdentity('192.168.18.70');
+
+storedIdentityValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-other-card' }));
+const messagesBeforeMismatchedControl = messages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'wrong-card',
+  'persisted identity mismatch must reject a privileged bridge command',
+);
+assert.equal(messages.length, messagesBeforeMismatchedControl, 'mismatched privileged command never reaches postMessage');
+await rePairDiscoveredCardBridgeIdentity('192.168.18.70');
+assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 're-pair requires its explicit replacement API');
+
+// The card page can reload without changing its WindowProxy or host. A new
+// ready lifecycle must revoke the prior card synchronously while fresh identity
+// is still in flight, so no stale command or adoption window exists.
+delayFirmwareResponse = true;
+firmwareCardId = 'lw-reloaded-different';
+listeners.get('message')?.({
+  origin: 'http://192.168.18.70',
+  source: parentBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.18.70', version: 1 },
+});
+assert.equal(getCardBridgeState().card, null, 'same-target ready synchronously revokes verified identity');
+assert.equal(getCardBridgeState().discoveredCard, null, 'same-target ready synchronously clears stale discovery');
+const messagesBeforeReloadControl = messages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(messages.length, messagesBeforeReloadControl, 'reload lock sends no privileged command');
+assert.throws(() => adoptDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+assert.throws(() => rePairDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+assert.equal(typeof releaseFirmwareResponse, 'function', 'fresh identity response is delayed by the regression harness');
+delayFirmwareResponse = false;
+releaseFirmwareResponse();
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-reloaded-different', 'fresh reload identity replaces stale discovery');
+assert.equal(getCardBridgeState().card, null, 'mismatched fresh identity remains command-locked');
+assert.equal(getCardBridgeState().identityError, 'wrong-card');
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'wrong-card',
+);
 
 const retryMessages = [];
 const retryListeners = new Map();
@@ -161,6 +246,13 @@ const wiringRetryMessages = [];
 const wiringRetryListeners = new Map();
 const wiringRetryParent = {
   postMessage(message, targetOrigin) {
+    if (message.type === 'firmware-info') {
+      setTimeout(() => wiringRetryListeners.get('message')?.({
+        origin: 'http://192.168.18.70', source: wiringRetryParent,
+        data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response: { cardId: 'lw-handoff-test', firmwareVersion: '1.0.0' } },
+      }), 0);
+      return;
+    }
     wiringRetryMessages.push({ message, targetOrigin });
     if (wiringRetryMessages.length === 1) return;
     setTimeout(() => {
@@ -181,7 +273,10 @@ globalThis.window = {
   location: { search: '?cardBridge=1&cardHost=192.168.18.70' },
   opener: null,
   parent: wiringRetryParent,
-  localStorage: { getItem: () => '192.168.18.70', setItem: () => {} },
+  localStorage: {
+    getItem: key => key === 'lw_card_identity_v1' ? JSON.stringify({ version: 1, id: 'lw-handoff-test' }) : '192.168.18.70',
+    setItem: () => {},
+  },
   addEventListener(type, listener) { wiringRetryListeners.set(type, listener); },
   removeEventListener(type, listener) {
     if (wiringRetryListeners.get(type) === listener) wiringRetryListeners.delete(type);
@@ -189,6 +284,7 @@ globalThis.window = {
   dispatchEvent: () => {},
 };
 assert.equal(bootstrapCardBridgeFromOpener(), true);
+await verifyCardBridgeIdentity('192.168.18.70');
 const wiringRetryResponse = await sendCardBridgeRequest('wiring-status', {}, {
   host: '192.168.18.70',
   timeoutMs: 10,
@@ -198,10 +294,27 @@ assert.equal(wiringRetryMessages.length, 2);
 
 const stageTimeoutMessages = [];
 const stageTimeoutParent = {
-  postMessage(message, targetOrigin) { stageTimeoutMessages.push({ message, targetOrigin }); },
+  postMessage(message, targetOrigin) {
+    if (message.type === 'firmware-info') {
+      setTimeout(() => wiringRetryListeners.get('message')?.({
+        origin: 'http://192.168.18.70', source: stageTimeoutParent,
+        data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response: { cardId: 'lw-handoff-test', firmwareVersion: '1.0.0' } },
+      }), 0);
+      return;
+    }
+    if (message.type === 'status') {
+      setTimeout(() => wiringRetryListeners.get('message')?.({
+        origin: 'http://192.168.18.70', source: stageTimeoutParent,
+        data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response: { ok: true } },
+      }), 0);
+      return;
+    }
+    stageTimeoutMessages.push({ message, targetOrigin });
+  },
 };
 globalThis.window.parent = stageTimeoutParent;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
+await verifyCardBridgeIdentity('192.168.18.70');
 await assert.rejects(
   sendCardBridgeRequest('wiring-candidate', { candidate: {} }, {
     host: '192.168.18.70',
@@ -233,6 +346,11 @@ function bridgeWindowHarness({
 } = {}) {
   const eventListeners = new Map();
   const opened = [];
+  const identityId = `lw-${String(host).replace(/[^a-z0-9]/gi, '')}`;
+  const storageValues = new Map([
+    ['lw_chip_card_host', host],
+    ['lw_card_identity_v1', JSON.stringify({ version: 1, id: identityId })],
+  ]);
   const win = {
     location: {
       href: 'https://led.mandalacodes.com/#screen=patterns',
@@ -241,8 +359,9 @@ function bridgeWindowHarness({
     opener,
     parent,
     localStorage: {
-      getItem: () => host,
-      setItem: () => {},
+      getItem: key => storageValues.get(key) ?? null,
+      setItem: (key, value) => storageValues.set(key, value),
+      removeItem: key => storageValues.delete(key),
     },
     addEventListener(type, listener) {
       const listenersForType = eventListeners.get(type) || new Set();
@@ -267,6 +386,7 @@ function bridgeWindowHarness({
   return {
     win,
     opened,
+    storageValues,
     emitMessage(event) {
       for (const listener of eventListeners.get('message') || []) listener(event);
     },
@@ -275,8 +395,21 @@ function bridgeWindowHarness({
 
 // A verified parent/opener bridge is reused without opening another card page.
 const verifiedHost = '192.168.18.71';
-const verifiedParent = {};
-const verifiedHarness = bridgeWindowHarness({ host: verifiedHost, parent: verifiedParent });
+let verifiedHarness;
+const verifiedParent = {
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => verifiedHarness.emitMessage({
+      origin: `http://${verifiedHost}`,
+      source: verifiedParent,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681871', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+verifiedHarness = bridgeWindowHarness({ host: verifiedHost, parent: verifiedParent });
 globalThis.window = verifiedHarness.win;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
 verifiedHarness.emitMessage({
@@ -284,6 +417,7 @@ verifiedHarness.emitMessage({
   source: verifiedParent,
   data: { app: 'LightweaverCardBridge', type: 'ready', host: verifiedHost, version: 1 },
 });
+await verifyCardBridgeIdentity(verifiedHost);
 const verifiedAttempt = acquireCardBridgeFromGesture(verifiedHost, { timeoutMs: 25 });
 assert.equal(verifiedHarness.opened.length, 0);
 assert.equal((await verifiedAttempt.ready).verified, true);
@@ -291,8 +425,22 @@ assert.equal((await verifiedAttempt.ready).verified, true);
 // A standalone Studio opens exactly one named bridge synchronously, then waits
 // for a verified ready handshake before resolving and refocusing Studio.
 const popupHost = '192.168.18.72';
-const popupBridge = { closed: false, postMessage: () => {} };
-const popupHarness = bridgeWindowHarness({ host: popupHost, openResult: popupBridge });
+let popupHarness;
+const popupBridge = {
+  closed: false,
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => popupHarness.emitMessage({
+      origin: `http://${popupHost}`,
+      source: popupBridge,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681872', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+popupHarness = bridgeWindowHarness({ host: popupHost, openResult: popupBridge });
 globalThis.window = popupHarness.win;
 const popupAttempt = acquireCardBridgeFromGesture(popupHost, {
   studioUrl: 'https://led.mandalacodes.com/#screen=patterns',
@@ -316,7 +464,20 @@ assert.equal(popupHarness.win.focusCalls, 1);
 // A bridge tab that was verified and later closed is not reusable; the next
 // gesture must synchronously reopen the named tab and wait for a new handshake.
 popupBridge.closed = true;
-const replacementBridge = { closed: false, postMessage: () => {} };
+const replacementBridge = {
+  closed: false,
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => popupHarness.emitMessage({
+      origin: `http://${popupHost}`,
+      source: replacementBridge,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681872', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
 popupHarness.win.open = (url, name) => {
   popupHarness.opened.push({ url, name });
   return replacementBridge;
@@ -330,6 +491,67 @@ popupHarness.emitMessage({
 });
 await reopenedAttempt.ready;
 
+// A named popup keeps the same WindowProxy when it navigates from card A to B.
+// The target switch itself must stale every A request before B emits ready.
+const switchHostA = '192.168.18.75';
+const switchHostB = '192.168.18.76';
+const switchMessages = [];
+let switchHarness;
+const namedPopup = {
+  closed: false,
+  postMessage(message, targetOrigin) {
+    switchMessages.push({ message, targetOrigin });
+  },
+};
+switchHarness = bridgeWindowHarness({ host: switchHostA, openResult: namedPopup });
+globalThis.window = switchHarness.win;
+const respondFromSwitchHost = (entry, host, response) => switchHarness.emitMessage({
+  origin: `http://${host}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', id: entry.message.id, ok: true, response },
+});
+
+openCardBridge(switchHostA);
+switchHarness.emitMessage({
+  origin: `http://${switchHostA}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: switchHostA, version: 1 },
+});
+const initialAInfo = switchMessages.at(-1);
+respondFromSwitchHost(initialAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().card?.id, 'lw-1921681875');
+
+const delayedARequest = sendCardBridgeRequest('firmware-info', {}, { host: switchHostA, timeoutMs: 1000 });
+const delayedAInfo = switchMessages.at(-1);
+switchHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-1921681876' }));
+openCardBridge(switchHostB);
+assert.equal(getCardBridgeState().card, null, 'A→B target switch synchronously revokes A identity');
+respondFromSwitchHost(delayedAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
+await assert.rejects(delayedARequest, error => error?.reason === 'stale-host');
+assert.equal(getCardBridgeState().card, null, 'delayed A response cannot restore verified identity');
+assert.equal(getCardBridgeState().discoveredCard, null, 'delayed A response cannot restore discovered identity');
+
+switchHarness.emitMessage({
+  origin: `http://${switchHostB}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: switchHostB, version: 1 },
+});
+const freshBInfo = switchMessages.at(-1);
+const messagesBeforeBIdentity = switchMessages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(switchMessages.length, messagesBeforeBIdentity, 'B receives no privileged command before fresh identity');
+respondFromSwitchHost(freshBInfo, switchHostB, { cardId: 'lw-1921681876', firmwareVersion: '1.0.0' });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().card?.id, 'lw-1921681876', 'fresh matching B identity restores authority');
+const allowedBControl = sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 1000 });
+const bControlMessage = switchMessages.at(-1);
+respondFromSwitchHost(bControlMessage, switchHostB, { ok: true });
+await allowedBControl;
+
 const blockedHost = '192.168.18.73';
 const blockedHarness = bridgeWindowHarness({ host: blockedHost, openResult: null });
 globalThis.window = blockedHarness.win;
@@ -339,6 +561,36 @@ await assert.rejects(blockedAttempt.ready, error => (
   error?.reason === 'popup-blocked'
   && error.message === 'Allow the Lightweaver card window, then try the pattern again.'
 ));
+
+// Popup permission can be granted after the first refusal. The same visible
+// user-gesture action must make a fresh synchronous window.open attempt and
+// complete onboarding rather than remaining stuck on the rejected promise.
+const retryBridge = {
+  closed: false,
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => blockedHarness.emitMessage({
+      origin: `http://${blockedHost}`,
+      source: retryBridge,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681873', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+blockedHarness.win.open = (url, name) => {
+  blockedHarness.opened.push({ url, name });
+  return retryBridge;
+};
+const allowedRetry = acquireCardBridgeFromGesture(blockedHost, { timeoutMs: 100 });
+assert.equal(blockedHarness.opened.length, 2, 'retry performs a new popup attempt from the new gesture');
+blockedHarness.emitMessage({
+  origin: `http://${blockedHost}`,
+  source: retryBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: blockedHost, version: 1 },
+});
+assert.equal((await allowedRetry.ready).verified, true, 'popup-blocked onboarding resumes after permission is granted');
 
 const timeoutHost = '192.168.18.74';
 const timeoutHarness = bridgeWindowHarness({
