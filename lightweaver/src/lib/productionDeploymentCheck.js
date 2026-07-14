@@ -1,5 +1,7 @@
 export const DEFAULT_PRODUCTION_ORIGIN = 'https://led.mandalacodes.com';
 export const FACTORY_FIRMWARE_PATH = '/firmware/lightweaver-controller-esp32s3-factory.bin';
+export const FIRMWARE_MANIFEST_PATH = '/firmware/release-manifest.json';
+export const FIRMWARE_SIGNATURE_PATH = '/firmware/release-manifest.sig';
 
 export function resolveProductionUrls(env = {}) {
   const parsed = new URL(env.PROD_ORIGIN || DEFAULT_PRODUCTION_ORIGIN);
@@ -11,6 +13,8 @@ export function resolveProductionUrls(env = {}) {
     studioUrl: `${origin}/`,
     legacyDesignUrl: `${origin}/design`,
     firmwareUrl: `${origin}${FACTORY_FIRMWARE_PATH}`,
+    manifestUrl: `${origin}${FIRMWARE_MANIFEST_PATH}`,
+    signatureUrl: `${origin}${FIRMWARE_SIGNATURE_PATH}`,
   };
 }
 

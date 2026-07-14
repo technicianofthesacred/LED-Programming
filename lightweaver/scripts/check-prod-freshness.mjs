@@ -15,13 +15,14 @@
 // Override one origin for staging checks; all checked paths stay coherent:
 //   PROD_ORIGIN=https://studio.lightweaver-edw.pages.dev npm run check:prod
 
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The flasher's own validation (pure ESM, dependency-free): ESP magic byte +
 // HTML/SPA-fallback detection live in one place instead of being re-implemented.
 import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js';
+import { loadProductionFirmwareRelease } from '../src/lib/firmwareRelease.js';
 import {
   assertLegacyRouteRemoved,
   assertStudioRoot,
@@ -30,7 +31,14 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
-const { studioUrl, legacyDesignUrl, firmwareUrl: url } = resolveProductionUrls(process.env);
+const {
+  studioUrl,
+  legacyDesignUrl,
+  firmwareUrl: legacyAliasUrl,
+  manifestUrl,
+  signatureUrl,
+} = resolveProductionUrls(process.env);
+const productionOrigin = new URL(studioUrl).origin;
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -85,51 +93,36 @@ try {
   fail(`${err.message}\nThe production artifact must contain a top-level 404.html and no wildcard Studio rewrite.`);
 }
 
-let response;
+let release;
 try {
-  response = await fetch(url, {
-    cache: 'no-store',
+  const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
+    ...init,
     signal: AbortSignal.timeout(20_000),
   });
+  release = await loadProductionFirmwareRelease(productionFetch, webcrypto, {
+    manifestUrl,
+    signatureUrl,
+  });
 } catch (err) {
-  // Offline / DNS failure / timeout — a connectivity problem, not a deploy
-  // problem. Must not break offline dev or network-less CI.
-  console.log(`check-prod-freshness SKIPPED (could not reach ${url}: ${err?.cause?.code ?? err?.name ?? err?.message ?? err})`);
-  process.exit(0);
-}
-
-if (!response.ok) {
   fail(
-    `Production answered HTTP ${response.status} at\n  ${url}\n` +
-      'The live site is reachable but not serving the firmware file. Cards cannot be flashed from the website right now.',
+    `Production's signed firmware release is unavailable or invalid. The website installer will refuse to flash it.\n` +
+      `  manifest: ${manifestUrl}\n  signature: ${signatureUrl}\n  ${err?.message ?? err}`,
   );
 }
 
-const remote = new Uint8Array(await response.arrayBuffer());
-const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-
-try {
-  validateFirmwareImage({ bytes: remote, contentType });
-} catch (err) {
-  fail(
-    `Production serves something that is NOT an ESP32 firmware image at\n  ${url}\n` +
-      `  content-type: ${contentType || '(none)'}  first byte: 0x${(remote[0] ?? 0).toString(16)}  size: ${remote.length}\n` +
-      `  ${err.message}\n` +
-      'This is likely the SPA fallback (index.html with HTTP 200). The Studio flasher refuses this payload, so website flashing is effectively down until the bundle is republished with the binary included.',
-  );
-}
-
+const remote = release.bytes;
+validateFirmwareImage({ bytes: remote });
 const remoteHash = sha256(remote);
 if (remoteHash !== localHash) {
   fail(
-    'Production firmware DRIFTED from this repo:\n' +
-      `  live  ${url}\n        sha256 ${remoteHash}  (${remote.length} bytes)\n` +
+    'Production signed firmware DRIFTED from this repo:\n' +
+      `  live  ${new URL(release.manifest.image.url, productionOrigin)}\n        sha256 ${remoteHash}  (${remote.length} bytes)\n` +
       `  repo  ${localBinPath}\n        sha256 ${localHash}  (${local.length} bytes)\n` +
-      'Cards flashed from the website get different firmware than this checkout expects.\n' +
+      'The signed website installer would flash different firmware than this checkout expects.\n' +
       'Fix: rebuild and deploy this repository\'s root Pages artifact (see docs/led-mandalacodes-setup.md, "Deploy").',
   );
 }
 
 console.log(
-  `check-prod-freshness OK — production serves the committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${url}`,
+  `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
 );

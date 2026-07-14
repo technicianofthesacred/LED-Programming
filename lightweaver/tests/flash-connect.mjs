@@ -141,6 +141,10 @@ assert.match(flashSource, /writeVerifiedFlash/);
 
 {
   const screen = readFileSync(resolve(import.meta.dirname, '../src/v3/lw-flash.jsx'), 'utf8');
+  const technicianScreen = screen.slice(
+    screen.indexOf('function TechnicianFlashScreen'),
+    screen.indexOf('function UnsupportedInstallScreen'),
+  );
 
   assert.match(
     screen,
@@ -164,6 +168,16 @@ assert.match(flashSource, /writeVerifiedFlash/);
   );
   assert.match(screen, /findingRef\.current/, 'card selection should have a synchronous single-flight guard');
   assert.match(screen, /beforeunload/, 'active erase/write should guard accidental page unload');
+  assert.match(
+    technicianScreen,
+    /loadProductionFirmwareRelease\(\)/,
+    'technician firmware selection must use the same signed immutable release as automatic install',
+  );
+  assert.doesNotMatch(
+    technicianScreen,
+    /LIGHTWEAVER_FIRMWARE_URL|fetch\(/,
+    'technician firmware selection must not bypass the signed release with a mutable alias',
+  );
 }
 
 console.log('flash-connect tests passed');

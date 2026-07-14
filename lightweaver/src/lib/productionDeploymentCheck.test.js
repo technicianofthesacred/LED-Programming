@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import {
   assertLegacyRouteRemoved,
   assertStudioRoot,
@@ -18,7 +20,22 @@ test('one PROD_ORIGIN derives every production check URL', () => {
     studioUrl: 'https://preview.example.test/',
     legacyDesignUrl: 'https://preview.example.test/design',
     firmwareUrl: 'https://preview.example.test/firmware/lightweaver-controller-esp32s3-factory.bin',
+    manifestUrl: 'https://preview.example.test/firmware/release-manifest.json',
+    signatureUrl: 'https://preview.example.test/firmware/release-manifest.sig',
   });
+});
+
+test('mutable firmware metadata cannot be cached while immutable releases can be cached forever', async () => {
+  const headers = await readFile(resolve(import.meta.dirname, '../../public/_headers'), 'utf8');
+  for (const path of [
+    '/firmware/release-manifest.json',
+    '/firmware/release-manifest.sig',
+    '/firmware/release-provenance.json',
+    '/firmware/lightweaver-controller-esp32s3-factory.bin',
+  ]) {
+    assert.match(headers, new RegExp(`${path.replaceAll('.', '\\.')}\n  Cache-Control: no-store`));
+  }
+  assert.match(headers, /\/firmware\/releases\/\*\n  Cache-Control: public, max-age=31536000, immutable/);
 });
 
 test('Studio root must contain the root application shell', async () => {

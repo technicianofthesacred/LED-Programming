@@ -10,7 +10,6 @@ import {
 import {
   DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS,
   DEFAULT_WLED_APP_FLASH_ADDRESS,
-  MIN_FACTORY_IMAGE_BYTES,
   validateFirmwareImage,
   validateFlashPlan,
   validateInstallHardware,
@@ -27,9 +26,6 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     { n: 3, label: "Release BOOT", sub: "then click Connect", kbd: "BOOT ↑" },
   ];
 
-  // Base-relative so local previews and the canonical root deployment resolve
-  // the firmware from the same Vite base.
-  const LIGHTWEAVER_FIRMWARE_URL = `${import.meta.env.BASE_URL}firmware/lightweaver-controller-esp32s3-factory.bin`;
   const LIGHTWEAVER_FIRMWARE_NAME = 'lightweaver-controller-esp32s3-factory.bin';
 
   // Mockup-bug guard: keep button-internal glyphs at the mockup's 16px so the
@@ -101,26 +97,18 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
       setLoadingBundled(true);
       setStatus("Loading Lightweaver firmware…"); setKind("");
       try {
-        const response = await fetch(LIGHTWEAVER_FIRMWARE_URL, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`firmware file ${response.status}`);
-        const blob = await response.blob();
-        // Guard against the SPA fallback: a missing .bin path answers with
-        // index.html and HTTP 200. Never let a web page reach the flasher.
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        validateFirmwareImage({
-          bytes,
-          contentType: response.headers.get('content-type'),
-          minBytes: MIN_FACTORY_IMAGE_BYTES,
-        });
+        const release = await loadProductionFirmwareRelease();
+        validateProductionInstallRelease(release);
+        const { bytes } = release;
         const file = new File([bytes], LIGHTWEAVER_FIRMWARE_NAME, { type: 'application/octet-stream' });
         setFw(file);
         setAddr(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
         setErase(true);
-        setStatus("Lightweaver firmware selected."); setKind("ok");
-        append(`Selected ${LIGHTWEAVER_FIRMWARE_NAME} (${fmtSize(file.size)})`);
+        setStatus("Verified Lightweaver firmware selected."); setKind("ok");
+        append(`Verified and selected ${LIGHTWEAVER_FIRMWARE_NAME} (${fmtSize(file.size)})`);
       } catch (err) {
-        setStatus(`✕ Could not load bundled firmware: ${err.message}`); setKind("err");
-        append(`Bundled firmware failed: ${err.message}`);
+        setStatus(`✕ Could not verify Lightweaver firmware: ${err.message}`); setKind("err");
+        append(`Signed firmware verification failed: ${err.message}`);
       } finally {
         setLoadingBundled(false);
       }
