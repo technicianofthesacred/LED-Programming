@@ -568,10 +568,22 @@ import {
       }
 
       const sequence = ++browsePreviewSeq.current;
+      const scheduleVerifiedBridgePreview = () => {
+        const firmwareGap = cardBridgeFeatureGap('frame');
+        if (firmwareGap) {
+          setHandoffUrl('');
+          setStatusKind('err');
+          setStatus(firmwareGap.message);
+          return;
+        }
+        setStatusKind('');
+        setStatus('');
+        scheduleLivePreview(nextLook, target, 0);
+      };
       const bridgeOpen = hasCardBridge();
       const bridgeState = getCardBridgeState();
       if (bridgeOpen && bridgeState.verified && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)) {
-        scheduleLivePreview(nextLook, target);
+        scheduleVerifiedBridgePreview();
         return;
       }
 
@@ -584,15 +596,7 @@ import {
       setStatus('Connecting to the local Lightweaver card…');
       void attempt.ready.then(() => {
         if (sequence !== browsePreviewSeq.current) return;
-        const firmwareGap = cardBridgeFeatureGap('frame');
-        if (firmwareGap) {
-          setStatusKind('err');
-          setStatus(firmwareGap.message);
-          return;
-        }
-        setStatusKind('');
-        setStatus('');
-        scheduleLivePreview(nextLook, target, 0);
+        scheduleVerifiedBridgePreview();
       }).catch(error => {
         if (sequence !== browsePreviewSeq.current) return;
         setStatusKind('err');

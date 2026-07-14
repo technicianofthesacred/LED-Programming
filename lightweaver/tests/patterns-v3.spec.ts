@@ -185,6 +185,57 @@ test('an older card bridge points to the single Flash recovery action', async ({
   );
 });
 
+test('an already-verified legacy bridge is gated before sending a pattern', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    const bridge = { closed: false, postMessage: () => {} };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+        version: 1,
+      },
+    }));
+  });
+  await expect.poll(() => controlRequests.length).toBe(1);
+  controlRequests.length = 0;
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+      },
+    }));
+  });
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByRole('alert')).toHaveText(
+    "This card is running older firmware that can't do this yet. Open Flash to update the card, then try again.",
+  );
+  await page.waitForTimeout(150);
+  expect(controlRequests).toHaveLength(0);
+});
+
 test('setup JSON copy and download use the same compact card payload', async ({ page }) => {
   const project = createDefaultProject();
   project.id = 'setup-json-fixture';
