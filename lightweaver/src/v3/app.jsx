@@ -233,8 +233,9 @@ function Shell() {
       // guards established links against a direct 'connecting' event.
       checking: cardStatus.checking && !cardStatus.connected,
       host: cardStatus.host,
+      status: cardStatus.status,
     });
-  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host]);
+  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host, cardStatus.status]);
   const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const onConnectCard = useCallback(() => {

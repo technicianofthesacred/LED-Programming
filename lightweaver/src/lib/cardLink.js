@@ -19,8 +19,10 @@ import {
   getCardBridgeState,
   openCardBridge,
   sendCardBridgeRequest,
+  verifyCardBridgeIdentity,
 } from './cardBridge.js';
 import { readStoredCardHost } from './cardConnection.js';
+import { normalizeCardIdentity, persistCardIdentity } from './cardIdentity.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
 export const CARD_LINK_PING_TIMEOUT_MS = 2500;
@@ -43,6 +45,9 @@ export function initialCardLinkState(host = '') {
     transport: '',
     host: host || '',
     missedPings: 0,
+    card: null,
+    acknowledgedAt: '',
+    activity: 'idle',
   };
 }
 
@@ -66,12 +71,33 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         (prev.state === 'connecting' && prev.transport === 'bridge')
       )) return prev;
       if (prev.state === 'connecting' && prev.transport === via && prev.host === host) return prev;
-      return { state: 'connecting', reason: '', transport: via, host, missedPings: 0 };
+      return {
+        ...prev,
+        state: 'connecting', reason: '', transport: via, host, missedPings: 0,
+        ...(host !== prev.host ? { card: null, acknowledgedAt: '' } : {}),
+      };
     }
-    case 'bridge-ready':
+    case 'bridge-ready': {
+      if ((prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') && prev.card?.id && prev.host === host) return prev;
+      if (prev.state === 'connecting' && prev.transport === 'bridge' && prev.host === host) return prev;
+      return { ...prev, state: 'connecting', reason: '', transport: 'bridge', host, missedPings: 0 };
+    }
+    case 'card-verified': {
+      if (!event.card?.id) return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', missedPings: 0 };
+      if (prev.host && event.host && prev.host !== event.host) return prev;
+      const transport = event.via === 'direct' ? 'direct' : 'bridge';
+      return {
+        ...prev,
+        state: transport === 'direct' ? 'connected-direct' : 'connected-bridge',
+        reason: '', transport, host, missedPings: 0,
+        card: event.card,
+        acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
+      };
+    }
     case 'bridge-ping-ok': {
+      if (!prev.card?.id) return prev;
       if (prev.state === 'connected-bridge' && prev.host === host && prev.missedPings === 0) return prev;
-      return { state: 'connected-bridge', reason: '', transport: 'bridge', host, missedPings: 0 };
+      return { ...prev, state: 'connected-bridge', reason: '', transport: 'bridge', host, missedPings: 0 };
     }
     case 'bridge-ping-missed': {
       // A missed keepalive only matters for an established bridge link.
@@ -79,6 +105,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       const missedPings = prev.missedPings + 1;
       if (missedPings >= Math.max(1, missLimit)) {
         return {
+          ...prev,
           state: 'reconnecting-bridge',
           reason: 'card-restarting',
           transport: 'bridge',
@@ -94,21 +121,38 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       if (prev.state === 'connected-direct') return prev;
       const reason = event.reason || 'card-page-closed';
       if (prev.state === 'disconnected' && prev.reason === reason && prev.host === host) return prev;
-      return { state: 'disconnected', reason, transport: '', host, missedPings: 0 };
+      return { ...prev, state: 'disconnected', reason, transport: '', host, missedPings: 0 };
     }
     case 'direct-status': {
       if (event.connected) {
         // The bridge keepalive is authoritative while a bridge is up.
         if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
         if (prev.state === 'connected-direct' && prev.host === host) return prev;
-        return { state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0 };
+        if (!event.card?.id) {
+          return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', host, missedPings: 0 };
+        }
+        return {
+          ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0,
+          card: event.card,
+          acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
+        };
       }
       // A failed direct probe never tears down a live (or connecting) bridge.
       if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
       if (prev.state === 'connecting' && prev.transport === 'bridge') return prev;
       const reason = event.reason || 'card-unreachable';
       if (prev.state === 'disconnected' && prev.reason === reason && prev.host === host) return prev;
-      return { state: 'disconnected', reason, transport: '', host, missedPings: 0 };
+      return { ...prev, state: 'disconnected', reason, transport: '', host, missedPings: 0 };
+    }
+    case 'operation-started':
+      return prev.activity === 'pending' ? prev : { ...prev, activity: 'pending' };
+    case 'operation-recovering':
+      return prev.activity === 'recovering' ? prev : { ...prev, activity: 'recovering' };
+    case 'operation-failed':
+      return prev.activity === 'failed' ? prev : { ...prev, activity: 'failed' };
+    case 'operation-confirmed': {
+      const acknowledgedAt = event.acknowledgedAt || new Date().toISOString();
+      return { ...prev, activity: 'idle', acknowledgedAt };
     }
     default:
       return prev;
@@ -116,7 +160,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
 }
 
 export function isCardLinkConnected(state = {}) {
-  return state.state === 'connected-bridge' || state.state === 'connected-direct';
+  return Boolean(state.card?.id) && (state.state === 'connected-bridge' || state.state === 'connected-direct');
 }
 
 // Plain, friendly copy for the footer — the audience is a visual artist.
@@ -128,6 +172,9 @@ export function cardLinkReasonText(reason = '') {
     case 'popup-blocked': return 'The browser blocked the card page window — allow popups and try again.';
     case 'no-answer': return 'Could not reach the card.';
     case 'card-unreachable': return 'No card found on this network.';
+    case 'identity-missing': return 'This card needs a firmware update before Studio can verify it.';
+    case 'wrong-card': return 'This is a different Lightweaver card.';
+    case 'firmware-too-old': return 'This card firmware needs an update.';
     case 'never-connected':
     default:
       return 'Not connected to a card.';
@@ -293,9 +340,18 @@ export function getSharedCardLink() {
   win?.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, (event) => {
     const detail = event?.detail || {};
     if (detail.connected && detail.verified) {
-      // A verified handshake (ready event or verified response) from the card
-      // origin — the bridge is genuinely live.
-      sharedLink.dispatch({ type: 'bridge-ready', host: detail.host });
+      if (detail.card?.id) {
+        const acknowledgedAt = new Date().toISOString();
+        persistCardIdentity(detail.card, { acknowledgedAt });
+        sharedLink.dispatch({
+          type: 'card-verified', via: 'bridge', host: detail.host,
+          card: detail.card, acknowledgedAt,
+        });
+      } else if (detail.identityError) {
+        sharedLink.dispatch({ type: 'bridge-lost', reason: detail.identityError, host: detail.host });
+      } else {
+        sharedLink.dispatch({ type: 'bridge-ready', host: detail.host });
+      }
       return;
     }
     if (!detail.open) {
@@ -322,10 +378,13 @@ export function getCardLinkState() {
 }
 
 // Feed direct-transport results (useCardStatus on http/file) into the machine.
-export function reportDirectCardStatus({ connected = false, checking = false, host = '' } = {}) {
+export function reportDirectCardStatus({ connected = false, checking = false, host = '', status = null, card = null } = {}) {
   const link = getSharedCardLink();
   if (connected) {
-    link.dispatch({ type: 'direct-status', connected: true, host });
+    const identity = card?.id ? card : normalizeCardIdentity(status || card || {}, host);
+    const acknowledgedAt = new Date().toISOString();
+    if (identity.id) persistCardIdentity(identity, { acknowledgedAt });
+    link.dispatch({ type: 'direct-status', connected: true, host, card: identity, acknowledgedAt });
     return;
   }
   if (checking) {
@@ -346,7 +405,10 @@ export async function bootstrapCardLink() {
   link.dispatch({ type: 'connecting', via: 'bridge', host: getCardBridgeState().host });
   try {
     await sendCardBridgeRequest('ping', {}, { timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
-    link.dispatch({ type: 'bridge-ready', host: getCardBridgeState().host });
+    const card = await verifyCardBridgeIdentity(getCardBridgeState().host);
+    const acknowledgedAt = new Date().toISOString();
+    persistCardIdentity(card, { acknowledgedAt });
+    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, acknowledgedAt });
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not
     // pay this failing re-ping on every startup. A successful bridge

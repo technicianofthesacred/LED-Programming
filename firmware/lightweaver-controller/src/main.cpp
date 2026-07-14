@@ -40,6 +40,19 @@
 #define LW_SPI_MISO 13
 #endif
 
+#ifndef LW_FIRMWARE_VERSION
+#define LW_FIRMWARE_VERSION "1.0.0"
+#endif
+#ifndef LW_BUILD_ID
+#define LW_BUILD_ID "dev"
+#endif
+#ifndef LW_CONFIG_SCHEMA_VERSION
+#define LW_CONFIG_SCHEMA_VERSION 1
+#endif
+#ifndef LW_CAPABILITIES_VERSION
+#define LW_CAPABILITIES_VERSION 1
+#endif
+
 CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
@@ -1286,11 +1299,30 @@ bool runtimeIsBlackedOut() { return blackedOut; }
 
 String runtimeFirmwareInfo() {
   JsonDocument doc;
+  char cardId[16] = {};
+  snprintf(cardId, sizeof(cardId), "lw-%012llx",
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
+  doc["cardId"] = cardId;
+  doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
+  doc["buildId"] = LW_BUILD_ID;
+  doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
+  doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["build"] = __DATE__ " " __TIME__;
   doc["pixels"] = totalPixels;
   doc["piece"]["id"] = runtimeConfig.pieceId;
   doc["piece"]["name"] = runtimeConfig.pieceName;
   doc["lookCount"] = lookCount;
+  doc["runtimeSource"] = runtimeConfig.source == SOURCE_SD ? "sd" : runtimeConfig.source == SOURCE_NVS ? "internal-flash" : "defaults";
+  doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
+  doc["wiringProbation"]["active"] = wiringProbationActive;
+  doc["wiringProbation"]["remainingMs"] = wiringProbationActive && int32_t(wiringProbationDeadlineMs - millis()) > 0
+    ? wiringProbationDeadlineMs - millis() : 0;
+  doc["limits"]["pixels"] = LW_MAX_PIXELS;
+  doc["limits"]["outputs"] = LW_MAX_OUTPUTS;
+  doc["limits"]["looks"] = LW_MAX_LOOKS;
+  doc["limits"]["zones"] = LW_MAX_ZONES;
+  doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
+  doc["limits"]["configStorageBytes"] = 3968;
   doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
@@ -1307,6 +1339,8 @@ String runtimeFirmwareInfo() {
     output["id"] = outputs[i].id;
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
+    output["gpio"] = outputs[i].pin;
+    output["count"] = outputs[i].pixels;
   }
   int altPress = effectiveEncoderPressAltPin(controls);
   doc["controls"]["encoder"]["a"] = controls.encoderA;

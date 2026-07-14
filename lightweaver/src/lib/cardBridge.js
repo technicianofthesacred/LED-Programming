@@ -5,6 +5,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
+import { normalizeCardIdentity } from './cardIdentity.js';
 
 // Message types that command the hardware (write state, push config, reboot,
 // repair the LED output, stream live frames). These require a card origin we've
@@ -60,6 +61,8 @@ let bridgeReady = false;
 // The card page's reported bridge protocol version. 0 = legacy firmware that
 // predates versioning (no `version` field in its ready/replies).
 let bridgeVersion = 0;
+let bridgeCard = null;
+let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let listenerAttached = false;
@@ -115,6 +118,8 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeConnected = false;
   bridgeReady = false;
   bridgeVersion = 0;
+  bridgeCard = null;
+  bridgeIdentityError = '';
   dispatchBridgeChange();
 }
 
@@ -185,6 +190,8 @@ function handleBridgeMessage(event) {
     const claimedHost = normalizeCardHost(data.host || hostFromOrigin(event.origin));
     const derivedOrigin = cardHostToUrl(claimedHost);
     if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
+    if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
+    if (bridgeOrigin && event.origin !== bridgeOrigin) return;
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
       source: event.source,
@@ -192,6 +199,10 @@ function handleBridgeMessage(event) {
       host: claimedHost,
       connected: true,
       ready: true,
+    });
+    void verifyCardBridgeIdentity(claimedHost).catch(() => {
+      // Identity failures are surfaced through bridge state; the ready message
+      // handler must never create an unhandled async rejection.
     });
     return;
   }
@@ -315,11 +326,37 @@ export function getCardBridgeState() {
     verified: bridgeReady,
     // Bridge protocol version the card reported (0 = legacy firmware).
     version: bridgeVersion,
+    card: bridgeCard,
+    identityError: bridgeIdentityError,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
     open: Boolean(bridgeWindow),
   };
+}
+
+export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
+  const expectedHost = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
+  const expectedWindow = bridgeWindow;
+  try {
+    const response = await sendCardBridgeRequest('firmware-info', {}, { host: expectedHost });
+    const identity = normalizeCardIdentity(response, expectedHost);
+    if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
+    if (bridgeWindow !== expectedWindow || normalizeCardHost(bridgeHost) !== expectedHost) {
+      throw bridgeError('Ignored identity from an older card connection.', 'stale-host');
+    }
+    bridgeCard = identity;
+    bridgeIdentityError = '';
+    dispatchBridgeChange();
+    return identity;
+  } catch (error) {
+    if (bridgeWindow === expectedWindow && normalizeCardHost(bridgeHost) === expectedHost) {
+      bridgeCard = null;
+      bridgeIdentityError = error?.reason || 'identity-missing';
+      dispatchBridgeChange();
+    }
+    throw error;
+  }
 }
 
 export function getCardBridgeVersion() {
