@@ -562,6 +562,36 @@ await assert.rejects(blockedAttempt.ready, error => (
   && error.message === 'Allow the Lightweaver card window, then try the pattern again.'
 ));
 
+// Popup permission can be granted after the first refusal. The same visible
+// user-gesture action must make a fresh synchronous window.open attempt and
+// complete onboarding rather than remaining stuck on the rejected promise.
+const retryBridge = {
+  closed: false,
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => blockedHarness.emitMessage({
+      origin: `http://${blockedHost}`,
+      source: retryBridge,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681873', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+blockedHarness.win.open = (url, name) => {
+  blockedHarness.opened.push({ url, name });
+  return retryBridge;
+};
+const allowedRetry = acquireCardBridgeFromGesture(blockedHost, { timeoutMs: 100 });
+assert.equal(blockedHarness.opened.length, 2, 'retry performs a new popup attempt from the new gesture');
+blockedHarness.emitMessage({
+  origin: `http://${blockedHost}`,
+  source: retryBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: blockedHost, version: 1 },
+});
+assert.equal((await allowedRetry.ready).verified, true, 'popup-blocked onboarding resumes after permission is granted');
+
 const timeoutHost = '192.168.18.74';
 const timeoutHarness = bridgeWindowHarness({
   host: timeoutHost,

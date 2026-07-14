@@ -1,3 +1,5 @@
+import { readPersistedCardIdentity } from './cardIdentity.js';
+
 export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
 export const CARD_HOST_HISTORY_STORAGE_KEY = 'lw_chip_card_host_history';
@@ -135,10 +137,24 @@ export function rememberCardHost(rawHost = '') {
   return host;
 }
 
-export function candidateCardHosts(preferredHost = '') {
+function cardSpecificHosts(expectedCard = null) {
+  if (!expectedCard?.id) return [];
+  const normalizedHostname = expectedCard.hostname ? normalizeCardHost(expectedCard.hostname) : '';
+  const hostname = isLocalCardHost(normalizedHostname) ? normalizedHostname : '';
+  const normalizedAddress = expectedCard.address ? normalizeCardHost(expectedCard.address) : '';
+  const address = isIpv4(normalizedAddress) && isLocalCardHost(normalizedAddress) ? normalizedAddress : '';
+  return [...new Set([hostname, address].filter(Boolean))];
+}
+
+export function candidateCardHosts(preferredHost = '', expectedCard = readPersistedCardIdentity()) {
   const preferred = normalizeCardHost(preferredHost || readStoredCardHost());
   const history = readStoredCardHostHistory();
-  const hosts = [preferred, ...history, ...CARD_HOST_FALLBACKS.map(normalizeCardHost)];
+  const hosts = [
+    ...cardSpecificHosts(expectedCard),
+    preferred,
+    ...history,
+    ...CARD_HOST_FALLBACKS.map(normalizeCardHost),
+  ];
   return [...new Set(hosts.filter(Boolean))];
 }
 
@@ -151,7 +167,11 @@ function hostFromStatus(status, fallbackHost) {
   );
 }
 
-async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, controllers }) {
+function statusCardId(status = {}) {
+  return String(status?.cardId || status?.id || status?.pieceId || status?.piece?.cardId || '').trim();
+}
+
+async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, controllers, expectedCard }) {
   const ctrl = new AbortController();
   controllers.push(ctrl);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -161,6 +181,20 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
     const status = await response.json().catch(() => ({ ok: true }));
     if (status?.ok === false) throw new Error(status.error || 'card not ok');
     const connectedHost = hostFromStatus(status, host);
+    const reportedId = statusCardId(status);
+    if (expectedCard?.id && reportedId !== expectedCard.id) {
+      const error = new Error(reportedId
+        ? 'A different Lightweaver card answered at this address.'
+        : 'This Lightweaver card did not report a stable identity.');
+      error.reason = reportedId ? 'wrong-card' : 'identity-missing';
+      error.discoveredResult = {
+        connected: true,
+        host: connectedHost,
+        url: cardHostToUrl(connectedHost),
+        status,
+      };
+      throw error;
+    }
     rememberCardHost(connectedHost);
     if (host !== connectedHost) rememberCardHost(host);
     if (persist) writeStoredCardHost(connectedHost);
@@ -177,25 +211,41 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
 
 export async function discoverCardStatus({
   preferredHost = '',
+  expectedCard = readPersistedCardIdentity(),
   timeoutMs = 900,
   persist = true,
   fetchImpl = globalThis.fetch,
 } = {}) {
-  const hosts = candidateCardHosts(preferredHost);
+  const hosts = candidateCardHosts(preferredHost, expectedCard);
+  const specificHosts = cardSpecificHosts(expectedCard);
+  const tiers = specificHosts.length
+    ? [specificHosts, hosts.filter(host => !specificHosts.includes(host))]
+    : [hosts];
   const controllers = [];
+  const errors = [];
   try {
-    const found = await Promise.any(hosts.map(host => probeCardStatusHost(host, {
-      timeoutMs,
-      persist,
-      fetchImpl,
-      controllers,
-    })));
-    controllers.forEach(ctrl => ctrl.abort());
-    return found;
+    for (const tier of tiers.filter(items => items.length)) {
+      try {
+        const found = await Promise.any(tier.map(host => probeCardStatusHost(host, {
+          timeoutMs,
+          persist,
+          fetchImpl,
+          controllers,
+          expectedCard,
+        })));
+        controllers.forEach(ctrl => ctrl.abort());
+        return found;
+      } catch (error) {
+        errors.push(...(Array.isArray(error?.errors) ? error.errors : [error]));
+      }
+    }
+    throw new AggregateError(errors, 'No matching Lightweaver card answered.');
   } catch (error) {
     controllers.forEach(ctrl => ctrl.abort());
-    const errors = Array.isArray(error?.errors) ? error.errors : [error];
-    const lastError = errors.find(Boolean) || error;
+    const failures = Array.isArray(error?.errors) ? error.errors : [error];
+    const discoveredMismatch = failures.find(item => item?.discoveredResult)?.discoveredResult;
+    if (discoveredMismatch) return discoveredMismatch;
+    const lastError = failures.find(Boolean) || error;
     return {
       connected: false,
       host: hosts[0] || DEFAULT_CARD_HOST,

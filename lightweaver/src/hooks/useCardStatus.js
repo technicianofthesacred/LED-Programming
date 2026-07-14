@@ -6,6 +6,7 @@ import {
   readStoredCardHost,
   reduceCardConnectionState,
 } from '../lib/cardConnection.js';
+import { readPersistedCardIdentity } from '../lib/cardIdentity.js';
 
 export function useCardStatus({
   enabled = true,
@@ -31,6 +32,7 @@ export function useCardStatus({
     setState(prev => ({ ...prev, checking: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
+      expectedCard: readPersistedCardIdentity(),
       timeoutMs,
       persist: false,
     });
@@ -43,6 +45,7 @@ export function useCardStatus({
     setState(prev => ({ ...prev, checking: true, reconnecting: true, error: null }));
     const result = await discoverCardStatus({
       preferredHost: readStoredCardHost(),
+      expectedCard: readPersistedCardIdentity(),
       timeoutMs: Math.max(timeoutMs, 12000),
       persist: true,
     });
@@ -72,6 +75,7 @@ export function useCardStatus({
       try {
         const result = await discoverCardStatus({
           preferredHost: readStoredCardHost(),
+          expectedCard: readPersistedCardIdentity(),
           timeoutMs,
           persist: false,
         });
