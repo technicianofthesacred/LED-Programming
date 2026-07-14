@@ -28,7 +28,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # This job has no environment and no secrets. It must succeed before GitHub
+  # will even start the protected signer job below.
+  verify:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Cache unprivileged verification dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install pinned verification dependencies
+        run: |
+          pip install platformio==6.1.19
+          npm ci --prefix lightweaver
+
+      - name: Verify release code and Studio build
+        run: |
+          cd lightweaver
+          node --test src/lib/firmwareRelease.test.js
+          npm run build
+
+      - name: Verify pinned firmware compiles with the source identity
+        env:
+          LW_BUILD_ID: ${{ github.sha }}
+        run: |
+          pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
+          node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
+
   build:
+    needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: firmware-release
@@ -82,6 +129,12 @@ jobs:
             --config-max "$CONFIG_VERSION" \
             --minimum-installer 1.4.0
           node scripts/sign-release-artifacts.mjs
+
+      - name: Verify signed release set
+        run: |
+          cd lightweaver
+          node --test src/lib/firmwareRelease.test.js
+          node ../firmware/lightweaver-controller/tests/release-build-identity.mjs
 
       - name: Commit updated signed release if it changed
         id: release
