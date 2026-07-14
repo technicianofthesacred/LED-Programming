@@ -15,6 +15,8 @@ struct PatternModifiers {
   uint8_t driftHueMax = 255;
 };
 
+bool isSupportedProceduralPattern(const String& patternId);
+bool isSupportedPresetPattern(const String& patternId);
 bool isSupportedCompiledPattern(const String& patternId);
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods);
 bool renderPresetPattern(const String& preset, CRGB* leds, uint16_t totalPixels, const PatternModifiers& mods);

@@ -51,6 +51,7 @@ assert.notEqual(preflightStart, -1);
 assert.notEqual(selectStart, -1);
 const preflight = runtime.slice(preflightStart, selectStart);
 assert.match(preflight, /findLookById\(patternId\)/, 'loaded playlist looks must remain accepted');
+assert.match(preflight, /isLoadedLookRenderable\(\*look,\s*targetId\.length\(\)\s*>\s*0\)/, 'loaded looks must prove the requested target is renderable');
 assert.match(preflight, /isSupportedCompiledPattern\(patternId\)/, 'known compiled patterns must remain accepted');
 const select = runtime.slice(runtime.indexOf('bool runtimeSelectPatternById(const String& id)'), preflightStart);
 assert.match(select, /if\s*\(!isSupportedCompiledPattern\(id\)\)\s*return false;/, 'unknown global pattern ids must be rejected before state changes');
