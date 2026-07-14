@@ -10,6 +10,7 @@ import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
+import { cardStorageJson } from '../lib/cardPushClient.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
@@ -120,7 +121,6 @@ function realPatternShape(patternId) {
       () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
       [projectId, projectName, strips, board, standaloneController],
     );
-    const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     // ── live playlist write-back to the standalone controller ─────────────
@@ -301,10 +301,25 @@ function realPatternShape(patternId) {
     };
 
     const copyConfig = async () => {
-      try { await navigator.clipboard.writeText(configJson); } catch { /* clipboard blocked */ }
+      try {
+        await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
+        setPlaylistStatus(null);
+      } catch (error) {
+        setPlaylistStatus(makePlaylistPushErrorState(error, { host, runtimePackage }));
+      }
     };
 
-    const downloadConfig = () => downloadJson(`${safeProjectName || 'lightweaver'}-playlist-config.json`, configJson);
+    const downloadConfig = () => {
+      try {
+        downloadJson(
+          `${safeProjectName || 'lightweaver'}-playlist-config.json`,
+          cardStorageJson(runtimePackage),
+        );
+        setPlaylistStatus(null);
+      } catch (error) {
+        setPlaylistStatus(makePlaylistPushErrorState(error, { host, runtimePackage }));
+      }
+    };
     const openCard = () => window.open(cardHostToUrl(host), '_blank');
     // "Adjust" on the wiring-mismatch banner: jump straight to Layout → Size,
     // where the per-strip LED counts live, so the user can change the number
