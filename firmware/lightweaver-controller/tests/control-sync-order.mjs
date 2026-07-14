@@ -44,6 +44,33 @@ assert.ok(
   'revision validation must happen before any physical control mutation',
 );
 assert.match(body, /patternApplied\s*=\s*runtimeSelectPatternByIdZ/, 'pattern acknowledgement must derive from the real apply result');
+const preflightIndex = body.indexOf('runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)');
+assert.notEqual(preflightIndex, -1, 'pattern and zone targets must be checked without mutation');
+for (const setter of [
+  'runtimeSetSyncZones(',
+  'runtimeSetLedColorOrder(',
+  'runtimeSetBrightnessZ(',
+  'runtimeSetSpeedZ(',
+  'runtimeSetHueShiftZ(',
+  'runtimeSetBlackoutZ(',
+  'runtimeNextPattern(',
+  'runtimePreviousPattern(',
+  'runtimeSetCustomHueZ(',
+  'runtimeSetCustomSaturationZ(',
+  'runtimeSetCustomBreatheZ(',
+  'runtimeSetCustomDriftZ(',
+  'runtimeSetDriftRangeZ(',
+  'runtimeCancelStream(',
+]) {
+  const setterIndex = body.indexOf(setter);
+  assert.notEqual(setterIndex, -1, `control handler should contain ${setter}`);
+  assert.ok(preflightIndex < setterIndex, `target preflight must happen before ${setter}`);
+}
+assert.match(
+  body,
+  /if\s*\(patternRequested\s*&&\s*!runtimeCanSelectPatternByIdZ\(zoneTarget, confirmedPatternId\)\)[\s\S]*?server\.send\(422[\s\S]*?return;/,
+  'a missing pattern target must return 422 before any physical control mutation',
+);
 
 for (const proof of [
   'out["cardId"] = runtimeCardId()',

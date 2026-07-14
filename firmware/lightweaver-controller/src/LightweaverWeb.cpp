@@ -1206,6 +1206,16 @@ void handleControlPost() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"pattern id out of range\"}");
     return;
   }
+  if (patternRequested && !runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)) {
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["cardId"] = runtimeCardId();
+    rejected["error"] = "pattern or zone is no longer available";
+    String body;
+    serializeJson(rejected, body);
+    server.send(422, "application/json", body);
+    return;
+  }
 
   // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
   // command sent while the card is in split preview mode updates only zone 0.

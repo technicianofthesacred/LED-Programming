@@ -27,6 +27,7 @@ assert.match(main, /ESP\.getEfuseMac\(\)/, 'card identity must derive from the E
 assert.match(main, /lw-%012llx/, 'card identity must be a bounded lw- plus fixed-width hex id');
 assert.match(runtimeApi, /String\s+runtimeCardId\(\)/, 'web control acknowledgements must use the same stable runtime card identity');
 assert.match(main, /String\s+runtimeCardId\(\)[\s\S]*?ESP\.getEfuseMac\(\)/, 'runtime control identity must derive from the ESP32-S3 eFuse chip id');
+assert.match(runtimeApi, /bool\s+runtimeCanSelectPatternByIdZ\(/, 'firmware must expose a non-mutating pattern target preflight');
 
 for (const [source, payload] of [[firmwareInfo, '/api/firmware-info'], [runtimeStatus, '/api/status']]) {
   for (const field of [

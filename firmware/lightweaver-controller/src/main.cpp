@@ -1279,6 +1279,18 @@ bool runtimeSelectPatternById(const String& id) {
   return true;
 }
 
+// Validate the complete pattern target without changing visible state. The web
+// control transaction calls this before applying sync, color, or brightness so
+// a section removed by a newer wiring config cannot leave a partial preview.
+bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId) {
+  if (patternId.length() == 0 || runtimeConfig.zoneCount == 0) return false;
+  if (targetId.length() == 0) return true;
+  for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+    if (runtimeConfig.zones[i].id == targetId) return true;
+  }
+  return false;
+}
+
 // Zone-targeted pattern selection. Used by the per-zone designer flow.
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
   if (targetId.length() == 0) return runtimeSelectPatternById(patternId);

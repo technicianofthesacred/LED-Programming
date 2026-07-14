@@ -343,7 +343,13 @@ const parentBridge = {
         data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response },
       });
       if (message.type === 'zones') respond({ zones: [{ id: 'zone-a' }] });
-      else if (message.type === 'control') respond({ ok: true, applied: message.payload });
+      else if (message.type === 'control') respond({
+        ok: true,
+        cardId: 'lw-001122aabbcc',
+        patternId: message.payload.patternId,
+        revision: message.payload.revision,
+        applied: message.payload,
+      });
       else if (message.type === 'firmware-info') respond({
         cardId: 'lw-001122aabbcc',
         firmwareVersion: '1.0.0',
