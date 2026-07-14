@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
 import { readStoredCardHost, writeStoredCardHost } from '../../lib/cardConnection.js';
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
+import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
 import { connectCardLink } from '../../lib/cardLink.js';
 import { detectPlatformCapabilities } from '../../lib/platformCapabilities.js';
 
@@ -33,6 +34,8 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
   const [failure, setFailure] = useState('');
   const [host, setHost] = useState(readStoredCardHost);
   const capabilities = useMemo(platformCapabilities, [open]);
+  const rememberedCard = readPersistedCardIdentity();
+  const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
   const hasSetupHost = [host, link.host, setupEvidence.host].includes(SETUP_HOST);
   const flowEvidence = {
     setupNetwork: hasSetupHost ? { available: true, ssid: 'Lightweaver-XXXX' } : setupEvidence.setupNetwork,
@@ -41,7 +44,14 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
   const actionLink = intent === 'blank-card' && link.reason !== 'wrong-card'
     ? { state: 'disconnected', reason: link.reason }
     : link;
-  const action = nextCardConnectionAction({ link: actionLink, intent, capabilities, ...flowEvidence });
+  const flowIntent = intent || (hasKnownCard ? 'working-card' : '');
+  const action = nextCardConnectionAction({
+    link: actionLink,
+    intent: flowIntent,
+    capabilities,
+    rememberedCard,
+    ...flowEvidence,
+  });
 
   useEffect(() => {
     if (!open) return undefined;
@@ -79,6 +89,7 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
       link,
       intent: 'working-card',
       capabilities,
+      rememberedCard,
       ...flowEvidence,
     });
     if (next.id !== 'open-setup-network') connect();
@@ -111,7 +122,8 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
   const initialChoice = !intent
     && link.state === 'disconnected'
     && (!link.activity || link.activity === 'idle')
-    && NEUTRAL_FIRST_RUN_REASONS.has(link.reason);
+    && NEUTRAL_FIRST_RUN_REASONS.has(link.reason)
+    && !hasKnownCard;
   const setupSteps = action.id === 'open-setup-network';
 
   return (

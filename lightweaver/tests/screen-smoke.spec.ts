@@ -91,6 +91,26 @@ test('connection center starts with the two physical card choices', async ({ pag
   await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
 });
 
+test('an unreachable previously paired card opens directly on reconnect', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-remembered-card',
+      name: 'Remembered gallery card',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toContainText('Not connected');
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+  await expect(dialog).not.toContainText('lw-remembered-card');
+});
+
 test('opening while connecting renders the busy flow action directly', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -240,7 +260,7 @@ test('wrong-card recovery only adopts after the explicit secondary action', asyn
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await page.getByRole('button', { name: 'Reconnect' }).click();
   await expect(page.getByRole('button', { name: 'Use this card instead' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-expected-card');
   await page.getByRole('button', { name: 'Use this card instead' }).click();
