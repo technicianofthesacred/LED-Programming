@@ -151,6 +151,33 @@ assert.equal(
   'generic fallbacks must not race ahead of successful card-specific candidates',
 );
 
+const staleHintStart = Date.now();
+const staleHintProbes = [];
+const recoveredFromStaleHints = await discoverCardStatus({
+  preferredHost: 'lightweaver.local',
+  expectedCard,
+  timeoutMs: 700,
+  persist: false,
+  fetchImpl: async (url) => {
+    staleHintProbes.push(String(url));
+    if (String(url).startsWith('http://lightweaver.local/')) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, cardId: expectedCard.id }),
+      };
+    }
+    await new Promise(resolve => setTimeout(resolve, 650));
+    throw new TypeError('stale remembered hint');
+  },
+});
+assert.equal(recoveredFromStaleHints.connected, true);
+assert.equal(recoveredFromStaleHints.host, 'lightweaver.local');
+assert.ok(staleHintProbes.some(url => url.startsWith('http://lightweaver.local/')));
+assert.ok(
+  Date.now() - staleHintStart < 350,
+  'stale card-specific hints receive priority without delaying a safe generic fallback for the full probe timeout',
+);
+
 const connectedState = reduceCardConnectionState({
   connected: false,
   host: 'lightweaver.local',

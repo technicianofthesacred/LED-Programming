@@ -7,6 +7,7 @@ export const CARD_HOST_CHANGED_EVENT = 'lightweaver-card-host-changed';
 export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.4.1'];
 export const CARD_CONNECTION_MISS_LIMIT = 3;
 export const CARD_HOST_HISTORY_LIMIT = 8;
+export const CARD_SPECIFIC_DISCOVERY_HEAD_START_MS = 180;
 
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
@@ -218,31 +219,51 @@ export async function discoverCardStatus({
 } = {}) {
   const hosts = candidateCardHosts(preferredHost, expectedCard);
   const specificHosts = cardSpecificHosts(expectedCard);
-  const tiers = specificHosts.length
-    ? [specificHosts, hosts.filter(host => !specificHosts.includes(host))]
-    : [hosts];
+  const fallbackHosts = hosts.filter(host => !specificHosts.includes(host));
   const controllers = [];
-  const errors = [];
+  const priorErrors = [];
+  const probe = host => probeCardStatusHost(host, {
+    timeoutMs,
+    persist,
+    fetchImpl,
+    controllers,
+    expectedCard,
+  });
   try {
-    for (const tier of tiers.filter(items => items.length)) {
-      try {
-        const found = await Promise.any(tier.map(host => probeCardStatusHost(host, {
-          timeoutMs,
-          persist,
-          fetchImpl,
-          controllers,
-          expectedCard,
-        })));
+    let attempts = specificHosts.map(probe);
+    if (attempts.length && fallbackHosts.length) {
+      let timer;
+      const firstTier = Promise.any(attempts);
+      const headStart = await Promise.race([
+        firstTier.then(found => ({ found }), error => ({ error })),
+        new Promise(resolve => {
+          timer = setTimeout(() => resolve({ fallback: true }), CARD_SPECIFIC_DISCOVERY_HEAD_START_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (headStart.found) {
         controllers.forEach(ctrl => ctrl.abort());
-        return found;
-      } catch (error) {
-        errors.push(...(Array.isArray(error?.errors) ? error.errors : [error]));
+        return headStart.found;
       }
+      if (headStart.error) {
+        priorErrors.push(...(Array.isArray(headStart.error?.errors) ? headStart.error.errors : [headStart.error]));
+      }
+      // A short head start preserves the preferred route without turning two
+      // stale remembered hints into a multi-second onboarding stall. If those
+      // probes are merely slow (rather than failed), keep them in the race.
+      attempts = headStart.fallback ? [...attempts, ...fallbackHosts.map(probe)] : fallbackHosts.map(probe);
+    } else if (!attempts.length) {
+      attempts = fallbackHosts.map(probe);
     }
-    throw new AggregateError(errors, 'No matching Lightweaver card answered.');
+    const found = await Promise.any(attempts);
+    controllers.forEach(ctrl => ctrl.abort());
+    return found;
   } catch (error) {
     controllers.forEach(ctrl => ctrl.abort());
-    const failures = Array.isArray(error?.errors) ? error.errors : [error];
+    const failures = [
+      ...priorErrors,
+      ...(Array.isArray(error?.errors) ? error.errors : [error]),
+    ];
     const discoveredMismatch = failures.find(item => item?.discoveredResult)?.discoveredResult;
     if (discoveredMismatch) return discoveredMismatch;
     const lastError = failures.find(Boolean) || error;
