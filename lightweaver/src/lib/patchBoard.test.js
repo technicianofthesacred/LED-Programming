@@ -48,6 +48,33 @@ test('default board mirrors current strip order', () => {
     'layer-3',
     'layer-3',
   ]);
+  assert.equal(board.dataWireCount, 1);
+  assert.equal(board.dataWireCountNeedsReview, false);
+});
+
+test('logical patch changes never change the explicit physical data-wire count', () => {
+  const strip = makeStrip('outer', 8);
+  const board = createDefaultPatchBoard([strip]);
+  board.dataWireCount = 2;
+
+  sliceStripIntoPatches(board, strip, [2, 5]);
+  const resized = normalizePatchBoard(board, [makeStrip('outer', 12)]);
+  updatePatchRange(resized, resized.chains[0].rowIds[0], 2, 0);
+
+  assert.equal(resized.dataWireCount, 2);
+  assert.equal(resized.dataWireCountNeedsReview, false);
+});
+
+test('legacy patch boards default to one physical wire with an explicit review marker', () => {
+  const board = normalizePatchBoard({
+    physicalLocked: false,
+    chains: [{ id: 'main', rowIds: [] }],
+    groups: [],
+    patches: [],
+  }, []);
+
+  assert.equal(board.dataWireCount, 1);
+  assert.equal(board.dataWireCountNeedsReview, true);
 });
 
 test('normalization creates a default board for missing saved patch board data', () => {

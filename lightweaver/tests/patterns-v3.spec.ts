@@ -475,7 +475,7 @@ test('oversized setup JSON stops copy and download before browser side effects',
   });
 });
 
-test('Recover lights performs one complete recovery request', async ({ page }) => {
+test('Recover lights asks for physical confirmation and offers wire discovery when still dark', async ({ page }) => {
   const recoveries: Record<string, unknown>[] = [];
   let rebootCount = 0;
   await page.route('**/api/recover-lights', async route => {
@@ -503,7 +503,10 @@ test('Recover lights performs one complete recovery request', async ({ page }) =
   expect(recoveries[0]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
   expect(recoveries[1]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
   expect(rebootCount).toBe(1);
-  await expect(page.getByText('Recovery complete. The card reconnected and is holding warm white.')).toBeVisible();
+  await expect(page.getByText('Recovery frame sent. Do you see warm white on the real LEDs?')).toBeVisible();
+  await page.getByRole('button', { name: 'No, lights are still dark' }).click();
+  await expect(page.getByText('The card responded, but physical light is not confirmed.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Find my LED wire' })).toBeVisible();
 });
 
 test('category chips filter the grid', async ({ page }) => {

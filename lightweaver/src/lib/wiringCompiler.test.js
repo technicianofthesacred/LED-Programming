@@ -58,6 +58,53 @@ test('compiler supports four outputs and split ranges with unique global offsets
   assert.equal(result.totalPixels, 6);
 });
 
+test('logical split, resize, and reverse edits preserve physical output identities and GPIOs', () => {
+  const physicalOutputs = [{ id: 'physical-a', name: 'Data wire A', pin: 18, runIds: ['a'] }];
+  const variants = [
+    wiring({ outputs: physicalOutputs, runs: [wiring().runs[0]] }),
+    wiring({
+      outputs: [{ ...physicalOutputs[0], runIds: ['a-head', 'a-tail'] }],
+      runs: [
+        { id: 'a-head', type: 'strip', source: { stripId: 'a', from: 0, to: 1 }, physicalDirection: 'source-forward' },
+        { id: 'a-tail', type: 'strip', source: { stripId: 'a', from: 2, to: 3 }, physicalDirection: 'source-forward' },
+      ],
+    }),
+    wiring({
+      outputs: physicalOutputs,
+      runs: [{ ...wiring().runs[0], source: { stripId: 'a', from: 0, to: 2 } }],
+    }),
+    wiring({
+      outputs: physicalOutputs,
+      runs: [{ ...wiring().runs[0], physicalDirection: 'source-forward' }],
+    }),
+  ];
+
+  for (const variant of variants) {
+    const result = compileWiring({ wiring: variant, strips, capabilities });
+    assert.equal(result.ok, true);
+    assert.deepEqual(
+      result.outputs.map(({ id, pin }) => ({ id, pin })),
+      [{ id: 'physical-a', pin: 18 }],
+    );
+    assert.equal(result.physicalOutputCount, 1);
+  }
+});
+
+test('logical zones compile independently inside one physical output', () => {
+  const result = compileWiring({
+    wiring: wiring({
+      outputs: [{ id: 'one-wire', pin: 16, runIds: ['a', 'b'] }],
+      runs: wiring().runs.filter(run => run.id === 'a' || run.id === 'b'),
+    }),
+    strips,
+    capabilities,
+  });
+
+  assert.equal(result.outputs.length, 1);
+  assert.equal(result.zones.length, 2);
+  assert.deepEqual(result.zones.map(zone => zone.id), ['a', 'b']);
+});
+
 test('seam rotation changes physical source order without changing inclusive coverage', () => {
   const model = wiring({ outputs: [{ id: 'o', pin: 16, runIds: ['a'] }], runs: [{ id: 'a', type: 'strip', source: { stripId: 'a', from: 0, to: 3 }, physicalDirection: 'source-forward', seamLed: 2 }] });
   const result = compileWiring({ wiring: model, strips, capabilities });

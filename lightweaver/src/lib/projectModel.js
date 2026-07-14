@@ -21,6 +21,7 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
 import {
   createDefaultPatchBoard,
+  DEFAULT_DATA_WIRE_COUNT,
   migrateChainToStripOrder,
   normalizePatchBoard,
 } from './patchBoard.js';
@@ -291,17 +292,42 @@ export function migrateStripIdNamespace(project) {
 function alignChainToStripOrder(project) {
   migrateStripIdNamespace(project);
   const layout = project?.layout;
-  if (!layout || !Array.isArray(layout.strips) || !layout.strips.length) return project;
-  if (layout.patchBoard) {
-    layout.patchBoard = migrateChainToStripOrder(
-      normalizePatchBoard(layout.patchBoard, layout.strips),
-      layout.strips,
-    );
-  }
+  if (!layout || !Array.isArray(layout.strips)) return project;
+  const rawPatchBoard = layout.patchBoard;
+  const rawDataWireCount = Number(rawPatchBoard?.dataWireCount);
+  const hasExplicitDataWireCount = Number.isInteger(rawDataWireCount) && rawDataWireCount >= 1 && rawDataWireCount <= 4;
+  const savedWiringOutputCount = Array.isArray(layout.wiring?.outputs) && layout.wiring.outputs.length
+    ? Math.min(4, layout.wiring.outputs.length)
+    : 0;
+  const configuredOutputCount = (project.devices?.standaloneController?.outputs || [])
+    .filter(output => Number(output?.pixels ?? output?.pixelCount) > 0)
+    .slice(0, 4)
+    .length;
+  // Saved wiring outputs are the physical truth. Count metadata is a UI-owned
+  // declaration, but it may lag behind an older or partially saved project and
+  // must never cause migration to add/remove outputs or remap GPIOs.
+  const inferredDataWireCount = savedWiringOutputCount || (hasExplicitDataWireCount
+    ? rawDataWireCount
+    : configuredOutputCount || DEFAULT_DATA_WIRE_COUNT);
+  const ambiguousPhysicalOutputs = !hasExplicitDataWireCount && !savedWiringOutputCount && !configuredOutputCount;
+  layout.patchBoard = migrateChainToStripOrder(
+    normalizePatchBoard(rawPatchBoard, layout.strips),
+    layout.strips,
+  );
   layout.wiring = migrateWiring(layout.wiring, layout.strips, layout.patchBoard, {
     pin: project.devices?.standaloneController?.outputs?.[0]?.pin,
     outputs: project.devices?.standaloneController?.outputs,
   });
+  // Wiring outputs are the canonical physical declaration. Keep the legacy
+  // patch-board metadata synchronized for old saves without allowing a stale
+  // duplicate count to recreate, remove, or repin an output.
+  layout.patchBoard.dataWireCount = layout.wiring.outputs.length || inferredDataWireCount;
+  layout.patchBoard.dataWireCountNeedsReview = rawPatchBoard?.dataWireCountNeedsReview === true || ambiguousPhysicalOutputs;
+  if (layout.wiring.outputs.length !== inferredDataWireCount) {
+    // Never invent a GPIO/output to make legacy metadata line up. The existing
+    // physical topology remains authoritative until the user reviews it.
+    layout.patchBoard.dataWireCountNeedsReview = true;
+  }
   return project;
 }
 

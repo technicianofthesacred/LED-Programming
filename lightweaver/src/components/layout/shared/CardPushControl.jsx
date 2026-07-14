@@ -13,6 +13,11 @@ import {
   buildCardConfigHandoffUrl,
   CardPushError,
 } from '../../../lib/cardPushClient.js';
+import {
+  activateAndWaitForCardWiring,
+  confirmCardWiringCandidate,
+  rollbackCardWiringCandidate,
+} from '../../../lib/cardWiringSafety.js';
 
 // Send-to-card control (Wire mode, Phase 2 step 9 / plan Phase 3). Extracted
 // from PatchBoardScreen.pushToCard + its push* state. The `connected` prop
@@ -37,6 +42,8 @@ export function CardPushControl({
   const [action, dispatchAction] = useReducer(cardActionReducer, { confirmedRevision: projectLifecycle.installedRevision }, createCardActionState);
   const [pushFallbackJson, setPushFallbackJson] = useState('');
   const [pushFallbackPackage, setPushFallbackPackage] = useState(null);
+  const [wiringCandidate, setWiringCandidate] = useState(null);
+  const [wiringTestState, setWiringTestState] = useState('idle');
   const failedAttemptRef = useRef(null);
 
   // Serialize the current patch board into the firmware's runtime contract.
@@ -61,11 +68,20 @@ export function CardPushControl({
         }),
       };
     })();
+    setWiringTestState('idle');
+    setWiringCandidate(null);
     dispatchAction({ type: 'start', revision: attempt.revision });
     setPushStatus(`Pushing revision ${attempt.revision} to ${cleanHost}...`);
     setPushFallbackJson(''); setPushFallbackPackage(null);
     try {
-      await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+      const response = await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+      if (response?.state === 'staged' && response.activationId) {
+        setWiringCandidate({ activationId: response.activationId, attempt });
+        setWiringTestState('staged');
+        failedAttemptRef.current = null;
+        setPushStatus('New wiring is ready to test. Your current working setup is still safe.');
+        return;
+      }
       dispatchAction({ type: 'confirm' });
       markProjectInstalled(attempt.revision);
       markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
@@ -87,7 +103,50 @@ export function CardPushControl({
     }
   };
 
-  const pushing = action.status === 'pending';
+  const startWiringTest = async () => {
+    if (!wiringCandidate) return;
+    setWiringTestState('starting');
+    setPushStatus('Restarting the card with the test wiring…');
+    try {
+      await activateAndWaitForCardWiring(wiringCandidate.activationId, {
+        host: wiringCandidate.attempt.host,
+        timeoutMs: 18000,
+      });
+      setWiringTestState('testing');
+      setPushStatus('Testing the new wiring. The card will restore the working setup automatically if you do not confirm it.');
+    } catch (error) {
+      setWiringTestState('failed');
+      setPushStatus(error.message || 'The test wiring did not start. The working setup remains safe.');
+    }
+  };
+
+  const finishWiringTest = async visible => {
+    if (!wiringCandidate) return;
+    setWiringTestState(visible ? 'confirming' : 'rolling-back');
+    try {
+      if (visible) {
+        await confirmCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
+        dispatchAction({ type: 'confirm' });
+        markProjectInstalled(wiringCandidate.attempt.revision);
+        markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
+        setPushStatus(`Wiring confirmed. Revision ${wiringCandidate.attempt.revision} is now the card’s working setup.`);
+        setWiringTestState('confirmed');
+      } else {
+        await rollbackCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
+        failedAttemptRef.current = wiringCandidate.attempt;
+        dispatchAction({ type: 'fail', error: 'Wiring test rolled back.' });
+        setPushStatus('Restored the last working setup. Use Find my LED wire before trying again.');
+        setWiringTestState('rolled-back');
+      }
+      setWiringCandidate(null);
+    } catch (error) {
+      setWiringTestState('failed');
+      setPushStatus(error.message || 'The card could not finish the wiring test. It will roll back automatically when the timer ends.');
+    }
+  };
+
+  const pushing = action.status === 'pending' && wiringTestState === 'idle';
+  const wiringTransactionActive = Boolean(wiringCandidate);
 
   return (
     <div className="la-card-push">
@@ -95,7 +154,7 @@ export function CardPushControl({
         <button
           className="btn primary la-card-push-btn"
           data-testid="layout-send-to-card"
-          disabled={disabled || pushing}
+          disabled={disabled || pushing || wiringTransactionActive}
           onClick={() => pushToCard()}
           title={connected ? `Push zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
         >
@@ -118,6 +177,17 @@ export function CardPushControl({
           )}
           {action.status === 'failed' && <button className="btn" onClick={() => pushToCard(failedAttemptRef.current)}>Retry</button>}
         </div>
+      )}
+      {wiringCandidate && (
+        <section className="lw-wiring-candidate" aria-label="Wiring safety check">
+          <strong>{wiringTestState === 'testing' ? 'Do you see the expected lights?' : 'Test the new wiring'}</strong>
+          <p>{wiringTestState === 'testing' ? 'Check every connected output. Confirm only when the real LEDs match the blue first pixel and red final pixel test.' : 'The current working wiring remains stored until this test succeeds.'}</p>
+          {wiringTestState === 'staged' || wiringTestState === 'failed' ? (
+            <div><button className="btn primary" onClick={startWiringTest}>Start 90-second test</button><button className="btn" onClick={() => finishWiringTest(false)}>Cancel change</button></div>
+          ) : wiringTestState === 'testing' ? (
+            <div><button className="btn primary" onClick={() => finishWiringTest(true)}>Yes, everything lights correctly</button><button className="btn" onClick={() => finishWiringTest(false)}>No, restore working setup</button></div>
+          ) : <p>Working…</p>}
+        </section>
       )}
     </div>
   );

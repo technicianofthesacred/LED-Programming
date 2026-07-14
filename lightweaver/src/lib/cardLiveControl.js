@@ -11,6 +11,7 @@ import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
+import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
 
 function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
@@ -692,6 +693,40 @@ export async function recoverCardLights(look = {}, options = {}) {
     handoffMs: options.reclaimDelayMs ?? 50,
     setTimeoutImpl: options.setTimeoutImpl,
   });
+  // A recovery action is also the emergency exit from an unconfirmed wiring
+  // trial. Roll it back before asking the LED driver for a visible frame; this
+  // prevents recovery from faithfully lighting the same wrong GPIO candidate.
+  let safety = null;
+  try {
+    safety = await getCardWiringStatus({ host, timeoutMs: Math.min(options.timeoutMs || 3000, 1200) });
+  } catch {
+    // Older firmware has no wiring-safety API. Continue to the dedicated
+    // recovery endpoint, which preserves backward-compatible recovery.
+  }
+  if (safety?.activationId && (safety.state === 'staged' || safety.state === 'testing')) {
+    await rollbackCardWiringCandidate(safety.activationId, { host, timeoutMs: options.timeoutMs || 3000 });
+    const deadline = Date.now() + (options.restartTimeoutMs || 15000);
+    await waitForRecoveryRetry(options.restartSettleMs ?? 800, options.setTimeoutImpl);
+    while (Date.now() < deadline) {
+      try {
+        const restored = await getCardWiringStatus({ host, timeoutMs: 1200 });
+        if (restored.state === 'known-good' || restored.state === 'rolled-back') break;
+      } catch { /* card may be between reboot and WiFi reconnect */ }
+      await waitForRecoveryRetry(options.restartRetryMs ?? 500, options.setTimeoutImpl);
+    }
+  }
+  if (safety?.raw?.discovery?.active) {
+    await discoverCardWiring({ stop: true }, { host, timeoutMs: options.timeoutMs || 3000 });
+    const deadline = Date.now() + (options.restartTimeoutMs || 15000);
+    await waitForRecoveryRetry(options.restartSettleMs ?? 800, options.setTimeoutImpl);
+    while (Date.now() < deadline) {
+      try {
+        const restored = await getCardWiringStatus({ host, timeoutMs: 1200 });
+        if (!restored.raw?.discovery?.active) break;
+      } catch { /* rebooting */ }
+      await waitForRecoveryRetry(options.restartRetryMs ?? 500, options.setTimeoutImpl);
+    }
+  }
   if (isMixedContentBlocked()) {
     try {
       const response = await sendCardBridgeRequest('recover-lights', payload, { host, timeoutMs: options.timeoutMs || 3000 });

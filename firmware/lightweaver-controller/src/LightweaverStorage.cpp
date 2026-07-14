@@ -1,10 +1,20 @@
 #include "LightweaverStorage.h"
 #include <new>
+#include <esp_system.h>
 
 namespace {
 constexpr const char* NVS_NAMESPACE = "lightweaver";
-constexpr const char* NVS_CONFIG_KEY = "config";
+constexpr const char* NVS_LEGACY_CONFIG_KEY = "config";
+constexpr const char* NVS_KNOWN_GOOD_CONFIG_KEY = "knownGoodConfig";
+constexpr const char* NVS_CANDIDATE_CONFIG_KEY = "candidateConfig";
+constexpr const char* NVS_CANDIDATE_STATE_KEY = "candidateState";
+constexpr const char* NVS_CANDIDATE_ID_KEY = "candidateId";
+constexpr const char* NVS_CONFIRMED_ID_KEY = "confirmedId";
+constexpr const char* NVS_DISCOVERY_ACTIVE_KEY = "discoveryActive";
+constexpr const char* NVS_DISCOVERY_BATCH_KEY = "discoveryBatch";
+constexpr const char* NVS_RECOVERY_PENDING_KEY = "recoveryPending";
 constexpr const char* NVS_WIFI_KEY = "wifi";
+constexpr size_t NVS_STRING_LIMIT = 3968;
 
 uint16_t clampPixels(int value) {
   if (value < 1) return 1;
@@ -314,6 +324,188 @@ bool loadJsonString(const String& json, RuntimeConfig& config, RuntimeSource sou
   return true;
 }
 
+bool supportedOutputPin(int pin) {
+  return pin == 16 || pin == 17 || pin == 18 || pin == 21 ||
+         pin == 38 || pin == 39 || pin == 40 || pin == 48;
+}
+
+bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, String& message) {
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, json);
+  if (error) {
+    message = String("json parse failed: ") + error.c_str();
+    return false;
+  }
+
+  JsonArray outputJson = doc["led"]["outputs"].as<JsonArray>();
+  if (outputJson.isNull()) outputJson = doc["outputs"].as<JsonArray>();
+  if (outputJson.isNull() || outputJson.size() == 0) {
+    message = "config missing outputs";
+    return false;
+  }
+  if (outputJson.size() > LW_MAX_OUTPUTS) {
+    message = "more than 4 outputs are not supported";
+    return false;
+  }
+
+  long maxMilliamps = doc["led"]["maxMilliamps"] | 0L;
+  if (maxMilliamps < 0 || maxMilliamps > static_cast<long>(LW_MAX_MILLIAMPS)) {
+    message = "unsafe LED current limit";
+    return false;
+  }
+  float brightnessLimit = doc["led"]["brightnessLimit"] | 0.65f;
+  if (brightnessLimit < 0.0f || brightnessLimit > 1.0f) {
+    message = "brightness limit must be between 0 and 1";
+    return false;
+  }
+
+  int controlPins[] = {
+    doc["controls"]["encoder"]["a"] | 4,
+    doc["controls"]["encoder"]["b"] | 5,
+    doc["controls"]["encoder"]["press"] | 0,
+    doc["controls"]["encoder"]["alternatePress"] | 6,
+    doc["controls"]["previous"] | 7,
+    doc["controls"]["next"] | 8,
+    doc["controls"]["blackout"] | 9,
+    doc["controls"]["brightness"] | -1,
+    doc["controls"]["statusLed"] | int(DEFAULT_STATUS_LED_PIN),
+  };
+  uint8_t outputPins[LW_MAX_OUTPUTS] = {};
+  String outputIds[LW_MAX_OUTPUTS];
+  uint32_t totalPixels = 0;
+  uint8_t outputIndex = 0;
+  for (JsonVariant value : outputJson) {
+    JsonObject output = value.as<JsonObject>();
+    int pin = output["pin"] | 16;
+    int pixels = output["pixels"] | 0;
+    String id = String(output["id"] | "");
+    if (!supportedOutputPin(pin)) {
+      message = String("unsupported output pin ") + pin;
+      return false;
+    }
+    for (uint8_t i = 0; i < outputIndex; i++) {
+      if (outputPins[i] == pin) {
+        message = String("duplicate output pin ") + pin;
+        return false;
+      }
+      if (id.length() && outputIds[i] == id) {
+        message = String("duplicate output id ") + id;
+        return false;
+      }
+    }
+    for (int controlPin : controlPins) {
+      if (controlPin >= 0 && pin == controlPin) {
+        message = String("output pin conflicts with controls: ") + pin;
+        return false;
+      }
+    }
+    if (pixels <= 0) {
+      message = "output pixel count must be positive";
+      return false;
+    }
+    totalPixels += static_cast<uint32_t>(pixels);
+    if (totalPixels > LW_MAX_PIXELS) {
+      message = String("pixel total exceeds ") + LW_MAX_PIXELS;
+      return false;
+    }
+    outputPins[outputIndex] = static_cast<uint8_t>(pin);
+    outputIds[outputIndex] = id;
+    outputIndex++;
+  }
+
+  JsonArray looks = doc["looks"].as<JsonArray>();
+  if (looks.isNull()) looks = doc["patterns"].as<JsonArray>();
+  if (looks.isNull() || looks.size() == 0 || looks.size() > LW_MAX_LOOKS) {
+    message = "config missing looks or exceeds look limit";
+    return false;
+  }
+  String lookIds[LW_MAX_LOOKS];
+  uint8_t lookCount = 0;
+  for (JsonVariant value : looks) {
+    JsonObject look = value.as<JsonObject>();
+    String id = String(look["id"] | "");
+    String preset = String(look["preset"] | id.c_str());
+    if (!id.length()) {
+      message = "look id missing";
+      return false;
+    }
+    for (uint8_t i = 0; i < lookCount; i++) {
+      if (lookIds[i] == id) {
+        message = String("duplicate look id ") + id;
+        return false;
+      }
+    }
+    lookIds[lookCount++] = id;
+    (void)preset;
+  }
+  String startup = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
+  bool startupFound = false;
+  for (JsonVariant value : looks) {
+    JsonObject look = value.as<JsonObject>();
+    String id = String(look["id"] | "");
+    String preset = String(look["preset"] | id.c_str());
+    if (startup == id || startup == preset) startupFound = true;
+  }
+  if (!startupFound) {
+    message = String("unknown startup look ") + startup;
+    return false;
+  }
+
+  String zoneIds[LW_MAX_ZONES];
+  uint8_t zoneCount = 0;
+  JsonArray zones = doc["zones"].as<JsonArray>();
+  if (!zones.isNull()) {
+    if (zones.size() > LW_MAX_ZONES) {
+      message = "zone count exceeds limit";
+      return false;
+    }
+    for (JsonVariant value : zones) {
+      JsonObject zone = value.as<JsonObject>();
+      String id = String(zone["id"] | "");
+      if (!id.length()) {
+        message = "zone id missing";
+        return false;
+      }
+      for (uint8_t i = 0; i < zoneCount; i++) {
+        if (zoneIds[i] == id) {
+          message = String("duplicate zone id ") + id;
+          return false;
+        }
+      }
+      zoneIds[zoneCount++] = id;
+      JsonArray ranges = zone["ranges"].as<JsonArray>();
+      if (ranges.isNull() || ranges.size() == 0 || ranges.size() > LW_MAX_RANGES_PER_ZONE) {
+        message = String("invalid ranges for zone ") + id;
+        return false;
+      }
+      for (JsonVariant rangeValue : ranges) {
+        JsonObject range = rangeValue.as<JsonObject>();
+        int start = range["start"] | -1;
+        int count = range["count"] | 0;
+        if (start < 0 || count <= 0 || uint32_t(start) + uint32_t(count) > totalPixels) {
+          message = String("zone range exceeds pixel total for ") + id;
+          return false;
+        }
+      }
+    }
+  }
+
+  for (JsonVariant value : looks) {
+    JsonArray lookZones = value["zones"].as<JsonArray>();
+    for (JsonVariant zoneValue : lookZones) {
+      String id = String(zoneValue["id"] | "");
+      bool found = false;
+      for (uint8_t i = 0; i < zoneCount; i++) if (zoneIds[i] == id) found = true;
+      if (!found) {
+        message = String("unknown zone reference ") + id;
+        return false;
+      }
+    }
+  }
+
+  return loadJsonString(json, parsed, SOURCE_NVS, message);
+}
+
 bool loadSdConfig(RuntimeConfig& config, String& message) {
   if (!SD.begin(LW_SD_CS)) {
     message = "sd unavailable";
@@ -329,19 +521,97 @@ bool loadSdConfig(RuntimeConfig& config, String& message) {
   return loadJsonString(json, config, SOURCE_SD, message);
 }
 
-bool loadNvsConfig(RuntimeConfig& config, String& message) {
+bool loadNvsConfigKey(const char* key, RuntimeConfig& config, String& message) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) {
     message = "nvs unavailable";
     return false;
   }
-  String json = prefs.getString(NVS_CONFIG_KEY, "");
+  String json = prefs.getString(key, "");
   prefs.end();
   if (!json.length()) {
     message = "nvs empty";
     return false;
   }
   return loadJsonString(json, config, SOURCE_NVS, message);
+}
+
+bool loadNvsConfigKeyStrict(const char* key, RuntimeConfig& config, String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) {
+    message = "nvs unavailable";
+    return false;
+  }
+  String json = prefs.getString(key, "");
+  prefs.end();
+  if (!json.length()) {
+    message = "nvs empty";
+    return false;
+  }
+  return validateRuntimeConfigJsonStrict(json, config, message);
+}
+
+bool nvsConfigKeyHasValue(const char* key) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return false;
+  bool present = prefs.getString(key, "").length() > 0;
+  prefs.end();
+  return present;
+}
+
+WiringCandidateState readCandidateState(Preferences& prefs) {
+  uint8_t raw = prefs.getUChar(NVS_CANDIDATE_STATE_KEY, WIRING_CANDIDATE_NONE);
+  if (raw > WIRING_CANDIDATE_AWAITING_CONFIRMATION) return WIRING_CANDIDATE_NONE;
+  return static_cast<WiringCandidateState>(raw);
+}
+
+bool writeCandidateState(Preferences& prefs, WiringCandidateState state) {
+  return prefs.putUChar(NVS_CANDIDATE_STATE_KEY, static_cast<uint8_t>(state)) > 0;
+}
+
+bool candidateIdMatches(Preferences& prefs, const String& activationId) {
+  return activationId.length() > 0 &&
+         prefs.getString(NVS_CANDIDATE_ID_KEY, "") == activationId;
+}
+
+String makeActivationId() {
+  char id[18];
+  snprintf(id, sizeof(id), "%08lx%08lx",
+           static_cast<unsigned long>(esp_random()),
+           static_cast<unsigned long>(esp_random()));
+  return String(id);
+}
+
+bool migrateLegacyKnownGood(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs migration open failed";
+    return false;
+  }
+  String knownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  if (knownGood.length()) {
+    prefs.end();
+    return true;
+  }
+  String legacy = prefs.getString(NVS_LEGACY_CONFIG_KEY, "");
+  if (!legacy.length()) {
+    prefs.end();
+    return true;
+  }
+  bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy) == legacy.length();
+  prefs.end();
+  if (!ok) message = "known-good migration failed; legacy config preserved";
+  return ok;
+}
+
+const char* candidateStateLabel(WiringCandidateState state) {
+  switch (state) {
+    case WIRING_CANDIDATE_STAGED: return "staged";
+    case WIRING_CANDIDATE_BOOTING: return "booting";
+    case WIRING_CANDIDATE_AWAITING_CONFIRMATION: return "awaiting-confirmation";
+    case WIRING_CANDIDATE_NONE:
+    default: return "none";
+  }
 }
 
 void overlayNvsWifi(RuntimeConfig& config) {
@@ -430,19 +700,77 @@ void ensureDefaultZone(RuntimeConfig& config) {
 RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   String message;
   RuntimeLoadResult result;
+
+  // Upgrade in place: copy the legacy config before consulting candidate
+  // state. The legacy key is intentionally retained as a downgrade fallback.
+  if (!migrateLegacyKnownGood(message)) {
+    result.message = message;
+  }
+
+  WiringCandidateState state = WIRING_CANDIDATE_NONE;
+  {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, true)) {
+      state = readCandidateState(prefs);
+      prefs.end();
+    }
+  }
+
+  if (state == WIRING_CANDIDATE_BOOTING) {
+    if (loadNvsConfigKeyStrict(NVS_CANDIDATE_CONFIG_KEY, config, message)) {
+      Preferences prefs;
+      bool marked = prefs.begin(NVS_NAMESPACE, false) &&
+                    writeCandidateState(prefs, WIRING_CANDIDATE_AWAITING_CONFIRMATION);
+      prefs.end();
+      if (marked) {
+        overlayNvsWifi(config);
+        ensureDefaultZone(config);
+        result.ok = true;
+        result.source = SOURCE_NVS;
+        result.bootedCandidate = true;
+        result.message = "candidate loaded for wiring probation";
+        return result;
+      }
+      message = "candidate probation marker write failed";
+    }
+    String rollbackMessage;
+    WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
+    rollbackCandidateRuntimeConfig(status.activationId, rollbackMessage);
+  } else if (state == WIRING_CANDIDATE_AWAITING_CONFIRMATION) {
+    // A reset during probation is itself a failed trial. Persist rollback
+    // before loading so this candidate can never arm again in a reboot loop.
+    WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
+    rollbackCandidateRuntimeConfig(status.activationId, message);
+  }
+
+  bool knownGoodPresent = nvsConfigKeyHasValue(NVS_KNOWN_GOOD_CONFIG_KEY);
+  if (loadNvsConfigKeyStrict(NVS_KNOWN_GOOD_CONFIG_KEY, config, message)) {
+    overlayNvsWifi(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.source = SOURCE_NVS;
+    result.message = "known-good config loaded";
+    return result;
+  }
+
+  if (knownGoodPresent) {
+    // A present-but-invalid canonical slot is corruption, not absence. Do not
+    // silently boot SD or reconnect using saved WiFi: use compiled-safe wiring
+    // and the setup AP so recovery remains local and deterministic.
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    result.message = String("malformed known-good; safe defaults loaded: ") + message;
+    return result;
+  }
+
   if (loadSdConfig(config, message)) {
     overlayNvsWifi(config);
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_SD;
-    result.message = message;
-    return result;
-  }
-  if (loadNvsConfig(config, message)) {
-    overlayNvsWifi(config);
-    ensureDefaultZone(config);
-    result.ok = true;
-    result.source = SOURCE_NVS;
     result.message = message;
     return result;
   }
@@ -460,7 +788,6 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   // pushed from the Studio would otherwise fail deep in putString with an
   // opaque "nvs write failed" — reject it up front, before any deserialize or
   // heap allocation, with an actionable error.
-  constexpr size_t NVS_STRING_LIMIT = 3968;
   if (json.length() > NVS_STRING_LIMIT) {
     message = String("config too large for card storage (") + json.length() +
               " bytes, max " + NVS_STRING_LIMIT + ") — remove some looks or zones";
@@ -471,7 +798,7 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "runtime config allocation failed";
     return false;
   }
-  if (!loadJsonString(json, *parsed, SOURCE_NVS, message)) {
+  if (!validateRuntimeConfigJsonStrict(json, *parsed, message)) {
     delete parsed;
     return false;
   }
@@ -481,7 +808,21 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "nvs write open failed";
     return false;
   }
-  bool ok = prefs.putString(NVS_CONFIG_KEY, json) > 0;
+  if (readCandidateState(prefs) != WIRING_CANDIDATE_NONE) {
+    prefs.end();
+    delete parsed;
+    message = "wiring transaction is active; confirm or roll back before saving";
+    return false;
+  }
+  bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
+  if (ok) {
+    // Keep the old key as a downgrade fallback, but only after the canonical
+    // known-good write succeeds.
+    prefs.putString(NVS_LEGACY_CONFIG_KEY, json);
+    writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
+    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+    prefs.remove(NVS_CANDIDATE_ID_KEY);
+  }
   prefs.end();
   if (!ok) {
     delete parsed;
@@ -500,6 +841,239 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.activeHostname = preservedHostname;
   message = "saved to internal flash";
   return true;
+}
+
+bool stageRuntimeConfigJson(const String& json, String& activationId, String& message) {
+  if (json.length() > NVS_STRING_LIMIT) {
+    message = String("config too large for card storage (") + json.length() +
+              " bytes, max " + NVS_STRING_LIMIT + ")";
+    return false;
+  }
+  RuntimeConfig* parsed = new (std::nothrow) RuntimeConfig();
+  if (!parsed) {
+    message = "runtime config allocation failed";
+    return false;
+  }
+  bool valid = validateRuntimeConfigJsonStrict(json, *parsed, message);
+  delete parsed;
+  if (!valid) return false;
+
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs write open failed";
+    return false;
+  }
+  activationId = makeActivationId();
+  bool stored = prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json) == json.length();
+  bool idStored = stored && prefs.putString(NVS_CANDIDATE_ID_KEY, activationId) == activationId.length();
+  bool marked = idStored && writeCandidateState(prefs, WIRING_CANDIDATE_STAGED);
+  if (marked) prefs.remove(NVS_CONFIRMED_ID_KEY);
+  if (!marked) {
+    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+    prefs.remove(NVS_CANDIDATE_ID_KEY);
+    writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
+  }
+  prefs.end();
+  message = marked ? "wiring candidate staged" : "candidate storage failed";
+  return marked;
+}
+
+bool activateStagedRuntimeConfig(const String& activationId, String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs write open failed";
+    return false;
+  }
+  String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
+  WiringCandidateState state = readCandidateState(prefs);
+  if (!candidate.length() || state != WIRING_CANDIDATE_STAGED ||
+      !candidateIdMatches(prefs, activationId)) {
+    prefs.end();
+    message = "no staged wiring candidate";
+    return false;
+  }
+  // Candidate boot owns the LED controllers. Clear discovery before arming it
+  // so the following reboot can never register both topologies.
+  bool discoveryCleared = prefs.putBool(NVS_DISCOVERY_ACTIVE_KEY, false) > 0;
+  bool ok = discoveryCleared && writeCandidateState(prefs, WIRING_CANDIDATE_BOOTING);
+  prefs.end();
+  message = ok ? "candidate ready to boot" : "candidate activation failed";
+  return ok;
+}
+
+bool confirmCandidateRuntimeConfig(const String& activationId, String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs write open failed";
+    return false;
+  }
+  WiringCandidateState state = readCandidateState(prefs);
+  String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
+  if (state == WIRING_CANDIDATE_NONE && !candidate.length() &&
+      activationId.length() > 0 &&
+      prefs.getString(NVS_CONFIRMED_ID_KEY, "") == activationId) {
+    prefs.end();
+    message = "candidate already confirmed as known-good";
+    return true;
+  }
+  if (state != WIRING_CANDIDATE_AWAITING_CONFIRMATION || !candidate.length() ||
+      !candidateIdMatches(prefs, activationId)) {
+    prefs.end();
+    message = "no candidate awaiting confirmation";
+    return false;
+  }
+  bool promoted = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length();
+  if (promoted) {
+    prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate);
+    promoted = prefs.putString(NVS_CONFIRMED_ID_KEY, activationId) == activationId.length() &&
+               writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
+  }
+  if (promoted) {
+    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+    prefs.remove(NVS_CANDIDATE_ID_KEY);
+  }
+  prefs.end();
+  message = promoted ? "candidate confirmed as known-good" : "candidate confirmation failed";
+  return promoted;
+}
+
+bool rollbackCandidateRuntimeConfig(const String& activationId, String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs rollback open failed";
+    return false;
+  }
+  if (!candidateIdMatches(prefs, activationId)) {
+    prefs.end();
+    message = "candidate activation id mismatch";
+    return false;
+  }
+  // Clear the bootable marker first. A power loss after this write can leave
+  // stale candidate bytes, but those bytes can no longer be selected at boot.
+  bool safe = writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
+  if (safe) {
+    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+    prefs.remove(NVS_CANDIDATE_ID_KEY);
+  }
+  prefs.end();
+  message = safe ? "candidate rolled back" : "candidate rollback failed";
+  return safe;
+}
+
+WiringSafetyStatus getRuntimeWiringSafetyStatus() {
+  WiringSafetyStatus status;
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return status;
+  status.candidateState = readCandidateState(prefs);
+  status.hasKnownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "").length() > 0;
+  status.hasCandidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "").length() > 0;
+  if (status.hasCandidate) status.activationId = prefs.getString(NVS_CANDIDATE_ID_KEY, "");
+  status.bootedCandidate = status.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
+  status.discoveryActive = prefs.getBool(NVS_DISCOVERY_ACTIVE_KEY, false);
+  status.discoveryBatchIndex = prefs.getUChar(NVS_DISCOVERY_BATCH_KEY, 0);
+  prefs.end();
+  return status;
+}
+
+String runtimeWiringSafetyStatusJson() {
+  WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["candidateState"] = candidateStateLabel(status.candidateState);
+  if (status.hasCandidate) doc["activationId"] = status.activationId;
+  doc["hasKnownGood"] = status.hasKnownGood;
+  doc["hasCandidate"] = status.hasCandidate;
+  doc["bootedCandidate"] = status.bootedCandidate;
+  doc["discoveryActive"] = status.discoveryActive;
+  if (status.discoveryActive) doc["discoveryBatchIndex"] = status.discoveryBatchIndex;
+  doc["probationMs"] = LW_WIRING_PROBATION_MS;
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool runtimeConfigJsonChangesWiring(const String& json, const RuntimeConfig& current,
+                                    bool& changes, String& message) {
+  changes = false;
+  RuntimeConfig* parsed = new (std::nothrow) RuntimeConfig();
+  if (!parsed) {
+    message = "runtime config allocation failed";
+    return false;
+  }
+  bool valid = validateRuntimeConfigJsonStrict(json, *parsed, message);
+  if (!valid) {
+    delete parsed;
+    return false;
+  }
+  changes = parsed->outputCount != current.outputCount;
+  for (uint8_t i = 0; !changes && i < parsed->outputCount; i++) {
+    const OutputConfig& next = parsed->outputs[i];
+    const OutputConfig& active = current.outputs[i];
+    changes = next.id != active.id || next.pin != active.pin ||
+              next.pixels != active.pixels;
+  }
+  delete parsed;
+  message = changes ? "physical wiring changed" : "physical wiring unchanged";
+  return true;
+}
+
+bool setRuntimeWiringDiscoveryBatch(uint8_t batchIndex, String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs discovery open failed";
+    return false;
+  }
+  bool batchStored = prefs.putUChar(NVS_DISCOVERY_BATCH_KEY, batchIndex) > 0;
+  bool activeStored = batchStored && prefs.putBool(NVS_DISCOVERY_ACTIVE_KEY, true) > 0;
+  if (!activeStored) prefs.putBool(NVS_DISCOVERY_ACTIVE_KEY, false);
+  prefs.end();
+  message = activeStored ? "discovery batch ready to boot" : "discovery state write failed";
+  return activeStored;
+}
+
+bool clearRuntimeWiringDiscovery(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs discovery open failed";
+    return false;
+  }
+  // Clear the boot marker first. The remembered batch is inert without it.
+  bool cleared = prefs.putBool(NVS_DISCOVERY_ACTIVE_KEY, false) > 0;
+  prefs.end();
+  message = cleared ? "discovery stopped" : "discovery state clear failed";
+  return cleared;
+}
+
+bool armRuntimeRecoveryAfterRestart(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs recovery open failed";
+    return false;
+  }
+  bool armed = prefs.putBool(NVS_RECOVERY_PENDING_KEY, true) > 0;
+  prefs.end();
+  message = armed ? "recovery armed for restart" : "recovery intent write failed";
+  return armed;
+}
+
+bool runtimeRecoveryAfterRestartPending() {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return false;
+  bool pending = prefs.getBool(NVS_RECOVERY_PENDING_KEY, false);
+  prefs.end();
+  return pending;
+}
+
+bool clearRuntimeRecoveryAfterRestart(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs recovery open failed";
+    return false;
+  }
+  bool cleared = prefs.putBool(NVS_RECOVERY_PENDING_KEY, false) > 0;
+  prefs.end();
+  message = cleared ? "recovery intent completed" : "recovery intent clear failed";
+  return cleared;
 }
 
 bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& message) {

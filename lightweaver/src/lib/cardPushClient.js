@@ -20,6 +20,7 @@ import {
   CardConfigCapacityError,
   prepareCardStoragePayload,
 } from './cardStoragePayload.js';
+import { stageCardWiringCandidate } from './cardWiringSafety.js';
 
 export function getCardHostname() {
   return readStoredCardHost();
@@ -265,6 +266,19 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   }
   if (rebootPlan.layoutChanged && options.allowLayoutChange !== true) {
     throw layoutMismatchError(rebootPlan.current, runtimePackage);
+  }
+  // Physical output changes are never written over the running/known-good
+  // layout. The card owns a separate candidate slot and issues the activation
+  // identifier that the UI must use for test, confirmation, or rollback.
+  if (rebootPlan.layoutChanged) {
+    try {
+      return await stageCardWiringCandidate(preparedPayload.config, {
+        host,
+        timeoutMs: options.timeoutMs || 6000,
+      });
+    } catch (err) {
+      throw normalizeConfigPushError(host, err);
+    }
   }
   const pushOptions = {
     ...options,

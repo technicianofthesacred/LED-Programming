@@ -10,7 +10,32 @@ import {
 // repair the LED output, stream live frames). These require a card origin we've
 // verified is on the local network before we'll postMessage them — see
 // assertPrivilegedTarget.
-const PRIVILEGED_BRIDGE_TYPES = new Set(['config', 'control', 'reboot', 'recover-lights', 'frame']);
+const PRIVILEGED_BRIDGE_TYPES = new Set([
+  'config',
+  'control',
+  'reboot',
+  'recover-lights',
+  'frame',
+  'wiring-candidate',
+  'wiring-activate',
+  'wiring-confirm',
+  'wiring-rollback',
+  'wiring-discover',
+]);
+
+// Reads and idempotent transaction operations may safely cross one transient
+// bridge timeout. Candidate staging is intentionally absent: retrying it could
+// ask the card to mint a second activation identifier for one user action.
+const RETRYABLE_BRIDGE_TYPES = new Set([
+  'status',
+  'ping',
+  'config',
+  'recover-lights',
+  'wiring-status',
+  'wiring-activate',
+  'wiring-confirm',
+  'wiring-rollback',
+]);
 
 // Bridge protocol version this Studio speaks, and the version each versioned
 // feature first shipped in. Cards report their version in the 'ready'
@@ -487,7 +512,7 @@ export function sendCardBridgeRequest(type, payload = {}, {
     bridgeHost = resolvedHost;
   }
 
-  const shouldRetryTimeout = retryOnTimeout ?? ['status', 'ping', 'config', 'recover-lights'].includes(type);
+  const shouldRetryTimeout = retryOnTimeout ?? RETRYABLE_BRIDGE_TYPES.has(type);
   const maxAttempts = shouldRetryTimeout ? 2 : 1;
   return (async () => {
     let lastError = null;

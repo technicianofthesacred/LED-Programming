@@ -27,9 +27,11 @@ export function WiringOutputLane({
         >OUT</button>
         <h3>{output.name || output.id}</h3>
         <span>{runs.reduce((sum, run) => sum + (compiledById.get(run.id)?.count || 0), 0)} px</span>
-        <select className="lw-output-gpio" aria-label={`${output.name} GPIO`} value={output.pin} disabled={locked} onChange={event => onPinChange(Number(event.target.value))}>
-          {supportedPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePins.includes(pin)}>GPIO {pin}</option>)}
-        </select>
+        {advanced ? (
+          <select className="lw-output-gpio" aria-label={`${output.name} GPIO`} value={output.pin} disabled={locked} onChange={event => onPinChange(Number(event.target.value))}>
+            {supportedPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePins.includes(pin)}>GPIO {pin}</option>)}
+          </select>
+        ) : <span className="lw-output-gpio-label">GPIO {output.pin}</span>}
         <button className="lw-wire-remove" aria-label={`Remove ${output.name}`} title={runs.length ? `Remove all runs before removing ${output.name}` : `Remove ${output.name}`} disabled={locked || runs.length > 0} onClick={() => onRemoveOutput()}>×</button>
       </header>
       <div role="listbox" aria-label={`${output.name || output.id} runs`}>

@@ -420,20 +420,15 @@ function physicalScaleInfo(value) {
   return { scale: 1, unit: 'artwork', valid: false };
 }
 
-function requestedOutputCounts(outputCount, availableCount, capabilities, totalPixels) {
-  const max = Math.min(availableCount, Number(capabilities.maxOutputs) || availableCount);
-  if (outputCount !== 'auto') return [Number(outputCount)];
-  const perOutput = Number(capabilities.maxPixelsPerOutput ?? capabilities.maxPixels);
-  const minimum = Math.max(1, Math.ceil(totalPixels / perOutput));
-  return Array.from({ length: Math.max(0, max - minimum + 1) }, (_, index) => minimum + index);
-}
-
 export function proposeAutoWiring({
   wiring,
   strips = [],
   controllerAnchor,
-  availableOutputs = [],
-  outputCount = 'auto',
+  // availableOutputs is intentionally ignored. It is only a discovery/UI
+  // inventory and must never become permission to create outputs or choose GPIOs.
+  availableOutputs: _availableOutputs = [],
+  dataWireCount,
+  outputCount,
   physicalScale,
   capabilities = CARD_HARDWARE_CAPABILITIES,
 } = {}) {
@@ -446,18 +441,11 @@ export function proposeAutoWiring({
   if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) errors.push(error('controller-anchor-missing', 'Place the controller anchor before routing.'));
   const scaleInfo = physicalScaleInfo(physicalScale);
   if (!scaleInfo.valid) assumptions.push({ code: 'physical-scale-missing', message: 'Cable lengths are relative artwork distances, not physical estimates.' });
-  const outputs = [...availableOutputs].map((output, index) => ({
-    id: String(output?.id || `out${index + 1}`),
-    ...(output?.name ? { name: String(output.name) } : {}),
-    pin: Number(output?.pin),
-  })).sort((a, b) => compareText(a.id, b.id));
-  const outputIds = new Set(), pins = new Set();
-  for (const output of outputs) {
-    if (outputIds.has(output.id)) errors.push(error('output-id-duplicate', `Duplicate available output ID ${output.id}.`, { outputId: output.id }));
-    if (pins.has(output.pin)) errors.push(error('output-pin-duplicate', `Duplicate available output pin ${output.pin}.`, { pin: output.pin }));
-    if (!capabilities.supportedOutputPins?.includes(output.pin)) errors.push(error('output-pin-unsupported', `Unsupported available output pin ${output.pin}.`, { pin: output.pin }));
-    outputIds.add(output.id); pins.add(output.pin);
-  }
+  const outputs = model.outputs.map(output => ({
+    id: output.id,
+    ...(output.name ? { name: output.name } : {}),
+    pin: output.pin,
+  }));
   const bundleResult = buildBundles(model);
   errors.push(...bundleResult.errors);
   const runs = bundleResult.bundles.map(bundle => bundle.run);
@@ -476,28 +464,38 @@ export function proposeAutoWiring({
   if (totalPixels > capabilities.maxPixels) errors.push(error('pixel-limit', `Wiring uses ${totalPixels} pixels; hardware supports ${capabilities.maxPixels}.`));
   if (errors.length) return { ok: false, proposal: null, alternatives: [], assumptions, errors, score: null };
 
-  const counts = requestedOutputCounts(outputCount, outputs.length, capabilities, totalPixels);
-  const requested = outputCount === 'auto' ? null : Number(outputCount);
-  if (!counts.length || counts.some(count => !Number.isInteger(count) || count < 1 || count > outputs.length || count > capabilities.maxOutputs)) {
-    return { ok: false, proposal: null, alternatives: [], assumptions, errors: [error('output-unavailable', `Requested ${requested ?? 'automatic'} output count cannot be provided.`)], score: null };
+  const requestedValue = dataWireCount ?? outputCount ?? outputs.length;
+  if (requestedValue === 'auto') {
+    return { ok: false, proposal: null, alternatives: [], assumptions, errors: [error('output-count-explicit', 'Choose how many physical data wires leave the card before using Auto Wire.')], score: null };
+  }
+  const requested = Number(requestedValue);
+  if (!Number.isInteger(requested) || requested < 1 || requested > capabilities.maxOutputs) {
+    return { ok: false, proposal: null, alternatives: [], assumptions, errors: [error('output-unavailable', `Requested ${requestedValue} output count cannot be provided.`)], score: null };
+  }
+  if (requested !== outputs.length) {
+    return {
+      ok: false,
+      proposal: null,
+      alternatives: [],
+      assumptions,
+      errors: [error(
+        'output-count-mismatch',
+        `Auto Wire cannot change physical outputs. Set up ${requested} data wire${requested === 1 ? '' : 's'} first; this project currently has ${outputs.length}.`,
+        { requested, configured: outputs.length },
+      )],
+      score: null,
+    };
   }
   const stripById = geometryByStrip;
   const runById = new Map(runs.map(item => [item.id, item]));
   const optionsById = new Map(runs.map(item => [item.id, runOptions(item, stripById.get(item.source.stripId))]));
-  let candidates = [];
-  let usedCount = null;
-  let mode = null;
-  let budget = null;
-  for (const count of counts) {
-    if (count > runs.length) continue;
-    const selectedOutputs = outputs.slice(0, count);
-    const context = { model, runs, runById, bundleById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
-    budget = { operations: 0, stopped: false };
-    mode = runs.length <= 9 && count <= 2 ? 'exact' : 'heuristic';
-    candidates = mode === 'exact' ? exactSearch(context, budget) : heuristicSearch(context, budget);
-    if (candidates.length) { usedCount = count; break; }
-    if (outputCount !== 'auto') break;
-  }
+  const selectedOutputs = outputs;
+  const context = { model, runs, runById, bundleById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
+  const budget = { operations: 0, stopped: false };
+  const mode = runs.length <= 9 && requested <= 2 ? 'exact' : 'heuristic';
+  const candidates = requested <= runs.length
+    ? (mode === 'exact' ? exactSearch(context, budget) : heuristicSearch(context, budget))
+    : [];
   if (!candidates.length) {
     return { ok: false, proposal: null, alternatives: [], assumptions, errors: [error('route-impossible', 'No route satisfies the fixed directions and hardware limits.')], score: null };
   }
@@ -506,8 +504,6 @@ export function proposeAutoWiring({
   const signatures = new Set();
   for (const candidate of candidates) if (!signatures.has(candidate.lexical)) { signatures.add(candidate.lexical); unique.push(candidate); }
   const best = unique[0];
-  const selectedOutputs = outputs.slice(0, usedCount);
-  const context = { model, runs, runById, bundleById, optionsById, outputs: selectedOutputs, anchor, scale: scaleInfo.scale, unit: scaleInfo.unit, capabilities };
   const search = { mode, operations: budget.operations, cap: OPERATION_CAP, capped: budget.stopped };
   if (budget.stopped) search.warning = 'Search stopped at the deterministic 250,000-operation cap; further improvements may exist.';
   const proposal = materialize(best, context, search);

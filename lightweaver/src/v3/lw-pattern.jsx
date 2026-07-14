@@ -334,6 +334,7 @@ import {
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState("");
     const [statusKind, setStatusKind] = useState("");
+    const [recoveryConfirmation, setRecoveryConfirmation] = useState('');
     const [cardSave, dispatchCardSave] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
@@ -947,6 +948,7 @@ import {
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
       const sequence = ++livePreviewSeq.current;
       setHandoffUrl('');
+      setRecoveryConfirmation('');
       setStatusKind('');
       setStatus(`Sending warm-white LED repair to ${cardHostToUrl(cardHost)}...`);
       try {
@@ -955,11 +957,13 @@ import {
           { host: cardHost, timeoutMs: 3200, restartCard: true },
         );
         if (sequence !== livePreviewSeq.current) return;
-        setStatusKind('ok');
-        setStatus('Recovery complete. The card reconnected and is holding warm white.');
+        setStatusKind('');
+        setRecoveryConfirmation('pending');
+        setStatus('Recovery frame sent. Do you see warm white on the real LEDs?');
       } catch (error) {
         if (sequence !== livePreviewSeq.current) return;
         setStatusKind('err');
+        setRecoveryConfirmation('');
         setStatus(error?.message || `LED repair could not reach ${cardHostToUrl(cardHost)}. Check power and WiFi, then turn on Use local card.`);
       }
     };
@@ -1082,6 +1086,25 @@ import {
                 {showFlashAction &&
                   <div className="pmx-status-actions">
                     <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
+                  </div>
+                }
+                {recoveryConfirmation === 'pending' &&
+                  <div className="pmx-status-actions" aria-label="Confirm physical recovery">
+                    <button type="button" className="btn primary" onClick={() => {
+                      setRecoveryConfirmation('confirmed');
+                      setStatusKind('ok');
+                      setStatus('Warm white confirmed on the real LEDs.');
+                    }}>Yes, warm white is visible</button>
+                    <button type="button" className="btn" onClick={() => {
+                      setRecoveryConfirmation('dark');
+                      setStatusKind('err');
+                      setStatus('The card responded, but physical light is not confirmed.');
+                    }}>No, lights are still dark</button>
+                  </div>
+                }
+                {recoveryConfirmation === 'dark' &&
+                  <div className="pmx-status-actions">
+                    <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=layout&mode=wire'; }}>Find my LED wire</button>
                   </div>
                 }
               </div>

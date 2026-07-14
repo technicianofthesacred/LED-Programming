@@ -39,11 +39,18 @@ const model = (runs, outputs = [{ id: 'out1', pin: 16, runIds: runs.map(item => 
   runs,
 });
 
+const physicalOutputs = (runs, count) => Array.from({ length: count }, (_, index) => ({
+  id: `out${index + 1}`,
+  pin: capabilities.supportedOutputPins[index],
+  runIds: index === 0 ? runs.map(item => item.id) : [],
+}));
+
 const solve = overrides => proposeAutoWiring({
   wiring: overrides.wiring,
   strips: overrides.strips,
   controllerAnchor: overrides.controllerAnchor ?? { x: 0, y: 0 },
   availableOutputs: overrides.availableOutputs ?? [{ id: 'out1', name: 'A', pin: 16 }, { id: 'out2', name: 'B', pin: 17 }],
+  dataWireCount: overrides.dataWireCount,
   outputCount: overrides.outputCount ?? 1,
   physicalScale: Object.hasOwn(overrides, 'physicalScale') ? overrides.physicalScale : { pxPerMm: 1 },
   capabilities: overrides.capabilities ?? capabilities,
@@ -62,13 +69,41 @@ test('routes a one-output chain from the controller without mutating accepted wi
   assert.notEqual(result.proposal.wiring, wiring);
 });
 
-test('automatic output count uses the fewest outputs that satisfy per-output limits', () => {
+test('Auto Wire refuses automatic output creation even when extra GPIO templates are available', () => {
   const strips = [strip('a', [[0, 0], [1, 0]]), strip('b', [[2, 0], [3, 0]])];
   const wiring = model([run('a'), run('b')]);
   const result = solve({ wiring, strips, outputCount: 'auto', capabilities: { ...capabilities, maxPixelsPerOutput: 2 } });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(item => item.code === 'output-count-explicit'));
+  assert.equal(wiring.outputs.length, 1);
+  assert.equal(wiring.outputs[0].pin, 16);
+});
+
+test('Auto Wire preserves the exact user-owned output IDs and GPIOs', () => {
+  const strips = [strip('a', [[0, 0], [1, 0]]), strip('b', [[20, 0], [21, 0]])];
+  const wiring = model(
+    [run('a'), run('b')],
+    [
+      { id: 'left-wire', name: 'Left wire', pin: 21, runIds: ['a'] },
+      { id: 'right-wire', name: 'Right wire', pin: 18, runIds: ['b'] },
+    ],
+  );
+  const result = solve({
+    wiring,
+    strips,
+    outputCount: 2,
+    availableOutputs: [
+      { id: 'invented-1', pin: 16 },
+      { id: 'invented-2', pin: 17 },
+      { id: 'invented-3', pin: 18 },
+    ],
+  });
+
   assert.equal(result.ok, true);
-  assert.equal(result.proposal.wiring.outputs.length, 2);
-  assert.deepEqual(result.proposal.outputTotals, [2, 2]);
+  assert.deepEqual(
+    result.proposal.wiring.outputs.map(({ id, pin }) => ({ id, pin })),
+    [{ id: 'left-wire', pin: 21 }, { id: 'right-wire', pin: 18 }],
+  );
 });
 
 test('fixed output count separates two spatial clusters and balances output pixels', () => {
@@ -76,7 +111,8 @@ test('fixed output count separates two spatial clusters and balances output pixe
     strip('a', [[-101, 0], [-100, 0]]), strip('b', [[-91, 0], [-90, 0]]),
     strip('c', [[90, 0], [91, 0]]), strip('d', [[100, 0], [101, 0]]),
   ];
-  const wiring = model([run('a'), run('b'), run('c'), run('d')]);
+  const runs = [run('a'), run('b'), run('c'), run('d')];
+  const wiring = model(runs, physicalOutputs(runs, 2));
   const result = solve({ wiring, strips, outputCount: 2 });
   assert.equal(result.ok, true);
   assert.deepEqual(result.proposal.outputTotals, [4, 4]);
@@ -117,7 +153,8 @@ test('lexicographic scoring prefers total jumper length before worst jumper and 
     strip('a', [[1, 0], [2, 0]]), strip('b', [[3, 0], [4, 0]]),
     strip('c', [[100, 0], [101, 0]]),
   ];
-  const wiring = model([run('a'), run('b'), run('c')]);
+  const runs = [run('a'), run('b'), run('c')];
+  const wiring = model(runs, physicalOutputs(runs, 2));
   const result = solve({ wiring, strips, outputCount: 2 });
   assert.equal(result.ok, true);
   assert.equal(result.score[0], 0);
@@ -182,10 +219,11 @@ test('hard rejects invalid topology, pins, fixed constraints, pixels, and ranges
     availableOutputs: [{ id: 'out1', pin: 16 }],
   });
   assert.equal(impossible.ok, false);
-  assert.ok(impossible.errors.some(error => error.code === 'output-unavailable'));
+  assert.ok(impossible.errors.some(error => error.code === 'output-count-mismatch'));
 
+  const fixedRuns = ['a', 'b', 'c'].map(id => run(id, 'a', { directionPolicy: 'fixed' }));
   const fixedImpossible = solve({
-    wiring: model(['a', 'b', 'c'].map(id => run(id, 'a', { directionPolicy: 'fixed' }))),
+    wiring: model(fixedRuns, physicalOutputs(fixedRuns, 2)),
     strips,
     outputCount: 2,
     capabilities: { ...capabilities, maxPixelsPerOutput: 2 },
@@ -206,7 +244,7 @@ test('missing scale uses artwork units, states an assumption, and computes prope
 test('is byte-for-byte repeatable across object-key ordering and caps deterministic work', () => {
   const strips = Array.from({ length: 10 }, (_, index) => strip(`s${String(index).padStart(2, '0')}`, [[index * 10, 0], [index * 10 + 1, 0]]));
   const runs = strips.map(item => run(item.id));
-  const wiringA = model(runs);
+  const wiringA = model(runs, physicalOutputs(runs, 2));
   const wiringB = {
     runs: runs.map(item => ({ verified: item.verified, seamLed: item.seamLed, physicalDirection: item.physicalDirection, directionPolicy: item.directionPolicy, source: { to: item.source.to, from: item.source.from, stripId: item.source.stripId }, type: item.type, id: item.id })),
     outputs: wiringA.outputs.map(output => ({ runIds: output.runIds, pin: output.pin, id: output.id })),
@@ -221,7 +259,8 @@ test('is byte-for-byte repeatable across object-key ordering and caps determinis
 
 test('exact search stops at 250,000 deterministic candidates and reports the cap', () => {
   const strips = Array.from({ length: 7 }, (_, index) => strip(`r${index}`, [[index * 3, 0], [index * 3 + 1, 1]]));
-  const result = solve({ wiring: model(strips.map(item => run(item.id))), strips, outputCount: 2 });
+  const runs = strips.map(item => run(item.id));
+  const result = solve({ wiring: model(runs, physicalOutputs(runs, 2)), strips, outputCount: 2 });
   assert.equal(result.ok, true);
   assert.equal(result.proposal.search.mode, 'exact');
   assert.equal(result.proposal.search.operations, 250000);
@@ -266,7 +305,10 @@ test('inactive bundles stay on their pixel output and count toward limits and ba
   ];
   const runs = [run('a'), { id: 'reserved', type: 'inactive', count: 2, verified: false }, run('b'), run('c')];
   const result = solve({
-    wiring: model(runs), strips, outputCount: 'auto',
+    wiring: model(runs, [
+      { id: 'out1', pin: 16, runIds: ['a', 'reserved'] },
+      { id: 'out2', pin: 17, runIds: ['b', 'c'] },
+    ]), strips, outputCount: 2,
     capabilities: { ...capabilities, maxPixelsPerOutput: 4 },
   });
   assert.equal(result.ok, true);
@@ -280,7 +322,7 @@ test('inactive bundles stay on their pixel output and count toward limits and ba
 test('heuristic scoring includes inactive bundle pixels while routing only strip geometry', () => {
   const strips = Array.from({ length: 10 }, (_, index) => strip(`h${index}`, [[index * 4, 0], [index * 4 + 1, 0]]));
   const runs = [run('h0'), { id: 'reserved', type: 'inactive', count: 100, verified: false }, ...strips.slice(1).map(item => run(item.id))];
-  const result = solve({ wiring: model(runs), strips, outputCount: 2 });
+  const result = solve({ wiring: model(runs, physicalOutputs(runs, 2)), strips, outputCount: 2 });
   assert.equal(result.ok, true);
   assert.equal(result.proposal.search.mode, 'heuristic');
   assert.equal(result.proposal.outputTotals.reduce((sum, count) => sum + count, 0), 120);

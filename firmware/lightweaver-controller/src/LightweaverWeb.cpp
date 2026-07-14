@@ -216,6 +216,12 @@ String studioBridgeScript() {
                   "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1)}}"
                   "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
+                  "else if(m.type==='wiring-status'){response=await get('/api/wiring/status')}"
+                  "else if(m.type==='wiring-candidate'){response=await post('/api/wiring/candidate',m.payload||{})}"
+                  "else if(m.type==='wiring-activate'){response=await post('/api/wiring/activate',m.payload||{})}"
+                  "else if(m.type==='wiring-confirm'){response=await post('/api/wiring/confirm',m.payload||{})}"
+                  "else if(m.type==='wiring-rollback'){response=await post('/api/wiring/rollback',m.payload||{})}"
+                  "else if(m.type==='wiring-discover'){response=await post('/api/wiring/discover',m.payload||{})}"
                   "else if(m.type==='reboot'){"
                     "const r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
@@ -225,7 +231,7 @@ String studioBridgeScript() {
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
                     "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
-                    "const shouldReboot=m.reboot===true||response.requiresReboot===true||(m.reboot==='if-needed'&&response.requiresReboot!==false);"
+                    "const shouldReboot=response.state!=='staged'&&(m.reboot===true||response.requiresReboot===true||(m.reboot==='if-needed'&&response.requiresReboot!==false));"
                     "if(shouldReboot){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
                   "}else{throw new Error('unknown bridge request')}"
                   "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response})"
@@ -485,7 +491,7 @@ void handleRoot() {
             "</div>"
             "<script>"
             "const $=id=>document.getElementById(id);"
-            "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
+            "const post=async(p,b)=>{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));return j};"
             "const get=p=>fetch(p).then(r=>r.json());");
   page += studioOpenScript();
   page += studioBridgeScript();
@@ -497,7 +503,7 @@ void handleRoot() {
             "const showControlError=(message,retry,owner)=>{controlRetry=retry;controlErrorOwner=owner;$('control-error-text').textContent=message;$('control-error').classList.add('on')};"
             "$('control-retry').onclick=()=>{const retry=controlRetry;if(retry)retry()};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
-            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
+            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);if(j.state==='staged'){showHandoff('New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.','ok');return}showHandoff('Saved on the card.','ok');if(j.requiresReboot===true&&params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
             "installFromHash();"
             "let patterns=[],currentId='',blackoutOn=false;"
             "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
@@ -787,6 +793,12 @@ void handleAdvancedRoot() {
               ".sw-photo-white{background:linear-gradient(90deg,#3a3328,#c8b89c,#f4ede0,#c8b89c,#3a3328)}"
               "</style>");
 
+    page += F("<div class='card' id='wiring-safety-card'><h2>Wiring safety</h2>"
+              "<p class='note' id='wiring-safe-status'>Checking the working setup…</p>"
+              "<div class='row'><button class='primary' id='restore-wiring'>Restore working setup</button><button id='find-wire'>Find my LED wire</button></div>"
+              "<p class='note'>Restore cancels an unconfirmed wiring change. Wire finder tests safe LED ports in groups of four.</p>"
+              "</div>");
+
     page += F("<details><summary>Settings</summary><div class='body'>"
               "<label class='field'>Piece name</label>"
               "<input type='text' id='rn-piece' value='");
@@ -825,7 +837,7 @@ void handleAdvancedRoot() {
   // Script
   page += F("<script>"
             "const $=id=>document.getElementById(id);"
-            "const post=(p,b)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})}).then(r=>r.json());"
+            "const post=async(p,b)=>{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));return j};"
             "const get=p=>fetch(p).then(r=>r.json());");
   page += studioOpenScript();
   page += studioBridgeScript();
@@ -833,7 +845,7 @@ void handleAdvancedRoot() {
             "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
-            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);showHandoff('Saved. Rebooting card so the new playlist and LED layout take effect.','ok');if(params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
+            "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);if(j.state==='staged'){showHandoff('New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.','ok');return}showHandoff('Saved on the card.','ok');if(j.requiresReboot===true&&params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
             "installFromHash();");
 
   if (needsSetup) {
@@ -886,6 +898,9 @@ void handleAdvancedRoot() {
               "$('prev').onclick=async()=>{await post('/api/control',{previous:true});loadOnce()};"
               "$('next').onclick=async()=>{await post('/api/control',{next:true});loadOnce()};"
               "$('blackout').onclick=async()=>{blackoutOn=!blackoutOn;$('blackout').classList.toggle('primary',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
+              "const refreshWiringSafety=async()=>{try{const s=await get('/api/wiring/status');const el=$('wiring-safe-status');el.textContent=s.state==='testing'?'Testing new wiring — confirm it in Studio before the timer ends.':s.state==='staged'?'New wiring is staged but the working setup is still active.':'Current setup is safe.';el.className='note '+(s.state==='known-good'?'ok':'')}catch(_){}};"
+              "$('restore-wiring').onclick=async()=>{const el=$('wiring-safe-status');try{el.textContent='Restoring the working setup…';const r=await post('/api/recover-lights',{patternId:'warm-white',brightness:.65,syncZones:true});if(r.rebooting){el.textContent='Working setup selected. The card is rebooting and will show warm white after restart.'}else if(r.diagnostics&&r.diagnostics.frameSubmitted){el.textContent='Working setup restored and recovery light sent.'}else{el.textContent='Working setup selected, but no recovery frame was submitted.'}el.className='note '+((r.rebooting||(r.diagnostics&&r.diagnostics.frameSubmitted))?'ok':'err')}catch(e){el.textContent=e.message;el.className='note err'}};"
+              "$('find-wire').onclick=async()=>{const el=$('wiring-safe-status');try{const d=await post('/api/wiring/discover',{batch:0});const a=d.assignments||d.outputs||[];el.textContent=d.rebooting||d.requiresReboot?'Card is restarting into wire discovery. Reconnect, then match the persistent LED color in Studio: '+a.map(x=>(x.label||x.color)+' = GPIO '+x.pin).join(' · '):'Watch the LEDs, then match the color in Studio: '+a.map(x=>(x.label||x.color)+' = GPIO '+x.pin).join(' · ')}catch(e){el.textContent=e.message;el.className='note err'}};"
               "$('identify').onclick=()=>{post('/api/identify',{});const m=$('set-msg');m.textContent='Watch the strip — it will flash 3 times.';m.className='note ok';setTimeout(()=>m.textContent='',3000)};"
               "$('reboot').onclick=async()=>{if(!confirm('Reboot the card? Everything stays saved; the strip will go dark for ~5 seconds.'))return;const m=$('set-msg');m.textContent='Rebooting…';m.className='note';await post('/api/reboot',{})};"
               "$('change-wifi').onclick=()=>{if(!confirm('Reset WiFi only? Patterns and piece name stay. Card reboots into setup mode — you will need to rejoin it from a phone (Lightweaver-XXXX) to enter new WiFi credentials.'))return;const m=$('set-msg');m.textContent='Resetting WiFi…';m.className='note';post('/api/reset-wifi',{})};"
@@ -894,7 +909,7 @@ void handleAdvancedRoot() {
                 "const r=await post('/api/rename',{pieceName:$('rn-piece').value,hostname:$('rn-host').value});"
                 "if(r.ok){m.textContent='Saved. Reboot to use new hostname.';m.className='note ok'}else{m.textContent=r.error||'Failed';m.className='note err'}};"
               "get('/api/firmware-info').then(d=>{const f=$('fw-info');f.textContent='build '+d.build+' • '+(d.freeHeap/1024|0)+'KB free • '+d.rssi+' dBm'}).catch(()=>{});"
-              "loadOnce();");
+              "loadOnce();refreshWiringSafety();");
   }
 
   page += F("</script></body></html>");
@@ -930,12 +945,182 @@ void handleConfigPost() {
     return;
   }
   String message;
+  bool wiringChanged = false;
+  if (!runtimeConfigJsonChangesWiring(server.arg("plain"), *runtimeConfigPtr, wiringChanged, message)) {
+    server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
+    return;
+  }
+  if (wiringChanged) {
+    String activationId;
+    bool staged = stageRuntimeConfigJson(server.arg("plain"), activationId, message);
+    JsonDocument response;
+    response["ok"] = staged;
+    response["state"] = staged ? "staged" : "known-good";
+    if (staged) response["activationId"] = activationId;
+    response[staged ? "message" : "error"] = message;
+    response["requiresReboot"] = false;
+    response["requiresConfirmation"] = staged;
+    String body;
+    serializeJson(response, body);
+    server.send(staged ? 200 : 400, "application/json", body);
+    return;
+  }
   bool ok = saveRuntimeConfigJson(server.arg("plain"), *runtimeConfigPtr, message);
   if (!ok) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
+}
+
+bool readWiringRequest(JsonDocument& doc, String& error) {
+  if (!server.hasArg("plain") || !server.arg("plain").length()) {
+    error = "missing json body";
+    return false;
+  }
+  DeserializationError parseError = deserializeJson(doc, server.arg("plain"));
+  if (parseError) {
+    error = String("json parse failed: ") + parseError.c_str();
+    return false;
+  }
+  return true;
+}
+
+void sendWiringOperation(bool ok, const String& state, const String& activationId,
+                         const String& message, bool rebooting = false) {
+  JsonDocument doc;
+  doc["ok"] = ok;
+  doc["state"] = state;
+  if (activationId.length()) doc["activationId"] = activationId;
+  if (ok) doc["message"] = message;
+  else doc["error"] = message;
+  doc["rebooting"] = rebooting;
+  doc["remainingProbationMs"] = state == "testing" ? LW_WIRING_PROBATION_MS : 0;
+  doc["nextStep"] = state == "staged" ? "activate" :
+                    state == "testing" ? "confirm-physical-lights" :
+                    state == "rolled-back" ? "find-led-wire" : "none";
+  JsonArray outputs = doc["currentOutputs"].to<JsonArray>();
+  for (uint8_t i = 0; i < runtimeConfigPtr->outputCount; i++) {
+    JsonObject output = outputs.add<JsonObject>();
+    output["id"] = runtimeConfigPtr->outputs[i].id;
+    output["pin"] = runtimeConfigPtr->outputs[i].pin;
+    output["pixels"] = runtimeConfigPtr->outputs[i].pixels;
+  }
+  String body;
+  serializeJson(doc, body);
+  server.send(ok ? 200 : 400, "application/json", body);
+}
+
+void handleWiringStatus() {
+  sendCors();
+  server.send(200, "application/json", runtimeWiringSafetyStatus());
+}
+
+void handleWiringCandidate() {
+  sendCors();
+  JsonDocument doc;
+  String message;
+  if (!readWiringRequest(doc, message)) {
+    sendWiringOperation(false, "known-good", "", message);
+    return;
+  }
+  JsonVariant candidate = doc["candidate"];
+  if (candidate.isNull()) {
+    sendWiringOperation(false, "known-good", "", "candidate config missing");
+    return;
+  }
+  String candidateJson;
+  serializeJson(candidate, candidateJson);
+  String activationId;
+  bool ok = stageRuntimeConfigJson(candidateJson, activationId, message);
+  sendWiringOperation(ok, ok ? "staged" : "known-good", activationId, message);
+}
+
+String wiringActivationId(JsonDocument& doc) {
+  return String(doc["activationId"] | "");
+}
+
+void handleWiringActivate() {
+  sendCors();
+  JsonDocument doc;
+  String message;
+  if (!readWiringRequest(doc, message)) {
+    sendWiringOperation(false, "staged", "", message);
+    return;
+  }
+  String activationId = wiringActivationId(doc);
+  bool ok = runtimeActivateWiringCandidate(activationId, message);
+  sendWiringOperation(ok, ok ? "testing" : "staged", activationId, message, ok);
+  if (ok) { delay(250); ESP.restart(); }
+}
+
+void handleWiringConfirm() {
+  sendCors();
+  JsonDocument doc;
+  String message;
+  if (!readWiringRequest(doc, message)) {
+    sendWiringOperation(false, "testing", "", message);
+    return;
+  }
+  String activationId = wiringActivationId(doc);
+  bool ok = runtimeConfirmWiringCandidate(activationId, message);
+  sendWiringOperation(ok, ok ? "known-good" : "testing", activationId, message);
+}
+
+void handleWiringRollback() {
+  sendCors();
+  JsonDocument doc;
+  String message;
+  if (!readWiringRequest(doc, message)) {
+    sendWiringOperation(false, "testing", "", message);
+    return;
+  }
+  String activationId = wiringActivationId(doc);
+  bool ok = runtimeRollbackWiringCandidate(activationId, message);
+  sendWiringOperation(ok, ok ? "rolled-back" : "testing", activationId, message, ok);
+  if (ok) { delay(250); ESP.restart(); }
+}
+
+void handleWiringDiscover() {
+  sendCors();
+  JsonDocument doc;
+  if (server.hasArg("plain") && server.arg("plain").length()) {
+    DeserializationError parseError = deserializeJson(doc, server.arg("plain"));
+    if (parseError) {
+      server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + parseError.c_str() + "\"}");
+      return;
+    }
+  }
+  long batchValue = doc["batch"] | 0L;
+  if (batchValue < 0 || batchValue > 255) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"discovery batch out of range\"}");
+    return;
+  }
+  uint8_t batch = static_cast<uint8_t>(batchValue);
+  String body;
+  bool shouldReboot = false;
+  bool ok = false;
+  if (doc["stop"] | false) {
+    String message;
+    ok = runtimeStopSafeDiscovery(message);
+    JsonDocument response;
+    response["ok"] = ok;
+    response["state"] = ok ? "known-good" : "safe-mode";
+    response[ok ? "message" : "error"] = message;
+    response["requiresReboot"] = ok;
+    response["assignments"].to<JsonArray>();
+    serializeJson(response, body);
+    shouldReboot = ok;
+  } else {
+    body = runtimeSafeDiscoveryOutput(batch);
+    JsonDocument response;
+    if (!deserializeJson(response, body)) {
+      ok = response["ok"] | false;
+      shouldReboot = ok && (response["requiresReboot"] | false);
+    }
+  }
+  server.send(ok ? 200 : 400, "application/json", body);
+  if (shouldReboot) { delay(250); ESP.restart(); }
 }
 
 void handleWifiPost() {
@@ -1062,6 +1247,47 @@ void handleRecoverLights() {
   String patternId = hasControlField(doc, "patternId") ? controlString(doc, "patternId") : String("warm-white");
   float brightness = hasControlField(doc, "brightness") ? controlFloat(doc, "brightness") : 1.0f;
   bool syncZones = hasControlField(doc, "syncZones") ? controlBool(doc, "syncZones") : true;
+  WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+  bool candidateWasActive = safety.candidateState == WIRING_CANDIDATE_BOOTING ||
+                            safety.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
+  bool restartRequired = candidateWasActive || safety.discoveryActive;
+  if (restartRequired) {
+    String armMessage;
+    if (!armRuntimeRecoveryAfterRestart(armMessage)) {
+      server.send(409, "application/json", String("{\"ok\":false,\"error\":\"") + armMessage + "\"}");
+      return;
+    }
+  }
+  if (safety.hasCandidate) {
+    String rollbackMessage;
+    if (!runtimeRollbackWiringCandidate(safety.activationId, rollbackMessage)) {
+      if (restartRequired) {
+        String clearMessage;
+        clearRuntimeRecoveryAfterRestart(clearMessage);
+      }
+      server.send(409, "application/json", String("{\"ok\":false,\"error\":\"") + rollbackMessage + "\"}");
+      return;
+    }
+    if (candidateWasActive) {
+      server.send(200, "application/json", "{\"ok\":true,\"accepted\":true,\"rolledBack\":true,\"recoveryPending\":true,\"rebooting\":true,\"nextStep\":\"reconnect-to-recovered-card\"}");
+      delay(250);
+      ESP.restart();
+      return;
+    }
+  }
+  String discoveryMessage;
+  if (safety.discoveryActive) {
+    if (!runtimeStopSafeDiscovery(discoveryMessage)) {
+      String clearMessage;
+      clearRuntimeRecoveryAfterRestart(clearMessage);
+      server.send(409, "application/json", String("{\"ok\":false,\"error\":\"") + discoveryMessage + "\"}");
+      return;
+    }
+    server.send(200, "application/json", "{\"ok\":true,\"accepted\":true,\"discoveryStopped\":true,\"recoveryPending\":true,\"rebooting\":true,\"nextStep\":\"reconnect-to-recovered-card\"}");
+    delay(250);
+    ESP.restart();
+    return;
+  }
   server.send(200, "application/json", runtimeRecoverLights(patternId, brightness, syncZones));
 }
 
@@ -1423,6 +1649,18 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
   server.on("/api/config", HTTP_POST, handleConfigPost);
+  server.on("/api/wiring/status", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/status", HTTP_GET, handleWiringStatus);
+  server.on("/api/wiring/candidate", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/candidate", HTTP_POST, handleWiringCandidate);
+  server.on("/api/wiring/activate", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/activate", HTTP_POST, handleWiringActivate);
+  server.on("/api/wiring/confirm", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/confirm", HTTP_POST, handleWiringConfirm);
+  server.on("/api/wiring/rollback", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/rollback", HTTP_POST, handleWiringRollback);
+  server.on("/api/wiring/discover", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wiring/discover", HTTP_POST, handleWiringDiscover);
   server.on("/api/wifi", HTTP_OPTIONS, handleOptions);
   server.on("/api/wifi", HTTP_POST, handleWifiPost);
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
