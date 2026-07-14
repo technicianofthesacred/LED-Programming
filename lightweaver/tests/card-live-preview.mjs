@@ -175,6 +175,27 @@ const lookOnlyProof = await pushLivePreviewToCard(
 );
 assert.equal(lookOnlyProof.confirmedLook.patternId, 'ocean');
 
+let aliasRequestBody = null;
+globalThis.fetch = async (url, options = {}) => {
+  aliasRequestBody = JSON.parse(options.body || '{}');
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      cardId: 'lw-expected',
+      patternId: aliasRequestBody.patternId,
+      revision: aliasRequestBody.revision,
+    }),
+  };
+};
+const aliasAcknowledgement = await pushLivePreviewToCard(
+  { patternId: 'gradient' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 19, autoDiscover: false, latestOnly: false },
+);
+assert.equal(aliasRequestBody.patternId, 'aurora', 'display-only pattern ids must transmit their firmware runtime alias');
+assert.equal(aliasAcknowledgement.patternId, 'aurora', 'firmware echo is validated against the transmitted runtime id');
+assert.equal(aliasAcknowledgement.revision, 19, 'alias-aware acknowledgement must preserve physical preview revision proof');
+
 const controlResponseLimit = 8192;
 const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: '' });
 const exactLimitBody = exactLimitBase.slice(0, -2) + 'x'.repeat(controlResponseLimit - exactLimitBase.length) + '"}';

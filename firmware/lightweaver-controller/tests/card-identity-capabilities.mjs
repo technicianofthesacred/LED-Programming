@@ -19,7 +19,7 @@ for (const flag of [
 }
 assert.match(
   platform,
-  /extra_scripts = pre:scripts\/inject-build-identity\.py/,
+  /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/,
   'LW_BUILD_ID must be injected from the exact release source revision',
 );
 

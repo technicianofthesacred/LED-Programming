@@ -11,7 +11,7 @@ const workflow = readFileSync(resolve(repoRoot, '.github/workflows/build-firmwar
 assert.match(manifest.buildId, /^[a-f0-9]{40}$/);
 assert.equal(manifest.provenance.sourceRevision, manifest.buildId);
 assert.ok(image.includes(Buffer.from(manifest.buildId)), 'factory image must contain the exact signed manifest build ID');
-assert.match(platformio, /extra_scripts = pre:scripts\/inject-build-identity\.py/);
+assert.match(platformio, /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/);
 assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.sha \}\}/);
 assert.match(workflow, /--build-id "\$\{GITHUB_SHA\}"/);
 

@@ -419,7 +419,8 @@ test('firmware dependencies are exactly pinned and provenance is signature-bound
   assert.match(platformio, /bblanchon\/ArduinoJson@7\.4\.3/);
   assert.match(platformio, /links2004\/WebSockets@2\.7\.3/);
   assert.doesNotMatch(platformio, /@\^/);
-  assert.match(platformio, /extra_scripts = pre:scripts\/inject-build-identity\.py/);
+  assert.match(platformio, /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/);
+  assert.match(platformio, /extra_scripts\s*=\s*[\s\S]*pre:scripts\/guard-webserver-control-body\.py/);
 
   const manifest = JSON.parse(await fixture('valid-manifest.json'));
   assert.equal(manifest.provenance.platformio, '6.1.19');

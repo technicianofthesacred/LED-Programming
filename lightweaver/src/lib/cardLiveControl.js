@@ -140,10 +140,11 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
 
   const requestedPatternId = String(look?.patternId || '').trim();
+  const requestedRuntimePatternId = getCardPatternRuntimeId(requestedPatternId) || requestedPatternId;
   const echoedPatternId = String(
     response.patternId || response.confirmedPatternId || response.confirmedLook?.patternId || response.look?.patternId || '',
   ).trim();
-  if (requestedPatternId && echoedPatternId && requestedPatternId !== echoedPatternId) {
+  if (requestedRuntimePatternId && echoedPatternId && requestedRuntimePatternId !== echoedPatternId) {
     throw previewAckError('preview-mismatch', 'The card confirmed a different physical look.');
   }
   const requestedRevision = acknowledgementRevision(options.revision ?? look?.revision);
@@ -151,7 +152,7 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
     throw previewAckError('preview-mismatch', 'The card confirmed a different preview revision.');
   }
-  const hasConfirmedLook = Boolean(requestedPatternId && echoedPatternId === requestedPatternId);
+  const hasConfirmedLook = Boolean(requestedRuntimePatternId && echoedPatternId === requestedRuntimePatternId);
   const hasConfirmedRevision = Boolean(requestedRevision !== null && echoedRevision === requestedRevision);
   const hasRequestedIntent = Boolean(requestedPatternId || requestedRevision !== null);
   const explicitlyLegacy = options.previewAcknowledgementCapability === 'legacy-ok-only';

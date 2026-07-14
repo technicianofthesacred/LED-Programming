@@ -684,7 +684,6 @@ bool selectLookInstant(int index) {
   if (lookCount == 0) return false;
   uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
   if (!isLoadedLookRenderable(looks[nextIndex], false)) return false;
-  if (nextIndex == currentLookIndex && !blackedOut) return true;
 
   closeSequence();
   currentLookIndex = nextIndex;
@@ -826,12 +825,24 @@ void applyLookToRuntimeZones(const LookConfig& look) {
 
 // Find a look by id or preset in the loaded playlist. Missing ids fall back
 // to the compiled procedural pattern renderer inside renderZone().
-const LookConfig* findLookById(const String& id) {
-  if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
+const LookConfig* findLookByExactId(const String& id) {
   for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id || looks[i].preset == id) return &looks[i];
+    if (looks[i].id == id) return &looks[i];
   }
   return nullptr;
+}
+
+const LookConfig* findLookByPresetAlias(const String& preset) {
+  for (uint8_t i = 0; i < lookCount; i++) {
+    if (looks[i].preset == preset) return &looks[i];
+  }
+  return nullptr;
+}
+
+const LookConfig* findLookById(const String& id) {
+  if (id.length() == 0) return lookCount ? &looks[currentLookIndex] : nullptr;
+  const LookConfig* exact = findLookByExactId(id);
+  return exact ? exact : findLookByPresetAlias(id);
 }
 
 bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
@@ -855,7 +866,7 @@ bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
 
 bool renderZone(const ZoneConfig& zone, uint32_t now) {
   if (zone.rangeCount == 0) return false;
-  const LookConfig* look = findLookById(zone.patternId);
+  const LookConfig* look = isSupportedCompiledPattern(zone.patternId) ? nullptr : findLookById(zone.patternId);
 
   PatternModifiers mods;
   mods.speed = zone.speed;
@@ -1304,15 +1315,18 @@ void runtimePreviousPattern() {
 }
 
 bool runtimeSelectPatternById(const String& id) {
-  for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == id || looks[i].preset == id) {
-      if (!isLoadedLookRenderable(looks[i], false)) return false;
-      return selectLookInstant(i);
-    }
+  const LookConfig* look = findLookByExactId(id);
+  if (look) {
+    if (!isLoadedLookRenderable(*look, false)) return false;
+    return selectLookInstant(static_cast<int>(look - looks));
   }
-  if (!isSupportedCompiledPattern(id)) return false;
-  applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
-  return true;
+  if (isSupportedCompiledPattern(id)) {
+    applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
+    return true;
+  }
+  look = findLookByPresetAlias(id);
+  if (!look || !isLoadedLookRenderable(*look, false)) return false;
+  return selectLookInstant(static_cast<int>(look - looks));
 }
 
 // Validate the complete pattern target without changing visible state. The web
@@ -1320,9 +1334,15 @@ bool runtimeSelectPatternById(const String& id) {
 // a section removed by a newer wiring config cannot leave a partial preview.
 bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId) {
   if (patternId.length() == 0 || runtimeConfig.zoneCount == 0) return false;
-  const LookConfig* look = findLookById(patternId);
+  bool zoneTargeted = targetId.length() > 0;
+  const LookConfig* look = zoneTargeted && isSupportedCompiledPattern(patternId)
+    ? nullptr
+    : findLookByExactId(patternId);
+  if (!look && !isSupportedCompiledPattern(patternId) && !zoneTargeted) {
+    look = findLookByPresetAlias(patternId);
+  }
   if (look) {
-    if (!isLoadedLookRenderable(*look, targetId.length() > 0)) return false;
+    if (!isLoadedLookRenderable(*look, zoneTargeted)) return false;
   } else if (!isSupportedCompiledPattern(patternId)) {
     return false;
   }

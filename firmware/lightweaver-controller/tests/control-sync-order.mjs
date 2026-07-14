@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
+const platformio = readFileSync(resolve(here, '../platformio.ini'), 'utf8');
+const parserGuard = readFileSync(resolve(here, '../scripts/guard-webserver-control-body.py'), 'utf8');
 const start = source.indexOf('void handleControlPost()');
 assert.notEqual(start, -1, 'handleControlPost should exist');
 
@@ -32,6 +34,18 @@ assert.match(source, /class\s+BoundedControlRequestHandler\s+final\s*:\s*public 
 assert.match(source, /bool\s+canRaw\(String uri\)\s+override/);
 assert.match(source, /bool\s+canUpload\(String uri\)\s+override\s*\{[\s\S]*?return false;/, 'multipart uploads must not enter the raw callback with no HTTPRaw state');
 assert.match(source, /server\.addHandler\(new BoundedControlRequestHandler\(\)\)/, 'the control path must register the bounded raw handler instead of FunctionRequestHandler/plainBuf');
+assert.match(platformio, /pre:scripts\/guard-webserver-control-body\.py/, 'the universal pre-parser guard must run before framework compilation');
+assert.match(parserGuard, /122de5397729899ac8600d545f7ed4b8a02298351a4f1b0fa5c7fa73f87a14d0/, 'build must pin the inspected Parsing.cpp source hash');
+assert.match(parserGuard, /_currentUri\s*==\s*"\/api\/control"/);
+assert.match(parserGuard, /_clientContentLength\s*>\s*LW_WEB_CONTROL_MAX_BODY_BYTES/);
+assert.match(parserGuard, /client\.stop\(\)/);
+assert.match(parserGuard, /return false;/, 'oversized multipart/json/form requests must exit before every framework body branch');
+assert.match(parserGuard, /corsOriginAllowed/, 'pre-parser rejection must preserve the project origin allowlist');
+assert.match(parserGuard, /Access-Control-Allow-Origin/, 'oversized browser requests must expose the 413 through CORS');
+assert.match(parserGuard, /Access-Control-Allow-Private-Network/, 'local-card private-network CORS must survive early rejection');
+assert.match(parserGuard, /AddBuildMiddleware/, 'guard must replace only the Parsing.cpp compilation unit without mutating the global package');
+assert.match(parserGuard, /hashlib\.sha256/, 'framework drift must fail closed before patch injection');
+assert.match(platformio, /-DLW_WEB_CONTROL_MAX_BODY_BYTES=4096/);
 
 const syncIndex = body.indexOf('runtimeSetSyncZones(controlBool(doc, "syncZones"))');
 assert.notEqual(syncIndex, -1, 'handleControlPost should apply syncZones when present');
