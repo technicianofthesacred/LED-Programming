@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { REAL_PATTERNS } from '../src/v3/v3-data.js';
+import { createDefaultProject } from '../src/lib/projectModel.js';
+import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
+import { CARD_PATTERN_BANK } from '../src/lib/cardPatternBank.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
@@ -20,6 +24,13 @@ async function gotoFreshPatterns(page) {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function gotoSavedProjectPatterns(page, project) {
+  await page.addInitScript((savedProject) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 }
 
 test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {
@@ -83,6 +94,16 @@ test('clicking a card updates the preview', async ({ page }) => {
 });
 
 test('setup JSON copy and download use the same compact card payload', async ({ page }) => {
+  const project = createDefaultProject();
+  project.id = 'setup-json-fixture';
+  project.name = 'Setup JSON fixture';
+  const expected = prepareCardStoragePayload(buildCardRuntimePackageFromProject({
+    projectId: project.id,
+    projectName: project.name,
+    strips: project.layout.strips,
+    patchBoard: project.layout.patchBoard,
+    standaloneController: project.devices.standaloneController,
+  })).json;
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -91,7 +112,7 @@ test('setup JSON copy and download use the same compact card payload', async ({ 
       },
     });
   });
-  await gotoFreshPatterns(page);
+  await gotoSavedProjectPatterns(page, project);
 
   await page.getByRole('button', { name: /Card tools/ }).click();
   await page.getByRole('menuitem', { name: /Copy setup/ }).click();
@@ -107,10 +128,77 @@ test('setup JSON copy and download use the same compact card payload', async ({ 
   const downloaded = Buffer.concat(chunks).toString('utf8');
 
   expect(copied).toBe(downloaded);
+  expect(copied).toBe(expected);
   expect(copied).not.toContain('\n');
   const config = JSON.parse(copied);
   expect(config.patterns).toBeUndefined();
   expect(config.controls?.encoder?.patternCycleIds).toBeUndefined();
+});
+
+test('oversized setup JSON stops copy and download before browser side effects', async ({ page }) => {
+  const project = createDefaultProject();
+  project.id = 'oversized-setup-fixture';
+  project.name = 'Oversized setup fixture';
+  const patterns = CARD_PATTERN_BANK.slice(0, 32);
+  project.devices.standaloneController.playlist = patterns.map((pattern, order) => ({
+    id: pattern.id,
+    label: `${pattern.label} ${'oversized-label-'.repeat(24)}`,
+    type: 'pattern',
+    patternId: pattern.id,
+    enabled: true,
+    order,
+  }));
+  project.devices.standaloneController.controls.encoder.patternCycleIds = patterns.map(pattern => pattern.id);
+  const runtimePackage = buildCardRuntimePackageFromProject({
+    projectId: project.id,
+    projectName: project.name,
+    strips: project.layout.strips,
+    patchBoard: project.layout.patchBoard,
+    standaloneController: project.devices.standaloneController,
+  });
+  let capacityError: any = null;
+  try {
+    prepareCardStoragePayload(runtimePackage);
+  } catch (error) {
+    capacityError = error;
+  }
+  expect(capacityError?.reason).toBe('config-too-large');
+
+  await page.addInitScript(() => {
+    (window as any).__setupSideEffects = { clipboard: 0, objectUrl: 0, anchorClick: 0 };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => { (window as any).__setupSideEffects.clipboard += 1; },
+      },
+    });
+    URL.createObjectURL = () => {
+      (window as any).__setupSideEffects.objectUrl += 1;
+      return 'blob:unexpected';
+    };
+    HTMLAnchorElement.prototype.click = function click() {
+      (window as any).__setupSideEffects.anchorClick += 1;
+    };
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Copy setup/ }).click();
+  await expect(page.getByText(capacityError.message, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__setupSideEffects)).toEqual({
+    clipboard: 0,
+    objectUrl: 0,
+    anchorClick: 0,
+  });
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Download setup/ }).click();
+  await expect(page.getByText(capacityError.message, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__setupSideEffects)).toEqual({
+    clipboard: 0,
+    objectUrl: 0,
+    anchorClick: 0,
+  });
 });
 
 test('Recover lights performs one complete recovery request', async ({ page }) => {
