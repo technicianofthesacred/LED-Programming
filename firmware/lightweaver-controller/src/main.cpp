@@ -1303,12 +1303,16 @@ uint32_t runtimeWiringProbationRemainingMs() {
   return remaining > 0 ? static_cast<uint32_t>(remaining) : 0;
 }
 
-String runtimeFirmwareInfo() {
-  JsonDocument doc;
+String runtimeCardId() {
   char cardId[16] = {};
   snprintf(cardId, sizeof(cardId), "lw-%012llx",
            static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
-  doc["cardId"] = cardId;
+  return String(cardId);
+}
+
+String runtimeFirmwareInfo() {
+  JsonDocument doc;
+  doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;

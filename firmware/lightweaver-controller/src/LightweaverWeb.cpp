@@ -1190,6 +1190,22 @@ void handleControlPost() {
   // (under sync rules — see runtime API). Visitors using the basic page never
   // send `zone`; the designer surface does.
   String zoneTarget = hasControlField(doc, "zone") ? controlString(doc, "zone") : String("");
+  bool hasRevision = hasControlField(doc, "revision");
+  uint32_t confirmedRevision = 0;
+  if (hasRevision) {
+    if (!doc["revision"].is<uint32_t>()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"revision out of range\"}");
+      return;
+    }
+    confirmedRevision = doc["revision"].as<uint32_t>();
+  }
+  bool patternRequested = hasControlField(doc, "patternId");
+  bool patternApplied = !patternRequested;
+  String confirmedPatternId = patternRequested ? controlString(doc, "patternId") : String("");
+  if (patternRequested && (confirmedPatternId.length() == 0 || confirmedPatternId.length() > 64)) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"pattern id out of range\"}");
+    return;
+  }
 
   // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
   // command sent while the card is in split preview mode updates only zone 0.
@@ -1201,9 +1217,8 @@ void handleControlPost() {
   if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
   if (hasControlField(doc, "next") && controlBool(doc, "next")) runtimeNextPattern();
   if (hasControlField(doc, "previous") && controlBool(doc, "previous")) runtimePreviousPattern();
-  if (hasControlField(doc, "patternId")) {
-    String id = controlString(doc, "patternId");
-    if (id.length()) runtimeSelectPatternByIdZ(zoneTarget, id);
+  if (patternRequested) {
+    patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
   }
   if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
   if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
@@ -1217,7 +1232,19 @@ void handleControlPost() {
   if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
   // Echo current state back
   JsonDocument out;
-  out["ok"] = true;
+  out["ok"] = !patternRequested || patternApplied;
+  out["cardId"] = runtimeCardId();
+  if (hasRevision) {
+    out["revision"] = confirmedRevision;
+    out["confirmedRevision"] = confirmedRevision;
+  }
+  if (patternRequested && patternApplied) {
+    out["patternId"] = confirmedPatternId;
+    JsonObject confirmedLook = out["confirmedLook"].to<JsonObject>();
+    confirmedLook["patternId"] = confirmedPatternId;
+    confirmedLook["zone"] = zoneTarget;
+    confirmedLook["syncZones"] = runtimeGetSyncZones();
+  }
   out["brightness"] = runtimeGetBrightness();
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
@@ -1231,7 +1258,7 @@ void handleControlPost() {
   out["driftMax"] = runtimeGetDriftHueMax();
   String body;
   serializeJson(out, body);
-  server.send(200, "application/json", body);
+  server.send(!patternRequested || patternApplied ? 200 : 422, "application/json", body);
 }
 
 void handleRecoverLights() {

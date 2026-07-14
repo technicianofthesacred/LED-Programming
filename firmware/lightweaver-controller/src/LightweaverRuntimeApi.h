@@ -53,6 +53,7 @@ float runtimeGetBrightness();
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
+String runtimeCardId();
 String runtimeFirmwareInfo();
 void runtimeFactoryReset();
 void runtimeResetWifi();
