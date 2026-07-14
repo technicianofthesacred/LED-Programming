@@ -61,10 +61,13 @@ jobs:
           pip install platformio==6.1.19
           npm ci --prefix lightweaver
 
-      - name: Verify release code and Studio build
+      - name: Verify every source and core contract before signing
         run: |
           cd lightweaver
-          node --test src/lib/firmwareRelease.test.js
+          # The factory binary is intentionally stale on a firmware-source
+          # commit; the protected build below replaces it. Every other normal
+          # core contract still runs here and must pass before secrets unlock.
+          npm run test:core:source
           npm run build
 
       - name: Verify pinned firmware compiles with the source identity

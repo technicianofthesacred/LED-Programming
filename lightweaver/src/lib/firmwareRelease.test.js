@@ -16,6 +16,7 @@ import {
   loadProductionFirmwareRelease,
   validateFirmwareManifest,
 } from './firmwareRelease.js';
+import { sourceCoreCommands } from '../../scripts/run-core-source-tests.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '../../..');
 const fixtureRoot = resolve(repoRoot, 'release/test-vectors');
@@ -350,6 +351,7 @@ test('committed production release is signed and content-addressed by the pinned
 test('firmware workflow builds, signs, commits, and uploads one release set', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/build-firmware.yml'), 'utf8');
   const deployWorkflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  const packageJson = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/package.json'), 'utf8'));
   assert.match(workflow, /scripts\/build-firmware-manifest\.mjs/);
   assert.match(workflow, /scripts\/sign-release-artifacts\.mjs/);
   assert.match(workflow, /secrets\.LIGHTWEAVER_RELEASE_SIGNING_KEY/);
@@ -369,8 +371,36 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   const verifyJob = workflow.slice(workflow.indexOf('  verify:'), workflow.indexOf('  build:'));
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);
-  assert.match(verifyJob, /node --test src\/lib\/firmwareRelease\.test\.js/);
+  assert.match(verifyJob, /npm run test:core:source/);
   assert.match(verifyJob, /pio run/);
+  assert.ok(
+    verifyJob.indexOf('npm run test:core:source') < verifyJob.indexOf('pio run'),
+    'every source/core contract must pass before the protected signer can run',
+  );
+  assert.equal(
+    packageJson.scripts['test:core:source'],
+    'node --test src/lib/firmwareRelease.test.js && node scripts/run-core-source-tests.mjs',
+  );
+  assert.equal(
+    packageJson.scripts['firmware:check-bin'],
+    'node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs',
+  );
+  const ordinaryCoreCommands = packageJson.scripts['test:core'].split(' && ');
+  assert.equal(
+    ordinaryCoreCommands.at(-1),
+    packageJson.scripts['firmware:check-bin'],
+    'ordinary core tests must retain the stale factory binary launch gate',
+  );
+  assert.deepEqual(
+    sourceCoreCommands(packageJson),
+    ordinaryCoreCommands.slice(0, -1),
+    'the protected signer must run every ordinary core contract except factory binary freshness',
+  );
+  assert.throws(
+    () => sourceCoreCommands({ scripts: { 'test:core': 'node tests/example.mjs' } }),
+    /source contracts followed by the factory freshness gate|must end with the exact factory binary freshness gate/,
+    'the source-only runner must fail closed if the normal launch gate changes',
+  );
   const signedVerification = workflow.indexOf('Verify signed release set');
   const releaseCommit = workflow.indexOf('Commit updated signed release');
   const artifactUpload = workflow.indexOf('Upload signed release set');
