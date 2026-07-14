@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://led.mandalacodes.com/firmware/firmware-manifest.schema.json",
+  "title": "Lightweaver signed firmware release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "target",
+    "firmwareVersion",
+    "buildId",
+    "image",
+    "configSchema",
+    "minimumInstallerVersion"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "target": { "const": "esp32-s3-n16r8" },
+    "firmwareVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "buildId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "sha256"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^/firmware/releases/[^/]+/[^/]+/lightweaver-controller-esp32s3-factory\\.bin$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "configSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "type": "integer", "minimum": 1 },
+        "max": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "minimumInstallerVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" }
+  }
+}

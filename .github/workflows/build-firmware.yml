@@ -1,7 +1,8 @@
 name: Build firmware binary
 
-# Rebuilds the factory firmware image that led.mandalacodes.com flashes to cards,
-# and commits it back so the website never ships stale firmware. Runs in CI
+# Rebuilds and signs the factory firmware release that led.mandalacodes.com
+# flashes to cards, and commits the complete release set back so the website
+# never ships stale or unsigned firmware. Runs in CI
 # because the ESP32 toolchain host is reachable here (it is blocked inside the
 # Claude agent sandbox). The trigger watches firmware SOURCE only, so the bot's
 # binary-only commit does not re-trigger this workflow (no loop).
@@ -16,6 +17,10 @@ on:
       - 'firmware/lightweaver-controller/src/**'
       - 'firmware/lightweaver-controller/platformio.ini'
       - 'firmware/lightweaver-controller/scripts/build-factory-bin.sh'
+      - 'scripts/build-firmware-manifest.mjs'
+      - 'scripts/sign-release-artifacts.mjs'
+      - 'lightweaver/src/lib/firmwareRelease.js'
+      - 'release/keys/lightweaver-release-public.pem'
       - '.github/workflows/build-firmware.yml'
 
 permissions:
@@ -38,6 +43,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Cache PlatformIO toolchain
         uses: actions/cache@v4
         with:
@@ -54,18 +63,44 @@ jobs:
       - name: Rebuild merged factory binary
         run: firmware/lightweaver-controller/scripts/build-factory-bin.sh
 
-      - name: Commit updated binary if it changed
+      - name: Build and sign immutable release set
+        env:
+          LIGHTWEAVER_RELEASE_SIGNING_KEY: ${{ secrets.LIGHTWEAVER_RELEASE_SIGNING_KEY }}
         run: |
-          BIN=lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
-          if git diff --quiet -- "$BIN"; then
-            echo "Firmware binary already matches current source — nothing to commit."
+          FW_VERSION="$(sed -n 's/.*LW_FIRMWARE_VERSION=\\"\([^\\"]*\)\\".*/\1/p' firmware/lightweaver-controller/platformio.ini)"
+          CONFIG_VERSION="$(sed -n 's/.*LW_CONFIG_SCHEMA_VERSION=\([0-9][0-9]*\).*/\1/p' firmware/lightweaver-controller/platformio.ini)"
+          test -n "$FW_VERSION"
+          test -n "$CONFIG_VERSION"
+          node scripts/build-firmware-manifest.mjs \
+            --firmware-version "$FW_VERSION" \
+            --build-id "${GITHUB_SHA}" \
+            --config-min "$CONFIG_VERSION" \
+            --config-max "$CONFIG_VERSION" \
+            --minimum-installer 1.4.0
+          node scripts/sign-release-artifacts.mjs
+
+      - name: Commit updated signed release if it changed
+        id: release
+        run: |
+          RELEASE_PATHS=(
+            lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+            lightweaver/public/firmware/release-manifest.json
+            lightweaver/public/firmware/release-manifest.sig
+            lightweaver/public/firmware/release-provenance.json
+            lightweaver/public/firmware/releases
+          )
+          if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
+             test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then
+            echo "Signed firmware release already matches current source — nothing to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$BIN"
-          git commit -m "CI: rebuild Lightweaver factory firmware binary from current source"
+          git add "${RELEASE_PATHS[@]}"
+          git commit -m "CI: publish signed Lightweaver firmware release"
           git push origin "HEAD:${{ github.ref_name }}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Trigger site deploy
         # GITHUB_TOKEN pushes do not fire workflow `push` triggers (GitHub
@@ -77,12 +112,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BIN=lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
-          if git diff HEAD~1 --quiet -- "$BIN" 2>/dev/null; then
-            echo "Binary unchanged — skipping deploy-site dispatch."
+          if [ "${{ steps.release.outputs.changed }}" != "true" ]; then
+            echo "Signed release unchanged — skipping deploy-site dispatch."
           else
-            echo "Binary updated — dispatching deploy-site.yml…"
-            # Non-fatal: the binary is already committed at this point, so a
+            echo "Signed release updated — dispatching deploy-site.yml…"
+            # Non-fatal: the release is already committed at this point, so a
             # dispatch failure must not redden a build that shipped its
             # artifact. launch:check's factory-bin-freshness still guards
             # against a stale site.
@@ -90,9 +124,13 @@ jobs:
               || echo "::warning::deploy-site dispatch failed — run it manually from the Actions tab so the site serves the fresh binary."
           fi
 
-      - name: Upload binary as artifact
+      - name: Upload signed release set as one artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lightweaver-controller-esp32s3-factory
-          path: lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
+          name: lightweaver-controller-esp32s3-signed-release
+          path: |
+            lightweaver/public/firmware/release-manifest.json
+            lightweaver/public/firmware/release-manifest.sig
+            lightweaver/public/firmware/release-provenance.json
+            lightweaver/public/firmware/releases/
           if-no-files-found: error

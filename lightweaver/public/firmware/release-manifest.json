@@ -1,0 +1,1 @@
+{"buildId":"factory-de4e64b9fe8e","configSchema":{"max":1,"min":1},"firmwareVersion":"1.0.0","image":{"sha256":"de4e64b9fe8e43fbe8ec0a175ef9798bc54971e5fe40f69b5cafea1125bd1a1b","size":1140752,"url":"/firmware/releases/1.0.0/factory-de4e64b9fe8e/lightweaver-controller-esp32s3-factory.bin"},"minimumInstallerVersion":"1.4.0","schemaVersion":1,"target":"esp32-s3-n16r8"}
