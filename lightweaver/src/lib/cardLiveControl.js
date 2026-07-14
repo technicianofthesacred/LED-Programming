@@ -67,7 +67,9 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
 
   const requestedPatternId = String(look?.patternId || '').trim();
-  const echoedPatternId = String(response.patternId || response.look?.patternId || '').trim();
+  const echoedPatternId = String(
+    response.patternId || response.confirmedPatternId || response.confirmedLook?.patternId || response.look?.patternId || '',
+  ).trim();
   if (requestedPatternId && echoedPatternId && requestedPatternId !== echoedPatternId) {
     throw previewAckError('preview-mismatch', 'The card confirmed a different physical look.');
   }
@@ -75,6 +77,16 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   const echoedRevision = acknowledgementRevision(response.revision ?? response.confirmedRevision);
   if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
     throw previewAckError('preview-mismatch', 'The card confirmed a different preview revision.');
+  }
+  const hasConfirmedLook = Boolean(requestedPatternId && echoedPatternId === requestedPatternId);
+  const hasConfirmedRevision = Boolean(requestedRevision !== null && echoedRevision === requestedRevision);
+  const hasRequestedIntent = Boolean(requestedPatternId || requestedRevision !== null);
+  const explicitlyLegacy = options.previewAcknowledgementCapability === 'legacy-ok-only';
+  if (hasRequestedIntent && !hasConfirmedLook && !hasConfirmedRevision && !explicitlyLegacy) {
+    throw previewAckError(
+      'preview-unconfirmed',
+      'The card answered, but did not confirm which physical preview it applied.',
+    );
   }
   return response;
 }
@@ -86,15 +98,21 @@ function latestPreviewQueueKey(host = '') {
 function enqueueLatestPreview(key, task) {
   let queue = latestPreviewQueues.get(key);
   if (!queue) {
-    queue = { running: false, pending: null };
+    queue = { running: false, pending: null, generation: 0 };
     latestPreviewQueues.set(key, queue);
   }
 
   return new Promise((resolve, reject) => {
+    const generation = ++queue.generation;
     if (queue.pending) {
       queue.pending.reject(supersededPreviewError());
     }
-    queue.pending = { task, resolve, reject };
+    queue.pending = {
+      task,
+      resolve,
+      reject,
+      arbitration: { isCurrent: () => queue.generation === generation },
+    };
     void drainLatestPreviewQueue(key, queue);
   });
 }
@@ -106,7 +124,7 @@ async function drainLatestPreviewQueue(key, queue) {
     queue.pending = null;
     queue.running = true;
     try {
-      request.resolve(await request.task());
+      request.resolve(await request.task(request.arbitration));
     } catch (error) {
       request.reject(error);
     } finally {
@@ -114,6 +132,10 @@ async function drainLatestPreviewQueue(key, queue) {
     }
   }
   if (!queue.pending) latestPreviewQueues.delete(key);
+}
+
+function requireCurrentPreviewIntent(options = {}) {
+  if (options.previewArbitration?.isCurrent?.() === false) throw supersededPreviewError();
 }
 
 // Live-preview pushes may fall back from a specific zone to the whole strip
@@ -565,6 +587,7 @@ async function pushSectionPreviewToHost(host, targets = [], options = {}) {
   const allTarget = normalizedTargets.find(target => target.kind === 'all') || normalizedTargets[0];
 
   if (!sectionTargets.length) {
+    requireCurrentPreviewIntent(options);
     return allTarget
       ? pushLivePreviewToHost(host, { ...allTarget.look, syncZones: true }, options)
       : { ok: true, zonesPreviewed: 0 };
@@ -582,6 +605,7 @@ async function pushSectionPreviewToHost(host, targets = [], options = {}) {
       .map(target => target.zone)
       .filter(zoneId => !zoneExists(zonesPayload, zoneId));
     if (missingZones.length) {
+      requireCurrentPreviewIntent(options);
       const fallback = allTarget || sectionTargets[0];
       const response = await pushLivePreviewToHost(host, { ...fallback.look, syncZones: true }, options);
       return {
@@ -596,6 +620,7 @@ async function pushSectionPreviewToHost(host, targets = [], options = {}) {
 
   const results = [];
   for (const target of sectionTargets) {
+    requireCurrentPreviewIntent(options);
     results.push(await pushLivePreviewToHost(
       host,
       { ...target.look, zone: target.zone, syncZones: false },
@@ -611,6 +636,7 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
   const allTarget = normalizedTargets.find(target => target.kind === 'all') || normalizedTargets[0];
 
   if (!sectionTargets.length) {
+    requireCurrentPreviewIntent(options);
     return allTarget
       ? pushLivePreviewToBridge(host, { ...allTarget.look, syncZones: true }, options)
       : { ok: true, zonesPreviewed: 0 };
@@ -628,6 +654,7 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
       .map(target => target.zone)
       .filter(zoneId => !zoneExists(zonesPayload, zoneId));
     if (missingZones.length) {
+      requireCurrentPreviewIntent(options);
       const fallback = allTarget || sectionTargets[0];
       const response = await pushLivePreviewToBridge(host, { ...fallback.look, syncZones: true }, options);
       return {
@@ -642,6 +669,7 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
 
   const results = [];
   for (const target of sectionTargets) {
+    requireCurrentPreviewIntent(options);
     results.push(await pushLivePreviewToBridge(
       host,
       { ...target.look, zone: target.zone, syncZones: false },
@@ -830,11 +858,12 @@ export async function recoverCardLights(look = {}, options = {}) {
   }
 }
 
-export async function pushSectionPreviewToCard(targets, options = {}) {
+async function sendSectionPreviewToCard(targets, options = {}) {
   const host = options.host || readStoredCardHost();
   try {
     return await pushSectionPreviewToHost(host, targets, options);
   } catch (error) {
+    if (error?.reason === 'superseded') throw error;
     if (!isMixedContentBlocked() && options.autoDiscover !== false) {
       const found = await discoverCardStatus({
         preferredHost: host,
@@ -850,6 +879,15 @@ export async function pushSectionPreviewToCard(targets, options = {}) {
     }
     throw normalizePreviewError(host, error);
   }
+}
+
+export async function pushSectionPreviewToCard(targets, options = {}) {
+  const host = options.host || readStoredCardHost();
+  if (options.latestOnly === false) return sendSectionPreviewToCard(targets, options);
+  return enqueueLatestPreview(
+    latestPreviewQueueKey(host),
+    arbitration => sendSectionPreviewToCard(targets, { ...options, previewArbitration: arbitration }),
+  );
 }
 
 export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {

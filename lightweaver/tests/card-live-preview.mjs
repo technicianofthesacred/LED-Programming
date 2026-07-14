@@ -104,6 +104,7 @@ for (const [label, responseBody, reason] of [
   ['malformed JSON', null, 'invalid-acknowledgement'],
   ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed'],
   ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card'],
+  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'preview-unconfirmed'],
   ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch'],
   ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch'],
 ]) {
@@ -136,6 +137,43 @@ const acknowledgedPreview = await pushLivePreviewToCard(
 assert.equal(acknowledgedPreview.cardId, 'lw-expected');
 assert.equal(acknowledgedPreview.patternId, 'ocean');
 assert.equal(acknowledgedPreview.revision, 7);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected' }),
+});
+const explicitLegacyPreview = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  {
+    host: 'lightweaver.local',
+    expectedCardId: 'lw-expected',
+    revision: 7,
+    previewAcknowledgementCapability: 'legacy-ok-only',
+    autoDiscover: false,
+    latestOnly: false,
+  },
+);
+assert.equal(explicitLegacyPreview.ok, true, 'legacy acknowledgement is allowed only by an explicit compatibility decision');
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', confirmedRevision: 7 }),
+});
+const revisionOnlyProof = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(revisionOnlyProof.confirmedRevision, 7);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', confirmedLook: { patternId: 'ocean' } }),
+});
+const lookOnlyProof = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(lookOnlyProof.confirmedLook.patternId, 'ocean');
 
 globalThis.fetch = async () => { throw new TypeError('network down'); };
 await assert.rejects(
@@ -359,7 +397,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -392,7 +430,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -425,7 +463,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -463,7 +501,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, recovered: true }),
+    json: async () => ({ ok: true, recovered: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -521,7 +559,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -579,7 +617,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, fallback: true }),
+    json: async () => ({ ok: true, fallback: true, patternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -652,6 +690,58 @@ assert.equal(firstPreviewResponse.patternId, 'aurora');
 assert.equal(secondPreviewError.reason, 'superseded');
 assert.equal(thirdPreviewResponse.patternId, 'ocean');
 assert.deepEqual(latestPreviewRequests, ['aurora', 'ocean']);
+
+// Section combos and single-pattern taps share the same per-host arbitration.
+// Once the newer pattern intent exists, the older combo may finish its in-flight
+// zone but must never start another zone write.
+let releaseComboZoneOne;
+const interleavedPreviewRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/api/zones')) {
+    return {
+      ok: true,
+      json: async () => ({
+        zones: [
+          { id: 'zone-one', patternId: 'aurora' },
+          { id: 'zone-two', patternId: 'aurora' },
+        ],
+      }),
+    };
+  }
+  const body = JSON.parse(options.body || '{}');
+  interleavedPreviewRequests.push({ zone: body.zone || '', patternId: body.patternId });
+  if (body.zone === 'zone-one') {
+    await new Promise(resolve => { releaseComboZoneOne = resolve; });
+  }
+  return {
+    ok: true,
+    json: async () => ({ ok: true, patternId: body.patternId, revision: body.revision }),
+  };
+};
+
+const olderCombo = pushSectionPreviewToCard([
+  { id: 'zone-one', zoneId: 'zone-one', kind: 'section', look: { patternId: 'ocean' } },
+  { id: 'zone-two', zoneId: 'zone-two', kind: 'section', look: { patternId: 'sparkle' } },
+], {
+  host: '192.168.18.71',
+  revision: 20,
+  autoDiscover: false,
+}).catch(error => error);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.deepEqual(interleavedPreviewRequests, [{ zone: 'zone-one', patternId: 'ocean' }]);
+const newerPattern = pushLivePreviewToCard({ patternId: 'fire' }, {
+  host: '192.168.18.71',
+  revision: 21,
+  autoDiscover: false,
+});
+releaseComboZoneOne();
+const [olderComboError, newerPatternResponse] = await Promise.all([olderCombo, newerPattern]);
+assert.equal(olderComboError.reason, 'superseded');
+assert.equal(newerPatternResponse.patternId, 'fire');
+assert.deepEqual(interleavedPreviewRequests, [
+  { zone: 'zone-one', patternId: 'ocean' },
+  { zone: '', patternId: 'fire' },
+]);
 
 const listeners = new Map();
 const bridgeMessages = [];
