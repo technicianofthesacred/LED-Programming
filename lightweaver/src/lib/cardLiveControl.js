@@ -8,7 +8,7 @@ import {
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
-import { CardPushError, pushConfigToCard } from './cardPushClient.js';
+import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
 
@@ -105,6 +105,66 @@ function buildRecoverLightsPayload(look = {}) {
     brightness: normalized.brightness,
     ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
   };
+}
+
+function requireRecoveryAcknowledgement(response) {
+  const diagnostics = response?.diagnostics;
+  const commandAccepted = response?.ok === true && (response?.accepted === true || response?.recovered === true);
+  const visibleFramePrepared = diagnostics?.frameSubmitted !== false &&
+    Number(diagnostics?.nonBlackPixels) > 0 && Number(diagnostics?.brightnessByte) > 0;
+  if (!commandAccepted || !visibleFramePrepared) {
+    throw new CardPushError(
+      'recovery-unconfirmed',
+      'The card answered, but it did not confirm a visible recovery frame. Restart the card, then try Recover lights again.',
+    );
+  }
+  return response;
+}
+
+function waitForRecoveryRetry(ms, setTimeoutImpl = setTimeout) {
+  return new Promise(resolve => setTimeoutImpl(resolve, ms));
+}
+
+async function redeliverRecoveryAfterRestart(host, payload, options = {}) {
+  const deadline = Date.now() + (options.restartTimeoutMs || 15000);
+  await waitForRecoveryRetry(options.restartSettleMs ?? 800, options.setTimeoutImpl);
+  let lastError = null;
+  do {
+    try {
+      const response = isMixedContentBlocked()
+        ? await sendCardBridgeRequest('recover-lights', payload, {
+            host,
+            timeoutMs: Math.min(options.timeoutMs || 3000, 1200),
+            retryOnTimeout: false,
+          })
+        : await postRecoverLightsToHost(host, payload, {
+            ...options,
+            timeoutMs: Math.min(options.timeoutMs || 3000, 1200),
+          });
+      return requireRecoveryAcknowledgement(response);
+    } catch (error) {
+      lastError = error;
+      if (Date.now() >= deadline) break;
+      await waitForRecoveryRetry(options.restartRetryMs ?? 500, options.setTimeoutImpl);
+    }
+  } while (Date.now() < deadline);
+  throw new CardPushError(
+    'recovery-timeout',
+    'The card restarted but did not reconnect in time. Wait a moment, then use Recover lights again.',
+    lastError,
+  );
+}
+
+async function finishRecovery(host, payload, response, options = {}) {
+  const acknowledged = requireRecoveryAcknowledgement(response);
+  if (options.restartCard !== true) return acknowledged;
+  if (isMixedContentBlocked()) {
+    await sendCardBridgeRequest('reboot', {}, { host, timeoutMs: Math.min(options.timeoutMs || 3000, 1200) });
+  } else {
+    await requestCardReboot(host, options);
+  }
+  const restored = await redeliverRecoveryAfterRestart(host, payload, options);
+  return { ...restored, restarted: true };
 }
 
 function cloneJson(value) {
@@ -634,13 +694,14 @@ export async function recoverCardLights(look = {}, options = {}) {
   });
   if (isMixedContentBlocked()) {
     try {
-      return await sendCardBridgeRequest('recover-lights', payload, { host, timeoutMs: options.timeoutMs || 3000 });
+      const response = await sendCardBridgeRequest('recover-lights', payload, { host, timeoutMs: options.timeoutMs || 3000 });
+      return await finishRecovery(host, payload, response, options);
     } catch (error) {
       throw normalizePreviewError(host, error);
     }
   }
   try {
-    return await postRecoverLightsToHost(host, payload, options);
+    return await finishRecovery(host, payload, await postRecoverLightsToHost(host, payload, options), options);
   } catch (error) {
     if (options.autoDiscover !== false) {
       const found = await discoverCardStatus({
@@ -649,7 +710,7 @@ export async function recoverCardLights(look = {}, options = {}) {
       });
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
-          return await postRecoverLightsToHost(found.host, payload, options);
+          return await finishRecovery(found.host, payload, await postRecoverLightsToHost(found.host, payload, options), options);
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
         }

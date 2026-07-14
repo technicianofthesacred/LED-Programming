@@ -30,7 +30,7 @@ export const CARD_LINK_CONNECT_TIMEOUT_MS = 15000;
 // before showing the one-click "Connect to card" affordance.
 export const CARD_LINK_BRIDGE_ACTIVE_KEY = 'lw_card_bridge_was_active';
 
-export const CARD_LINK_STATES = ['disconnected', 'connecting', 'connected-bridge', 'connected-direct'];
+export const CARD_LINK_STATES = ['disconnected', 'connecting', 'reconnecting-bridge', 'connected-bridge', 'connected-direct'];
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
@@ -61,6 +61,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       // no-answer timer and the state could sit in 'connecting' forever.
       if (via === 'direct' && (
         prev.state === 'connected-bridge' ||
+        prev.state === 'reconnecting-bridge' ||
         prev.state === 'connected-direct' ||
         (prev.state === 'connecting' && prev.transport === 'bridge')
       )) return prev;
@@ -74,13 +75,13 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
     }
     case 'bridge-ping-missed': {
       // A missed keepalive only matters for an established bridge link.
-      if (prev.state !== 'connected-bridge') return prev;
+      if (prev.state !== 'connected-bridge' && prev.state !== 'reconnecting-bridge') return prev;
       const missedPings = prev.missedPings + 1;
       if (missedPings >= Math.max(1, missLimit)) {
         return {
-          state: 'disconnected',
-          reason: event.reason || 'card-stopped-answering',
-          transport: '',
+          state: 'reconnecting-bridge',
+          reason: 'card-restarting',
+          transport: 'bridge',
           host,
           missedPings,
         };
@@ -98,12 +99,12 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
     case 'direct-status': {
       if (event.connected) {
         // The bridge keepalive is authoritative while a bridge is up.
-        if (prev.state === 'connected-bridge') return prev;
+        if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
         if (prev.state === 'connected-direct' && prev.host === host) return prev;
         return { state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0 };
       }
       // A failed direct probe never tears down a live (or connecting) bridge.
-      if (prev.state === 'connected-bridge') return prev;
+      if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
       if (prev.state === 'connecting' && prev.transport === 'bridge') return prev;
       const reason = event.reason || 'card-unreachable';
       if (prev.state === 'disconnected' && prev.reason === reason && prev.host === host) return prev;
@@ -137,6 +138,7 @@ export function cardLinkStatusText(state = {}) {
   switch (state.state) {
     case 'connected-bridge': return 'Live via card page';
     case 'connected-direct': return 'Live direct';
+    case 'reconnecting-bridge': return 'Card restarting…';
     case 'connecting': return 'Looking for the card…';
     default: return cardLinkReasonText(state.reason);
   }
@@ -207,21 +209,25 @@ export function createCardLink({
   }
 
   async function runPing() {
-    if (destroyed || pinging || state.state !== 'connected-bridge') return;
+    if (destroyed || pinging || (state.state !== 'connected-bridge' && state.state !== 'reconnecting-bridge')) return;
+    const pingHost = state.host;
     pinging = true;
     try {
       await sendRequest('ping', {}, { timeoutMs: pingTimeoutMs });
-      dispatch({ type: 'bridge-ping-ok' });
+      if (state.host === pingHost && (state.state === 'connected-bridge' || state.state === 'reconnecting-bridge')) {
+        dispatch({ type: 'bridge-ping-ok', host: pingHost });
+      }
     } catch (error) {
+      if (state.host !== pingHost || (state.state !== 'connected-bridge' && state.state !== 'reconnecting-bridge')) return;
       if (error?.reason === 'bridge-missing' || error?.reason === 'bridge-post-failed') {
-        dispatch({ type: 'bridge-lost', reason: 'card-page-closed' });
+        dispatch({ type: 'bridge-lost', reason: 'card-page-closed', host: pingHost });
       } else {
-        dispatch({ type: 'bridge-ping-missed', reason: 'card-stopped-answering' });
+        dispatch({ type: 'bridge-ping-missed', reason: 'card-stopped-answering', host: pingHost });
       }
     } finally {
       pinging = false;
     }
-    if (state.state === 'connected-bridge') schedulePing();
+    if (state.state === 'connected-bridge' || state.state === 'reconnecting-bridge') schedulePing();
   }
 
   function dispatch(event) {
@@ -232,6 +238,17 @@ export function createCardLink({
     if (state.state === 'connected-bridge') {
       clearConnectTimer();
       if (prev.state !== 'connected-bridge') writeBridgeWasActive(true);
+      if (!pingTimer && !pinging) schedulePing();
+    } else if (state.state === 'reconnecting-bridge') {
+      if (prev.state !== 'reconnecting-bridge') {
+        clearConnectTimer();
+        if (connectTimeoutMs > 0) {
+          connectTimer = setTimeout(() => {
+            connectTimer = null;
+            dispatch({ type: 'bridge-lost', reason: 'no-answer' });
+          }, connectTimeoutMs);
+        }
+      }
       if (!pingTimer && !pinging) schedulePing();
     } else if (state.state === 'connecting' && state.transport === 'bridge') {
       stopKeepalive();
@@ -286,6 +303,7 @@ export function getSharedCardLink() {
       // event while disconnected must not rewrite the honest reason.
       const current = sharedLink.getState();
       if (current.state === 'connected-bridge' ||
+          current.state === 'reconnecting-bridge' ||
           (current.state === 'connecting' && current.transport === 'bridge')) {
         sharedLink.dispatch({ type: 'bridge-lost', reason: 'card-page-closed' });
       }

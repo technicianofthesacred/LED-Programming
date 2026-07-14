@@ -50,8 +50,11 @@ assert.match(
   /setTimeout\([^;]*\/api\/reboot/,
   'bridge config handler should schedule /api/reboot on a timer so the reply goes out first',
 );
+const configBranchStart = script.search(/m\.type===['"]config['"]/);
+const configBranchEnd = script.indexOf('}else{throw', configBranchStart);
+const configBranch = script.slice(configBranchStart, configBranchEnd);
 assert.doesNotMatch(
-  script,
+  configBranch,
   /await\s+(?:post|fetch)\(['"]\/api\/reboot/,
   'bridge config handler must NOT await the reboot before replying (would drop the channel and surface a false save failure)',
 );

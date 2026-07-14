@@ -71,6 +71,7 @@ float fadeScale = 1.0f;
 
 uint8_t currentLookIndex = 0;
 bool blackedOut = false;
+bool ledOutputsReady = false;
 ErrorCode errorCode = ERROR_NONE;
 
 File sequenceFile;
@@ -229,11 +230,27 @@ void loop() {
   esp_task_wdt_reset();  // pet the watchdog every iteration, before any early return
   bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
-  if (!recoveryHoldActive) {
-    handleWledRealtime();
-    handleArtnet();
-    handleWledWebSocket();
+  // A web request can arm recovery inside handleLightweaverWeb(). Re-read the
+  // deadline in this same loop tick so no stale stream/error/AP frame can
+  // overwrite the recovery frame before the user sees it.
+  recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
+
+  if (recoveryHoldActive && ledOutputsReady) {
+    PatternModifiers mods;
+    mods.speed = 1.0f;
+    mods.customHue = 32;
+    mods.customSaturation = 230;
+    bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
+    if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
+    FastLED.setBrightness(computeBrightnessByte());
+    showLeds();
+    delay(10);
+    return;
   }
+
+  handleWledRealtime();
+  handleArtnet();
+  handleWledWebSocket();
   frameSourceTick();
 
   if (errorCode != ERROR_NONE) {
@@ -275,19 +292,6 @@ void loop() {
   }
 
   if (blackedOut) {
-    delay(10);
-    return;
-  }
-
-  if (recoveryHoldActive) {
-    PatternModifiers mods;
-    mods.speed = 1.0f;
-    mods.customHue = 32;
-    mods.customSaturation = 230;
-    bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
-    if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
-    FastLED.setBrightness(computeBrightnessByte());
-    showLeds();
     delay(10);
     return;
   }
@@ -423,6 +427,7 @@ bool loadProfile() {
 }
 
 bool setupLedOutputs() {
+  ledOutputsReady = false;
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   // Automatic brightness limiter: when a current ceiling is configured, FastLED
@@ -494,6 +499,7 @@ bool setupLedOutputs() {
 
   FastLED.setBrightness(0);
   FastLED.clear(true);
+  ledOutputsReady = true;
   return true;
 }
 
@@ -1389,7 +1395,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     brightnessByte = computeBrightnessByte();
   }
   FastLED.setBrightness(brightnessByte);
-  showLeds();
+  if (ledOutputsReady) showLeds();
 
   uint16_t nonBlackPixels = 0;
   for (uint16_t i = 0; i < totalPixels && i < LW_MAX_PIXELS; i++) {
@@ -1398,10 +1404,15 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
 
   JsonDocument doc;
   doc["ok"] = true;
-  doc["recovered"] = true;
+  // FastLED exposes no electrical acknowledgement from the strip. Report
+  // exactly what firmware can prove: the command was accepted and a visible
+  // frame was prepared/submitted to the configured output controllers.
+  doc["accepted"] = true;
   doc["patternId"] = id;
   JsonObject diagnostics = doc["diagnostics"].to<JsonObject>();
   diagnostics["rendered"] = rendered;
+  diagnostics["framePrepared"] = totalPixels > 0;
+  diagnostics["frameSubmitted"] = ledOutputsReady;
   diagnostics["pixels"] = totalPixels;
   diagnostics["nonBlackPixels"] = nonBlackPixels;
   diagnostics["brightnessByte"] = brightnessByte;

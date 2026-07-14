@@ -22,6 +22,18 @@ assert.match(
 
 assert.match(
   web,
+  /m\.type==='reboot'/,
+  'card bridge should proxy the hard-recovery reboot request',
+);
+
+const rebootBranchStart = web.indexOf("else if(m.type==='reboot')");
+const rebootBranchEnd = web.indexOf("else if(m.type==='config')", rebootBranchStart);
+const rebootBranch = web.slice(rebootBranchStart, rebootBranchEnd);
+assert.match(rebootBranch, /!r\.ok\|\|response\.ok===false/,
+  'bridge reboot must reject a non-2xx or explicit failed reboot response');
+
+assert.match(
+  web,
   /handleRecoverLights/,
   'firmware web layer should expose a recover-lights handler',
 );
@@ -38,11 +50,15 @@ assert.match(
   'main runtime should implement the recover-lights routine',
 );
 
-assert.match(
-  main,
-  /handleLightweaverWeb\(\);\s*if \(!recoveryHoldActive\)/,
-  'firmware loop should service web recovery before draining live stream inputs',
-);
+const loopStart = main.indexOf('void loop() {');
+const webHandler = main.indexOf('handleLightweaverWeb();', loopStart);
+const recoveryRefresh = main.indexOf('recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;', webHandler);
+const recoveryBranch = main.indexOf('if (recoveryHoldActive && ledOutputsReady) {', loopStart);
+const errorBranch = main.indexOf('if (errorCode != ERROR_NONE) {', loopStart);
+const streamHandler = main.indexOf('handleWledRealtime();', loopStart);
+assert.ok(recoveryBranch > -1, 'firmware loop should have a recovery owner branch');
+assert.ok(recoveryBranch < errorBranch, 'recovery should outrank the error-state clear loop');
+assert.ok(recoveryBranch < streamHandler, 'recovery should outrank external frame producers');
 
 assert.match(
   main,
@@ -98,4 +114,29 @@ assert.match(
   'recover diagnostics should report whether the logical LED buffer is non-black',
 );
 
+assert.doesNotMatch(
+  main,
+  /doc\["recovered"\] = true;/,
+  'firmware must not claim physical recovery that it cannot electrically verify',
+);
+
+assert.match(
+  main,
+  /doc\["accepted"\] = true;/,
+  'firmware should report that the recovery command was accepted',
+);
+
+assert.match(
+  main,
+  /bool ledOutputsReady = false;/,
+  'firmware should track successful physical output setup separately from configured counts',
+);
+
+assert.match(
+  main,
+  /diagnostics\["frameSubmitted"\] = ledOutputsReady;/,
+  'firmware must only report frame submission after every configured output was registered',
+);
+
 console.log('recover-lights-endpoint tests passed');
+assert.ok(recoveryRefresh > webHandler, 'firmware loop should recompute recovery ownership after the web handler can arm it');

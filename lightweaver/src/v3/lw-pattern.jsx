@@ -950,10 +950,13 @@ import {
       setStatusKind('');
       setStatus(`Sending warm-white LED repair to ${cardHostToUrl(cardHost)}...`);
       try {
-        await recoverCardLights({ patternId: 'warm-white', brightness: 1, syncZones: true }, { host: cardHost, timeoutMs: 3200 });
+        await recoverCardLights(
+          { patternId: 'warm-white', brightness: 1, syncZones: true },
+          { host: cardHost, timeoutMs: 3200, restartCard: true },
+        );
         if (sequence !== livePreviewSeq.current) return;
         setStatusKind('ok');
-        setStatus('Warm-white recovery sent. If you see light, the strip is alive; otherwise check power, ground, and the data pin.');
+        setStatus('Recovery complete. The card reconnected and is holding warm white.');
       } catch (error) {
         if (sequence !== livePreviewSeq.current) return;
         setStatusKind('err');

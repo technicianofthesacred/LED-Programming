@@ -477,17 +477,33 @@ test('oversized setup JSON stops copy and download before browser side effects',
 
 test('Recover lights performs one complete recovery request', async ({ page }) => {
   const recoveries: Record<string, unknown>[] = [];
+  let rebootCount = 0;
   await page.route('**/api/recover-lights', async route => {
     recoveries.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, recovered: true }) });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        accepted: true,
+        diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+      }),
+    });
+  });
+  await page.route('**/api/reboot', async route => {
+    rebootCount += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
   await gotoFreshPatterns(page);
 
   await page.getByTestId('recover-lights').click();
-  await expect.poll(() => recoveries.length).toBe(1);
+  await expect.poll(() => recoveries.length).toBe(2);
   await page.waitForTimeout(150);
-  expect(recoveries).toHaveLength(1);
+  expect(recoveries).toHaveLength(2);
   expect(recoveries[0]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
+  expect(recoveries[1]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
+  expect(rebootCount).toBe(1);
+  await expect(page.getByText('Recovery complete. The card reconnected and is holding warm white.')).toBeVisible();
 });
 
 test('category chips filter the grid', async ({ page }) => {

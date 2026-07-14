@@ -12,6 +12,7 @@ import {
   readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
+import { requestCardReboot } from '../src/lib/cardPushClient.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -107,9 +108,10 @@ globalThis.fetch = async (url, options = {}) => {
     ok: true,
     json: async () => ({
       ok: true,
-      recovered: true,
+      accepted: true,
       diagnostics: {
         brightnessByte: 220,
+        nonBlackPixels: 44,
         firstLogicalPixel: { r: 255, g: 244, b: 220 },
       },
     }),
@@ -131,7 +133,7 @@ const recoveryResponse = await recoverCardLights({
   },
 });
 
-assert.equal(recoveryResponse.recovered, true);
+assert.equal(recoveryResponse.accepted, true);
 assert.deepEqual(recoveryOrder, ['browser-reclaimed', 'recover-post'], 'browser producers stop before card recovery is posted');
 assert.equal(recoveryRequests[0].url, 'http://192.168.18.70/api/recover-lights');
 assert.equal(recoveryRequests[0].options.method, 'POST');
@@ -140,6 +142,51 @@ assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
   brightness: 1,
   syncZones: true,
 });
+
+const hardRecoveryOrder = [];
+globalThis.fetch = async (url) => {
+  hardRecoveryOrder.push(String(url).endsWith('/api/reboot') ? 'reboot' : 'recover');
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      accepted: true,
+      diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+    }),
+  };
+};
+const hardRecovery = await recoverCardLights(
+  { patternId: 'warm-white', brightness: 1, syncZones: true },
+  {
+    host: '192.168.18.70',
+    restartCard: true,
+    restartSettleMs: 0,
+    setTimeoutImpl: callback => { callback(); return 0; },
+    reclaimFrameStreams: async () => hardRecoveryOrder.push('reclaim'),
+  },
+);
+assert.deepEqual(hardRecoveryOrder, ['reclaim', 'recover', 'reboot', 'recover']);
+assert.equal(hardRecovery.restarted, true, 'hard recovery reports the completed LED driver restart');
+
+globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => 'restart failed' });
+await assert.rejects(
+  requestCardReboot('192.168.18.70'),
+  error => error?.reason === 'http',
+  'an HTTP failure must not be reported as an accepted restart',
+);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, recovered: true }),
+});
+await assert.rejects(
+  recoverCardLights(
+    { patternId: 'warm-white', brightness: 1, syncZones: true },
+    { host: '192.168.18.70', autoDiscover: false, reclaimFrameStreams: async () => {} },
+  ),
+  error => error?.reason === 'recovery-unconfirmed',
+  'a transport-level 200 without frame diagnostics must not be presented as recovered lights',
+);
 
 const repairPackage = buildMirroredLedRepairPackage({
   app: 'Lightweaver',

@@ -60,8 +60,12 @@ let dropped = bridged;
 for (let i = 0; i < CARD_LINK_PING_MISS_LIMIT; i += 1) {
   dropped = reduceCardLink(dropped, { type: 'bridge-ping-missed' });
 }
-assert.equal(dropped.state, 'disconnected');
-assert.equal(dropped.reason, 'card-stopped-answering');
+assert.equal(dropped.state, 'reconnecting-bridge');
+assert.equal(dropped.reason, 'card-restarting');
+assert.equal(cardLinkStatusText(dropped), 'Card restarting…');
+const returnedAfterReboot = reduceCardLink(dropped, { type: 'bridge-ping-ok' });
+assert.equal(returnedAfterReboot.state, 'connected-bridge');
+assert.equal(returnedAfterReboot.missedPings, 0);
 
 // a missed ping while there is no bridge is meaningless
 assert.equal(reduceCardLink(initial, { type: 'bridge-ping-missed' }), initial);
@@ -141,14 +145,48 @@ assert.equal(link.getState().state, 'connected-bridge');
 await waitFor(() => pingCount >= 2, 2000, 'two keepalive pings');
 assert.equal(link.getState().state, 'connected-bridge');
 failPings = true;
-await waitFor(() => link.getState().state === 'disconnected', 2000, 'keepalive miss disconnect');
-assert.equal(link.getState().reason, 'card-stopped-answering');
-const pingsAtDisconnect = pingCount;
-await sleep(40);
-assert.equal(pingCount, pingsAtDisconnect, 'keepalive stops after disconnect');
-assert.ok(seen.includes('connected-bridge') && seen.includes('disconnected'));
+await waitFor(() => link.getState().state === 'reconnecting-bridge', 2000, 'reboot-period reconnect state');
+const pingsAtReconnect = pingCount;
+await waitFor(() => pingCount > pingsAtReconnect, 2000, 'keepalive continues while card reboots');
+failPings = false;
+await waitFor(() => link.getState().state === 'connected-bridge', 2000, 'automatic bridge recovery');
+assert.ok(seen.includes('connected-bridge') && seen.includes('reconnecting-bridge'));
 unsubscribe();
 link.destroy();
+
+// A card that never returns eventually becomes an honest no-answer state.
+const deadLink = createCardLink({
+  sendRequest: async () => {
+    const error = new Error('timeout');
+    error.reason = 'bridge-timeout';
+    throw error;
+  },
+  pingIntervalMs: 5,
+  pingTimeoutMs: 5,
+  connectTimeoutMs: 35,
+  missLimit: 2,
+});
+deadLink.dispatch({ type: 'bridge-ready', host: '192.168.4.1' });
+await waitFor(() => deadLink.getState().state === 'disconnected', 2000, 'reconnect deadline');
+assert.equal(deadLink.getState().reason, 'no-answer');
+deadLink.destroy();
+
+// A reply from an old host/session must never authenticate a newly selected card.
+let resolveStalePing;
+const hostSwitchLink = createCardLink({
+  sendRequest: async () => new Promise(resolve => { resolveStalePing = resolve; }),
+  pingIntervalMs: 1,
+  pingTimeoutMs: 50,
+  connectTimeoutMs: 200,
+});
+hostSwitchLink.dispatch({ type: 'bridge-ready', host: 'card-a.local' });
+await waitFor(() => typeof resolveStalePing === 'function', 2000, 'old-host ping to start');
+hostSwitchLink.dispatch({ type: 'connecting', via: 'bridge', host: 'card-b.local' });
+resolveStalePing({ ok: true });
+await sleep(10);
+assert.equal(hostSwitchLink.getState().state, 'connecting');
+assert.equal(hostSwitchLink.getState().host, 'card-b.local');
+hostSwitchLink.destroy();
 
 // ── runtime: a missing bridge window disconnects immediately ────────────────
 const goneLink = createCardLink({

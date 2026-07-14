@@ -217,19 +217,20 @@ async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
   return { reboot, current, layoutChanged, projectChanged };
 }
 
-async function requestCardReboot(host, options = {}) {
+export async function requestCardReboot(host, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
   try {
-    await fetch(`${cardHostToUrl(host)}/api/reboot`, {
+    const response = await fetch(`${cardHostToUrl(host)}/api/reboot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
       signal: ctrl.signal,
     });
-  } catch {
-    // The card may close the HTTP connection as it reboots; the config is
-    // already saved, so treat this as an accepted reboot request.
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new CardPushError('http', `card returned ${response.status}: ${text || 'reboot was rejected'}`);
+    }
   } finally {
     clearTimeout(timer);
   }
