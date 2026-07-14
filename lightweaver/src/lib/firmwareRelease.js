@@ -9,8 +9,8 @@ export const PRODUCTION_SIGNATURE_URL = '/firmware/release-manifest.sig';
 // This non-secret key is intentionally pinned in the installer bundle. Release
 // signing uses the matching private key held only in the protected CI secret.
 export const LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8w4Ke8UlzlztEvAHmCVhiGlDNjtb
-FYBylUWXRnSzpRD05Jm/34gY5h4AcGFe9DUCxCWQKIzPDDB/6YKZpDMkww==
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQ+nuEatzP5juWyVYJDC3GpSozW/y
+LAB3xjDNBGPyFvbvZKhZl+cFxuR1VB2cRrIo2XaaeuqefTz1oMRb6zwQLw==
 -----END PUBLIC KEY-----`;
 
 const encoder = new TextEncoder();

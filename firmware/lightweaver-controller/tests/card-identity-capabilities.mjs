@@ -12,12 +12,16 @@ const runtimeStatus = storage.match(/String runtimeStatusJson\([^)]*\)\s*\{[\s\S
 
 for (const flag of [
   'LW_FIRMWARE_VERSION',
-  'LW_BUILD_ID',
   'LW_CONFIG_SCHEMA_VERSION',
   'LW_CAPABILITIES_VERSION',
 ]) {
   assert.match(platform, new RegExp(`-D${flag}=`), `${flag} must have a pinned build default`);
 }
+assert.match(
+  platform,
+  /extra_scripts = pre:scripts\/inject-build-identity\.py/,
+  'LW_BUILD_ID must be injected from the exact release source revision',
+);
 
 assert.match(main, /ESP\.getEfuseMac\(\)/, 'card identity must derive from the ESP32-S3 eFuse chip id');
 assert.match(main, /lw-%012llx/, 'card identity must be a bounded lw- plus fixed-width hex id');
