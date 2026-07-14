@@ -3,6 +3,7 @@ import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
   isLocalCardHost,
+  normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
@@ -108,7 +109,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
 
   const connect = (rawHost = '', { bridge = false } = {}) => {
     setFailure('');
-    const targetHost = rawHost || readStoredCardHost();
+    const targetHost = normalizeCardHost(rawHost || readStoredCardHost());
     if (!isLocalCardHost(targetHost)) {
       setFailure('Enter a valid local Lightweaver hostname before connecting.');
       return;
@@ -145,11 +146,12 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
 
   const saveHost = (event) => {
     event.preventDefault();
-    if (!isLocalCardHost(host)) {
+    const normalizedHost = normalizeCardHost(host);
+    if (!isLocalCardHost(normalizedHost)) {
       setFailure('Enter a valid local Lightweaver hostname.');
       return;
     }
-    setHost(writeStoredCardHost(host));
+    setHost(writeStoredCardHost(normalizedHost));
     setFailure('');
   };
 

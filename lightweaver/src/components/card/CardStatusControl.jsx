@@ -34,22 +34,27 @@ export function CardStatusControl({ link, onOpen, open = false }) {
     : `Connect Lightweaver · ${status}`;
 
   return (
-    <button
-      type="button"
-      className={`card-status-control is-${status.toLowerCase().replace(/\s+/g, '-')}`}
-      onClick={onOpen}
-      aria-label={accessibleName}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      aria-controls="card-connection-center"
-      data-testid="card-link-status"
-    >
-      <span className="card-status-dot" aria-hidden="true" />
-      <span className="card-status-copy">
-        <span className="card-status-name">{connected ? (link.card?.name || 'Lightweaver') : 'Lightweaver'}</span>
-        <span className="card-status-state">{status}</span>
+    <>
+      <button
+        type="button"
+        className={`card-status-control is-${status.toLowerCase().replace(/\s+/g, '-')}`}
+        onClick={onOpen}
+        aria-label={accessibleName}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="card-connection-center"
+        data-testid="card-link-status"
+      >
+        <span className="card-status-dot" aria-hidden="true" />
+        <span className="card-status-copy">
+          <span className="card-status-name">{connected ? (link.card?.name || 'Lightweaver') : 'Lightweaver'}</span>
+          <span className="card-status-state">{status}</span>
+        </span>
+        {summary && <span className="card-status-summary">{summary}</span>}
+      </button>
+      <span className="card-status-announcement" role="status" aria-live="polite" aria-atomic="true">
+        {status}
       </span>
-      {summary && <span className="card-status-summary">{summary}</span>}
-    </button>
+    </>
   );
 }
