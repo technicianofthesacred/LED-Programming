@@ -7,6 +7,7 @@ import {
   cardBridgeAutoPreviewEnabled,
   getCardBridgeState,
   isCardBridgeLaunch,
+  openCardBridge,
   sendCardBridgeRequest,
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
@@ -385,6 +386,7 @@ function bridgeWindowHarness({
   return {
     win,
     opened,
+    storageValues,
     emitMessage(event) {
       for (const listener of eventListeners.get('message') || []) listener(event);
     },
@@ -488,6 +490,67 @@ popupHarness.emitMessage({
   data: { app: 'LightweaverCardBridge', type: 'ready', host: popupHost, version: 1 },
 });
 await reopenedAttempt.ready;
+
+// A named popup keeps the same WindowProxy when it navigates from card A to B.
+// The target switch itself must stale every A request before B emits ready.
+const switchHostA = '192.168.18.75';
+const switchHostB = '192.168.18.76';
+const switchMessages = [];
+let switchHarness;
+const namedPopup = {
+  closed: false,
+  postMessage(message, targetOrigin) {
+    switchMessages.push({ message, targetOrigin });
+  },
+};
+switchHarness = bridgeWindowHarness({ host: switchHostA, openResult: namedPopup });
+globalThis.window = switchHarness.win;
+const respondFromSwitchHost = (entry, host, response) => switchHarness.emitMessage({
+  origin: `http://${host}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', id: entry.message.id, ok: true, response },
+});
+
+openCardBridge(switchHostA);
+switchHarness.emitMessage({
+  origin: `http://${switchHostA}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: switchHostA, version: 1 },
+});
+const initialAInfo = switchMessages.at(-1);
+respondFromSwitchHost(initialAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().card?.id, 'lw-1921681875');
+
+const delayedARequest = sendCardBridgeRequest('firmware-info', {}, { host: switchHostA, timeoutMs: 1000 });
+const delayedAInfo = switchMessages.at(-1);
+switchHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-1921681876' }));
+openCardBridge(switchHostB);
+assert.equal(getCardBridgeState().card, null, 'A→B target switch synchronously revokes A identity');
+respondFromSwitchHost(delayedAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
+await assert.rejects(delayedARequest, error => error?.reason === 'stale-host');
+assert.equal(getCardBridgeState().card, null, 'delayed A response cannot restore verified identity');
+assert.equal(getCardBridgeState().discoveredCard, null, 'delayed A response cannot restore discovered identity');
+
+switchHarness.emitMessage({
+  origin: `http://${switchHostB}`,
+  source: namedPopup,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: switchHostB, version: 1 },
+});
+const freshBInfo = switchMessages.at(-1);
+const messagesBeforeBIdentity = switchMessages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(switchMessages.length, messagesBeforeBIdentity, 'B receives no privileged command before fresh identity');
+respondFromSwitchHost(freshBInfo, switchHostB, { cardId: 'lw-1921681876', firmwareVersion: '1.0.0' });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().card?.id, 'lw-1921681876', 'fresh matching B identity restores authority');
+const allowedBControl = sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 1000 });
+const bControlMessage = switchMessages.at(-1);
+respondFromSwitchHost(bControlMessage, switchHostB, { ok: true });
+await allowedBControl;
 
 const blockedHost = '192.168.18.73';
 const blockedHarness = bridgeWindowHarness({ host: blockedHost, openResult: null });

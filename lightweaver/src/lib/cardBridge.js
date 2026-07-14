@@ -147,6 +147,7 @@ function setBridgeState({
     (normalizedHost && bridgeHost && normalizedHost !== bridgeHost)
   );
   if (targetChanged) {
+    bridgeLifecycle += 1;
     bridgeReady = false;
     bridgeCard = null;
     bridgeDiscoveredCard = null;
@@ -240,16 +241,21 @@ function handleBridgeMessage(event) {
 
   const request = pending.get(data.id);
   if (!request) return;
+  if (
+    request.lifecycle !== bridgeLifecycle ||
+    (bridgeOrigin && request.origin !== bridgeOrigin) ||
+    normalizeCardHost(request.host) !== normalizeCardHost(bridgeHost)
+  ) {
+    pending.delete(data.id);
+    clearTimeout(request.timer);
+    request.reject(bridgeError('Ignored a response from an older card target.', 'stale-host'));
+    return;
+  }
   if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
   if (request.origin && event.origin !== request.origin) return;
 
   pending.delete(data.id);
   clearTimeout(request.timer);
-
-  if (request.lifecycle !== bridgeLifecycle) {
-    request.reject(bridgeError('Ignored a response from an older card-page lifecycle.', 'stale-host'));
-    return;
-  }
 
   if (data.ok === false) {
     const error = new Error(data.error || 'Card bridge request failed');
