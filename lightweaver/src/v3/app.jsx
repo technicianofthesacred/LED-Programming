@@ -132,7 +132,7 @@ function StatusBar({ link, onOpenConnectionCenter, totalLeds, stripCount, densit
         />
         <span>LEDs</span>
         {testStrip.enabled && (
-          <span className="sb-ts-note">Testing on {testStrip.length} LEDs — your design is unchanged.</span>
+          <span className="sb-ts-note">Testing on {testStrip.length} LEDs (your design is unchanged).</span>
         )}
       </div>
 
@@ -320,6 +320,11 @@ function Shell() {
         open={connectionCenterOpen}
         link={cardLink}
         onClose={closeConnectionCenter}
+        setupEvidence={{
+          host: cardLink.host || cardStatus.host,
+          mode: cardStatus.status?.setupMode || cardStatus.status?.mode,
+          setupNetwork: cardStatus.status?.setupNetwork,
+        }}
       />
       <input ref={fileInputRef} type="file" accept=".lw.json,.json" style={{ display: 'none' }} onChange={onFile} />
     </div>

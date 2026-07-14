@@ -23,17 +23,25 @@ function goToInstall() {
   window.location.hash = params.toString();
 }
 
-export function CardConnectionCenter({ open, link, onClose }) {
+const SETUP_HOST = '192.168.4.1';
+const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
+
+export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }) {
   const panelRef = useRef(null);
   const restoreFocusRef = useRef(null);
   const [intent, setIntent] = useState('');
   const [failure, setFailure] = useState('');
   const [host, setHost] = useState(readStoredCardHost);
   const capabilities = useMemo(platformCapabilities, [open]);
+  const hasSetupHost = [host, link.host, setupEvidence.host].includes(SETUP_HOST);
+  const flowEvidence = {
+    setupNetwork: hasSetupHost ? { available: true, ssid: 'Lightweaver-XXXX' } : setupEvidence.setupNetwork,
+    setupMode: setupEvidence.mode,
+  };
   const actionLink = intent === 'blank-card' && link.reason !== 'wrong-card'
     ? { state: 'disconnected', reason: link.reason }
     : link;
-  const action = nextCardConnectionAction({ link: actionLink, intent, capabilities });
+  const action = nextCardConnectionAction({ link: actionLink, intent, capabilities, ...flowEvidence });
 
   useEffect(() => {
     if (!open) return undefined;
@@ -59,15 +67,21 @@ export function CardConnectionCenter({ open, link, onClose }) {
 
   if (!open) return null;
 
-  const connect = () => {
+  const connect = (rawHost = '') => {
     setFailure('');
-    const result = connectCardLink();
+    const result = connectCardLink(rawHost);
     if (!result) setFailure('The browser could not open the card page. Allow popups, then try again.');
   };
 
   const chooseWorkingCard = () => {
     setIntent('working-card');
-    connect();
+    const next = nextCardConnectionAction({
+      link,
+      intent: 'working-card',
+      capabilities,
+      ...flowEvidence,
+    });
+    if (next.id !== 'open-setup-network') connect();
   };
 
   const chooseBlankCard = () => {
@@ -95,8 +109,9 @@ export function CardConnectionCenter({ open, link, onClose }) {
   };
 
   const initialChoice = !intent
-    && action.id !== 'connected'
-    && link.reason !== 'wrong-card';
+    && link.state === 'disconnected'
+    && (!link.activity || link.activity === 'idle')
+    && NEUTRAL_FIRST_RUN_REASONS.has(link.reason);
   const setupSteps = action.id === 'open-setup-network';
 
   return (
@@ -136,8 +151,8 @@ export function CardConnectionCenter({ open, link, onClose }) {
           {setupSteps && (
             <ol className="card-setup-steps">
               <li>Power the Lightweaver card.</li>
-              <li>Join its Lightweaver setup Wi-Fi.</li>
-              <li>Finish Wi-Fi setup, then return here.</li>
+              <li>Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network.</li>
+              <li>Finish setup, return to Studio, then press Continue.</li>
             </ol>
           )}
 
@@ -158,7 +173,12 @@ export function CardConnectionCenter({ open, link, onClose }) {
             ) : action.id === 'web-serial-install' ? (
               <button type="button" className="btn primary" onClick={goToInstall}>Start installation</button>
             ) : action.id === 'supported-browser-handoff' || action.id === 'supported-device-handoff' ? null : (
-              <button type="button" className="btn primary" onClick={connect} disabled={action.primaryDisabled}>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => connect(setupSteps ? SETUP_HOST : '')}
+                disabled={action.primaryDisabled}
+              >
                 {setupSteps ? 'Continue' : action.primaryLabel}
               </button>
             )}

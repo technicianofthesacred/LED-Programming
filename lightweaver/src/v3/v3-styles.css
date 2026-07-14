@@ -615,7 +615,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
   .card-condition-choice,
   .card-connection-actions .btn,
   .card-connection-details .btn,
-  .card-connection-close { min-height: 44px; }
+  .card-connection-close,
+  .card-connection-details summary,
+  .card-connection-details input { min-height: 44px; }
+  .card-connection-details summary { display: flex; align-items: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -4,8 +4,13 @@ import { test, expect } from '@playwright/test';
 // preview screen) alongside the original six.
 const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Show', 'Settings', 'Flash', 'Installer'];
 
-async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'lightweaver.local') {
-  await page.addInitScript(({ id, cardHost }) => {
+test.beforeEach(async ({ page }) => {
+  await page.route('http://lightweaver.local/**', route => route.abort());
+  await page.route('http://192.168.4.1/**', route => route.abort());
+});
+
+async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'lightweaver.local', dropPingResponses = false) {
+  await page.addInitScript(({ id, cardHost, dropPings }) => {
     (window as any).__cardPopupCalls = [];
     const originalOpen = window.open.bind(window);
     window.open = ((url?: string | URL, name?: string) => {
@@ -15,6 +20,7 @@ async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'light
       Object.defineProperty(popup, 'postMessage', {
         configurable: true,
         value(message: any, targetOrigin: string) {
+          if (dropPings && message.type === 'ping') return;
           queueMicrotask(() => {
             window.dispatchEvent(new MessageEvent('message', {
               origin: targetOrigin,
@@ -52,7 +58,14 @@ async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'light
       });
       return popup;
     }) as typeof window.open;
-  }, { id: cardId, cardHost: host });
+  }, { id: cardId, cardHost: host, dropPings: dropPingResponses });
+}
+
+async function dispatchCardLinkEvents(page, events: Record<string, unknown>[]) {
+  await page.evaluate(async linkEvents => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    for (const event of linkEvents) getSharedCardLink().dispatch(event);
+  }, events);
 }
 
 test('every primary screen exposes the Lightweaver connection control', async ({ page }) => {
@@ -76,6 +89,91 @@ test('connection center starts with the two physical card choices', async ({ pag
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
+});
+
+test('opening while connecting renders the busy flow action directly', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Connect Lightweaver' })).toBeVisible();
+  await dispatchCardLinkEvents(page, [{ type: 'connecting', via: 'bridge', host: 'lightweaver.local' }]);
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toContainText('Studio is reconnecting to your Lightweaver now.');
+  await expect(dialog.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+});
+
+test('opening after a blocked popup renders the retry action directly', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.open = (() => null) as typeof window.open;
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await page.getByRole('button', { name: 'Close connection center' }).click();
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+});
+
+test('opening with old firmware renders installation recovery directly', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Connect Lightweaver' })).toBeVisible();
+  await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'firmware-too-old', host: 'lightweaver.local' }]);
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await expect(page.getByRole('button', { name: 'Start installation' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+});
+
+test('opening while the card is recovering renders the busy recovery action directly', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Connect Lightweaver' })).toBeVisible();
+  await dispatchCardLinkEvents(page, [
+    {
+      type: 'card-verified',
+      via: 'bridge',
+      host: 'lightweaver.local',
+      card: { id: 'lw-recovering-card', name: 'Gallery card' },
+    },
+    { type: 'bridge-ping-missed', host: 'lightweaver.local' },
+    { type: 'bridge-ping-missed', host: 'lightweaver.local' },
+  ]);
+  await expect(page.getByTestId('card-link-status')).toContainText('Recovering');
+  await page.getByTestId('card-link-status').click();
+  await expect(page.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+});
+
+test('working setup card shows AP steps before continuing through the setup host', async ({ page }) => {
+  await installCardPopupMock(page, 'lw-setup-card', '192.168.4.1');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_chip_card_host', '192.168.4.1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toContainText('Lightweaver-XXXX');
+  await expect(dialog).toContainText(/finish setup/i);
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(0);
+  await dialog.getByRole('button', { name: 'Continue' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls[0]?.url || '')).toContain('192.168.4.1');
 });
 
 test('working-card choice opens the card popup path', async ({ page }) => {
@@ -171,6 +269,19 @@ test('mobile connection sheet fits without horizontal overflow', async ({ page }
   expect(metrics.right).toBeLessThanOrEqual(390);
   expect(metrics.bottom).toBeLessThanOrEqual(844);
   expect(metrics.pageScrollWidth).toBe(metrics.pageClientWidth);
+
+  const interactiveTargets = [
+    dialog.getByRole('button', { name: 'Close connection center' }),
+    dialog.getByRole('button', { name: 'My card already lights up' }),
+    dialog.getByRole('button', { name: 'Blank or not responding' }),
+    dialog.getByText('Connection details', { exact: true }),
+  ];
+  for (const target of interactiveTargets) {
+    expect((await target.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+  await dialog.getByText('Connection details', { exact: true }).click();
+  expect((await dialog.getByLabel('Card hostname').boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect((await dialog.getByRole('button', { name: 'Save', exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
 });
 
 test('layout opens with the default two-circle hardware layout', async ({ page }) => {
@@ -325,6 +436,7 @@ test('connection center uses the stored card host and verifies the popup card', 
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await page.getByRole('button', { name: 'Continue' }).click();
 
   await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls[0]?.url || '')).toContain('192.168.4.1');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.4.1');
