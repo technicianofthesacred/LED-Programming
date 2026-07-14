@@ -11,7 +11,7 @@ the live deploy; there is no separate mandalacodes step for the LED surface.
 
 - **Production** (`led.mandalacodes.com`, Pages project `lightweaver`, production
   branch `main`): `npm run deploy:pages` stages this repo's Studio (Show screen
-  included) with `/` → `/design/` and `wrangler pages deploy … --branch main`.
+  included) directly at `/` and runs `wrangler pages deploy … --branch main`.
   `.github/workflows/deploy-site.yml` runs it automatically on every push to
   `main` that touches `lightweaver/**`.
 - **Gate:** the deploy only publishes when `CLOUDFLARE_API_TOKEN` (Pages: Edit)
@@ -23,15 +23,13 @@ the live deploy; there is no separate mandalacodes step for the LED surface.
 - `scripts/go-live.sh` still targets the `studio` preview branch
   (`https://studio.lightweaver-edw.pages.dev`) for a dry-run before going live.
 
-Trade-off of this repo owning production: `led.mandalacodes.com/` redirects
-straight into the Studio — there is no separate marketing landing page unless
-one is folded into this repo's staged bundle (`stage:pages`).
+Trade-off of this repo owning production: `led.mandalacodes.com/` is the Studio;
+there is no separate marketing landing page unless one is folded into this
+repo's staged bundle (`stage:pages`).
 
 ## Current recommended setup
 
-Use a separate Cloudflare Pages project named `lightweaver`, then attach `led.mandalacodes.com` as the custom domain. The artifact currently deployed to that project is the Mandala Codes public bundle from `mandalacodes/dist`, with Lightweaver Studio v3 embedded under `/design/`.
-
-This gives `led.mandalacodes.com` a small customer landing/install surface at `/` and the actual chip-config Studio at `/design/`, while keeping the hardware runtime on the ESP32 card page.
+Use a separate Cloudflare Pages project named `lightweaver`, then attach `led.mandalacodes.com` as the custom domain. This repository's Vite output is staged at the artifact root, so the custom-domain root is the canonical Studio URL while the hardware runtime remains on the ESP32 card page.
 
 ## Why separate Pages project
 
@@ -42,17 +40,25 @@ This gives `led.mandalacodes.com` a small customer landing/install surface at `/
 ## Local build
 
 ```bash
-cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/mandalacodes"
-npm run build:designer
+cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
+npm ci
 npm run build
+npm run stage:pages
+npm run verify:pages
 ```
+
+Wrangler is pinned exactly in `devDependencies` and `package-lock.json`. Use the
+npm scripts after `npm ci`; do not replace them with an unpinned `npx` download.
+The pinned Wrangler requires Node 22, which both the reusable test gate and
+production deploy job use.
 
 Important public routes:
 
-- `/` - Lightweaver customer landing/install surface
-- `/design/` - Lightweaver Studio v3 chip-config tool
-- `/design/#screen=patterns` - visual pattern/color selection
-- `/design/#screen=load` - copy/download chip config and open the card page
+- `/#screen=patterns` - visual pattern/color selection
+- `/#screen=layout` - physical layout and wiring
+- `/#screen=flash` - card firmware installer
+- `/visitor` - visitor page
+- `/firmware/lightweaver-controller-esp32s3-factory.bin` - factory firmware
 
 ## Cloudflare Pages deployment
 
@@ -62,25 +68,26 @@ Status on 2026-05-29:
 - Current Pages domain: `https://lightweaver-edw.pages.dev`
 - Current custom domain: `https://led.mandalacodes.com`
 - `https://lightweaver-edw.pages.dev/` returns HTTP 200
-- `https://led.mandalacodes.com/` returns HTTP 200
-- `https://led.mandalacodes.com/design/#screen=patterns` opens Studio v3
+- `https://led.mandalacodes.com/` returns HTTP 200 and opens Studio v3
 - `/api/lw/*` is intentionally excluded from Pages Functions and the old KV namespace has been deleted
 
 One-time project creation:
 
 ```bash
 cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
-wrangler pages project create lightweaver --production-branch main
+npm run pages:project
 ```
 
 Deploy:
 
 ```bash
-cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/mandalacodes"
-npm run build:designer
-npm run build
-wrangler pages deploy dist --project-name lightweaver --branch main --commit-dirty=true
+cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
+npm run deploy:pages
 ```
+
+`deploy:pages` builds, stages, verifies the root artifact (including the branded
+404 that keeps the retired route unavailable), and only then invokes the pinned
+Wrangler binary.
 
 The deployed fallback URL will be:
 
@@ -129,6 +136,15 @@ Verify after SSL activates:
 
 ```bash
 curl -I https://led.mandalacodes.com/
+curl -I https://led.mandalacodes.com/design  # must be exactly 404
+cd lightweaver && npm run check:prod
+```
+
+For a preview deployment, override the one origin so the root, retired route,
+and firmware checks cannot accidentally target different deployments:
+
+```bash
+PROD_ORIGIN=https://studio.lightweaver-edw.pages.dev npm run check:prod
 ```
 
 ## Card control path

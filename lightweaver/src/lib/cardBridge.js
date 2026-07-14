@@ -40,6 +40,7 @@ let bridgeSeq = 0;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
+const bridgeAcquisitions = new Map();
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
@@ -276,7 +277,7 @@ export function openCardBridge(rawHost = '', {
     : `${origin}/#studioBridge=1`;
   const opened = win.open(bridgeUrl, 'lightweaver-card-bridge');
   if (opened) {
-    setBridgeState({ source: opened, origin, host, connected: false });
+    setBridgeState({ source: opened, origin, host, connected: false, ready: false });
   }
   return opened;
 }
@@ -298,6 +299,78 @@ export function getCardBridgeState() {
 
 export function getCardBridgeVersion() {
   return bridgeVersion;
+}
+
+export function acquireCardBridgeFromGesture(rawHost = '', {
+  studioUrl = '',
+  timeoutMs = 2500,
+} = {}) {
+  const win = browserWindow();
+  const host = normalizeCardHost(rawHost || readStoredCardHost());
+  attachCardBridgeListener();
+  bootstrapCardBridgeFromOpener();
+
+  const current = getCardBridgeState();
+  if (current.verified && !bridgeTargetClosed() && normalizeCardHost(current.host) === host) {
+    return { window: bridgeWindow, ready: Promise.resolve(current) };
+  }
+
+  const existing = bridgeAcquisitions.get(host);
+  if (existing) return existing;
+
+  let timer = null;
+  let settle = null;
+  const ready = new Promise((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const attempt = { window: null, ready };
+  bridgeAcquisitions.set(host, attempt);
+
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+    win?.removeEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+    if (bridgeAcquisitions.get(host) === attempt) bridgeAcquisitions.delete(host);
+  };
+  const resolveWhenVerified = (state = getCardBridgeState()) => {
+    if (!state?.verified || normalizeCardHost(state.host) !== host) return false;
+    cleanup();
+    try {
+      win?.focus?.();
+    } catch {
+      /* Browser focus permission is best-effort. */
+    }
+    settle.resolve(state);
+    return true;
+  };
+  function onBridgeChange(event) {
+    resolveWhenVerified(event?.detail || getCardBridgeState());
+  }
+
+  win?.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
+
+  // Keep this before any asynchronous boundary: popup permission is attached
+  // to the user's pattern-click gesture, and the stable name reuses one tab.
+  const opened = openCardBridge(host, { autoOpenStudio: false, studioUrl });
+  attempt.window = opened;
+  if (!opened) {
+    cleanup();
+    settle.reject(bridgeError(
+      'Allow the Lightweaver card window, then try the pattern again.',
+      'popup-blocked',
+    ));
+    return attempt;
+  }
+
+  if (resolveWhenVerified()) return attempt;
+  timer = setTimeout(() => {
+    cleanup();
+    settle.reject(bridgeError(
+      'The card page opened but did not answer. Check that this device is on the card\'s Wi-Fi.',
+      'bridge-timeout',
+    ));
+  }, Math.max(0, Number(timeoutMs) || 0));
+
+  return attempt;
 }
 
 // When Studio wants a v1 feature (e.g. 'frame' streaming) but the connected

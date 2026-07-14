@@ -4,6 +4,9 @@ import { resolve } from 'node:path';
 
 const headers = readFileSync(resolve(import.meta.dirname, '../public/_headers'), 'utf8');
 
+assert.match(headers, /^\/\*$/m, 'root deployment headers must apply to every Studio route');
+assert.doesNotMatch(headers, /^\/design/m, 'headers must not preserve the removed deployment mount');
+
 assert.doesNotMatch(
   headers,
   /^ \s*X-Frame-Options:/im,

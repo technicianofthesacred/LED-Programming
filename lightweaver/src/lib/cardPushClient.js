@@ -2,8 +2,8 @@
 // card. Mirrors the firmware's /api/config POST endpoint.
 //
 // Hostname resolution: the designer remembers the most recently used card.
-// Mixed-content is a real concern when the designer runs on HTTPS (it does,
-// at led.mandalacodes.com/design) - fetches to plain HTTP local hosts will
+// Mixed-content is a real concern when the designer runs on HTTPS (it does at
+// led.mandalacodes.com) - fetches to plain HTTP local hosts will
 // be blocked by the browser. The client surfaces that as a typed error the
 // UI handles by showing a copy-paste fallback.
 
@@ -16,6 +16,10 @@ import {
   writeStoredCardHost,
 } from './cardConnection.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import {
+  CardConfigCapacityError,
+  prepareCardStoragePayload,
+} from './cardStoragePayload.js';
 
 export function getCardHostname() {
   return readStoredCardHost();
@@ -26,7 +30,7 @@ export function setCardHostname(host) {
 }
 
 export function encodeCardConfigHandoffPayload(runtimePackage = {}) {
-  const text = JSON.stringify(runtimePackage.config || runtimePackage);
+  const text = cardStorageJson(runtimePackage);
   if (typeof TextEncoder !== 'undefined' && typeof btoa === 'function') {
     const bytes = new TextEncoder().encode(text);
     let binary = '';
@@ -38,6 +42,10 @@ export function encodeCardConfigHandoffPayload(runtimePackage = {}) {
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   }
   return Buffer.from(text, 'utf8').toString('base64url');
+}
+
+export function cardStorageJson(runtimePackage = {}) {
+  return prepareCardStoragePayload(runtimePackage).json;
 }
 
 export function decodeCardConfigHandoffPayload(payload = '') {
@@ -72,7 +80,7 @@ function isMixedContentBlocked() {
 
 async function postConfigToHost(host, runtimePackage, options = {}) {
   const url = `${cardHostToUrl(host)}/api/config`;
-  const body = JSON.stringify(runtimePackage.config || runtimePackage);
+  const body = options.preparedPayload?.json || cardStorageJson(runtimePackage);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 6000);
   try {
@@ -228,6 +236,7 @@ async function requestCardReboot(host, options = {}) {
 }
 
 function normalizeConfigPushError(host, err) {
+  if (err instanceof CardConfigCapacityError) return err;
   if (err instanceof CardPushError) return err;
   if (isMixedContentBlocked()) {
     return new CardPushError(
@@ -245,6 +254,9 @@ function normalizeConfigPushError(host, err) {
 // POST the runtime config to the card. Returns the parsed JSON echo on
 // success; throws CardPushError on failure with a typed reason.
 export async function pushConfigToCard(runtimePackage, options = {}) {
+  // Prepare before discovery, bridge messaging, or direct HTTP so an
+  // over-capacity configuration never causes an external side effect.
+  const preparedPayload = prepareCardStoragePayload(runtimePackage);
   const host = options.host || getCardHostname();
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
   if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
@@ -256,12 +268,13 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   const pushOptions = {
     ...options,
     reboot: options.reboot === 'if-needed' ? rebootPlan.reboot : options.reboot,
+    preparedPayload,
   };
   if (isMixedContentBlocked()) {
     try {
       return await sendCardBridgeRequest(
         'config',
-        runtimePackage.config || runtimePackage,
+        preparedPayload.config,
         { host, timeoutMs: options.timeoutMs || 6000, reboot: pushOptions.reboot },
       );
     } catch (err) {
@@ -295,6 +308,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
           const retryOptions = {
             ...options,
             reboot: options.reboot === 'if-needed' ? retryRebootPlan.reboot : options.reboot,
+            preparedPayload,
           };
           return await postConfigToHost(found.host, runtimePackage, retryOptions);
         } catch (retryErr) {

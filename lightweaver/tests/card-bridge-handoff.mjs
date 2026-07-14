@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  acquireCardBridgeFromGesture,
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
@@ -7,6 +8,13 @@ import {
   isCardBridgeLaunch,
   sendCardBridgeRequest,
 } from '../src/lib/cardBridge.js';
+
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, options = {}) {
+    this.type = type;
+    this.detail = options.detail;
+  }
+};
 
 globalThis.window = {
   location: {
@@ -146,5 +154,132 @@ const retryResponse = await sendCardBridgeRequest('status', {}, {
 });
 assert.equal(retryResponse.recoveredAfterDrop, true);
 assert.equal(retryMessages.length, 2);
+
+function bridgeWindowHarness({
+  host,
+  opener = null,
+  parent = null,
+  openResult = undefined,
+} = {}) {
+  const eventListeners = new Map();
+  const opened = [];
+  const win = {
+    location: {
+      href: 'https://led.mandalacodes.com/#screen=patterns',
+      search: opener || parent ? `?cardBridge=1&cardHost=${host}` : '',
+    },
+    opener,
+    parent,
+    localStorage: {
+      getItem: () => host,
+      setItem: () => {},
+    },
+    addEventListener(type, listener) {
+      const listenersForType = eventListeners.get(type) || new Set();
+      listenersForType.add(listener);
+      eventListeners.set(type, listenersForType);
+    },
+    removeEventListener(type, listener) {
+      eventListeners.get(type)?.delete(listener);
+    },
+    dispatchEvent(event) {
+      for (const listener of eventListeners.get(event.type) || []) listener(event);
+    },
+    open(url, name) {
+      opened.push({ url, name });
+      return openResult;
+    },
+    focusCalls: 0,
+    focus() {
+      this.focusCalls += 1;
+    },
+  };
+  return {
+    win,
+    opened,
+    emitMessage(event) {
+      for (const listener of eventListeners.get('message') || []) listener(event);
+    },
+  };
+}
+
+// A verified parent/opener bridge is reused without opening another card page.
+const verifiedHost = '192.168.18.71';
+const verifiedParent = {};
+const verifiedHarness = bridgeWindowHarness({ host: verifiedHost, parent: verifiedParent });
+globalThis.window = verifiedHarness.win;
+assert.equal(bootstrapCardBridgeFromOpener(), true);
+verifiedHarness.emitMessage({
+  origin: `http://${verifiedHost}`,
+  source: verifiedParent,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: verifiedHost, version: 1 },
+});
+const verifiedAttempt = acquireCardBridgeFromGesture(verifiedHost, { timeoutMs: 25 });
+assert.equal(verifiedHarness.opened.length, 0);
+assert.equal((await verifiedAttempt.ready).verified, true);
+
+// A standalone Studio opens exactly one named bridge synchronously, then waits
+// for a verified ready handshake before resolving and refocusing Studio.
+const popupHost = '192.168.18.72';
+const popupBridge = { closed: false, postMessage: () => {} };
+const popupHarness = bridgeWindowHarness({ host: popupHost, openResult: popupBridge });
+globalThis.window = popupHarness.win;
+const popupAttempt = acquireCardBridgeFromGesture(popupHost, {
+  studioUrl: 'https://led.mandalacodes.com/#screen=patterns',
+  timeoutMs: 100,
+});
+assert.equal(popupHarness.opened.length, 1, 'window.open must run before the user gesture returns');
+assert.equal(popupHarness.opened[0].name, 'lightweaver-card-bridge');
+const duplicateAttempt = acquireCardBridgeFromGesture(popupHost, { timeoutMs: 100 });
+assert.equal(popupHarness.opened.length, 1, 'concurrent acquisition reuses the named popup');
+assert.equal(duplicateAttempt.ready, popupAttempt.ready, 'concurrent acquisition reuses one promise');
+popupHarness.emitMessage({
+  origin: `http://${popupHost}`,
+  source: popupBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: popupHost, version: 1 },
+});
+const popupState = await popupAttempt.ready;
+assert.equal(popupState.verified, true);
+assert.equal(popupState.host, popupHost);
+assert.equal(popupHarness.win.focusCalls, 1);
+
+// A bridge tab that was verified and later closed is not reusable; the next
+// gesture must synchronously reopen the named tab and wait for a new handshake.
+popupBridge.closed = true;
+const replacementBridge = { closed: false, postMessage: () => {} };
+popupHarness.win.open = (url, name) => {
+  popupHarness.opened.push({ url, name });
+  return replacementBridge;
+};
+const reopenedAttempt = acquireCardBridgeFromGesture(popupHost, { timeoutMs: 100 });
+assert.equal(popupHarness.opened.length, 2);
+popupHarness.emitMessage({
+  origin: `http://${popupHost}`,
+  source: replacementBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: popupHost, version: 1 },
+});
+await reopenedAttempt.ready;
+
+const blockedHost = '192.168.18.73';
+const blockedHarness = bridgeWindowHarness({ host: blockedHost, openResult: null });
+globalThis.window = blockedHarness.win;
+const blockedAttempt = acquireCardBridgeFromGesture(blockedHost, { timeoutMs: 25 });
+assert.equal(blockedHarness.opened.length, 1);
+await assert.rejects(blockedAttempt.ready, error => (
+  error?.reason === 'popup-blocked'
+  && error.message === 'Allow the Lightweaver card window, then try the pattern again.'
+));
+
+const timeoutHost = '192.168.18.74';
+const timeoutHarness = bridgeWindowHarness({
+  host: timeoutHost,
+  openResult: { closed: false, postMessage: () => {} },
+});
+globalThis.window = timeoutHarness.win;
+const timeoutAttempt = acquireCardBridgeFromGesture(timeoutHost, { timeoutMs: 10 });
+await assert.rejects(timeoutAttempt.ready, error => (
+  error?.reason === 'bridge-timeout'
+  && error.message === "The card page opened but did not answer. Check that this device is on the card's Wi-Fi."
+));
 
 console.log('card-bridge-handoff tests passed');

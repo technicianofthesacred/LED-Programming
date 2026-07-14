@@ -5,8 +5,8 @@ name: Deploy site
 # Deploy ownership (updated 2026-07-13, see docs/led-mandalacodes-setup.md):
 # led.mandalacodes.com is the custom domain on the `lightweaver` Cloudflare
 # Pages project, whose production branch is `main`. `npm run deploy:pages`
-# stages this repo's Studio (Show screen included) with `/` → `/design/` and
-# deploys it to `--branch main`, i.e. the live domain. So a push to this repo's
+# stages this repo's Studio (Show screen included) directly at `/` and deploys
+# it to `--branch main`, i.e. the live domain. So a push to this repo's
 # main IS the live deploy — there is no separate mandalacodes step for the LED
 # surface. (mandalacodes.com itself stays a different project; it must NOT also
 # publish to `lightweaver`, or the two would overwrite each other.)
@@ -72,7 +72,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Check Cloudflare credentials
         id: creds
@@ -104,8 +104,9 @@ jobs:
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs
 
-      # Core tests already ran (and passed) in the required `test` job above —
-      # no secrets-gated re-run here.
+      # Core tests already ran in the required `test` job above. deploy:pages
+      # still builds, stages, and runs artifact assertions immediately before
+      # the pinned Wrangler upload so an invalid artifact cannot be published.
       - name: Build and deploy to Cloudflare Pages
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver

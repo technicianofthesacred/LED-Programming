@@ -11,6 +11,7 @@ import {
   pushSectionPreviewToCard,
   readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
+import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -210,6 +211,10 @@ assert.deepEqual(repairRequests.map(item => item.url), [
 assert.deepEqual(JSON.parse(repairRequests[1].options.body).led.outputs, [
   { id: 'out1', name: 'Output 1 mirrored', pin: 16, pixels: 44 },
 ]);
+assert.equal(
+  repairRequests[1].options.body,
+  prepareCardStoragePayload(repairPackage).json,
+);
 
 const requests = [];
 globalThis.fetch = async (url, options = {}) => {

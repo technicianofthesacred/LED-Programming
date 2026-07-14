@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { REAL_PATTERNS } from '../src/v3/v3-data.js';
+import { createDefaultProject } from '../src/lib/projectModel.js';
+import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
+import { CARD_PATTERN_BANK } from '../src/lib/cardPatternBank.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
@@ -20,6 +24,13 @@ async function gotoFreshPatterns(page) {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function gotoSavedProjectPatterns(page, project) {
+  await page.addInitScript((savedProject) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 }
 
 test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {
@@ -80,6 +91,388 @@ test('clicking a card updates the preview', async ({ page }) => {
   await expect(page.locator('.pm-preview-pane')).toContainText('Ocean');
   // Live preview pushes the selected pattern to the card.
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
+});
+
+test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__bridgeOpenCalls = [];
+    (window as any).__bridgeMessages = [];
+    const originalOpen = window.open.bind(window);
+    window.open = ((url?: string | URL, name?: string) => {
+      (window as any).__bridgeOpenCalls.push({ url: String(url || ''), name });
+      const popup = originalOpen('about:blank', name);
+      (window as any).__bridgePopup = popup;
+      if (popup) {
+        Object.defineProperty(popup, 'postMessage', {
+          configurable: true,
+          value(message: any, targetOrigin: string) {
+            (window as any).__bridgeMessages.push({ message, targetOrigin });
+            queueMicrotask(() => {
+              window.dispatchEvent(new MessageEvent('message', {
+                origin: targetOrigin,
+                source: popup,
+                data: {
+                  app: 'LightweaverCardBridge',
+                  id: message.id,
+                  ok: true,
+                  version: 1,
+                  response: { ok: true, patternId: message.payload?.patternId },
+                },
+              }));
+            });
+          },
+        });
+      }
+      return popup;
+    }) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Plasma');
+  expect(await page.evaluate(() => (window as any).__bridgeOpenCalls)).toHaveLength(1);
+  await page.waitForTimeout(150);
+  expect(controlRequests).toHaveLength(0);
+
+  await page.evaluate(() => {
+    const popup = (window as any).__bridgePopup;
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      source: popup,
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+        version: 1,
+      },
+    }));
+  });
+
+  await expect.poll(() => page.evaluate(() => (window as any).__bridgeMessages.length)).toBe(1);
+  const [bridgeRequest] = await page.evaluate(() => (window as any).__bridgeMessages);
+  expect(bridgeRequest.targetOrigin).toBe('http://lightweaver.local');
+  expect(bridgeRequest.message.app).toBe('LightweaverStudioBridge');
+  expect(bridgeRequest.message.type).toBe('control');
+  expect(bridgeRequest.message.payload.patternId).toBe('plasma');
+  expect(controlRequests).toHaveLength(0);
+  await page.waitForTimeout(2400);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(1);
+});
+
+test('disabling live preview invalidates a pending bridge selection', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__bridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: unknown, targetOrigin: string) {
+        (window as any).__bridgeMessages.push({ message, targetOrigin });
+      },
+    };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: { app: 'LightweaverCardBridge', type: 'ready', host: 'lightweaver.local', version: 1 },
+    }));
+  });
+
+  await page.waitForTimeout(200);
+  expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(0);
+});
+
+test('leaving Patterns invalidates a pending bridge selection', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__bridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: unknown, targetOrigin: string) {
+        (window as any).__bridgeMessages.push({ message, targetOrigin });
+      },
+    };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.evaluate(() => { window.location.hash = '#screen=layout'; });
+  await expect(page.locator('.pm')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: { app: 'LightweaverCardBridge', type: 'ready', host: 'lightweaver.local', version: 1 },
+    }));
+  });
+
+  await page.waitForTimeout(200);
+  expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(0);
+});
+
+test('blocked automatic card window gives one concrete recovery action', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.open = (() => null) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByRole('alert')).toContainText(
+    'Allow the Lightweaver card window, then try the pattern again.',
+  );
+});
+
+test('an older card bridge points to the single Flash recovery action', async ({ page }) => {
+  await page.addInitScript(() => {
+    const bridge = { closed: false, postMessage: () => {} };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+      },
+    }));
+  });
+
+  await expect(page.getByRole('alert')).toContainText(
+    "This card is running older firmware that can't do this yet. Open Flash to update the card, then try again.",
+  );
+});
+
+test('an already-verified legacy bridge is gated before sending a pattern', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__legacyBridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: any, targetOrigin: string) {
+        (window as any).__legacyBridgeMessages.push({ message, targetOrigin });
+        queueMicrotask(() => {
+          window.dispatchEvent(new MessageEvent('message', {
+            origin: targetOrigin,
+            data: {
+              app: 'LightweaverCardBridge',
+              id: message.id,
+              ok: true,
+              version: 1,
+              response: { ok: true },
+            },
+          }));
+        });
+      },
+    };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+        version: 1,
+      },
+    }));
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__legacyBridgeMessages.length)).toBe(1);
+  await page.evaluate(() => { (window as any).__legacyBridgeMessages.length = 0; });
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: {
+        app: 'LightweaverCardBridge',
+        type: 'ready',
+        host: 'lightweaver.local',
+      },
+    }));
+  });
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByRole('alert')).toContainText(
+    "This card is running older firmware that can't do this yet. Open Flash to update the card, then try again.",
+  );
+  await page.waitForTimeout(150);
+  expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__legacyBridgeMessages)).toHaveLength(0);
+  const flashAction = page.getByRole('button', { name: 'Open Flash' });
+  await expect(flashAction).toBeVisible();
+  await flashAction.click();
+  await expect(page).toHaveURL(/#screen=flash$/);
+});
+
+test('setup JSON copy and download use the same compact card payload', async ({ page }) => {
+  const project = createDefaultProject();
+  project.id = 'setup-json-fixture';
+  project.name = 'Setup JSON fixture';
+  const expected = prepareCardStoragePayload(buildCardRuntimePackageFromProject({
+    projectId: project.id,
+    projectName: project.name,
+    strips: project.layout.strips,
+    patchBoard: project.layout.patchBoard,
+    standaloneController: project.devices.standaloneController,
+  })).json;
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => { (window as any).__copiedSetup = text; },
+      },
+    });
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Copy setup/ }).click();
+  const copied = await page.evaluate(() => (window as any).__copiedSetup || '');
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('menuitem', { name: /Download setup/ }).click();
+  const download = await downloadPromise;
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const downloaded = Buffer.concat(chunks).toString('utf8');
+
+  expect(copied).toBe(downloaded);
+  expect(copied).toBe(expected);
+  expect(copied).not.toContain('\n');
+  const config = JSON.parse(copied);
+  expect(config.patterns).toBeUndefined();
+  expect(config.controls?.encoder?.patternCycleIds).toBeUndefined();
+});
+
+test('oversized setup JSON stops copy and download before browser side effects', async ({ page }) => {
+  const project = createDefaultProject();
+  project.id = 'oversized-setup-fixture';
+  project.name = 'Oversized setup fixture';
+  const patterns = CARD_PATTERN_BANK.slice(0, 32);
+  project.devices.standaloneController.playlist = patterns.map((pattern, order) => ({
+    id: pattern.id,
+    label: `${pattern.label} ${'oversized-label-'.repeat(24)}`,
+    type: 'pattern',
+    patternId: pattern.id,
+    enabled: true,
+    order,
+  }));
+  project.devices.standaloneController.controls.encoder.patternCycleIds = patterns.map(pattern => pattern.id);
+  const runtimePackage = buildCardRuntimePackageFromProject({
+    projectId: project.id,
+    projectName: project.name,
+    strips: project.layout.strips,
+    patchBoard: project.layout.patchBoard,
+    standaloneController: project.devices.standaloneController,
+  });
+  let capacityError: any = null;
+  try {
+    prepareCardStoragePayload(runtimePackage);
+  } catch (error) {
+    capacityError = error;
+  }
+  expect(capacityError?.reason).toBe('config-too-large');
+
+  await page.addInitScript(() => {
+    (window as any).__setupSideEffects = { clipboard: 0, objectUrl: 0, anchorClick: 0 };
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async () => { (window as any).__setupSideEffects.clipboard += 1; },
+      },
+    });
+    URL.createObjectURL = () => {
+      (window as any).__setupSideEffects.objectUrl += 1;
+      return 'blob:unexpected';
+    };
+    HTMLAnchorElement.prototype.click = function click() {
+      (window as any).__setupSideEffects.anchorClick += 1;
+    };
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Copy setup/ }).click();
+  await expect(page.getByText(capacityError.message, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__setupSideEffects)).toEqual({
+    clipboard: 0,
+    objectUrl: 0,
+    anchorClick: 0,
+  });
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Download setup/ }).click();
+  await expect(page.getByText(capacityError.message, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__setupSideEffects)).toEqual({
+    clipboard: 0,
+    objectUrl: 0,
+    anchorClick: 0,
+  });
 });
 
 test('Recover lights performs one complete recovery request', async ({ page }) => {

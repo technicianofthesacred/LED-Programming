@@ -43,20 +43,24 @@ import {
 import {
   cardHostToUrl,
   discoverCardStatus,
+  normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '../lib/cardPushClient.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
+  acquireCardBridgeFromGesture,
+  cardBridgeFeatureGap,
+  getCardBridgeState,
+  hasCardBridge,
   readLocalChipDefault,
   writeLocalChipDefault,
-  openCardBridge,
 } from '../lib/cardBridge.js';
 
   // Mockup geometry id -> live symSettings.
@@ -336,8 +340,18 @@ import {
     const [draftLooks, setDraftLooks] = useState({});
     const livePreviewTimer = useRef(null);
     const livePreviewSeq = useRef(0);
+    const browsePreviewSeq = useRef(0);
     const savedComboSeq = useRef(0);
     const draftProjectSnapshotRef = useRef(project => project);
+
+    const invalidatePendingPreview = useCallback(() => {
+      browsePreviewSeq.current += 1;
+      livePreviewSeq.current += 1;
+      if (livePreviewTimer.current) {
+        clearTimeout(livePreviewTimer.current);
+        livePreviewTimer.current = null;
+      }
+    }, []);
 
     // Warm default so first load reads warm (Lava Lamp-like) like the mockup,
     // unless a real saved default look exists.
@@ -455,7 +469,6 @@ import {
       () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
       [projectId, projectName, strips, board, standaloneController],
     );
-    const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     const updateController = (patch) => {
@@ -504,7 +517,12 @@ import {
           }
           await pushLivePreviewToCard(
             { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
-            { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: false },
+            {
+              host: cardHost,
+              timeoutMs: 2200,
+              fallbackMissingZoneToAll: false,
+              preferBridge: localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:'),
+            },
           );
           if (sequence === livePreviewSeq.current) {
             markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
@@ -527,11 +545,11 @@ import {
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, markCardLookConfirmed, runtimePackage, selectedTarget]);
+    }, [cardHost, livePreview, localCard, markCardLookConfirmed, runtimePackage, selectedTarget]);
 
     useEffect(() => () => {
-      if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
-    }, []);
+      invalidatePendingPreview();
+    }, [invalidatePendingPreview]);
 
     useEffect(() => {
       if (sectionTargets.some(target => target.id === selectedTargetId)) return;
@@ -539,23 +557,82 @@ import {
     }, [sectionTargets, selectedTargetId]);
 
     useEffect(() => {
+      invalidatePendingPreview();
+      setHandoffUrl('');
+      setStatusKind('');
+      setStatus('');
       setDraftLooks({});
       setMixName('');
       setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
-    }, [projectRevision]);
+    }, [invalidatePendingPreview, projectRevision]);
 
     const updatePreviewLook = (patch, { push = true } = {}) => {
-      if (!selectedTarget) return;
+      if (!selectedTarget) return null;
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
       setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
       markProjectEdited();
       if (push) scheduleLivePreview(nextLook, selectedTarget);
+      return nextLook;
     };
+
+    const scheduleBrowseLivePreview = useCallback((nextLook, target) => {
+      if (!nextLook) return;
+      const needsBridge = livePreview && (
+        localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:')
+      );
+      if (!needsBridge) {
+        scheduleLivePreview(nextLook, target);
+        return;
+      }
+
+      const sequence = ++browsePreviewSeq.current;
+      const scheduleVerifiedBridgePreview = () => {
+        const firmwareGap = cardBridgeFeatureGap('frame');
+        if (firmwareGap) {
+          setHandoffUrl('');
+          setStatusKind('err');
+          setStatus(firmwareGap.message);
+          return;
+        }
+        setStatusKind('');
+        setStatus('');
+        scheduleLivePreview(nextLook, target, 0);
+      };
+      const bridgeOpen = hasCardBridge();
+      const bridgeState = getCardBridgeState();
+      if (bridgeOpen && bridgeState.verified && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)) {
+        scheduleVerifiedBridgePreview();
+        return;
+      }
+
+      const attempt = acquireCardBridgeFromGesture(cardHost, {
+        studioUrl: typeof window !== 'undefined' ? window.location.href : '',
+        timeoutMs: 2500,
+      });
+      setHandoffUrl('');
+      setStatusKind('');
+      setStatus('Connecting to the local Lightweaver card…');
+      void attempt.ready.then(() => {
+        if (sequence !== browsePreviewSeq.current) return;
+        scheduleVerifiedBridgePreview();
+      }).catch(error => {
+        if (sequence !== browsePreviewSeq.current) return;
+        setStatusKind('err');
+        if (error?.reason === 'popup-blocked') {
+          setStatus('Allow the Lightweaver card window, then try the pattern again.');
+        } else if (error?.reason === 'bridge-timeout') {
+          setStatus('The card page opened but did not answer. Check that this device is on the card\'s Wi-Fi.');
+        } else {
+          setStatus(error?.message || 'The local card did not connect. Open Flash to update the card, then try again.');
+        }
+      });
+    }, [cardHost, livePreview, localCard, scheduleLivePreview]);
 
     // Clicking a target tab pushes that target's current look to its zone
     // (debounced) so the physical strip follows the selection.
     const selectTarget = (target) => {
       if (!target) return;
+      invalidatePendingPreview();
       setSelectedTargetId(target.id);
       // Picking a target only changes what the controls edit — with live
       // preview off nothing is sent, so there is nothing to report. The
@@ -721,7 +798,7 @@ import {
         dispatchCardSave({ type: 'fail', error: error?.message });
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(packageForCard, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
-        } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
+        } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch' || error?.reason === 'config-too-large') {
           setStatusKind('err');
           setStatus(error.message);
         } else {
@@ -827,33 +904,43 @@ import {
           }));
           setDraftLooks({});
           setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
-          scheduleLivePreview(normalizeSectionVisualLook(realLook.defaultLook), sectionTargets[0]);
+          scheduleBrowseLivePreview(normalizeSectionVisualLook(realLook.defaultLook), sectionTargets[0]);
         }
         return;
       }
-      updatePreviewLook({ patternId: p.id });
+      const nextLook = updatePreviewLook({ patternId: p.id }, { push: false });
+      scheduleBrowseLivePreview(nextLook, selectedTarget);
     };
 
     const copyConfig = async () => {
       setHandoffUrl('');
       try {
-        await navigator.clipboard.writeText(configJson);
+        await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
         setStatusKind('ok');
         setStatus('Setup JSON copied. Paste it into the card page on the same WiFi.');
-      } catch {
+      } catch (error) {
         setStatusKind('err');
-        setStatus('Clipboard was blocked. Download the setup JSON instead.');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Clipboard was blocked. Download the setup JSON instead.');
       }
     };
 
     const downloadConfig = () => {
-      const blob = new Blob([configJson], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${safeProjectName || 'lightweaver'}-chip-config.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      try {
+        const blob = new Blob([cardStorageJson(runtimePackage)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${safeProjectName || 'lightweaver'}-chip-config.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        setStatusKind('err');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Could not prepare the setup download. Try again.');
+      }
     };
 
     const repairLed = async () => {
@@ -915,20 +1002,12 @@ import {
 
     const toggleLocalCard = () => {
       const next = !localCard;
+      if (!next) invalidatePendingPreview();
       writeLocalChipDefault(next);
       setLocalCard(next);
       if (next) {
-        const opened = openCardBridge(cardHost, {
-          autoOpenStudio: true,
-          studioUrl: typeof window !== 'undefined' ? window.location.href : '',
-        });
-        if (opened) {
-          setStatusKind('');
-          setStatus(`Local card is now the default control path. Opening ${cardHostToUrl(cardHost)} so Studio can take over the LEDs there.`);
-        } else {
-          setStatusKind('err');
-          setStatus(`Could not open ${cardHostToUrl(cardHost)}. Allow popups or open the card from the Card status.`);
-        }
+        setStatusKind('ok');
+        setStatus('Local preview is on. Your next pattern tap will connect to the card automatically.');
         return;
       }
       setStatusKind('ok');
@@ -950,6 +1029,7 @@ import {
 
     const targetTotal = Math.max(0, sectionTargets.length - 1) || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
+    const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
 
     return (
       <div className="screen">
@@ -996,6 +1076,11 @@ import {
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   </div>
                 }
+                {showFlashAction &&
+                  <div className="pmx-status-actions">
+                    <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
+                  </div>
+                }
               </div>
             }
 
@@ -1006,7 +1091,15 @@ import {
 
                 <div className="pm-livebar">
                   <label className="pm-check">
-                    <input type="checkbox" checked={livePreview} onChange={(event) => setLivePreview(event.target.checked)} />
+                    <input type="checkbox" checked={livePreview} onChange={(event) => {
+                      if (!event.target.checked) {
+                        invalidatePendingPreview();
+                        setHandoffUrl('');
+                        setStatusKind('');
+                        setStatus('');
+                      }
+                      setLivePreview(event.target.checked);
+                    }} />
                     <span aria-hidden="true" className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
                     Preview taps on the LED card
                   </label>
