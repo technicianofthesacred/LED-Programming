@@ -9,8 +9,12 @@ import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
-import { sendCardBridgeRequest } from './cardBridge.js';
-import { guardDirectCardMutation } from './cardIdentity.js';
+import { getCardBridgeState, sendCardBridgeRequest } from './cardBridge.js';
+import {
+  compareCardIdentity,
+  guardDirectCardMutation,
+  readPersistedCardIdentity,
+} from './cardIdentity.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
 import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
 
@@ -26,6 +30,53 @@ const latestPreviewQueues = new Map();
 
 function supersededPreviewError() {
   return new CardPushError('superseded', 'Superseded by a newer live preview request.');
+}
+
+function previewAckError(reason, message, cause) {
+  return new CardPushError(reason, message, cause);
+}
+
+function expectedPreviewCardId(options = {}) {
+  return String(options.expectedCardId || readPersistedCardIdentity()?.id || '').trim();
+}
+
+function acknowledgementRevision(value) {
+  return value === undefined || value === null || value === '' ? null : String(value);
+}
+
+export function requireLivePreviewAcknowledgement(response, look = {}, options = {}, verifiedCard = null) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable preview acknowledgement.');
+  }
+  if (response.ok !== true) {
+    throw previewAckError('preview-unconfirmed', 'The card did not confirm the physical preview.');
+  }
+
+  const expectedId = expectedPreviewCardId(options);
+  const actualId = String(response.cardId || response.card?.id || verifiedCard?.id || '').trim();
+  if (expectedId) {
+    const comparison = compareCardIdentity({ id: expectedId }, { id: actualId });
+    if (!comparison.ok) {
+      throw previewAckError(
+        comparison.reason === 'missing-identity' ? 'identity-missing' : comparison.reason,
+        comparison.reason === 'wrong-card'
+          ? 'A different Lightweaver card answered the preview request.'
+          : 'The card did not identify itself in the preview acknowledgement.',
+      );
+    }
+  }
+
+  const requestedPatternId = String(look?.patternId || '').trim();
+  const echoedPatternId = String(response.patternId || response.look?.patternId || '').trim();
+  if (requestedPatternId && echoedPatternId && requestedPatternId !== echoedPatternId) {
+    throw previewAckError('preview-mismatch', 'The card confirmed a different physical look.');
+  }
+  const requestedRevision = acknowledgementRevision(options.revision ?? look?.revision);
+  const echoedRevision = acknowledgementRevision(response.revision ?? response.confirmedRevision);
+  if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
+    throw previewAckError('preview-mismatch', 'The card confirmed a different preview revision.');
+  }
+  return response;
 }
 
 function latestPreviewQueueKey(host = '') {
@@ -402,7 +453,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   if (options.preferBridge || isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
   }
-  await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
+  const verifiedCard = await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
   let previewLook = look;
   let previewZoneFallback = null;
   if (options.fallbackMissingZoneToAll && look?.zone) {
@@ -422,7 +473,10 @@ async function pushLivePreviewToHost(host, look, options = {}) {
     }
   }
   const url = `${cardHostToUrl(host)}/api/control`;
-  const body = JSON.stringify(buildLivePreviewControlPayload(previewLook));
+  const body = JSON.stringify({
+    ...buildLivePreviewControlPayload(previewLook),
+    ...(options.revision !== undefined ? { revision: options.revision } : {}),
+  });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 2500);
   try {
@@ -436,10 +490,16 @@ async function pushLivePreviewToHost(host, look, options = {}) {
       const text = await response.text().catch(() => '');
       throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
     }
-    const json = await response.json().catch(() => ({ ok: true }));
+    let json;
+    try {
+      json = await response.json();
+    } catch (error) {
+      throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable preview acknowledgement.', error);
+    }
+    const acknowledged = requireLivePreviewAcknowledgement(json, previewLook, options, verifiedCard);
     return previewZoneFallback
-      ? { ...json, previewZoneFallback: true, ...previewZoneFallback }
-      : json;
+      ? { ...acknowledged, previewZoneFallback: true, ...previewZoneFallback }
+      : acknowledged;
   } finally {
     clearTimeout(timer);
   }
@@ -466,12 +526,16 @@ async function pushLivePreviewToBridge(host, look, options = {}) {
   }
   const json = await sendCardBridgeRequest(
     'control',
-    buildLivePreviewControlPayload(previewLook),
+    {
+      ...buildLivePreviewControlPayload(previewLook),
+      ...(options.revision !== undefined ? { revision: options.revision } : {}),
+    },
     { host, timeoutMs: options.timeoutMs || 2500 },
   );
+  const acknowledged = requireLivePreviewAcknowledgement(json, previewLook, options, getCardBridgeState().card);
   return previewZoneFallback
-    ? { ...json, previewZoneFallback: true, ...previewZoneFallback }
-    : json;
+    ? { ...acknowledged, previewZoneFallback: true, ...previewZoneFallback }
+    : acknowledged;
 }
 
 function normalizedPreviewTargets(targets = []) {

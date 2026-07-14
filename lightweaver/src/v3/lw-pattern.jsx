@@ -52,9 +52,15 @@ import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '..
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
-import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
+import {
+  PHYSICAL_PREVIEW_FAILURE_MESSAGE,
+  cardActionReducer,
+  cardActionStatusLabel,
+  createCardActionState,
+} from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
+  CARD_BRIDGE_CHANGED_EVENT,
   acquireCardBridgeFromGesture,
   cardBridgeFeatureGap,
   getCardBridgeState,
@@ -336,6 +342,7 @@ import {
     const [statusKind, setStatusKind] = useState("");
     const [recoveryConfirmation, setRecoveryConfirmation] = useState('');
     const [cardSave, dispatchCardSave] = useReducer(cardActionReducer, undefined, createCardActionState);
+    const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
@@ -343,6 +350,7 @@ import {
     const livePreviewSeq = useRef(0);
     const browsePreviewSeq = useRef(0);
     const savedComboSeq = useRef(0);
+    const latestPreviewIntent = useRef(null);
     const draftProjectSnapshotRef = useRef(project => project);
 
     const invalidatePendingPreview = useCallback(() => {
@@ -352,6 +360,7 @@ import {
         clearTimeout(livePreviewTimer.current);
         livePreviewTimer.current = null;
       }
+      dispatchPreviewAction({ type: 'reset' });
     }, []);
 
     // Warm default so first load reads warm (Lava Lamp-like) like the mockup,
@@ -504,6 +513,8 @@ import {
       setHandoffUrl('');
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
       const sequence = ++livePreviewSeq.current;
+      latestPreviewIntent.current = { look: nextLook, target };
+      dispatchPreviewAction({ type: 'start', revision: sequence });
       const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
       livePreviewTimer.current = setTimeout(async () => {
         setHandoffUrl('');
@@ -523,9 +534,11 @@ import {
               timeoutMs: 2200,
               fallbackMissingZoneToAll: false,
               preferBridge: localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:'),
+              revision: sequence,
             },
           );
           if (sequence === livePreviewSeq.current) {
+            dispatchPreviewAction({ type: 'confirm', revision: sequence });
             markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
             setStatusKind('');
             setStatus('');
@@ -535,18 +548,26 @@ import {
             return;
           }
           if (sequence === livePreviewSeq.current) {
+            dispatchPreviewAction({ type: 'fail', revision: sequence });
             setStatusKind('err');
-            const actionableReason = ['mixed-content', 'layout-mismatch', 'project-mismatch', 'zones-missing'].includes(error?.reason);
             if (error?.reason === 'mixed-content') {
               setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
             }
-            setStatus(actionableReason
-              ? error.message
-              : `Could not reach the card at ${cardHostToUrl(cardHost)}. This change is not on the lights. Use Connect to card in the bottom bar.`);
+            setStatus(PHYSICAL_PREVIEW_FAILURE_MESSAGE);
           }
         }
       }, delayMs);
     }, [cardHost, livePreview, localCard, markCardLookConfirmed, runtimePackage, selectedTarget]);
+
+    const retryLatestPreview = useCallback(() => {
+      const latest = latestPreviewIntent.current;
+      if (!latest) return;
+      scheduleLivePreview(latest.look, latest.target, 0);
+    }, [scheduleLivePreview]);
+
+    const openConnectionCenter = useCallback(() => {
+      document.querySelector('[data-testid="card-link-status"]')?.click();
+    }, []);
 
     useEffect(() => () => {
       invalidatePendingPreview();
@@ -613,10 +634,24 @@ import {
       setHandoffUrl('');
       setStatusKind('');
       setStatus('Connecting to the local Lightweaver card…');
+      const onBridgeChanged = () => {
+        if (sequence !== browsePreviewSeq.current) return;
+        const state = getCardBridgeState();
+        if (!state.verified) return;
+        const firmwareGap = cardBridgeFeatureGap('frame');
+        if (!firmwareGap) return;
+        browsePreviewSeq.current += 1;
+        window.removeEventListener(CARD_BRIDGE_CHANGED_EVENT, onBridgeChanged);
+        setStatusKind('err');
+        setStatus(firmwareGap.message);
+      };
+      window.addEventListener(CARD_BRIDGE_CHANGED_EVENT, onBridgeChanged);
       void attempt.ready.then(() => {
+        window.removeEventListener(CARD_BRIDGE_CHANGED_EVENT, onBridgeChanged);
         if (sequence !== browsePreviewSeq.current) return;
         scheduleVerifiedBridgePreview();
       }).catch(error => {
+        window.removeEventListener(CARD_BRIDGE_CHANGED_EVENT, onBridgeChanged);
         if (sequence !== browsePreviewSeq.current) return;
         setStatusKind('err');
         if (error?.reason === 'popup-blocked') {
@@ -1088,6 +1123,12 @@ import {
                     <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
                   </div>
                 }
+                {status === PHYSICAL_PREVIEW_FAILURE_MESSAGE && previewAction.status === 'failed' &&
+                  <div className="pmx-status-actions">
+                    <button type="button" className="btn primary" onClick={openConnectionCenter}>Reconnect</button>
+                    <button type="button" className="btn" onClick={retryLatestPreview}>Retry</button>
+                  </div>
+                }
                 {recoveryConfirmation === 'pending' &&
                   <div className="pmx-status-actions" aria-label="Confirm physical recovery">
                     <button type="button" className="btn primary" onClick={() => {
@@ -1129,7 +1170,7 @@ import {
                     <span aria-hidden="true" className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
                     Preview taps on the LED card
                   </label>
-                  <span className="pm-saved">All sections saved</span>
+                  <span className="pm-saved" data-testid="physical-preview-status">{cardActionStatusLabel(previewAction)}</span>
                 </div>
 
                 {/* design target */}

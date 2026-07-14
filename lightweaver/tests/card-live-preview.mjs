@@ -97,6 +97,46 @@ assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
 
+// A transport response is not a physical acknowledgement unless it is valid
+// JSON, says ok:true, belongs to the paired card, and does not contradict the
+// requested look/revision when the firmware echoes those fields.
+for (const [label, responseBody, reason] of [
+  ['malformed JSON', null, 'invalid-acknowledgement'],
+  ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed'],
+  ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card'],
+  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch'],
+  ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch'],
+]) {
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: responseBody === null
+      ? async () => { throw new SyntaxError('bad json'); }
+      : async () => responseBody,
+  });
+  await assert.rejects(
+    pushLivePreviewToCard(
+      { patternId: 'ocean' },
+      { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+    ),
+    error => {
+      assert.equal(error?.reason, reason, label);
+      return true;
+    },
+  );
+}
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ ok: true, cardId: 'lw-expected', patternId: 'ocean', revision: 7 }),
+});
+const acknowledgedPreview = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
+);
+assert.equal(acknowledgedPreview.cardId, 'lw-expected');
+assert.equal(acknowledgedPreview.patternId, 'ocean');
+assert.equal(acknowledgedPreview.revision, 7);
+
 globalThis.fetch = async () => { throw new TypeError('network down'); };
 await assert.rejects(
   readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),

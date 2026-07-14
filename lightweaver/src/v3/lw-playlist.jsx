@@ -3,7 +3,7 @@
    unchanged from the design source; only the data + handlers were swapped
    from the SAMPLE arrays to the live app's real playlist, real pattern bank,
    and real card handlers. No visual structure was altered. */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useReducer, useRef, useState } from 'react';
 import { I } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
@@ -51,6 +51,12 @@ import {
   makePlaylistPushPendingState,
   makePlaylistPushSuccessState,
 } from '../lib/studioActionStatus.js';
+import {
+  PHYSICAL_PREVIEW_FAILURE_MESSAGE,
+  cardActionReducer,
+  cardActionStatusLabel,
+  createCardActionState,
+} from '../lib/cardAction.js';
 
 function downloadJson(filename, content) {
   const blob = new Blob([content], { type: 'application/json' });
@@ -104,8 +110,10 @@ function realPatternShape(patternId) {
     const [live, setLive] = useState(null);
     const [handoffUrl, setHandoffUrl] = useState('');
     const [playlistStatus, setPlaylistStatus] = useState(null);
+    const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [playlistSyncing, setPlaylistSyncing] = useState(false);
     const previewSequence = React.useRef(0);
+    const latestLiveItem = useRef(null);
     const [drag, setDrag] = useState({ from: null, over: null });
 
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
@@ -174,7 +182,9 @@ function realPatternShape(patternId) {
     // ── live preview / card control ───────────────────────────────────────
     const previewPatternOnCard = async (patternId) => {
       const sequence = ++previewSequence.current;
+      dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
+      setPlaylistStatus(null);
       try {
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
@@ -182,20 +192,27 @@ function realPatternShape(patternId) {
           if (sequence !== previewSequence.current) return;
         }
         const confirmedLook = buildPatternPlaylistPreview(patternId);
-        await pushLivePreviewToCard(confirmedLook, { host, timeoutMs: 2200 });
+        await pushLivePreviewToCard(confirmedLook, { host, timeoutMs: 2200, revision: sequence });
         if (sequence === previewSequence.current) {
+          dispatchPreviewAction({ type: 'confirm', revision: sequence });
           markCardLookConfirmed(confirmedLook);
           setPlaylistStatus(null);
           return true;
         }
-      } catch { /* preview is best-effort; connection state lives in the footer */ }
+      } catch (error) {
+        if (sequence !== previewSequence.current || error?.reason === 'superseded') return false;
+        dispatchPreviewAction({ type: 'fail', revision: sequence });
+        setPlaylistStatus({ kind: 'err', message: PHYSICAL_PREVIEW_FAILURE_MESSAGE, physicalPreview: true });
+      }
       return false;
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
       if (!savedLook) return;
       const sequence = ++previewSequence.current;
+      dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
+      setPlaylistStatus(null);
       try {
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
@@ -207,9 +224,10 @@ function realPatternShape(patternId) {
           const confirmedLook = { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true };
           await pushLivePreviewToCard(
             confirmedLook,
-            { host, timeoutMs: 2600 },
+            { host, timeoutMs: 2600, revision: sequence },
           );
           if (sequence === previewSequence.current) {
+            dispatchPreviewAction({ type: 'confirm', revision: sequence });
             markCardLookConfirmed(confirmedLook);
             setPlaylistStatus(null);
             return true;
@@ -229,25 +247,38 @@ function realPatternShape(patternId) {
         if (sequence !== previewSequence.current) return;
         await pushSectionPreviewToCard(
           targets,
-          { host, timeoutMs: 2600 },
+          { host, timeoutMs: 2600, revision: sequence },
         );
-        if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
+        if (sequence === previewSequence.current) {
+          dispatchPreviewAction({ type: 'confirm', revision: sequence });
+          markCardLookConfirmed(normalizeCardVisualLook(savedLook.defaultLook || {}));
+          setPlaylistStatus(null);
+          return true;
+        }
       } catch (error) {
         if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
-        const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
-        setPlaylistStatus(nextStatus);
-        setHandoffUrl(nextStatus.handoffUrl || '');
+        dispatchPreviewAction({ type: 'fail', revision: sequence });
+        setPlaylistStatus({ kind: 'err', message: PHYSICAL_PREVIEW_FAILURE_MESSAGE, physicalPreview: true });
       }
       return false;
     };
 
     const setLiveItem = async (item) => {
       if (!item) return;
+      latestLiveItem.current = item;
       const confirmed = item.type === 'combo'
         ? await previewSavedLookOnCard(savedLookById.get(item.lookId))
         : await previewPatternOnCard(item.patternId);
       if (confirmed) setLive(item.id);
     };
+
+    const retryLatestPreview = () => {
+      if (latestLiveItem.current) void setLiveItem(latestLiveItem.current);
+    };
+
+    const openConnectionCenter = useCallback(() => {
+      document.querySelector('[data-testid="card-link-status"]')?.click();
+    }, []);
 
     const fallbackLiveLook = () => {
       const firstItem = playlist[0];
@@ -409,6 +440,12 @@ function realPatternShape(patternId) {
                   <div className="pmx-status-hint">{playlistStatus.action.hint}</div>
                 }
                 <div className="pmx-status-actions">
+                  {playlistStatus.physicalPreview &&
+                    <>
+                      <button className="btn primary" onClick={openConnectionCenter}>Reconnect</button>
+                      <button className="btn" onClick={retryLatestPreview}>Retry</button>
+                    </>
+                  }
                   {playlistStatus.action &&
                     <button
                       className="btn primary"
@@ -424,7 +461,7 @@ function realPatternShape(patternId) {
                   {playlistStatus.action?.kind === 'allow-layout-change' &&
                     <button className="btn" disabled={playlistSyncing} onClick={adjustLedCounts}>Adjust LED count</button>
                   }
-                  <button className="btn" onClick={openCard}>{I.open}Open card page</button>
+                  {!playlistStatus.physicalPreview && <button className="btn" onClick={openCard}>{I.open}Open card page</button>}
                   {handoffUrl &&
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   }
@@ -438,6 +475,7 @@ function realPatternShape(patternId) {
                   <span className="sf-l">Card address</span>
                   <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} aria-label="Card address" />
                   <span className="pl-count">{playlist.length} looks · dial press to advance</span>
+                  <span className="pl-count" data-testid="playlist-physical-preview-status">{cardActionStatusLabel(previewAction)}</span>
                 </div>
 
                 <div className="pl-list">
