@@ -47,7 +47,7 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '../lib/cardPushClient.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
@@ -455,7 +455,6 @@ import {
       () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
       [projectId, projectName, strips, board, standaloneController],
     );
-    const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     const updateController = (patch) => {
@@ -837,23 +836,32 @@ import {
     const copyConfig = async () => {
       setHandoffUrl('');
       try {
-        await navigator.clipboard.writeText(configJson);
+        await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
         setStatusKind('ok');
         setStatus('Setup JSON copied. Paste it into the card page on the same WiFi.');
-      } catch {
+      } catch (error) {
         setStatusKind('err');
-        setStatus('Clipboard was blocked. Download the setup JSON instead.');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Clipboard was blocked. Download the setup JSON instead.');
       }
     };
 
     const downloadConfig = () => {
-      const blob = new Blob([configJson], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${safeProjectName || 'lightweaver'}-chip-config.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      try {
+        const blob = new Blob([cardStorageJson(runtimePackage)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${safeProjectName || 'lightweaver'}-chip-config.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        setStatusKind('err');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Could not prepare the setup download. Try again.');
+      }
     };
 
     const repairLed = async () => {

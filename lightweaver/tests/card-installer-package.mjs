@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { makeCardRuntimePackage } from '../src/lib/cardRuntimeContract.js';
 import {
   buildCardConfigHandoffUrl,
+  cardStorageJson,
   decodeCardConfigHandoffPayload,
   pushConfigToCard,
 } from '../src/lib/cardPushClient.js';
+import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 
 const pkg = makeCardRuntimePackage({
   projectName: 'Customer Piece',
@@ -34,11 +36,14 @@ assert.match(body, /"patternCycleIds":\["aurora","ember","scanner"\]/);
 assert.equal(pkg.config.led.outputs[0].pin, 16);
 assert.equal(pkg.config.controls.encoder.press, 0);
 
+const prepared = prepareCardStoragePayload(pkg);
+assert.equal(cardStorageJson(pkg), prepared.json);
 const handoffUrl = buildCardConfigHandoffUrl('lightweaver.local', pkg);
 assert.ok(handoffUrl.startsWith('http://lightweaver.local/#lwconfig='));
 const handoffParams = new URL(handoffUrl).hash.slice(1);
 const handoffPayload = new URLSearchParams(handoffParams).get('lwconfig');
-assert.deepEqual(JSON.parse(decodeCardConfigHandoffPayload(handoffPayload)), pkg.config);
+assert.equal(decodeCardConfigHandoffPayload(handoffPayload), prepared.json);
+assert.deepEqual(JSON.parse(decodeCardConfigHandoffPayload(handoffPayload)), prepared.config);
 assert.equal(new URLSearchParams(handoffParams).get('reboot'), '1');
 
 const requests = [];
@@ -99,6 +104,10 @@ assert.deepEqual(requests.map(request => request.url), [
   'http://192.168.4.1/api/config',
   'http://192.168.4.1/api/reboot',
 ]);
+assert.equal(
+  requests.find(request => request.url === 'http://192.168.4.1/api/config')?.options?.body,
+  prepared.json,
+);
 
 requests.length = 0;
 globalThis.fetch = async (url, options = {}) => {
@@ -224,6 +233,7 @@ assert.equal(bridgePushed.saved, true);
 assert.equal(bridgeMessages[0].message.type, 'firmware-info');
 assert.equal(bridgeMessages[1].message.type, 'config');
 assert.equal(bridgeMessages[1].message.reboot, false);
+assert.deepEqual(bridgeMessages[1].message.payload, prepared.config);
 
 bridgeMessages.length = 0;
 bridgeCurrentOutputs = [{ id: 'outer', pin: 16, pixels: 22 }, { id: 'inner', pin: 17, pixels: 22 }];
@@ -237,5 +247,34 @@ await assert.rejects(
 );
 assert.equal(bridgeMessages.length, 1);
 assert.equal(bridgeMessages[0].message.type, 'firmware-info');
+
+const oversizedPackage = {
+  format: 'lightweaver-card-runtime-package',
+  config: {
+    version: 1,
+    mode: 'website-flash',
+    led: { pixels: 4, outputs: [{ id: 'main', pin: 16, pixels: 4 }] },
+    looks: [{ id: 'huge', label: 'Huge', unknownFutureField: 'x'.repeat(5000) }],
+  },
+};
+const callsBeforeOverflow = { fetch: 0, bridge: bridgeMessages.length };
+globalThis.fetch = async () => {
+  callsBeforeOverflow.fetch += 1;
+  throw new Error('overflow must fail before fetch');
+};
+await assert.rejects(
+  pushConfigToCard(oversizedPackage, {
+    host: 'lightweaver.local',
+    timeoutMs: 50,
+    autoDiscover: false,
+  }),
+  error => error?.reason === 'config-too-large' && error.bytes > error.maxBytes,
+);
+assert.equal(callsBeforeOverflow.fetch, 0);
+assert.equal(bridgeMessages.length, callsBeforeOverflow.bridge);
+assert.throws(
+  () => buildCardConfigHandoffUrl('lightweaver.local', oversizedPackage),
+  error => error?.reason === 'config-too-large' && error.bytes > error.maxBytes,
+);
 
 console.log('card-installer-package tests passed');

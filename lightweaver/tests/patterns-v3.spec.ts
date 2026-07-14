@@ -82,6 +82,37 @@ test('clicking a card updates the preview', async ({ page }) => {
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
 });
 
+test('setup JSON copy and download use the same compact card payload', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => { (window as any).__copiedSetup = text; },
+      },
+    });
+  });
+  await gotoFreshPatterns(page);
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  await page.getByRole('menuitem', { name: /Copy setup/ }).click();
+  const copied = await page.evaluate(() => (window as any).__copiedSetup || '');
+
+  await page.getByRole('button', { name: /Card tools/ }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('menuitem', { name: /Download setup/ }).click();
+  const download = await downloadPromise;
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const downloaded = Buffer.concat(chunks).toString('utf8');
+
+  expect(copied).toBe(downloaded);
+  expect(copied).not.toContain('\n');
+  const config = JSON.parse(copied);
+  expect(config.patterns).toBeUndefined();
+  expect(config.controls?.encoder?.patternCycleIds).toBeUndefined();
+});
+
 test('Recover lights performs one complete recovery request', async ({ page }) => {
   const recoveries: Record<string, unknown>[] = [];
   await page.route('**/api/recover-lights', async route => {
