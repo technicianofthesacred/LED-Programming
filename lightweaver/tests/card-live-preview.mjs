@@ -98,7 +98,9 @@ assert.equal(hardwareRequests[0].url, 'http://192.168.18.70/api/control');
 assert.deepEqual(JSON.parse(hardwareRequests[0].options.body), { colorOrder: 'GBR' });
 
 const recoveryRequests = [];
+const recoveryOrder = [];
 globalThis.fetch = async (url, options = {}) => {
+  recoveryOrder.push('recover-post');
   recoveryRequests.push({ url, options });
   return {
     ok: true,
@@ -120,9 +122,16 @@ const recoveryResponse = await recoverCardLights({
 }, {
   host: '192.168.18.70',
   timeoutMs: 1000,
+  reclaimDelayMs: 17,
+  reclaimFrameStreams: async (host, options) => {
+    recoveryOrder.push('browser-reclaimed');
+    assert.equal(host, '192.168.18.70');
+    assert.equal(options.handoffMs, 17);
+  },
 });
 
 assert.equal(recoveryResponse.recovered, true);
+assert.deepEqual(recoveryOrder, ['browser-reclaimed', 'recover-post'], 'browser producers stop before card recovery is posted');
 assert.equal(recoveryRequests[0].url, 'http://192.168.18.70/api/recover-lights');
 assert.equal(recoveryRequests[0].options.method, 'POST');
 assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {

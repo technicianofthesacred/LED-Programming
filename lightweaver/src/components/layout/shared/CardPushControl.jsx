@@ -1,12 +1,16 @@
-import { useState } from 'react';
+import { useReducer, useRef, useState } from 'react';
+import { useProject } from '../../../state/ProjectContext.jsx';
+import { cardActionReducer, createCardActionState } from '../../../lib/cardAction.js';
 import {
   makeCardRuntimePackage,
   patchBoardToZones,
 } from '../../../lib/cardRuntimeContract.js';
+import { chainAddressCount } from '../../../lib/patchBoard.js';
 import {
   getCardHostname,
   setCardHostname,
   pushConfigToCard,
+  buildCardConfigHandoffUrl,
   CardPushError,
 } from '../../../lib/cardPushClient.js';
 
@@ -24,55 +28,57 @@ export function CardPushControl({
   projectId,
   projectName,
   standaloneController,
+  disabled = false,
   children,
 }) {
+  const { projectLifecycle, markProjectInstalled, markCardLookConfirmed } = useProject();
   const [pushHost, setPushHost] = useState(() => getCardHostname());
   const [pushStatus, setPushStatus] = useState('');
-  const [pushKind, setPushKind] = useState(''); // '' | 'ok' | 'err' | 'pending'
+  const [action, dispatchAction] = useReducer(cardActionReducer, { confirmedRevision: projectLifecycle.installedRevision }, createCardActionState);
   const [pushFallbackJson, setPushFallbackJson] = useState('');
+  const [pushFallbackPackage, setPushFallbackPackage] = useState(null);
+  const failedAttemptRef = useRef(null);
 
   // Serialize the current patch board into the firmware's runtime contract.
   // Direct push is only for local HTTP/file Studio sessions; hosted HTTPS
   // flows use the copy-paste fallback shown by the error state.
-  const pushToCard = async () => {
-    const cleanHost = pushHost.trim().toLowerCase() || 'lightweaver.local';
+  const pushToCard = async (retryAttempt = null) => {
+    const cleanHost = retryAttempt?.host || pushHost.trim().toLowerCase() || 'lightweaver.local';
     setCardHostname(cleanHost);
     setPushHost(getCardHostname());
-    setPushKind('pending');
-    setPushStatus(`Pushing to ${cleanHost}...`);
-    setPushFallbackJson('');
-    const zones = patchBoardToZones(board, strips);
-    const outputs = (standaloneController?.outputs || []).map((o, i) => ({
-      id: o.id || `out${i + 1}`,
-      name: o.name || `Output ${i + 1}`,
-      pin: o.pin,
-      pixels: o.pixels,
-    }));
-    const totalPixels = strips.reduce((sum, s) => sum + (s.pixelCount ?? s.pixels?.length ?? 0), 0);
-    const pkg = makeCardRuntimePackage({
-      projectId,
-      projectName,
-      mode: 'website-flash',
-      led: {
-        pixels: totalPixels || undefined,
-        colorOrder: standaloneController?.led?.colorOrder,
-        brightnessLimit: standaloneController?.led?.brightnessLimit,
-        outputs: outputs.length ? outputs : undefined,
-      },
-      controls: standaloneController?.controls,
-      zones,
-      syncZones: zones.length <= 1,
-    });
+    const attempt = retryAttempt || (() => {
+      const zones = patchBoardToZones(board, strips);
+      const outputs = (standaloneController?.outputs || []).map((o, i) => ({ id: o.id || `out${i + 1}`, name: o.name || `Output ${i + 1}`, pin: o.pin, pixels: o.pixels }));
+      const totalPixels = chainAddressCount(board, strips);
+      return {
+        host: cleanHost,
+        revision: projectLifecycle.editedRevision,
+        zoneCount: zones.length,
+        pkg: makeCardRuntimePackage({
+          projectId, projectName, mode: 'website-flash',
+          led: { pixels: totalPixels || undefined, colorOrder: standaloneController?.led?.colorOrder, brightnessLimit: standaloneController?.led?.brightnessLimit, outputs: outputs.length ? outputs : undefined },
+          controls: standaloneController?.controls, zones, syncZones: zones.length <= 1,
+        }),
+      };
+    })();
+    dispatchAction({ type: 'start', revision: attempt.revision });
+    setPushStatus(`Pushing revision ${attempt.revision} to ${cleanHost}...`);
+    setPushFallbackJson(''); setPushFallbackPackage(null);
     try {
-      await pushConfigToCard(pkg, { host: getCardHostname(), allowLayoutChange: true });
-      setPushKind('ok');
-      setPushStatus(`Pushed ${zones.length} zone${zones.length === 1 ? '' : 's'} to ${cleanHost}`);
-      setTimeout(() => { setPushStatus(''); setPushKind(''); }, 4000);
+      await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+      dispatchAction({ type: 'confirm' });
+      markProjectInstalled(attempt.revision);
+      markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
+      failedAttemptRef.current = null;
+      setPushStatus(`Installed revision ${attempt.revision} on card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
     } catch (err) {
-      setPushKind('err');
+      failedAttemptRef.current = attempt;
+      const message = err instanceof CardPushError ? err.message : `Push failed: ${err.message || err}`;
+      dispatchAction({ type: 'fail', error: message });
       if (err instanceof CardPushError && err.reason === 'mixed-content') {
         setPushStatus('Browser blocked the request. Use the JSON below: connect to the card and paste at its onboard page.');
-        setPushFallbackJson(JSON.stringify(pkg.config, null, 2));
+        setPushFallbackJson(JSON.stringify(attempt.pkg.config, null, 2));
+        setPushFallbackPackage(attempt.pkg);
       } else if (err instanceof CardPushError) {
         setPushStatus(err.message);
       } else {
@@ -81,7 +87,7 @@ export function CardPushControl({
     }
   };
 
-  const pushing = pushKind === 'pending';
+  const pushing = action.status === 'pending';
 
   return (
     <div className="la-card-push">
@@ -89,27 +95,28 @@ export function CardPushControl({
         <button
           className="btn primary la-card-push-btn"
           data-testid="layout-send-to-card"
-          disabled={pushing}
-          onClick={pushToCard}
+          disabled={disabled || pushing}
+          onClick={() => pushToCard()}
           title={connected ? `Push zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
         >
           <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
-          {pushing ? `Pushing to ${pushHost}…` : 'Send to card'}
+          {pushing ? `Installing on ${pushHost}…` : 'Install on card'}
         </button>
         {children}
       </div>
 
       {pushStatus && (
-        <div className={`la-card-push-banner ${pushKind === 'ok' ? 'is-ok' : pushKind === 'err' ? 'is-err' : 'is-pending'}`}>
+        <div className={`la-card-push-banner ${action.status === 'confirmed' ? 'is-ok' : action.status === 'failed' ? 'is-err' : 'is-pending'}`}>
           {pushStatus}
+          {action.status === 'failed' && action.confirmedRevision != null && <p>Installed revision {action.confirmedRevision} remains on the card.</p>}
           {pushFallbackJson && (
-            <textarea
-              readOnly
-              value={pushFallbackJson}
-              onClick={e => e.target.select()}
-              className="la-card-push-fallback"
-            />
+            <div className="lw-wire-recovery" aria-label="Mixed-content recovery">
+              <textarea readOnly value={pushFallbackJson} onClick={e => e.target.select()} className="la-card-push-fallback"/>
+              <button className="btn" onClick={() => navigator.clipboard?.writeText(pushFallbackJson)}>Copy payload</button>
+              <button className="btn" onClick={() => window.open(buildCardConfigHandoffUrl(failedAttemptRef.current?.host || getCardHostname(), pushFallbackPackage), '_blank', 'noopener')}>Open installer</button>
+            </div>
           )}
+          {action.status === 'failed' && <button className="btn" onClick={() => pushToCard(failedAttemptRef.current)}>Retry</button>}
         </div>
       )}
     </div>

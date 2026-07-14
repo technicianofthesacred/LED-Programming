@@ -38,6 +38,7 @@ test('new projects open with the two-ring customer hardware layout', () => {
   assert.equal(project.layout.strips.length, 2);
   assert.equal(isDefaultCircleLayout(project.layout.strips), true);
   assert.equal(project.layout.strips.reduce((sum, strip) => sum + strip.pixelCount, 0), 44);
+  assert.deepEqual(project.layout.strips.map(strip => strip.pixelCount), [27, 17]);
   assert.deepEqual(project.layout.patchBoard.chains[0].rowIds, [
     'patch-default-outer-circle',
     'patch-default-inner-circle',

@@ -1,5 +1,6 @@
 import { chainPixelOffsets, mainChain, normalizePatchBoard } from './patchBoard.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { compileWiring } from './wiringCompiler.js';
 
 export const ALL_SECTIONS_TARGET_ID = 'all';
 export const MAX_SAVED_LOOKS = 12;
@@ -12,8 +13,33 @@ export function normalizeSectionVisualLook(look = {}) {
 export function deriveSectionTargets({
   strips = [],
   patchBoard = null,
+  wiring = null,
+  compiledWiring = null,
   defaultLook = {},
 } = {}) {
+  const compiled = compiledWiring || (wiring ? compileWiring({ wiring, strips }) : null);
+  if (compiled?.ok) {
+    const fallbackLook = normalizeSectionVisualLook(defaultLook);
+    return [{
+      id: ALL_SECTIONS_TARGET_ID,
+      zoneId: '',
+      kind: 'all',
+      label: 'All sections',
+      pixelCount: compiled.totalPixels,
+      look: fallbackLook,
+    }, ...compiled.zones.map(zone => ({
+      id: zone.id,
+      zoneId: zone.id,
+      stripId: zone.id,
+      kind: 'section',
+      label: zone.label,
+      pixelCount: zone.ranges.reduce((sum, range) => sum + range.count, 0),
+      start: zone.ranges[0]?.start || 0,
+      end: (zone.ranges.at(-1)?.start || 0) + Math.max(0, (zone.ranges.at(-1)?.count || 0) - 1),
+      ranges: zone.ranges,
+      look: fallbackLook,
+    }))];
+  }
   const board = normalizePatchBoard(patchBoard, strips);
   const totalPixels = totalStripPixels(strips);
   const fallbackLook = normalizeSectionVisualLook(defaultLook);

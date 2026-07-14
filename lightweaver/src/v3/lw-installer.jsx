@@ -1,7 +1,7 @@
 /* Light Weaver v3 — Installer screen (worker bench guide) */
 /* Exact mockup file, converted from window-global script to ES module.
    Only the wrapper changed; the component body below is byte-identical. */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { I } from './lw-shared.jsx';
 
 
@@ -48,10 +48,17 @@ import { I } from './lw-shared.jsx';
     "Dial press changes looks.",
     "Reboot keeps the saved project.",
   ];
+  const INSTALLER_CHECKS_KEY = 'lw_installer_signoff_v1';
 
   function InstallerScreen({ go }) {
-    const [checks, setChecks] = useState(() => new Set());
+    const [checks, setChecks] = useState(() => {
+      try { return new Set(JSON.parse(localStorage.getItem(INSTALLER_CHECKS_KEY) || '[]')); }
+      catch { return new Set(); }
+    });
     const toggle = (i) => setChecks((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+    useEffect(() => {
+      try { localStorage.setItem(INSTALLER_CHECKS_KEY, JSON.stringify([...checks])); } catch {}
+    }, [checks]);
     const goTo = (v) => go && go(v);
 
     return (
@@ -122,10 +129,11 @@ import { I } from './lw-shared.jsx';
                 </section>
 
                 <section className="card inst-sec">
-                  <div className="sec-h"><span className="t">Final signoff</span><span className="m">{checks.size}/{SIGNOFF.length} bench test</span></div>
+                  <div className="sec-h"><span className="t">Final signoff</span><span className="m" aria-live="polite">{checks.size === SIGNOFF.length ? 'Ready to ship' : `${checks.size}/${SIGNOFF.length} bench test`}</span></div>
                   <div className="inst-signoff">
                     {SIGNOFF.map((s, i) => (
-                      <label key={i} className="inst-check" onClick={() => toggle(i)}>
+                      <label key={i} className="inst-check">
+                        <input type="checkbox" checked={checks.has(i)} onChange={() => toggle(i)} />
                         <span className={"pm-box" + (checks.has(i) ? " on" : "")}>{checks.has(i) && I.check}</span>
                         <span className={checks.has(i) ? "done" : ""}>{s}</span>
                       </label>

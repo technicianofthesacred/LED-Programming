@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   rgbCss,
   pointsAttr,
@@ -10,6 +11,7 @@ import {
   restingLedAlpha,
 } from '../../../lib/previewVisuals.js';
 import { LightCone, OmniHalo } from '../shared/InspectorPrimitives.jsx';
+import { WiringCordOverlay } from '../wire/WiringCordOverlay.jsx';
 
 // ── LayoutCanvas ────────────────────────────────────────────────────────────
 // Verbatim lift of the LayoutScreen <svg> stage subtree (defs, artwork, heat,
@@ -40,7 +42,16 @@ export function LayoutCanvas({
   } = lightPreview;
   const {
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
+    wiring, compiledWiring, selectedWiringRunId, onControllerAnchorMove, onSeamMove,
   } = wire;
+  const fallbackAnchor = { x: parsedVb(viewBox).w * 0.12, y: parsedVb(viewBox).h * 0.12 };
+  const [dragAnchor, setDragAnchor] = useState(null);
+  useEffect(() => setDragAnchor(null), [wiring?.controllerAnchor?.x, wiring?.controllerAnchor?.y]);
+  const displayedAnchor = dragAnchor || wiring?.controllerAnchor || fallbackAnchor;
+  const selectedPhysicalRun = wiring?.runs?.find(run => run.id === selectedWiringRunId);
+  const selectedPhysicalStrip = strips.find(strip => strip.id === selectedPhysicalRun?.source?.stripId);
+  const selectedSeamLed = selectedPhysicalRun?.seamLed ?? selectedPhysicalRun?.source?.from;
+  const selectedSeamPoint = selectedPhysicalStrip?.pixels?.[selectedSeamLed];
   const { mode, drawMode, waypoints, ghostPt, ghostD } = draw;
   const {
     isEditingGesture, isPanning, rubberBand, movingStripIds,
@@ -91,10 +102,10 @@ export function LayoutCanvas({
             }}
             onClick={handleSvgClick}
             onDoubleClick={handleSvgDblClick}
-            onMouseMove={handleSvgMouseMove}
-            onMouseDown={handleSvgMouseDown}
-            onMouseUp={handleSvgMouseUp}
-            onMouseLeave={handleSvgMouseLeave}
+            onPointerMove={handleSvgMouseMove}
+            onPointerDown={handleSvgMouseDown}
+            onPointerUp={handleSvgMouseUp}
+            onPointerLeave={handleSvgMouseLeave}
             onContextMenu={handleContextMenu}
             onWheel={handleWheel}
           >
@@ -113,6 +124,10 @@ export function LayoutCanvas({
                 <stop offset="100%" stopColor="oklch(80% 0.2 30)" stopOpacity="0"/>
               </radialGradient>
             </defs>
+
+            {mode === 'wire' && compiledWiring && (
+              <WiringCordOverlay compiled={compiledWiring} selectedRunId={selectedWiringRunId}/>
+            )}
 
             {/* ── Artwork background ── */}
             {artworkHTML && (
@@ -172,7 +187,7 @@ export function LayoutCanvas({
                         fill="none" stroke="#fff" strokeOpacity="0.001"
                         strokeWidth="16" strokeLinecap="round" pointerEvents="stroke"
                         style={{ cursor: 'pointer' }}
-                        onMouseDown={e => e.stopPropagation()}
+                        onPointerDown={e => e.stopPropagation()}
                         onMouseEnter={() => { setHoveredLayerId(l.layerId); setHoveredSubPathId(t.pathId); }}
                         onMouseLeave={() => { setHoveredLayerId(null); setHoveredSubPathId(null); }}
                         onClick={e => {
@@ -267,6 +282,15 @@ export function LayoutCanvas({
                 <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
                   <path d={s.pathData}
                         data-strip-path={s.id}
+                        tabIndex="0"
+                        role="button"
+                        aria-label={`Select ${s.name} strip`}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectStrip(s.id);
+                          }
+                        }}
                         fill="none"
                         stroke="white"
                         strokeOpacity="0.001"
@@ -274,7 +298,7 @@ export function LayoutCanvas({
                         strokeLinecap="round"
                         pointerEvents="visibleStroke"
                         style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
-                        onMouseDown={e => {
+                        onPointerDown={e => {
                           if (wireOverlayMode === 'chop') {
                             e.preventDefault();
                             e.stopPropagation();
@@ -377,6 +401,68 @@ export function LayoutCanvas({
                     </g>
                   );
                 })}
+              </g>
+            )}
+
+            {mode === 'wire' && (
+              <g
+                className="lw-controller-anchor"
+                transform={`translate(${displayedAnchor.x} ${displayedAnchor.y})`}
+              >
+                <circle
+                  data-testid="controller-anchor"
+                  role="button"
+                  aria-label="Controller anchor"
+                  tabIndex={0}
+                  pointerEvents="all"
+                  r={vbScale * 12}
+                  onPointerDown={event => {
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture?.(event.pointerId);
+                  setDragAnchor(displayedAnchor);
+                  }}
+                  onPointerMove={event => {
+                  if (!event.currentTarget.hasPointerCapture?.(event.pointerId) || !svgRef.current) return;
+                  const matrix = svgRef.current.getScreenCTM()?.inverse();
+                  if (!matrix) return;
+                  const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix);
+                  setDragAnchor({ x: point.x, y: point.y });
+                  }}
+                  onPointerUp={event => {
+                  if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) return;
+                  event.currentTarget.releasePointerCapture?.(event.pointerId);
+                  onControllerAnchorMove(event);
+                  }}
+                />
+                <path pointerEvents="none" d={`M ${-vbScale * 6} 0 H ${vbScale * 6} M 0 ${-vbScale * 6} V ${vbScale * 6}`}/>
+                <text pointerEvents="none" x={vbScale * 15} y={vbScale * 4}>CARD</text>
+              </g>
+            )}
+
+            {mode === 'wire' && selectedSeamPoint && (selectedPhysicalStrip?.closed || selectedPhysicalStrip?.isClosed || selectedPhysicalRun?.seamLed != null) && (
+              <g
+                data-testid="connector-seam-handle"
+                role="slider"
+                aria-label="Connector seam handle"
+                aria-valuenow={selectedSeamLed}
+                aria-disabled={wiring.locked || selectedPhysicalRun.verified || selectedPhysicalRun.directionPolicy === 'fixed'}
+                tabIndex={0}
+                className="lw-seam-handle"
+                pointerEvents="all"
+                transform={`translate(${selectedSeamPoint.x} ${selectedSeamPoint.y})`}
+                onPointerDown={event => {
+                  if (wiring.locked || selectedPhysicalRun.verified || selectedPhysicalRun.directionPolicy === 'fixed') return;
+                  event.stopPropagation();
+                  event.currentTarget.setPointerCapture?.(event.pointerId);
+                }}
+                onPointerUp={event => {
+                  if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) return;
+                  event.currentTarget.releasePointerCapture?.(event.pointerId);
+                  onSeamMove(selectedPhysicalRun.id, event);
+                }}
+              >
+                <circle r={vbScale * 9}/>
+                <circle r={vbScale * 3}/>
               </g>
             )}
 

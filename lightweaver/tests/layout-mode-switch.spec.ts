@@ -43,7 +43,7 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
 });
 
-test('switching mode mid-draw cancels the in-progress freehand strip', async ({ page }) => {
+test('switching mode mid-draw suspends the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
   await gotoLayout(page);
 
   const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
@@ -63,10 +63,16 @@ test('switching mode mid-draw cancels the in-progress freehand strip', async ({ 
   await page.keyboard.press('2');
   await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+  await expect(page.locator('.la-draw-hint')).toHaveCount(0);
 
   await page.keyboard.press('1');
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
-  // Cancelled: no leftover draw hint / waypoints, and the Draw tool is inactive.
+  await expect(drawBtn).not.toHaveClass(/active/);
+  await drawBtn.click();
+  await expect(drawBtn).toHaveClass(/active/);
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
+  await page.getByRole('button', { name: /Cancel \(Esc\)/ }).click();
   await expect(page.locator('.la-draw-hint')).toHaveCount(0);
   await expect(drawBtn).not.toHaveClass(/active/);
   await expect(drawBtn).toHaveText('Draw');

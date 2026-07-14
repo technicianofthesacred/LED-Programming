@@ -12,8 +12,8 @@ test('layout opens with the default two-circle hardware layout', async ({ page }
   await expect(page.getByTestId('default-circle-layout-panel')).toBeVisible();
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
   await expect(page.locator('path[data-strip-path]')).toHaveCount(2);
-  await expect(page.locator('.la-strip-row', { hasText: 'Outer circle' })).toContainText('22');
-  await expect(page.locator('.la-strip-row', { hasText: 'Inner circle' })).toContainText('22');
+  await expect(page.locator('.la-strip-row', { hasText: 'Outer circle' })).toContainText('27');
+  await expect(page.locator('.la-strip-row', { hasText: 'Inner circle' })).toContainText('17');
   await expect(page.getByText('Default two-circle hardware')).toBeVisible();
 });
 

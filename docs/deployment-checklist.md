@@ -37,6 +37,19 @@ Run this before the controller leaves the bench, and again after any code, firmw
 - [ ] **Pi proxy sanity** (if Pi-hosted): on the Pi, confirm `curl http://localhost:3000/api/health` and `curl "http://localhost:3000/api/wled/info?ip=<wled-ip>"`.
 - [ ] **Controller record saved:** MAC address, final IP/hostname, pixel count, GPIO/output mapping, color order, brightness cap, and latest WLED/controller JSON snapshot.
 
+### Physical wiring acceptance — real card and artwork required
+
+Studio's automated tests prove the wiring compiler, drag/drop interactions, Auto Wire determinism, delivery acknowledgement, rollback, and assembly-map generation. They do **not** prove the installation's physical wires. Complete every item below beside the powered artwork; do not mark these passed from a mocked browser run.
+
+- [ ] **Output identity:** run Wire → Bench test and confirm each connector label/GPIO lights only its intended physical output.
+- [ ] **First pixel:** confirm the red DATA IN marker appears at the actual first LED for every strip run.
+- [ ] **Direction and order:** follow the low-brightness green chase through every run and confirm its physical direction and lane order; record corrections in Studio.
+- [ ] **Jumper routing:** compare every cable-jump prompt and assembly-map destination with the installed wire, including estimated length and strain relief.
+- [ ] **Reserved addresses:** confirm every reserved-unlit block stays dark and consumes the documented address count.
+- [ ] **Color order:** run a red/green/blue check on every output and correct RGB/GRB/etc. before signoff.
+- [ ] **Brightness cap:** verify the configured current/brightness limit against the real PSU and wiring gauge.
+- [ ] **Locked wiring saved:** complete verification, lock the canonical wiring, save the project file, install that exact revision on the card, and archive the printed assembly map with the controller record.
+
 ---
 
 ## 1. Pre-deploy WLED config
@@ -122,6 +135,7 @@ This is the actual customer flow for the ESP32-only runtime. Run through end-to-
 5. **Pick a scene** — tap a scene button. Confirm the strip changes within ~500 ms.
 6. **Cycle all scenes** — each button must produce a visibly different look. No dark frames, no stuck pixels.
 7. **Optional home-WiFi setup** — in the card page's settings, enter the customer's home WiFi credentials. After reboot the card joins that network and becomes reachable at `lightweaver.local` from any device on the same network.
+8. **Visitor rollback check** — while a scene/brightness command is pending, force one failed request and confirm the visitor page restores the prior visible selection/value instead of showing an optimistic success.
 
 If any step fails, see Section 7.
 

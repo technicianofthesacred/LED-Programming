@@ -94,6 +94,7 @@ function realPatternShape(patternId) {
       patchBoard,
       standaloneController,
       setStandaloneController,
+      markCardLookConfirmed,
     } = useProject();
 
     const [host, setHost] = useState(readStoredCardHost);
@@ -180,9 +181,15 @@ function realPatternShape(patternId) {
           await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
           if (sequence !== previewSequence.current) return;
         }
-        await pushLivePreviewToCard(buildPatternPlaylistPreview(patternId), { host, timeoutMs: 2200 });
-        if (sequence === previewSequence.current) setPlaylistStatus(null);
+        const confirmedLook = buildPatternPlaylistPreview(patternId);
+        await pushLivePreviewToCard(confirmedLook, { host, timeoutMs: 2200 });
+        if (sequence === previewSequence.current) {
+          markCardLookConfirmed(confirmedLook);
+          setPlaylistStatus(null);
+          return true;
+        }
       } catch { /* preview is best-effort; connection state lives in the footer */ }
+      return false;
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
@@ -197,12 +204,17 @@ function realPatternShape(patternId) {
           // mix's own default look across the whole (collapsed) strip.
           await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
           if (sequence !== previewSequence.current) return;
+          const confirmedLook = { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true };
           await pushLivePreviewToCard(
-            { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true },
+            confirmedLook,
             { host, timeoutMs: 2600 },
           );
-          if (sequence === previewSequence.current) setPlaylistStatus(null);
-          return;
+          if (sequence === previewSequence.current) {
+            markCardLookConfirmed(confirmedLook);
+            setPlaylistStatus(null);
+            return true;
+          }
+          return false;
         }
         const targets = buildSavedLookPlaylistPreviewTargets({ savedLook, strips, patchBoard: board });
         const requiredZoneIds = targets
@@ -219,20 +231,22 @@ function realPatternShape(patternId) {
           targets,
           { host, timeoutMs: 2600 },
         );
-        if (sequence === previewSequence.current) setPlaylistStatus(null);
+        if (sequence === previewSequence.current) { setPlaylistStatus(null); return true; }
       } catch (error) {
         if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage });
         setPlaylistStatus(nextStatus);
         setHandoffUrl(nextStatus.handoffUrl || '');
       }
+      return false;
     };
 
-    const setLiveItem = (item) => {
+    const setLiveItem = async (item) => {
       if (!item) return;
-      setLive(item.id);
-      if (item.type === 'combo') { void previewSavedLookOnCard(savedLookById.get(item.lookId)); return; }
-      void previewPatternOnCard(item.patternId);
+      const confirmed = item.type === 'combo'
+        ? await previewSavedLookOnCard(savedLookById.get(item.lookId))
+        : await previewPatternOnCard(item.patternId);
+      if (confirmed) setLive(item.id);
     };
 
     const fallbackLiveLook = () => {
@@ -372,6 +386,8 @@ function realPatternShape(patternId) {
               <div
                 className={"pmx-status" + (playlistStatus.kind === 'ok' ? ' is-ok' : playlistStatus.kind === 'err' ? ' is-err' : '')}
                 data-testid="playlist-card-status"
+                role={playlistStatus.kind === 'err' ? 'alert' : 'status'}
+                aria-live="polite"
               >
                 {playlistStatus.message}
                 {playlistStatus.action?.hint &&
@@ -405,7 +421,7 @@ function realPatternShape(patternId) {
               <section className="pm-main">
                 <div className="pl-hostrow">
                   <span className="sf-l">Card address</span>
-                  <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} />
+                  <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} aria-label="Card address" />
                   <span className="pl-count">{playlist.length} looks · dial press to advance</span>
                 </div>
 
@@ -439,7 +455,7 @@ function realPatternShape(patternId) {
                           <span>{item.type === 'combo' ? "section mix" : `${p.label} across the piece`}</span>
                         </div>
                         <div className="pl-actions">
-                          <button className={"plbtn" + (live === id ? " on" : "")} onClick={() => setLiveItem(item)}>Live</button>
+                          <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} onClick={() => setLiveItem(item)}>Live</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
                           <button className="plbtn" disabled={i === playlist.length - 1} onClick={() => move(i, 1)}>Down</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => first(i)}>Make first</button>

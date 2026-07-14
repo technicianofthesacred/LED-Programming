@@ -5,8 +5,8 @@
    drove the mockup are replaced with the live pattern bank, ProjectContext, and
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { I, PATTERN_CATS, STRIP_TESTS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
+import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
+import { I, PATTERN_CATS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -50,21 +50,15 @@ import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
-import {
-  pushLiveHardwareToCard,
-  pushLivePreviewToCard,
-  recoverCardLights,
-} from '../lib/cardLiveControl.js';
-import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
+import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
+import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
+import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
   readLocalChipDefault,
   writeLocalChipDefault,
   openCardBridge,
 } from '../lib/cardBridge.js';
 
-  // Maps the mockup's 4 strip-test ids (r/g/b/w) to the live STRIP_COLOR_TESTS.
-  const STRIP_TEST_TO_PATTERN = { r: 'test-red', g: 'test-green', b: 'test-blue', w: 'test-white' };
-  const STRIP_TEST_BRIGHTNESS = { r: 1, g: 1, b: 1, w: 0.55 };
   // Mockup geometry id -> live symSettings.
   const GEOMETRY_SETTINGS = {
     none: { enabled: false, type: 'none' },
@@ -212,14 +206,15 @@ import {
   // each bead per frame — so Sparkle sparkles, Fire flickers, and every slider
   // recolors the preview the way the card will. Falls back to the static palette
   // strand only when a pattern has no runnable code.
-  function LivePreviewRow({ patternId, pal, look, n = 22, big = false }) {
+  function LivePreviewRow({ patternId, pal, look, previewStrip, n = 22, big = false, symSettings }) {
     const codeId = useMemo(() => resolveCodePatternId(patternId), [patternId]);
     const fn = useMemo(() => (codeId ? compilePattern(codeId) : null), [codeId]);
     const paletteNorm = useMemo(() => normalizePalette(pal), [pal]);
-    const strip = useMemo(() => buildPreviewStrip(n), [n]);
+    const strip = previewStrip || buildPreviewStrip(n);
+    n = strip.pts.length || n;
     const beadRefs = useRef([]);
     const live = useRef({});
-    live.current = { fn, codeId, paletteNorm, strip, look, n, big };
+    live.current = { fn, codeId, paletteNorm, strip, look, n, big, symSettings };
 
     useEffect(() => {
       if (!fn) return undefined;
@@ -237,12 +232,14 @@ import {
           paletteNorm: s.paletteNorm,
           masterBrightness: s.look?.brightness ?? 1,
           masterSpeed: s.look?.speed ?? 1,
+          symSettings: s.symSettings,
         });
         const px = applyLookColorModifiers(frame.pixels, tMs, s.look || {});
+        const offIndexes = new Set(s.strip.offIndexes || []);
         for (let i = 0; i < s.n; i++) {
           const el = beadRefs.current[i];
           if (!el) continue;
-          const c = px[i] || { r: 0, g: 0, b: 0 };
+          const c = offIndexes.has(i) ? { r: 0, g: 0, b: 0 } : (px[i] || { r: 0, g: 0, b: 0 });
           const col = `rgb(${c.r},${c.g},${c.b})`;
           el.style.background = col;
           el.style.boxShadow = `0 0 ${s.big ? 9 : 5}px ${col}, 0 0 ${s.big ? 20 : 11}px ${col}`;
@@ -264,10 +261,10 @@ import {
       </div>);
   }
 
-  function LedStage({ patternId, pal, look }) {
+  function LedStage({ patternId, pal, look, previewStrip, symSettings }) {
     return (
-      <div className="pm-led-stage">
-        <LivePreviewRow patternId={patternId} pal={pal} look={look} n={22} big />
+      <div className="pm-led-stage" data-testid="pattern-project-preview" data-preview-led-count={previewStrip?.pts?.length || 22} data-preview-order={(previewStrip?.order || []).join(',')} data-preview-symmetry={symSettings?.enabled ? symSettings.type : 'none'}>
+        <LivePreviewRow patternId={patternId} pal={pal} look={look} previewStrip={previewStrip} n={22} big symSettings={symSettings} />
         <span className="sheen" />
       </div>);
   }
@@ -277,38 +274,63 @@ import {
       projectId,
       projectName,
       projectRevision,
+      projectLifecycle,
       strips,
+      hidden,
       setStrips,
       viewBox,
       svgText,
       patchBoard,
+      compiledWiring,
       setPatchBoard,
       standaloneController,
       setStandaloneController,
       registerProjectSnapshotContributor,
+      markProjectEdited,
+      markProjectInstalled,
+      markCardLookConfirmed,
       symSettings,
       setSymSettings,
     } = useProject();
+    const projectPreviewStrip = useMemo(
+      () => createProjectPreviewStrip({ compiledWiring, strips, hidden }),
+      [projectRevision, compiledWiring, strips, hidden],
+    );
 
     // ── browse / ui state ───────────────────────────────────────────────
     const [q, setQ] = useState("");
     const [cat, setCat] = useState("all");
     const [livePreview, setLivePreview] = useState(true);
     const [localCard, setLocalCard] = useState(readLocalChipDefault);
-    const [stripTest, setStripTest] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
+    const menuButtonRef = useRef(null);
+    const menuRef = useRef(null);
     const [mixName, setMixName] = useState("");
 
     // Show-more pagination so the browser isn't 130+ cards tall (which buries the
     // preview on narrow screens). Resets whenever the filter or search changes.
     const PATTERN_PAGE = 24;
     const [visibleCount, setVisibleCount] = useState(PATTERN_PAGE);
+    const patternSentinelRef = useRef(null);
     useEffect(() => { setVisibleCount(PATTERN_PAGE); }, [cat, q]);
+    useEffect(() => {
+      if (!menuOpen) return undefined;
+      menuRef.current?.querySelector('button')?.focus();
+      const onKeyDown = event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        setMenuOpen(false);
+        requestAnimationFrame(() => menuButtonRef.current?.focus());
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+    }, [menuOpen]);
 
     // ── real engine state ───────────────────────────────────────────────
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState("");
     const [statusKind, setStatusKind] = useState("");
+    const [cardSave, dispatchCardSave] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
@@ -379,7 +401,6 @@ import {
       [resolveDraftTargetLook, sectionTargets],
     );
 
-    const stripColorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
     const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
       ? []
       : standaloneController?.playlist;
@@ -416,6 +437,17 @@ import {
       if (q && !p.label.toLowerCase().includes(q.toLowerCase())) return false;
       return true;
     });
+    useEffect(() => {
+      const node = patternSentinelRef.current;
+      if (!node || typeof IntersectionObserver === 'undefined') return undefined;
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setVisibleCount(count => Math.min(filtered.length, count + PATTERN_PAGE));
+        }
+      }, { rootMargin: '600px 0px' });
+      observer.observe(node);
+      return () => observer.disconnect();
+    }, [cat, q, filtered.length]);
     const playlistSize = playlist.length;
 
     // ── controller / preview helpers (ported from PatternsScreen) ───────
@@ -475,6 +507,7 @@ import {
             { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: false },
           );
           if (sequence === livePreviewSeq.current) {
+            markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
             setStatusKind('');
             setStatus('');
           }
@@ -494,7 +527,7 @@ import {
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, runtimePackage, selectedTarget]);
+    }, [cardHost, livePreview, markCardLookConfirmed, runtimePackage, selectedTarget]);
 
     useEffect(() => () => {
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
@@ -515,6 +548,7 @@ import {
       if (!selectedTarget) return;
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
       setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
+      markProjectEdited();
       if (push) scheduleLivePreview(nextLook, selectedTarget);
     };
 
@@ -632,8 +666,9 @@ import {
     };
 
     const savePreviewToCard = async () => {
-      const { nextLook, nextBoard, nextController: savedController } = buildCurrentHardwareState({ saveNamedLook: true });
-      const nextController = promotePatternFirst(savedController, nextLook.patternId);
+      const requestedRevision = projectLifecycle.editedRevision;
+      const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
+      const nextController = promotePatternFirst(draftController, nextLook.patternId);
       const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
       // Test strip mode (see src/lib/testStrip.js): the saved design (project
       // state below) is untouched — only what actually goes to the card is
@@ -653,16 +688,20 @@ import {
       try {
         const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
-        setPatchBoard(nextBoard);
-        setStandaloneController(nextController);
-        setDraftLooks({});
-        setMixName('');
+        dispatchCardSave({ type: 'start', revision: requestedRevision });
         const response = await pushConfigToCard(packageForCard, {
           host: safety.host || cardHost,
           timeoutMs: 6000,
           reboot: 'if-needed',
           allowLayoutChange: testStrip.enabled || undefined,
           allowProjectChange: testStrip.enabled || undefined,
+        });
+        dispatchCardSave({ type: 'confirm' });
+        markProjectInstalled(requestedRevision);
+        markCardLookConfirmed({
+          ...nextLook,
+          zone: testStrip.enabled ? '' : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : ''),
+          syncZones: testStrip.enabled || selectedTarget?.kind !== 'section',
         });
         if (!response.rebooting) {
           // A test-strip card only has the one collapsed zone, so there is no
@@ -679,6 +718,7 @@ import {
         setStatusKind('');
         setStatus('');
       } catch (error) {
+        dispatchCardSave({ type: 'fail', error: error?.message });
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(packageForCard, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
         } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
@@ -724,47 +764,6 @@ import {
       setDraftLooks({});
       setStatusKind('');
       setStatus(`Saved “${label}”. Find it under the Mixes filter.`);
-    };
-
-    const playStripColorTest = async (testId, colorOrder = stripColorOrder) => {
-      const patternId = STRIP_TEST_TO_PATTERN[testId] || 'test-red';
-      const brightness = STRIP_TEST_BRIGHTNESS[testId] ?? 1;
-      const test = STRIP_TESTS.find(t => t.id === testId) || STRIP_TESTS[0];
-      setStripTest(testId);
-      setStatusKind('');
-      setStatus(`Showing ${test.label} test on ${cardHostToUrl(cardHost)} with ${colorOrder} order...`);
-      try {
-        await recoverCardLights({ patternId, brightness, syncZones: true }, { host: cardHost, timeoutMs: 3200 });
-        setStatusKind('ok');
-        setStatus(`${test.label} test is live. If the strip is not ${test.label.toLowerCase()}, press Try next order.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error?.message || `${test.label} test could not reach ${cardHostToUrl(cardHost)}.`);
-      }
-    };
-
-    const applyStripColorOrder = async (order) => {
-      const nextOrder = normalizeUsbLedColorOrder(order, stripColorOrder);
-      updateController({ led: { colorOrder: nextOrder } });
-      setStatusKind('');
-      setStatus(`Trying ${nextOrder} color order on ${cardHostToUrl(cardHost)}...`);
-      try {
-        const response = await pushLiveHardwareToCard({ colorOrder: nextOrder }, { host: cardHost, timeoutMs: 2200 });
-        const appliedOrder = normalizeUsbLedColorOrder(response?.colorOrder || nextOrder, nextOrder);
-        if (appliedOrder !== nextOrder) updateController({ led: { colorOrder: appliedOrder } });
-        await playStripColorTest(stripTest || 'r', appliedOrder);
-        setStatusKind('ok');
-        setStatus(`${appliedOrder} order is live. Stop when the strip shows the test color.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error?.message || `${nextOrder} color order could not reach ${cardHostToUrl(cardHost)}.`);
-      }
-    };
-
-    const tryNextStripColorOrder = () => {
-      const currentIndex = COLOR_ORDERS.indexOf(stripColorOrder);
-      const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
-      void applyStripColorOrder(nextOrder);
     };
 
     const writePlaylist = (nextItems) => {
@@ -894,6 +893,7 @@ import {
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
         if (!safety.ok) return;
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        markCardLookConfirmed({ ...nextLook, zone: selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '', syncZones: selectedTarget?.kind !== 'section' });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
@@ -962,25 +962,25 @@ import {
                 <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard}>{I.bolt}Save to card</button>
+                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
                 {connected &&
-                  <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed}>{I.wrench}Recover lights</button>
+                  <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }
                 <div className="ag-conn">
                   <button className={"btn" + (localCard ? " toggled" : "")} aria-pressed={localCard} onClick={toggleLocalCard}>{localCard ? "Using local card" : "Use local card"}</button>
                   <button className="btn" onClick={openCardPage}>{I.open}Open card page</button>
                 </div>
                 <div className="pm-menu">
-                  <button className="btn" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>{I.dots}Card tools{I.chevronD}</button>
+                  <button ref={menuButtonRef} className="btn" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((o) => !o)} disabled={cardSave.conflictsDisabled}>{I.dots}Card tools{I.chevronD}</button>
                   {menuOpen &&
                   <>
-                      <div className="pm-menu-backdrop" onClick={() => setMenuOpen(false)} />
-                      <div className="pm-menu-pop">
-                        <button className="pm-menu-item" onClick={() => { setMenuOpen(false); repairLed(); }}>{I.wrench}Repair LED</button>
-                        <button className="pm-menu-item" onClick={() => { setMenuOpen(false); sendSplitPreview(); }}>{I.target}Send split preview</button>
+                      <div className="pm-menu-backdrop" aria-hidden="true" onClick={() => setMenuOpen(false)} />
+                      <div ref={menuRef} className="pm-menu-pop" role="menu" aria-label="Card tools">
+                        <button role="menuitem" className="pm-menu-item" onClick={() => { setMenuOpen(false); repairLed(); }}>{I.wrench}Repair LED</button>
+                        <button role="menuitem" className="pm-menu-item" onClick={() => { setMenuOpen(false); sendSplitPreview(); }}>{I.target}Send split preview</button>
                         <div className="pm-menu-sep" />
-                        <button className="pm-menu-item" onClick={() => { setMenuOpen(false); copyConfig(); }}>{I.copy}Copy setup</button>
-                        <button className="pm-menu-item" onClick={() => { setMenuOpen(false); downloadConfig(); }}>{I.download}Download setup</button>
+                        <button role="menuitem" className="pm-menu-item" onClick={() => { setMenuOpen(false); copyConfig(); }}>{I.copy}Copy setup</button>
+                        <button role="menuitem" className="pm-menu-item" onClick={() => { setMenuOpen(false); downloadConfig(); }}>{I.download}Download setup</button>
                       </div>
                     </>
                   }
@@ -989,7 +989,7 @@ import {
             </header>
 
             {status &&
-              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')}>
+              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')} role={statusKind === 'err' ? 'alert' : 'status'} aria-live="polite">
                 {status}
                 {handoffUrl &&
                   <div className="pmx-status-actions">
@@ -1005,22 +1005,12 @@ import {
                 <div className="sec-h"><span className="t">Tap a pattern to preview</span><span className="m">{filtered.length} shown of {REAL_PATTERNS.length} chip-ready + {realMixes.length} mixes / {playlistSize} in playlist</span><span className="line" /></div>
 
                 <div className="pm-livebar">
-                  <label className="pm-check" onClick={() => setLivePreview((v) => !v)}>
-                    <span className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
+                  <label className="pm-check">
+                    <input type="checkbox" checked={livePreview} onChange={(event) => setLivePreview(event.target.checked)} />
+                    <span aria-hidden="true" className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
                     Preview taps on the LED card
                   </label>
                   <span className="pm-saved">All sections saved</span>
-                </div>
-
-                <div className="pm-stripfinder">
-                  <span className="sf-l">Strip finder</span>
-                  <div className="sf-btns">
-                    {STRIP_TESTS.map((t) =>
-                    <button key={t.id} className={"sf-btn" + (stripTest === t.id ? " on" : "")} title={`Test ${t.label}`} onClick={() => playStripColorTest(t.id)} style={stripTest === t.id ? { "--sf": t.col } : null}>{t.short}</button>
-                    )}
-                  </div>
-                  <span className="sf-order">Order <b data-testid="strip-color-order">{stripColorOrder}</b></span>
-                  <button className="btn ghost-sm" onClick={tryNextStripColorOrder}>{I.refresh}Try next order</button>
                 </div>
 
                 {/* design target */}
@@ -1068,24 +1058,26 @@ import {
                     {filtered.slice(0, visibleCount).map((p) => {
                       const cardInPlaylist = inPlaylist(p.id);
                       return (
-                    <div key={p.id} className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} onClick={() => selectCard(p)}>
+                    <div key={p.id} className="pmcard-wrap">
+                      <button type="button" className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} aria-pressed={p.id === selId} onClick={() => selectCard(p)}>
                         <div className="pmcard-led"><LedRow pal={p.pal} n={9} /></div>
                         <div className="pmcard-row">
                           <span className="pmcard-nm">{p.label}</span>
                           {p.mix && <span className="mixtag">mix</span>}
                           <span className="pmcard-sp">{p.sp}</span>
                         </div>
-                        <button className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
+                      </button>
+                        <button type="button" aria-pressed={cardInPlaylist} className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
                           <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z" /></svg>
                           {cardInPlaylist ? "In playlist" : "Add to playlist"}
                         </button>
-                      </div>
+                    </div>
                       );
                     })}
                     {!filtered.length && <p style={{ color: "var(--text-faint)", fontSize: 13, gridColumn: "1 / -1", padding: 20 }}>No chip patterns match this search.</p>}
                   </div>
                   {filtered.length > visibleCount &&
-                    <div className="pm-showmore">
+                    <div className="pm-showmore" ref={patternSentinelRef} data-testid="patterns-sentinel">
                       <button type="button" className="btn ghost-sm" data-testid="patterns-show-more" onClick={() => setVisibleCount((c) => c + PATTERN_PAGE)}>
                         Show {Math.min(PATTERN_PAGE, filtered.length - visibleCount)} more
                       </button>
@@ -1101,7 +1093,7 @@ import {
               <aside className="pm-aside">
                 <div className="card pm-pane pm-preview-pane">
                   <div className="sec-h"><span className="t">Preview</span><span className="m">{selectedTargetName} · {sel.label}</span></div>
-                  <LedStage patternId={sel.id} pal={sel.pal} look={look} />
+                  <LedStage patternId={sel.id} pal={sel.pal} look={look} previewStrip={projectPreviewStrip} symSettings={symSettings} />
                 </div>
 
                 <div className="card pm-pane">

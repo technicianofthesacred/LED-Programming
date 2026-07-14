@@ -10,7 +10,7 @@
    advanced JSON, autosave, and the relocated encoder controls) is appended as
    additional .card.set-card sections in the same mockup idiom so it reads as
    native, not bolted on. */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { I, SWATCHES } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useTweaks } from '../components/Tweaks.jsx';
@@ -54,6 +54,7 @@ import {
   saveProjectLibraryRecord,
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
+import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
@@ -68,7 +69,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   function Seg({ opts, val, set }) {
     return (
       <div className="mini-seg">
-        {opts.map((o) => <button key={o} className={val === o ? "on" : ""} onClick={() => set(o)}>{o}</button>)}
+        {opts.map((o) => <button type="button" key={o} className={val === o ? "on" : ""} aria-pressed={val === o} onClick={() => set(o)}>{o}</button>)}
       </div>
     );
   }
@@ -83,9 +84,9 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 
   // ── Live wiring helpers ───────────────────────────────────────────────
   // Mockup Seg labels stay verbatim; these map them to the real enum values.
-  const THEME_LABELS = ['Studio', 'Lab', 'Neon'];
-  const THEME_VALUE = { Studio: 'studio', Lab: 'lab', Neon: 'neon' };
-  const THEME_LABEL = { studio: 'Studio', lab: 'Lab', neon: 'Neon' };
+  const THEME_LABELS = ['Studio', 'Daylight'];
+  const THEME_VALUE = { Studio: 'studio', Daylight: 'daylight' };
+  const THEME_LABEL = { studio: 'Studio', daylight: 'Daylight' };
 
   const SMOOTH_LABELS = ['Off', 'Soft', 'Smooth'];
   // real MOTION_SMOOTHING_MODES = ['off','soft','silk']; map by index, label stays mockup-native
@@ -106,8 +107,8 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   const COLOR_ORDER_LABELS = ['RGB', 'GRB', 'BRG'];
 
   function formatSavedTime(lastSaved) {
-    if (!lastSaved) return 'not saved this session';
-    return `autosaved ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    if (!lastSaved) return 'no recovery copy yet';
+    return `recovery copy ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   }
 
   function formatLibraryTime(updatedAt) {
@@ -149,6 +150,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
   function SettingsScreen() {
     const {
       projectId,
+      projectLifecycle,
       projectName, setProjectName,
       bpm, setBpm,
       showDuration, setShowDuration,
@@ -164,15 +166,20 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       svgText,
       patchBoard, setPatchBoard,
       standaloneController, setStandaloneController,
-      serializeProject, loadProject, newProject,
+      serializeProject, replaceProject, replaceWithNewProject,
+      markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
       lastSaved,
     } = useProject();
     const { tweaks, set: setTweak } = useTweaks();
+    useEffect(() => {
+      document.documentElement.dataset.theme = tweaks.theme === 'daylight' ? 'daylight' : 'studio';
+    }, [tweaks.theme]);
 
     const importRef = useRef(null);
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState('');
     const [statusKind, setStatusKind] = useState('');
+    const [cardWrite, dispatchCardWrite] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [projectLibrary, setProjectLibrary] = useState(() => listProjectLibraryRecords());
     const [activeProjectRecordId, setActiveProjectRecordId] = useState(() => readActiveProjectLibraryRecordId());
@@ -361,15 +368,21 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     };
 
     const pushDirect = async () => {
+      const requestedRevision = projectLifecycle.editedRevision;
+      dispatchCardWrite({ type: 'start', revision: requestedRevision });
       setStatusKind('');
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
       try {
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        markProjectInstalled(requestedRevision);
+        markCardLookConfirmed({ ...defaultLook, syncZones: true });
+        dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');
         setStatus(response.rebooting
           ? 'Saved on card. Rebooting now so the LED output layout takes effect.'
           : 'Saved on card.');
       } catch (error) {
+        dispatchCardWrite({ type: 'fail', error: error?.message });
         setStatusKind('err');
         setStatus(error?.reason === 'project-mismatch'
           ? error.message
@@ -392,6 +405,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     const saveProjectFile = async () => {
       const data = serializeProject();
       const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-studio-project.lwproj.json`, data);
+      if (ok) markProjectPersisted('file');
       setStatusKind(ok ? 'ok' : 'err');
       setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
     };
@@ -400,14 +414,16 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       const file = event.target.files?.[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = async (ev) => {
         try {
           const data = JSON.parse(ev.target.result);
-          if (!loadProject(data)) {
+          const result = await replaceProject(data);
+          if (result.reason === 'invalid') {
             setStatusKind('err');
             setStatus('That project file does not look like a Lightweaver Studio project.');
             return;
           }
+          if (!result.ok) return;
           writeActiveProjectLibraryRecordId('');
           setActiveProjectRecordId('');
           setStatusKind('ok');
@@ -429,6 +445,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
     const saveProjectToLibrary = () => {
       try {
         const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject()));
+        markProjectPersisted('browser');
         writeActiveProjectLibraryRecordId(record.id);
         setActiveProjectRecordId(record.id);
         refreshProjectLibrary();
@@ -444,6 +461,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       if (!activeProjectRecordId) { saveProjectToLibrary(); return; }
       try {
         const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject(), { id: activeProjectRecordId }));
+        markProjectPersisted('browser');
         writeActiveProjectLibraryRecordId(record.id);
         refreshProjectLibrary();
         setStatusKind('ok');
@@ -454,10 +472,10 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       }
     };
 
-    const openProjectFromLibrary = (record) => {
+    const openProjectFromLibrary = async (record) => {
       if (!record) return;
-      if (!window.confirm(`Open ${record.name}? The current Studio workspace will be replaced.`)) return;
-      if (!loadProject(record.project)) {
+      const result = await replaceProject(record.project);
+      if (result.reason === 'invalid') {
         setStatusKind('err');
         setStatus('That saved project could not be opened.');
         return;
@@ -494,11 +512,11 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       setStatus(`Deleted ${record.name} from this browser.`);
     };
 
-    const startNewProject = () => {
-      if (!window.confirm('Discard this Studio project and start over?')) return;
+    const startNewProject = async () => {
+      const result = await replaceWithNewProject();
+      if (!result.ok) return;
       writeActiveProjectLibraryRecordId('');
       setActiveProjectRecordId('');
-      newProject();
     };
 
     useEffect(() => {
@@ -537,7 +555,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   </Row>
                   <Row label="Write to card" hint="Save this setup onto the chip" stack>
                     <div className="set-actions">
-                      {directPushAvailable && <button className="btn" onClick={pushDirect}>Save to card</button>}
+                      {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Saving…' : cardWrite.status === 'failed' ? 'Retry save' : 'Save to card'}</button>}
                       {!directPushAvailable && <a className="btn" href={handoffUrl} target="_blank" rel="noopener noreferrer">{I.open}Open card installer</a>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
                       <button className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>{I.open}Open card page</button>

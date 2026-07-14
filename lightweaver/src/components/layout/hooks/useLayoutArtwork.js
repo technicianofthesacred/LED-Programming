@@ -5,6 +5,7 @@ import {
   nextStripId,
   layerArtworkMarkup,
 } from '../../../lib/layoutGeometry.js';
+import { isClosedPathData } from '../../../lib/pathClosure.js';
 
 // Artwork side: layers, layer/strip groups, layer order, path selection,
 // add-as-strip flows, and rename/hide/delete for artwork.
@@ -164,6 +165,7 @@ export function useLayoutArtwork(ctx, { getLedCount }) {
         // Merged from several paths: no single artwork source.
         sourceLayerId: null, sourcePathId: null,
         pathData: combinedPathData, pixelCount: count, pixels,
+        closed: pathSel.length === 1 && isClosedPathData(pathSel[0].pathData, pathSel[0].closed),
         x: 0, y: 0,
         color: nextColor(), emit: 'dir', angle: 0, reversed: false,
         speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
@@ -189,6 +191,7 @@ export function useLayoutArtwork(ctx, { getLedCount }) {
         sourcePathId: p.pathId ?? null,
         name: p.name,
         pathData: p.pathData,
+        closed: isClosedPathData(p.pathData, p.closed),
         pixelCount: count,
         pixels,
         x: 0, y: 0,

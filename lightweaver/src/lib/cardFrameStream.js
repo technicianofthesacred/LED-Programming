@@ -38,6 +38,7 @@ export const FRAME_KEEPALIVE_MS = 850;
 // Direct-WS congestion guard: past this many unsent bytes we skip the tick and
 // let the next one carry the (newer) frame instead of queueing stale ones.
 const WS_CONGESTION_BYTES = 8192;
+export const FRAME_OWNERSHIP_CHANNEL = 'lightweaver-card-frame-owner-v1';
 
 export function clampFrameFps(fps) {
   const value = Number(fps);
@@ -165,6 +166,120 @@ export function defaultFrameTransport(host = '') {
     : createBridgeFrameTransport(host);
 }
 
+function defaultOwnershipInstanceId() {
+  try { return globalThis.crypto?.randomUUID?.() || `frame-${Date.now()}-${Math.random()}`; }
+  catch { return `frame-${Date.now()}-${Math.random()}`; }
+}
+
+function newerOwnershipClaim(candidate, current) {
+  if (!current) return true;
+  const candidateTime = Number(candidate?.startedAt) || 0;
+  const currentTime = Number(current?.startedAt) || 0;
+  if (candidateTime !== currentTime) return candidateTime > currentTime;
+  return String(candidate?.ownerId || '') > String(current?.ownerId || '');
+}
+
+// Coordinates streams within this JS realm through the local registry and
+// across same-origin tabs through BroadcastChannel. The coordinator is
+// injectable so ownership and tab handoff stay deterministic in tests.
+export function createFrameOwnershipCoordinator({
+  BroadcastChannelImpl = typeof window !== 'undefined' ? globalThis.BroadcastChannel : null,
+  channelName = FRAME_OWNERSHIP_CHANNEL,
+  instanceId = defaultOwnershipInstanceId(),
+} = {}) {
+  const owners = new Map();
+  let sequence = 0;
+  let lastStartedAt = 0;
+
+  function supersede(entry, nextClaim) {
+    if (!entry || entry.released) return;
+    entry.released = true;
+    if (owners.get(entry.host) === entry) owners.delete(entry.host);
+    try { entry.channel?.close?.(); } catch { /* noop */ }
+    try { entry.onSuperseded?.(nextClaim); } catch { /* ownership must still transfer */ }
+  }
+
+  return {
+    claim({ host = '', startedAt = Date.now(), onSuperseded } = {}) {
+      const normalizedHost = normalizeCardHost(host);
+      const existing = owners.get(normalizedHost);
+      const claimStartedAt = Math.max(Number(startedAt) || 0, lastStartedAt + 1);
+      lastStartedAt = claimStartedAt;
+      const claim = {
+        type: 'claim',
+        host: normalizedHost,
+        ownerId: `${instanceId}:${++sequence}`,
+        startedAt: claimStartedAt,
+      };
+      if (existing) supersede(existing, claim);
+
+      let channel = null;
+      if (typeof BroadcastChannelImpl === 'function') {
+        try { channel = new BroadcastChannelImpl(channelName); } catch { channel = null; }
+      }
+      const entry = { ...claim, channel, onSuperseded, released: false };
+      owners.set(normalizedHost, entry);
+      if (channel) {
+        channel.onmessage = event => {
+          const candidate = event?.data;
+          if (!['claim', 'reclaim'].includes(candidate?.type) || normalizeCardHost(candidate.host) !== normalizedHost) return;
+          if (candidate.type === 'reclaim') { supersede(entry, candidate); return; }
+          if (candidate.ownerId === entry.ownerId || !newerOwnershipClaim(candidate, entry)) return;
+          supersede(entry, candidate);
+        };
+        try { channel.postMessage(claim); } catch { /* local ownership still applies */ }
+      }
+
+      return {
+        ownerId: entry.ownerId,
+        host: normalizedHost,
+        isOwner: () => !entry.released && owners.get(normalizedHost) === entry,
+        release() {
+          if (entry.released) return;
+          entry.released = true;
+          if (owners.get(normalizedHost) === entry) owners.delete(normalizedHost);
+          try { channel?.close?.(); } catch { /* noop */ }
+        },
+      };
+    },
+    reclaim({ host = '' } = {}) {
+      const normalizedHost = normalizeCardHost(host);
+      const message = {
+        type: 'reclaim',
+        host: normalizedHost,
+        ownerId: `${instanceId}:reclaim:${++sequence}`,
+        startedAt: Date.now(),
+      };
+      const existing = owners.get(normalizedHost);
+      if (existing) supersede(existing, message);
+      if (typeof BroadcastChannelImpl === 'function') {
+        let channel = null;
+        try {
+          channel = new BroadcastChannelImpl(channelName);
+          channel.postMessage(message);
+        } catch { /* local reclaim still applies */ }
+        Promise.resolve().then(() => {
+          try { channel?.close?.(); } catch { /* noop */ }
+        });
+      }
+      return { host: normalizedHost, reclaimed: Boolean(existing) };
+    },
+  };
+}
+
+const defaultFrameOwnershipCoordinator = createFrameOwnershipCoordinator();
+
+export async function reclaimCardFrameStreams(host = '', {
+  ownershipCoordinator = defaultFrameOwnershipCoordinator,
+  handoffMs = 50,
+  setTimeoutImpl = (...args) => setTimeout(...args),
+} = {}) {
+  const result = ownershipCoordinator?.reclaim?.({ host }) || { host: normalizeCardHost(host), reclaimed: false };
+  const delay = Math.max(0, Number(handoffMs) || 0);
+  if (delay) await new Promise(resolve => setTimeoutImpl(resolve, delay));
+  return result;
+}
+
 // The streamer. push() as fast as you like (every RAF); frames go out on the
 // throttle clock, one in flight at a time, newest frame always winning.
 //
@@ -181,14 +296,19 @@ export function createCardFrameStream({
   transport = null,
   keepaliveMs = FRAME_KEEPALIVE_MS,
   onHealth = null,
+  ownershipCoordinator = defaultFrameOwnershipCoordinator,
   setIntervalImpl = (...args) => setInterval(...args),
   clearIntervalImpl = (...args) => clearInterval(...args),
   now = () => Date.now(),
 } = {}) {
   const wire = transport || defaultFrameTransport(host);
+  const ownershipHost = normalizeCardHost(host || readStoredCardHost());
   let frameFps = clampFrameFps(fps);
   let timer = null;
   let active = false;
+  let yielded = false;
+  let ownership = null;
+  let transportClosed = false;
   let latest = null;
   let latestDirty = false;
   let inflight = false;
@@ -200,6 +320,12 @@ export function createCardFrameStream({
   let consecutiveFailures = 0;
   let failingSince = 0;
   let lastError = null;
+
+  function closeTransport() {
+    if (transportClosed) return;
+    transportClosed = true;
+    wire.close?.();
+  }
 
   function noteFailure(error) {
     lastError = error;
@@ -226,6 +352,26 @@ export function createCardFrameStream({
     } catch { /* a health listener must never break the pump */ }
   }
 
+  function yieldOwnership(nextClaim) {
+    if (yielded) return;
+    yielded = true;
+    active = false;
+    if (timer !== null) { clearIntervalImpl(timer); timer = null; }
+    latest = null;
+    latestDirty = false;
+    const reclaimed = nextClaim?.type === 'reclaim';
+    const error = new Error(reclaimed
+      ? 'Recover lights reclaimed this card from active browser frame streams.'
+      : 'Another tab or Lightweaver screen took control of this card stream.');
+    error.reason = reclaimed ? 'stream-reclaimed' : 'stream-superseded';
+    lastError = error;
+    consecutiveFailures = Math.max(1, consecutiveFailures);
+    undeliveredFrames += 1;
+    if (!failingSince) failingSince = now();
+    closeTransport();
+    emitHealth();
+  }
+
   async function pump() {
     if (!active || inflight) return;
     const idleTooLong = latest && (now() - lastSentAt) >= keepaliveMs;
@@ -235,6 +381,10 @@ export function createCardFrameStream({
     inflight = true;
     try {
       const result = await wire.sendFrame(frame, seg);
+      // A newer same-host stream may claim ownership while this send is in
+      // flight. Its acknowledgement must not revive or mark this stream
+      // healthy after it has yielded.
+      if (!active || yielded || (ownership && !ownership.isOwner())) return;
       if (result && result.wsOpen === false) {
         // F1 contract: the relay accepted the postMessage but its socket to
         // the card was closed — the frame did NOT reach the LEDs.
@@ -258,36 +408,48 @@ export function createCardFrameStream({
   }
 
   function start() {
-    if (active) return;
+    if (active || yielded) return false;
+    ownership = ownershipCoordinator?.claim?.({
+      host: ownershipHost,
+      startedAt: now(),
+      onSuperseded: yieldOwnership,
+    }) || null;
     active = true;
     lastSentAt = now();
     timer = setIntervalImpl(pump, Math.round(1000 / frameFps));
+    return true;
   }
 
   function push(pixels) {
-    if (!Array.isArray(pixels) || !pixels.length) return;
+    if (yielded || !Array.isArray(pixels) || !pixels.length) return false;
     if (latestDirty) droppedFrames += 1; // previous frame never made the wire
     latest = pixels;
     latestDirty = true;
+    return true;
   }
 
   async function stop() {
     if (!active) {
-      wire.close?.();
+      ownership?.release?.();
+      ownership = null;
+      closeTransport();
       return;
     }
+    const ownsCard = ownership?.isOwner?.() ?? true;
     active = false;
     if (timer !== null) { clearIntervalImpl(timer); timer = null; }
     latest = null;
     latestDirty = false;
+    ownership?.release?.();
+    ownership = null;
     // Release the card's frame-source claim so its own pattern resumes —
     // the existing control path, never a bespoke stop message.
     try {
-      await wire.sendCancel();
+      if (ownsCard) await wire.sendCancel();
     } catch (error) {
       lastError = error;
     } finally {
-      wire.close?.();
+      closeTransport();
     }
   }
 

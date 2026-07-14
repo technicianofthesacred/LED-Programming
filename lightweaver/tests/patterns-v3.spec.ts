@@ -3,8 +3,8 @@ import { REAL_PATTERNS } from '../src/v3/v3-data.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
-// browse cards, .pm-targetcard, .pm-stripfinder, .chips/.chip, and the testids
-// that the live component exposes (strip-color-order, save-current-combo,
+// browse cards, .pm-targetcard, .chips/.chip, and the testids
+// that the live component exposes (save-current-combo,
 // section-target-*, look-color-picker, look-*-slider/-readout, card-*-label).
 
 async function setRangeValue(locator, value: string) {
@@ -27,11 +27,13 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
 
   // The mockup shell and the browse grid render.
   await expect(page.locator('.pm')).toBeVisible();
-  await expect(page.locator('.pm-stripfinder')).toBeVisible();
+  await expect(page.locator('.pm-stripfinder')).toHaveCount(0);
+  await expect(page.getByText('Strip finder', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Try next order' })).toHaveCount(0);
   await expect(page.locator('.pm-targetcard')).toBeVisible();
 
-  // Every chip-ready pattern renders as a .pmcard (no load-more in this DOM).
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  // The catalog starts with one exact 24-card batch.
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(24);
   await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
 });
 
@@ -75,16 +77,31 @@ test('clicking a card updates the preview', async ({ page }) => {
   // Selected card is marked, and the preview/labels reflect Ocean.
   await expect(page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]')).toHaveClass(/\bon\b/);
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
-  await expect(page.getByText('Blue and teal rolling wave movement.')).toBeVisible();
+  await expect(page.locator('.pm-preview-pane')).toContainText('Ocean');
   // Live preview pushes the selected pattern to the card.
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
+});
+
+test('Recover lights performs one complete recovery request', async ({ page }) => {
+  const recoveries: Record<string, unknown>[] = [];
+  await page.route('**/api/recover-lights', async route => {
+    recoveries.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, recovered: true }) });
+  });
+  await gotoFreshPatterns(page);
+
+  await page.getByTestId('recover-lights').click();
+  await expect.poll(() => recoveries.length).toBe(1);
+  await page.waitForTimeout(150);
+  expect(recoveries).toHaveLength(1);
+  expect(recoveries[0]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
 });
 
 test('category chips filter the grid', async ({ page }) => {
   await gotoFreshPatterns(page);
 
   // Let the full grid settle before measuring (auto-retrying assertion).
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(REAL_PATTERNS.length);
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(24);
   const allCount = await page.locator('.pm-cards .pmcard').count();
 
   // Pick the Water category chip in the browse tools.
@@ -134,37 +151,6 @@ test('the advanced hue-shift slider exposes its testids', async ({ page }) => {
   await expect(page.getByTestId('look-hue-shift-readout')).toHaveText('-24');
 });
 
-test('the strip finder order pill cycles to the next color order', async ({ page }) => {
-  const controlRequests: Record<string, unknown>[] = [];
-  await page.route('**/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44, colorOrder: 'RGB' }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-  await page.route('**/api/control', async route => {
-    const body = JSON.parse(route.request().postData() || '{}');
-    controlRequests.push(body);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, colorOrder: body.colorOrder || 'RGB' }),
-    });
-  });
-  await page.route('**/api/recover-lights', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await gotoFreshPatterns(page);
-
-  await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
-  await page.locator('.pm-stripfinder').getByRole('button', { name: 'Try next order' }).click();
-
-  await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect.poll(() => controlRequests.some(r => r.colorOrder === 'GRB')).toBe(true);
-});
-
 test('saving the current look as a mix adds a mix card to the grid', async ({ page }) => {
   await page.route('**/api/control', async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
@@ -179,7 +165,7 @@ test('saving the current look as a mix adds a mix card to the grid', async ({ pa
 
   // A new mix card (tagged 'mix') appears in the grid.
   await expect(page.locator('.pm-cards .pmcard .mixtag')).toHaveCount(1);
-  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(before + 1);
+  await expect(page.locator('.pm-cards .pmcard')).toHaveCount(before);
 });
 
 test('the mirror geometry control switches the active geometry', async ({ page }) => {

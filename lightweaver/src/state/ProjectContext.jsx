@@ -21,6 +21,8 @@ import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js'
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
+import { compileWiring } from '../lib/wiringCompiler.js';
+import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
   createLayoutState,
   createLayoutHistory,
@@ -35,6 +37,15 @@ import {
   readStorageJsonWithBackup,
   writeStorageJsonWithBackup,
 } from '../lib/projectStorage.js';
+import {
+  createProjectLifecycle,
+  hasUnsavedChanges,
+  lifecycleLabel,
+  markEdited,
+  markInstalled,
+  markPersisted,
+  replaceProjectSafely,
+} from '../lib/projectLifecycle.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
 const LS_AUTOSAVE_BACKUP_KEY = 'lw_autosave_v3_backup';
@@ -90,24 +101,48 @@ function makeInitialLayoutState(layout) {
       pxPerMm: layout.pxPerMm,
       patchBoard: normalizePatchBoard(layout.patchBoard, layout.strips),
     }),
+    wiring: migrateWiring(layout.wiring, layout.strips, layout.patchBoard),
     _history: createLayoutHistory(),
   };
 }
 
 function layoutRootReducer(state, action) {
+  const physicalChangeKinds = {
+    'layout/addStrip': 'geometry',
+    'layout/addStrips': 'geometry',
+    'layout/removeStrip': 'geometry',
+    'layout/removeStrips': 'geometry',
+    'layout/reverseStrip': 'direction',
+    'layout/duplicateStrip': 'geometry',
+    'layout/mergeStrips': 'route',
+    'layout/updateStrip': 'geometry',
+    'layout/setStripOffset': 'geometry',
+    'layout/setStripCountOverrides': 'led-count',
+    'layout/setArtwork': 'geometry',
+    'layout/deleteLayer': 'geometry',
+    'layout/setDensity': 'led-count',
+    'layout/setScale': 'geometry',
+    'layout/calibrate': 'geometry',
+    'layout/updatePatchBoard': 'route',
+  };
+  const physicalChangeKind = action.changeKind ||
+    (action.type === 'compat/set' ? physicalChangeKindForCompatField(action.field) : physicalChangeKinds[action.type]);
+  const boundary = invalidateWiringVerification(state.wiring, { kind: physicalChangeKind, runIds: action.runIds });
+  if (!boundary.ok) return state;
+  const invalidateWiring = next => boundary.wiring !== state.wiring ? { ...next, wiring: boundary.wiring } : next;
   switch (action.type) {
     // Compat setter — mirrors a single useState field; never records history.
     case 'compat/set': {
       const current = state[action.field];
       const value = typeof action.value === 'function' ? action.value(current) : action.value;
       if (value === current) return state;
-      return { ...state, [action.field]: value };
+      return invalidateWiring({ ...state, [action.field]: value });
     }
     // Snapshot current state as one undo entry (called before a mutation).
     case 'layout/pushHistory':
       return {
         ...state,
-        _history: { past: pushSnapshotStack(state._history.past, makeLayoutSnapshot(state)), future: [] },
+        _history: { past: pushSnapshotStack(state._history.past, { ...makeLayoutSnapshot(state), wiring: state.wiring }), future: [] },
       };
     // Patch-board edit (mutating callback over a normalized board copy).
     case 'layout/updatePatchBoard': {
@@ -115,29 +150,31 @@ function layoutRootReducer(state, action) {
       action.mutate(board);
       return { ...state, patchBoard: normalizePatchBoard(board, state.strips) };
     }
+    case 'layout/setWiring':
+      return { ...state, wiring: action.wiring };
     case 'layout/undo': {
       if (!state._history.past.length) return state;
       const past = state._history.past.slice();
       const snap = past.pop();
-      const future = pushSnapshotStack(state._history.future, makeLayoutSnapshot(state));
+      const future = pushSnapshotStack(state._history.future, { ...makeLayoutSnapshot(state), wiring: state.wiring });
       const applied = applyLayoutSnapshot(state, snap, rebuildSnapshotStrip);
-      return { ...applied, _history: { past, future } };
+      return { ...applied, wiring: snap.wiring || state.wiring, _history: { past, future } };
     }
     case 'layout/redo': {
       if (!state._history.future.length) return state;
       const future = state._history.future.slice();
       const snap = future.pop();
-      const past = pushSnapshotStack(state._history.past, makeLayoutSnapshot(state));
+      const past = pushSnapshotStack(state._history.past, { ...makeLayoutSnapshot(state), wiring: state.wiring });
       const applied = applyLayoutSnapshot(state, snap, rebuildSnapshotStrip);
-      return { ...applied, _history: { past, future } };
+      return { ...applied, wiring: snap.wiring || state.wiring, _history: { past, future } };
     }
     // Load a project: reset the slice AND clear history (not undoable back).
     case 'layout/reset':
-      return { ...createLayoutState(action.init), _history: createLayoutHistory() };
+      return { ...createLayoutState(action.init), wiring: action.init.wiring, _history: createLayoutHistory() };
     // Selection + any structured layout action flow through the pure reducer
     // (selection actions never create undo entries).
     default:
-      return layoutReducer(state, action);
+      return invalidateWiring(layoutReducer(state, action));
   }
 }
 
@@ -208,6 +245,16 @@ export function ProjectProvider({ children }) {
   //    snapshot stack across strip + patch-board edits) ────────────────────
   const [layout, dispatchLayout] = useReducer(layoutRootReducer, defaults.layout, makeInitialLayoutState);
   const [projectRevision,   setProjectRevision]   = useState(0);
+  const [confirmedCardLook, setConfirmedCardLook] = useState(null);
+  const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
+    if (action.type === 'edited') return markEdited(state);
+    if (action.type === 'persisted') return markPersisted(state, action.destination);
+    if (action.type === 'installed') return markInstalled(state, action.revision);
+    if (action.type === 'replaced') return createProjectLifecycle();
+    return state;
+  }, undefined, createProjectLifecycle);
+  const projectFingerprintRef = useRef('');
+  const suppressNextLifecycleEditRef = useRef(true);
 
   // Live values read straight off the reducer state.
   const {
@@ -223,6 +270,7 @@ export function ProjectProvider({ children }) {
     layerGroups: layoutLayerGroups,
     layerOrder: layoutLayerOrder,
     patchBoard,
+    wiring,
     selection,
   } = layout;
 
@@ -254,6 +302,14 @@ export function ProjectProvider({ children }) {
     dispatchLayout({ type: 'layout/pushHistory' });
     dispatchLayout({ type: 'layout/updatePatchBoard', mutate });
   }, []);
+  const updateWiring = useCallback((mutate, options = {}) => {
+    const result = mutateWiring(wiring, mutate, { strips, ...options });
+    if (!result.ok) return result;
+    dispatchLayout({ type: 'layout/pushHistory' });
+    dispatchLayout({ type: 'layout/setWiring', wiring: result.wiring });
+    return result;
+  }, [wiring, strips]);
+  const compiledWiring = useMemo(() => compileWiring({ wiring, strips, groups: layoutLayerGroups }), [wiring, strips, layoutLayerGroups]);
 
   // Selection dispatchers (LayoutScreen's single selection model rides on these).
   const selectStrip       = useCallback(id => dispatchLayout(layoutActions.selectStrip(id)), []);
@@ -350,7 +406,16 @@ export function ProjectProvider({ children }) {
   const [physicalControls, setPhysicalControls] = useState(defaults.devices.physicalControls);
   const [controllerProfiles, setControllerProfiles] = useState(defaults.devices.controllerProfiles || []);
   const [activeControllerId, setActiveControllerId] = useState(defaults.devices.activeControllerId || '');
-  const [standaloneController, setStandaloneController] = useState(defaults.devices.standaloneController || defaultStandaloneController());
+  const [standaloneController, setStandaloneControllerRaw] = useState(defaults.devices.standaloneController || defaultStandaloneController());
+  const setStandaloneController = useCallback(value => {
+    const next = typeof value === 'function' ? value(standaloneController) : value;
+    const kind = standaloneControllerPhysicalChangeKind(standaloneController, next);
+    const boundary = invalidateWiringVerification(wiring, { kind });
+    if (!boundary.ok) return boundary;
+    if (boundary.wiring !== wiring) dispatchLayout({ type: 'layout/setWiring', wiring: boundary.wiring });
+    setStandaloneControllerRaw(next);
+    return { ok: true, wiring: boundary.wiring, errors: [] };
+  }, [standaloneController, wiring]);
 
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
@@ -529,6 +594,7 @@ export function ProjectProvider({ children }) {
         layerGroups: layout.layerGroups || [],
         layerOrder: layout.layerOrder || [],
         patchBoard: normalizePatchBoard(shouldSeedDefaultLayout ? defaults.layout.patchBoard : layout.patchBoard, restoredStrips),
+        wiring: migrateWiring(layout.wiring, restoredStrips, layout.patchBoard),
       },
     });
     setActivePatternId(pattern.activePatternId || defaults.pattern.activePatternId);
@@ -554,7 +620,7 @@ export function ProjectProvider({ children }) {
     setPhysicalControls(devices.physicalControls || defaults.devices.physicalControls);
     setControllerProfiles(devices.controllerProfiles || []);
     setActiveControllerId(devices.activeControllerId || '');
-    setStandaloneController(defaultStandaloneController(devices.standaloneController));
+    setStandaloneControllerRaw(defaultStandaloneController(devices.standaloneController));
     setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);
@@ -599,6 +665,7 @@ export function ProjectProvider({ children }) {
         layerGroups: layoutLayerGroups,
         layerOrder: layoutLayerOrder,
         patchBoard: normalizePatchBoard(patchBoard, strips),
+        wiring,
       },
       pattern: {
         activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
@@ -637,7 +704,7 @@ export function ProjectProvider({ children }) {
 
     return project;
   }, [
-    projectId, projectName, strips, viewBox, svgText, hidden, patchBoard,
+    projectId, projectName, strips, viewBox, svgText, hidden, patchBoard, wiring,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
@@ -645,6 +712,19 @@ export function ProjectProvider({ children }) {
     showClips, showTransitions, showCues, autoLanes, showDuration,
     liveRecording, liveQuantize, wledIp, wledSegmentMap, physicalControls, controllerProfiles, activeControllerId, standaloneController,
   ]);
+
+  useEffect(() => {
+    const fingerprint = JSON.stringify(serializeProject());
+    if (!projectFingerprintRef.current || suppressNextLifecycleEditRef.current) {
+      projectFingerprintRef.current = fingerprint;
+      suppressNextLifecycleEditRef.current = false;
+      return;
+    }
+    if (projectFingerprintRef.current !== fingerprint) {
+      projectFingerprintRef.current = fingerprint;
+      dispatchProjectLifecycle({ type: 'edited' });
+    }
+  }, [serializeProject]);
 
   useEffect(() => {
     clearTimeout(saveTimerRef.current);
@@ -666,6 +746,28 @@ export function ProjectProvider({ children }) {
     applyProject(createDefaultProject());
   }, [applyProject]);
 
+  const replaceProject = useCallback(async (candidate, options = {}) => {
+    return replaceProjectSafely({
+      candidate,
+      validate: value => migrateProject(value),
+      dirty: hasUnsavedChanges(projectLifecycle),
+      confirmDiscard: options.confirmDiscard || (() => window.confirm('Replace this project? Unsaved changes will be lost.')),
+      apply: validated => {
+        suppressNextLifecycleEditRef.current = true;
+        applyProject(validated);
+        dispatchProjectLifecycle({ type: 'replaced' });
+      },
+    });
+  }, [applyProject, projectLifecycle]);
+
+  const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
+  const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
+  const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
+  const markProjectInstalled = useCallback(revision => dispatchProjectLifecycle({ type: 'installed', revision }), []);
+  const markCardLookConfirmed = useCallback(look => {
+    setConfirmedCardLook(look ? JSON.parse(JSON.stringify(look)) : null);
+  }, []);
+
   return (
     <ProjectContext.Provider value={{
       // Layout
@@ -682,6 +784,7 @@ export function ProjectProvider({ children }) {
       layoutLayerOrder,  setLayoutLayerOrder,
       patchBoard,        setPatchBoard,
       updatePatchBoard,
+      wiring, updateWiring, compiledWiring,
       // Layout undo/redo (single shared snapshot stack)
       pushLayoutHistory, undoLayout, redoLayout,
       layoutHistLen,     layoutFutLen,
@@ -693,6 +796,10 @@ export function ProjectProvider({ children }) {
       togglePathSel,     clearLayoutSelection,
       renameLayoutSelection,
       projectRevision,
+      projectLifecycle,
+      projectLifecycleLabel: lifecycleLabel(projectLifecycle),
+      projectHasUnsavedChanges: hasUnsavedChanges(projectLifecycle),
+      confirmedCardLook,
       // Pattern
       activePatternId, setActivePatternId,
       palette,         setPalette,
@@ -750,7 +857,13 @@ export function ProjectProvider({ children }) {
       standaloneController, setStandaloneController,
       // Project persistence
       serializeProject,
-      loadProject,
+      loadProject: replaceProject,
+      replaceProject,
+      replaceWithNewProject,
+      markProjectPersisted,
+      markProjectEdited,
+      markProjectInstalled,
+      markCardLookConfirmed,
       registerProjectSnapshotContributor,
       newProject,
       lastSaved,

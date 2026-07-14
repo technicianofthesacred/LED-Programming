@@ -3,6 +3,8 @@ import { DEFAULT_STANDALONE_OUTPUTS, deriveStandaloneOutputsFromStrips, normaliz
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternById, getCardPatternRuntimeId, orderedCardPatterns } from './cardPatternBank.js';
 import { applySavedLookToPatchBoard, normalizeSavedLooks } from './sectionLookModel.js';
+import { chainAddressCount } from './patchBoard.js';
+import { compileWiring } from './wiringCompiler.js';
 import {
   derivePlaylistLookIds,
   isDefaultPatternCycle,
@@ -14,21 +16,32 @@ export function totalProjectPixels(strips = []) {
   return strips.reduce((sum, strip) => sum + (strip.pixels?.length || strip.pixelCount || strip.leds || 0), 0);
 }
 
+export function totalPhysicalAddresses(patchBoard, strips = []) {
+  const sourcePixels = totalProjectPixels(strips);
+  return patchBoard ? Math.max(sourcePixels, chainAddressCount(patchBoard, strips)) : sourcePixels;
+}
+
 export function buildCardRuntimePackageFromProject({
   projectId = '',
   projectName = 'Lightweaver Piece',
   strips = [],
   patchBoard = null,
+  wiring = null,
+  compiledWiring = null,
   standaloneController = {},
 } = {}) {
-  const totalPixels = totalProjectPixels(strips);
+  const compiled = compiledWiring || (wiring ? compileWiring({ wiring, strips }) : null);
+  if (compiled && !compiled.ok) throw new Error(compiled.errors.map(error => error.message).join(' '));
+  const totalPixels = compiled?.totalPixels ?? totalPhysicalAddresses(patchBoard, strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
   const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
-  const resolvedPixels = explicitOutputLayout
+  const resolvedPixels = compiled
+    ? compiled.totalPixels
+    : explicitOutputLayout
     ? configuredOutputPixels
     : (totalPixels || configuredOutputPixels || DEFAULT_CARD_LED.pixels);
-  const outputs = resolveCardOutputs({
+  const outputs = compiled?.outputs || resolveCardOutputs({
     strips,
     configuredOutputs,
     resolvedPixels,
@@ -49,7 +62,7 @@ export function buildCardRuntimePackageFromProject({
       ...legacyCycleIds,
     ],
   });
-  const zones = patchBoard ? patchBoardToZones(patchBoard, strips) : [];
+  const zones = compiled?.zones || (patchBoard ? patchBoardToZones(patchBoard, strips) : []);
   const runtimeZones = zones.length ? applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) : [{
     id: 'full-piece',
     label: 'Full Piece',
@@ -70,6 +83,7 @@ export function buildCardRuntimePackageFromProject({
     strips,
     runtimeZones,
     visualLook,
+    compiled: Boolean(compiled),
   });
   const requestedPatternIds = [
     visualLook.patternId,
@@ -166,6 +180,7 @@ function buildRuntimeLooksFromPlaylist({
   strips = [],
   runtimeZones = [],
   visualLook = {},
+  compiled = false,
 } = {}) {
   const savedLookById = new Map(savedLooks.map(look => [look.id, look]));
   return (playlist || [])
@@ -175,11 +190,18 @@ function buildRuntimeLooksFromPlaylist({
         const savedLook = savedLookById.get(item.lookId);
         if (!savedLook) return null;
         const comboDefault = normalizeCardVisualLook(savedLook.defaultLook);
-        const comboBoard = applySavedLookToPatchBoard({ patchBoard, strips, savedLook });
-        const comboZones = patchBoardToZones(comboBoard, strips);
-        const effectiveZones = comboZones.length
-          ? applyVisualLookDefaultsToZones(comboZones, comboBoard, comboDefault)
-          : runtimeZones.map(zone => applyLookFieldsToZone(zone, comboDefault));
+        const effectiveZones = compiled
+          ? runtimeZones.map(zone => applyLookFieldsToZone(
+              zone,
+              normalizeCardVisualLook(savedLook.sectionLooks?.[zone.id] || comboDefault),
+            ))
+          : (() => {
+              const comboBoard = applySavedLookToPatchBoard({ patchBoard, strips, savedLook });
+              const comboZones = patchBoardToZones(comboBoard, strips);
+              return comboZones.length
+                ? applyVisualLookDefaultsToZones(comboZones, comboBoard, comboDefault)
+                : runtimeZones.map(zone => applyLookFieldsToZone(zone, comboDefault));
+            })();
         return {
           id: item.id,
           label: item.label || savedLook.label,

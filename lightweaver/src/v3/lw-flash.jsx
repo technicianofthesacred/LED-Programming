@@ -48,6 +48,7 @@ import {
     const [connecting, setConnecting] = useState(false);
     const [fw, setFw] = useState(null);
     const [erase, setErase] = useState(true);
+    const [eraseConfirmed, setEraseConfirmed] = useState(false);
     const [addr, setAddr] = useState(DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS);
     const [flashing, setFlashing] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -181,7 +182,7 @@ import {
       }
     };
 
-    const canFlash = connected && fw && !flashing;
+    const canFlash = connected && fw && !flashing && (!erase || eraseConfirmed);
     const canConnect = hasWebSerial && !connecting && !flashing;
 
     return (
@@ -235,10 +236,17 @@ import {
                 <span className="k">Address</span>
                 <input className="num-input" style={{ width: 110, textAlign: "left" }} value={addr} onChange={(e) => setAddr(e.target.value)} />
                 <span className="k">Erase all</span>
-                <label className="ex-check" style={{ margin: 0 }} onClick={() => setErase((x) => !x)}>
+                <label className="ex-check" style={{ margin: 0 }}>
+                  <input type="checkbox" checked={erase} onChange={() => { setErase((x) => !x); setEraseConfirmed(false); }} />
                   <span className={"ex-toggle" + (erase ? " on" : "")} />
                   <span className="hint">Wipes the chip first — takes ~15 s. Factory firmware flashes at {DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS}; app-only replacements usually flash at {DEFAULT_WLED_APP_FLASH_ADDRESS} with this off.</span>
                 </label>
+                {erase && (
+                  <label className="ex-check" style={{ margin: 0, gridColumn: '1 / -1' }}>
+                    <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
+                    <span className="hint"><strong>Final confirmation:</strong> I understand Erase all permanently removes the current card settings.</span>
+                  </label>
+                )}
               </div>
             </div>
 
