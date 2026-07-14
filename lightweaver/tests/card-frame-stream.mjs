@@ -20,6 +20,8 @@ import {
   createBridgeFrameTransport,
   createCardFrameStream,
   createDirectFrameTransport,
+  createFrameOwnershipCoordinator,
+  reclaimCardFrameStreams,
   DEFAULT_FRAME_FPS,
   DIRECT_BACKOFF_MAX_MS,
   DIRECT_BACKOFF_MIN_MS,
@@ -67,6 +69,25 @@ function makeTransport(clock) {
     close() { record.closed += 1; },
   };
   return record;
+}
+
+function makeBroadcastHub() {
+  const channels = new Map();
+  return class FakeBroadcastChannel {
+    constructor(name) {
+      this.name = name;
+      this.onmessage = null;
+      const peers = channels.get(name) || new Set();
+      peers.add(this);
+      channels.set(name, peers);
+    }
+    postMessage(data) {
+      for (const peer of channels.get(this.name) || []) {
+        if (peer !== this) peer.onmessage?.({ data: structuredClone(data) });
+      }
+    }
+    close() { channels.get(this.name)?.delete(this); }
+  };
 }
 
 const FRAME = (n) => Array.from({ length: 4 }, (_, i) => `0000${(n * 4 + i).toString(16).padStart(2, '0').toUpperCase()}`);
@@ -195,6 +216,98 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
     assert.ok(gap <= 2000, `background-tab wire cadence ${gap}ms stays under the 2s watchdog`);
   }
   await stream.stop();
+}
+
+// ── ownership: newest same-host stream wins without cancelling it ─────────
+{
+  const clock = makeClock();
+  const health = [];
+  const firstRecord = makeTransport(clock);
+  const secondRecord = makeTransport(clock);
+  const ownership = createFrameOwnershipCoordinator({ BroadcastChannelImpl: null });
+  const first = createCardFrameStream({
+    host: 'HTTP://LIGHTWEAVER.LOCAL/setup',
+    transport: firstRecord.transport,
+    ownershipCoordinator: ownership,
+    onHealth: report => health.push(report),
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  const second = createCardFrameStream({
+    host: 'lightweaver.local',
+    transport: secondRecord.transport,
+    ownershipCoordinator: ownership,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+
+  first.start();
+  first.push(FRAME(1));
+  await clock.advance(60);
+  second.start();
+  assert.equal(first.isActive(), false, 'new same-host stream immediately yields the prior stream');
+  assert.equal(firstRecord.cancels, 0, 'yield never sends cancelStream into the new owner');
+  assert.equal(firstRecord.closed, 1, 'yield closes the prior transport');
+  assert.equal(health.at(-1)?.reason, 'stream-superseded', 'yield surfaces a clear health reason');
+
+  const firstSendCount = firstRecord.sends.length;
+  first.push(FRAME(9));
+  first.start();
+  second.push(FRAME(2));
+  await clock.advance(1000);
+  assert.equal(firstRecord.sends.length, firstSendCount, 'a yielded stream cannot restart or send after push');
+  assert.ok(secondRecord.sends.length > 0, 'the newest owner continues streaming');
+  await first.stop();
+  assert.equal(firstRecord.cancels, 0, 'stopping a yielded stream still does not cancel the owner');
+  await second.stop();
+  assert.equal(secondRecord.cancels, 1, 'explicitly stopping the current owner sends one cancel');
+}
+
+// ── ownership: BroadcastChannel coordinates tabs and isolates hosts ────────
+{
+  const BroadcastChannelImpl = makeBroadcastHub();
+  const clock = makeClock();
+  const tabA = createFrameOwnershipCoordinator({ BroadcastChannelImpl, instanceId: 'tab-a' });
+  const tabB = createFrameOwnershipCoordinator({ BroadcastChannelImpl, instanceId: 'tab-b' });
+  const firstRecord = makeTransport(clock);
+  const secondRecord = makeTransport(clock);
+  const otherHostRecord = makeTransport(clock);
+  const first = createCardFrameStream({ host: '192.168.4.1', transport: firstRecord.transport, ownershipCoordinator: tabA, now: () => 10, setIntervalImpl: clock.setIntervalImpl, clearIntervalImpl: clock.clearIntervalImpl });
+  const otherHost = createCardFrameStream({ host: '192.168.4.2', transport: otherHostRecord.transport, ownershipCoordinator: tabA, now: () => 15, setIntervalImpl: clock.setIntervalImpl, clearIntervalImpl: clock.clearIntervalImpl });
+  const second = createCardFrameStream({ host: 'http://192.168.4.1/', transport: secondRecord.transport, ownershipCoordinator: tabB, now: () => 20, setIntervalImpl: clock.setIntervalImpl, clearIntervalImpl: clock.clearIntervalImpl });
+
+  first.start();
+  otherHost.start();
+  second.start();
+  assert.equal(first.isActive(), false, 'newer claim from another tab supersedes the same normalized host');
+  assert.equal(firstRecord.cancels, 0);
+  assert.equal(otherHost.isActive(), true, 'a stream to another host remains owned and active');
+  assert.equal(otherHostRecord.closed, 0, 'different-host transport is untouched');
+  let releaseHandoff;
+  const reclaimed = reclaimCardFrameStreams('http://192.168.4.1/path', {
+    ownershipCoordinator: tabA,
+    handoffMs: 25,
+    setTimeoutImpl(callback, delay) {
+      assert.equal(delay, 25);
+      releaseHandoff = callback;
+    },
+  });
+  assert.equal(second.isActive(), false, 'reclaim broadcasts to and terminalizes the current owner in another tab');
+  assert.equal(secondRecord.closed, 1, 'reclaimed transport closes immediately');
+  assert.equal(secondRecord.cancels, 0, 'browser reclaim never sends card cancel before recovery');
+  assert.equal(otherHost.isActive(), true, 'reclaim remains scoped to the normalized target host');
+  releaseHandoff();
+  await reclaimed;
+  second.push(FRAME(8));
+  second.start();
+  await clock.advance(1000);
+  assert.equal(secondRecord.sends.length, 0, 'reclaimed stream cannot restart or send again');
+  await second.stop();
+  await otherHost.stop();
+  assert.equal(secondRecord.cancels, 0);
+  assert.equal(otherHostRecord.cancels, 1);
 }
 
 // ── wsOpen:false replies are undelivered (F1 contract) ────────────────────

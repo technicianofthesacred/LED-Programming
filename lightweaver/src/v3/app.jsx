@@ -322,7 +322,7 @@ function Shell() {
       <Rail view={view} setView={setView} />
 
       <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-        {Screen ? <Screen connected={connected} go={setView} /> : null}
+        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={setView} /> : null}
       </Suspense>
 
       <StatusBar

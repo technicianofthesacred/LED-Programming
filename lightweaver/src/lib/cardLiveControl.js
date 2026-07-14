@@ -10,6 +10,7 @@ import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard } from './cardPushClient.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { reclaimCardFrameStreams } from './cardFrameStream.js';
 
 function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
@@ -623,6 +624,12 @@ export async function identifyCardLights(options = {}) {
 export async function recoverCardLights(look = {}, options = {}) {
   const host = options.host || readStoredCardHost();
   const payload = buildRecoverLightsPayload(look);
+  const reclaim = options.reclaimFrameStreams || reclaimCardFrameStreams;
+  await reclaim(host, {
+    ownershipCoordinator: options.ownershipCoordinator,
+    handoffMs: options.reclaimDelayMs ?? 50,
+    setTimeoutImpl: options.setTimeoutImpl,
+  });
   if (isMixedContentBlocked()) {
     try {
       return await sendCardBridgeRequest('recover-lights', payload, { host, timeoutMs: options.timeoutMs || 3000 });

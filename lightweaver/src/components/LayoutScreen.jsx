@@ -16,7 +16,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 // The full useLayoutState() bundle is passed straight through to DrawModePanel
 // as a single `state` prop (that panel references nearly the entire bundle).
 
-export function LayoutScreen({ connected }) {
+export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
@@ -277,7 +277,7 @@ export function LayoutScreen({ connected }) {
         </div>
         {mode === 'draw' && <DrawModePanel state={state}/>}
         {mode === 'size' && <SizeModePanel state={state}/>}
-        {mode === 'wire' && <WireModePanel state={state} connected={connected}/>}
+        {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>}
       </aside>
       </div>{/* .la */}
     </div>

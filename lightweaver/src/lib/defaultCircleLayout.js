@@ -106,8 +106,13 @@ export function createDefaultCircleLayout({
   sectionPixelCounts = null,
   viewBox = DEFAULT_CIRCLE_VIEW_BOX,
 } = {}) {
-  const pixelCounts = Array.isArray(sectionPixelCounts) && sectionPixelCounts.length
-    ? sectionPixelCounts
+  const requestedCounts = sectionPixelCounts || (
+    Number(totalPixels) === DEFAULT_CIRCLE_TOTAL_PIXELS && Number(sectionCount) === DEFAULT_CIRCLE_SECTION_COUNT
+      ? [27, 17]
+      : null
+  );
+  const pixelCounts = Array.isArray(requestedCounts) && requestedCounts.length
+    ? requestedCounts
         .slice(0, DEFAULT_CIRCLE_SECTION_LIMIT)
         .map(value => clampHardwarePixelCount(value, 1))
     : distributePixels(totalPixels, sectionCount);

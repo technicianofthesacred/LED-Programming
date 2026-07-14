@@ -6,7 +6,7 @@
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
 import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
-import { I, PATTERN_CATS, STRIP_TESTS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
+import { I, PATTERN_CATS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -50,12 +50,7 @@ import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js
 import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
-import {
-  pushLiveHardwareToCard,
-  pushLivePreviewToCard,
-  recoverCardLights,
-} from '../lib/cardLiveControl.js';
-import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../lib/usbLedColorOrder.js';
+import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
@@ -64,9 +59,6 @@ import {
   openCardBridge,
 } from '../lib/cardBridge.js';
 
-  // Maps the mockup's 4 strip-test ids (r/g/b/w) to the live STRIP_COLOR_TESTS.
-  const STRIP_TEST_TO_PATTERN = { r: 'test-red', g: 'test-green', b: 'test-blue', w: 'test-white' };
-  const STRIP_TEST_BRIGHTNESS = { r: 1, g: 1, b: 1, w: 0.55 };
   // Mockup geometry id -> live symSettings.
   const GEOMETRY_SETTINGS = {
     none: { enabled: false, type: 'none' },
@@ -310,7 +302,6 @@ import {
     const [cat, setCat] = useState("all");
     const [livePreview, setLivePreview] = useState(true);
     const [localCard, setLocalCard] = useState(readLocalChipDefault);
-    const [stripTest, setStripTest] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
     const menuButtonRef = useRef(null);
     const menuRef = useRef(null);
@@ -410,7 +401,6 @@ import {
       [resolveDraftTargetLook, sectionTargets],
     );
 
-    const stripColorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
     const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
       ? []
       : standaloneController?.playlist;
@@ -776,47 +766,6 @@ import {
       setStatus(`Saved “${label}”. Find it under the Mixes filter.`);
     };
 
-    const playStripColorTest = async (testId, colorOrder = stripColorOrder) => {
-      const patternId = STRIP_TEST_TO_PATTERN[testId] || 'test-red';
-      const brightness = STRIP_TEST_BRIGHTNESS[testId] ?? 1;
-      const test = STRIP_TESTS.find(t => t.id === testId) || STRIP_TESTS[0];
-      setStripTest(testId);
-      setStatusKind('');
-      setStatus(`Showing ${test.label} test on ${cardHostToUrl(cardHost)} with ${colorOrder} order...`);
-      try {
-        await recoverCardLights({ patternId, brightness, syncZones: true }, { host: cardHost, timeoutMs: 3200 });
-        setStatusKind('ok');
-        setStatus(`${test.label} test is live. If the strip is not ${test.label.toLowerCase()}, press Try next order.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error?.message || `${test.label} test could not reach ${cardHostToUrl(cardHost)}.`);
-      }
-    };
-
-    const applyStripColorOrder = async (order) => {
-      const nextOrder = normalizeUsbLedColorOrder(order, stripColorOrder);
-      updateController({ led: { colorOrder: nextOrder } });
-      setStatusKind('');
-      setStatus(`Trying ${nextOrder} color order on ${cardHostToUrl(cardHost)}...`);
-      try {
-        const response = await pushLiveHardwareToCard({ colorOrder: nextOrder }, { host: cardHost, timeoutMs: 2200 });
-        const appliedOrder = normalizeUsbLedColorOrder(response?.colorOrder || nextOrder, nextOrder);
-        if (appliedOrder !== nextOrder) updateController({ led: { colorOrder: appliedOrder } });
-        await playStripColorTest(stripTest || 'r', appliedOrder);
-        setStatusKind('ok');
-        setStatus(`${appliedOrder} order is live. Stop when the strip shows the test color.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error?.message || `${nextOrder} color order could not reach ${cardHostToUrl(cardHost)}.`);
-      }
-    };
-
-    const tryNextStripColorOrder = () => {
-      const currentIndex = COLOR_ORDERS.indexOf(stripColorOrder);
-      const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
-      void applyStripColorOrder(nextOrder);
-    };
-
     const writePlaylist = (nextItems) => {
       const normalized = normalizeCardPlaylist(nextItems, { savedLooks, allowEmpty: true });
       updateController({
@@ -1062,17 +1011,6 @@ import {
                     Preview taps on the LED card
                   </label>
                   <span className="pm-saved">All sections saved</span>
-                </div>
-
-                <div className="pm-stripfinder">
-                  <span className="sf-l">Strip finder</span>
-                  <div className="sf-btns">
-                    {STRIP_TESTS.map((t) =>
-                    <button key={t.id} className={"sf-btn" + (stripTest === t.id ? " on" : "")} title={`Test ${t.label}`} onClick={() => playStripColorTest(t.id)} style={stripTest === t.id ? { "--sf": t.col } : null}>{t.short}</button>
-                    )}
-                  </div>
-                  <span className="sf-order">Order <b data-testid="strip-color-order">{stripColorOrder}</b></span>
-                  <button className="btn ghost-sm" onClick={tryNextStripColorOrder}>{I.refresh}Try next order</button>
                 </div>
 
                 {/* design target */}

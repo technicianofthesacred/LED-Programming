@@ -10,6 +10,9 @@ import {
   createWiringChaseSession,
   createWiringChaseState,
   wiringChaseReducer,
+  planAdjacentStripBoundary,
+  planOutputPixelCountAdjustment,
+  planStripPixelCountAdjustment,
 } from './wiringChase.js';
 
 const compiled = {
@@ -72,15 +75,157 @@ test('completion requires explicit confirmation of cable and reserved-unlit rows
   assert.deepEqual(Object.keys(state.confirmedRuns).sort(), ['jump-a', 'reserved-a', 'run-a', 'run-b']);
 });
 
-test('full-frame chase stays black off target, marks first pixel, and never exceeds ten percent', () => {
+test('full-frame chase stays black off target, marks blue first and red last, and never exceeds ten percent', () => {
   const frame = buildWiringChaseFrame({ totalPixels: 8, step: buildWiringChaseSteps(compiled)[1] });
   assert.equal(frame.length, 8);
-  assert.equal(frame[0], '1A0000');
-  assert.ok(frame.slice(1, 4).every(pixel => pixel === '001A00'));
+  assert.equal(frame[0], '00001A');
+  assert.ok(frame.slice(1, 3).every(pixel => pixel === '001A00'));
+  assert.equal(frame[3], '1A0000');
   assert.ok(frame.slice(4).every(pixel => pixel === '000000'));
   for (const pixel of frame) for (const channel of pixel.match(/../g).map(value => parseInt(value, 16))) assert.ok(channel <= CHASE_MAX_CHANNEL);
   const reservedFrame = buildWiringChaseFrame({ totalPixels: 10, step: { ...compiledWithEveryPhysicalRow.runs[2], kind: 'inactive' } });
   assert.ok(reservedFrame.every(pixel => pixel === '000000'));
+});
+
+test('second boundary frame blacks the entire first run and lights only the second run blue through red', () => {
+  const secondStep = { ...buildWiringChaseSteps(compiled)[2], physicalDirection: 'source-forward' };
+  const frame = buildWiringChaseFrame({ totalPixels: compiled.totalPixels, step: secondStep });
+  assert.deepEqual(frame.slice(0, 4), ['000000', '000000', '000000', '000000']);
+  assert.deepEqual(frame.slice(4), ['00001A', '001A00', '001A00', '1A0000']);
+});
+
+test('a single-pixel chase marker is magenta because it is both first and last', () => {
+  const frame = buildWiringChaseFrame({ totalPixels: 3, step: { kind: 'run', start: 1, count: 1 } });
+  assert.deepEqual(frame, ['000000', '1A001A', '000000']);
+});
+
+test('reverse-mapped run swaps blue and red endpoints while output markers stay fixed', () => {
+  const forward = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'run', start: 1, count: 4, physicalDirection: 'source-forward' } });
+  const reverse = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'run', start: 1, count: 4, physicalDirection: 'source-reverse' } });
+  const output = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'output', start: 1, count: 4, physicalDirection: 'source-reverse' } });
+  assert.equal(forward[1], '00001A');
+  assert.equal(forward[4], '1A0000');
+  assert.equal(reverse[1], '1A0000');
+  assert.equal(reverse[4], '00001A');
+  assert.equal(output[1], '00001A');
+  assert.equal(output[4], '1A0000');
+});
+
+test('adjacent boundary adjustment plans valid counts for distinct strips without changing total', () => {
+  const wiring = {
+    outputs: [{ id: 'out1', runIds: ['outer', 'inner'] }],
+    runs: [
+      { id: 'outer', type: 'strip', source: { stripId: 'outer-strip', from: 0, to: 21 } },
+      { id: 'inner', type: 'strip', source: { stripId: 'inner-strip', from: 0, to: 21 } },
+    ],
+  };
+  let stripCounts = { 'outer-strip': 22, 'inner-strip': 22 };
+  let counts;
+  for (let index = 0; index < 4; index += 1) {
+    counts = planAdjacentStripBoundary(wiring, stripCounts, { outputId: 'out1', runId: 'outer', delta: 1 });
+    stripCounts = Object.fromEntries(counts.map(item => [item.stripId, item.count]));
+  }
+  assert.deepEqual(counts, [
+    { runId: 'outer', stripId: 'outer-strip', count: 26 },
+    { runId: 'inner', stripId: 'inner-strip', count: 18 },
+  ]);
+  assert.equal(wiring.runs[0].source.to, 21);
+  assert.equal(wiring.runs[1].source.to, 21);
+  assert.equal(counts.reduce((sum, item) => sum + item.count, 0), 44);
+});
+
+test('adjacent boundary adjustment refuses to reduce either strip below one pixel', () => {
+  const wiring = {
+    outputs: [{ id: 'out1', runIds: ['a', 'b'] }],
+    runs: [
+      { id: 'a', type: 'strip', source: { stripId: 'a', from: 0, to: 0 } },
+      { id: 'b', type: 'strip', source: { stripId: 'b', from: 0, to: 3 } },
+    ],
+  };
+  assert.throws(() => planAdjacentStripBoundary(wiring, { a: 1, b: 4 }, { outputId: 'out1', runId: 'a', delta: -1 }), /at least one pixel/i);
+  assert.equal(wiring.runs[0].source.to, 0);
+  assert.equal(wiring.runs[1].source.to, 3);
+});
+
+test('the last strip adjusts against its previous neighbor', () => {
+  const wiring = {
+    outputs: [{ id: 'out1', runIds: ['outer', 'inner'] }],
+    runs: [
+      { id: 'outer', type: 'strip', source: { stripId: 'outer', from: 0, to: 25 } },
+      { id: 'inner', type: 'strip', source: { stripId: 'inner', from: 0, to: 17 } },
+    ],
+  };
+  assert.deepEqual(planAdjacentStripBoundary(wiring, { outer: 26, inner: 18 }, { outputId: 'out1', runId: 'inner', delta: 1 }), [
+    { runId: 'inner', stripId: 'inner', count: 19 },
+    { runId: 'outer', stripId: 'outer', count: 25 },
+  ]);
+});
+
+test('output count adjustment resizes its final strip and ignores a trailing cable', () => {
+  const wiring = {
+    outputs: [
+      { id: 'out1', runIds: ['outer', 'inner', 'jump'] },
+      { id: 'out2', runIds: ['other'] },
+    ],
+    runs: [
+      { id: 'outer', type: 'strip', source: { stripId: 'outer', from: 0, to: 25 } },
+      { id: 'inner', type: 'strip', source: { stripId: 'inner', from: 0, to: 17 } },
+      { id: 'jump', type: 'cable' },
+      { id: 'other', type: 'strip', source: { stripId: 'other', from: 0, to: 9 } },
+    ],
+  };
+  assert.deepEqual(planOutputPixelCountAdjustment(wiring, { outer: 26, inner: 18, other: 10 }, { outputId: 'out1', delta: -1 }), {
+    runId: 'inner', stripId: 'inner', count: 17,
+  });
+  assert.deepEqual(planOutputPixelCountAdjustment(wiring, { outer: 26, inner: 18, other: 10 }, { outputId: 'out2', delta: 1 }), {
+    runId: 'other', stripId: 'other', count: 11,
+  });
+});
+
+test('output count adjustment refuses an output without a strip and keeps one pixel minimum', () => {
+  const wiring = {
+    outputs: [{ id: 'out1', runIds: ['reserved', 'jump'] }],
+    runs: [{ id: 'reserved', type: 'inactive', count: 3 }, { id: 'jump', type: 'cable' }],
+  };
+  assert.throws(() => planOutputPixelCountAdjustment(wiring, {}, { outputId: 'out1', delta: 1 }), /no adjustable strip/i);
+  const one = {
+    outputs: [{ id: 'out1', runIds: ['only'] }],
+    runs: [{ id: 'only', type: 'strip', source: { stripId: 'only', from: 0, to: 0 } }],
+  };
+  assert.throws(() => planOutputPixelCountAdjustment(one, { only: 1 }, { outputId: 'out1', delta: -1 }), /at least one pixel/i);
+});
+
+test('inline strip count adjustment targets that exact strip and keeps one pixel minimum', () => {
+  const wiring = {
+    outputs: [{ id: 'out1', runIds: ['outer', 'inner'] }],
+    runs: [
+      { id: 'outer', type: 'strip', source: { stripId: 'outer-strip', from: 0, to: 25 } },
+      { id: 'inner', type: 'strip', source: { stripId: 'inner-strip', from: 0, to: 17 } },
+    ],
+  };
+  assert.deepEqual(planStripPixelCountAdjustment(wiring, { 'outer-strip': 26, 'inner-strip': 18 }, { runId: 'outer', delta: -1 }), {
+    runId: 'outer', stripId: 'outer-strip', count: 25,
+  });
+  assert.deepEqual(planStripPixelCountAdjustment(wiring, { 'outer-strip': 26, 'inner-strip': 18 }, { runId: 'inner', delta: 1 }), {
+    runId: 'inner', stripId: 'inner-strip', count: 19,
+  });
+  assert.throws(() => planStripPixelCountAdjustment(wiring, { 'outer-strip': 26, 'inner-strip': 1 }, { runId: 'inner', delta: -1 }), /at least one pixel/i);
+});
+
+test('syncing compiled wiring keeps the current run active and resends its resized frame', () => {
+  let state = createWiringChaseState(compiled);
+  state = wiringChaseReducer(state, { type: 'next' });
+  const requestId = state.requestId;
+  const resized = {
+    ...compiled,
+    outputs: [{ ...compiled.outputs[0], count: 8 }],
+    runs: [{ ...compiled.runs[0], count: 5 }, { ...compiled.runs[1], start: 5, count: 3 }],
+  };
+  state = wiringChaseReducer(state, { type: 'sync-compiled', compiled: resized });
+  assert.equal(state.steps[state.stepIndex].runId, 'run-a');
+  assert.equal(state.steps[state.stepIndex].count, 5);
+  assert.equal(state.delivery, 'idle');
+  assert.equal(state.requestId, requestId + 1);
 });
 
 test('state cannot confirm without delivery and requires every output/run fact before completion', () => {
@@ -153,7 +298,8 @@ test('session acknowledges real delivery, times out, and restores in cancel-then
     async stop() { order.push('cancelStream'); },
   };
   const session = createWiringChaseSession({
-    createStream: options => { health = options.onHealth; assert.equal(options.fps, 4); return fakeStream; },
+    host: '192.168.18.70',
+    createStream: options => { health = options.onHealth; assert.equal(options.fps, 4); assert.equal(options.host, '192.168.18.70'); return fakeStream; },
     priorLook: { patternId: 'fire' },
     restoreLook: async look => order.push(`restore:${look.patternId}`),
   });
@@ -232,4 +378,38 @@ test('session treats wsOpen false as undelivered even when a relay claims delive
   health({ ok: true, delivered: true, wsOpen: false, consecutiveFailures: 0 });
   await assert.rejects(result, /closed/i);
   assert.deepEqual(order, ['cancelStream', 'restore']);
+});
+
+test('session fails a pending physical check clearly when another tab takes frame ownership', async () => {
+  let health;
+  const order = [];
+  const session = createWiringChaseSession({
+    createStream: options => {
+      health = options.onHealth;
+      return { start() {}, push() {}, async stop() { order.push('stop-yielded'); } };
+    },
+    priorLook: { patternId: 'fire' },
+    restoreLook: async () => order.push('restore-old-look'),
+  });
+  const pending = session.show(['00001A', '1A0000']);
+  health({ delivered: false, consecutiveFailures: 1, reason: 'stream-superseded' });
+  await assert.rejects(pending, /another tab.*took control/i);
+  assert.deepEqual(order, ['stop-yielded'], 'superseded session does not overwrite the new owner by restoring its old look');
+});
+
+test('Recover lights reclaim ends a pending physical check without restoring its old look', async () => {
+  let health;
+  const order = [];
+  const session = createWiringChaseSession({
+    createStream: options => {
+      health = options.onHealth;
+      return { start() {}, push() {}, async stop() { order.push('stop-reclaimed'); } };
+    },
+    priorLook: { patternId: 'fire' },
+    restoreLook: async () => order.push('restore-old-look'),
+  });
+  const pending = session.show(['00001A', '1A0000']);
+  health({ delivered: false, consecutiveFailures: 1, reason: 'stream-reclaimed' });
+  await assert.rejects(pending, /Recover lights/i);
+  assert.deepEqual(order, ['stop-reclaimed']);
 });

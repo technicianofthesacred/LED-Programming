@@ -6,6 +6,18 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 const wled = readFileSync(resolve(here, '../src/LightweaverWledJsonApi.cpp'), 'utf8');
+const websocket = readFileSync(resolve(here, '../src/LightweaverWledWebSocket.cpp'), 'utf8');
+
+assert.match(
+  websocket,
+  /if \(!headerName\.equalsIgnoreCase\("origin"\)\) return true;/,
+  'WebSocket origin validation must ignore ordinary handshake headers such as Host',
+);
+assert.match(
+  websocket,
+  /kWsMandatoryHeaders\[\] = \{"origin"\}/,
+  'browser WebSocket clients must still provide an Origin header',
+);
 
 for (const [name, source] of [
   ['LightweaverWeb.cpp', web],

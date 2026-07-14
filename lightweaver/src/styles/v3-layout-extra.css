@@ -215,15 +215,12 @@
 .lw-viewport { transition: box-shadow .16s ease-out; }
 .lw-viewport--drop { box-shadow: inset 0 0 0 2px var(--accent); }
 
-/* undo/redo step-count badge on the toolbar icon buttons */
-.la .tb-btn.icon { position: relative; }
+/* Inline history count stays inside the toolbar button at any digit width. */
 .la .tb-btn .cnt {
-  position: absolute; top: -3px; right: -3px;
-  min-width: 13px; height: 13px; padding: 0 3px;
-  display: grid; place-items: center;
+  min-width: 11px; padding-left: 2px;
+  display: inline-block;
   font-family: var(--font-mono); font-size: 9px; line-height: 1;
-  color: var(--on-accent, var(--bg-canvas)); background: var(--accent);
-  border-radius: 7px;
+  color: var(--text-faint);
 }
 
 /* ── Wire-mode content (patch-board editor absorbed into WireModePanel) ───

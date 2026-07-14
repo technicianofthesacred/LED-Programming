@@ -52,7 +52,7 @@ async function mockLocalCard(page: any, options: any = {}) {
   return card;
 }
 
-async function gotoWire(page: any, { verified = false } = {}) {
+async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void) } = {}) {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
@@ -68,6 +68,7 @@ async function gotoWire(page: any, { verified = false } = {}) {
   project.layout.wiring.verified = true;
   project.layout.wiring.locked = true;
   project.layout.wiring.runs.forEach((run: any) => { run.verified = true; });
+  transformProject?.(project);
   const ready = path.join(tmp, 'ready.json');
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
@@ -81,8 +82,10 @@ test('Send to card stays disabled for default unverified wiring and makes no req
 
   const send = page.getByTestId('layout-send-to-card');
   await expect(send).toBeDisabled();
+  await expect(send).toContainText('Install on card');
   await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
-  await expect(page.getByTestId('layout-export-ledmap')).toBeVisible();
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'File only — does not change the card');
   expect(card.operations).toEqual([]);
 });
 
@@ -93,7 +96,7 @@ test('a successful push is pending until acknowledgement and records the exact i
 
   await page.getByTestId('layout-send-to-card').click();
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
-  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Pushing/);
+  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Installing/);
 
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 5000 });
@@ -102,6 +105,29 @@ test('a successful push is pending until acknowledgement and records the exact i
   await expect(banner).toContainText(/zone/i);
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
+});
+
+test('Install on card uses the edited physical lane GPIO and compiled pixel count', async ({ page }) => {
+  const card = await mockLocalCard(page);
+  await gotoWire(page, {
+    verified: true,
+    transformProject(project: any) {
+      const outer = project.layout.strips.find((strip: any) => strip.name === 'Outer circle');
+      const outerRun = project.layout.wiring.runs.find((run: any) => run.source?.stripId === outer.id);
+      outer.pixelCount = 26;
+      outer.pixels = outer.pixels.slice(0, 26).map((pixel: any, index: number) => ({ ...pixel, index }));
+      outerRun.source.to = 25;
+      outerRun.seamLed = Math.min(Number(outerRun.seamLed) || 25, 25);
+      project.layout.wiring.outputs[0].pin = 38;
+    },
+  });
+
+  await page.getByTestId('layout-send-to-card').click();
+  await expect(page.locator('.la-card-push-banner')).toHaveClass(/is-ok/);
+  expect(card.savedConfig.led.pixels).toBe(43);
+  expect(card.savedConfig.led.outputs).toEqual([
+    expect.objectContaining({ pin: 38, pixels: 43 }),
+  ]);
 });
 
 test('a failed push retains the acknowledged installed revision and Retry installs successfully', async ({ page }) => {
@@ -132,7 +158,7 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   expect(card.attemptedConfigs.at(-1)).toEqual(failedPayload);
 });
 
-test('Export ledmap.json downloads a valid { n, map } WLED ledmap', async ({ page }) => {
+test('Download WLED map exports a valid { n, map } file', async ({ page }) => {
   await mockLocalCard(page);
   await gotoWire(page);
 

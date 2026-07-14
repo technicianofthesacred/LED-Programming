@@ -121,11 +121,11 @@ void applyState(uint8_t* payload, size_t length) {
 // browser. Browsers always send an Origin header on a cross-document WS
 // connect; we accept it only if it matches the shared HTTP CORS allowlist
 // (Studio + local dev) OR is the card's own page (same host as this server).
-// Non-browser clients (the designer's native tooling, curl) send no Origin and
-// are allowed, mirroring the HTTP API where a missing Origin is unrestricted.
 bool validateWsOrigin(String headerName, String headerValue) {
-  (void)headerName;  // only "origin" is registered as mandatory below
-  if (!headerValue.length()) return true;  // non-browser client, no Origin
+  // arduinoWebSockets invokes this callback for every non-core HTTP header,
+  // not only the mandatory header named below. Ordinary handshake headers
+  // such as Host must not be interpreted as Origin values.
+  if (!headerName.equalsIgnoreCase("origin")) return true;
   if (corsOriginAllowed(headerValue)) return true;
   // Same-origin: the card's own page served over http on the LAN. Match the
   // active hostname (lightweaver.local) and the AP/STA IP.
@@ -174,8 +174,7 @@ void setupWledWebSocket() {
   ws.begin();
   ws.onEvent(onEvent);
   // Reject the handshake when a browser presents a disallowed Origin. "origin"
-  // is marked mandatory so the validator runs on every connection that carries
-  // it; clients without the header (native tooling) still pass through.
+  // is mandatory, so browser and native clients must identify their origin.
   static const char* kWsMandatoryHeaders[] = {"origin"};
   ws.onValidateHttpHeader(validateWsOrigin, kWsMandatoryHeaders, 1);
   started = true;

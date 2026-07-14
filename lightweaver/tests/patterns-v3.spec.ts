@@ -3,8 +3,8 @@ import { REAL_PATTERNS } from '../src/v3/v3-data.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
-// browse cards, .pm-targetcard, .pm-stripfinder, .chips/.chip, and the testids
-// that the live component exposes (strip-color-order, save-current-combo,
+// browse cards, .pm-targetcard, .chips/.chip, and the testids
+// that the live component exposes (save-current-combo,
 // section-target-*, look-color-picker, look-*-slider/-readout, card-*-label).
 
 async function setRangeValue(locator, value: string) {
@@ -27,7 +27,9 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
 
   // The mockup shell and the browse grid render.
   await expect(page.locator('.pm')).toBeVisible();
-  await expect(page.locator('.pm-stripfinder')).toBeVisible();
+  await expect(page.locator('.pm-stripfinder')).toHaveCount(0);
+  await expect(page.getByText('Strip finder', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Try next order' })).toHaveCount(0);
   await expect(page.locator('.pm-targetcard')).toBeVisible();
 
   // The catalog starts with one exact 24-card batch.
@@ -78,6 +80,21 @@ test('clicking a card updates the preview', async ({ page }) => {
   await expect(page.locator('.pm-preview-pane')).toContainText('Ocean');
   // Live preview pushes the selected pattern to the card.
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
+});
+
+test('Recover lights performs one complete recovery request', async ({ page }) => {
+  const recoveries: Record<string, unknown>[] = [];
+  await page.route('**/api/recover-lights', async route => {
+    recoveries.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, recovered: true }) });
+  });
+  await gotoFreshPatterns(page);
+
+  await page.getByTestId('recover-lights').click();
+  await expect.poll(() => recoveries.length).toBe(1);
+  await page.waitForTimeout(150);
+  expect(recoveries).toHaveLength(1);
+  expect(recoveries[0]).toMatchObject({ patternId: 'warm-white', brightness: 1, syncZones: true });
 });
 
 test('category chips filter the grid', async ({ page }) => {
@@ -132,37 +149,6 @@ test('the advanced hue-shift slider exposes its testids', async ({ page }) => {
   await page.locator('.pmx-advanced summary').click();
   await setRangeValue(page.getByTestId('look-hue-shift-slider'), '-24');
   await expect(page.getByTestId('look-hue-shift-readout')).toHaveText('-24');
-});
-
-test('the strip finder order pill cycles to the next color order', async ({ page }) => {
-  const controlRequests: Record<string, unknown>[] = [];
-  await page.route('**/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44, colorOrder: 'RGB' }, wifi: { ip: 'lightweaver.local' } }),
-    });
-  });
-  await page.route('**/api/control', async route => {
-    const body = JSON.parse(route.request().postData() || '{}');
-    controlRequests.push(body);
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, colorOrder: body.colorOrder || 'RGB' }),
-    });
-  });
-  await page.route('**/api/recover-lights', async route => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-  });
-
-  await gotoFreshPatterns(page);
-
-  await expect(page.getByTestId('strip-color-order')).toHaveText('RGB');
-  await page.locator('.pm-stripfinder').getByRole('button', { name: 'Try next order' }).click();
-
-  await expect(page.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect.poll(() => controlRequests.some(r => r.colorOrder === 'GRB')).toBe(true);
 });
 
 test('saving the current look as a mix adds a mix card to the grid', async ({ page }) => {

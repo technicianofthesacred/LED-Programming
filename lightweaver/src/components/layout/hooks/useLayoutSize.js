@@ -47,6 +47,20 @@ export function useLayoutSize(ctx) {
     setStripCountOverrides(prev => (prev[id] ? prev : { ...prev, [id]: true }));
   }, [resampleStrip, setStripCountOverrides, pushLayoutHistory]);
 
+  const setStripCounts = useCallback((updates = [], { recordHistory = true } = {}) => {
+    const counts = new Map(updates.map(({ id, count }) => [id, Math.max(1, Math.round(Number(count) || 1))]));
+    if (!counts.size) return;
+    if (recordHistory) pushLayoutHistory();
+    setStrips(prev => prev.map(strip => counts.has(strip.id)
+      ? rebuildStrip({ ...strip, pixelCount: counts.get(strip.id) })
+      : strip));
+    setStripCountOverrides(prev => {
+      const next = { ...prev };
+      for (const id of counts.keys()) next[id] = true;
+      return next;
+    });
+  }, [pushLayoutHistory, setStrips, rebuildStrip, setStripCountOverrides]);
+
   // Clear a strip's override and recompute its count from the current density/scale.
   const resetStripCount = useCallback((id) => {
     pushLayoutHistory();
@@ -105,6 +119,7 @@ export function useLayoutSize(ctx) {
     getLedCount,
     resampleStrip,
     setStripCount,
+    setStripCounts,
     resetStripCount,
     stripCountOverrides,
     handleDensityChange,

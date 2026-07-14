@@ -23,8 +23,54 @@ export function buildWiringChaseFrame({ totalPixels = 0, step } = {}) {
   const start = Math.max(0, Number(step.start) || 0);
   const end = Math.min(frame.length, start + Math.max(0, Number(step.count) || 0));
   for (let index = start; index < end; index += 1) frame[index] = '001A00';
-  if (start < end) frame[start] = '1A0000';
+  if (end - start === 1) frame[start] = '1A001A';
+  else if (start < end) {
+    const reversedRun = step.kind === 'run' && step.physicalDirection === 'source-reverse';
+    frame[start] = reversedRun ? '1A0000' : '00001A';
+    frame[end - 1] = reversedRun ? '00001A' : '1A0000';
+  }
   return frame;
+}
+
+export function planAdjacentStripBoundary(wiring = {}, stripCounts = {}, { outputId, runId, delta } = {}) {
+  const output = (wiring.outputs || []).find(item => item.id === outputId);
+  const index = output?.runIds?.indexOf(runId) ?? -1;
+  const runsById = new Map((wiring.runs || []).map(run => [run.id, run]));
+  const active = runsById.get(runId);
+  const next = runsById.get(output?.runIds?.[index + 1]);
+  const previous = runsById.get(output?.runIds?.[index - 1]);
+  const neighbor = next?.type === 'strip' ? next : previous;
+  if (index < 0 || active?.type !== 'strip' || neighbor?.type !== 'strip') throw new Error('This run has no adjacent strip boundary to adjust.');
+  const amount = Math.sign(Number(delta) || 0);
+  const activeCount = Math.max(0, Number(stripCounts[active.source.stripId]) || 0);
+  const neighborCount = Math.max(0, Number(stripCounts[neighbor.source.stripId]) || 0);
+  const nextActive = activeCount + amount;
+  const nextNeighbor = neighborCount - amount;
+  if (nextActive < 1 || nextNeighbor < 1) throw new Error('Each strip must keep at least one pixel.');
+  return [
+    { runId: active.id, stripId: active.source.stripId, count: nextActive },
+    { runId: neighbor.id, stripId: neighbor.source.stripId, count: nextNeighbor },
+  ];
+}
+
+export function planOutputPixelCountAdjustment(wiring = {}, stripCounts = {}, { outputId, delta } = {}) {
+  const output = (wiring.outputs || []).find(item => item.id === outputId);
+  const runsById = new Map((wiring.runs || []).map(run => [run.id, run]));
+  const run = [...(output?.runIds || [])].reverse().map(id => runsById.get(id)).find(item => item?.type === 'strip');
+  if (!run) throw new Error('This output has no adjustable strip.');
+  const amount = Math.sign(Number(delta) || 0);
+  const count = Math.max(0, Number(stripCounts[run.source.stripId]) || 0) + amount;
+  if (count < 1) throw new Error('The strip must keep at least one pixel.');
+  return { runId: run.id, stripId: run.source.stripId, count };
+}
+
+export function planStripPixelCountAdjustment(wiring = {}, stripCounts = {}, { runId, delta } = {}) {
+  const run = (wiring.runs || []).find(item => item.id === runId && item.type === 'strip');
+  if (!run) throw new Error('This wiring row is not an adjustable strip.');
+  const amount = Math.sign(Number(delta) || 0);
+  const count = Math.max(0, Number(stripCounts[run.source.stripId]) || 0) + amount;
+  if (count < 1) throw new Error('The strip must keep at least one pixel.');
+  return { runId: run.id, stripId: run.source.stripId, count };
 }
 
 function completionTruth(state) {
@@ -45,6 +91,12 @@ export function createWiringChaseState(compiled = {}) {
 export function wiringChaseReducer(state, action) {
   if (action.type === 'begin') return createWiringChaseState(action.compiled);
   if (!state || state.status !== 'active') return state;
+  if (action.type === 'sync-compiled') {
+    const active = state.steps[state.stepIndex];
+    const steps = buildWiringChaseSteps(action.compiled);
+    const stepIndex = Math.max(0, steps.findIndex(step => step.kind === active?.kind && step.outputId === active?.outputId && step.runId === active?.runId));
+    return { ...state, steps, stepIndex, delivery: 'idle', error: '', requestId: state.requestId + 1 };
+  }
   if (action.type === 'delivery') {
     if (action.requestId != null && action.requestId !== state.requestId) return state;
     const delivered = action.response?.ok !== false && action.response?.wsOpen !== false;
@@ -96,6 +148,7 @@ export function wiringChaseReducer(state, action) {
 
 export function createWiringChaseSession({
   createStream = createCardFrameStream,
+  host,
   priorLook = null,
   restoreLook = null,
   setTimeoutImpl = setTimeout,
@@ -108,13 +161,13 @@ export function createWiringChaseSession({
   let ended = false;
   let restoring = null;
   let refreshTimer = null;
-  const finish = async () => {
+  const finish = async ({ restorePrior = true } = {}) => {
     if (restoring) return restoring;
     restoring = (async () => {
       await stream.stop();
       if (refreshTimer != null) clearIntervalImpl(refreshTimer);
       refreshTimer = null;
-      if (priorLook && typeof restoreLook === 'function') await restoreLook(priorLook);
+      if (restorePrior && priorLook && typeof restoreLook === 'function') await restoreLook(priorLook);
     })();
     return restoring;
   };
@@ -125,15 +178,24 @@ export function createWiringChaseSession({
     if (timer != null) clearTimeoutImpl(timer);
     timer = null;
     ended = true;
-    try { await finish(); } finally { reject(error); }
+    try { await finish({ restorePrior: !['stream-superseded', 'stream-reclaimed'].includes(error?.reason) }); } finally { reject(error); }
   };
   const stream = createStream({
+    host,
     fps: CHASE_FPS,
     onHealth(health) {
       if (!pending || ended) return;
       if (health?.wsOpen === false || Number(health?.consecutiveFailures || 0) > 0) {
-        const reason = health.reason === 'relay-socket-closed' || health?.wsOpen === false ? 'The card relay socket is closed.' : 'Frame delivery failed.';
-        void fail(new Error(reason));
+        const reason = health.reason === 'stream-reclaimed'
+          ? 'Recover lights stopped this physical check and reclaimed the card from browser frame streams.'
+          : health.reason === 'stream-superseded'
+            ? 'Another tab or Lightweaver screen took control of the card. Restart this physical check to take control again.'
+          : health.reason === 'relay-socket-closed' || health?.wsOpen === false
+            ? 'The card relay socket is closed.'
+            : 'Frame delivery failed.';
+        const error = new Error(reason);
+        error.reason = health.reason || null;
+        void fail(error);
       } else if (health?.delivered === true && health?.ok !== false) {
         const resolve = pending.resolve;
         pending = null;
