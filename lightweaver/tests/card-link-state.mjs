@@ -9,6 +9,7 @@ import {
   getSharedCardLink,
   initialCardLinkState,
   isCardLinkConnected,
+  reportDirectCardStatus,
   reduceCardLink,
 } from '../src/lib/cardLink.js';
 import {
@@ -56,6 +57,17 @@ assert.equal(bridged.transport, 'bridge');
 assert.equal(bridged.card.id, 'lw-001122aabbcc');
 assert.equal(bridged.acknowledgedAt, '2026-07-14T12:00:00.000Z');
 assert.equal(isCardLinkConnected(bridged), true);
+
+const wrongBridgeCard = reduceCardLink(bridgeReadyOnly, {
+  type: 'card-verified',
+  via: 'bridge',
+  host: '192.168.4.1',
+  expectedCard: { id: 'lw-expected' },
+  card: { id: 'lw-different' },
+});
+assert.equal(wrongBridgeCard.state, 'disconnected');
+assert.equal(wrongBridgeCard.reason, 'wrong-card');
+assert.equal(isCardLinkConnected(wrongBridgeCard), false);
 // steady-state pings return the same reference (no re-render churn)
 assert.equal(reduceCardLink(bridged, { type: 'bridge-ping-ok' }), bridged);
 
@@ -102,7 +114,19 @@ const direct = reduceCardLink(initial, {
 assert.equal(direct.state, 'connected-direct');
 assert.equal(direct.transport, 'direct');
 assert.equal(isCardLinkConnected(direct), true);
-assert.equal(reduceCardLink(direct, { type: 'direct-status', connected: true, host: '192.168.18.70' }), direct);
+const wrongDirectCard = reduceCardLink(initial, {
+  type: 'direct-status',
+  connected: true,
+  host: '192.168.18.70',
+  expectedCard: { id: 'lw-expected' },
+  card: { id: 'lw-different' },
+});
+assert.equal(wrongDirectCard.state, 'disconnected');
+assert.equal(wrongDirectCard.reason, 'wrong-card');
+assert.equal(isCardLinkConnected(wrongDirectCard), false);
+assert.equal(reduceCardLink(direct, {
+  type: 'direct-status', connected: true, host: '192.168.18.70', card: { id: 'lw-001122aabbcc' },
+}), direct);
 
 const directDown = reduceCardLink(direct, { type: 'direct-status', connected: false, host: '192.168.18.70' });
 assert.equal(directDown.state, 'disconnected');
@@ -283,6 +307,10 @@ guardedLink.destroy();
 // never silently collapsed to the whole strip.
 const sent = [];
 const listeners = new Map();
+const storedValues = new Map([
+  ['lw_chip_card_host', '192.168.18.70'],
+  ['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' })],
+]);
 const parentBridge = {
   postMessage(message, targetOrigin) {
     sent.push({ message, targetOrigin });
@@ -310,14 +338,38 @@ globalThis.window = {
   opener: null,
   parent: parentBridge,
   localStorage: {
-    getItem: () => '192.168.18.70',
-    setItem: () => {},
-    removeItem: () => {},
+    getItem: key => storedValues.get(key) ?? null,
+    setItem: (key, value) => storedValues.set(key, value),
+    removeItem: key => storedValues.delete(key),
   },
   addEventListener(type, listener) { listeners.set(type, listener); },
   removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
   dispatchEvent: () => {},
 };
+globalThis.localStorage = globalThis.window.localStorage;
+
+// Runtime connection paths compare stable identity before persistence. A card
+// at the remembered IP is still the wrong card when its eFuse-derived ID differs.
+reportDirectCardStatus({
+  connected: true,
+  host: '192.168.18.70',
+  status: { cardId: 'lw-different', firmwareVersion: '1.0.0' },
+});
+assert.equal(getCardLinkState().state, 'disconnected');
+assert.equal(getCardLinkState().reason, 'wrong-card');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+
+listeners.get('lightweaver-card-bridge-changed')?.({
+  detail: {
+    connected: true,
+    verified: true,
+    host: '192.168.18.70',
+    card: { id: 'lw-different', firmwareVersion: '1.0.0' },
+  },
+});
+assert.equal(getCardLinkState().state, 'disconnected');
+assert.equal(getCardLinkState().reason, 'wrong-card');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
 
 const fallbackResponse = await pushLivePreviewToCard(
   { patternId: 'ocean', brightness: 0.8, zone: 'zone-b', syncZones: false },

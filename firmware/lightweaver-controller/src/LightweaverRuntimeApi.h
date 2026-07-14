@@ -37,6 +37,7 @@ bool runtimeGetSyncZones();
 String runtimeZonesJson();
 String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones);
 String runtimeWiringSafetyStatus();
+uint32_t runtimeWiringProbationRemainingMs();
 bool runtimeActivateWiringCandidate(const String& activationId, String& message);
 bool runtimeConfirmWiringCandidate(const String& activationId, String& message);
 bool runtimeRollbackWiringCandidate(const String& activationId, String& message);

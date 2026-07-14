@@ -22,7 +22,12 @@ import {
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
 import { readStoredCardHost } from './cardConnection.js';
-import { normalizeCardIdentity, persistCardIdentity } from './cardIdentity.js';
+import {
+  compareCardIdentity,
+  normalizeCardIdentity,
+  persistCardIdentity,
+  readPersistedCardIdentity,
+} from './cardIdentity.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
 export const CARD_LINK_PING_TIMEOUT_MS = 2500;
@@ -85,6 +90,10 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
     case 'card-verified': {
       if (!event.card?.id) return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', missedPings: 0 };
       if (prev.host && event.host && prev.host !== event.host) return prev;
+      if (event.expectedCard?.id) {
+        const comparison = compareCardIdentity(event.expectedCard, event.card);
+        if (!comparison.ok) return { ...prev, state: 'disconnected', reason: comparison.reason, transport: '', missedPings: 0 };
+      }
       const transport = event.via === 'direct' ? 'direct' : 'bridge';
       return {
         ...prev,
@@ -127,10 +136,14 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       if (event.connected) {
         // The bridge keepalive is authoritative while a bridge is up.
         if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
-        if (prev.state === 'connected-direct' && prev.host === host) return prev;
         if (!event.card?.id) {
           return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', host, missedPings: 0 };
         }
+        if (event.expectedCard?.id) {
+          const comparison = compareCardIdentity(event.expectedCard, event.card);
+          if (!comparison.ok) return { ...prev, state: 'disconnected', reason: comparison.reason, transport: '', host, missedPings: 0 };
+        }
+        if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id) return prev;
         return {
           ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0,
           card: event.card,
@@ -342,10 +355,12 @@ export function getSharedCardLink() {
     if (detail.connected && detail.verified) {
       if (detail.card?.id) {
         const acknowledgedAt = new Date().toISOString();
-        persistCardIdentity(detail.card, { acknowledgedAt });
+        const expectedCard = readPersistedCardIdentity() || null;
+        const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, detail.card) : { ok: true };
+        if (comparison.ok) persistCardIdentity(detail.card, { acknowledgedAt });
         sharedLink.dispatch({
           type: 'card-verified', via: 'bridge', host: detail.host,
-          card: detail.card, acknowledgedAt,
+          card: detail.card, expectedCard, acknowledgedAt,
         });
       } else if (detail.identityError) {
         sharedLink.dispatch({ type: 'bridge-lost', reason: detail.identityError, host: detail.host });
@@ -383,8 +398,10 @@ export function reportDirectCardStatus({ connected = false, checking = false, ho
   if (connected) {
     const identity = card?.id ? card : normalizeCardIdentity(status || card || {}, host);
     const acknowledgedAt = new Date().toISOString();
-    if (identity.id) persistCardIdentity(identity, { acknowledgedAt });
-    link.dispatch({ type: 'direct-status', connected: true, host, card: identity, acknowledgedAt });
+    const expectedCard = readPersistedCardIdentity() || null;
+    const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, identity) : { ok: true };
+    if (identity.id && comparison.ok) persistCardIdentity(identity, { acknowledgedAt });
+    link.dispatch({ type: 'direct-status', connected: true, host, card: identity, expectedCard, acknowledgedAt });
     return;
   }
   if (checking) {
@@ -407,8 +424,10 @@ export async function bootstrapCardLink() {
     await sendCardBridgeRequest('ping', {}, { timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
     const card = await verifyCardBridgeIdentity(getCardBridgeState().host);
     const acknowledgedAt = new Date().toISOString();
-    persistCardIdentity(card, { acknowledgedAt });
-    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, acknowledgedAt });
+    const expectedCard = readPersistedCardIdentity() || null;
+    const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, card) : { ok: true };
+    if (comparison.ok) persistCardIdentity(card, { acknowledgedAt });
+    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, expectedCard, acknowledgedAt });
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not
     // pay this failing re-ping on every startup. A successful bridge

@@ -6,6 +6,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const platform = fs.readFileSync(path.join(root, 'platformio.ini'), 'utf8');
 const main = fs.readFileSync(path.join(root, 'src/main.cpp'), 'utf8');
 const storage = fs.readFileSync(path.join(root, 'src/LightweaverStorage.cpp'), 'utf8');
+const runtimeApi = fs.readFileSync(path.join(root, 'src/LightweaverRuntimeApi.h'), 'utf8');
 const firmwareInfo = main.match(/String runtimeFirmwareInfo\(\)\s*\{[\s\S]*?\n\}/)?.[0] || '';
 const runtimeStatus = storage.match(/String runtimeStatusJson\([^)]*\)\s*\{[\s\S]*?\n\}/)?.[0] || '';
 
@@ -44,5 +45,21 @@ for (const source of [firmwareInfo, runtimeStatus]) {
   assert.match(source, /LW_MAX_RANGES_PER_ZONE/);
   assert.doesNotMatch(source, /doc\["(?:password|credentials|rawNvs)"\]/i, 'identity payloads must not expose secrets or raw NVS');
 }
+
+assert.match(
+  runtimeApi,
+  /uint32_t\s+runtimeWiringProbationRemainingMs\(\)/,
+  'runtime API must expose the live wiring probation remainder to /api/status',
+);
+assert.match(
+  main,
+  /uint32_t\s+runtimeWiringProbationRemainingMs\(\)[\s\S]*?wiringProbationActive[\s\S]*?wiringProbationDeadlineMs\s*-\s*millis\(\)/,
+  'runtime probation getter must read the active in-memory deadline',
+);
+assert.match(
+  runtimeStatus,
+  /runtimeWiringProbationRemainingMs\(\)/,
+  '/api/status must report the live runtime probation remainder rather than the unpopulated storage snapshot',
+);
 
 console.log('card identity capability contract tests passed');

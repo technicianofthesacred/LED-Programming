@@ -1297,6 +1297,12 @@ float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
 
+uint32_t runtimeWiringProbationRemainingMs() {
+  if (!wiringProbationActive) return 0;
+  int32_t remaining = int32_t(wiringProbationDeadlineMs - millis());
+  return remaining > 0 ? static_cast<uint32_t>(remaining) : 0;
+}
+
 String runtimeFirmwareInfo() {
   JsonDocument doc;
   char cardId[16] = {};
@@ -1315,8 +1321,7 @@ String runtimeFirmwareInfo() {
   doc["runtimeSource"] = runtimeConfig.source == SOURCE_SD ? "sd" : runtimeConfig.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
   doc["wiringProbation"]["active"] = wiringProbationActive;
-  doc["wiringProbation"]["remainingMs"] = wiringProbationActive && int32_t(wiringProbationDeadlineMs - millis()) > 0
-    ? wiringProbationDeadlineMs - millis() : 0;
+  doc["wiringProbation"]["remainingMs"] = runtimeWiringProbationRemainingMs();
   doc["limits"]["pixels"] = LW_MAX_PIXELS;
   doc["limits"]["outputs"] = LW_MAX_OUTPUTS;
   doc["limits"]["looks"] = LW_MAX_LOOKS;

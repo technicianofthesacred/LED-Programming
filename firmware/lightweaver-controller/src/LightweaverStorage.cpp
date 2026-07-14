@@ -1,4 +1,5 @@
 #include "LightweaverStorage.h"
+#include "LightweaverRuntimeApi.h"
 #include <new>
 #include <esp_system.h>
 
@@ -1143,9 +1144,9 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["source"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["runtimeSource"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
-  WiringSafetyStatus wiring = getRuntimeWiringSafetyStatus();
-  doc["wiringProbation"]["active"] = wiring.bootedCandidate;
-  doc["wiringProbation"]["remainingMs"] = wiring.remainingProbationMs;
+  uint32_t remainingProbationMs = runtimeWiringProbationRemainingMs();
+  doc["wiringProbation"]["active"] = remainingProbationMs > 0;
+  doc["wiringProbation"]["remainingMs"] = remainingProbationMs;
   doc["limits"]["pixels"] = LW_MAX_PIXELS;
   doc["limits"]["outputs"] = LW_MAX_OUTPUTS;
   doc["limits"]["looks"] = LW_MAX_LOOKS;
