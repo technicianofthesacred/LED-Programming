@@ -372,10 +372,15 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);
   assert.match(verifyJob, /npm run test:core:source/);
+  assert.match(verifyJob, /node scripts\/ensure-rollup-native\.mjs/);
   assert.match(verifyJob, /pio run/);
   assert.ok(
     verifyJob.indexOf('npm run test:core:source') < verifyJob.indexOf('pio run'),
     'every source/core contract must pass before the protected signer can run',
+  );
+  assert.ok(
+    verifyJob.indexOf('node scripts/ensure-rollup-native.mjs') < verifyJob.indexOf('npm run build'),
+    'CI must repair npm optional Rollup binaries before the Studio build',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],

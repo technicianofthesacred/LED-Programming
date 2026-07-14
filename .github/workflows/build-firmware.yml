@@ -68,6 +68,7 @@ jobs:
           # commit; the protected build below replaces it. Every other normal
           # core contract still runs here and must pass before secrets unlock.
           npm run test:core:source
+          node scripts/ensure-rollup-native.mjs
           npm run build
 
       - name: Verify pinned firmware compiles with the source identity
