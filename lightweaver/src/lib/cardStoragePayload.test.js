@@ -39,6 +39,11 @@ test('prepares all 19 playlist looks within the card flash storage limit', () =>
 
   assert.ok(prepared.bytes <= CARD_CONFIG_STORAGE_LIMIT_BYTES, `expected compact config within limit, got ${prepared.bytes}`);
   assert.deepEqual(prepared.config.looks.map(look => look.id), selectedPatterns.map(pattern => pattern.id));
+  assert.deepEqual(
+    reconstructFirmwareLookDefaults(prepared.config),
+    runtimePackage.config.looks,
+    'firmware defaults must reconstruct every original look field without semantic loss',
+  );
   assert.equal('patterns' in prepared.config, false);
   assert.equal(prepared.bytes, Buffer.byteLength(prepared.json, 'utf8'));
 });
@@ -229,3 +234,31 @@ test('throws an exact UTF-8 capacity error for an oversized compact combo', () =
     },
   );
 });
+
+function reconstructFirmwareLookDefaults(config = {}) {
+  return config.looks.map(look => ({
+    ...look,
+    mode: look.mode ?? (config.mode === 'sd-sequence' ? 'sequence' : 'procedural'),
+    preset: look.preset ?? look.id,
+    fps: look.fps ?? 24,
+    loop: look.loop ?? true,
+    fadeOutMs: look.fadeOutMs ?? 320,
+    fadeInMs: look.fadeInMs ?? 420,
+    brightness: look.brightness ?? 0.65,
+    ...(Array.isArray(look.zones) ? { zones: look.zones.map(reconstructFirmwareZoneDefaults) } : {}),
+  }));
+}
+
+function reconstructFirmwareZoneDefaults(zone = {}) {
+  return {
+    ...zone,
+    brightness: zone.brightness ?? 1,
+    speed: zone.speed ?? 1,
+    hueShift: zone.hueShift ?? 0,
+    customHue: zone.customHue ?? 32,
+    customSaturation: zone.customSaturation ?? 230,
+    customBreathe: zone.customBreathe ?? false,
+    customDrift: zone.customDrift ?? false,
+    blackout: zone.blackout ?? false,
+  };
+}
