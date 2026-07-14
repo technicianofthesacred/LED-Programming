@@ -21,6 +21,16 @@ export async function connectESP({ onAttempt, onLog } = {}) {
   });
 }
 
+export async function inspectConnectedESP(loader, chipDescription = '') {
+  if (!loader) throw new Error('The connected card could not be inspected');
+  const flashSize = await loader.detectFlashSize();
+  return {
+    chipDescription: String(chipDescription || loader.chip?.CHIP_NAME || 'Unknown chip'),
+    chipName: String(loader.chip?.CHIP_NAME || ''),
+    flashSize,
+  };
+}
+
 export async function disconnectESP(loader, transport) {
   try {
     if (transport) await transport.disconnect().catch(() => {});

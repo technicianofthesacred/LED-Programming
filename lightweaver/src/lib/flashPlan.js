@@ -9,6 +9,8 @@ export const ESP_IMAGE_MAGIC = 0xe9;
 // factory-firmware URL is not the real binary (an error page, a truncated
 // download, or an HTML fallback served with HTTP 200).
 export const MIN_FACTORY_IMAGE_BYTES = 512 * 1024;
+export const LIGHTWEAVER_INSTALL_CHIP = 'ESP32-S3';
+export const LIGHTWEAVER_INSTALL_FLASH_BYTES = 16 * 1024 * 1024;
 
 const BROKEN_SUFFIX = '— nothing was written to your card.';
 
@@ -74,4 +76,27 @@ export function validateFlashPlan({ address, eraseAll }) {
   }
 
   return { address: parsedAddress };
+}
+
+function flashSizeToBytes(value) {
+  const match = /^\s*(\d+)\s*(KB|MB)\s*$/i.exec(String(value ?? ''));
+  if (!match) return null;
+  const multiplier = match[2].toUpperCase() === 'MB' ? 1024 * 1024 : 1024;
+  const bytes = Number(match[1]) * multiplier;
+  return Number.isSafeInteger(bytes) ? bytes : null;
+}
+
+export function validateInstallHardware({ chipName, flashSize } = {}) {
+  const normalizedChip = String(chipName ?? '').trim().toUpperCase();
+  if (normalizedChip !== LIGHTWEAVER_INSTALL_CHIP) {
+    throw new Error(`This is ${chipName || 'an unknown chip'}, not an ESP32-S3. Nothing was erased or installed.`);
+  }
+  const flashBytes = flashSizeToBytes(flashSize);
+  if (flashBytes == null) {
+    throw new Error('Studio could not verify the card has 16 MB of flash. Nothing was erased or installed.');
+  }
+  if (flashBytes !== LIGHTWEAVER_INSTALL_FLASH_BYTES) {
+    throw new Error(`This card has ${flashSize} of flash; Lightweaver needs 16 MB. Nothing was erased or installed.`);
+  }
+  return { chipName: LIGHTWEAVER_INSTALL_CHIP, flashBytes };
 }

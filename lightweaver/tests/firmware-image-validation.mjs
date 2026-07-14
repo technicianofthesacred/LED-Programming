@@ -10,12 +10,34 @@
 import assert from 'node:assert/strict';
 import {
   ESP_IMAGE_MAGIC,
+  LIGHTWEAVER_INSTALL_CHIP,
+  LIGHTWEAVER_INSTALL_FLASH_BYTES,
   MIN_FACTORY_IMAGE_BYTES,
+  validateInstallHardware,
   validateFirmwareImage,
 } from '../src/lib/flashPlan.js';
 
 assert.equal(ESP_IMAGE_MAGIC, 0xe9, 'ESP image magic byte is 0xE9');
 assert.ok(MIN_FACTORY_IMAGE_BYTES >= 512 * 1024, 'factory image floor is at least 512 KB');
+assert.equal(LIGHTWEAVER_INSTALL_CHIP, 'ESP32-S3');
+assert.equal(LIGHTWEAVER_INSTALL_FLASH_BYTES, 16 * 1024 * 1024);
+
+assert.deepEqual(
+  validateInstallHardware({ chipName: 'ESP32-S3', flashSize: '16MB' }),
+  { chipName: 'ESP32-S3', flashBytes: 16 * 1024 * 1024 },
+);
+assert.throws(
+  () => validateInstallHardware({ chipName: 'ESP32-C3', flashSize: '16MB' }),
+  /not an ESP32-S3.*nothing was erased or installed/i,
+);
+assert.throws(
+  () => validateInstallHardware({ chipName: 'ESP32-S3', flashSize: '8MB' }),
+  /needs 16 MB.*nothing was erased or installed/i,
+);
+assert.throws(
+  () => validateInstallHardware({ chipName: 'ESP32-S3', flashSize: 'unknown' }),
+  /could not verify.*nothing was erased or installed/i,
+);
 
 function espImage(size) {
   const bytes = new Uint8Array(size);

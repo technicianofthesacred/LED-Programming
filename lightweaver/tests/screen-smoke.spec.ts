@@ -287,7 +287,8 @@ test('blank-card choice reaches Flash install when Web Serial is supported', asy
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
   await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
-  await expect(page.getByText('Bootloader mode')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Find connected card' })).toBeVisible();
 });
 
 test('connection details reject public hosts and resync before reopening', async ({ page }) => {

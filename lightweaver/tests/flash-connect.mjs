@@ -8,6 +8,10 @@ import { resolve } from 'node:path';
 
 assert.deepEqual(ESP_CONNECT_RESET_SEQUENCE, ['default_reset', 'usb_reset', 'no_reset']);
 
+const flashSource = readFileSync(resolve(import.meta.dirname, '../src/lib/flash.js'), 'utf8');
+assert.match(flashSource, /export async function inspectConnectedESP/);
+assert.match(flashSource, /detectFlashSize\(\)/);
+
 {
   const attempts = [];
   const disconnected = [];
