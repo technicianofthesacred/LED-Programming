@@ -201,6 +201,22 @@ test('keeps patterns when there are no persisted looks', () => {
   assert.deepEqual(compact.looks, []);
 });
 
+test('preserves an object-valued config key when the input is a raw config', () => {
+  const rawConfig = {
+    mode: 'website-flash',
+    futureRootField: 'keep this',
+    config: { futureNestedField: true },
+    looks: [{ id: 'aurora', mode: 'procedural', preset: 'aurora' }],
+  };
+
+  const compact = compactCardStorageConfig(rawConfig);
+
+  assert.equal(compact.mode, 'website-flash');
+  assert.equal(compact.futureRootField, 'keep this');
+  assert.deepEqual(compact.config, { futureNestedField: true });
+  assert.deepEqual(compact.looks, [{ id: 'aurora' }]);
+});
+
 test('throws an exact UTF-8 capacity error for an oversized compact combo', () => {
   const config = {
     piece: { name: '🔥 Gallery Piece' },
@@ -219,7 +235,7 @@ test('throws an exact UTF-8 capacity error for an oversized compact combo', () =
   const expectedBytes = Buffer.byteLength(expectedJson, 'utf8');
 
   assert.throws(
-    () => prepareCardStoragePayload({ config }),
+    () => prepareCardStoragePayload({ format: 'lightweaver-card-runtime-package', config }),
     error => {
       assert.ok(error instanceof CardConfigCapacityError);
       assert.equal(error.name, 'CardConfigCapacityError');

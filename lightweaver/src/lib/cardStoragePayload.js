@@ -14,7 +14,8 @@ export class CardConfigCapacityError extends Error {
 }
 
 export function compactCardStorageConfig(runtimePackageOrConfig = {}) {
-  const source = isObject(runtimePackageOrConfig?.config)
+  const source = runtimePackageOrConfig?.format === 'lightweaver-card-runtime-package' &&
+    isObject(runtimePackageOrConfig?.config)
     ? runtimePackageOrConfig.config
     : runtimePackageOrConfig;
   const config = cloneValue(isObject(source) ? source : {});
