@@ -1,63 +1,92 @@
-# Lightweaver card — flash & run (worker runbook)
+# Lightweaver card — install and run
 
-A code-free checklist for getting a Lightweaver card running by flashing it from
-**led.mandalacodes.com** (Studio opens directly at the root). No programming needed. If a step doesn't match what you
-see, **stop and report exactly what's on screen** — don't guess.
+This is a code-free worker checklist. Start at **[led.mandalacodes.com](https://led.mandalacodes.com)**. Do not type an IP address, search for a firmware file, or use a separate installer page.
 
-> **Before the worker starts (owner check):** make sure the website is serving the
-> **current** firmware. The card only behaves as well as the binary on the site.
-> If firmware was changed recently, rebuild and redeploy first
-> (`firmware/lightweaver-controller/scripts/build-factory-bin.sh`, then
-> `cd lightweaver && npm run deploy:pages`). Otherwise flashing just reinstalls
-> old firmware — the "works but not fully" trap.
+If the screen does not match a step, stop and report what it says. Do not guess around a safety warning.
+
+## Owner release check
+
+Before handing the card to a worker, the owner must confirm that protected CI rebuilt and signed firmware after the latest firmware source change. A source change intentionally makes the freshness gate fail until CI publishes the new release.
+
+Run:
+
+```bash
+cd lightweaver
+npm run launch:check
+npm run check:prod
+```
+
+Do not proceed if the factory binary is stale, signature/release verification fails, the production check fails, or `check:prod` was skipped because the machine was offline. Record the release firmware version, `buildId`, and source revision from the signed manifest/provenance.
 
 ## You need
-- A **laptop or desktop** running **Chrome or Edge** (the flasher uses Web Serial —
-  this does **not** work on a phone, or in Safari/Firefox).
-- The Lightweaver card and its **USB cable**.
-- A phone with WiFi (to finish setup).
 
-## Flash the card
-1. Plug the card into the computer with the USB cable.
-2. Open **led.mandalacodes.com** in Chrome/Edge.
-3. Find the **flash / install firmware** tool and choose the **Lightweaver factory
-   firmware** option (it should select itself and show a file name ending in
-   `-factory.bin`). Leave **Erase all** checked.
-4. Click **Flash**. A browser popup asks you to pick a serial port — choose the one
-   that appears when the card is plugged in (often "USB JTAG" / "CP210x" / "ESP32").
-5. Wait. It erases (~15s) then writes for a minute or two. **Don't unplug.** When it
-   says done / it reboots, flashing is complete.
+- A laptop or desktop with current Chrome or Edge.
+- The Lightweaver ESP32-S3 card.
+- A USB data cable and stable card/LED power.
+- Access to the Wi-Fi network the finished piece will use.
 
-✅ **Success looks like:** the progress reaches 100% and reports done, and the card's
-LEDs do something (light up or flicker) after it reboots.
+## Install Lightweaver
 
-## Connect it to WiFi
-6. On your phone, open WiFi settings. Join the network named **`Lightweaver-XXXX`**
-   (XXXX is letters/numbers). It has no password.
-7. A setup page should open automatically (if not, open a browser — it appears).
-8. Pick the venue/home WiFi, enter its password, and save. The card reboots and joins
-   that network.
+1. Plug in and power the card.
+2. Open `led.mandalacodes.com` in Chrome or Edge.
+3. Select **Connect Lightweaver**.
+4. Choose **Blank or not responding**.
+5. Select **Install Lightweaver**.
+6. When the browser asks, choose the USB device that appeared when the card was connected.
+7. Wait while Studio checks the card and verifies the official signed release.
+8. Read the destructive confirmation, make sure the selected device is the Lightweaver card, and confirm installation.
+9. Do not unplug the card while Studio erases, writes, verifies, and reboots it.
 
-✅ **Success looks like:** after it reboots, the LEDs run a pattern, and the
-`Lightweaver-XXXX` network disappears (because the card is now on the real WiFi).
+Success means Studio reports verified installation and continues to card setup. A flashing percentage or LEDs flickering by themselves are not sufficient proof.
 
-## If something's off — quick recovery (still no code)
-- **No `Lightweaver-XXXX` network appears** → unplug the card, wait 5s, plug back in,
-  wait 30s, look again.
-- **LEDs stay dark or look wrong (wrong colors/half lit)** → re-flash (repeat *Flash
-  the card* with **Erase all** checked). If still wrong, it's likely **wiring/power**,
-  not the flash — report it.
-- **Flash popup shows no serial port** → try a different USB cable (some are
-  charge-only) and a different USB port, then retry from step 1.
-- **It joined the wrong WiFi / you mistyped the password** → unplug/replug; if the
-  `Lightweaver-XXXX` network comes back, redo *Connect it to WiFi*. If it doesn't,
-  report it (a WiFi reset may be needed).
+## Connect and configure
 
-## What to report back to Adrian
-You can't debug code, but these observations are exactly what's useful:
-1. Did flashing reach **100% / done**? Any red error text? (copy it or photo it)
-2. After reboot, **what did the LEDs do** — nothing, flicker, steady, a moving pattern?
-3. Did **`Lightweaver-XXXX`** appear, and did the setup page open?
-4. After entering WiFi, did the LEDs start a pattern and the setup network go away?
+1. Continue in the same Studio flow.
+2. When instructed, open Wi-Fi settings and join `Lightweaver-XXXX`.
+3. Return to Studio and press **Continue**.
+4. Choose the venue/home Wi-Fi on the card-owned setup surface and enter its password.
+5. Return to Studio after the card reboots.
+6. Confirm Studio shows the expected card identity before changing GPIOs or LED counts.
 
-A photo of the screen at any failing step is worth more than a description.
+The worker should never need to enter `192.168.4.1`, `lightweaver.local`, or a numeric LAN address.
+
+## Verify real LEDs
+
+1. Open Layout → Wire in Studio.
+2. Check the GPIO/output shown for each physical connector.
+3. Run the physical boundary test. Pixel 1 must be blue and the proposed final pixel must be red.
+4. Use the nearby plus/minus controls until the red pixel is exactly the physical end; pixels beyond it must be dark.
+5. Confirm direction, color order, and every separate output.
+6. Lock wiring only after the real artwork matches Studio.
+7. Choose several patterns. **Playing on Lightweaver** must appear only after the card changes. For several rapid choices, only the final choice should become the confirmed physical selection.
+
+## Reconnect or recover
+
+- If Studio loses the card, use the Card Status control and select **Reconnect**. Do not enter an IP.
+- If the browser blocked the card page, allow the popup/local-network request and use the visible retry action.
+- If the Studio preview changes but the LEDs do not, use **Reconnect** and then **Retry** beside the error.
+- If the lights remain stuck or dark, use **Recover Lights** from Studio. Follow its result, then answer whether light is physically visible.
+- If Studio routes back to USB installation/recovery, follow that guided flow. Do not choose an arbitrary firmware file.
+
+## Stop and report
+
+Stop immediately if:
+
+- the signed release cannot be verified;
+- the card identity or target does not match;
+- Studio warns that firmware/configuration is too large or unsafe;
+- installation loses power or USB connection;
+- a wrong GPIO test does not roll back;
+- Studio says **Playing on Lightweaver** but the physical output did not change; or
+- recovery completes without visible light.
+
+Report:
+
+1. The exact on-screen message and action that failed.
+2. The firmware version and `buildId` shown by Studio.
+3. Whether the USB chooser saw the card.
+4. What the LEDs physically displayed.
+5. Whether `Lightweaver-XXXX` appeared.
+6. Whether reconnect or Recover Lights received a card acknowledgement.
+
+A photo of the failing screen and LEDs is more useful than a guessed explanation.
