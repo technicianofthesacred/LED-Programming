@@ -5,7 +5,7 @@
 
 ## Outcome
 
-Lightweaver Studio is served directly at `https://led.mandalacodes.com/`, while existing `/design` links continue to work. A normal playlist, including the reported 19-look project, saves to the current ESP32 card without deleting looks or exceeding the firmware's 3,968-byte NVS string limit. Clicking a pattern establishes the local card bridge automatically when browser security requires one and then performs the requested preview.
+Lightweaver Studio is served directly at `https://led.mandalacodes.com/`. The obsolete `/design` mount is removed rather than maintained as a second public route. A normal playlist, including the reported 19-look project, saves to the current ESP32 card without deleting looks or exceeding the firmware's 3,968-byte NVS string limit. Clicking a pattern establishes the local card bridge automatically when browser security requires one and then performs the requested preview.
 
 ## Confirmed root causes
 
@@ -29,12 +29,11 @@ The hosted Studio is HTTPS while the card is a private-network HTTP origin. Brow
 
 - Build the production Studio with base `/` and stage the Vite output at the Pages artifact root.
 - Route `/*` to the root `index.html` so hash-based Studio screens work at the canonical domain.
-- Redirect `/design` and `/design/` to `/` while preserving query parameters and hash fragments in the browser.
-- Keep `/design/*` as a compatibility path that resolves into the same root application during the transition; it must not contain a second copy of the bundle.
+- Remove `/design`, `/design/`, and `/design/*` deployment routes. They are not a supported compatibility surface.
 - Serve the visitor page and factory firmware from root-relative paths.
-- Update deployment tests, production-freshness checks, runbooks, fallback links, and workflow comments so `/` is the source of truth.
+- Update deployment tests, production-freshness checks, runbooks, firmware links, fallback links, and workflow comments so `/` is the only source of truth.
 
-Success means entering `https://led.mandalacodes.com/` loads Studio without a visible redirect to `/design/`, and old bookmarked `/design/#...` URLs reach the equivalent root Studio screen.
+Success means entering `https://led.mandalacodes.com/` loads Studio directly and all generated Lightweaver links target root-domain query parameters and hashes without inserting `/design`.
 
 ### 2. Compact card-storage payload
 
@@ -99,14 +98,14 @@ This automation does not weaken origin validation. Privileged messages still tar
 
 - Production build assets use `/` as their base.
 - Pages staging places `index.html`, assets, firmware, headers, and redirects at the artifact root.
-- `/` loads Studio, old `/design` links retain their intended screen, and firmware downloads from the root path.
+- `/` loads Studio, `/design` is absent from staged routing and generated links, and firmware downloads from the root path.
 - Desktop and phone smoke tests cover Layout, Patterns, Flash, and the card bridge entry point.
 
 ## Release and verification
 
 1. Run focused unit and browser tests, then `npm run launch:check`.
 2. Rebuild and commit factory firmware only if firmware source changes. This design is expected to require Studio changes only.
-3. Deploy a Pages preview and validate the root URL, old-link compatibility, compact 19-look handoff, and automatic bridge.
+3. Deploy a Pages preview and validate the root-only URL, absence of `/design` in generated links, compact 19-look handoff, and automatic bridge.
 4. Merge through `main` and wait for the production deployment gate.
 5. Verify the live domain in a fresh browser session and compare the public firmware hash with the committed binary.
 6. Perform one real-card save and pattern-preview check. Confirm the card accepts the 19-look configuration, restarts when required, and responds to subsequent pattern clicks without the manual bridge instruction.
