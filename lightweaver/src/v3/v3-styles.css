@@ -408,6 +408,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
    ============================================================ */
 .status-bar {
   grid-area: stat;
+  position: relative; z-index: 36;
   display: flex; align-items: center; gap: 0;
   padding: 0 12px; height: 32px;
   border-top: 1px solid var(--border-hair);
@@ -492,6 +493,91 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .crumb { min-width: 0; }
 .layer-name { overflow: hidden; text-overflow: ellipsis; }
 
+/* Persistent card connection control and its anchored connection panel. */
+.card-status-control {
+  min-width: 0; height: 26px; max-width: 390px;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 0 9px; border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  background: var(--bg-elev); color: var(--text-mid);
+  transition: background .12s, border-color .12s, color .12s;
+}
+.card-status-control:hover { background: var(--bg-elev-2); border-color: var(--border); color: var(--text-hi); }
+.card-status-control:focus-visible,
+.card-connection-center button:focus-visible,
+.card-connection-center input:focus-visible,
+.card-connection-center summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.card-status-control.is-connected { background: var(--ok-dim); border-color: var(--border-soft); }
+.card-status-control.is-needs-attention { background: var(--bg-sel); border-color: var(--accent-line); }
+.card-status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--idle); }
+.card-status-control.is-connected .card-status-dot { background: var(--ok); }
+.card-status-control.is-connecting .card-status-dot,
+.card-status-control.is-recovering .card-status-dot { background: var(--accent); }
+.card-status-copy { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.card-status-name { color: var(--text-hi); font-weight: 600; }
+.card-status-state { color: var(--text-lo); }
+.card-status-summary {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-lo); font-family: var(--font-mono); font-size: 10.5px;
+}
+
+.card-connection-center {
+  position: fixed; z-index: 50; left: 12px; bottom: 40px;
+  width: min(400px, calc(100vw - 24px)); max-height: min(640px, calc(100vh - 72px));
+  overflow-y: auto; padding: 18px;
+  border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--bg-panel); color: var(--text-mid);
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--bg-app) 72%, transparent);
+}
+.card-connection-center:focus { outline: none; }
+.card-connection-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.card-connection-kicker {
+  margin: 0 0 4px; color: var(--text-lo); font-size: 10px; font-weight: 600;
+  letter-spacing: .09em; text-transform: uppercase;
+}
+.card-connection-head h2 { margin: 0; color: var(--text-hi); font-size: 18px; line-height: 1.25; }
+.card-connection-close {
+  width: 32px; height: 32px; flex: 0 0 auto; border-radius: var(--r-sm);
+  color: var(--text-lo); font-size: 22px; line-height: 1;
+}
+.card-connection-close:hover { background: var(--bg-elev); color: var(--text-hi); }
+.card-condition-choices { display: grid; gap: 9px; margin-top: 16px; }
+.card-condition-choices > p,
+.card-connection-action > p { margin: 0 0 4px; color: var(--text-lo); font-size: 12.5px; line-height: 1.5; }
+.card-condition-choice {
+  display: grid; gap: 4px; min-height: 66px; padding: 11px 12px; text-align: left;
+  border: 1px solid var(--border-soft); border-radius: var(--r-md);
+  background: var(--bg-elev); color: var(--text-mid);
+  transition: background .12s, border-color .12s;
+}
+.card-condition-choice:hover { background: var(--bg-sel); border-color: var(--accent-line); }
+.card-condition-choice strong { color: var(--text-hi); font-size: 13px; }
+.card-condition-choice span { color: var(--text-lo); font-size: 11.5px; line-height: 1.4; }
+.card-connection-action { margin-top: 17px; }
+.card-connection-action h3 { margin: 0 0 6px; color: var(--text-hi); font-size: 14px; }
+.card-connection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.card-connection-actions .btn:disabled { opacity: .5; cursor: wait; }
+.card-connection-failure { color: var(--danger) !important; }
+.card-setup-steps { margin: 12px 0 0; padding-left: 20px; color: var(--text-mid); font-size: 12.5px; line-height: 1.65; }
+.card-acknowledged-facts {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px;
+  margin: 13px 0 0; padding: 11px 12px; border-radius: var(--r-md); background: var(--bg-elev);
+  font-size: 11.5px;
+}
+.card-acknowledged-facts dt { color: var(--text-lo); }
+.card-acknowledged-facts dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
+.card-connection-details { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border-hair); }
+.card-connection-details summary { width: fit-content; cursor: pointer; color: var(--text-lo); font-size: 11.5px; }
+.card-connection-details form { display: grid; gap: 7px; margin-top: 11px; }
+.card-connection-details label { color: var(--text-mid); font-size: 11.5px; }
+.card-connection-details form > div { display: flex; gap: 7px; }
+.card-connection-details input {
+  min-width: 0; flex: 1; height: 32px; padding: 0 9px;
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  background: var(--bg-elev); color: var(--text-hi); font-family: var(--font-mono); font-size: 11.5px;
+}
+
 /* ============================================================
    Mobile shell (narrow viewports, e.g. phones)
    The outer app grid's third column is a fixed 320px track that
@@ -518,4 +604,21 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
   .status-bar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 6px; padding: 6px 12px; }
   .sb-card { flex-wrap: wrap; row-gap: 4px; }
   .sb-facts { display: none; }
+
+  .card-status-control { min-height: 44px; max-width: min(100%, 300px); }
+  .card-status-summary { display: none; }
+  .card-connection-center {
+    left: 0; right: 0; bottom: 0; width: 100%; max-height: min(76vh, 640px);
+    padding: 18px 18px max(18px, env(safe-area-inset-bottom));
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+  .card-condition-choice,
+  .card-connection-actions .btn,
+  .card-connection-details .btn,
+  .card-connection-close { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-status-control,
+  .card-condition-choice { transition: none; }
 }

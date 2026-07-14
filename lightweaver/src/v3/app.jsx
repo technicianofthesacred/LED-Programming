@@ -4,12 +4,12 @@
 import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
+import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
+import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
 import {
   bootstrapCardLink,
-  cardLinkStatusText,
-  connectCardLink,
   getCardLinkState,
   isCardLinkConnected,
   reportDirectCardStatus,
@@ -90,31 +90,14 @@ function Rail({ view, setView }) {
 }
 
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
-/* The connection indicator reads the cardLink state machine ONLY: green dot +
-   transport label when connected; otherwise the honest reason plus the
-   one-click fix (Connect to card opens the card page popup, which is the only
-   live path from the HTTPS Studio). */
-function StatusBar({ link, onConnectCard, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
+/* One compact status control opens the shared Connection Center. Transport and
+   host diagnostics stay out of routine chrome. */
+function StatusBar({ link, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
   const connected = isCardLinkConnected(link);
-  const connecting = link.state === 'connecting';
   return (
     <footer className="status-bar">
       <div className="sb-card">
-        <span className={"sb-dot " + (connected ? "on" : "off")} />
-        <span className="sb-label">Card</span>
-        <input className="sb-host" value={link.host || 'lightweaver.local'} readOnly disabled aria-label="Card hostname or IP" />
-        {connected ? (
-          <span className="sb-stream" data-testid="card-link-status"><span className="pulse" />{cardLinkStatusText(link)}</span>
-        ) : (
-          <>
-            <span data-testid="card-link-status" style={{ color: 'var(--text-mid)', whiteSpace: 'nowrap' }}>
-              {cardLinkStatusText(link)}
-            </span>
-            {!connecting && (
-              <button className="sb-connect" onClick={onConnectCard}>Connect to card</button>
-            )}
-          </>
-        )}
+        <CardStatusControl link={link} onOpen={onOpenConnectionCenter} />
       </div>
 
       <div className="sb-div" />
@@ -179,6 +162,7 @@ function applyStoredStudioTheme() {
 
 function Shell() {
   const [view, setView] = useState(viewFromHash);
+  const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, replaceProject, replaceWithNewProject,
     projectLifecycleLabel, markProjectPersisted,
@@ -198,7 +182,7 @@ function Shell() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', view);
-    if (view !== 'layout') params.delete('mode');
+    if (view !== 'layout' && !(view === 'flash' && params.get('mode') === 'install')) params.delete('mode');
     const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
@@ -238,13 +222,8 @@ function Shell() {
   }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host, cardStatus.status]);
   const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
-  const onConnectCard = useCallback(() => {
-    if (directCardControl) {
-      cardStatus.connect?.();
-      return;
-    }
-    connectCardLink();
-  }, [directCardControl, cardStatus]);
+  const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
+  const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
 
   // configured push rate; Tweaks fires lw-preview-settings when it changes
   const [pushFps, setPushFps] = useState(readPushFps);
@@ -328,7 +307,7 @@ function Shell() {
 
       <StatusBar
         link={cardLink}
-        onConnectCard={onConnectCard}
+        onOpenConnectionCenter={openConnectionCenter}
         totalLeds={totalLeds}
         stripCount={strips.length}
         density={layoutDensity}
@@ -336,6 +315,11 @@ function Shell() {
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
+      />
+      <CardConnectionCenter
+        open={connectionCenterOpen}
+        link={cardLink}
+        onClose={closeConnectionCenter}
       />
       <input ref={fileInputRef} type="file" accept=".lw.json,.json" style={{ display: 'none' }} onChange={onFile} />
     </div>

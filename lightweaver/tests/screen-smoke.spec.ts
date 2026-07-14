@@ -4,6 +4,175 @@ import { test, expect } from '@playwright/test';
 // preview screen) alongside the original six.
 const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Show', 'Settings', 'Flash', 'Installer'];
 
+async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'lightweaver.local') {
+  await page.addInitScript(({ id, cardHost }) => {
+    (window as any).__cardPopupCalls = [];
+    const originalOpen = window.open.bind(window);
+    window.open = ((url?: string | URL, name?: string) => {
+      const popup = originalOpen('about:blank', name);
+      (window as any).__cardPopupCalls.push({ url: String(url || ''), name });
+      if (!popup) return popup;
+      Object.defineProperty(popup, 'postMessage', {
+        configurable: true,
+        value(message: any, targetOrigin: string) {
+          queueMicrotask(() => {
+            window.dispatchEvent(new MessageEvent('message', {
+              origin: targetOrigin,
+              source: popup,
+              data: {
+                app: 'LightweaverCardBridge',
+                id: message.id,
+                ok: true,
+                version: 1,
+                response: message.type === 'firmware-info'
+                  ? {
+                      cardId: id,
+                      cardName: 'Gallery card',
+                      firmwareVersion: '1.4.0',
+                      buildId: 'test-build',
+                      outputs: [{ gpio: 16, count: 44 }],
+                    }
+                  : { ok: true },
+              },
+            }));
+          });
+        },
+      });
+      queueMicrotask(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          origin: `http://${cardHost}`,
+          source: popup,
+          data: {
+            app: 'LightweaverCardBridge',
+            type: 'ready',
+            host: cardHost,
+            version: 1,
+          },
+        }));
+      });
+      return popup;
+    }) as typeof window.open;
+  }, { id: cardId, cardHost: host });
+}
+
+test('every primary screen exposes the Lightweaver connection control', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  for (const label of SCREENS) {
+    await page.locator('.rail-item', { hasText: label }).click();
+    await expect(page.getByRole('button', { name: 'Connect Lightweaver' })).toBeVisible();
+  }
+});
+
+test('connection center starts with the two physical card choices', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
+});
+
+test('working-card choice opens the card popup path', async ({ page }) => {
+  await installCardPopupMock(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(1);
+  await expect(page.getByRole('button', { name: /Gallery card.*Connected/i })).toBeVisible();
+});
+
+test('blank-card choice reaches Flash install when Web Serial is supported', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'Blank or not responding' }).click();
+  await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+});
+
+test('blank-card choice explains the supported-device handoff when install is unsupported', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'Blank or not responding' }).click();
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toContainText(/Chrome or Edge|supported computer/i);
+});
+
+test('Escape closes the connection center and restores focus', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const trigger = page.getByRole('button', { name: 'Connect Lightweaver' });
+  await trigger.click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('wrong-card recovery only adopts after the explicit secondary action', async ({ page }) => {
+  await installCardPopupMock(page, 'lw-found-card');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-expected-card',
+      name: 'Expected card',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await expect(page.getByRole('button', { name: 'Use this card instead' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-expected-card');
+  await page.getByRole('button', { name: 'Use this card instead' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-found-card');
+});
+
+test('mobile connection sheet fits without horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  const metrics = await dialog.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return {
+      left: rect.left,
+      right: rect.right,
+      bottom: rect.bottom,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(metrics.left).toBeGreaterThanOrEqual(0);
+  expect(metrics.right).toBeLessThanOrEqual(390);
+  expect(metrics.bottom).toBeLessThanOrEqual(844);
+  expect(metrics.pageScrollWidth).toBe(metrics.pageClientWidth);
+});
+
 test('layout opens with the default two-circle hardware layout', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -124,7 +293,7 @@ test('flash screen is reachable for public chip setup', async ({ page }) => {
   await expect(page.getByText('Bootloader mode')).toBeVisible();
   await expect(page.getByText('Lightweaver firmware', { exact: true })).toBeVisible();
   await expect(page.getByText('Fetch latest WLED')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Flash firmware' })).toBeVisible();
 });
 
@@ -145,71 +314,21 @@ test('installer screen gives a worker the full chip setup checklist', async ({ p
   await expect(page).toHaveURL(/#screen=flash$/);
 });
 
-test('status bar card item retries discovery and stores the found card host', async ({ page }) => {
-  // src/lib/cardConnection.js's CARD_HOST_FALLBACKS dropped the frozen
-  // src-v3 build's hardcoded bench IP (192.168.18.70) — the only fallbacks
-  // discovery tries now are ['lightweaver.local', '192.168.4.1']
-  // (candidateCardHosts). Mock the AP-fallback address instead.
-  //
-  // src/hooks/useCardStatus.js also now runs an unprompted discovery probe
-  // the instant the app mounts (`reconnectNow()` in its effect) and re-polls
-  // every ~2.5s on its own timer, and the footer's "Connect to card" button
-  // only renders while disconnected — so there's a real race between that
-  // ambient poll succeeding (which does NOT persist the host, `persist:
-  // false`) and this test's own click on "Connect to card" (which DOES,
-  // `persist: true`). Freeze the page's timers with Playwright's Clock API
-  // so the ambient re-poll can never fire while this test is driving the
-  // explicit click — only the always-real first mount-time probe (a plain
-  // call, not a timer) and this test's own interactions run.
-  await page.clock.install();
-
-  const statusRequests: string[] = [];
-  let allowApFallback = false;
-  await page.route('http://lightweaver.local/api/status', async route => {
-    statusRequests.push(route.request().url());
-    await route.abort();
-  });
-  await page.route('http://192.168.4.1/api/status', async route => {
-    statusRequests.push(route.request().url());
-    if (!allowApFallback) {
-      await route.abort();
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        ok: true,
-        wifi: { ip: '192.168.4.1', hostname: 'lightweaver' },
-        led: { pixels: 44 },
-      }),
-    });
-  });
-
+test('connection center uses the stored card host and verifies the popup card', async ({ page }) => {
+  await installCardPopupMock(page, 'lw-ap-card', '192.168.4.1');
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_chip_card_host', '192.168.4.1');
+  });
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  // The old dedicated "card-status-reconnect" testid button is gone — the
-  // footer StatusBar (src/v3/app.jsx) now has a plain "Connect to card"
-  // button that drives the same discovery/fallback-host logic
-  // (src/lib/cardConnection.js), and reports state through the
-  // "card-link-status" testid used elsewhere in this suite.
-  const connectButton = page.getByRole('button', { name: 'Connect to card' });
-  // Right after the button first appears, a second in-flight mount probe can
-  // still flip the footer back to "Looking for the card…" — which unmounts
-  // the button — before settling. Wait for the SETTLED disconnected copy
-  // (cardLinkReasonText's 'card-unreachable' string, src/lib/cardLink.js)
-  // so the button we're about to click can't vanish out from under the
-  // click, and only THEN let the AP address start answering.
-  await expect(page.getByTestId('card-link-status')).toContainText('No card found on this network.');
-  await expect(connectButton).toBeVisible();
-  allowApFallback = true;
-  await connectButton.click();
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
 
-  await expect.poll(() => statusRequests.some(url => url.includes('192.168.4.1'))).toBe(true);
-  await expect.poll(async () => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.4.1');
-  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i);
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls[0]?.url || '')).toContain('192.168.4.1');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.4.1');
+  await expect(page.getByRole('button', { name: /Gallery card.*Connected/i })).toBeVisible();
 });
 
 test('patterns target selector wraps without overflow and the footer stays single-line', async ({ page }) => {
