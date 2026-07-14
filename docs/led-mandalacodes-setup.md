@@ -49,6 +49,8 @@ npm run verify:pages
 
 Wrangler is pinned exactly in `devDependencies` and `package-lock.json`. Use the
 npm scripts after `npm ci`; do not replace them with an unpinned `npx` download.
+The pinned Wrangler requires Node 22, which both the reusable test gate and
+production deploy job use.
 
 Important public routes:
 

@@ -10,6 +10,7 @@ const index = readFileSync(resolve(root, 'index.html'), 'utf8');
 const freshness = readFileSync(resolve(root, 'scripts/check-prod-freshness.mjs'), 'utf8');
 const deploymentCheck = readFileSync(resolve(root, 'src/lib/productionDeploymentCheck.js'), 'utf8');
 const workflow = readFileSync(resolve(root, '../.github/workflows/deploy-site.yml'), 'utf8');
+const testWorkflow = readFileSync(resolve(root, '../.github/workflows/test.yml'), 'utf8');
 const setupDoc = readFileSync(resolve(root, '../docs/led-mandalacodes-setup.md'), 'utf8');
 const runtimeRootReferences = [
   readFileSync(resolve(root, 'src/lib/cardPushClient.js'), 'utf8'),
@@ -49,6 +50,10 @@ assert.match(deploymentCheck, /\/design/);
 assert.match(deploymentCheck, /\/firmware\/lightweaver-controller-esp32s3-factory\.bin/);
 assert.match(deploymentCheck, /expected HTTP 404/);
 assert.doesNotMatch(workflow, /\/design\/?/);
+assert.match(workflow, /node-version: '22'/);
+assert.doesNotMatch(workflow, /node-version: '20'/);
+assert.match(testWorkflow, /node-version: '22'/);
+assert.doesNotMatch(testWorkflow, /node-version: '20'/);
 assert.doesNotMatch(deploymentDocs, /led\.mandalacodes\.com\/design\/?#|led\.mandalacodes\.com\/design[^\n]*opens Studio/);
 assert.match(setupDoc, /Wrangler is pinned/);
 assert.match(setupDoc, /PROD_ORIGIN/);
