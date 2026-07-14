@@ -1,3 +1,16 @@
+export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
+  'connected',
+  'reconnect-known-card',
+  'choose-card-condition',
+  'open-setup-network',
+  'open-card-page',
+  'retry-card-page',
+  'web-serial-install',
+  'supported-browser-handoff',
+  'supported-device-handoff',
+  'connector-fallback',
+]);
+
 const ACTION_COPY = Object.freeze({
   connected: Object.freeze({
     title: 'Lightweaver connected',
@@ -52,16 +65,34 @@ const ACTION_COPY = Object.freeze({
 });
 
 const RETRY_REASONS = new Set(['popup-blocked', 'no-answer', 'card-page-closed']);
-const OPEN_PAGE_REASONS = new Set(['identity-missing', 'firmware-too-old']);
+const INSTALL_RECOVERY_REASONS = new Set(['identity-missing', 'firmware-too-old']);
 const MOBILE_PLATFORMS = new Set(['android', 'ios', 'unknown']);
 const DESKTOP_PLATFORMS = new Set(['macos', 'windows', 'linux']);
 
 function action(id, additions = {}) {
-  return { id, ...ACTION_COPY[id], ...additions };
+  const copy = ACTION_COPY[id];
+  if (!copy || !CARD_CONNECTION_ACTION_IDS.includes(id)) {
+    throw new RangeError(`Unknown card connection action: ${String(id)}`);
+  }
+  return { id, ...copy, ...additions };
 }
 
 function hasCardIdentity(value) {
-  return Boolean(value && typeof value === 'object' && String(value.id || value.cardId || '').trim());
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value.id ?? value.cardId;
+  if (typeof candidate !== 'string') return false;
+  const id = candidate.trim();
+  return id.length > 0 && id.length <= 64;
+}
+
+function cardLabel(value, fallback) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  if (typeof value.name === 'string') {
+    const name = value.name.trim().slice(0, 128);
+    if (name) return name;
+  }
+  if (hasCardIdentity(value)) return (value.id ?? value.cardId).trim();
+  return fallback;
 }
 
 function hasKnownCard(input, link) {
@@ -69,6 +100,7 @@ function hasKnownCard(input, link) {
     input.expectedCard,
     input.rememberedCard,
     input.discoveredCard,
+    input.detectedCard,
     input.card,
     input.discovery?.card,
     link.expectedCard,
@@ -115,6 +147,11 @@ function unsupportedInstallHandoff(capabilities) {
   return 'supported-device-handoff';
 }
 
+function installRecoveryAction(capabilities) {
+  if (capabilities.canWebSerialInstall === true) return action('web-serial-install');
+  return action(unsupportedInstallHandoff(capabilities));
+}
+
 export function nextCardConnectionAction(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return action('choose-card-condition');
@@ -142,8 +179,19 @@ export function nextCardConnectionAction(input = {}) {
     });
   }
 
-  if (link.reason === 'wrong-card') return action('reconnect-known-card');
-  if (OPEN_PAGE_REASONS.has(link.reason)) return action('open-card-page');
+  if (link.reason === 'wrong-card') {
+    const expected = cardLabel(input.expectedCard || link.expectedCard, 'your expected card');
+    const detected = cardLabel(input.detectedCard || input.discoveredCard || input.card || link.card, 'a different card');
+    return action('reconnect-known-card', {
+      explanation: `Studio expected ${expected}, but found ${detected}. Reconnect the expected card or explicitly choose the detected card.`,
+      primaryLabel: 'Reconnect expected card',
+      secondaryAction: {
+        id: 'adopt-discovered-card',
+        label: 'Use this card instead',
+      },
+    });
+  }
+  if (INSTALL_RECOVERY_REASONS.has(link.reason)) return installRecoveryAction(capabilities);
   if (RETRY_REASONS.has(link.reason)) return action('retry-card-page');
 
   if (input.intent === 'working-card') {

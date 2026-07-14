@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { nextCardConnectionAction } from './cardConnectionFlow.js';
+import {
+  CARD_CONNECTION_ACTION_IDS,
+  nextCardConnectionAction,
+} from './cardConnectionFlow.js';
 
 const actionCases = [
   ['connected', { link: { state: 'connected-bridge', card: { id: 'lw-a' } } }, 'connected'],
@@ -29,14 +32,48 @@ test('returns the closed action vocabulary with one primary action', () => {
   }
 });
 
+test('exports the exact frozen ten-action vocabulary', () => {
+  assert.deepEqual(CARD_CONNECTION_ACTION_IDS, [
+    'connected',
+    'reconnect-known-card',
+    'choose-card-condition',
+    'open-setup-network',
+    'open-card-page',
+    'retry-card-page',
+    'web-serial-install',
+    'supported-browser-handoff',
+    'supported-device-handoff',
+    'connector-fallback',
+  ]);
+  assert.equal(CARD_CONNECTION_ACTION_IDS.length, 10);
+  assert.equal(Object.isFrozen(CARD_CONNECTION_ACTION_IDS), true);
+  assert.throws(() => CARD_CONNECTION_ACTION_IDS.push('surprise'), TypeError);
+});
+
 test('requires a verified identity before reporting a connection', () => {
   assert.equal(nextCardConnectionAction({
     link: { state: 'connected-direct', card: { id: 'lw-a' } },
+  }).id, 'connected');
+  assert.equal(nextCardConnectionAction({
+    link: { state: 'connected-direct', card: { id: 'x'.repeat(64) } },
   }).id, 'connected');
   assert.notEqual(nextCardConnectionAction({
     link: { state: 'connected-bridge', card: null },
     intent: 'working-card',
   }).id, 'connected');
+
+  const malformedIds = [
+    {},
+    [],
+    '   ',
+    'x'.repeat(65),
+  ];
+  for (const id of malformedIds) {
+    assert.notEqual(nextCardConnectionAction({
+      link: { state: 'connected-direct', card: { id } },
+      intent: 'working-card',
+    }).id, 'connected');
+  }
 });
 
 test('keeps in-flight links busy instead of offering a competing connection path', () => {
@@ -55,8 +92,6 @@ test('keeps in-flight links busy instead of offering a competing connection path
 test('routes known disconnection reasons to honest recovery actions', () => {
   const cases = [
     ['wrong-card', 'reconnect-known-card'],
-    ['identity-missing', 'open-card-page'],
-    ['firmware-too-old', 'open-card-page'],
     ['popup-blocked', 'retry-card-page'],
     ['no-answer', 'retry-card-page'],
     ['card-page-closed', 'retry-card-page'],
@@ -69,6 +104,45 @@ test('routes known disconnection reasons to honest recovery actions', () => {
     });
     assert.equal(action.id, expectedId, reason);
     assert.notEqual(action.id, 'connected', reason);
+  }
+});
+
+test('wrong-card recovery reconnects the expected card and offers explicit adoption only', () => {
+  const action = nextCardConnectionAction({
+    link: { state: 'disconnected', reason: 'wrong-card' },
+    intent: 'working-card',
+    expectedCard: { id: 'lw-expected', name: 'Gallery Mandala' },
+    detectedCard: { id: 'lw-detected', name: 'Workshop Ring' },
+  });
+
+  assert.equal(action.id, 'reconnect-known-card');
+  assert.equal(action.primaryLabel, 'Reconnect expected card');
+  assert.match(action.explanation, /Gallery Mandala/);
+  assert.match(action.explanation, /Workshop Ring/);
+  assert.deepEqual(action.secondaryAction, {
+    id: 'adopt-discovered-card',
+    label: 'Use this card instead',
+  });
+  assert.notEqual(action.id, action.secondaryAction.id);
+});
+
+test('identity failures route to installation or supported handoff without reopening the card page', () => {
+  for (const reason of ['identity-missing', 'firmware-too-old']) {
+    assert.equal(nextCardConnectionAction({
+      link: { state: 'disconnected', reason },
+      intent: 'working-card',
+      capabilities: { canWebSerialInstall: true },
+    }).id, 'web-serial-install', `${reason}: local installation`);
+    assert.equal(nextCardConnectionAction({
+      link: { state: 'disconnected', reason },
+      intent: 'working-card',
+      capabilities: { canWebSerialInstall: false, handoffKind: 'supported-browser-handoff' },
+    }).id, 'supported-browser-handoff', `${reason}: browser handoff`);
+    assert.equal(nextCardConnectionAction({
+      link: { state: 'disconnected', reason },
+      intent: 'working-card',
+      capabilities: { canWebSerialInstall: false, handoffKind: 'supported-device-handoff' },
+    }).id, 'supported-device-handoff', `${reason}: device handoff`);
   }
 });
 
