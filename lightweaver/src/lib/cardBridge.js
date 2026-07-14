@@ -6,6 +6,8 @@ import {
   writeStoredCardHost,
 } from './cardConnection.js';
 import {
+  adoptExpectedCardIdentity,
+  compareCardIdentity,
   normalizeCardIdentity,
   readPersistedCardIdentity,
   requireExpectedCardIdentity,
@@ -67,6 +69,7 @@ let bridgeReady = false;
 // predates versioning (no `version` field in its ready/replies).
 let bridgeVersion = 0;
 let bridgeCard = null;
+let bridgeDiscoveredCard = null;
 let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
@@ -124,6 +127,7 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeReady = false;
   bridgeVersion = 0;
   bridgeCard = null;
+  bridgeDiscoveredCard = null;
   bridgeIdentityError = '';
   dispatchBridgeChange();
 }
@@ -143,6 +147,7 @@ function setBridgeState({
   if (targetChanged) {
     bridgeReady = false;
     bridgeCard = null;
+    bridgeDiscoveredCard = null;
     bridgeIdentityError = '';
     bridgeVersion = 0;
   }
@@ -243,10 +248,19 @@ function handleBridgeMessage(event) {
     try {
       const identity = normalizeCardIdentity(responsePayload, request.host || bridgeHost);
       if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
-      requireExpectedCardIdentity(identity);
-      bridgeCard = identity;
-      bridgeIdentityError = '';
+      bridgeDiscoveredCard = identity;
+      try {
+        requireExpectedCardIdentity(identity);
+        bridgeCard = identity;
+        bridgeIdentityError = '';
+      } catch (error) {
+        // Discovery is read-only and must still succeed. Keep commands locked
+        // until an explicit first-pair adoption or re-pair verifies this card.
+        bridgeCard = null;
+        bridgeIdentityError = error?.reason || 'identity-missing';
+      }
     } catch (error) {
+      bridgeDiscoveredCard = null;
       bridgeCard = null;
       bridgeIdentityError = error?.reason || 'identity-missing';
       dispatchBridgeChange();
@@ -366,6 +380,7 @@ export function getCardBridgeState() {
     // Bridge protocol version the card reported (0 = legacy firmware).
     version: bridgeVersion,
     card: bridgeCard,
+    discoveredCard: bridgeDiscoveredCard,
     identityError: bridgeIdentityError,
     identityVerified,
     host: bridgeHost || readStoredCardHost(),
@@ -373,6 +388,46 @@ export function getCardBridgeState() {
     lastSeenAt: bridgeLastSeenAt,
     open: Boolean(bridgeWindow),
   };
+}
+
+function requireDiscoveredBridgeCard(rawHost = bridgeHost) {
+  const host = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
+  if (!bridgeReady || normalizeCardHost(bridgeHost) !== host) {
+    throw bridgeError('The discovered card belongs to an older bridge host.', 'stale-host');
+  }
+  if (!bridgeDiscoveredCard?.id) {
+    throw bridgeError('Discover the card identity before pairing it.', 'identity-missing');
+  }
+  return bridgeDiscoveredCard;
+}
+
+export function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = requireDiscoveredBridgeCard(rawHost);
+  const expected = readPersistedCardIdentity();
+  if (expected?.id) {
+    const comparison = compareCardIdentity(expected, identity);
+    if (!comparison.ok) {
+      throw bridgeError('Use the explicit re-pair action to replace the expected Lightweaver card.', comparison.reason);
+    }
+  }
+  if (!adoptExpectedCardIdentity(identity)) {
+    throw bridgeError('Could not save the paired Lightweaver identity.', 'identity-storage');
+  }
+  bridgeCard = identity;
+  bridgeIdentityError = '';
+  dispatchBridgeChange();
+  return identity;
+}
+
+export function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = requireDiscoveredBridgeCard(rawHost);
+  if (!adoptExpectedCardIdentity(identity)) {
+    throw bridgeError('Could not replace the paired Lightweaver identity.', 'identity-storage');
+  }
+  bridgeCard = identity;
+  bridgeIdentityError = '';
+  dispatchBridgeChange();
+  return identity;
 }
 
 export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {

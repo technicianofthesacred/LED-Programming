@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {
   acquireCardBridgeFromGesture,
+  adoptDiscoveredCardBridgeIdentity,
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
   getCardBridgeState,
   isCardBridgeLaunch,
   sendCardBridgeRequest,
+  rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
 } from '../src/lib/cardBridge.js';
 
@@ -113,6 +115,20 @@ assert.equal(parentBridgeResponse.fromParentBridge, true);
 assert.equal(messages[0].targetOrigin, 'http://192.168.18.70');
 assert.equal(messages[0].message.app, 'LightweaverStudioBridge');
 
+const discoveredResponse = await sendCardBridgeRequest('firmware-info', {}, {
+  host: '192.168.18.70',
+  timeoutMs: 1000,
+});
+assert.equal(discoveredResponse.cardId, 'lw-handoff-test', 'read-only identity discovery succeeds before pairing');
+assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-handoff-test', 'pending discovered identity is exposed');
+assert.equal(storedIdentityValues.has('lw_card_identity_v1'), false, 'background discovery never adopts a card');
+await assert.rejects(
+  verifyCardBridgeIdentity('192.168.18.70'),
+  error => error?.reason === 'identity-missing',
+  'background verification cannot adopt the first discovered card',
+);
+assert.equal(storedIdentityValues.has('lw_card_identity_v1'), false, 'background verification leaves fresh storage untouched');
+
 const messagesBeforeUnverifiedControl = messages.length;
 await assert.rejects(
   sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
@@ -120,8 +136,9 @@ await assert.rejects(
   'transport readiness must not authorize a privileged bridge command',
 );
 assert.equal(messages.length, messagesBeforeUnverifiedControl, 'unverified privileged command never reaches postMessage');
-storedIdentityValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-handoff-test' }));
 globalThis.localStorage = globalThis.window.localStorage;
+await adoptDiscoveredCardBridgeIdentity('192.168.18.70');
+assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 'explicit first-pair adoption persists identity');
 await verifyCardBridgeIdentity('192.168.18.70');
 
 storedIdentityValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-other-card' }));
@@ -132,7 +149,8 @@ await assert.rejects(
   'persisted identity mismatch must reject a privileged bridge command',
 );
 assert.equal(messages.length, messagesBeforeMismatchedControl, 'mismatched privileged command never reaches postMessage');
-storedIdentityValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-handoff-test' }));
+await rePairDiscoveredCardBridgeIdentity('192.168.18.70');
+assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 're-pair requires its explicit replacement API');
 
 const retryMessages = [];
 const retryListeners = new Map();

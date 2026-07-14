@@ -467,6 +467,55 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   delete globalThis.window;
 }
 
+// Every reconnect re-verifies the exact host before constructing a new socket.
+{
+  let reportedCardId = 'lw-expected';
+  const sockets = [];
+  class ReconnectingWS {
+    constructor() {
+      this.readyState = 0;
+      this.bufferedAmount = 0;
+      this.sent = [];
+      sockets.push(this);
+      queueMicrotask(() => {
+        this.readyState = 1;
+        this.onopen?.();
+      });
+    }
+    send(payload) { this.sent.push(payload); }
+    close() {
+      this.readyState = 3;
+      this.onclose?.({});
+    }
+  }
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  const identityReads = [];
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: ReconnectingWS,
+    fetchImpl: async (url) => {
+      identityReads.push(url);
+      return { ok: true, json: async () => ({ cardId: reportedCardId }) };
+    },
+  });
+  await transport.sendFrame(['FF0000']);
+  assert.equal(sockets.length, 1);
+  assert.equal(sockets[0].sent.length, 1);
+  sockets[0].close();
+  reportedCardId = 'lw-different';
+  await assert.rejects(transport.sendFrame(['00FF00']), error => error?.reason === 'wrong-card');
+  assert.equal(identityReads.length, 2, 'reconnect repeats identity verification');
+  assert.equal(sockets.length, 1, 'wrong-card reconnect constructs no second WebSocket');
+  assert.equal(sockets[0].sent.length, 1, 'wrong-card reconnect sends no frame');
+  delete globalThis.window;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 //  Studio bridge side: 'frame' rides the privileged postMessage channel and
 //  the reported bridge version gates it.

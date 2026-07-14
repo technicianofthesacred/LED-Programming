@@ -5,6 +5,7 @@ import {
   cardLinkBootstrapFailureReason,
   cardLinkReasonText,
   cardLinkStatusText,
+  connectCardLink,
   createCardLink,
   getCardLinkState,
   getSharedCardLink,
@@ -350,7 +351,7 @@ globalThis.window = {
   },
   addEventListener(type, listener) { listeners.set(type, listener); },
   removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
-  dispatchEvent: () => {},
+  dispatchEvent(event) { listeners.get(event?.type)?.(event); },
 };
 globalThis.localStorage = globalThis.window.localStorage;
 
@@ -405,6 +406,20 @@ const bootState = await bootstrapCardLink();
 assert.equal(bootState.state, 'connected-bridge');
 assert.equal(bootState.host, '192.168.18.70');
 assert.equal(getCardLinkState().state, 'connected-bridge');
+
+// A fresh browser adopts its first discovered identity only after the existing
+// Connect button's user gesture opens the card bridge.
+storedValues.delete('lw_card_identity_v1');
+globalThis.window.open = () => parentBridge;
+assert.equal(connectCardLink('192.168.18.70'), parentBridge);
+listeners.get('message')?.({
+  origin: 'http://192.168.18.70',
+  source: parentBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.18.70', version: 1 },
+});
+await waitFor(() => storedValues.has('lw_card_identity_v1'), 2000, 'explicit Connect first-pair adoption');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+await waitFor(() => getCardLinkState().state === 'connected-bridge', 2000, 'first-pair verified connection');
 getSharedCardLink().destroy();
 
 console.log('card-link-state tests passed');

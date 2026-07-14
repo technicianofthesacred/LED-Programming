@@ -15,6 +15,7 @@
 // wired to cardBridge's change events for the app to subscribe to.
 import {
   CARD_BRIDGE_CHANGED_EVENT,
+  adoptDiscoveredCardBridgeIdentity,
   bootstrapCardBridgeFromOpener,
   getCardBridgeState,
   openCardBridge,
@@ -345,6 +346,14 @@ export function createCardLink({
 
 // ── shared browser instance ────────────────────────────────────────────────
 let sharedLink = null;
+let pendingFirstPairHost = '';
+let pendingFirstPairTimer = null;
+
+function clearPendingFirstPair() {
+  pendingFirstPairHost = '';
+  if (pendingFirstPairTimer) clearTimeout(pendingFirstPairTimer);
+  pendingFirstPairTimer = null;
+}
 
 export function getSharedCardLink() {
   if (sharedLink) return sharedLink;
@@ -353,6 +362,16 @@ export function getSharedCardLink() {
   win?.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, (event) => {
     const detail = event?.detail || {};
     if (detail.connected && detail.verified) {
+      if (pendingFirstPairHost && detail.discoveredCard?.id && !readPersistedCardIdentity()) {
+        const host = pendingFirstPairHost;
+        clearPendingFirstPair();
+        try {
+          adoptDiscoveredCardBridgeIdentity(host);
+        } catch (error) {
+          sharedLink.dispatch({ type: 'bridge-lost', reason: error?.reason || 'identity-missing', host });
+        }
+        return;
+      }
       if (detail.card?.id) {
         const acknowledgedAt = new Date().toISOString();
         const expectedCard = readPersistedCardIdentity() || null;
@@ -454,8 +473,15 @@ export async function bootstrapCardLink() {
 // the CARD_BRIDGE_CHANGED_EVENT wiring above.
 export function connectCardLink(rawHost = '') {
   const link = getSharedCardLink();
+  const host = rawHost || readStoredCardHost();
+  clearPendingFirstPair();
+  if (!readPersistedCardIdentity()) {
+    pendingFirstPairHost = host;
+    pendingFirstPairTimer = setTimeout(clearPendingFirstPair, CARD_LINK_CONNECT_TIMEOUT_MS);
+  }
   const opened = openCardBridge(rawHost);
   if (!opened) {
+    clearPendingFirstPair();
     link.dispatch({ type: 'bridge-lost', reason: 'popup-blocked' });
     return null;
   }

@@ -102,6 +102,43 @@ test('direct transport uses the wiring endpoints and card-issued activation id',
   assert.equal(discovery.batch, 2);
 });
 
+test('direct wiring mutations verify expected identity before every POST', async () => {
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  try {
+    for (const reportedIdentity of [{ cardId: 'lw-wrong' }, {}]) {
+      const requests = [];
+      const options = {
+        host: '192.168.18.70',
+        transport: 'direct',
+        fetchImpl: async (url, request = {}) => {
+          requests.push({ url, request });
+          return jsonResponse(reportedIdentity);
+        },
+      };
+      for (const operation of [
+        () => stageCardWiringCandidate({ led: { outputs: [] } }, options),
+        () => activateCardWiringCandidate('activation-1', options),
+        () => confirmCardWiringCandidate('activation-1', options),
+        () => rollbackCardWiringCandidate('activation-1', options),
+        () => discoverCardWiring({ batch: 1 }, options),
+        () => discoverCardWiring({ stop: true }, options),
+      ]) {
+        await assert.rejects(operation(), error => ['wrong-card', 'identity-missing'].includes(error?.reason));
+      }
+      assert.equal(requests.some(({ request }) => request.method === 'POST'), false, 'identity failure sends zero wiring POSTs');
+    }
+  } finally {
+    delete globalThis.window;
+  }
+});
+
 test('bridge transport uses the matching message types and retry policy', async () => {
   const calls = [];
   const bridgeRequestImpl = async (type, payload, options) => {
