@@ -27,7 +27,7 @@
 - Create: `lightweaver/src/lib/platformCapabilities.js`
 - Create: `lightweaver/src/lib/platformCapabilities.test.js`
 
-- [ ] **Step 1: Write failing tests for supported desktop, unsupported Safari/Firefox, Android capability-probed, and insecure contexts.**
+- [x] **Step 1: Write failing tests for supported desktop, unsupported Safari/Firefox, Android capability-probed, and insecure contexts.**
 
 ```js
 import test from 'node:test';
@@ -47,10 +47,10 @@ test('never infers USB support from a browser name', () => {
 });
 ```
 
-- [ ] **Step 2: Run `cd lightweaver && node --test src/lib/platformCapabilities.test.js`.** Expected: FAIL because the module does not exist.
-- [ ] **Step 3: Implement `detectPlatformCapabilities({ secureContext, serial, userAgent, maxTouchPoints })` returning `canWebSerialInstall`, `canControlInstalledCard`, `isMobile`, `platform`, and `handoffKind`.** Use capability presence for authorization; use the user agent only for explanatory platform copy.
-- [ ] **Step 4: Run the focused test.** Expected: PASS.
-- [ ] **Step 5: Commit:** `git add lightweaver/src/lib/platformCapabilities.js lightweaver/src/lib/platformCapabilities.test.js && git commit -m "feat: detect Lightweaver hardware capabilities"`.
+- [x] **Step 2: Run `cd lightweaver && node --test src/lib/platformCapabilities.test.js`.** Expected: FAIL because the module does not exist.
+- [x] **Step 3: Implement `detectPlatformCapabilities({ secureContext, serial, userAgent, maxTouchPoints })` returning `canWebSerialInstall`, `canControlInstalledCard`, `isMobile`, `platform`, and `handoffKind`.** Use capability presence for authorization; use the user agent only for explanatory platform copy.
+- [x] **Step 4: Run the focused test.** Expected: PASS.
+- [x] **Step 5: Commit:** `git add lightweaver/src/lib/platformCapabilities.js lightweaver/src/lib/platformCapabilities.test.js && git commit -m "feat: detect Lightweaver hardware capabilities"`.
 
 ## Task 2: Add stable card identity and verified link state
 
@@ -65,7 +65,7 @@ test('never infers USB support from a browser name', () => {
 - Modify: `firmware/lightweaver-controller/src/LightweaverStorage.cpp`
 - Create: `firmware/lightweaver-controller/tests/card-identity-capabilities.mjs`
 
-- [ ] **Step 1: Write failing tests that normalize `/api/firmware-info` into a stable identity, reject a different card before mutation, and require verified identity before `isCardLinkConnected` returns true.**
+- [x] **Step 1: Write failing tests that normalize `/api/firmware-info` into a stable identity, reject a different card before mutation, and require verified identity before `isCardLinkConnected` returns true.**
 
 ```js
 const identity = normalizeCardIdentity({ pieceId: 'mandala-01', pieceName: 'Front Mandala', build: 'abc123', bridgeVersion: 1 }, '192.168.18.70');
@@ -76,15 +76,15 @@ assert.deepEqual(identity, {
 assert.deepEqual(compareCardIdentity({ id: 'mandala-01' }, { id: 'other' }), { ok: false, reason: 'wrong-card' });
 ```
 
-- [ ] **Step 2: Add a failing firmware contract requiring `/api/firmware-info` and `/api/status` to expose `cardId`, semantic `firmwareVersion`, `buildId`, `configSchemaVersion`, `capabilitiesVersion`, output GPIO/counts, declared limits, runtime source, reset reason, and current wiring probation.**
-- [ ] **Step 3: Run `node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs` and `cd lightweaver && node --test src/lib/cardIdentity.test.js && node tests/card-link-state.mjs`.** Expected: the new firmware and identity tests FAIL.
-- [ ] **Step 4: Pin `LW_FIRMWARE_VERSION`, `LW_BUILD_ID`, `LW_CONFIG_SCHEMA_VERSION`, and `LW_CAPABILITIES_VERSION` through build flags.** Derive `cardId` from the ESP32-S3 eFuse chip ID with a `lw-` prefix; treat it as stable non-secret identity, not an authentication secret.
-- [ ] **Step 5: Extend the two firmware status payloads with the required bounded fields and the existing compile-time limits from `LightweaverTypes.h`.** Do not expose Wi-Fi credentials or raw NVS values.
-- [ ] **Step 6: Implement identity normalization and `compareCardIdentity(expected, actual)`.** Persist only the stable ID, name, unique hostname, last successful address, firmware version/build, and last acknowledgement timestamp under versioned local-storage keys.
-- [ ] **Step 7: Extend card-link state with `card`, `acknowledgedAt`, and `activity`.** `activity` is one of `idle`, `pending`, `recovering`, or `failed` and changes only through `operation-started`, `operation-recovering`, `operation-confirmed`, and `operation-failed` events. A popup opening or unverified `ready` event remains `connecting`; only an acknowledged `firmware-info` response carrying the expected bridge origin and normalized identity dispatches `card-verified` and becomes connected.
-- [ ] **Step 8: Extend the bridge ready path to request `firmware-info` immediately and include the normalized identity in `CARD_BRIDGE_CHANGED_EVENT`.** Preserve bridge-version gating and origin validation.
-- [ ] **Step 9: Run the focused firmware and Studio suites.** Expected: PASS, including stale-host and wrong-card cases.
-- [ ] **Step 10: Commit:** `git add firmware/lightweaver-controller lightweaver/src/lib/cardIdentity.js lightweaver/src/lib/cardIdentity.test.js lightweaver/src/lib/cardLink.js lightweaver/src/lib/cardBridge.js lightweaver/tests/card-link-state.mjs && git commit -m "feat: verify card identity before connection"`.
+- [x] **Step 2: Add a failing firmware contract requiring `/api/firmware-info` and `/api/status` to expose `cardId`, semantic `firmwareVersion`, `buildId`, `configSchemaVersion`, `capabilitiesVersion`, output GPIO/counts, declared limits, runtime source, reset reason, and current wiring probation.**
+- [x] **Step 3: Run `node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs` and `cd lightweaver && node --test src/lib/cardIdentity.test.js && node tests/card-link-state.mjs`.** Expected: the new firmware and identity tests FAIL.
+- [x] **Step 4: Pin `LW_FIRMWARE_VERSION`, `LW_BUILD_ID`, `LW_CONFIG_SCHEMA_VERSION`, and `LW_CAPABILITIES_VERSION` through build flags.** Derive `cardId` from the ESP32-S3 eFuse chip ID with a `lw-` prefix; treat it as stable non-secret identity, not an authentication secret.
+- [x] **Step 5: Extend the two firmware status payloads with the required bounded fields and the existing compile-time limits from `LightweaverTypes.h`.** Do not expose Wi-Fi credentials or raw NVS values.
+- [x] **Step 6: Implement identity normalization and `compareCardIdentity(expected, actual)`.** Persist only the stable ID, name, unique hostname, last successful address, firmware version/build, and last acknowledgement timestamp under versioned local-storage keys.
+- [x] **Step 7: Extend card-link state with `card`, `acknowledgedAt`, and `activity`.** `activity` is one of `idle`, `pending`, `recovering`, or `failed` and changes only through `operation-started`, `operation-recovering`, `operation-confirmed`, and `operation-failed` events. A popup opening or unverified `ready` event remains `connecting`; only an acknowledged `firmware-info` response carrying the expected bridge origin and normalized identity dispatches `card-verified` and becomes connected.
+- [x] **Step 8: Extend the bridge ready path to request `firmware-info` immediately and include the normalized identity in `CARD_BRIDGE_CHANGED_EVENT`.** Preserve bridge-version gating and origin validation.
+- [x] **Step 9: Run the focused firmware and Studio suites.** Expected: PASS, including stale-host and wrong-card cases.
+- [x] **Step 10: Commit:** `git add firmware/lightweaver-controller lightweaver/src/lib/cardIdentity.js lightweaver/src/lib/cardIdentity.test.js lightweaver/src/lib/cardLink.js lightweaver/src/lib/cardBridge.js lightweaver/tests/card-link-state.mjs && git commit -m "feat: verify card identity before connection"`.
 
 ## Task 3: Build the pure connection-flow decision engine
 
@@ -92,7 +92,7 @@ assert.deepEqual(compareCardIdentity({ id: 'mandala-01' }, { id: 'other' }), { o
 - Create: `lightweaver/src/lib/cardConnectionFlow.js`
 - Create: `lightweaver/src/lib/cardConnectionFlow.test.js`
 
-- [ ] **Step 1: Write table-driven failing tests for every supported state.**
+- [x] **Step 1: Write table-driven failing tests for every supported state.**
 
 ```js
 const cases = [
@@ -105,11 +105,11 @@ const cases = [
 for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(input).id, expected);
 ```
 
-- [ ] **Step 2: Run `cd lightweaver && node --test src/lib/cardConnectionFlow.test.js`.** Expected: FAIL because the module does not exist.
-- [ ] **Step 3: Implement a closed action vocabulary:** `connected`, `reconnect-known-card`, `choose-card-condition`, `open-setup-network`, `open-card-page`, `retry-card-page`, `web-serial-install`, `supported-browser-handoff`, `supported-device-handoff`, and `connector-fallback`.
-- [ ] **Step 4: Give every action one title, one short explanation, one primary button label, and an optional secondary help action.** Do not emit browser-security terminology in routine copy.
-- [ ] **Step 5: Run the focused suite.** Expected: PASS and every table fixture produces exactly one primary action.
-- [ ] **Step 6: Commit:** `git add lightweaver/src/lib/cardConnectionFlow.js lightweaver/src/lib/cardConnectionFlow.test.js && git commit -m "feat: route universal card connection flow"`.
+- [x] **Step 2: Run `cd lightweaver && node --test src/lib/cardConnectionFlow.test.js`.** Expected: FAIL because the module does not exist.
+- [x] **Step 3: Implement a closed action vocabulary:** `connected`, `reconnect-known-card`, `choose-card-condition`, `open-setup-network`, `open-card-page`, `retry-card-page`, `web-serial-install`, `supported-browser-handoff`, `supported-device-handoff`, and `connector-fallback`.
+- [x] **Step 4: Give every action one title, one short explanation, one primary button label, and an optional secondary help action.** Do not emit browser-security terminology in routine copy.
+- [x] **Step 5: Run the focused suite.** Expected: PASS and every table fixture produces exactly one primary action.
+- [x] **Step 6: Commit:** `git add lightweaver/src/lib/cardConnectionFlow.js lightweaver/src/lib/cardConnectionFlow.test.js && git commit -m "feat: route universal card connection flow"`.
 
 ## Task 4: Replace the footer-only connection affordance with a global Connection Center
 
@@ -120,14 +120,14 @@ for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(inp
 - Modify: `lightweaver/src/v3/v3-styles.css`
 - Modify: `lightweaver/tests/screen-smoke.spec.ts`
 
-- [ ] **Step 1: Add failing Playwright assertions that every Studio screen exposes one `Connect Lightweaver` control, opens a dialog, and offers `My card already lights up` and `Blank or not responding`.**
-- [ ] **Step 2: Run `cd lightweaver && npx playwright test tests/screen-smoke.spec.ts --grep "Connect Lightweaver"`.** Expected: FAIL against the current footer button.
-- [ ] **Step 3: Implement `CardStatusControl` with the five visual states from the design:** Not connected, Connecting, Connected, Needs attention, Recovering. Connected copy includes card name, pixel total, GPIO summary, and firmware build only when supplied by acknowledged card status.
-- [ ] **Step 4: Implement `CardConnectionCenter` as a modal dialog driven only by `nextCardConnectionAction`.** The working-card path calls `connectCardLink`; the blank-card path navigates to `#screen=flash&mode=install`; unsupported paths show the correct handoff. Keep IP/hostname editing inside a collapsed diagnostic disclosure.
-- [ ] **Step 5: Mount both components once in `app.jsx`; replace the large read-only hostname/footer controls with the compact status control while preserving test-strip controls.**
-- [ ] **Step 6: Add mobile CSS at 390×844 with no horizontal overflow and 44px primary touch targets.**
-- [ ] **Step 7: Run the focused Playwright test at desktop and mobile projects.** Expected: PASS.
-- [ ] **Step 8: Commit:** `git add lightweaver/src/components/card lightweaver/src/v3/app.jsx lightweaver/src/v3/v3-styles.css lightweaver/tests/screen-smoke.spec.ts && git commit -m "feat: add universal Lightweaver connection center"`.
+- [x] **Step 1: Add failing Playwright assertions that every Studio screen exposes one `Connect Lightweaver` control, opens the connection panel, and offers `My card already lights up` and `Blank or not responding`.**
+- [x] **Step 2: Run `cd lightweaver && npx playwright test tests/screen-smoke.spec.ts --grep "Connect Lightweaver"`.** Expected: FAIL against the current footer button.
+- [x] **Step 3: Implement `CardStatusControl` with the five visual states from the design:** Not connected, Connecting, Connected, Needs attention, Recovering. Connected copy includes card name, pixel total, GPIO summary, and firmware build only when supplied by acknowledged card status.
+- [x] **Step 4: Implement `CardConnectionCenter` as a non-blocking anchored panel that becomes a bottom sheet on narrow screens, driven only by `nextCardConnectionAction`.** It uses dialog semantics, closes with Escape/outside click, and does not obscure the whole workspace. The working-card path calls `connectCardLink`; the blank-card path navigates to `#screen=flash&mode=install`; unsupported paths show the correct handoff. Keep IP/hostname editing inside a collapsed diagnostic disclosure.
+- [x] **Step 5: Mount both components once in `app.jsx`; replace the large read-only hostname/footer controls with the compact status control while preserving test-strip controls.**
+- [x] **Step 6: Add mobile CSS at 390×844 with no horizontal overflow and 44px primary touch targets.**
+- [x] **Step 7: Run the focused Playwright test at desktop and mobile projects.** Expected: PASS.
+- [x] **Step 8: Commit:** `git add lightweaver/src/components/card lightweaver/src/v3/app.jsx lightweaver/src/v3/v3-styles.css lightweaver/tests/screen-smoke.spec.ts && git commit -m "feat: add universal Lightweaver connection center"`.
 
 ## Task 5: Make working-card onboarding resumable and identity-safe
 
@@ -139,13 +139,13 @@ for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(inp
 - Modify: `lightweaver/tests/card-bridge-handoff.mjs`
 - Modify: `lightweaver/tests/screen-smoke.spec.ts`
 
-- [ ] **Step 1: Add failing tests for remembered card ID plus replaceable IP, setup-network fallback, popup-blocked retry, and wrong-card refusal.**
-- [ ] **Step 2: Run `cd lightweaver && node tests/card-connection-mode.mjs && node tests/card-bridge-handoff.mjs`.** Expected: at least the new identity cases FAIL.
-- [ ] **Step 3: Make discovery candidates use unique hostname and last successful address before generic `lightweaver.local` and `192.168.4.1`.** Numeric address success updates the hint but never changes the stable ID.
-- [ ] **Step 4: When the card reports setup/AP mode, show three physical steps:** power the card, join `Lightweaver-XXXX`, return and press Continue. Continue opens `192.168.4.1` only from a user gesture.
-- [ ] **Step 5: On reconnect, compare the detected stable ID with the expected project/card association before enabling Save, GPIO, firmware, or recovery mutations.** Offer explicit `Use this card instead` rather than silently rebinding.
-- [ ] **Step 6: Run the Node bridge/discovery suites and focused browser flow.** Expected: PASS.
-- [ ] **Step 7: Commit:** `git add lightweaver/src/lib/cardConnection.js lightweaver/src/hooks/useCardStatus.js lightweaver/src/components/card/CardConnectionCenter.jsx lightweaver/tests && git commit -m "feat: resume safe local card onboarding"`.
+- [x] **Step 1: Add failing tests for remembered card ID plus replaceable IP, setup-network fallback, popup-blocked retry, and wrong-card refusal.**
+- [x] **Step 2: Run `cd lightweaver && node tests/card-connection-mode.mjs && node tests/card-bridge-handoff.mjs`.** Expected: at least the new identity cases FAIL.
+- [x] **Step 3: Make discovery candidates use unique hostname and last successful address before generic `lightweaver.local` and `192.168.4.1`.** Numeric address success updates the hint but never changes the stable ID.
+- [x] **Step 4: When the card reports setup/AP mode, show three physical steps:** power the card, join `Lightweaver-XXXX`, return and press Continue. Continue opens `192.168.4.1` only from a user gesture.
+- [x] **Step 5: On reconnect, compare the detected stable ID with the expected project/card association before enabling Save, GPIO, firmware, or recovery mutations.** Offer explicit `Use this card instead` rather than silently rebinding.
+- [x] **Step 6: Run the Node bridge/discovery suites and focused browser flow.** Expected: PASS.
+- [x] **Step 7: Commit:** `git add lightweaver/src/lib/cardConnection.js lightweaver/src/hooks/useCardStatus.js lightweaver/src/components/card/CardConnectionCenter.jsx lightweaver/tests && git commit -m "feat: resume safe local card onboarding"`.
 
 ## Task 6: Make blank-card installation automatic and platform-correct
 
@@ -169,16 +169,16 @@ for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(inp
 - Modify: `lightweaver/tests/firmware-image-validation.mjs`
 - Create: `lightweaver/tests/universal-install.spec.ts`
 
-- [ ] **Step 1: Write failing tests that install mode automatically selects a publisher-signed deployed factory image, requires secure Web Serial, validates ESP32-S3 identity and 16MB flash, rejects a tampered manifest/image, and never exposes file/address/erase controls.**
-- [ ] **Step 2: Run the focused Node and Playwright tests.** Expected: FAIL because current Flash exposes advanced controls and browser guidance only after navigation.
-- [ ] **Step 3: Define a canonical manifest with `target`, `firmwareVersion`, `buildId`, immutable image URL, size, SHA-256, config schema range, and minimum installer version.** Sign the canonical bytes with ECDSA P-256; pin only the public key in the repository and store the private key exclusively as the protected `LIGHTWEAVER_RELEASE_SIGNING_KEY` CI secret.
-- [ ] **Step 4: Implement release scripts that fail closed when the signing key is absent, publish versioned immutable factory images, sign the manifest, and make CI upload the manifest, signature, image, and provenance artifact together.** Add valid and tampered fixed test vectors without committing the production private key.
-- [ ] **Step 5: Implement `loadProductionFirmwareRelease(fetchImpl, cryptoImpl)` to verify the manifest signature using the pinned public key, then stream/fetch the image and verify its size and SHA-256 before returning its bytes.** Never trust a URL, target, or callback supplied by page query parameters.
-- [ ] **Step 6: Add a simple install mode with one `Find connected card` action, automatic signed production firmware loading, chip/flash validation, plain-language erase confirmation, progress, verification, USB release, and automatic transition to the setup-network step.**
-- [ ] **Step 7: Move file selection, offsets, erase choice, and raw log behind a separately labelled Technician diagnostics disclosure that is not rendered in install mode.**
-- [ ] **Step 8: For unsupported environments, render the action from `cardConnectionFlow` and preserve the current project in the original browser.**
-- [ ] **Step 9: Run the focused suites plus `node lightweaver/tests/pages-staging.mjs`.** Expected: PASS with a staged signed manifest and immutable versioned image.
-- [ ] **Step 10: Commit:** `git add release scripts .github/workflows/build-firmware.yml lightweaver/public/firmware lightweaver/src/lib/firmwareRelease.* lightweaver/src/lib/flash.js lightweaver/src/lib/flashPlan.js lightweaver/src/v3/lw-flash.jsx lightweaver/tests && git commit -m "feat: simplify signed card installation"`.
+- [x] **Step 1: Write failing tests that install mode automatically selects a publisher-signed deployed factory image, requires secure Web Serial, validates ESP32-S3 identity and 16MB flash, rejects a tampered manifest/image, and never exposes file/address/erase controls.**
+- [x] **Step 2: Run the focused Node and Playwright tests.** Expected: FAIL because current Flash exposes advanced controls and browser guidance only after navigation.
+- [x] **Step 3: Define a canonical manifest with `target`, `firmwareVersion`, `buildId`, immutable image URL, size, SHA-256, config schema range, and minimum installer version.** Sign the canonical bytes with ECDSA P-256; pin only the public key in the repository and store the private key exclusively as the protected `LIGHTWEAVER_RELEASE_SIGNING_KEY` CI secret.
+- [x] **Step 4: Implement release scripts that fail closed when the signing key is absent, publish versioned immutable factory images, sign the manifest, and make CI upload the manifest, signature, image, and provenance artifact together.** Add valid and tampered fixed test vectors without committing the production private key.
+- [x] **Step 5: Implement `loadProductionFirmwareRelease(fetchImpl, cryptoImpl)` to verify the manifest signature using the pinned public key, then stream/fetch the image and verify its size and SHA-256 before returning its bytes.** Never trust a URL, target, or callback supplied by page query parameters.
+- [x] **Step 6: Add a simple install mode with one `Find connected card` action, automatic signed production firmware loading, chip/flash validation, plain-language erase confirmation, progress, verification, USB release, and automatic transition to the setup-network step.**
+- [x] **Step 7: Move file selection, offsets, erase choice, and raw log behind a separately labelled Technician diagnostics disclosure that is not rendered in install mode.**
+- [x] **Step 8: For unsupported environments, render the action from `cardConnectionFlow` and preserve the current project in the original browser.**
+- [x] **Step 9: Run the focused suites plus `node lightweaver/tests/pages-staging.mjs`.** Expected: PASS with a staged signed manifest and immutable versioned image.
+- [x] **Step 10: Commit:** `git add release scripts .github/workflows/build-firmware.yml lightweaver/public/firmware lightweaver/src/lib/firmwareRelease.* lightweaver/src/lib/flash.js lightweaver/src/lib/flashPlan.js lightweaver/src/v3/lw-flash.jsx lightweaver/tests && git commit -m "feat: simplify signed card installation"`.
 
 ## Task 7: Make physical preview acknowledgement explicit
 
@@ -192,13 +192,13 @@ for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(inp
 - Modify: `lightweaver/tests/playlist-live-preview.mjs`
 - Modify: `lightweaver/tests/pattern-screen.spec.ts`
 
-- [ ] **Step 1: Extend the existing live-preview and `cardAction` tests to distinguish `Previewing in Studio`, `Sending to Lightweaver`, `Playing on Lightweaver`, superseded intent, malformed/`ok:false` acknowledgement, wrong card ID, and failed physical output.**
-- [ ] **Step 2: Run the focused Node suites.** Expected: the new acknowledgement assertions FAIL; existing newest-intent coalescing remains green.
-- [ ] **Step 3: Keep the existing per-host latest-only queue in `pushLivePreviewToCard`; do not add a second queue.** Tighten its success contract so confirmation requires valid JSON with `ok:true`, expected card identity, and the echoed/confirmed look or revision when supported.
-- [ ] **Step 4: Route pattern and playlist physical state through the existing `cardActionReducer`.** Set physical selection only on card acknowledgement; keep Studio preview immediately responsive and ignore superseded responses.
-- [ ] **Step 5: On failure, show exactly:** `The Studio preview changed, but the physical lights did not. Reconnect and retry.` with actions opening the Connection Center and retrying the latest intent.
-- [ ] **Step 6: Run Node and Playwright focused tests.** Expected: PASS.
-- [ ] **Step 7: Commit:** `git add lightweaver/src/lib/cardAction* lightweaver/src/lib/cardLiveControl.js lightweaver/src/v3/lw-pattern.jsx lightweaver/src/v3/lw-playlist.jsx lightweaver/tests && git commit -m "feat: confirm physical Lightweaver previews"`.
+- [x] **Step 1: Extend the existing live-preview and `cardAction` tests to distinguish `Previewing in Studio`, `Sending to Lightweaver`, `Playing on Lightweaver`, superseded intent, malformed/`ok:false` acknowledgement, wrong card ID, and failed physical output.**
+- [x] **Step 2: Run the focused Node suites.** Expected: the new acknowledgement assertions FAIL; existing newest-intent coalescing remains green.
+- [x] **Step 3: Keep the existing per-host latest-only queue in `pushLivePreviewToCard`; do not add a second queue.** Tighten its success contract so confirmation requires valid JSON with `ok:true`, expected card identity, and the echoed/confirmed look or revision when supported.
+- [x] **Step 4: Route pattern and playlist physical state through the existing `cardActionReducer`.** Set physical selection only on card acknowledgement; keep Studio preview immediately responsive and ignore superseded responses.
+- [x] **Step 5: On failure, show exactly:** `The Studio preview changed, but the physical lights did not. Reconnect and retry.` with actions opening the Connection Center and retrying the latest intent.
+- [x] **Step 6: Run Node and Playwright focused tests.** Expected: PASS.
+- [x] **Step 7: Commit:** `git add lightweaver/src/lib/cardAction* lightweaver/src/lib/cardLiveControl.js lightweaver/src/v3/lw-pattern.jsx lightweaver/src/v3/lw-playlist.jsx lightweaver/tests && git commit -m "feat: confirm physical Lightweaver previews"`.
 
 ## Task 8: Verify and ship Phase 1
 
@@ -208,10 +208,10 @@ for (const [input, expected] of cases) assert.equal(nextCardConnectionAction(inp
 - Modify: `docs/deployment-checklist.md`
 - Modify: `docs/worker-flash-runbook.md`
 
-- [ ] **Step 1: Update customer documentation so every flow starts at `led.mandalacodes.com`; retain local card URLs only in technician diagnostics.**
-- [ ] **Step 2: Run focused unit tests:** `cd lightweaver && node --test src/lib/platformCapabilities.test.js src/lib/cardIdentity.test.js src/lib/cardConnectionFlow.test.js src/lib/firmwareRelease.test.js src/lib/cardAction.test.js`.
-- [ ] **Step 3: Run existing integration contracts:** `cd lightweaver && node tests/card-link-state.mjs && node tests/card-connection-mode.mjs && node tests/card-bridge-handoff.mjs && node tests/flash-connect.mjs && node tests/firmware-image-validation.mjs && node tests/card-live-preview.mjs && node tests/playlist-live-preview.mjs`.
-- [ ] **Step 4: Run browser flows:** `cd lightweaver && npx playwright test tests/screen-smoke.spec.ts tests/universal-install.spec.ts tests/pattern-screen.spec.ts`.
+- [x] **Step 1: Update customer documentation so every flow starts at `led.mandalacodes.com`; retain local card URLs only in technician diagnostics.**
+- [x] **Step 2: Run focused unit tests:** `cd lightweaver && node --test src/lib/platformCapabilities.test.js src/lib/cardIdentity.test.js src/lib/cardConnectionFlow.test.js src/lib/firmwareRelease.test.js src/lib/cardAction.test.js`.
+- [x] **Step 3: Run existing integration contracts:** `cd lightweaver && node tests/card-link-state.mjs && node tests/card-connection-mode.mjs && node tests/card-bridge-handoff.mjs && node tests/flash-connect.mjs && node tests/firmware-image-validation.mjs && node tests/card-live-preview.mjs && node tests/playlist-live-preview.mjs`.
+- [x] **Step 4: Run browser flows:** `cd lightweaver && npx playwright test tests/screen-smoke.spec.ts tests/universal-install.spec.ts tests/patterns-v3.spec.ts`.
 - [ ] **Step 5: Run the complete launch gate:** `cd lightweaver && npm run launch:check`. Expected: all core, production-deployment, Show, build, staging, and Pages verification checks pass.
 - [ ] **Step 6: Hardware acceptance on the bench card:** connect from production HTTPS, verify card ID and GPIO16/44 pixels, select three patterns rapidly and confirm only the final pattern becomes physical, close the card page and confirm Studio stops claiming live output, reconnect without entering an IP, and complete a non-destructive USB identity check in Chrome.
 - [ ] **Step 7: Request spec-compliance and code-quality reviews, fix blocking findings, rerun the full Phase 1 verification, rebuild the public artifact, and deploy only after production freshness passes.**
