@@ -41,7 +41,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { buildCardConfigHandoffUrl, pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '../lib/cardPushClient.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import {
@@ -193,9 +193,8 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       [projectId, projectName, strips, board, standaloneController],
     );
     const config = runtimePackage.config;
-    const configJson = useMemo(() => JSON.stringify(runtimePackage.config, null, 2), [runtimePackage]);
+    const configJson = useMemo(() => JSON.stringify(config, null, 2), [config]);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
-    const handoffUrl = useMemo(() => buildCardConfigHandoffUrl(cardHost, runtimePackage), [cardHost, runtimePackage]);
 
     const savedLooks = normalizeSavedLooks(standaloneController?.looks);
     const activeSavedLook = savedLooks.find(look => look.id === standaloneController?.activeLookId) || savedLooks[0] || null;
@@ -384,20 +383,34 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
       } catch (error) {
         dispatchCardWrite({ type: 'fail', error: error?.message });
         setStatusKind('err');
-        setStatus(error?.reason === 'project-mismatch'
+        setStatus(error?.reason === 'project-mismatch' || error?.reason === 'config-too-large'
           ? error.message
           : 'Could not reach the card. Copy or download the card settings and paste them on the card page.');
       }
     };
 
+    const openCardInstaller = () => {
+      try {
+        const url = buildCardConfigHandoffUrl(cardHost, runtimePackage);
+        window.open(url, '_blank', 'noopener,noreferrer');
+      } catch (error) {
+        setStatusKind('err');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Could not prepare the card installer. Try again.');
+      }
+    };
+
     const copyConfig = async () => {
       try {
-        await navigator.clipboard.writeText(configJson);
+        await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
         setStatusKind('ok');
         setStatus('Card settings copied. Paste them into the card page on the same WiFi.');
-      } catch {
+      } catch (error) {
         setStatusKind('err');
-        setStatus('Clipboard was blocked. Use Download card settings instead.');
+        setStatus(error?.reason === 'config-too-large'
+          ? error.message
+          : 'Clipboard was blocked. Use Download card settings instead.');
       }
     };
 
@@ -556,7 +569,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   <Row label="Write to card" hint="Save this setup onto the chip" stack>
                     <div className="set-actions">
                       {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Saving…' : cardWrite.status === 'failed' ? 'Retry save' : 'Save to card'}</button>}
-                      {!directPushAvailable && <a className="btn" href={handoffUrl} target="_blank" rel="noopener noreferrer">{I.open}Open card installer</a>}
+                      {!directPushAvailable && <button className="btn" onClick={openCardInstaller}>{I.open}Open card installer</button>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
                       <button className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>{I.open}Open card page</button>
                       <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=flash'; }}>{I.bolt}Flash chip</button>

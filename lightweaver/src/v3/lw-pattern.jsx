@@ -720,7 +720,7 @@ import {
         dispatchCardSave({ type: 'fail', error: error?.message });
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(packageForCard, 'Saved in Studio. The browser blocked direct local-card access, so open the card installer to finish saving it on the card.');
-        } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch') {
+        } else if (error?.reason === 'layout-mismatch' || error?.reason === 'project-mismatch' || error?.reason === 'config-too-large') {
           setStatusKind('err');
           setStatus(error.message);
         } else {
