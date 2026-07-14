@@ -126,16 +126,12 @@ test('opening while connecting renders the busy flow action directly', async ({ 
 });
 
 test('opening after a blocked popup renders the retry action directly', async ({ page }) => {
-  await page.addInitScript(() => {
-    window.open = (() => null) as typeof window.open;
-  });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
-
-  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await page.getByRole('button', { name: 'My card already lights up' }).click();
-  await page.getByRole('button', { name: 'Close connection center' }).click();
+  await expect(page.getByTestId('card-link-status')).toBeVisible();
+  await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'popup-blocked', host: 'lightweaver.local' }]);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
@@ -150,7 +146,7 @@ test('opening with old firmware renders installation recovery directly', async (
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'Connect Lightweaver' })).toBeVisible();
   await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'firmware-too-old', host: 'lightweaver.local' }]);
-
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect(page.getByRole('button', { name: 'Start installation' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
@@ -198,14 +194,27 @@ test('working setup card shows AP steps before continuing through the setup host
 
 test('working-card choice opens the card popup path', async ({ page }) => {
   await installCardPopupMock(page);
+  let allowDirect = false;
+  const directRequests: string[] = [];
+  await page.route('http://lightweaver.local/api/status', async route => {
+    directRequests.push(route.request().url());
+    if (!allowDirect) return route.abort();
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ cardId: 'lw-direct-card', cardName: 'Direct card', led: { pixels: 44 } }),
+    });
+  });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  allowDirect = true;
   await page.getByRole('button', { name: 'My card already lights up' }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(1);
-  await expect(page.getByRole('button', { name: /Gallery card.*Connected/i })).toBeVisible();
+  await expect.poll(() => directRequests.length).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(0);
+  await expect(page.getByRole('button', { name: /Direct card.*Connected/i })).toBeVisible();
 });
 
 test('blank-card choice reaches Flash install when Web Serial is supported', async ({ page }) => {
@@ -219,7 +228,79 @@ test('blank-card choice reaches Flash install when Web Serial is supported', asy
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
+  await expect(page.getByText('Bootloader mode')).toBeVisible();
 });
+
+test('connection details reject public hosts and resync before reopening', async ({ page }) => {
+  await installCardPopupMock(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByText('Connection details', { exact: true }).click();
+  const host = page.getByLabel('Card hostname');
+  await host.fill('example.com');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('local Lightweaver hostname');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).not.toBe('example.com');
+  await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(0);
+
+  await page.getByRole('button', { name: 'Close connection center' }).click();
+  await page.evaluate(() => {
+    localStorage.setItem('lw_chip_card_host', '192.168.4.1');
+    window.dispatchEvent(new CustomEvent('lightweaver-card-host-changed'));
+  });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByText('Connection details', { exact: true }).click();
+  await expect(page.getByLabel('Card hostname')).toHaveValue('192.168.4.1');
+});
+
+test('status control announces state and dialog expansion', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const status = page.getByTestId('card-link-status');
+  await expect(status).toHaveAccessibleName(/Not connected/);
+  await expect(status).toHaveAttribute('aria-expanded', 'false');
+  await expect(status).toHaveAttribute('aria-controls', 'card-connection-center');
+  await status.click();
+  await expect(status).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Escape');
+  await expect(status).toHaveAttribute('aria-expanded', 'false');
+
+  await dispatchCardLinkEvents(page, [{ type: 'connecting', via: 'bridge', host: 'lightweaver.local' }]);
+  await expect(status).toHaveAccessibleName(/Connecting/);
+  await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'popup-blocked', host: 'lightweaver.local' }]);
+  await expect(status).toHaveAccessibleName(/Needs attention/);
+});
+
+for (const width of [641, 768, 900]) {
+  test(`connected footer remains usable without overflow at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => localStorage.clear());
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByTestId('card-link-status')).toBeVisible();
+    await dispatchCardLinkEvents(page, [{
+      type: 'card-verified',
+      via: 'bridge',
+      host: 'lightweaver.local',
+      card: {
+        id: 'lw-responsive-card',
+        name: 'Responsive gallery card',
+        pixelCount: 440,
+        gpioSummary: 'GPIO 16 · 220, GPIO 17 · 220',
+        firmwareVersion: '1.4.0',
+        buildId: 'responsive-build',
+      },
+    }]);
+    await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+    await expect(page.locator('.card-status-summary')).not.toContainText('Responsive gallery card');
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}
 
 test('blank-card choice explains the supported-device handoff when install is unsupported', async ({ page }) => {
   await page.addInitScript(() => {
@@ -244,6 +325,11 @@ test('Escape closes the connection center and restores focus', async ({ page }) 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
   await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await page.locator('.topbar').click({ position: { x: 300, y: 20 } });
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
+  await expect(trigger).not.toBeFocused();
 });
 
 test('wrong-card recovery only adopts after the explicit secondary action', async ({ page }) => {
@@ -260,7 +346,10 @@ test('wrong-card recovery only adopts after the explicit secondary action', asyn
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await page.getByRole('button', { name: 'Reconnect' }).click();
+  await page.evaluate(async () => {
+    const { connectCardLink } = await import('/src/lib/cardLink.js');
+    connectCardLink('lightweaver.local');
+  });
   await expect(page.getByRole('button', { name: 'Use this card instead' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-expected-card');
   await page.getByRole('button', { name: 'Use this card instead' }).click();

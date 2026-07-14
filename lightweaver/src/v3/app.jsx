@@ -10,6 +10,7 @@ import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
 import {
   bootstrapCardLink,
+  connectCardLink,
   getCardLinkState,
   isCardLinkConnected,
   reportDirectCardStatus,
@@ -92,12 +93,12 @@ function Rail({ view, setView }) {
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
 /* One compact status control opens the shared Connection Center. Transport and
    host diagnostics stay out of routine chrome. */
-function StatusBar({ link, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
   const connected = isCardLinkConnected(link);
   return (
     <footer className="status-bar">
       <div className="sb-card">
-        <CardStatusControl link={link} onOpen={onOpenConnectionCenter} />
+        <CardStatusControl link={link} onOpen={onOpenConnectionCenter} open={connectionCenterOpen} />
       </div>
 
       <div className="sb-div" />
@@ -224,6 +225,10 @@ function Shell() {
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const onConnectCard = useCallback((host = '') => {
+    if (directCardControl) return cardStatus.connect?.();
+    return connectCardLink(host);
+  }, [directCardControl, cardStatus.connect]);
 
   // configured push rate; Tweaks fires lw-preview-settings when it changes
   const [pushFps, setPushFps] = useState(readPushFps);
@@ -307,6 +312,7 @@ function Shell() {
 
       <StatusBar
         link={cardLink}
+        connectionCenterOpen={connectionCenterOpen}
         onOpenConnectionCenter={openConnectionCenter}
         totalLeds={totalLeds}
         stripCount={strips.length}
@@ -320,6 +326,7 @@ function Shell() {
         open={connectionCenterOpen}
         link={cardLink}
         onClose={closeConnectionCenter}
+        onConnectCard={onConnectCard}
         setupEvidence={{
           host: cardLink.host || cardStatus.host,
           mode: cardStatus.status?.setupMode || cardStatus.status?.mode,

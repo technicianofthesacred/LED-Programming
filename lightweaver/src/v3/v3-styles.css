@@ -516,10 +516,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .card-status-control.is-recovering .card-status-dot { background: var(--accent); }
 .card-status-copy { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .card-status-name { color: var(--text-hi); font-weight: 600; }
-.card-status-state { color: var(--text-lo); }
+.card-status-state { color: var(--text-mid); }
 .card-status-summary {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-lo); font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 10.5px;
 }
 
 .card-connection-center {
@@ -533,7 +533,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .card-connection-center:focus { outline: none; }
 .card-connection-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-connection-kicker {
-  margin: 0 0 4px; color: var(--text-lo); font-size: 10px; font-weight: 600;
+  margin: 0 0 4px; color: var(--text-mid); font-size: 10px; font-weight: 600;
   letter-spacing: .09em; text-transform: uppercase;
 }
 .card-connection-head h2 { margin: 0; color: var(--text-hi); font-size: 18px; line-height: 1.25; }
@@ -544,7 +544,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .card-connection-close:hover { background: var(--bg-elev); color: var(--text-hi); }
 .card-condition-choices { display: grid; gap: 9px; margin-top: 16px; }
 .card-condition-choices > p,
-.card-connection-action > p { margin: 0 0 4px; color: var(--text-lo); font-size: 12.5px; line-height: 1.5; }
+.card-connection-action > p { margin: 0 0 4px; color: var(--text-mid); font-size: 12.5px; line-height: 1.5; }
 .card-condition-choice {
   display: grid; gap: 4px; min-height: 66px; padding: 11px 12px; text-align: left;
   border: 1px solid var(--border-soft); border-radius: var(--r-md);
@@ -553,7 +553,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 }
 .card-condition-choice:hover { background: var(--bg-sel); border-color: var(--accent-line); }
 .card-condition-choice strong { color: var(--text-hi); font-size: 13px; }
-.card-condition-choice span { color: var(--text-lo); font-size: 11.5px; line-height: 1.4; }
+.card-condition-choice span { color: var(--text-mid); font-size: 11.5px; line-height: 1.4; }
 .card-connection-action { margin-top: 17px; }
 .card-connection-action h3 { margin: 0 0 6px; color: var(--text-hi); font-size: 14px; }
 .card-connection-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
@@ -565,10 +565,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
   margin: 13px 0 0; padding: 11px 12px; border-radius: var(--r-md); background: var(--bg-elev);
   font-size: 11.5px;
 }
-.card-acknowledged-facts dt { color: var(--text-lo); }
+.card-acknowledged-facts dt { color: var(--text-mid); }
 .card-acknowledged-facts dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
 .card-connection-details { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border-hair); }
-.card-connection-details summary { width: fit-content; cursor: pointer; color: var(--text-lo); font-size: 11.5px; }
+.card-connection-details summary { width: fit-content; cursor: pointer; color: var(--text-mid); font-size: 11.5px; }
 .card-connection-details form { display: grid; gap: 7px; margin-top: 11px; }
 .card-connection-details label { color: var(--text-mid); font-size: 11.5px; }
 .card-connection-details form > div { display: flex; gap: 7px; }
@@ -592,6 +592,17 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
    (topbar actions, status-bar telemetry) wraps rather than pushing
    `document.documentElement.scrollWidth` past the viewport.
    ============================================================ */
+@media (max-width: 1024px) {
+  .status-bar {
+    flex-wrap: wrap; height: auto; min-height: 32px;
+    row-gap: 6px; padding: 6px 12px;
+  }
+  .sb-card { min-width: 0; flex: 1 1 360px; }
+  .card-status-control { max-width: 100%; }
+  .sb-facts { display: none; }
+  .sb-teststrip { flex: 1 1 auto; }
+}
+
 @media (max-width: 640px) {
   .app {
     grid-template-columns: 58px minmax(0, 1fr) 0px;

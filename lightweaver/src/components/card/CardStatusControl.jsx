@@ -18,7 +18,6 @@ export function cardConnectionStatus(link = {}) {
 
 function connectedSummary(card = {}) {
   return [
-    card.name,
     card.pixelCount > 0 ? `${card.pixelCount} pixels` : '',
     card.gpioSummary,
     card.firmwareVersion ? `firmware ${card.firmwareVersion}` : '',
@@ -26,13 +25,13 @@ function connectedSummary(card = {}) {
   ].filter(Boolean).join(' · ');
 }
 
-export function CardStatusControl({ link, onOpen }) {
+export function CardStatusControl({ link, onOpen, open = false }) {
   const status = cardConnectionStatus(link);
   const connected = status === 'Connected';
   const summary = connected ? connectedSummary(link.card) : '';
   const accessibleName = connected
     ? `${link.card?.name || 'Lightweaver'} · Connected`
-    : 'Connect Lightweaver';
+    : `Connect Lightweaver · ${status}`;
 
   return (
     <button
@@ -41,6 +40,8 @@ export function CardStatusControl({ link, onOpen }) {
       onClick={onOpen}
       aria-label={accessibleName}
       aria-haspopup="dialog"
+      aria-expanded={open}
+      aria-controls="card-connection-center"
       data-testid="card-link-status"
     >
       <span className="card-status-dot" aria-hidden="true" />

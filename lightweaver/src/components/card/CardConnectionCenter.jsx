@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
-import { readStoredCardHost, writeStoredCardHost } from '../../lib/cardConnection.js';
+import {
+  CARD_HOST_CHANGED_EVENT,
+  isLocalCardHost,
+  readStoredCardHost,
+  writeStoredCardHost,
+} from '../../lib/cardConnection.js';
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
 import { connectCardLink } from '../../lib/cardLink.js';
@@ -27,9 +32,10 @@ function goToInstall() {
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
 
-export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }) {
+export function CardConnectionCenter({ open, link, onClose, onConnectCard = connectCardLink, setupEvidence = {} }) {
   const panelRef = useRef(null);
   const restoreFocusRef = useRef(null);
+  const shouldRestoreFocusRef = useRef(false);
   const [intent, setIntent] = useState('');
   const [failure, setFailure] = useState('');
   const [host, setHost] = useState(readStoredCardHost);
@@ -56,11 +62,15 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
   useEffect(() => {
     if (!open) return undefined;
     restoreFocusRef.current = document.activeElement;
+    shouldRestoreFocusRef.current = false;
     setFailure('');
     setIntent('');
     const timer = window.setTimeout(() => panelRef.current?.focus(), 0);
     const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        shouldRestoreFocusRef.current = true;
+        onClose();
+      }
     };
     const onPointerDown = (event) => {
       if (!panelRef.current?.contains(event.target)) onClose();
@@ -71,15 +81,39 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
       window.clearTimeout(timer);
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
-      restoreFocusRef.current?.focus?.();
+      if (shouldRestoreFocusRef.current) restoreFocusRef.current?.focus?.();
     };
   }, [open, onClose]);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    const syncHost = () => setHost(readStoredCardHost());
+    syncHost();
+    window.addEventListener(CARD_HOST_CHANGED_EVENT, syncHost);
+    return () => window.removeEventListener(CARD_HOST_CHANGED_EVENT, syncHost);
+  }, [open]);
+
   if (!open) return null;
 
-  const connect = (rawHost = '') => {
+  const closeAndRestore = () => {
+    shouldRestoreFocusRef.current = true;
+    onClose();
+  };
+
+  const openInstall = () => {
+    shouldRestoreFocusRef.current = false;
+    onClose();
+    goToInstall();
+  };
+
+  const connect = (rawHost = '', { bridge = false } = {}) => {
     setFailure('');
-    const result = connectCardLink(rawHost);
+    const targetHost = rawHost || readStoredCardHost();
+    if (!isLocalCardHost(targetHost)) {
+      setFailure('Enter a valid local Lightweaver hostname before connecting.');
+      return;
+    }
+    const result = bridge ? connectCardLink(targetHost) : onConnectCard(targetHost);
     if (!result) setFailure('The browser could not open the card page. Allow popups, then try again.');
   };
 
@@ -97,7 +131,7 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
 
   const chooseBlankCard = () => {
     setIntent('blank-card');
-    if (capabilities.canWebSerialInstall) goToInstall();
+    if (capabilities.canWebSerialInstall) openInstall();
   };
 
   const useDiscoveredCard = () => {
@@ -111,12 +145,12 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
 
   const saveHost = (event) => {
     event.preventDefault();
-    try {
-      setHost(writeStoredCardHost(host));
-      setFailure('');
-    } catch {
+    if (!isLocalCardHost(host)) {
       setFailure('Enter a valid local Lightweaver hostname.');
+      return;
     }
+    setHost(writeStoredCardHost(host));
+    setFailure('');
   };
 
   const initialChoice = !intent
@@ -129,6 +163,7 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
   return (
     <section
       ref={panelRef}
+      id="card-connection-center"
       className="card-connection-center"
       role="dialog"
       aria-modal="false"
@@ -140,7 +175,7 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
           <p className="card-connection-kicker">Card connection</p>
           <h2 id="card-connection-title">Connect Lightweaver</h2>
         </div>
-        <button type="button" className="card-connection-close" onClick={onClose} aria-label="Close connection center">×</button>
+        <button type="button" className="card-connection-close" onClick={closeAndRestore} aria-label="Close connection center">×</button>
       </header>
 
       {initialChoice ? (
@@ -177,18 +212,16 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
             </dl>
           )}
 
-          {failure && <p className="card-connection-failure" role="alert">{failure}</p>}
-
           <div className="card-connection-actions">
             {action.id === 'connected' ? (
-              <button type="button" className="btn primary" onClick={onClose}>Done</button>
+              <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>
             ) : action.id === 'web-serial-install' ? (
-              <button type="button" className="btn primary" onClick={goToInstall}>Start installation</button>
+              <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>
             ) : action.id === 'supported-browser-handoff' || action.id === 'supported-device-handoff' ? null : (
               <button
                 type="button"
                 className="btn primary"
-                onClick={() => connect(setupSteps ? SETUP_HOST : '')}
+                onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
                 disabled={action.primaryDisabled}
               >
                 {setupSteps ? 'Continue' : action.primaryLabel}
@@ -200,6 +233,8 @@ export function CardConnectionCenter({ open, link, onClose, setupEvidence = {} }
           </div>
         </div>
       )}
+
+      {failure && <p className="card-connection-failure" role="alert">{failure}</p>}
 
       <details className="card-connection-details">
         <summary>Connection details</summary>
