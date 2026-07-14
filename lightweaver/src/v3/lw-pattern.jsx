@@ -344,6 +344,15 @@ import {
     const savedComboSeq = useRef(0);
     const draftProjectSnapshotRef = useRef(project => project);
 
+    const invalidatePendingPreview = useCallback(() => {
+      browsePreviewSeq.current += 1;
+      livePreviewSeq.current += 1;
+      if (livePreviewTimer.current) {
+        clearTimeout(livePreviewTimer.current);
+        livePreviewTimer.current = null;
+      }
+    }, []);
+
     // Warm default so first load reads warm (Lava Lamp-like) like the mockup,
     // unless a real saved default look exists.
     //
@@ -508,7 +517,12 @@ import {
           }
           await pushLivePreviewToCard(
             { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
-            { host: cardHost, timeoutMs: 2200, fallbackMissingZoneToAll: false },
+            {
+              host: cardHost,
+              timeoutMs: 2200,
+              fallbackMissingZoneToAll: false,
+              preferBridge: localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:'),
+            },
           );
           if (sequence === livePreviewSeq.current) {
             markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
@@ -531,11 +545,11 @@ import {
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, markCardLookConfirmed, runtimePackage, selectedTarget]);
+    }, [cardHost, livePreview, localCard, markCardLookConfirmed, runtimePackage, selectedTarget]);
 
     useEffect(() => () => {
-      if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
-    }, []);
+      invalidatePendingPreview();
+    }, [invalidatePendingPreview]);
 
     useEffect(() => {
       if (sectionTargets.some(target => target.id === selectedTargetId)) return;
@@ -543,10 +557,14 @@ import {
     }, [sectionTargets, selectedTargetId]);
 
     useEffect(() => {
+      invalidatePendingPreview();
+      setHandoffUrl('');
+      setStatusKind('');
+      setStatus('');
       setDraftLooks({});
       setMixName('');
       setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
-    }, [projectRevision]);
+    }, [invalidatePendingPreview, projectRevision]);
 
     const updatePreviewLook = (patch, { push = true } = {}) => {
       if (!selectedTarget) return null;
@@ -614,6 +632,7 @@ import {
     // (debounced) so the physical strip follows the selection.
     const selectTarget = (target) => {
       if (!target) return;
+      invalidatePendingPreview();
       setSelectedTargetId(target.id);
       // Picking a target only changes what the controls edit — with live
       // preview off nothing is sent, so there is nothing to report. The
@@ -983,6 +1002,7 @@ import {
 
     const toggleLocalCard = () => {
       const next = !localCard;
+      if (!next) invalidatePendingPreview();
       writeLocalChipDefault(next);
       setLocalCard(next);
       if (next) {
@@ -1009,6 +1029,7 @@ import {
 
     const targetTotal = Math.max(0, sectionTargets.length - 1) || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
+    const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
 
     return (
       <div className="screen">
@@ -1055,6 +1076,11 @@ import {
                     <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
                   </div>
                 }
+                {showFlashAction &&
+                  <div className="pmx-status-actions">
+                    <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
+                  </div>
+                }
               </div>
             }
 
@@ -1065,7 +1091,15 @@ import {
 
                 <div className="pm-livebar">
                   <label className="pm-check">
-                    <input type="checkbox" checked={livePreview} onChange={(event) => setLivePreview(event.target.checked)} />
+                    <input type="checkbox" checked={livePreview} onChange={(event) => {
+                      if (!event.target.checked) {
+                        invalidatePendingPreview();
+                        setHandoffUrl('');
+                        setStatusKind('');
+                        setStatus('');
+                      }
+                      setLivePreview(event.target.checked);
+                    }} />
                     <span aria-hidden="true" className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
                     Preview taps on the LED card
                   </label>

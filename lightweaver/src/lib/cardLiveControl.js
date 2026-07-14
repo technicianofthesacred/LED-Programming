@@ -332,7 +332,9 @@ function liveTargetsFromZones(zonesPayload = {}, fallbackLook = {}) {
 }
 
 async function pushLivePreviewToHost(host, look, options = {}) {
-  if (isMixedContentBlocked()) {
+  // Local-card mode deliberately exercises the same verified postMessage path
+  // as public HTTPS, even when Studio itself is running from an HTTP dev host.
+  if (options.preferBridge || isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
   }
   let previewLook = look;

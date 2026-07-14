@@ -93,7 +93,7 @@ test('clicking a card updates the preview', async ({ page }) => {
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
 });
 
-test('first local-card pattern click opens one bridge and sends only the newest selection', async ({ page }) => {
+test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
@@ -101,10 +101,34 @@ test('first local-card pattern click opens one bridge and sends only the newest 
   });
   await page.addInitScript(() => {
     (window as any).__bridgeOpenCalls = [];
-    const bridge = { closed: false, postMessage: () => {} };
+    (window as any).__bridgeMessages = [];
+    const originalOpen = window.open.bind(window);
     window.open = ((url?: string | URL, name?: string) => {
       (window as any).__bridgeOpenCalls.push({ url: String(url || ''), name });
-      return bridge as any;
+      const popup = originalOpen('about:blank', name);
+      (window as any).__bridgePopup = popup;
+      if (popup) {
+        Object.defineProperty(popup, 'postMessage', {
+          configurable: true,
+          value(message: any, targetOrigin: string) {
+            (window as any).__bridgeMessages.push({ message, targetOrigin });
+            queueMicrotask(() => {
+              window.dispatchEvent(new MessageEvent('message', {
+                origin: targetOrigin,
+                source: popup,
+                data: {
+                  app: 'LightweaverCardBridge',
+                  id: message.id,
+                  ok: true,
+                  version: 1,
+                  response: { ok: true, patternId: message.payload?.patternId },
+                },
+              }));
+            });
+          },
+        });
+      }
+      return popup;
     }) as typeof window.open;
   });
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
@@ -122,8 +146,10 @@ test('first local-card pattern click opens one bridge and sends only the newest 
   expect(controlRequests).toHaveLength(0);
 
   await page.evaluate(() => {
+    const popup = (window as any).__bridgePopup;
     window.dispatchEvent(new MessageEvent('message', {
       origin: 'http://lightweaver.local',
+      source: popup,
       data: {
         app: 'LightweaverCardBridge',
         type: 'ready',
@@ -133,9 +159,91 @@ test('first local-card pattern click opens one bridge and sends only the newest 
     }));
   });
 
-  await expect.poll(() => controlRequests.length).toBe(1);
-  expect(controlRequests[0].patternId).toBe('plasma');
-  expect(controlRequests.some(request => request.patternId === 'ocean')).toBe(false);
+  await expect.poll(() => page.evaluate(() => (window as any).__bridgeMessages.length)).toBe(1);
+  const [bridgeRequest] = await page.evaluate(() => (window as any).__bridgeMessages);
+  expect(bridgeRequest.targetOrigin).toBe('http://lightweaver.local');
+  expect(bridgeRequest.message.app).toBe('LightweaverStudioBridge');
+  expect(bridgeRequest.message.type).toBe('control');
+  expect(bridgeRequest.message.payload.patternId).toBe('plasma');
+  expect(controlRequests).toHaveLength(0);
+  await page.waitForTimeout(2400);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(1);
+});
+
+test('disabling live preview invalidates a pending bridge selection', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__bridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: unknown, targetOrigin: string) {
+        (window as any).__bridgeMessages.push({ message, targetOrigin });
+      },
+    };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: { app: 'LightweaverCardBridge', type: 'ready', host: 'lightweaver.local', version: 1 },
+    }));
+  });
+
+  await page.waitForTimeout(200);
+  expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(0);
+});
+
+test('leaving Patterns invalidates a pending bridge selection', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await page.addInitScript(() => {
+    (window as any).__bridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: unknown, targetOrigin: string) {
+        (window as any).__bridgeMessages.push({ message, targetOrigin });
+      },
+    };
+    window.open = (() => bridge as any) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.evaluate(() => { window.location.hash = '#screen=layout'; });
+  await expect(page.locator('.pm')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      data: { app: 'LightweaverCardBridge', type: 'ready', host: 'lightweaver.local', version: 1 },
+    }));
+  });
+
+  await page.waitForTimeout(200);
+  expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__bridgeMessages)).toHaveLength(0);
 });
 
 test('blocked automatic card window gives one concrete recovery action', async ({ page }) => {
@@ -151,7 +259,7 @@ test('blocked automatic card window gives one concrete recovery action', async (
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
-  await expect(page.getByRole('alert')).toHaveText(
+  await expect(page.getByRole('alert')).toContainText(
     'Allow the Lightweaver card window, then try the pattern again.',
   );
 });
@@ -180,7 +288,7 @@ test('an older card bridge points to the single Flash recovery action', async ({
     }));
   });
 
-  await expect(page.getByRole('alert')).toHaveText(
+  await expect(page.getByRole('alert')).toContainText(
     "This card is running older firmware that can't do this yet. Open Flash to update the card, then try again.",
   );
 });
@@ -192,7 +300,25 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
   await page.addInitScript(() => {
-    const bridge = { closed: false, postMessage: () => {} };
+    (window as any).__legacyBridgeMessages = [];
+    const bridge = {
+      closed: false,
+      postMessage(message: any, targetOrigin: string) {
+        (window as any).__legacyBridgeMessages.push({ message, targetOrigin });
+        queueMicrotask(() => {
+          window.dispatchEvent(new MessageEvent('message', {
+            origin: targetOrigin,
+            data: {
+              app: 'LightweaverCardBridge',
+              id: message.id,
+              ok: true,
+              version: 1,
+              response: { ok: true },
+            },
+          }));
+        });
+      },
+    };
     window.open = (() => bridge as any) as typeof window.open;
   });
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
@@ -214,8 +340,8 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
       },
     }));
   });
-  await expect.poll(() => controlRequests.length).toBe(1);
-  controlRequests.length = 0;
+  await expect.poll(() => page.evaluate(() => (window as any).__legacyBridgeMessages.length)).toBe(1);
+  await page.evaluate(() => { (window as any).__legacyBridgeMessages.length = 0; });
 
   await page.evaluate(() => {
     window.dispatchEvent(new MessageEvent('message', {
@@ -229,11 +355,16 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
   });
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
-  await expect(page.getByRole('alert')).toHaveText(
+  await expect(page.getByRole('alert')).toContainText(
     "This card is running older firmware that can't do this yet. Open Flash to update the card, then try again.",
   );
   await page.waitForTimeout(150);
   expect(controlRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__legacyBridgeMessages)).toHaveLength(0);
+  const flashAction = page.getByRole('button', { name: 'Open Flash' });
+  await expect(flashAction).toBeVisible();
+  await flashAction.click();
+  await expect(page).toHaveURL(/#screen=flash$/);
 });
 
 test('setup JSON copy and download use the same compact card payload', async ({ page }) => {
