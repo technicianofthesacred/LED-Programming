@@ -9,7 +9,7 @@ import {
 } from '../../lib/cardConnection.js';
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
-import { connectCardLink } from '../../lib/cardLink.js';
+import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import { detectPlatformCapabilities } from '../../lib/platformCapabilities.js';
 
 function platformCapabilities() {
@@ -57,6 +57,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     intent: flowIntent,
     capabilities,
     rememberedCard,
+    discoveredCard: link.discoveredCard,
     ...flowEvidence,
   });
 
@@ -135,9 +136,13 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     if (capabilities.canWebSerialInstall) openInstall();
   };
 
-  const useDiscoveredCard = () => {
+  const useDiscoveredCard = async () => {
     try {
-      rePairDiscoveredCardBridgeIdentity(link.host);
+      if (link.transport === 'direct' && link.discoveredCard?.id) {
+        await adoptDiscoveredDirectCard();
+      } else {
+        rePairDiscoveredCardBridgeIdentity(link.host);
+      }
       setFailure('');
     } catch (error) {
       setFailure(error?.message || 'Studio could not pair this card.');

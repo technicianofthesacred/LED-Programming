@@ -217,6 +217,64 @@ test('working-card choice opens the card popup path', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Direct card.*Connected/i })).toBeVisible();
 });
 
+test('background direct discovery stays unpaired until the explicit working-card choice', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-passive-card', cardName: 'Passive card', led: { pixels: 44 } }),
+  }));
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_card_identity_v1'))).toBeNull();
+  await expect(page.getByTestId('card-link-status')).not.toHaveAccessibleName(/Connected/);
+
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-passive-card');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
+test('direct wrong-card adoption is explicit and reverifies before Connected', async ({ page }) => {
+  let firmwareChecks = 0;
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-direct-found', cardName: 'Found direct card' }),
+  }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => {
+    firmwareChecks += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ cardId: 'lw-direct-found', cardName: 'Found direct card', firmwareVersion: '1.4.0' }),
+    });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-direct-expected',
+      name: 'Expected direct card',
+      hostname: 'lightweaver',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
+  await page.getByTestId('card-link-status').click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toContainText('Found direct card');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-direct-expected');
+
+  await dialog.getByRole('button', { name: 'Use this card instead' }).click();
+  await expect.poll(() => firmwareChecks).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-direct-found');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
 test('blank-card choice reaches Flash install when Web Serial is supported', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });

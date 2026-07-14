@@ -22,12 +22,13 @@ import {
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
-import { readStoredCardHost } from './cardConnection.js';
+import { readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
 import {
   compareCardIdentity,
   normalizeCardIdentity,
   persistCardIdentity,
   readPersistedCardIdentity,
+  verifyExpectedCardAtHost,
 } from './cardIdentity.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
@@ -138,16 +139,31 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         // The bridge keepalive is authoritative while a bridge is up.
         if (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') return prev;
         if (!event.card?.id) {
-          return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', host, missedPings: 0 };
+          return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: 'direct', host, missedPings: 0 };
         }
         if (event.expectedCard?.id) {
           const comparison = compareCardIdentity(event.expectedCard, event.card);
-          if (!comparison.ok) return { ...prev, state: 'disconnected', reason: comparison.reason, transport: '', host, missedPings: 0 };
+          if (!comparison.ok) return {
+            ...prev,
+            state: 'disconnected', reason: comparison.reason, transport: 'direct', host, missedPings: 0,
+            discoveredCard: event.card,
+            expectedCard: event.expectedCard,
+            card: null,
+          };
+        } else if (!event.allowAdopt) {
+          return {
+            ...prev,
+            state: 'disconnected', reason: 'never-connected', transport: 'direct', host, missedPings: 0,
+            discoveredCard: event.card,
+            card: null,
+          };
         }
         if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id) return prev;
         return {
           ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0,
           card: event.card,
+          discoveredCard: null,
+          expectedCard: event.card,
           acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
         };
       }
@@ -156,7 +172,10 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       if (prev.state === 'connecting' && prev.transport === 'bridge') return prev;
       const reason = event.reason || 'card-unreachable';
       if (prev.state === 'disconnected' && prev.reason === reason && prev.host === host) return prev;
-      return { ...prev, state: 'disconnected', reason, transport: '', host, missedPings: 0 };
+      return {
+        ...prev, state: 'disconnected', reason, transport: event.transport || 'direct', host, missedPings: 0,
+        ...(event.discoveredCard ? { discoveredCard: event.discoveredCard } : {}),
+      };
     }
     case 'operation-started':
       return prev.activity === 'pending' ? prev : { ...prev, activity: 'pending' };
@@ -412,22 +431,70 @@ export function getCardLinkState() {
 }
 
 // Feed direct-transport results (useCardStatus on http/file) into the machine.
-export function reportDirectCardStatus({ connected = false, checking = false, host = '', status = null, card = null } = {}) {
+export function reportDirectCardStatus({
+  connected = false,
+  checking = false,
+  host = '',
+  status = null,
+  card = null,
+  detectedStatus = null,
+  reason = '',
+  allowAdopt = false,
+} = {}) {
   const link = getSharedCardLink();
   if (connected) {
     const identity = card?.id ? card : normalizeCardIdentity(status || card || {}, host);
     const acknowledgedAt = new Date().toISOString();
     const expectedCard = readPersistedCardIdentity() || null;
     const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, identity) : { ok: true };
-    if (identity.id && comparison.ok) persistCardIdentity(identity, { acknowledgedAt });
-    link.dispatch({ type: 'direct-status', connected: true, host, card: identity, expectedCard, acknowledgedAt });
+    if (identity.id && comparison.ok && (expectedCard?.id || allowAdopt)) {
+      persistCardIdentity(identity, { acknowledgedAt });
+      rememberCardHost(host);
+      writeStoredCardHost(host);
+    }
+    link.dispatch({
+      type: 'direct-status', connected: true, host, card: identity, expectedCard,
+      acknowledgedAt, allowAdopt,
+    });
+    return;
+  }
+  if (detectedStatus) {
+    const discoveredCard = normalizeCardIdentity(detectedStatus, host);
+    const expectedCard = readPersistedCardIdentity() || null;
+    link.dispatch({
+      type: 'direct-status', connected: true, host, card: discoveredCard, expectedCard,
+      allowAdopt: false,
+    });
     return;
   }
   if (checking) {
     link.dispatch({ type: 'connecting', via: 'direct', host });
     return;
   }
-  link.dispatch({ type: 'direct-status', connected: false, host, reason: 'card-unreachable' });
+  link.dispatch({ type: 'direct-status', connected: false, host, reason: reason || 'card-unreachable' });
+}
+
+export async function adoptDiscoveredDirectCard({ fetchImpl } = {}) {
+  const link = getSharedCardLink();
+  const state = link.getState();
+  const discoveredCard = state.discoveredCard;
+  if (state.transport !== 'direct' || !discoveredCard?.id) {
+    const error = new Error('No directly connected Lightweaver card is ready to pair.');
+    error.reason = 'identity-missing';
+    throw error;
+  }
+  const verifyOptions = { expected: discoveredCard };
+  if (fetchImpl) verifyOptions.fetchImpl = fetchImpl;
+  const verified = await verifyExpectedCardAtHost(state.host, verifyOptions);
+  const acknowledgedAt = new Date().toISOString();
+  persistCardIdentity(verified, { acknowledgedAt });
+  rememberCardHost(state.host);
+  writeStoredCardHost(state.host);
+  link.dispatch({
+    type: 'direct-status', connected: true, host: state.host, card: verified,
+    expectedCard: verified, allowAdopt: true, acknowledgedAt,
+  });
+  return verified;
 }
 
 // App-load behavior: adopt an opener/parent bridge when Studio was launched

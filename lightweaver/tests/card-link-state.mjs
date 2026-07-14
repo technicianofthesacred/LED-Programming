@@ -117,6 +117,7 @@ const direct = reduceCardLink(initial, {
   connected: true,
   host: '192.168.18.70',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  allowAdopt: true,
 });
 assert.equal(direct.state, 'connected-direct');
 assert.equal(direct.transport, 'direct');
@@ -130,9 +131,22 @@ const wrongDirectCard = reduceCardLink(initial, {
 });
 assert.equal(wrongDirectCard.state, 'disconnected');
 assert.equal(wrongDirectCard.reason, 'wrong-card');
+assert.equal(wrongDirectCard.transport, 'direct');
+assert.equal(wrongDirectCard.discoveredCard.id, 'lw-different');
 assert.equal(isCardLinkConnected(wrongDirectCard), false);
+const passiveUnpairedCard = reduceCardLink(initial, {
+  type: 'direct-status',
+  connected: true,
+  host: '192.168.18.71',
+  card: { id: 'lw-passive-discovery' },
+});
+assert.equal(passiveUnpairedCard.state, 'disconnected');
+assert.equal(passiveUnpairedCard.reason, 'never-connected');
+assert.equal(passiveUnpairedCard.discoveredCard.id, 'lw-passive-discovery');
+assert.equal(isCardLinkConnected(passiveUnpairedCard), false, 'background polling never adopts a first card');
 assert.equal(reduceCardLink(direct, {
   type: 'direct-status', connected: true, host: '192.168.18.70', card: { id: 'lw-001122aabbcc' },
+  expectedCard: { id: 'lw-001122aabbcc' },
 }), direct);
 
 const directDown = reduceCardLink(direct, { type: 'direct-status', connected: false, host: '192.168.18.70' });

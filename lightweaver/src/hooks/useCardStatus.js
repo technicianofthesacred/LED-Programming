@@ -21,6 +21,9 @@ export function useCardStatus({
     reconnecting: Boolean(enabled),
     host: readStoredCardHost(),
     status: null,
+    detectedStatus: null,
+    reason: '',
+    allowAdopt: false,
     error: null,
     checkedAt: 0,
     missCount: 0,
@@ -36,7 +39,7 @@ export function useCardStatus({
       timeoutMs,
       persist: false,
     });
-    setState(prev => reduceCardConnectionState(prev, result, { now: Date.now(), missLimit }));
+    setState(prev => reduceCardConnectionState(prev, { ...result, allowAdopt: false }, { now: Date.now(), missLimit }));
     return result;
   }, [enabled, missLimit, timeoutMs]);
 
@@ -49,7 +52,7 @@ export function useCardStatus({
       timeoutMs: Math.max(timeoutMs, 12000),
       persist: true,
     });
-    setState(prev => reduceCardConnectionState(prev, result, { now: Date.now(), missLimit }));
+    setState(prev => reduceCardConnectionState(prev, { ...result, allowAdopt: true }, { now: Date.now(), missLimit }));
     return result;
   }, [enabled, missLimit, timeoutMs]);
 
@@ -81,7 +84,7 @@ export function useCardStatus({
         });
         if (!active) return;
         setState(prev => {
-          const next = reduceCardConnectionState(prev, result, { now: Date.now(), missLimit });
+          const next = reduceCardConnectionState(prev, { ...result, allowAdopt: false }, { now: Date.now(), missLimit });
           latestState = next;
           return next;
         });

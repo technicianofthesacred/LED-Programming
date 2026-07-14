@@ -5,6 +5,7 @@ import {
   cardLoadMethodForProtocol,
   candidateCardHosts,
   CARD_HOST_CHANGED_EVENT,
+  CARD_HOST_HISTORY_STORAGE_KEY,
   CARD_HOST_STORAGE_KEY,
   discoverCardStatus,
   normalizeCardHost,
@@ -267,7 +268,74 @@ assert.equal(
   expectedCard.id,
   'a successful numeric address may update the address hint but never the stable card ID',
 );
+assert.equal(
+  JSON.parse(storage.get('lw_card_identity_v1')).address,
+  '192.168.18.70',
+  'the verified winner updates only the expected card address hint',
+);
 
+const mismatchDiscovery = await discoverCardStatus({
+  preferredHost: '192.168.18.70',
+  expectedCard,
+  timeoutMs: 25,
+  persist: true,
+  fetchImpl: async () => ({
+    ok: true,
+    json: async () => ({ ok: true, cardId: 'lw-wrong-card', wifi: { ip: '192.168.18.88' } }),
+  }),
+});
+assert.equal(mismatchDiscovery.connected, false, 'a detected identity mismatch is never a connection');
+assert.equal(mismatchDiscovery.reason, 'wrong-card');
+assert.equal(mismatchDiscovery.detectedStatus.cardId, 'lw-wrong-card');
+assert.equal(storage.get(CARD_HOST_STORAGE_KEY), '192.168.18.70', 'a wrong card never replaces the address hint');
+
+storage.set(CARD_HOST_STORAGE_KEY, 'example.com');
+storage.set(CARD_HOST_HISTORY_STORAGE_KEY, JSON.stringify([
+  'evil.example.com',
+  '203.0.113.10',
+  '192.168.18.90',
+]));
+assert.deepEqual(
+  candidateCardHosts('', null),
+  ['lightweaver.local', '192.168.18.90', '192.168.4.1'],
+  'stored preferred and history values are sanitized before any probe is created',
+);
+
+storage.set(CARD_HOST_STORAGE_KEY, 'lightweaver.local');
+storage.set(CARD_HOST_HISTORY_STORAGE_KEY, '[]');
+storage.set('lw_card_identity_v1', JSON.stringify({
+  version: 1,
+  id: expectedCard.id,
+  hostname: expectedCard.hostname,
+  address: expectedCard.address,
+}));
+const raceWinner = await discoverCardStatus({
+  preferredHost: 'lightweaver.local',
+  expectedCard,
+  timeoutMs: 100,
+  persist: true,
+  fetchImpl: async (url) => {
+    if (String(url).startsWith('http://192.168.18.70/')) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      return { ok: true, json: async () => ({ cardId: expectedCard.id, wifi: { ip: '192.168.18.70' } }) };
+    }
+    if (String(url).startsWith('http://lightweaver-ddeeff.local/')) {
+      await new Promise(resolve => setTimeout(resolve, 35));
+      return { ok: true, json: async () => ({ cardId: expectedCard.id, wifi: { ip: '192.168.18.99' } }) };
+    }
+    throw new TypeError('unreachable');
+  },
+});
+assert.equal(raceWinner.host, '192.168.18.70');
+await new Promise(resolve => setTimeout(resolve, 50));
+assert.equal(
+  storage.get(CARD_HOST_STORAGE_KEY),
+  '192.168.18.70',
+  'only the selected verified winner may persist; a slower losing probe has no side effects',
+);
+
+events.length = 0;
+storage.set(CARD_HOST_STORAGE_KEY, '192.168.18.71');
 writeStoredCardHost('192.168.18.70');
 writeStoredCardHost('192.168.18.70');
 assert.equal(storage.get(CARD_HOST_STORAGE_KEY), '192.168.18.70');

@@ -219,8 +219,20 @@ function Shell() {
       checking: cardStatus.checking && !cardStatus.connected,
       host: cardStatus.host,
       status: cardStatus.status,
+      detectedStatus: cardStatus.detectedStatus,
+      reason: cardStatus.reason,
+      allowAdopt: cardStatus.allowAdopt,
     });
-  }, [directCardControl, cardStatus.connected, cardStatus.checking, cardStatus.host, cardStatus.status]);
+  }, [
+    directCardControl,
+    cardStatus.connected,
+    cardStatus.checking,
+    cardStatus.host,
+    cardStatus.status,
+    cardStatus.detectedStatus,
+    cardStatus.reason,
+    cardStatus.allowAdopt,
+  ]);
   const connected = isCardLinkConnected(cardLink);
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);

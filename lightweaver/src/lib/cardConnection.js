@@ -1,4 +1,4 @@
-import { readPersistedCardIdentity } from './cardIdentity.js';
+import { persistCardIdentity, readPersistedCardIdentity } from './cardIdentity.js';
 
 export const DEFAULT_CARD_HOST = 'lightweaver.local';
 export const CARD_HOST_STORAGE_KEY = 'lw_chip_card_host';
@@ -91,7 +91,8 @@ export function isLocalCardHost(rawHost = '') {
 export function readStoredCardHost() {
   if (typeof window === 'undefined') return DEFAULT_CARD_HOST;
   try {
-    return normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
+    const host = normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
+    return isLocalCardHost(host) ? host : DEFAULT_CARD_HOST;
   } catch {
     return DEFAULT_CARD_HOST;
   }
@@ -99,6 +100,7 @@ export function readStoredCardHost() {
 
 export function writeStoredCardHost(rawHost = '') {
   const host = normalizeCardHost(rawHost);
+  if (!isLocalCardHost(host)) return readStoredCardHost();
   if (typeof window !== 'undefined') {
     try {
       const previous = normalizeCardHost(window.localStorage.getItem(CARD_HOST_STORAGE_KEY) || DEFAULT_CARD_HOST);
@@ -117,7 +119,7 @@ export function readStoredCardHostHistory() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(CARD_HOST_HISTORY_STORAGE_KEY) || '[]');
     return Array.isArray(parsed)
-      ? [...new Set(parsed.map(normalizeCardHost).filter(Boolean))].slice(0, CARD_HOST_HISTORY_LIMIT)
+      ? [...new Set(parsed.map(normalizeCardHost).filter(isLocalCardHost))].slice(0, CARD_HOST_HISTORY_LIMIT)
       : [];
   } catch {
     return [];
@@ -126,6 +128,7 @@ export function readStoredCardHostHistory() {
 
 export function rememberCardHost(rawHost = '') {
   const host = normalizeCardHost(rawHost);
+  if (!isLocalCardHost(host)) return readStoredCardHost();
   if (typeof window !== 'undefined') {
     try {
       const next = [host, ...readStoredCardHostHistory().filter(item => item !== host)]
@@ -148,7 +151,8 @@ function cardSpecificHosts(expectedCard = null) {
 }
 
 export function candidateCardHosts(preferredHost = '', expectedCard = readPersistedCardIdentity()) {
-  const preferred = normalizeCardHost(preferredHost || readStoredCardHost());
+  const normalizedPreferred = normalizeCardHost(preferredHost || readStoredCardHost());
+  const preferred = isLocalCardHost(normalizedPreferred) ? normalizedPreferred : DEFAULT_CARD_HOST;
   const history = readStoredCardHostHistory();
   const hosts = [
     ...cardSpecificHosts(expectedCard),
@@ -160,19 +164,20 @@ export function candidateCardHosts(preferredHost = '', expectedCard = readPersis
 }
 
 function hostFromStatus(status, fallbackHost) {
-  return normalizeCardHost(
+  const candidate = normalizeCardHost(
     status?.wifi?.ip ||
     status?.ip ||
     status?.network?.ip ||
     fallbackHost,
   );
+  return isLocalCardHost(candidate) ? candidate : normalizeCardHost(fallbackHost);
 }
 
 function statusCardId(status = {}) {
   return String(status?.cardId || status?.id || status?.pieceId || status?.piece?.cardId || '').trim();
 }
 
-async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, controllers, expectedCard }) {
+async function probeCardStatusHost(host, { timeoutMs, fetchImpl, controllers, expectedCard }) {
   const ctrl = new AbortController();
   controllers.push(ctrl);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -189,16 +194,15 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
         : 'This Lightweaver card did not report a stable identity.');
       error.reason = reportedId ? 'wrong-card' : 'identity-missing';
       error.discoveredResult = {
-        connected: true,
+        connected: false,
         host: connectedHost,
         url: cardHostToUrl(connectedHost),
-        status,
+        reason: error.reason,
+        detectedStatus: status,
+        error,
       };
       throw error;
     }
-    rememberCardHost(connectedHost);
-    if (host !== connectedHost) rememberCardHost(host);
-    if (persist) writeStoredCardHost(connectedHost);
     return {
       connected: true,
       host: connectedHost,
@@ -208,6 +212,18 @@ async function probeCardStatusHost(host, { timeoutMs, persist, fetchImpl, contro
   } finally {
     clearTimeout(timer);
   }
+}
+
+function persistSelectedWinner(found, { persist, expectedCard }) {
+  if (!persist || !expectedCard?.id || statusCardId(found?.status) !== expectedCard.id) return found;
+  const host = normalizeCardHost(found.host);
+  if (!isLocalCardHost(host)) return found;
+  rememberCardHost(host);
+  writeStoredCardHost(host);
+  if (isIpv4(host)) {
+    persistCardIdentity({ ...expectedCard, address: host });
+  }
+  return found;
 }
 
 export async function discoverCardStatus({
@@ -224,7 +240,6 @@ export async function discoverCardStatus({
   const priorErrors = [];
   const probe = host => probeCardStatusHost(host, {
     timeoutMs,
-    persist,
     fetchImpl,
     controllers,
     expectedCard,
@@ -243,7 +258,7 @@ export async function discoverCardStatus({
       clearTimeout(timer);
       if (headStart.found) {
         controllers.forEach(ctrl => ctrl.abort());
-        return headStart.found;
+        return persistSelectedWinner(headStart.found, { persist, expectedCard });
       }
       if (headStart.error) {
         priorErrors.push(...(Array.isArray(headStart.error?.errors) ? headStart.error.errors : [headStart.error]));
@@ -257,7 +272,7 @@ export async function discoverCardStatus({
     }
     const found = await Promise.any(attempts);
     controllers.forEach(ctrl => ctrl.abort());
-    return found;
+    return persistSelectedWinner(found, { persist, expectedCard });
   } catch (error) {
     controllers.forEach(ctrl => ctrl.abort());
     const failures = [
@@ -289,6 +304,9 @@ export function reduceCardConnectionState(previous = {}, result = {}, {
       reconnecting: false,
       host,
       status: result.status || previous.status || null,
+      detectedStatus: null,
+      reason: '',
+      allowAdopt: Boolean(result.allowAdopt),
       error: null,
       checkedAt: now,
       missCount: 0,
@@ -297,13 +315,17 @@ export function reduceCardConnectionState(previous = {}, result = {}, {
   }
 
   const misses = Math.max(0, Number(previous.missCount || 0)) + 1;
-  const stillInGrace = Boolean(previous.connected) && misses < Math.max(1, missLimit);
+  const identityFailure = result.reason === 'wrong-card' || result.reason === 'identity-missing';
+  const stillInGrace = !identityFailure && Boolean(previous.connected) && misses < Math.max(1, missLimit);
   return {
     checking: false,
     connected: stillInGrace,
     reconnecting: true,
     host: fallbackHost,
     status: previous.status || null,
+    detectedStatus: result.detectedStatus || previous.detectedStatus || null,
+    reason: result.reason || previous.reason || '',
+    allowAdopt: false,
     error: result.error || previous.error || null,
     checkedAt: now,
     missCount: misses,
