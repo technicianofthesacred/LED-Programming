@@ -334,6 +334,35 @@ assert.equal(
   'only the selected verified winner may persist; a slower losing probe has no side effects',
 );
 
+let releaseStaleDiscovery;
+const staleDiscoveryGate = new Promise(resolve => { releaseStaleDiscovery = resolve; });
+const pairingA = { id: 'lw-pairing-a' };
+storage.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: pairingA.id }));
+storage.set(CARD_HOST_STORAGE_KEY, 'lightweaver.local');
+const delayedPairingA = discoverCardStatus({
+  preferredHost: 'lightweaver.local',
+  expectedCard: pairingA,
+  timeoutMs: 500,
+  persist: true,
+  fetchImpl: async () => {
+    await staleDiscoveryGate;
+    return {
+      ok: true,
+      json: async () => ({ cardId: pairingA.id, wifi: { ip: '192.168.18.101' } }),
+    };
+  },
+});
+storage.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-pairing-b', address: '192.168.18.202' }));
+storage.set(CARD_HOST_STORAGE_KEY, '192.168.18.202');
+releaseStaleDiscovery();
+await delayedPairingA;
+assert.equal(
+  JSON.parse(storage.get('lw_card_identity_v1')).id,
+  'lw-pairing-b',
+  'a delayed discovery for pairing A cannot overwrite the newer pairing B generation',
+);
+assert.equal(storage.get(CARD_HOST_STORAGE_KEY), '192.168.18.202');
+
 events.length = 0;
 storage.set(CARD_HOST_STORAGE_KEY, '192.168.18.71');
 writeStoredCardHost('192.168.18.70');

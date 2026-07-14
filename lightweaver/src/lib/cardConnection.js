@@ -216,12 +216,17 @@ async function probeCardStatusHost(host, { timeoutMs, fetchImpl, controllers, ex
 
 function persistSelectedWinner(found, { persist, expectedCard }) {
   if (!persist || !expectedCard?.id || statusCardId(found?.status) !== expectedCard.id) return found;
+  // Discovery spans network awaits. Re-read authority at commit time: a
+  // successful reply for card A must not write its address after the user has
+  // paired card B while A was still in flight.
+  const currentExpected = readPersistedCardIdentity();
+  if (!currentExpected?.id || currentExpected.id !== expectedCard.id) return found;
   const host = normalizeCardHost(found.host);
   if (!isLocalCardHost(host)) return found;
   rememberCardHost(host);
   writeStoredCardHost(host);
   if (isIpv4(host)) {
-    persistCardIdentity({ ...expectedCard, address: host });
+    persistCardIdentity({ ...currentExpected, address: host });
   }
   return found;
 }

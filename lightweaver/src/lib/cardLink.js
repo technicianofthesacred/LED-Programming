@@ -55,6 +55,7 @@ export function initialCardLinkState(host = '') {
     card: null,
     acknowledgedAt: '',
     activity: 'idle',
+    directDiscoveryRevision: 0,
   };
 }
 
@@ -149,6 +150,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
             discoveredCard: event.card,
             expectedCard: event.expectedCard,
             card: null,
+            directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           };
         } else if (!event.allowAdopt) {
           return {
@@ -156,6 +158,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
             state: 'disconnected', reason: 'never-connected', transport: 'direct', host, missedPings: 0,
             discoveredCard: event.card,
             card: null,
+            directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           };
         }
         if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id) return prev;
@@ -164,6 +167,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
           card: event.card,
           discoveredCard: null,
           expectedCard: event.card,
+          directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
         };
       }
@@ -474,8 +478,7 @@ export function reportDirectCardStatus({
   link.dispatch({ type: 'direct-status', connected: false, host, reason: reason || 'card-unreachable' });
 }
 
-export async function adoptDiscoveredDirectCard({ fetchImpl } = {}) {
-  const link = getSharedCardLink();
+export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCardLink() } = {}) {
   const state = link.getState();
   const discoveredCard = state.discoveredCard;
   if (state.transport !== 'direct' || !discoveredCard?.id) {
@@ -483,9 +486,25 @@ export async function adoptDiscoveredDirectCard({ fetchImpl } = {}) {
     error.reason = 'identity-missing';
     throw error;
   }
+  const snapshot = {
+    host: state.host,
+    cardId: discoveredCard.id,
+    revision: state.directDiscoveryRevision || 0,
+  };
   const verifyOptions = { expected: discoveredCard };
   if (fetchImpl) verifyOptions.fetchImpl = fetchImpl;
   const verified = await verifyExpectedCardAtHost(state.host, verifyOptions);
+  const current = link.getState();
+  if (
+    current.transport !== 'direct'
+    || current.host !== snapshot.host
+    || current.discoveredCard?.id !== snapshot.cardId
+    || (current.directDiscoveryRevision || 0) !== snapshot.revision
+  ) {
+    const error = new Error('A newer card discovery replaced this pairing attempt. Try again with the card now shown.');
+    error.reason = 'stale-discovery';
+    throw error;
+  }
   const acknowledgedAt = new Date().toISOString();
   persistCardIdentity(verified, { acknowledgedAt });
   rememberCardHost(state.host);

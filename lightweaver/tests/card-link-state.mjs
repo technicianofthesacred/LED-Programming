@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   CARD_LINK_PING_MISS_LIMIT,
+  adoptDiscoveredDirectCard,
   bootstrapCardLink,
   cardLinkBootstrapFailureReason,
   cardLinkReasonText,
@@ -379,6 +380,39 @@ reportDirectCardStatus({
 assert.equal(getCardLinkState().state, 'disconnected');
 assert.equal(getCardLinkState().reason, 'wrong-card');
 assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+
+const isolatedDirectLink = createCardLink({ host: '192.168.18.70' });
+isolatedDirectLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  expectedCard: { id: 'lw-001122aabbcc' },
+  card: { id: 'lw-delayed-a', name: 'Delayed A' },
+});
+let releaseDirectVerification;
+const directVerificationGate = new Promise(resolve => { releaseDirectVerification = resolve; });
+const delayedDirectAdoption = adoptDiscoveredDirectCard({
+  link: isolatedDirectLink,
+  fetchImpl: async () => {
+    await directVerificationGate;
+    return {
+      ok: true,
+      json: async () => ({ cardId: 'lw-delayed-a', cardName: 'Delayed A' }),
+    };
+  },
+});
+isolatedDirectLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.71',
+  expectedCard: { id: 'lw-001122aabbcc' },
+  card: { id: 'lw-newer-b', name: 'Newer B' },
+});
+releaseDirectVerification();
+await assert.rejects(
+  delayedDirectAdoption,
+  error => error?.reason === 'stale-discovery',
+  'a delayed adoption of A cannot persist or connect after host/newer discovery B replaces it',
+);
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
+assert.equal(isolatedDirectLink.getState().discoveredCard.id, 'lw-newer-b');
+assert.equal(isolatedDirectLink.getState().state, 'disconnected');
 
 listeners.get('lightweaver-card-bridge-changed')?.({
   detail: {
