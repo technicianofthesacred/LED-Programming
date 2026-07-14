@@ -61,10 +61,13 @@ assert.equal(embeddedStudio.hash, '#screen=patterns');
 
 const messages = [];
 const storedIdentityValues = new Map([['lw_chip_card_host', '192.168.18.70']]);
+let firmwareCardId = 'lw-handoff-test';
+let delayFirmwareResponse = false;
+let releaseFirmwareResponse = null;
 const parentBridge = {
   postMessage(message, targetOrigin) {
     messages.push({ message, targetOrigin });
-    setTimeout(() => {
+    const respond = () => {
       listeners.get('message')?.({
         origin: 'http://192.168.18.70',
         source: parentBridge,
@@ -73,11 +76,16 @@ const parentBridge = {
           id: message.id,
           ok: true,
           response: message.type === 'firmware-info'
-            ? { cardId: 'lw-handoff-test', firmwareVersion: '1.0.0' }
+            ? { cardId: firmwareCardId, firmwareVersion: '1.0.0' }
             : { ok: true, fromParentBridge: true },
         },
       });
-    }, 0);
+    };
+    if (message.type === 'firmware-info' && delayFirmwareResponse) {
+      releaseFirmwareResponse = respond;
+      return;
+    }
+    setTimeout(respond, 0);
   },
 };
 const listeners = new Map();
@@ -151,6 +159,38 @@ await assert.rejects(
 assert.equal(messages.length, messagesBeforeMismatchedControl, 'mismatched privileged command never reaches postMessage');
 await rePairDiscoveredCardBridgeIdentity('192.168.18.70');
 assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 're-pair requires its explicit replacement API');
+
+// The card page can reload without changing its WindowProxy or host. A new
+// ready lifecycle must revoke the prior card synchronously while fresh identity
+// is still in flight, so no stale command or adoption window exists.
+delayFirmwareResponse = true;
+firmwareCardId = 'lw-reloaded-different';
+listeners.get('message')?.({
+  origin: 'http://192.168.18.70',
+  source: parentBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.18.70', version: 1 },
+});
+assert.equal(getCardBridgeState().card, null, 'same-target ready synchronously revokes verified identity');
+assert.equal(getCardBridgeState().discoveredCard, null, 'same-target ready synchronously clears stale discovery');
+const messagesBeforeReloadControl = messages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(messages.length, messagesBeforeReloadControl, 'reload lock sends no privileged command');
+assert.throws(() => adoptDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+assert.throws(() => rePairDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+assert.equal(typeof releaseFirmwareResponse, 'function', 'fresh identity response is delayed by the regression harness');
+delayFirmwareResponse = false;
+releaseFirmwareResponse();
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-reloaded-different', 'fresh reload identity replaces stale discovery');
+assert.equal(getCardBridgeState().card, null, 'mismatched fresh identity remains command-locked');
+assert.equal(getCardBridgeState().identityError, 'wrong-card');
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => error?.reason === 'wrong-card',
+);
 
 const retryMessages = [];
 const retryListeners = new Map();

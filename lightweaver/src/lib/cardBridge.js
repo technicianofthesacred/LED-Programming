@@ -73,6 +73,7 @@ let bridgeDiscoveredCard = null;
 let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
+let bridgeLifecycle = 0;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
@@ -129,6 +130,7 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeCard = null;
   bridgeDiscoveredCard = null;
   bridgeIdentityError = '';
+  bridgeLifecycle += 1;
   dispatchBridgeChange();
 }
 
@@ -213,6 +215,14 @@ function handleBridgeMessage(event) {
     if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
     if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
     if (bridgeOrigin && event.origin !== bridgeOrigin) return;
+    // A card-page reload may retain the exact same WindowProxy and host. Revoke
+    // the prior lifecycle synchronously before exposing transport readiness;
+    // fresh firmware identity is the only path back to command authority.
+    bridgeLifecycle += 1;
+    bridgeReady = false;
+    bridgeCard = null;
+    bridgeDiscoveredCard = null;
+    bridgeIdentityError = '';
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
       source: event.source,
@@ -235,6 +245,11 @@ function handleBridgeMessage(event) {
 
   pending.delete(data.id);
   clearTimeout(request.timer);
+
+  if (request.lifecycle !== bridgeLifecycle) {
+    request.reject(bridgeError('Ignored a response from an older card-page lifecycle.', 'stale-host'));
+    return;
+  }
 
   if (data.ok === false) {
     const error = new Error(data.error || 'Card bridge request failed');
@@ -433,11 +448,12 @@ export function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
 export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
   const expectedHost = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
   const expectedWindow = bridgeWindow;
+  const expectedLifecycle = bridgeLifecycle;
   try {
     const response = await sendCardBridgeRequest('firmware-info', {}, { host: expectedHost });
     const identity = normalizeCardIdentity(response, expectedHost);
     if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
-    if (bridgeWindow !== expectedWindow || normalizeCardHost(bridgeHost) !== expectedHost) {
+    if (bridgeWindow !== expectedWindow || normalizeCardHost(bridgeHost) !== expectedHost || bridgeLifecycle !== expectedLifecycle) {
       throw bridgeError('Ignored identity from an older card connection.', 'stale-host');
     }
     requireExpectedCardIdentity(identity, { expected: readPersistedCardIdentity() });
@@ -446,7 +462,7 @@ export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
     dispatchBridgeChange();
     return identity;
   } catch (error) {
-    if (bridgeWindow === expectedWindow && normalizeCardHost(bridgeHost) === expectedHost) {
+    if (bridgeWindow === expectedWindow && normalizeCardHost(bridgeHost) === expectedHost && bridgeLifecycle === expectedLifecycle) {
       bridgeCard = null;
       bridgeIdentityError = error?.reason || 'identity-missing';
       dispatchBridgeChange();
@@ -597,7 +613,10 @@ function bridgeRequestAttempt(type, payload, {
       markBridgeTimeout(startedAt);
       reject(bridgeError('Timed out waiting for the card bridge.', 'bridge-timeout'));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timer, origin: targetOrigin, type, host: resolvedHost });
+    pending.set(id, {
+      resolve, reject, timer, origin: targetOrigin, type, host: resolvedHost,
+      lifecycle: bridgeLifecycle,
+    });
     try {
       bridgeWindow.postMessage(message, targetOrigin);
     } catch (cause) {
@@ -630,7 +649,10 @@ export function sendCardBridgeRequest(type, payload = {}, {
   if (!IDENTITY_FREE_BRIDGE_TYPES.has(type)) {
     try {
       if (!bridgeReady || !bridgeCard?.id) {
-        throw bridgeError('The card bridge transport is open, but card identity is not verified.', 'identity-missing');
+        throw bridgeError(
+          'The card bridge transport is open, but card identity is not verified.',
+          bridgeIdentityError || 'identity-missing',
+        );
       }
       requireExpectedCardIdentity(bridgeCard);
       if (normalizeCardHost(bridgeHost) !== resolvedHost) {
