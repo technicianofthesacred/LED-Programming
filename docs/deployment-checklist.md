@@ -22,6 +22,9 @@ cd lightweaver && npm run check:prod
 ```
 
 It hashes the live `/firmware/*.bin` against the committed binary and checks the ESP magic byte; it exits 0 with a SKIPPED note when offline (deploy-time check — not part of `test:core`).
+It also requires the root Studio shell and an exact branded HTTP 404 at the
+retired route. For a preview, set `PROD_ORIGIN` once so all three checks use the
+same deployment.
 
 ---
 

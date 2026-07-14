@@ -4,10 +4,13 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8'));
 const redirects = readFileSync(resolve(root, 'public/_redirects'), 'utf8');
 const index = readFileSync(resolve(root, 'index.html'), 'utf8');
 const freshness = readFileSync(resolve(root, 'scripts/check-prod-freshness.mjs'), 'utf8');
+const deploymentCheck = readFileSync(resolve(root, 'src/lib/productionDeploymentCheck.js'), 'utf8');
 const workflow = readFileSync(resolve(root, '../.github/workflows/deploy-site.yml'), 'utf8');
+const setupDoc = readFileSync(resolve(root, '../docs/led-mandalacodes-setup.md'), 'utf8');
 const runtimeRootReferences = [
   readFileSync(resolve(root, 'src/lib/cardPushClient.js'), 'utf8'),
   readFileSync(resolve(root, 'src/v3/lw-flash.jsx'), 'utf8'),
@@ -21,8 +24,16 @@ const deploymentDocs = [
 assert.equal(pkg.scripts['build:design'], undefined);
 assert.match(pkg.scripts['stage:pages'], /cp -R dist\/. \.pages\/lightweaver\//);
 assert.doesNotMatch(pkg.scripts['stage:pages'], /lightweaver\/design/);
-assert.equal(pkg.scripts['deploy:pages'], 'npm run build && npm run stage:pages && npx --yes wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main');
+assert.equal(pkg.scripts['verify:pages'], 'node tests/pages-staging.mjs --artifact');
+assert.match(pkg.scripts['launch:check'], /npm run build && npm run stage:pages && npm run verify:pages$/);
+assert.equal(pkg.scripts['deploy:pages'], 'npm run build && npm run stage:pages && npm run verify:pages && wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main');
+assert.equal(pkg.scripts['pages:project'], 'wrangler pages project create lightweaver --production-branch main');
+assert.match(pkg.devDependencies.wrangler, /^\d+\.\d+\.\d+$/);
+assert.equal(lock.packages[''].devDependencies.wrangler, pkg.devDependencies.wrangler);
+assert.doesNotMatch(JSON.stringify(pkg.scripts), /npx --yes wrangler/);
 assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-staging\.mjs/);
+assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js');
+assert.match(pkg.scripts['launch:check'], /npm run test:core && npm run test:prod-deploy && npm run test:show/);
 
 assert.doesNotMatch(redirects, /^\/design/m);
 assert.match(redirects, /^\/visitor \/src\/visitor\/visitor\.html 200$/m);
@@ -32,12 +43,15 @@ assert.ok(existsSync(resolve(root, 'public/404.html')), 'a top-level 404 disable
 
 assert.match(index, /https:\/\/led\.mandalacodes\.com\/#screen=patterns/);
 assert.doesNotMatch(index, /led\.mandalacodes\.com\/design/);
-assert.match(freshness, /https:\/\/led\.mandalacodes\.com\/firmware\/lightweaver-controller-esp32s3-factory\.bin/);
-assert.match(freshness, /https:\/\/led\.mandalacodes\.com\//);
-assert.match(freshness, /https:\/\/led\.mandalacodes\.com\/design/);
-assert.match(freshness, /Legacy Studio route is still live/);
+assert.match(freshness, /resolveProductionUrls\(process\.env\)/);
+assert.match(deploymentCheck, /https:\/\/led\.mandalacodes\.com/);
+assert.match(deploymentCheck, /\/design/);
+assert.match(deploymentCheck, /\/firmware\/lightweaver-controller-esp32s3-factory\.bin/);
+assert.match(deploymentCheck, /expected HTTP 404/);
 assert.doesNotMatch(workflow, /\/design\/?/);
-assert.doesNotMatch(deploymentDocs, /led\.mandalacodes\.com\/design/);
+assert.doesNotMatch(deploymentDocs, /led\.mandalacodes\.com\/design\/?#|led\.mandalacodes\.com\/design[^\n]*opens Studio/);
+assert.match(setupDoc, /Wrangler is pinned/);
+assert.match(setupDoc, /PROD_ORIGIN/);
 assert.doesNotMatch(runtimeRootReferences, /led\.mandalacodes\.com\/design|\/design\//);
 
 if (process.argv.includes('--artifact')) {

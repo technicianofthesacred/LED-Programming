@@ -314,7 +314,8 @@ Use root base and root artifact:
 
 ```json
 "stage:pages": "rm -rf .pages/lightweaver && mkdir -p .pages/lightweaver && cp -R dist/. .pages/lightweaver/",
-"deploy:pages": "npm run build && npm run stage:pages && npx --yes wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main"
+"verify:pages": "node tests/pages-staging.mjs --artifact",
+"deploy:pages": "npm run build && npm run stage:pages && npm run verify:pages && wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main"
 ```
 
 Make `public/_redirects` contain only the explicit visitor paths:
@@ -324,7 +325,7 @@ Make `public/_redirects` contain only the explicit visitor paths:
 /visitor/ /src/visitor/visitor.html 200
 ```
 
-Add a top-level `public/404.html`; Cloudflare Pages uses it to disable implicit SPA fallback, so `/design` is genuinely not an app route. Update the live fallback URL, firmware freshness URL to `/firmware/...`, production root/legacy-route checks, and deployment documentation/comments. Do not add a `/design` redirect or second artifact copy.
+Add a top-level `public/404.html`; Cloudflare Pages uses it to disable implicit SPA fallback, so `/design` is genuinely not an app route. The production check must require the exact branded 404 rather than accepting another failure status. Derive the root, retired route, and firmware URL from one `PROD_ORIGIN`. Pin Wrangler exactly in the lockfile, use its npm-script binary, and run artifact verification immediately before upload. Update deployment documentation/comments. Do not add a `/design` redirect or second artifact copy.
 
 - [ ] **Step 4: Build, stage, and inspect the artifact**
 

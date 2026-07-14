@@ -12,8 +12,8 @@
 // sandboxed CI) it prints SKIPPED and exits 0. It only fails when it can see
 // production and production is wrong. Do NOT add this to test:core.
 //
-// Override the URL for staging checks:
-//   PROD_FIRMWARE_URL=https://studio.lightweaver-edw.pages.dev/firmware/... npm run check:prod
+// Override one origin for staging checks; all checked paths stay coherent:
+//   PROD_ORIGIN=https://studio.lightweaver-edw.pages.dev npm run check:prod
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -22,15 +22,15 @@ import { fileURLToPath } from 'node:url';
 // The flasher's own validation (pure ESM, dependency-free): ESP magic byte +
 // HTML/SPA-fallback detection live in one place instead of being re-implemented.
 import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js';
+import {
+  assertLegacyRouteRemoved,
+  assertStudioRoot,
+  resolveProductionUrls,
+} from '../src/lib/productionDeploymentCheck.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
-const studioUrl = process.env.PROD_STUDIO_URL
-  || 'https://led.mandalacodes.com/';
-const legacyDesignUrl = process.env.PROD_LEGACY_DESIGN_URL
-  || 'https://led.mandalacodes.com/design';
-const url = process.env.PROD_FIRMWARE_URL
-  || 'https://led.mandalacodes.com/firmware/lightweaver-controller-esp32s3-factory.bin';
+const { studioUrl, legacyDesignUrl, firmwareUrl: url } = resolveProductionUrls(process.env);
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -63,12 +63,10 @@ try {
   process.exit(0);
 }
 
-if (!studioResponse.ok) {
-  fail(`Production Studio root answered HTTP ${studioResponse.status} at\n  ${studioUrl}`);
-}
-const studioHtml = await studioResponse.text();
-if (!/id=["']root["']/.test(studioHtml)) {
-  fail(`Production root does not contain the Lightweaver Studio shell at\n  ${studioUrl}`);
+try {
+  await assertStudioRoot(studioResponse, studioUrl);
+} catch (err) {
+  fail(err.message);
 }
 
 let legacyResponse;
@@ -81,11 +79,10 @@ try {
 } catch (err) {
   fail(`Production root is reachable, but the removed route could not be checked at\n  ${legacyDesignUrl}\n  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`);
 }
-if (legacyResponse.ok || (legacyResponse.status >= 300 && legacyResponse.status < 400)) {
-  fail(
-    `Legacy Studio route is still live (HTTP ${legacyResponse.status}) at\n  ${legacyDesignUrl}\n` +
-      'The production artifact must contain a top-level 404.html and no wildcard Studio rewrite.',
-  );
+try {
+  await assertLegacyRouteRemoved(legacyResponse, legacyDesignUrl);
+} catch (err) {
+  fail(`${err.message}\nThe production artifact must contain a top-level 404.html and no wildcard Studio rewrite.`);
 }
 
 let response;

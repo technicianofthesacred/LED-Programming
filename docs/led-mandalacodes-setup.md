@@ -41,9 +41,14 @@ Use a separate Cloudflare Pages project named `lightweaver`, then attach `led.ma
 
 ```bash
 cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
+npm ci
 npm run build
 npm run stage:pages
+npm run verify:pages
 ```
+
+Wrangler is pinned exactly in `devDependencies` and `package-lock.json`. Use the
+npm scripts after `npm ci`; do not replace them with an unpinned `npx` download.
 
 Important public routes:
 
@@ -68,7 +73,7 @@ One-time project creation:
 
 ```bash
 cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
-wrangler pages project create lightweaver --production-branch main
+npm run pages:project
 ```
 
 Deploy:
@@ -77,6 +82,10 @@ Deploy:
 cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led/lightweaver"
 npm run deploy:pages
 ```
+
+`deploy:pages` builds, stages, verifies the root artifact (including the branded
+404 that keeps the retired route unavailable), and only then invokes the pinned
+Wrangler binary.
 
 The deployed fallback URL will be:
 
@@ -125,6 +134,15 @@ Verify after SSL activates:
 
 ```bash
 curl -I https://led.mandalacodes.com/
+curl -I https://led.mandalacodes.com/design  # must be exactly 404
+cd lightweaver && npm run check:prod
+```
+
+For a preview deployment, override the one origin so the root, retired route,
+and firmware checks cannot accidentally target different deployments:
+
+```bash
+PROD_ORIGIN=https://studio.lightweaver-edw.pages.dev npm run check:prod
 ```
 
 ## Card control path

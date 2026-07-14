@@ -104,8 +104,9 @@ jobs:
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs
 
-      # Core tests already ran (and passed) in the required `test` job above —
-      # no secrets-gated re-run here.
+      # Core tests already ran in the required `test` job above. deploy:pages
+      # still builds, stages, and runs artifact assertions immediately before
+      # the pinned Wrangler upload so an invalid artifact cannot be published.
       - name: Build and deploy to Cloudflare Pages
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
