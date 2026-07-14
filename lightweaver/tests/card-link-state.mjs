@@ -414,6 +414,72 @@ assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122a
 assert.equal(isolatedDirectLink.getState().discoveredCard.id, 'lw-newer-b');
 assert.equal(isolatedDirectLink.getState().state, 'disconnected');
 
+async function assertPersistedAuthorityRace({ initialIdentity, nextIdentity, label }) {
+  if (initialIdentity) {
+    storedValues.set('lw_card_identity_v1', JSON.stringify(initialIdentity));
+  } else {
+    storedValues.delete('lw_card_identity_v1');
+  }
+  const link = createCardLink({ host: '192.168.18.72' });
+  link.dispatch({
+    type: 'direct-status', connected: true, host: '192.168.18.72',
+    expectedCard: { id: 'lw-authority-before' },
+    card: { id: 'lw-cross-tab-a', name: 'Cross-tab A' },
+  });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const adoption = adoptDiscoveredDirectCard({
+    link,
+    fetchImpl: async () => {
+      await gate;
+      return {
+        ok: true,
+        json: async () => ({ cardId: 'lw-cross-tab-a', cardName: 'Cross-tab A' }),
+      };
+    },
+  });
+  if (nextIdentity) {
+    storedValues.set('lw_card_identity_v1', JSON.stringify(nextIdentity));
+  } else {
+    storedValues.delete('lw_card_identity_v1');
+  }
+  release();
+  await assert.rejects(
+    adoption,
+    error => error?.reason === 'stale-identity',
+    label,
+  );
+  assert.deepEqual(
+    storedValues.has('lw_card_identity_v1')
+      ? JSON.parse(storedValues.get('lw_card_identity_v1'))
+      : null,
+    nextIdentity,
+    `${label}: the newer cross-tab authority remains untouched`,
+  );
+}
+
+await assertPersistedAuthorityRace({
+  initialIdentity: null,
+  nextIdentity: { version: 1, id: 'lw-cross-tab-b' },
+  label: 'null-to-card cross-tab pairing invalidates delayed direct adoption',
+});
+await assertPersistedAuthorityRace({
+  initialIdentity: { version: 1, id: 'lw-authority-before' },
+  nextIdentity: null,
+  label: 'card-to-null cross-tab forgetting invalidates delayed direct adoption',
+});
+await assertPersistedAuthorityRace({
+  initialIdentity: {
+    version: 1, id: 'lw-same-card', address: '192.168.18.72', acknowledgedAt: '2026-07-14T10:00:00.000Z',
+  },
+  nextIdentity: {
+    version: 1, id: 'lw-same-card', address: '192.168.18.73', acknowledgedAt: '2026-07-15T10:00:00.000Z',
+  },
+  label: 'same-ID generation/address change invalidates delayed direct adoption',
+});
+
+storedValues.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' }));
+
 listeners.get('lightweaver-card-bridge-changed')?.({
   detail: {
     connected: true,

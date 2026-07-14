@@ -478,6 +478,11 @@ export function reportDirectCardStatus({
   link.dispatch({ type: 'direct-status', connected: false, host, reason: reason || 'card-unreachable' });
 }
 
+function persistedIdentityAuthorityToken(identity) {
+  if (!identity) return 'null';
+  return JSON.stringify(Object.entries(identity).sort(([left], [right]) => left.localeCompare(right)));
+}
+
 export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCardLink() } = {}) {
   const state = link.getState();
   const discoveredCard = state.discoveredCard;
@@ -490,10 +495,16 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
     host: state.host,
     cardId: discoveredCard.id,
     revision: state.directDiscoveryRevision || 0,
+    persistedAuthority: persistedIdentityAuthorityToken(readPersistedCardIdentity()),
   };
   const verifyOptions = { expected: discoveredCard };
   if (fetchImpl) verifyOptions.fetchImpl = fetchImpl;
   const verified = await verifyExpectedCardAtHost(state.host, verifyOptions);
+  if (persistedIdentityAuthorityToken(readPersistedCardIdentity()) !== snapshot.persistedAuthority) {
+    const error = new Error('The paired card changed in another tab while this check was running. Review the card now shown and try again.');
+    error.reason = 'stale-identity';
+    throw error;
+  }
   const current = link.getState();
   if (
     current.transport !== 'direct'
