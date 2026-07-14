@@ -43,6 +43,7 @@ import {
 import {
   cardHostToUrl,
   discoverCardStatus,
+  normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
@@ -54,9 +55,12 @@ import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
+  acquireCardBridgeFromGesture,
+  cardBridgeFeatureGap,
+  getCardBridgeState,
+  hasCardBridge,
   readLocalChipDefault,
   writeLocalChipDefault,
-  openCardBridge,
 } from '../lib/cardBridge.js';
 
   // Mockup geometry id -> live symSettings.
@@ -336,6 +340,7 @@ import {
     const [draftLooks, setDraftLooks] = useState({});
     const livePreviewTimer = useRef(null);
     const livePreviewSeq = useRef(0);
+    const browsePreviewSeq = useRef(0);
     const savedComboSeq = useRef(0);
     const draftProjectSnapshotRef = useRef(project => project);
 
@@ -544,12 +549,62 @@ import {
     }, [projectRevision]);
 
     const updatePreviewLook = (patch, { push = true } = {}) => {
-      if (!selectedTarget) return;
+      if (!selectedTarget) return null;
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
       setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
       markProjectEdited();
       if (push) scheduleLivePreview(nextLook, selectedTarget);
+      return nextLook;
     };
+
+    const scheduleBrowseLivePreview = useCallback((nextLook, target) => {
+      if (!nextLook) return;
+      const needsBridge = livePreview && (
+        localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:')
+      );
+      if (!needsBridge) {
+        scheduleLivePreview(nextLook, target);
+        return;
+      }
+
+      const sequence = ++browsePreviewSeq.current;
+      const bridgeOpen = hasCardBridge();
+      const bridgeState = getCardBridgeState();
+      if (bridgeOpen && bridgeState.verified && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)) {
+        scheduleLivePreview(nextLook, target);
+        return;
+      }
+
+      const attempt = acquireCardBridgeFromGesture(cardHost, {
+        studioUrl: typeof window !== 'undefined' ? window.location.href : '',
+        timeoutMs: 2500,
+      });
+      setHandoffUrl('');
+      setStatusKind('');
+      setStatus('Connecting to the local Lightweaver card…');
+      void attempt.ready.then(() => {
+        if (sequence !== browsePreviewSeq.current) return;
+        const firmwareGap = cardBridgeFeatureGap('frame');
+        if (firmwareGap) {
+          setStatusKind('err');
+          setStatus(firmwareGap.message);
+          return;
+        }
+        setStatusKind('');
+        setStatus('');
+        scheduleLivePreview(nextLook, target, 0);
+      }).catch(error => {
+        if (sequence !== browsePreviewSeq.current) return;
+        setStatusKind('err');
+        if (error?.reason === 'popup-blocked') {
+          setStatus('Allow the Lightweaver card window, then try the pattern again.');
+        } else if (error?.reason === 'bridge-timeout') {
+          setStatus('The card page opened but did not answer. Check that this device is on the card\'s Wi-Fi.');
+        } else {
+          setStatus(error?.message || 'The local card did not connect. Open Flash to update the card, then try again.');
+        }
+      });
+    }, [cardHost, livePreview, localCard, scheduleLivePreview]);
 
     // Clicking a target tab pushes that target's current look to its zone
     // (debounced) so the physical strip follows the selection.
@@ -826,11 +881,12 @@ import {
           }));
           setDraftLooks({});
           setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
-          scheduleLivePreview(normalizeSectionVisualLook(realLook.defaultLook), sectionTargets[0]);
+          scheduleBrowseLivePreview(normalizeSectionVisualLook(realLook.defaultLook), sectionTargets[0]);
         }
         return;
       }
-      updatePreviewLook({ patternId: p.id });
+      const nextLook = updatePreviewLook({ patternId: p.id }, { push: false });
+      scheduleBrowseLivePreview(nextLook, selectedTarget);
     };
 
     const copyConfig = async () => {
@@ -926,17 +982,8 @@ import {
       writeLocalChipDefault(next);
       setLocalCard(next);
       if (next) {
-        const opened = openCardBridge(cardHost, {
-          autoOpenStudio: true,
-          studioUrl: typeof window !== 'undefined' ? window.location.href : '',
-        });
-        if (opened) {
-          setStatusKind('');
-          setStatus(`Local card is now the default control path. Opening ${cardHostToUrl(cardHost)} so Studio can take over the LEDs there.`);
-        } else {
-          setStatusKind('err');
-          setStatus(`Could not open ${cardHostToUrl(cardHost)}. Allow popups or open the card from the Card status.`);
-        }
+        setStatusKind('ok');
+        setStatus('Local preview is on. Your next pattern tap will connect to the card automatically.');
         return;
       }
       setStatusKind('ok');
