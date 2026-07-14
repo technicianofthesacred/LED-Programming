@@ -14,6 +14,15 @@ const body = source.slice(start, echoStart);
 const responseEnd = source.indexOf('\n}', echoStart);
 const responseBody = source.slice(echoStart, responseEnd);
 
+const sizeCheckIndex = body.indexOf('LW_MAX_CONTROL_BODY_BYTES');
+const deserializeIndex = body.indexOf('deserializeJson(doc, server.arg("plain"))');
+assert.notEqual(sizeCheckIndex, -1, 'control requests must have an explicit byte ceiling');
+assert.notEqual(deserializeIndex, -1, 'control handler should deserialize JSON');
+assert.ok(sizeCheckIndex < deserializeIndex, 'oversized control requests must be rejected before JSON deserialization');
+assert.match(body, /LW_MAX_CONTROL_BODY_BYTES\s*=\s*4096/, 'control request ceiling must stay small and explicit');
+assert.match(body, /server\.arg\("plain"\)\.length\(\)\s*>\s*LW_MAX_CONTROL_BODY_BYTES/, 'the exact ceiling is accepted and the first byte over is rejected');
+assert.match(body, /server\.send\(413,\s*"application\/json"/, 'oversized control requests must return HTTP 413');
+
 const syncIndex = body.indexOf('runtimeSetSyncZones(controlBool(doc, "syncZones"))');
 assert.notEqual(syncIndex, -1, 'handleControlPost should apply syncZones when present');
 

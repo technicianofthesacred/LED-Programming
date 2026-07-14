@@ -26,6 +26,7 @@ const COLOR_ORDER_OPTIONS = new Set(['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR']);
 const MIRRORED_REPAIR_OUTPUT_PIN = 16;
 const MIRRORED_REPAIR_DEFAULT_PIXELS = 44;
 const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'plasma', 'ocean', 'rainbow', 'scanner'];
+const MAX_CONTROL_RESPONSE_BYTES = 8192;
 const latestPreviewQueues = new Map();
 
 function supersededPreviewError() {
@@ -34,6 +35,78 @@ function supersededPreviewError() {
 
 function previewAckError(reason, message, cause) {
   return new CardPushError(reason, message, cause);
+}
+
+function oversizedControlResponseError() {
+  return new CardPushError(
+    'response-too-large',
+    `The card returned more than ${MAX_CONTROL_RESPONSE_BYTES} bytes for a control command.`,
+  );
+}
+
+function utf8Length(value = '') {
+  return new TextEncoder().encode(String(value)).byteLength;
+}
+
+async function readBoundedControlResponseText(response) {
+  const declaredLength = Number(response?.headers?.get?.('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_CONTROL_RESPONSE_BYTES) {
+    try {
+      await response?.body?.cancel?.();
+    } catch {
+      // The response is already rejected; cancellation is best-effort only.
+    }
+    throw oversizedControlResponseError();
+  }
+
+  if (response?.body?.getReader) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let text = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value?.byteLength || 0;
+      if (bytes > MAX_CONTROL_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw oversizedControlResponseError();
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  }
+
+  if (typeof response?.text === 'function') {
+    const text = await response.text();
+    if (utf8Length(text) > MAX_CONTROL_RESPONSE_BYTES) throw oversizedControlResponseError();
+    return text;
+  }
+
+  // Small unit-test and embedded bridge mocks may expose only json(). Keep
+  // them on the same byte contract by serializing before returning the value.
+  if (typeof response?.json === 'function') {
+    let text;
+    try {
+      text = JSON.stringify(await response.json());
+    } catch (error) {
+      throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable control acknowledgement.', error);
+    }
+    if (utf8Length(text) > MAX_CONTROL_RESPONSE_BYTES) throw oversizedControlResponseError();
+    return text;
+  }
+  return '';
+}
+
+function requireBoundedControlObject(response) {
+  let encoded;
+  try {
+    encoded = JSON.stringify(response);
+  } catch (error) {
+    throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable preview acknowledgement.', error);
+  }
+  if (utf8Length(encoded) > MAX_CONTROL_RESPONSE_BYTES) throw oversizedControlResponseError();
+  return response;
 }
 
 function expectedPreviewCardId(options = {}) {
@@ -352,11 +425,16 @@ async function postControlPayloadToHost(host, payload, options = {}) {
       body,
       signal: ctrl.signal,
     });
+    const text = await readBoundedControlResponseText(response);
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
       throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
     }
-    return await response.json().catch(() => ({ ok: true }));
+    if (!text) return { ok: true };
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable control acknowledgement.', error);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -476,6 +554,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
     return pushLivePreviewToBridge(host, look, options);
   }
   const verifiedCard = await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
+  requireCurrentPreviewIntent(options);
   let previewLook = look;
   let previewZoneFallback = null;
   if (options.fallbackMissingZoneToAll && look?.zone) {
@@ -493,6 +572,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
       // If the zone probe fails, keep the original targeted request so the
       // normal connection error path can report the real card reachability issue.
     }
+    requireCurrentPreviewIntent(options);
   }
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify({
@@ -502,19 +582,20 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 2500);
   try {
+    requireCurrentPreviewIntent(options);
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
       signal: ctrl.signal,
     });
+    const text = await readBoundedControlResponseText(response);
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
       throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
     }
     let json;
     try {
-      json = await response.json();
+      json = JSON.parse(text);
     } catch (error) {
       throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable preview acknowledgement.', error);
     }
@@ -545,15 +626,17 @@ async function pushLivePreviewToBridge(host, look, options = {}) {
       // Keep the original request so the bridge error path can report the
       // actual handoff problem if the card page is not open or not updated.
     }
+    requireCurrentPreviewIntent(options);
   }
-  const json = await sendCardBridgeRequest(
+  requireCurrentPreviewIntent(options);
+  const json = requireBoundedControlObject(await sendCardBridgeRequest(
     'control',
     {
       ...buildLivePreviewControlPayload(previewLook),
       ...(options.revision !== undefined ? { revision: options.revision } : {}),
     },
     { host, timeoutMs: options.timeoutMs || 2500 },
-  );
+  ));
   const acknowledged = requireLivePreviewAcknowledgement(json, previewLook, options, getCardBridgeState().card);
   return previewZoneFallback
     ? { ...acknowledged, previewZoneFallback: true, ...previewZoneFallback }
@@ -704,13 +787,17 @@ async function sendLivePreviewToCard(look, options = {}) {
   try {
     return await pushLivePreviewToHost(host, look, options);
   } catch (error) {
+    if (error?.reason === 'superseded') throw error;
     if (!isMixedContentBlocked() && options.autoDiscover !== false) {
+      requireCurrentPreviewIntent(options);
       const found = await discoverCardStatus({
         preferredHost: host,
         timeoutMs: Math.min(options.timeoutMs || 2500, 900),
       });
+      requireCurrentPreviewIntent(options);
       if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
         try {
+          requireCurrentPreviewIntent(options);
           return await pushLivePreviewToHost(found.host, look, options);
         } catch (retryError) {
           throw normalizePreviewError(found.host, retryError);
@@ -728,7 +815,7 @@ export async function pushLivePreviewToCard(look, options = {}) {
   }
   return enqueueLatestPreview(
     latestPreviewQueueKey(host),
-    () => sendLivePreviewToCard(look, options),
+    arbitration => sendLivePreviewToCard(look, { ...options, previewArbitration: arbitration }),
   );
 }
 

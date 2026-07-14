@@ -175,6 +175,47 @@ const lookOnlyProof = await pushLivePreviewToCard(
 );
 assert.equal(lookOnlyProof.confirmedLook.patternId, 'ocean');
 
+const controlResponseLimit = 8192;
+const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: '' });
+const exactLimitBody = exactLimitBase.slice(0, -2) + 'x'.repeat(controlResponseLimit - exactLimitBase.length) + '"}';
+assert.equal(new TextEncoder().encode(exactLimitBody).byteLength, controlResponseLimit);
+globalThis.fetch = async () => new Response(exactLimitBody, {
+  status: 200,
+  headers: { 'Content-Type': 'application/json', 'Content-Length': String(controlResponseLimit) },
+});
+const exactLimitAcknowledgement = await pushLivePreviewToCard(
+  { patternId: 'ocean' },
+  { host: 'lightweaver.local', expectedCardId: 'lw-expected', autoDiscover: false, latestOnly: false },
+);
+assert.equal(exactLimitAcknowledgement.patternId, 'ocean', 'a response exactly at the ceiling remains valid');
+
+for (const [label, responseFactory] of [
+  ['declared oversized acknowledgement', () => new Response(
+    `${exactLimitBody} `,
+    { status: 200, headers: { 'Content-Type': 'application/json', 'Content-Length': String(controlResponseLimit + 1) } },
+  )],
+  ['streamed oversized acknowledgement', () => new Response(
+    JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: 'x'.repeat(12000) }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  )],
+  ['oversized error body', () => new Response('x'.repeat(controlResponseLimit + 1), {
+    status: 422,
+    headers: { 'Content-Type': 'text/plain' },
+  })],
+]) {
+  globalThis.fetch = async () => responseFactory();
+  await assert.rejects(
+    pushLivePreviewToCard(
+      { patternId: 'ocean' },
+      { host: 'lightweaver.local', expectedCardId: 'lw-expected', autoDiscover: false, latestOnly: false },
+    ),
+    error => {
+      assert.equal(error?.reason, 'response-too-large', label);
+      return true;
+    },
+  );
+}
+
 globalThis.fetch = async () => { throw new TypeError('network down'); };
 await assert.rejects(
   readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
@@ -650,6 +691,36 @@ assert.deepEqual(JSON.parse(resetFallbackRequests[1].options.body), {
 });
 
 delete globalThis.window;
+let releaseStaleZoneProbe;
+let staleZoneProbeStarted;
+const staleZoneProbeReady = new Promise(resolve => { staleZoneProbeStarted = resolve; });
+const arbitratedControlRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  if (String(url).endsWith('/api/zones')) {
+    staleZoneProbeStarted();
+    await new Promise(resolve => { releaseStaleZoneProbe = resolve; });
+    return { ok: true, json: async () => ({ zones: [{ id: 'zone-a' }] }) };
+  }
+  const body = JSON.parse(options.body || '{}');
+  arbitratedControlRequests.push(body.patternId);
+  return { ok: true, json: async () => ({ ok: true, patternId: body.patternId }) };
+};
+const staleAurora = pushLivePreviewToCard({ patternId: 'aurora', zone: 'zone-a' }, {
+  host: '192.168.18.69',
+  fallbackMissingZoneToAll: true,
+  autoDiscover: false,
+}).catch(error => error);
+await staleZoneProbeReady;
+const currentFire = pushLivePreviewToCard({ patternId: 'fire' }, {
+  host: '192.168.18.69',
+  autoDiscover: false,
+});
+releaseStaleZoneProbe();
+const [staleAuroraError, currentFireResponse] = await Promise.all([staleAurora, currentFire]);
+assert.equal(staleAuroraError.reason, 'superseded');
+assert.equal(currentFireResponse.patternId, 'fire');
+assert.deepEqual(arbitratedControlRequests, ['fire'], 'an obsolete preview must not POST after deferred preflight');
+
 let releaseFirstPreview;
 const latestPreviewRequests = [];
 globalThis.fetch = async (url, options = {}) => {
@@ -745,6 +816,7 @@ assert.deepEqual(interleavedPreviewRequests, [
 
 const listeners = new Map();
 const bridgeMessages = [];
+let bridgeControlPadding = '';
 const bridgeWindow = {
   postMessage(message, targetOrigin) {
     bridgeMessages.push({ message, targetOrigin });
@@ -758,7 +830,7 @@ const bridgeWindow = {
           ok: true,
           response: message.type === 'firmware-info'
             ? { cardId: 'lw-live-preview', firmwareVersion: '1.0.0' }
-            : { ok: true, bridged: true, patternId: message.payload?.patternId },
+            : { ok: true, bridged: true, patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
     }, 0);
@@ -808,5 +880,15 @@ assert.equal(bridgeMessages[0].targetOrigin, 'http://lightweaver.local');
 assert.equal(bridgeMessages[0].message.app, 'LightweaverStudioBridge');
 assert.equal(bridgeMessages[0].message.type, 'control');
 assert.equal(bridgeMessages[0].message.payload.patternId, 'ocean');
+
+bridgeControlPadding = 'x'.repeat(controlResponseLimit + 1);
+await assert.rejects(
+  pushLivePreviewToCard(
+    { patternId: 'fire' },
+    { host: 'lightweaver.local', timeoutMs: 1000, latestOnly: false, autoDiscover: false },
+  ),
+  error => error?.reason === 'response-too-large',
+  'the HTTPS card-page bridge must enforce the same bounded acknowledgement contract',
+);
 
 console.log('card-live-preview tests passed');

@@ -1179,6 +1179,11 @@ void handleReboot() {
 void handleControlPost() {
   sendCors();
   JsonDocument doc;
+  constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
+  if (server.hasArg("plain") && server.arg("plain").length() > LW_MAX_CONTROL_BODY_BYTES) {
+    server.send(413, "application/json", "{\"ok\":false,\"error\":\"control request too large\"}");
+    return;
+  }
   if (server.hasArg("plain") && server.arg("plain").length()) {
     DeserializationError err = deserializeJson(doc, server.arg("plain"));
     if (err) {
