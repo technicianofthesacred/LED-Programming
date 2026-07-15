@@ -83,6 +83,14 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   confirmDestructiveAction: invokeConfirmation,
   onProgress: (callback) => subscribe('bridge:progress', callback),
   onResult: (callback) => subscribe('bridge:result', callback),
+  onLaunchRequest: (callback) => {
+    if (typeof callback !== 'function') throw new TypeError('A callback function is required');
+    const listener = (_event, payload) => {
+      if (payload && OPERATIONS.has(payload.operation) && Object.keys(payload).length === 1) callback(Object.freeze({ operation: payload.operation }));
+    };
+    ipcRenderer.on('bridge:launch-request', listener);
+    return () => ipcRenderer.removeListener('bridge:launch-request', listener);
+  },
   cancelBeforeCriticalSection: () => ipcRenderer.invoke('bridge:cancel').then(sanitizeCancellation),
 }));
 

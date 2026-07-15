@@ -3,7 +3,10 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const {
+  createLaunchRouter, createNonceStore, createSafeCallbackOpener, findLaunchUrlInArgv, registerProtocolClient,
+} = require('./deep-link-protocol');
 const { createIpcHandlers } = require('./ipc-handlers');
 const { createProductionDependencies } = require('./esptool-runtime');
 const { createOperationRunner } = require('./operation-runner');
@@ -17,6 +20,54 @@ const smokeTest = process.argv.includes('--smoke-test');
 const inspectCardSmoke = process.argv.includes('--inspect-card');
 const operationState = createOperationState();
 let mainWindow = null;
+const callbackOpener = createSafeCallbackOpener({ openExternal: url => shell.openExternal(url) });
+const nonceStore = createNonceStore({ userDataPath: app.getPath('userData') });
+
+function publicCallbackResult(payload) {
+  const status = payload.state === 'awaiting-card-acknowledgement'
+    ? payload.state
+    : payload.classification === 'usb-ownership-uncertain' || payload.state === 'usb-ownership-uncertain'
+      ? 'usb-ownership-uncertain'
+      : payload.classification === 'needs-safe-recovery' || payload.state === 'recovery-required'
+        ? 'needs-safe-recovery' : 'recoverable-failure';
+  return Object.freeze({
+    status,
+    code: typeof payload.code === 'string' ? payload.code : status,
+    ...(status === 'awaiting-card-acknowledgement' ? {
+      cardId: payload.cardId, firmwareVersion: payload.firmwareVersion, buildId: payload.buildId,
+    } : {}),
+    target: 'lightweaver-controller-esp32s3',
+    verification: payload.verification === 'flash-verified' ? 'flash-verified' : 'not-verified',
+    physicalOutput: 'unconfirmed',
+  });
+}
+
+const launchRouter = createLaunchRouter({
+  consumeNonce: request => nonceStore.consume(request),
+  deliver: request => {
+    if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Bridge window is unavailable');
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('bridge:launch-request', Object.freeze({ operation: request.operation }));
+  },
+});
+
+function routeLaunch(value) {
+  try { launchRouter.route(value); } catch (error) {
+    process.stderr.write(`Lightweaver Bridge rejected launch request: ${redactSensitiveText(error?.message)}\n`);
+  }
+}
+
+async function returnBoundedResult(payload, completedOperation) {
+  const request = launchRouter.active;
+  if (!request) return;
+  if (request.operation !== completedOperation) {
+    launchRouter.complete();
+    return;
+  }
+  try { await callbackOpener.open(request, publicCallbackResult(payload)); }
+  finally { launchRouter.complete(); }
+}
 
 async function createProductionRunner() {
   const dependencies = await createProductionDependencies();
@@ -32,6 +83,7 @@ function registerIpcHandlers(runner) {
     rendererPath,
     operation: operationState,
     runner,
+    onBoundedResult: returnBoundedResult,
   });
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }
@@ -64,6 +116,7 @@ async function createMainWindow() {
   if (window.webContents.mainFrame.url !== pathToFileURL(rendererPath).href) {
     throw new Error('Renderer loaded an unexpected URL');
   }
+  launchRouter.setReady();
   return window;
 }
 
@@ -119,7 +172,34 @@ async function run() {
   }
 }
 
-app.whenReady().then(run).catch((error) => {
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) app.quit();
+else registerProtocolClient(app);
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  routeLaunch(url);
+});
+
+app.on('second-instance', (_event, argv) => {
+  try {
+    const value = findLaunchUrlInArgv(argv);
+    if (value) routeLaunch(value);
+  } catch (error) {
+    process.stderr.write(`Lightweaver Bridge rejected argv: ${redactSensitiveText(error?.message)}\n`);
+  }
+});
+
+if (singleInstance) {
+  try {
+    const initialLaunch = findLaunchUrlInArgv(process.argv);
+    if (initialLaunch) routeLaunch(initialLaunch);
+  } catch (error) {
+    process.stderr.write(`Lightweaver Bridge rejected initial argv: ${redactSensitiveText(error?.message)}\n`);
+  }
+}
+
+if (singleInstance) app.whenReady().then(run).catch((error) => {
   process.stderr.write(`Lightweaver Bridge failed: ${redactSensitiveText(error && error.message)}\n`);
   app.exit(1);
 });

@@ -6,6 +6,10 @@ directories:
 files:
   - src/**/*
   - package.json
+protocols:
+  - name: Lightweaver Bridge launch
+    schemes:
+      - lightweaver
 mac:
   category: public.app-category.utilities
   target:

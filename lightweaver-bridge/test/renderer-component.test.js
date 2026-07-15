@@ -24,6 +24,7 @@ test('unplug-replug guidance requires a deliberate acknowledgement before inspec
     cancelBeforeCriticalSection: async () => ({ cancelled: true }),
     onProgress() {},
     onResult(listener) { onResult = listener; },
+    onLaunchRequest() {},
   };
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
   vm.runInNewContext(source, {

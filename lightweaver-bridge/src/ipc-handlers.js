@@ -5,7 +5,7 @@ const { isTrustedIpcEvent } = require('./security');
 
 const DESTRUCTIVE_OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
 
-function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner }) {
+function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {} }) {
   let pendingAuthority = null;
 
   function assertTrusted(event) {
@@ -104,11 +104,15 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
       })).then(result => {
         if (operation.current === 'installing') operation.advanceVerification();
         operation.finishFlashVerified();
-        sendIfStillTrusted(event, 'bridge:result', createRendererResult('awaiting-card-acknowledgement', result.message, result));
+        const payload = createRendererResult('awaiting-card-acknowledgement', result.message, result);
+        sendIfStillTrusted(event, 'bridge:result', payload);
+        Promise.resolve(onBoundedResult(payload, authority.operation)).catch(() => {});
       }).catch(error => {
         if (operation.current === 'installing') operation.failCriticalSection(error?.classification);
         else if (operation.current === 'verifying') operation.finishFailure(error?.classification);
-        sendIfStillTrusted(event, 'bridge:result', failurePayload(error));
+        const payload = failurePayload(error);
+        sendIfStillTrusted(event, 'bridge:result', payload);
+        Promise.resolve(onBoundedResult(payload, authority.operation)).catch(() => {});
       });
       return createRendererResult('installing', 'Installation started. Keep the card connected.');
     },

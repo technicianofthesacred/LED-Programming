@@ -140,6 +140,7 @@ test('confirmation returns installing promptly while async runner drives verifie
   const { createOperationState } = require('../src/operation-state');
   const { window, event } = trustedWindowAndEvent();
   const sent = [];
+  const bounded = [];
   window.webContents.send = (channel, payload) => sent.push([channel, payload]);
   let finish;
   const operation = createOperationState();
@@ -147,6 +148,7 @@ test('confirmation returns installing promptly while async runner drives verifie
     getActiveWindow: () => window,
     rendererPath,
     operation,
+    onBoundedResult: (payload, requestedOperation) => bounded.push([payload, requestedOperation]),
     runner: {
       inspect: async () => ({ compatible: true, cardId: 'lw-441bf681feb0' }),
       prepare: async () => ({ confirmationToken: 'd'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Factory install replaces card configuration.' }),
@@ -180,6 +182,9 @@ test('confirmation returns installing promptly while async runner drives verifie
   assert.equal(result.physicalOutput, 'unconfirmed');
   assert.equal(result.pipelineComplete, false);
   assert.equal(result.state, 'awaiting-card-acknowledgement');
+  assert.equal(bounded.length, 1);
+  assert.equal(bounded[0][0], result);
+  assert.equal(bounded[0][1], 'install-current-release');
 });
 
 test('IPC preserves structured failure classifications and truthful distinct result states', async () => {
@@ -381,7 +386,7 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
 
   assert.deepEqual(Object.keys(exposed).sort(), [
     'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'inspectCompatibleCard',
-    'onProgress', 'onResult', 'startOperation',
+    'onLaunchRequest', 'onProgress', 'onResult', 'startOperation',
   ]);
   assert.equal('ipcRenderer' in exposed, false);
   const inspected = await exposed.inspectCompatibleCard();
@@ -391,6 +396,15 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   await assert.rejects(() => exposed.startOperation('arbitrary'), /operation/i);
   await exposed.startOperation('install-current-release');
   assert.deepEqual(invokes.at(-1), ['bridge:start-operation', 'install-current-release']);
+
+  let launch;
+  exposed.onLaunchRequest(payload => { launch = payload; });
+  listeners.get('bridge:launch-request')({}, { operation: 'recover-current-release', nonce: 'must-not-cross' });
+  assert.equal(launch, undefined);
+  listeners.get('bridge:launch-request')({}, { operation: 'recover-current-release' });
+  assert.deepEqual(Object.keys(launch), ['operation']);
+  assert.equal(launch.operation, 'recover-current-release');
+  assert.equal(Object.isFrozen(launch), true);
 
   let received;
   const unsubscribe = exposed.onProgress((payload) => { received = payload; });

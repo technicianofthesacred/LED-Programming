@@ -58,8 +58,9 @@ primaryAction.addEventListener('click', async () => {
       render({ state: 'select-card' });
     } else {
       const inspected = await bridge.inspectCompatibleCard();
-      if (inspected.compatible) render(await bridge.startOperation(selectedOperation));
-      else render(inspected);
+      if (inspected.compatible && (selectedOperation === 'install-current-release' || selectedOperation === 'recover-current-release')) {
+        render(await bridge.startOperation(selectedOperation));
+      } else render(inspected);
     }
   } catch {
     render({ state: 'recovery-required', message: 'The local bridge could not complete that step. No further action was taken.' });
@@ -73,4 +74,11 @@ cancelAction.addEventListener('click', async () => {
 
 bridge.onProgress(render);
 bridge.onResult(render);
+bridge.onLaunchRequest(({ operation }) => {
+  selectedOperation = operation;
+  render({
+    state: 'select-card',
+    message: `Studio requested ${operation.replaceAll('-', ' ')}. Inspect the connected card; the Bridge will still require confirmation before any destructive action.`,
+  });
+});
 render({ state: 'select-card' });
