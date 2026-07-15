@@ -79,30 +79,35 @@ assert.match(
   /function lwOpenStudio\(event,url\)/,
   'simple local card page should define the Studio click handoff as a global function callable from inline onclick',
 );
-assert.match(
+assert.doesNotMatch(
   web,
-  /document\.createElement\('iframe'\)/,
-  'simple local card page should load Studio in an iframe so the local card page stays available as the bridge',
+  /document\.createElement\(['"]iframe['"]\)/,
+  'new card firmware must never embed Studio in the local HTTP page',
 );
 assert.match(
   web,
-  /frame\.src=url/,
-  'simple local card page should point the embedded Studio iframe at the bridge-enabled Studio URL',
+  /window\.open\(url,'lightweaver-studio'\)/,
+  'the card page should open Studio as a separate top-level HTTPS window',
 );
 assert.match(
   web,
-  /contentWindow\.postMessage\(\{app:'LightweaverCardBridge',type:'ready'/,
-  'card page should send a ready bridge message into the embedded Studio iframe',
+  /https:\/\/led\.mandalacodes\.com\/\?cardBridge=1&cardHost=/,
+  'the card page should compile the canonical HTTPS Studio origin into its handoff URL',
 );
 assert.match(
   web,
-  /searchParams\.set\('cardHost',location\.host\)/,
-  'simple local card page should rewrite cardHost to the actual local origin before embedding Studio',
+  /u\.searchParams\.set\('cardHost',location\.host\)/,
+  'the card page should rewrite only the local cardHost hint before opening Studio',
+);
+assert.doesNotMatch(
+  web,
+  /studioAutoOpen|(?:searchParams|p)\.get\(['"](?:studioUrl|callback|firmwareUrl|origin)['"]\)/,
+  'card query parameters must not select or auto-open an arbitrary Studio URL',
 );
 assert.match(
   web,
-  /studioAutoOpen/,
-  'card page should support public Studio opening the local card bridge and auto-launching the embedded Studio handoff',
+  /Allow pop-ups for this page, then tap Open Studio again\./,
+  'the card page should give concise, actionable help when the Studio popup is blocked',
 );
 assert.match(
   web,

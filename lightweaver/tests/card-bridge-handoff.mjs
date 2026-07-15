@@ -51,14 +51,11 @@ const handoffUrl = buildCardBridgeLaunchUrl(
 );
 const handoff = new URL(handoffUrl);
 assert.equal(handoff.origin, 'http://192.168.18.70');
-assert.equal(handoff.searchParams.get('studioAutoOpen'), '1');
 assert.equal(handoff.hash, '#studioBridge=1');
-const embeddedStudio = new URL(handoff.searchParams.get('studioUrl'));
-assert.equal(embeddedStudio.origin, 'https://led.mandalacodes.com');
-assert.equal(embeddedStudio.searchParams.get('cardBridge'), '1');
-assert.equal(embeddedStudio.searchParams.get('cardHost'), '192.168.18.70');
-assert.equal(embeddedStudio.searchParams.get('studioTakeover'), '1');
-assert.equal(embeddedStudio.hash, '#screen=patterns');
+assert.equal(handoff.search, '', 'Studio must not pass an auto-open URL through the card query string');
+assert.equal(handoff.searchParams.has('studioAutoOpen'), false);
+assert.equal(handoff.searchParams.has('studioUrl'), false);
+assert.equal(handoff.href.includes('deployCheck=123'), false, 'arbitrary Studio URL data is never forwarded to the card');
 
 const messages = [];
 const storedIdentityValues = new Map([['lw_chip_card_host', '192.168.18.70']]);

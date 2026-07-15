@@ -120,39 +120,28 @@ String cardBridgeHost(const RuntimeConfig& cfg) {
 String studioBridgeUrl(const RuntimeConfig& cfg) {
   String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
   url += cardBridgeHost(cfg);
-  url += "&studioTakeover=1";
   url += "#screen=patterns";
   return url;
 }
 
 String studioOpenScript() {
   String script;
-  script.reserve(1100);
+  script.reserve(900);
   script += F("function lwOpenStudio(event,url){"
            "if(event)event.preventDefault();"
-           "try{const u=new URL(url);u.searchParams.set('cardHost',location.host);url=u.href}catch(_){}"
-           "const frame=document.createElement('iframe');"
-           "frame.src=url;"
-           "frame.title='Lightweaver Studio';"
-           "frame.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;border:0;background:#050505;z-index:9999';"
-           "const ready=()=>{try{const o=new URL(frame.src).origin;frame.contentWindow&&frame.contentWindow.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
-  script += String(LW_BRIDGE_VERSION);
-  script += F(",href:location.href,host:location.host},o)}catch(_){}};"
-           "frame.addEventListener('load',ready);"
-           "document.documentElement.style.background='#050505';"
-           "document.body.style.margin='0';"
-           "document.body.innerHTML='';"
-           "document.body.appendChild(frame);"
-           "setTimeout(ready,300);"
+           "try{"
+             "const requested=new URL(url,'https://led.mandalacodes.com/');"
+             "const u=new URL('https://led.mandalacodes.com/');"
+             "u.searchParams.set('cardBridge','1');"
+             "u.searchParams.set('cardHost',location.host);"
+             "for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value))u.searchParams.set(key,value)}"
+             "u.hash='#screen=patterns';url=u.href"
+           "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=patterns'}"
+           "const opened=window.open(url,'lightweaver-studio');"
+           "if(!opened)alert('Allow pop-ups for this page, then tap Open Studio again.');"
+           "else try{opened.focus()}catch(_){}"
            "return false"
-           "}"
-           "function lwMaybeAutoOpenStudio(){"
-           "try{const p=new URLSearchParams(location.search);"
-           "if(p.get('studioAutoOpen')==='1'){"
-           "const link=document.getElementById('studio-link');"
-           "const url=p.get('studioUrl')||(link&&link.href)||'';"
-           "if(url)setTimeout(()=>lwOpenStudio(null,url),80)"
-           "}}catch(_){}}");
+           "}");
   return script;
 }
 
@@ -501,7 +490,6 @@ void handleRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
-            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "let controlRetry=null,controlErrorOwner=null;"
             "const clearControlError=owner=>{if(owner&&controlErrorOwner&&owner!==controlErrorOwner)return;controlRetry=null;controlErrorOwner=null;$('control-error').classList.remove('on');$('control-error-text').textContent=''};"
@@ -514,7 +502,7 @@ void handleRoot() {
             "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
             "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
-            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.searchParams.set('studioTakeover','1');u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
             "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
             "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
             /*LW_CONFIRMED_CONTROL_START*/
@@ -847,7 +835,6 @@ void handleAdvancedRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
-            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);if(j.state==='staged'){showHandoff('New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.','ok');return}showHandoff('Saved on the card.','ok');if(j.requiresReboot===true&&params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
@@ -876,7 +863,7 @@ void handleAdvancedRoot() {
               "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
               "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
               "const setNow=p=>{$('now-name').textContent=p?p.label:'—';$('now-mode').textContent=p?p.mode:'—'};"
-              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.searchParams.set('studioTakeover','1');u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
               "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
               "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.onclick=async()=>{currentId=p.id;renderGrid();setNow(p);await post('/api/control',{patternId:p.id})};g.appendChild(b)})};"

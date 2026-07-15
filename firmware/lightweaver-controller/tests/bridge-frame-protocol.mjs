@@ -55,8 +55,13 @@ assert.doesNotMatch(
 const readyMessages = web.match(
   /postMessage\(\{app:'LightweaverCardBridge',type:'ready',version:"\);\s*script \+= (?:bridgeVersion|String\(LW_BRIDGE_VERSION\));/g,
 ) || [];
-assert.ok(readyMessages.length >= 2,
-  'both card→Studio ready postMessages exist (iframe open + opener handshake) and splice the version from LW_BRIDGE_VERSION');
+assert.ok(readyMessages.length >= 1,
+  'the card→Studio opener ready handshake exists and splices the version from LW_BRIDGE_VERSION');
+assert.doesNotMatch(
+  web,
+  /contentWindow\.postMessage\(\{app:'LightweaverCardBridge',type:'ready'/,
+  'new firmware must not add an iframe-specific ready handshake',
+);
 
 assert.match(
   web,
@@ -66,7 +71,7 @@ assert.match(
 assert.match(
   web,
   /Object\.assign\(\{app:'LightweaverCardBridge',version:"\);\s*script \+= bridgeVersion;/,
-  'every bridge relay reply is stamped with the constant-derived version (covers the iframe flow where ready can be missed)',
+  'every bridge relay reply is stamped with the constant-derived version (covers compatibility flows where ready can be missed)',
 );
 
 // firmware-info carries bridgeVersion so Studio can gate before any handshake
@@ -83,7 +88,7 @@ assert.doesNotMatch(fwInfo, /indexOf\('\{'\)/,
 assert.match(fwInfo, /info\[brace\] == '\{'/,
   'firmware-info splice verifies the first non-whitespace char is the opening brace');
 
-// ── scope the rest to the embedded bridge script ──────────────────────────
+// ── scope the rest to the card-page bridge script ─────────────────────────
 const fnStart = web.indexOf('String studioBridgeScript()');
 assert.notEqual(fnStart, -1, 'LightweaverWeb.cpp should define studioBridgeScript()');
 const fnEnd = web.indexOf('return script;', fnStart);
