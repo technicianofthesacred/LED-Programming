@@ -12,14 +12,16 @@ const {
 } = require('../src/native-serial-transport');
 
 class FakeSerialPort extends EventEmitter {
-  constructor({ writeReturns = true, deferWrites = false } = {}) {
+  constructor({ writeReturns = true, deferWrites = false, deferOpen = false } = {}) {
     super();
     this.isOpen = false;
     this.writes = [];
     this.signals = [];
     this.writeReturns = writeReturns;
     this.deferWrites = deferWrites;
+    this.deferOpen = deferOpen;
     this.pendingWrites = [];
+    this.pendingOpen = null;
     this.openCalls = 0;
     this.closeCalls = 0;
     this.drainCalls = 0;
@@ -28,8 +30,18 @@ class FakeSerialPort extends EventEmitter {
 
   open(callback) {
     this.openCalls += 1;
-    this.isOpen = true;
-    queueMicrotask(() => callback(null));
+    if (this.deferOpen) this.pendingOpen = callback;
+    else {
+      this.isOpen = true;
+      queueMicrotask(() => callback(null));
+    }
+  }
+
+  completeOpen(error = null) {
+    const callback = this.pendingOpen;
+    this.pendingOpen = null;
+    this.isOpen = !error;
+    if (callback) callback(error);
   }
 
   close(callback) {
@@ -107,6 +119,30 @@ test('opens a lazily-created native port with bounded serial options and closes 
   assert.equal(port.closeCalls, 1);
 });
 
+test('late open success after timeout remains owned and closes exactly once', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({ port, openTimeoutMs: 15, closeTimeoutMs: 100 });
+  await assert.rejects(() => transport.connect(), /open timed out/i);
+  assert.equal(port.closeCalls, 0);
+  assert.equal(port.listenerCount('error'), 1);
+  port.completeOpen();
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 1);
+  assert.equal(port.listenerCount('error'), 0);
+  assert.equal(port.listenerCount('close'), 0);
+});
+
+test('late open error after timeout releases listeners without attempting close', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({ port, openTimeoutMs: 15, closeTimeoutMs: 100 });
+  await assert.rejects(() => transport.connect(), /open timed out/i);
+  port.completeOpen(new Error('late open failure'));
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 0);
+  assert.equal(port.listenerCount('error'), 0);
+  assert.equal(port.listenerCount('close'), 0);
+});
+
 test('readLoop collects chunks and read unescapes complete and partial SLIP packets', async () => {
   const { port, transport } = createHarness();
   await connectAndRead(transport);
@@ -162,6 +198,53 @@ test('write applies esptool SLIP escaping, waits for callback/backpressure, and 
   await transport.flushOutput();
   assert.equal(port.drainCalls, 1);
   await transport.disconnect();
+});
+
+test('disconnect waits for an active write success before resetting signals and closing', async () => {
+  const port = new FakeSerialPort({ deferWrites: true });
+  const { transport } = createHarness({ port, writeTimeoutMs: 1000, disconnectTimeoutMs: 200 });
+  await transport.connect();
+  const write = transport.write(Uint8Array.of(1));
+  await new Promise((resolve) => setImmediate(resolve));
+  const disconnect = transport.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(port.closeCalls, 0);
+  assert.deepEqual(port.signals, []);
+  port.completeWrite();
+  await Promise.all([write, disconnect]);
+  assert.deepEqual(port.signals.slice(-2), [{ dtr: false }, { rts: false }]);
+  assert.equal(port.closeCalls, 1);
+});
+
+test('disconnect waits for an active write error before closing without a race', async () => {
+  const port = new FakeSerialPort({ deferWrites: true });
+  const { transport } = createHarness({ port, writeTimeoutMs: 1000, disconnectTimeoutMs: 200 });
+  await transport.connect();
+  const write = assert.rejects(transport.write(Uint8Array.of(1)), /write failed/i);
+  await new Promise((resolve) => setImmediate(resolve));
+  const disconnect = transport.disconnect();
+  assert.equal(port.closeCalls, 0);
+  port.completeWrite(new Error('write failed'));
+  await Promise.all([write, disconnect]);
+  assert.equal(port.closeCalls, 1);
+});
+
+test('disconnect aborts a never-callback write within a bound, skips racing signals, and is idempotent', async () => {
+  const port = new FakeSerialPort({ deferWrites: true });
+  const { transport } = createHarness({
+    port, writeTimeoutMs: 1000, disconnectTimeoutMs: 15, closeTimeoutMs: 100,
+  });
+  await transport.connect();
+  const write = assert.rejects(transport.write(Uint8Array.of(1)), /aborted.*disconnect/i);
+  await new Promise((resolve) => setImmediate(resolve));
+  const first = transport.disconnect();
+  const second = transport.disconnect();
+  await Promise.all([first, second, write]);
+  assert.deepEqual(port.signals, []);
+  assert.equal(port.closeCalls, 1);
+  port.completeWrite(new Error('late callback'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(port.closeCalls, 1);
 });
 
 test('rejects oversized and stalled writes rather than buffering without a bound', async () => {

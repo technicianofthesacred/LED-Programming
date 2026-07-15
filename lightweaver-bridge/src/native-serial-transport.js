@@ -107,6 +107,7 @@ class NativeSerialTransport {
     maxHexBytes = 256,
     maxReadTimeoutMs = 120000,
     writeTimeoutMs = 30000,
+    disconnectTimeoutMs = 5000,
     openTimeoutMs = 10000,
     closeTimeoutMs = 5000,
     logger = null,
@@ -125,6 +126,7 @@ class NativeSerialTransport {
     this._maxHexBytes = maxHexBytes;
     this._maxReadTimeoutMs = maxReadTimeoutMs;
     this._writeTimeoutMs = writeTimeoutMs;
+    this._disconnectTimeoutMs = disconnectTimeoutMs;
     this._openTimeoutMs = openTimeoutMs;
     this._closeTimeoutMs = closeTimeoutMs;
     this._logger = logger;
@@ -133,11 +135,13 @@ class NativeSerialTransport {
     this._lastTraceTime = Date.now();
     this._waiters = new Set();
     this._ioTail = Promise.resolve();
+    this._ioAbortWaiters = new Set();
     this._connected = false;
     this._readLoopStarted = false;
     this._activeRead = false;
     this._intentionalClose = false;
     this._disconnecting = null;
+    this._openingSettlement = null;
     this._terminalError = null;
     this._deviceLostCallback = null;
     this._deviceLostNotified = false;
@@ -223,7 +227,7 @@ class NativeSerialTransport {
   }
 
   async connect(baud = 115200, serialOptions = {}) {
-    if (this._connected) throw new Error('Serial transport is already connected');
+    if (this._connected || this._port) throw new Error('Serial transport is already connected or opening');
     if (!Number.isInteger(baud) || baud <= 0 || baud > 5000000) throw new RangeError('Unsupported serial baud rate');
     const dataBits = serialOptions.dataBits === undefined ? 8 : serialOptions.dataBits;
     const stopBits = serialOptions.stopBits === undefined ? 1 : serialOptions.stopBits;
@@ -248,14 +252,60 @@ class NativeSerialTransport {
     this._port = port;
     this._attachLifecycleListeners(port);
     try {
-      await withTimeout(callbackOperation((callback) => port.open(callback)), this._openTimeoutMs, 'Serial open timed out');
+      await this._openPort(port);
       this._connected = true;
       this.baudrate = baud;
     } catch (error) {
       this._terminalError = error;
-      await this._cleanupPort(true);
+      if (error.code !== 'SERIAL_OPEN_TIMEOUT') await this._cleanupPort(true, { port, resetSignals: false });
       throw error;
     }
+  }
+
+  _openPort(port) {
+    let timedOut = false;
+    let callbackSettled = false;
+    let resolveSettlement;
+    const settlement = new Promise((resolve) => { resolveSettlement = resolve; });
+    this._openingSettlement = settlement;
+    return new Promise((resolve, reject) => {
+      const finishPromptly = (error) => {
+        if (callbackSettled) return;
+        callbackSettled = true;
+        clearTimeout(timer);
+        if (!timedOut) {
+          this._openingSettlement = null;
+          resolveSettlement();
+          if (error) reject(error);
+          else resolve();
+          return;
+        }
+        const cleanup = error
+          ? this._releaseFailedOpen(port)
+          : this._cleanupPort(true, { port, resetSignals: true });
+        Promise.resolve(cleanup).catch(() => {}).finally(() => {
+          if (this._openingSettlement === settlement) this._openingSettlement = null;
+          resolveSettlement();
+        });
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        const error = new Error('Serial open timed out');
+        error.code = 'SERIAL_OPEN_TIMEOUT';
+        reject(error);
+      }, this._openTimeoutMs);
+      try {
+        port.open(finishPromptly);
+      } catch (error) {
+        finishPromptly(error);
+      }
+    });
+  }
+
+  _releaseFailedOpen(port) {
+    this._removeListeners(port);
+    if (this._port === port) this._port = null;
+    this._buffer = Buffer.alloc(0);
   }
 
   readLoop() {
@@ -310,8 +360,9 @@ class NativeSerialTransport {
       }
     }
     this._wakeWaiters();
+    this._abortPendingIo(error);
     if (!this._disconnecting) {
-      this._disconnecting = this._cleanupPort(true).finally(() => { this._disconnecting = null; });
+      this._disconnecting = this._cleanupPort(true, { resetSignals: false }).finally(() => { this._disconnecting = null; });
     }
   }
 
@@ -392,12 +443,29 @@ class NativeSerialTransport {
   }
 
   _enqueue(task) {
+    if (!this._connected || !this._port || this._terminalError) {
+      return Promise.reject(this._terminalError || new Error('Serial transport is disconnected'));
+    }
+    const admittedPort = this._port;
     const operation = this._ioTail.then(() => {
-      if (!this._connected || !this._port) throw this._terminalError || new Error('Serial transport is disconnected');
-      return task(this._port);
+      if (this._port !== admittedPort || !admittedPort.isOpen) throw this._terminalError || new Error('Serial transport is disconnected');
+      return task(admittedPort);
     });
     this._ioTail = operation.catch(() => {});
     return operation;
+  }
+
+  _abortable(promise) {
+    let abort;
+    const aborted = new Promise((_, reject) => {
+      abort = (error) => reject(error);
+      this._ioAbortWaiters.add(abort);
+    });
+    return Promise.race([promise, aborted]).finally(() => this._ioAbortWaiters.delete(abort));
+  }
+
+  _abortPendingIo(error) {
+    for (const abort of this._ioAbortWaiters) abort(error);
   }
 
   async write(data) {
@@ -418,7 +486,7 @@ class NativeSerialTransport {
           port.once('error', onError);
         });
       try {
-        await withTimeout(Promise.all([callbackDone, backpressureDone]), this._writeTimeoutMs, 'Serial write timed out');
+        await withTimeout(this._abortable(Promise.all([callbackDone, backpressureDone])), this._writeTimeoutMs, 'Serial write timed out');
       } finally {
         cleanupBackpressure();
       }
@@ -426,15 +494,17 @@ class NativeSerialTransport {
   }
 
   async flushOutput() {
-    await this.waitForUnlock(this._writeTimeoutMs);
-    if (!this._connected || !this._port) throw this._terminalError || new Error('Serial transport is disconnected');
-    await withTimeout(callbackOperation((callback) => this._port.drain(callback)), this._writeTimeoutMs, 'Serial output flush timed out');
+    return this._enqueue(async (port) => {
+      const drain = callbackOperation((callback) => port.drain(callback));
+      await withTimeout(this._abortable(drain), this._writeTimeoutMs, 'Serial output flush timed out');
+    });
   }
 
   async setDTR(state) {
     const next = Boolean(state);
     return this._enqueue(async (port) => {
-      await withTimeout(callbackOperation((callback) => port.set({ dtr: next }, callback)), this._writeTimeoutMs, 'Serial DTR update timed out');
+      const update = callbackOperation((callback) => port.set({ dtr: next }, callback));
+      await withTimeout(this._abortable(update), this._writeTimeoutMs, 'Serial DTR update timed out');
       this._dtrState = next;
     });
   }
@@ -442,8 +512,10 @@ class NativeSerialTransport {
   async setRTS(state) {
     const next = Boolean(state);
     return this._enqueue(async (port) => {
-      await withTimeout(callbackOperation((callback) => port.set({ rts: next }, callback)), this._writeTimeoutMs, 'Serial RTS update timed out');
-      await withTimeout(callbackOperation((callback) => port.set({ dtr: this._dtrState }, callback)), this._writeTimeoutMs, 'Serial DTR refresh timed out');
+      const rts = callbackOperation((callback) => port.set({ rts: next }, callback));
+      await withTimeout(this._abortable(rts), this._writeTimeoutMs, 'Serial RTS update timed out');
+      const dtr = callbackOperation((callback) => port.set({ dtr: this._dtrState }, callback));
+      await withTimeout(this._abortable(dtr), this._writeTimeoutMs, 'Serial DTR refresh timed out');
     });
   }
 
@@ -457,23 +529,47 @@ class NativeSerialTransport {
     if (!this._port && !this._connected) return;
     if (!this._terminalError) this._terminalError = new Error('Serial transport disconnected');
     this._wakeWaiters();
-    this._disconnecting = this._cleanupPort(false).finally(() => { this._disconnecting = null; });
+    this._disconnecting = this._disconnectSequence().finally(() => { this._disconnecting = null; });
     return this._disconnecting;
   }
 
-  async _cleanupPort(preserveError) {
-    const port = this._port;
+  async _disconnectSequence() {
+    if (this._openingSettlement) {
+      await withTimeout(this._openingSettlement, this._disconnectTimeoutMs, 'Serial open cleanup timed out');
+      return;
+    }
+    const admittedIo = this._ioTail;
+    let ioDrained = true;
+    try {
+      await withTimeout(admittedIo, this._disconnectTimeoutMs, 'Serial I/O drain timed out during disconnect');
+    } catch (_) {
+      ioDrained = false;
+      this._abortPendingIo(new Error('Serial I/O aborted during disconnect'));
+      try {
+        await withTimeout(admittedIo, Math.min(this._closeTimeoutMs, 1000), 'Serial I/O abort timed out');
+      } catch (_) {
+        // The native close below is the final ownership boundary for a stuck callback.
+      }
+    }
+    await this._cleanupPort(false, { resetSignals: ioDrained });
+  }
+
+  async _cleanupPort(preserveError, { port = this._port, resetSignals = true } = {}) {
     if (!port) return;
     this._intentionalClose = true;
-    this._connected = false;
-    this._readLoopStarted = false;
+    if (this._port === port) {
+      this._connected = false;
+      this._readLoopStarted = false;
+    }
     this._wakeWaiters();
     if (port.isOpen) {
-      try {
-        await withTimeout(callbackOperation((callback) => port.set({ dtr: false }, callback)), Math.min(this._closeTimeoutMs, 1000), 'Serial signal reset timed out');
-        await withTimeout(callbackOperation((callback) => port.set({ rts: false }, callback)), Math.min(this._closeTimeoutMs, 1000), 'Serial signal reset timed out');
-      } catch (_) {
-        // Closing the port remains mandatory even when a disconnected adapter rejects signal changes.
+      if (resetSignals) {
+        try {
+          await withTimeout(callbackOperation((callback) => port.set({ dtr: false }, callback)), Math.min(this._closeTimeoutMs, 1000), 'Serial signal reset timed out');
+          await withTimeout(callbackOperation((callback) => port.set({ rts: false }, callback)), Math.min(this._closeTimeoutMs, 1000), 'Serial signal reset timed out');
+        } catch (_) {
+          // Closing the port remains mandatory even when a disconnected adapter rejects signal changes.
+        }
       }
       try {
         await withTimeout(callbackOperation((callback) => port.close(callback)), this._closeTimeoutMs, 'Serial close timed out');
@@ -483,7 +579,7 @@ class NativeSerialTransport {
     }
     this._removeListeners(port);
     this._buffer = Buffer.alloc(0);
-    this._port = null;
+    if (this._port === port) this._port = null;
     this._intentionalClose = false;
   }
 }
