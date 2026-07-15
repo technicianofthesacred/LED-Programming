@@ -388,6 +388,7 @@ class NativeSerialTransport {
 
   _onFatal(error) {
     if (this._terminalError || this._intentionalClose) return;
+    this._establishDisconnectGeneration();
     this._terminalError = error;
     if (!this._deviceLostNotified) {
       this._deviceLostNotified = true;
@@ -632,14 +633,17 @@ class NativeSerialTransport {
   async disconnect() {
     if (this._disconnecting) return this._disconnecting;
     if (!this._port && !this._connected) return;
-    if (!this._disconnectRequested) {
-      this._disconnectRequested = true;
-      this._connectionGeneration += 1;
-    }
+    this._establishDisconnectGeneration();
     if (!this._terminalError) this._terminalError = new Error('Serial transport disconnected');
     this._wakeWaiters();
     this._disconnecting = this._disconnectSequence().finally(() => { this._disconnecting = null; });
     return this._disconnecting;
+  }
+
+  _establishDisconnectGeneration() {
+    if (this._disconnectRequested) return;
+    this._disconnectRequested = true;
+    this._connectionGeneration += 1;
   }
 
   async _disconnectSequence() {

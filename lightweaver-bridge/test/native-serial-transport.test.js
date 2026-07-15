@@ -130,6 +130,14 @@ async function connectAndRead(transport) {
   transport.readLoop();
 }
 
+async function waitFor(predicate, timeoutMs = 200) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Condition did not become true before deadline');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 test('opens a lazily-created native port with bounded serial options and closes idempotently', async () => {
   const { createdWith, port, transport } = createHarness();
 
@@ -548,6 +556,52 @@ test('fatal teardown shares cleanup with immediate disconnect and tolerates a th
   assert.doesNotThrow(() => port.emit('error', new Error('cable failed')));
   await transport.disconnect();
   assert.equal(port.closeCalls, 1);
+});
+
+test('fatal close timeout and explicit retry share generation until late success clears ownership', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 10 });
+  await connectAndRead(transport);
+  port.emit('error', new Error('fatal cable error'));
+  await waitFor(() => transport._disconnecting === null);
+  const fatalGeneration = transport._connectionGeneration;
+  assert.equal(transport._disconnectRequested, true);
+  assert.equal(transport._closeAttempt.generation, fatalGeneration);
+  assert.equal(port.listenerCount('error'), 1);
+  const retry = transport.disconnect();
+  assert.equal(transport._connectionGeneration, fatalGeneration);
+  port.completeClose();
+  await retry;
+  assert.equal(port.closeCalls, 1);
+  assert.equal(port.listenerCount('error'), 0);
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 1);
+});
+
+test('fatal late close error remains retryable, then permits a clean reconnect', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 20 });
+  await connectAndRead(transport);
+  port.emit('error', new Error('fatal cable error'));
+  await waitFor(() => transport._disconnecting === null);
+  const fatalGeneration = transport._connectionGeneration;
+  assert.equal(transport._disconnectRequested, true);
+  const waitingRetry = transport.disconnect();
+  assert.equal(transport._connectionGeneration, fatalGeneration);
+  port.completeClose(new Error('late fatal close failed'));
+  await assert.rejects(waitingRetry, /disconnect.*close/i);
+  assert.equal(port.listenerCount('error'), 1);
+  const closeRetry = transport.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeClose();
+  await closeRetry;
+  assert.equal(port.listenerCount('error'), 0);
+  port.deferClose = false;
+  await transport.connect();
+  transport.readLoop();
+  assert.equal(port.listenerCount('error'), 1);
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 3);
 });
 
 test('buffer overflow fails deterministically and releases the port', async () => {
