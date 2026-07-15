@@ -17,7 +17,7 @@ import {
   replaceInstallConnection,
 } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
-import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
+import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
 
   const STEPS = [
@@ -271,6 +271,7 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     if (typeof navigator === 'undefined') return detectPlatformCapabilities();
     return detectPlatformCapabilities({
       secureContext: globalThis.isSecureContext === true,
+      topLevel: globalThis.top === globalThis.self,
       serial: navigator.serial,
       userAgent: navigator.userAgent,
       platform: navigator.platform,
@@ -279,13 +280,34 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
   }
 
   function UnsupportedInstall({ action }) {
-    const firstStep = action.legacyId === 'supported-device-handoff'
-      ? 'Open led.mandalacodes.com on a Mac, Windows, or Linux computer.'
-      : action.legacyId === 'connector-fallback'
-        ? 'Keep the card plugged into this computer and follow the recovery instructions.'
-        : action.id === 'escape-insecure-card-frame'
-          ? 'Open led.mandalacodes.com in its own secure tab.'
-          : 'Open the Lightweaver USB helper on this computer.';
+    let firstStep;
+    let showSecureInstaller = false;
+    switch (action.id) {
+      case 'escape-insecure-card-frame':
+        firstStep = 'Open secure Lightweaver Studio in its own top-level tab.';
+        showSecureInstaller = true;
+        break;
+      case 'handoff-supported-device':
+        firstStep = 'Open led.mandalacodes.com on a Mac, Windows, or Linux computer.';
+        break;
+      case 'launch-native-bridge':
+      case 'install-native-bridge':
+        firstStep = 'Use secure Studio in a browser with USB support, or continue on another supported computer.';
+        break;
+      case 'needs-safe-recovery':
+      case 'needs-card-update':
+        firstStep = 'Keep the card powered and use secure Studio on a supported computer.';
+        break;
+      case 'ready-browser-usb':
+        firstStep = 'Return to the secure top-level installer and connect the card by USB.';
+        break;
+      case 'ready-local-card':
+      case 'wrong-card':
+      case 'recoverable-failure':
+      default:
+        firstStep = 'Return to Studio and check the physical card connection.';
+        break;
+    }
 
     return (
       <div className="card install-handoff" role="status">
@@ -297,6 +319,9 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
           <li>Open this project, then choose <strong>Connect card</strong> and <strong>Blank or not responding</strong>.</li>
           <li>Plug the Lightweaver card into that computer by USB.</li>
         </ol>
+        {showSecureInstaller && (
+          <a className="btn-lg" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">Open secure installer</a>
+        )}
       </div>
     );
   }

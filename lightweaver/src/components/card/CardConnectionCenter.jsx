@@ -10,12 +10,16 @@ import {
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
-import { detectPlatformCapabilities } from '../../lib/platformCapabilities.js';
+import {
+  SECURE_INSTALLER_URL,
+  detectPlatformCapabilities,
+} from '../../lib/platformCapabilities.js';
 
 function platformCapabilities() {
   if (typeof window === 'undefined') return detectPlatformCapabilities();
   return detectPlatformCapabilities({
     secureContext: window.isSecureContext,
+    topLevel: window.top === window.self,
     serial: navigator.serial,
     userAgent: navigator.userAgent,
     platform: navigator.platform,
@@ -24,10 +28,7 @@ function platformCapabilities() {
 }
 
 function goToInstall() {
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  params.set('screen', 'flash');
-  params.set('mode', 'install');
-  window.location.hash = params.toString();
+  window.location.hash = 'screen=flash&mode=install';
 }
 
 const SETUP_HOST = '192.168.4.1';
@@ -128,7 +129,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
       rememberedCard,
       ...flowEvidence,
     });
-    if (next.legacyId !== 'open-setup-network') connect();
+    if (next.route !== 'setup-network') connect();
   };
 
   const chooseBlankCard = () => {
@@ -165,7 +166,49 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     && (!link.activity || link.activity === 'idle')
     && NEUTRAL_FIRST_RUN_REASONS.has(link.reason)
     && !hasKnownCard;
-  const setupSteps = action.legacyId === 'open-setup-network';
+  const setupSteps = action.id === 'recoverable-failure' && action.route === 'setup-network';
+
+  const renderPrimaryAction = () => {
+    switch (action.id) {
+      case 'ready-local-card':
+        return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
+      case 'ready-browser-usb':
+        return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
+      case 'escape-insecure-card-frame':
+        return (
+          <a className="btn primary" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">
+            Open secure installer
+          </a>
+        );
+      case 'needs-card-update':
+        return capabilities.canWebSerialInstall
+          ? <button type="button" className="btn primary" onClick={openInstall}>Update card</button>
+          : null;
+      case 'launch-native-bridge':
+      case 'install-native-bridge':
+      case 'handoff-supported-device':
+        return null;
+      case 'wrong-card':
+        return <button type="button" className="btn primary" onClick={() => connect()}>Reconnect expected card</button>;
+      case 'recoverable-failure':
+        return (
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
+            disabled={action.primaryDisabled}
+          >
+            {setupSteps ? 'Continue' : action.primaryLabel}
+          </button>
+        );
+      case 'needs-safe-recovery':
+        return capabilities.canWebSerialInstall
+          ? <button type="button" className="btn primary" onClick={openInstall}>Start safe recovery</button>
+          : null;
+      default:
+        return null;
+    }
+  };
 
   return (
     <section
@@ -198,9 +241,12 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           </button>
         </div>
       ) : (
-        <div className="card-connection-action" aria-live="polite" aria-busy={action.busy || undefined}>
+        <div className="card-connection-action" data-action-id={action.id} aria-live="polite" aria-busy={action.busy || undefined}>
           <h3>{action.title}</h3>
           <p>{action.explanation}</p>
+          {action.id === 'needs-safe-recovery' && !capabilities.canWebSerialInstall && (
+            <p>Bridge recovery is coming. Until then, keep the card powered and use secure Studio on a supported computer.</p>
+          )}
 
           {setupSteps && (
             <ol className="card-setup-steps">
@@ -210,7 +256,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
             </ol>
           )}
 
-          {action.legacyId === 'connected' && link.card && (
+          {action.id === 'ready-local-card' && link.card && (
             <dl className="card-acknowledged-facts">
               {link.card.name && <><dt>Name</dt><dd>{link.card.name}</dd></>}
               {link.card.pixelCount > 0 && <><dt>Pixels</dt><dd>{link.card.pixelCount}</dd></>}
@@ -220,20 +266,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           )}
 
           <div className="card-connection-actions">
-            {action.legacyId === 'connected' ? (
-              <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>
-            ) : action.legacyId === 'web-serial-install' ? (
-              <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>
-            ) : action.legacyId === 'supported-browser-handoff' || action.legacyId === 'supported-device-handoff' ? null : (
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
-                disabled={action.primaryDisabled}
-              >
-                {setupSteps ? 'Continue' : action.primaryLabel}
-              </button>
-            )}
+            {renderPrimaryAction()}
             {action.secondaryAction?.id === 'adopt-discovered-card' && (
               <button type="button" className="btn" onClick={useDiscoveredCard}>Use this card instead</button>
             )}

@@ -1,3 +1,5 @@
+export const SECURE_INSTALLER_URL = 'https://led.mandalacodes.com/#screen=flash&mode=install';
+
 function normalizePlatform({ userAgent, platform, maxTouchPoints }) {
   const browserIdentity = `${platform} ${userAgent}`;
   const isIpad = maxTouchPoints > 1 && /Mac(?:Intel|intosh)/i.test(browserIdentity);

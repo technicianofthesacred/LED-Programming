@@ -41,16 +41,34 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeEnabled();
 });
 
-test('desktop without browser USB launches the native helper path and keeps the project in Studio', async ({ page }) => {
+test('desktop without browser USB gives a truthful passive fallback and keeps the project in Studio', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
   await page.goto('/#screen=flash&mode=install');
 
-  await expect(page.getByRole('heading', { name: /Lightweaver USB helper/i })).toBeVisible();
-  await expect(page.getByText(/card plugged into this computer/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /secure Lightweaver Studio/i })).toBeVisible();
+  await expect(page.getByText(/USB helper is not available yet/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+});
+
+test('installer inside a secure iframe escapes to the fixed top-level installer', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout');
+  await page.evaluate(() => {
+    const frame = document.createElement('iframe');
+    frame.id = 'installer-frame';
+    frame.src = `${location.origin}/#screen=flash&mode=install&url=https://evil.example/fw.bin`;
+    document.body.append(frame);
+  });
+  const installer = page.frameLocator('#installer-frame');
+  await expect(installer.getByRole('heading', { name: 'Open secure installer' })).toBeVisible();
+  const escape = installer.getByRole('link', { name: 'Open secure installer' });
+  await expect(escape).toHaveAttribute('href', 'https://led.mandalacodes.com/#screen=flash&mode=install');
+  await expect(escape).toHaveAttribute('target', '_blank');
 });
 
 test('technician controls remain separately labelled outside install mode', async ({ page }) => {
@@ -66,7 +84,7 @@ test('technician controls remain separately labelled outside install mode', asyn
 
 test('Studio navigation is held on the installer while an install is active', async ({ page }) => {
   await page.goto('/#screen=flash&mode=install');
-  await expect(page.getByRole('heading', { name: /USB helper|Continue on a computer|Install Lightweaver/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /secure Lightweaver Studio|Continue on a computer|Install Lightweaver/i })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } })));
   await page.getByRole('button', { name: 'Layout' }).click();
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);

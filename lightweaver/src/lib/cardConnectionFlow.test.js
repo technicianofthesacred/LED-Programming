@@ -122,6 +122,17 @@ test('launches the desktop native bridge when browser USB is unavailable', () =>
   }
 });
 
+test('native bridge states do not promise an app action that is not built', () => {
+  for (const input of [
+    { intent: 'blank-card', capabilities: { platform: 'macos', isMobile: false } },
+    { link: { reason: 'native-bridge-missing' }, capabilities: { platform: 'windows', isMobile: false } },
+  ]) {
+    const result = nextCardConnectionAction(input);
+    assert.match(result.explanation, /not available yet/i);
+    assert.doesNotMatch(`${result.title} ${result.primaryLabel}`, /open USB helper|install USB helper/i);
+  }
+});
+
 test('offers native bridge installation after an exact missing-bridge failure', () => {
   assert.equal(nextCardConnectionAction({
     intent: 'blank-card',
@@ -180,6 +191,19 @@ test('turns bounded transient link failures into a retryable state', () => {
       intent: 'working-card',
       link: { state: 'disconnected', reason },
     }).id, 'recoverable-failure', reason);
+  }
+});
+
+test('keeps setup-network compatibility as an explicit recoverable route', () => {
+  for (const input of [
+    { intent: 'working-card', setupMode: true },
+    { intent: 'working-card', setupNetwork: { available: true, ssid: 'Lightweaver-1234' } },
+  ]) {
+    const result = nextCardConnectionAction(input);
+    assert.equal(result.id, 'recoverable-failure');
+    assert.equal(result.route, 'setup-network');
+    assert.equal(result.primaryLabel, 'Continue');
+    assert.match(result.explanation, /setup network/i);
   }
 });
 

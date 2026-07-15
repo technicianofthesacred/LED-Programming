@@ -38,15 +38,15 @@ const ACTION_COPY = Object.freeze({
   }),
   'launch-native-bridge': Object.freeze({
     legacyId: 'supported-browser-handoff',
-    title: 'Open the Lightweaver USB helper',
-    explanation: 'Keep the card plugged into this computer, then open the USB helper to continue.',
-    primaryLabel: 'Open USB helper',
+    title: 'Continue in secure Lightweaver Studio',
+    explanation: 'The Lightweaver USB helper is not available yet. Use secure Studio in a browser with USB support, or continue on another supported computer.',
+    primaryLabel: 'Show supported options',
   }),
   'install-native-bridge': Object.freeze({
     legacyId: 'connector-fallback',
-    title: 'Install the Lightweaver USB helper',
-    explanation: 'Install the USB helper on this computer, then return here with the card plugged in.',
-    primaryLabel: 'Install USB helper',
+    title: 'Continue in secure Lightweaver Studio',
+    explanation: 'The Lightweaver USB helper is not available yet. Use secure Studio in a browser with USB support, or continue on another supported computer.',
+    primaryLabel: 'Show supported options',
   }),
   'handoff-supported-device': Object.freeze({
     legacyId: 'supported-device-handoff',
@@ -128,6 +128,29 @@ function requiresInstaller(intent, reason) {
   return intent === 'blank-card' || intent === 'deep-recovery' || UPDATE_REASONS.has(reason);
 }
 
+function isSetupMode(value) {
+  return value === true || value === 'setup' || value === 'ap' || value === 'access-point';
+}
+
+function hasSetupEvidence(input, link) {
+  const setupNetwork = input.setupNetwork;
+  const networkEvidence = setupNetwork === true || (
+    setupNetwork && typeof setupNetwork === 'object' && (
+      setupNetwork.available === true
+      || setupNetwork.found === true
+      || /^Lightweaver-/i.test(String(setupNetwork.ssid || ''))
+    )
+  );
+
+  return networkEvidence
+    || isSetupMode(input.setupMode)
+    || isSetupMode(input.mode)
+    || isSetupMode(input.accessPoint)
+    || isSetupMode(input.discovery?.mode)
+    || isSetupMode(input.discoveredCard?.mode)
+    || isSetupMode(link.card?.mode);
+}
+
 function installationRoute(capabilities) {
   if (capabilities.mustEscapeToSecureInstaller === true) {
     return action('escape-insecure-card-frame');
@@ -185,6 +208,15 @@ export function nextCardConnectionAction(input = {}) {
   }
 
   if (requiresInstaller(input.intent, reason)) return installationRoute(capabilities);
+
+  if (input.intent === 'working-card' && hasSetupEvidence(input, link)) {
+    return action('recoverable-failure', {
+      route: 'setup-network',
+      title: 'Finish card setup',
+      explanation: 'Join the Lightweaver setup network, finish Wi-Fi setup, then return to Studio.',
+      primaryLabel: 'Continue',
+    });
+  }
 
   if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
 

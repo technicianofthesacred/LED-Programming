@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectPlatformCapabilities } from './platformCapabilities.js';
+import {
+  SECURE_INSTALLER_URL,
+  detectPlatformCapabilities,
+} from './platformCapabilities.js';
+
+test('uses one fixed canonical secure installer URL', () => {
+  assert.equal(SECURE_INSTALLER_URL, 'https://led.mandalacodes.com/#screen=flash&mode=install');
+  assert.doesNotMatch(SECURE_INSTALLER_URL, /callback|target|url=/i);
+});
 
 test('allows browser USB only from a secure top-level page with Web Serial', () => {
   const result = detectPlatformCapabilities({
@@ -48,6 +56,14 @@ test('escapes whenever page position or security blocks the installer', () => {
 
   assert.equal(secureFrame.mustEscapeToSecureInstaller, true);
   assert.equal(insecureTopLevel.mustEscapeToSecureInstaller, true);
+});
+
+test('an explicit secure iframe observation cannot use Web Serial', () => {
+  const result = detectPlatformCapabilities({ secureContext: true, topLevel: false, serial: {} });
+
+  assert.equal(result.embedded, true);
+  assert.equal(result.canWebSerialInstall, false);
+  assert.equal(result.mustEscapeToSecureInstaller, true);
 });
 
 test('keeps installed-card control available when Web Serial is absent', () => {
