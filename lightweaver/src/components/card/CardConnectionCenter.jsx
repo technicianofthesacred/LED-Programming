@@ -247,6 +247,9 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           {action.id === 'needs-safe-recovery' && !capabilities.canWebSerialInstall && (
             <p>Bridge recovery is coming. Until then, keep the card powered and use secure Studio on a supported computer.</p>
           )}
+          {action.id === 'needs-card-update' && !capabilities.canWebSerialInstall && (
+            <p>Bridge update is coming. Until then, keep the card powered and use secure Studio on a supported computer.</p>
+          )}
 
           {setupSteps && (
             <ol className="card-setup-steps">

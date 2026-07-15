@@ -211,6 +211,20 @@ test('safe recovery without browser USB is passive and names the coming Bridge p
   await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
 });
 
+test('old firmware without browser USB gives passive supported-computer guidance', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'firmware-too-old' });
+
+  await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-card-update');
+  await expect(actionRegion(page)).toContainText(/Bridge update is coming/i);
+  await expect(actionRegion(page)).toContainText(/supported computer/i);
+  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+});
+
 test('working setup card restores AP steps and continues through 192.168.4.1', async ({ page }) => {
   await installOpenSpy(page);
   await page.evaluate(() => localStorage.setItem('lw_chip_card_host', '192.168.4.1'));
