@@ -1,7 +1,7 @@
 # Lightweaver USB Connection Pipeline Design
 
 **Date:** 2026-07-15  
-**Status:** Draft for review  
+**Status:** Approved  
 **Parent design:** `2026-07-14-lightweaver-universal-web-hardware-design.md`  
 **Scope:** the public Studio connection orchestrator, the card-page handoff, and a narrow cross-platform Lightweaver Bridge
 
