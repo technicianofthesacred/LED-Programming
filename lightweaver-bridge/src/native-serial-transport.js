@@ -288,8 +288,15 @@ class NativeSerialTransport {
       this.baudrate = baud;
     } catch (error) {
       this._terminalError = error;
-      if (!this._disconnectRequested && error.code !== 'SERIAL_OPEN_TIMEOUT') {
-        await this._cleanupPort(true, { port, resetSignals: false });
+      if (error.code !== 'SERIAL_OPEN_TIMEOUT') {
+        try {
+          await this._cleanupPort(true, {
+            port,
+            resetSignals: error.code === 'SERIAL_CONNECT_CANCELLED',
+          });
+        } catch (_) {
+          // Retain failed close ownership for a later explicit disconnect retry.
+        }
       }
       throw error;
     }
@@ -680,6 +687,10 @@ class NativeSerialTransport {
   }
 
   async _closePort(port) {
+    if (!port.isOpen) {
+      this._finalizeClosedPort(port);
+      return;
+    }
     let attempt = this._closeAttempt;
     if (!attempt || attempt.port !== port) {
       let resolveSettlement;

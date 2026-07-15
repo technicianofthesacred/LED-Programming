@@ -195,6 +195,45 @@ test('disconnect during an open timeout continues cleanup after late success', a
   await assert.rejects(transport.readLoop(), /disconnect|timed out/i);
 });
 
+test('late open success after disconnect deadline still closes eventual native ownership once', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({
+    port, openTimeoutMs: 100, disconnectTimeoutMs: 10, closeTimeoutMs: 100,
+  });
+  const connecting = transport.connect();
+  const connectionResult = assert.rejects(connecting, /cancelled.*disconnect/i);
+  await assert.rejects(transport.disconnect(), /open cleanup timed out/i);
+  port.completeOpen();
+  await connectionResult;
+  assert.equal(port.closeCalls, 1);
+  assert.equal(port.isOpen, false);
+  assert.equal(port.listenerCount('error'), 0);
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 1);
+});
+
+test('late open cleanup close error remains owned and retryable after disconnect deadline', async () => {
+  const port = new FakeSerialPort({ deferOpen: true, deferClose: true });
+  const { transport } = createHarness({
+    port, openTimeoutMs: 100, disconnectTimeoutMs: 10, closeTimeoutMs: 100,
+  });
+  const connecting = transport.connect();
+  const connectionResult = assert.rejects(connecting, /cancelled.*disconnect/i);
+  await assert.rejects(transport.disconnect(), /open cleanup timed out/i);
+  port.completeOpen();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeClose(new Error('late close failed'));
+  await connectionResult;
+  assert.equal(port.isOpen, true);
+  assert.equal(port.listenerCount('error'), 1);
+  const retry = transport.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeClose();
+  await retry;
+  assert.equal(port.closeCalls, 2);
+  assert.equal(port.listenerCount('error'), 0);
+});
+
 test('readLoop collects chunks and read unescapes complete and partial SLIP packets', async () => {
   const { port, transport } = createHarness();
   await connectAndRead(transport);
