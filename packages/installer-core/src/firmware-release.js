@@ -1,4 +1,6 @@
-export const EXPECTED_FIRMWARE_TARGET = 'esp32-s3-n16r8';
+import { EXPECTED_FIRMWARE_TARGET } from './constants.js';
+
+export { EXPECTED_FIRMWARE_TARGET } from './constants.js';
 export const FIRMWARE_INSTALLER_VERSION = '1.4.0';
 // Bump this only after a release is known unsafe to replay. It is installer
 // policy applied after signature verification, so an older valid signature
@@ -160,12 +162,13 @@ function decodeBase64Url(value) {
 }
 
 async function fetchRequired(fetchImpl, url, label) {
-  const response = await fetchImpl(url, { cache: 'no-store', credentials: 'omit' });
+  const response = await fetchImpl(url, { cache: 'no-store', credentials: 'omit', redirect: 'error' });
   if (!response?.ok) throw new Error(`Unable to load firmware ${label}`);
+  if (response.redirected) throw new Error(`Firmware ${label} redirects are not allowed`);
   return response;
 }
 
-function resolveProductionReleaseUrl(value, label) {
+function resolveProductionReleaseUrl(value, label, runtime) {
   if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//')) {
     throw new Error(`Firmware ${label} URL must be a relative production path`);
   }
@@ -174,11 +177,11 @@ function resolveProductionReleaseUrl(value, label) {
     throw new Error(`Firmware ${label} URL must use the fixed production origin`);
   }
   // Browsers intentionally retain same-origin relative requests so local
-  // Studio development and the deployed site behave as before. Node has no
-  // document origin, so bridge/CLI consumers use the compiled HTTPS origin.
-  return typeof window === 'object' && window?.location
-    ? `${resolved.pathname}${resolved.search}${resolved.hash}`
-    : resolved.href;
+  // Studio development and the deployed site behave as before. Node bridge
+  // consumers opt in to the compiled HTTPS origin explicitly.
+  return runtime === 'node'
+    ? resolved.href
+    : `${resolved.pathname}${resolved.search}${resolved.hash}`;
 }
 
 async function readBoundedFirmwareImage(response, expectedSize) {
@@ -238,13 +241,17 @@ export async function loadProductionFirmwareRelease(
     installerVersion = FIRMWARE_INSTALLER_VERSION,
     manifestUrl = PRODUCTION_MANIFEST_URL,
     signatureUrl = PRODUCTION_SIGNATURE_URL,
+    runtime = 'browser',
   } = {},
 ) {
   if (typeof fetchImpl !== 'function') throw new Error('Firmware download is unavailable');
   if (!cryptoImpl?.subtle) throw new Error('Secure cryptographic verification is unavailable');
 
-  const resolvedManifestUrl = resolveProductionReleaseUrl(manifestUrl, 'manifest');
-  const resolvedSignatureUrl = resolveProductionReleaseUrl(signatureUrl, 'signature');
+  if (runtime !== 'browser' && runtime !== 'node') {
+    throw new Error('Firmware runtime must be browser or node');
+  }
+  const resolvedManifestUrl = resolveProductionReleaseUrl(manifestUrl, 'manifest', runtime);
+  const resolvedSignatureUrl = resolveProductionReleaseUrl(signatureUrl, 'signature', runtime);
 
   const [manifestResponse, signatureResponse] = await Promise.all([
     fetchRequired(fetchImpl, resolvedManifestUrl, 'manifest'),
@@ -277,7 +284,7 @@ export async function loadProductionFirmwareRelease(
   if (!signatureValid) throw new Error('Firmware manifest signature verification failed');
 
   validateFirmwareManifest(manifest, { installerVersion });
-  const imageUrl = resolveProductionReleaseUrl(manifest.image.url, 'image');
+  const imageUrl = resolveProductionReleaseUrl(manifest.image.url, 'image', runtime);
   const imageResponse = await fetchRequired(fetchImpl, imageUrl, 'image');
   const bytes = await readBoundedFirmwareImage(imageResponse, manifest.image.size);
   const digest = new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes));

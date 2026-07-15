@@ -7,7 +7,9 @@ import { webcrypto } from 'node:crypto';
 import {
   ESP_CONNECT_RESET_SEQUENCE,
   ESP_IMAGE_MAGIC,
+  EXPECTED_FIRMWARE_TARGET,
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
+  MAX_FACTORY_IMAGE_SIZE,
   MIN_FACTORY_IMAGE_BYTES,
   PRODUCTION_FIRMWARE_ORIGIN,
   calculateMD5Hex,
@@ -26,26 +28,52 @@ async function fixture(name, encoding = 'utf8') {
   return readFile(resolve(fixtureRoot, name), encoding);
 }
 
-function response(body, ok = true) {
+function response(body, ok = true, { chunks, contentLength, redirected = false, stream = true } = {}) {
   const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body);
-  let consumed = false;
+  const streamChunks = chunks ?? [bytes];
+  let index = 0;
   return {
     ok,
+    redirected,
     async text() { return typeof body === 'string' ? body : bytes.toString('utf8'); },
-    headers: { get: () => null },
-    body: {
+    headers: { get: name => String(name).toLowerCase() === 'content-length' && contentLength != null ? String(contentLength) : null },
+    body: stream ? {
       getReader() {
         return {
           async read() {
-            if (consumed) return { done: true };
-            consumed = true;
-            return { done: false, value: new Uint8Array(bytes) };
+            if (index >= streamChunks.length) return { done: true };
+            return { done: false, value: new Uint8Array(streamChunks[index++]) };
           },
           async cancel() {},
           releaseLock() {},
         };
       },
-    },
+    } : null,
+  };
+}
+
+async function signManifest(manifest) {
+  const keys = await webcrypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'],
+  );
+  const signature = new Uint8Array(await webcrypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    keys.privateKey,
+    canonicalFirmwareManifestBytes(manifest),
+  ));
+  const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey));
+  return {
+    publicKeyPem: `-----BEGIN PUBLIC KEY-----\n${spki.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END PUBLIC KEY-----`,
+    signature: Buffer.from(signature).toString('base64url'),
+  };
+}
+
+async function releaseFetch({ manifest, signature, imageResponse, calls = [] }) {
+  return async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith('release-manifest.json')) return response(JSON.stringify(manifest));
+    if (String(url).endsWith('release-manifest.sig')) return response(signature);
+    return imageResponse;
   };
 }
 
@@ -62,7 +90,7 @@ test('Node resolves every production release request against the compiled produc
     return response(image);
   };
 
-  await loadProductionFirmwareRelease(fetchImpl, webcrypto, { publicKeyPem });
+  await loadProductionFirmwareRelease(fetchImpl, webcrypto, { publicKeyPem, runtime: 'node' });
 
   assert.equal(PRODUCTION_FIRMWARE_ORIGIN, 'https://led.mandalacodes.com');
   assert.deepEqual(calls, [
@@ -78,7 +106,7 @@ test('caller-controlled absolute manifest origins are rejected before network ac
     loadProductionFirmwareRelease(
       async () => { fetched = true; return response('unreachable'); },
       webcrypto,
-      { manifestUrl: 'https://evil.example/release-manifest.json' },
+      { manifestUrl: 'https://evil.example/release-manifest.json', runtime: 'node' },
     ),
     /production origin|relative production path/i,
   );
@@ -99,32 +127,107 @@ test('caller origin hints cannot replace the compiled production origin', async 
   }, webcrypto, {
     publicKeyPem,
     productionOrigin: 'https://evil.example',
+    runtime: 'node',
   });
   assert.ok(calls.every(url => url.startsWith(PRODUCTION_FIRMWARE_ORIGIN)));
 });
 
-test('browser consumers retain same-origin relative request behavior', async () => {
+test('browser/default consumers retain same-origin relative request behavior', async () => {
   const manifest = await fixture('valid-manifest.json');
   const signature = await fixture('valid-manifest.sig');
   const image = await fixture('test-firmware.bin', null);
   const publicKeyPem = await fixture('test-only-release-public.pem');
   const calls = [];
-  globalThis.window = { location: { origin: 'https://preview.example' } };
+  await loadProductionFirmwareRelease(async url => {
+    calls.push(String(url));
+    if (String(url).endsWith('release-manifest.json')) return response(manifest);
+    if (String(url).endsWith('release-manifest.sig')) return response(signature);
+    return response(image);
+  }, webcrypto, { publicKeyPem });
+  assert.deepEqual(calls, [
+    '/firmware/release-manifest.json',
+    '/firmware/release-manifest.sig',
+    JSON.parse(manifest).image.url,
+  ]);
+});
+
+test('explicit Node runtime wins in a hybrid environment with window present', async () => {
+  const manifest = await fixture('valid-manifest.json');
+  const signature = await fixture('valid-manifest.sig');
+  const image = await fixture('test-firmware.bin', null);
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const calls = [];
+  globalThis.window = { location: { origin: 'https://evil.example' } };
   try {
     await loadProductionFirmwareRelease(async url => {
       calls.push(String(url));
       if (String(url).endsWith('release-manifest.json')) return response(manifest);
       if (String(url).endsWith('release-manifest.sig')) return response(signature);
       return response(image);
-    }, webcrypto, { publicKeyPem });
+    }, webcrypto, { publicKeyPem, runtime: 'node' });
   } finally {
     delete globalThis.window;
   }
-  assert.deepEqual(calls, [
-    '/firmware/release-manifest.json',
-    '/firmware/release-manifest.sig',
-    JSON.parse(manifest).image.url,
-  ]);
+  assert.ok(calls.every(url => url.startsWith(PRODUCTION_FIRMWARE_ORIGIN)));
+});
+
+test('all release requests fail closed on redirects', async () => {
+  const manifest = JSON.parse(await fixture('valid-manifest.json'));
+  const signature = await fixture('valid-manifest.sig');
+  const image = await fixture('test-firmware.bin', null);
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const calls = [];
+  await loadProductionFirmwareRelease(async (url, options) => {
+    calls.push({ url: String(url), options });
+    if (String(url).endsWith('release-manifest.json')) return response(JSON.stringify(manifest));
+    if (String(url).endsWith('release-manifest.sig')) return response(signature);
+    return response(image);
+  }, webcrypto, { publicKeyPem, runtime: 'node' });
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every(call => call.options.redirect === 'error'));
+
+  await assert.rejects(
+    loadProductionFirmwareRelease(async () => response('redirected', true, { redirected: true }), webcrypto),
+    /redirect/i,
+  );
+});
+
+test('signed manifests reject wrong targets and declared oversize before image fetch', async () => {
+  const base = JSON.parse(await fixture('valid-manifest.json'));
+  for (const manifest of [
+    { ...base, target: 'esp32-c3' },
+    { ...base, image: { ...base.image, size: MAX_FACTORY_IMAGE_SIZE + 1 } },
+  ]) {
+    const signed = await signManifest(manifest);
+    let imageFetched = false;
+    await assert.rejects(loadProductionFirmwareRelease(async url => {
+      if (String(url).endsWith('release-manifest.json')) return response(JSON.stringify(manifest));
+      if (String(url).endsWith('release-manifest.sig')) return response(signed.signature);
+      imageFetched = true;
+      return response(new Uint8Array());
+    }, webcrypto, { publicKeyPem: signed.publicKeyPem }), /target|maximum safe factory image size/i);
+    assert.equal(imageFetched, false);
+  }
+});
+
+test('bounded image loading rejects streamed oversize, truncation, missing streams, and digest mismatch', async () => {
+  const manifest = JSON.parse(await fixture('valid-manifest.json'));
+  const signature = await fixture('valid-manifest.sig');
+  const image = Buffer.from(await fixture('test-firmware.bin', null));
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const cases = [
+    { response: response(image, true, { chunks: [Buffer.alloc(MAX_FACTORY_IMAGE_SIZE + 1)] }), error: /maximum safe factory image size/i },
+    { response: response(image.subarray(0, -1)), error: /size mismatch/i },
+    { response: response(image, true, { stream: false }), error: /bounded stream/i },
+    { response: response(Buffer.from(image).fill(0, 1, 2)), error: /SHA-256 mismatch/i },
+  ];
+  for (const item of cases) {
+    const fetchImpl = await releaseFetch({ manifest, signature, imageResponse: item.response });
+    await assert.rejects(
+      loadProductionFirmwareRelease(fetchImpl, webcrypto, { publicKeyPem }),
+      item.error,
+    );
+  }
 });
 
 test('tampered manifests are rejected before image or erase-adjacent work', async () => {
@@ -157,7 +260,7 @@ test('shared core preserves image, MD5, reset retry, connection, and release saf
   bytes[0x8001] = 0x50;
   bytes[0x10000] = ESP_IMAGE_MAGIC;
   assert.equal(validateProductionInstallRelease({
-    manifest: { target: 'esp32-s3-n16r8', image: { size: bytes.length } },
+    manifest: { target: EXPECTED_FIRMWARE_TARGET, image: { size: bytes.length } },
     bytes,
   }).size, bytes.length);
 
@@ -199,6 +302,15 @@ test('shared core preserves image, MD5, reset retry, connection, and release saf
     disconnectESP: async () => { released += 1; },
   }), /write failed/);
   assert.equal(released, 1);
+
+  let cleanupAttempts = 0;
+  await assert.rejects(flashFirmwareAndRelease({
+    loader: {}, transport: {}, file: {}, address: 0, eraseAll: true,
+    flashFirmware: async () => {},
+    resetESP: async () => { throw new Error('reset failed'); },
+    disconnectESP: async () => { cleanupAttempts += 1; throw new Error('release failed'); },
+  }), /release failed/);
+  assert.equal(cleanupAttempts, 1);
 });
 
 test('canonicalization and pinned key are exposed from the package entrypoint', async () => {

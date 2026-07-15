@@ -14,11 +14,13 @@ on:
   push:
     paths:
       - 'lightweaver/**'
+      - 'packages/installer-core/**'
       - 'firmware/**'
       - '.github/workflows/test.yml'
   pull_request:
     paths:
       - 'lightweaver/**'
+      - 'packages/installer-core/**'
       - 'firmware/**'
       - '.github/workflows/test.yml'
   # Lets deploy-site.yml reuse this exact test job as its deploy gate instead

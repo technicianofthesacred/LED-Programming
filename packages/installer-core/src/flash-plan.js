@@ -1,3 +1,5 @@
+import { EXPECTED_FIRMWARE_TARGET } from './constants.js';
+
 export const DEFAULT_WLED_APP_FLASH_ADDRESS = '0x10000';
 export const DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS = '0x0';
 
@@ -104,7 +106,7 @@ export function validateInstallHardware({ chipName, flashSize } = {}) {
 export function validateProductionInstallRelease(release = {}) {
   const bytes = release.bytes instanceof Uint8Array ? release.bytes : new Uint8Array(0);
   const manifest = release.manifest && typeof release.manifest === 'object' ? release.manifest : {};
-  if (manifest.target !== 'esp32-s3-n16r8') {
+  if (manifest.target !== EXPECTED_FIRMWARE_TARGET) {
     throw new Error('The signed release does not target the Lightweaver ESP32-S3 card. Nothing can be installed.');
   }
   if (manifest.image?.size !== bytes.byteLength) {

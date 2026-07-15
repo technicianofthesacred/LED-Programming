@@ -35,6 +35,8 @@ assert.doesNotMatch(JSON.stringify(pkg.scripts), /npx --yes wrangler/);
 assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-staging\.mjs/);
 assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js');
 assert.match(pkg.scripts['launch:check'], /npm run test:core && npm run test:prod-deploy && npm run test:show/);
+assert.match(pkg.scripts['launch:check'], /^npm run test:core:source && npm run test:core/);
+assert.match(testWorkflow, /packages\/installer-core\/\*\*/);
 
 assert.doesNotMatch(redirects, /^\/design/m);
 assert.match(redirects, /^\/visitor \/src\/visitor\/visitor\.html 200$/m);

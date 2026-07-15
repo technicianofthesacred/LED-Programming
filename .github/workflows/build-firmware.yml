@@ -18,6 +18,7 @@ on:
       - 'scripts/build-firmware-manifest.mjs'
       - 'scripts/sign-release-artifacts.mjs'
       - 'lightweaver/src/lib/firmwareRelease.js'
+      - 'packages/installer-core/**'
       - 'release/keys/lightweaver-release-public.pem'
       - '.github/workflows/build-firmware.yml'
 

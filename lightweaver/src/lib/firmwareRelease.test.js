@@ -12,7 +12,6 @@ import {
   MAX_FACTORY_IMAGE_SIZE,
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
   MINIMUM_PRODUCTION_FIRMWARE_VERSION,
-  PRODUCTION_FIRMWARE_ORIGIN,
   canonicalFirmwareManifestBytes,
   loadProductionFirmwareRelease,
   validateFirmwareManifest,
@@ -129,7 +128,7 @@ test('verifies a fixed signed manifest before fetching and hashing its image', a
 
   assert.equal(release.manifest.firmwareVersion, '1.2.3');
   assert.equal(release.bytes.byteLength, release.manifest.image.size);
-  assert.equal(calls.at(-1), `${PRODUCTION_FIRMWARE_ORIGIN}${release.manifest.image.url}`);
+  assert.equal(calls.at(-1), release.manifest.image.url);
 });
 
 test('rejects a tampered manifest before requesting any image', async () => {
@@ -342,7 +341,7 @@ test('committed production release is signed and content-addressed by the pinned
   const fetchImpl = async (url) => {
     if (String(url).endsWith('release-manifest.json')) return response(manifest);
     if (String(url).endsWith('release-manifest.sig')) return response(signature);
-    if (String(url).endsWith(parsed.image.url)) return response(image);
+    if (url === parsed.image.url) return response(image);
     return response('missing', false);
   };
   const release = await loadProductionFirmwareRelease(fetchImpl, webcrypto);
@@ -355,6 +354,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   const packageJson = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/package.json'), 'utf8'));
   assert.match(workflow, /scripts\/build-firmware-manifest\.mjs/);
   assert.match(workflow, /scripts\/sign-release-artifacts\.mjs/);
+  assert.match(workflow, /packages\/installer-core\/\*\*/);
   assert.match(workflow, /secrets\.LIGHTWEAVER_RELEASE_SIGNING_KEY/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /release-manifest\.sig/);
@@ -385,8 +385,13 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['test:core:source'],
-    'node --test src/lib/firmwareRelease.test.js && node scripts/run-core-source-tests.mjs',
+    'npm run test:installer-core && node --test src/lib/firmwareRelease.test.js && node scripts/run-core-source-tests.mjs',
   );
+  assert.equal(
+    packageJson.scripts['test:installer-core'],
+    'node --test ../packages/installer-core/test/*.test.js',
+  );
+  assert.match(packageJson.scripts['launch:check'], /^npm run test:core:source && npm run test:core/);
   assert.equal(
     packageJson.scripts['firmware:check-bin'],
     'node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs',
