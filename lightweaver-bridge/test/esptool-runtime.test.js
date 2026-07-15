@@ -28,19 +28,56 @@ test('native runtime derives card id, restores application boot, then releases U
   assert.deepEqual(calls, ['reset', 'disconnect']);
 });
 
-test('inspection failure skips reset but still releases USB', async () => {
-  const calls = [];
+function failingIdentityLoader(stage, calls) {
+  return {
+    chip: {
+      CHIP_NAME: 'ESP32-S3',
+      async readMac() {
+        calls.push('read-mac');
+        if (stage === 'read-mac') throw new Error('read MAC failed');
+        return stage === 'normalize-mac' ? 'invalid-mac' : '44:1B:F6:81:FE:B0';
+      },
+    },
+    async detectFlashSize() {
+      calls.push('detect-flash');
+      if (stage === 'detect-flash') throw new Error('detect flash failed');
+      return '16MB';
+    },
+  };
+}
+
+test('every post-connect identity failure resets to app, disconnects, and preserves the inspection error', async () => {
   const { createEsptoolRuntime } = require('../src/esptool-runtime');
-  const runtime = createEsptoolRuntime({
-    selectPort: async () => ({}),
-    connect: async () => ({
-      loader: { async detectFlashSize() { calls.push('identify'); throw new Error('identity failed'); } },
-      transport: { async disconnect() { calls.push('disconnect'); } },
-    }),
-    reset: async () => calls.push('reset'),
-  });
-  await assert.rejects(() => runtime.inspectOne(), /identity failed/);
-  assert.deepEqual(calls, ['identify', 'disconnect']);
+  for (const stage of ['detect-flash', 'read-mac', 'normalize-mac']) {
+    const calls = [];
+    const runtime = createEsptoolRuntime({
+      selectPort: async () => ({}),
+      connect: async () => ({
+        loader: failingIdentityLoader(stage, calls),
+        transport: { async disconnect() { calls.push('disconnect'); } },
+      }),
+      reset: async () => calls.push('reset'),
+    });
+    await assert.rejects(() => runtime.inspectOne(), new RegExp(stage === 'normalize-mac' ? 'MAC is invalid' : stage.replace('-', ' '), 'i'));
+    assert.deepEqual(calls.slice(-2), ['reset', 'disconnect']);
+  }
+});
+
+test('reset failure supersedes every post-connect identity failure and still disconnects', async () => {
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  for (const stage of ['detect-flash', 'read-mac', 'normalize-mac']) {
+    const calls = [];
+    const runtime = createEsptoolRuntime({
+      selectPort: async () => ({}),
+      connect: async () => ({
+        loader: failingIdentityLoader(stage, calls),
+        transport: { async disconnect() { calls.push('disconnect'); } },
+      }),
+      reset: async () => { calls.push('reset'); throw new Error('hard reset failed'); },
+    });
+    await assert.rejects(() => runtime.inspectOne(), error => error.code === 'card-restoration-failed' && error.phase === 'inspection-restoration');
+    assert.deepEqual(calls.slice(-2), ['reset', 'disconnect']);
+  }
 });
 
 test('inspection reset failure is structured and still releases USB', async () => {

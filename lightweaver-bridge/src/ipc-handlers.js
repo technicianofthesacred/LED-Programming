@@ -34,6 +34,9 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
   }
 
   function failureMessage(classification, error) {
+    if (error?.nextAction === 'unplug-replug-card') {
+      return 'Unplug the card USB, wait a few seconds, reconnect it, then choose Inspect connected card.';
+    }
     if (classification === 'recoverable-failure') return 'No card changes were confirmed. Inspect again before retrying.';
     if (classification === 'usb-ownership-uncertain' && error?.verification === 'flash-verified') {
       return 'Flash was verified and the card restarted. Restart the Bridge or unplug and reconnect the card; do not reflash.';

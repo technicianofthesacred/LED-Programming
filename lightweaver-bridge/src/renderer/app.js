@@ -28,10 +28,16 @@ let selectedOperation = 'install-current-release';
 
 function render(payload = {}) {
   currentState = views[payload.state] ? payload.state : 'recovery-required';
-  const [marker, title, fallbackMessage, button] = views[currentState];
+  let [marker, title, fallbackMessage, button] = views[currentState];
+  if (payload.nextAction === 'unplug-replug-card') {
+    marker = 'Reconnect';
+    title = 'Reconnect the card';
+    fallbackMessage = 'Unplug the card USB, wait a few seconds, reconnect it, then choose Inspect connected card.';
+    button = 'I reconnected the card';
+  }
   stateMarker.textContent = marker;
   stateTitle.textContent = title;
-  stateMessage.textContent = payload.message || fallbackMessage;
+  stateMessage.textContent = payload.nextAction === 'unplug-replug-card' ? fallbackMessage : payload.message || fallbackMessage;
   primaryAction.textContent = button;
   confirmationToken = payload.confirmationToken || confirmationToken;
   if (currentState === 'recovery-required') selectedOperation = 'recover-current-release';

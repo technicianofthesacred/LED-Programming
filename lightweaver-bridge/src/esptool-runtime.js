@@ -61,19 +61,30 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
   return Object.freeze({
     async inspectOne() {
       const connection = await connectOne();
+      let identity;
+      let inspectionError = null;
+      let restorationError = null;
+      let releaseError = null;
       try {
-        const identity = await identify(connection);
+        try {
+          identity = await identify(connection);
+        } catch (error) {
+          inspectionError = error;
+        }
         try {
           await reset(connection);
         } catch (error) {
-          throw runtimeFailure('card-restoration-failed', `Card restoration failed: ${error?.message || 'hard reset failed'}`, 'inspection-restoration');
+          restorationError = runtimeFailure('card-restoration-failed', `Card restoration failed: ${error?.message || 'hard reset failed'}`, 'inspection-restoration');
         }
-        return identity;
       } finally {
         try { await connection.transport.disconnect(); } catch (error) {
-          throw runtimeFailure('usb-release-failed', `USB release failed: ${error?.message || 'unknown close failure'}`, 'usb-release');
+          releaseError = runtimeFailure('usb-release-failed', `USB release failed: ${error?.message || 'unknown close failure'}`, 'usb-release');
         }
       }
+      if (releaseError) throw releaseError;
+      if (restorationError) throw restorationError;
+      if (inspectionError) throw inspectionError;
+      return identity;
     },
     async connectForWrite() {
       const connection = await connectOne();

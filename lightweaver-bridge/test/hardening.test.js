@@ -246,6 +246,24 @@ test('synchronous IPC errors return bounded structured codes without raw paths',
   assert.equal(result.message.includes('/dev/'), false);
 });
 
+test('IPC preserves physical unplug-replug guidance for inspection restoration failure', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { inspect: async () => { throw Object.assign(new Error('Card restoration failed'), {
+      code: 'card-restoration-failed', classification: 'recoverable-failure',
+      phase: 'inspection-restoration', nextAction: 'unplug-replug-card',
+    }); } },
+  });
+  const result = await handlers['bridge:inspect'](event);
+  assert.equal(result.state, 'operation-failed');
+  assert.equal(result.nextAction, 'unplug-replug-card');
+  assert.match(result.message, /unplug.*wait.*reconnect.*inspect/i);
+  assert.doesNotMatch(result.message, /before retrying/i);
+});
+
 test('window recreation cannot inherit destructive confirmation authority', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
