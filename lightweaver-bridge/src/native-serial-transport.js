@@ -136,6 +136,8 @@ class NativeSerialTransport {
     this._waiters = new Set();
     this._ioTail = Promise.resolve();
     this._ioAbortWaiters = new Set();
+    this._nativeIo = new Set();
+    this._nativeIoStuck = false;
     this._connected = false;
     this._readLoopStarted = false;
     this._activeRead = false;
@@ -247,6 +249,8 @@ class NativeSerialTransport {
     };
     this._terminalError = null;
     this._deviceLostNotified = false;
+    this._nativeIo.clear();
+    this._nativeIoStuck = false;
     this._buffer = Buffer.alloc(0);
     const port = this._createPort(options);
     this._port = port;
@@ -468,6 +472,28 @@ class NativeSerialTransport {
     for (const abort of this._ioAbortWaiters) abort(error);
   }
 
+  _trackNativeIo(promise) {
+    const token = { settled: false, settlement: null };
+    token.settlement = Promise.resolve(promise)
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        token.settled = true;
+        this._nativeIo.delete(token);
+      });
+    this._nativeIo.add(token);
+    return token;
+  }
+
+  async _awaitTrackedNative(promise, timeout, message) {
+    const token = this._trackNativeIo(promise);
+    try {
+      return await withTimeout(this._abortable(promise), timeout, message);
+    } catch (error) {
+      if (!token.settled && error instanceof Error && /timed out/i.test(error.message)) this._nativeIoStuck = true;
+      throw error;
+    }
+  }
+
   async write(data) {
     const framed = this.slipWriter(data);
     return this._enqueue(async (port) => {
@@ -486,7 +512,11 @@ class NativeSerialTransport {
           port.once('error', onError);
         });
       try {
-        await withTimeout(this._abortable(Promise.all([callbackDone, backpressureDone])), this._writeTimeoutMs, 'Serial write timed out');
+        await this._awaitTrackedNative(
+          Promise.all([callbackDone, backpressureDone]),
+          this._writeTimeoutMs,
+          'Serial write timed out',
+        );
       } finally {
         cleanupBackpressure();
       }
@@ -496,7 +526,7 @@ class NativeSerialTransport {
   async flushOutput() {
     return this._enqueue(async (port) => {
       const drain = callbackOperation((callback) => port.drain(callback));
-      await withTimeout(this._abortable(drain), this._writeTimeoutMs, 'Serial output flush timed out');
+      await this._awaitTrackedNative(drain, this._writeTimeoutMs, 'Serial output flush timed out');
     });
   }
 
@@ -504,7 +534,7 @@ class NativeSerialTransport {
     const next = Boolean(state);
     return this._enqueue(async (port) => {
       const update = callbackOperation((callback) => port.set({ dtr: next }, callback));
-      await withTimeout(this._abortable(update), this._writeTimeoutMs, 'Serial DTR update timed out');
+      await this._awaitTrackedNative(update, this._writeTimeoutMs, 'Serial DTR update timed out');
       this._dtrState = next;
     });
   }
@@ -513,9 +543,9 @@ class NativeSerialTransport {
     const next = Boolean(state);
     return this._enqueue(async (port) => {
       const rts = callbackOperation((callback) => port.set({ rts: next }, callback));
-      await withTimeout(this._abortable(rts), this._writeTimeoutMs, 'Serial RTS update timed out');
+      await this._awaitTrackedNative(rts, this._writeTimeoutMs, 'Serial RTS update timed out');
       const dtr = callbackOperation((callback) => port.set({ dtr: this._dtrState }, callback));
-      await withTimeout(this._abortable(dtr), this._writeTimeoutMs, 'Serial DTR refresh timed out');
+      await this._awaitTrackedNative(dtr, this._writeTimeoutMs, 'Serial DTR refresh timed out');
     });
   }
 
@@ -539,11 +569,20 @@ class NativeSerialTransport {
       return;
     }
     const admittedIo = this._ioTail;
-    let ioDrained = true;
-    try {
-      await withTimeout(admittedIo, this._disconnectTimeoutMs, 'Serial I/O drain timed out during disconnect');
-    } catch (_) {
-      ioDrained = false;
+    const nativeIo = Promise.all(Array.from(this._nativeIo, (token) => token.settlement));
+    let ioDrained = !(this._nativeIoStuck && this._nativeIo.size > 0);
+    if (ioDrained) {
+      try {
+        await withTimeout(
+          Promise.all([admittedIo, nativeIo]),
+          this._disconnectTimeoutMs,
+          'Serial I/O drain timed out during disconnect',
+        );
+      } catch (_) {
+        ioDrained = false;
+      }
+    }
+    if (!ioDrained) {
       this._abortPendingIo(new Error('Serial I/O aborted during disconnect'));
       try {
         await withTimeout(admittedIo, Math.min(this._closeTimeoutMs, 1000), 'Serial I/O abort timed out');
@@ -580,6 +619,8 @@ class NativeSerialTransport {
     this._removeListeners(port);
     this._buffer = Buffer.alloc(0);
     if (this._port === port) this._port = null;
+    this._nativeIo.clear();
+    this._nativeIoStuck = false;
     this._intentionalClose = false;
   }
 }

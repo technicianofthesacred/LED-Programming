@@ -247,6 +247,20 @@ test('disconnect aborts a never-callback write within a bound, skips racing sign
   assert.equal(port.closeCalls, 1);
 });
 
+test('disconnect skips signals when a public write timeout leaves its native callback pending', async () => {
+  const port = new FakeSerialPort({ deferWrites: true });
+  const { transport } = createHarness({ port, writeTimeoutMs: 10, closeTimeoutMs: 100 });
+  await transport.connect();
+  await assert.rejects(transport.write(Uint8Array.of(1)), /write timed out/i);
+  assert.equal(port.pendingWrites.length, 1);
+  await transport.disconnect();
+  assert.deepEqual(port.signals, []);
+  assert.equal(port.closeCalls, 1);
+  port.completeWrite(new Error('late callback after close'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(port.closeCalls, 1);
+});
+
 test('rejects oversized and stalled writes rather than buffering without a bound', async () => {
   const port = new FakeSerialPort({ deferWrites: true, writeReturns: false });
   const { transport } = createHarness({ port, maxWriteBytes: 4, writeTimeoutMs: 15 });
