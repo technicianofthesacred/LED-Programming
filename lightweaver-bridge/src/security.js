@@ -42,4 +42,17 @@ function installWebContentsGuards(webContents) {
   webContents.session.setPermissionCheckHandler(() => false);
 }
 
-module.exports = { createWindowOptions, installWebContentsGuards, isAllowedApplicationUrl };
+function isTrustedIpcEvent(event, activeWindow, rendererPath) {
+  if (!event || !activeWindow || activeWindow.isDestroyed()) return false;
+  const webContents = activeWindow.webContents;
+  if (!webContents || event.sender !== webContents) return false;
+  if (!webContents.mainFrame || event.senderFrame !== webContents.mainFrame) return false;
+  return isAllowedApplicationUrl(event.senderFrame.url, rendererPath);
+}
+
+module.exports = {
+  createWindowOptions,
+  installWebContentsGuards,
+  isAllowedApplicationUrl,
+  isTrustedIpcEvent,
+};

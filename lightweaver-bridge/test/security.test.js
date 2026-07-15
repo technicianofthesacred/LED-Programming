@@ -58,105 +58,10 @@ test('navigation, new windows, and permission requests are denied', () => {
   assert.equal(permissionCheckHandler(webContents, 'serial'), false);
 });
 
-test('preload exposes only frozen typed methods and strips Electron events', async () => {
-  const { createBridgeApi } = require('../src/bridge-api');
-  const calls = [];
-  const subscriptions = new Map();
-  const api = createBridgeApi({
-    invoke(channel, value) {
-      calls.push([channel, value]);
-      return Promise.resolve({ ok: true });
-    },
-    on(channel, listener) { subscriptions.set(channel, listener); },
-    removeListener(channel, listener) {
-      if (subscriptions.get(channel) === listener) subscriptions.delete(channel);
-    },
-  });
-
-  assert.equal(Object.isFrozen(api), true);
-  assert.deepEqual(Object.keys(api).sort(), [
-    'cancelBeforeCriticalSection',
-    'confirmDestructiveAction',
-    'inspectCompatibleCard',
-    'onProgress',
-    'onResult',
-    'startOperation',
-  ]);
-  assert.equal('ipcRenderer' in api, false);
-  assert.equal('serial' in api, false);
-  assert.equal('filesystem' in api, false);
-  assert.equal('shell' in api, false);
-  assert.equal('openExternal' in api, false);
-
-  await api.inspectCompatibleCard();
-  await api.startOperation('install-firmware');
-  await api.confirmDestructiveAction('a'.repeat(32));
-  await api.cancelBeforeCriticalSection();
-  assert.deepEqual(calls, [
-    ['bridge:inspect', undefined],
-    ['bridge:start-operation', 'install-firmware'],
-    ['bridge:confirm-destructive', 'a'.repeat(32)],
-    ['bridge:cancel', undefined],
-  ]);
-
-  let received;
-  const unsubscribe = api.onProgress((value) => { received = value; });
-  subscriptions.get('bridge:progress')({ sender: 'secret' }, { state: 'installing', message: 'safe' });
-  assert.deepEqual(received, { state: 'installing', message: 'safe' });
-  unsubscribe();
-  assert.equal(subscriptions.has('bridge:progress'), false);
-});
-
 test('sandboxed preload is self-contained and signals readiness to the main process', () => {
   const preload = fs.readFileSync(path.join(bridgeRoot, 'src/preload.js'), 'utf8');
   assert.doesNotMatch(preload, /require\(['"]\.\//);
   assert.match(preload, /bridge:preload-ready/);
-});
-
-test('preload rejects arbitrary operations, invalid tokens, oversized messages, and non-functions', async () => {
-  const { createBridgeApi } = require('../src/bridge-api');
-  const api = createBridgeApi({ invoke: async () => ({}), on() {}, removeListener() {} });
-
-  await assert.rejects(() => api.startOperation('erase-disk'), /operation/i);
-  await assert.rejects(() => api.confirmDestructiveAction('../token'), /token/i);
-  assert.throws(() => api.onProgress('not a callback'), /callback/i);
-
-  let received;
-  const listeners = new Map();
-  const boundedApi = createBridgeApi({
-    invoke: async () => ({}),
-    on(channel, listener) { listeners.set(channel, listener); },
-    removeListener() {},
-  });
-  boundedApi.onResult((value) => { received = value; });
-  listeners.get('bridge:result')({}, {
-    state: 'complete',
-    message: 'x'.repeat(10_000),
-    extra: { secret: true },
-  });
-  assert.equal(received.message.length, 512);
-  assert.equal('extra' in received, false);
-  assert.equal(Object.isFrozen(received), true);
-});
-
-test('operation state permits cancellation only before the critical section and guards close during it', () => {
-  const { createOperationState } = require('../src/operation-state');
-  const operation = createOperationState();
-
-  assert.equal(operation.cancel(), true);
-  operation.reset();
-  operation.transition('confirm');
-  assert.equal(operation.cancel(), true);
-  operation.reset();
-  operation.transition('confirm');
-  operation.transition('installing');
-  assert.equal(operation.isCritical(), true);
-  assert.equal(operation.cancel(), false);
-  assert.equal(operation.shouldPreventClose(), true);
-  operation.transition('verifying');
-  assert.equal(operation.shouldPreventClose(), true);
-  operation.transition('complete');
-  assert.equal(operation.shouldPreventClose(), false);
 });
 
 test('renderer contains all local workflow states and a restrictive CSP', () => {

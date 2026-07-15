@@ -2,59 +2,37 @@
 
 const crypto = require('node:crypto');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain } = require('electron');
-const { validateOperation, validateToken, sanitizeText } = require('./bridge-api');
+const { createIpcHandlers } = require('./ipc-handlers');
 const { createOperationState } = require('./operation-state');
-const { createWindowOptions, installWebContentsGuards } = require('./security');
+const { redactSensitiveText } = require('./protocol');
+const { createWindowOptions, installWebContentsGuards, isTrustedIpcEvent } = require('./security');
 
 const rendererPath = path.join(__dirname, 'renderer', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.js');
 const smokeTest = process.argv.includes('--smoke-test');
 const operationState = createOperationState();
-let confirmationToken = null;
 let mainWindow = null;
 
-function boundedResult(state, message, extra = {}) {
-  return Object.freeze({ state, message: sanitizeText(message), ...extra });
-}
-
 function registerIpcHandlers() {
-  ipcMain.handle('bridge:inspect', () => {
-    operationState.transition('inspect');
-    return boundedResult('select-card', 'No compatible card selected. USB inspection is added in the next bridge task.', {
-      compatible: false,
-    });
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => mainWindow,
+    rendererPath,
+    operation: operationState,
+    inspectCard: async () => ({ compatible: false }),
+    createToken: () => crypto.randomBytes(24).toString('hex'),
   });
-  ipcMain.handle('bridge:start-operation', (_event, requestedOperation) => {
-    validateOperation(requestedOperation);
-    if (operationState.isCritical()) throw new Error('An operation is already in its critical section');
-    confirmationToken = crypto.randomBytes(24).toString('hex');
-    operationState.transition('confirm');
-    return boundedResult('confirm', 'Confirm that reinstalling firmware will replace the card configuration.', {
-      confirmationToken,
-    });
-  });
-  ipcMain.handle('bridge:confirm-destructive', (_event, token) => {
-    validateToken(token);
-    if (!confirmationToken || token !== confirmationToken || operationState.current !== 'confirm') {
-      throw new Error('Confirmation token is expired or does not match');
-    }
-    confirmationToken = null;
-    return boundedResult('recovery-required', 'USB installation is not included in this scaffold. No card changes were made.');
-  });
-  ipcMain.handle('bridge:cancel', () => {
-    const cancelled = operationState.cancel();
-    if (cancelled) confirmationToken = null;
-    return Object.freeze({ cancelled, state: operationState.current });
-  });
+  for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }
 
 async function createMainWindow() {
   const window = new BrowserWindow(createWindowOptions(preloadPath, { show: !smokeTest }));
+  mainWindow = window;
   const preloadReady = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Preload did not become ready')), 5_000);
     ipcMain.once('bridge:preload-ready', (event) => {
-      if (event.sender !== window.webContents) {
+      if (!isTrustedIpcEvent(event, window, rendererPath)) {
         clearTimeout(timeout);
         reject(new Error('Preload readiness came from an unexpected renderer'));
         return;
@@ -65,7 +43,7 @@ async function createMainWindow() {
   });
   installWebContentsGuards(window.webContents);
   window.webContents.on('console-message', (event) => {
-    const message = sanitizeText(event.message);
+    const message = redactSensitiveText(event.message);
     if (message) process.stderr.write(`[renderer] ${message}\n`);
   });
   window.on('close', (event) => {
@@ -73,7 +51,43 @@ async function createMainWindow() {
   });
   await window.loadFile(rendererPath);
   await preloadReady;
+  if (window.webContents.mainFrame.url !== pathToFileURL(rendererPath).href) {
+    throw new Error('Renderer loaded an unexpected URL');
+  }
   return window;
+}
+
+function verifyNavigationIsDenied(window) {
+  return new Promise((resolve, reject) => {
+    let navigationAttempted = false;
+    const timeout = setTimeout(() => reject(new Error('Navigation denial check timed out')), 3_000);
+    window.webContents.once('will-navigate', (_event, url) => {
+      if (url !== 'https://unexpected.invalid/') {
+        reject(new Error('Navigation check targeted an unexpected URL'));
+        return;
+      }
+      navigationAttempted = true;
+    });
+    ipcMain.once('bridge:smoke-navigation-attempted', (event) => {
+      clearTimeout(timeout);
+      if (!isTrustedIpcEvent(event, window, rendererPath)) {
+        reject(new Error('Navigation check came from an untrusted renderer'));
+        return;
+      }
+      setImmediate(() => {
+        if (!navigationAttempted) {
+          reject(new Error('Unexpected navigation was not attempted'));
+          return;
+        }
+        if (window.webContents.mainFrame.url !== pathToFileURL(rendererPath).href) {
+          reject(new Error('Unexpected renderer navigation was not denied'));
+          return;
+        }
+        resolve();
+      });
+    });
+    window.webContents.send('bridge:smoke-attempt-navigation');
+  });
 }
 
 async function run() {
@@ -81,6 +95,7 @@ async function run() {
   mainWindow = await createMainWindow();
   if (smokeTest) {
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Smoke-test window was not created');
+    await verifyNavigationIsDenied(mainWindow);
     process.stdout.write('Lightweaver Bridge smoke test passed\n');
     mainWindow.destroy();
     app.exit(0);
@@ -88,7 +103,7 @@ async function run() {
 }
 
 app.whenReady().then(run).catch((error) => {
-  process.stderr.write(`Lightweaver Bridge failed: ${sanitizeText(error && error.message)}\n`);
+  process.stderr.write(`Lightweaver Bridge failed: ${redactSensitiveText(error && error.message)}\n`);
   app.exit(1);
 });
 
