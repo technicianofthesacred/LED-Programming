@@ -136,10 +136,15 @@ test('an old card keeps the Studio selection and offers a card software update',
   await page.addInitScript(() => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' }));
   });
-  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({
+  await page.route('**/api/firmware-info', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ firmwareVersion: '0.9.0' }),
+    body: JSON.stringify({ cardId: 'lw-preview-test', firmwareVersion: '0.9.0' }),
+  }));
+  await page.route('**/api/control', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, patternId: 'ocean' }),
   }));
   await gotoFreshPatterns(page);
 

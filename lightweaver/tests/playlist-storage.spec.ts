@@ -171,9 +171,10 @@ test('Playlist transport timeout keeps its prior live row and offers a bounded r
   await expect(alert.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
 });
 
-test('Playlist unconfirmed physical output routes Recover lights to reset live', async ({ page }) => {
+test('Playlist keeps the failure visible while dedicated light recovery runs and confirms success', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
-  let controlCount = 0;
+  let releaseRecovery: (() => void) | null = null;
+  let recoveryCount = 0;
   await page.addInitScript(() => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-playlist-output-test' }));
   });
@@ -182,29 +183,83 @@ test('Playlist unconfirmed physical output routes Recover lights to reset live',
     contentType: 'application/json',
     body: JSON.stringify({ cardId: 'lw-playlist-output-test', firmwareVersion: '1.0.0' }),
   }));
-  await page.route('**/api/zones', route => route.fulfill({
+  await page.route('**/api/control', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ ok: true, zones: [] }),
+    body: JSON.stringify({ ok: true, cardId: 'lw-playlist-output-test' }),
   }));
-  await page.route('**/api/control', route => {
-    controlCount += 1;
-    const request = JSON.parse(route.request().postData() || '{}');
+  await page.route('**/api/wiring/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, state: 'known-good', currentOutputs: [] }),
+  }));
+  await page.route('**/api/recover-lights', async route => {
+    recoveryCount += 1;
+    if (recoveryCount === 1) await new Promise<void>(resolve => { releaseRecovery = resolve; });
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(controlCount === 1
-        ? { ok: true, cardId: 'lw-playlist-output-test' }
-        : { ok: true, cardId: 'lw-playlist-output-test', patternId: request.patternId }),
+      body: JSON.stringify({
+        ok: true,
+        accepted: true,
+        diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+      }),
     });
   });
+  await page.route('**/api/reboot', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true }),
+  }));
   await gotoPlaylist(page, project);
 
   await page.locator('.pl-row').first().getByRole('button', { name: 'Live' }).click();
   const alert = page.getByTestId('playlist-card-status');
   await expect(alert).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  const recoverButton = alert.getByRole('button', { name: 'Recover lights' });
+  await recoverButton.click();
+
+  await expect.poll(() => Boolean(releaseRecovery)).toBe(true);
+  await expect(alert).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await expect(recoverButton).toBeDisabled();
+  releaseRecovery?.();
+
+  await expect.poll(() => recoveryCount).toBe(2);
+  await expect(page.getByTestId('playlist-card-status')).toContainText('Recovery frame sent. Confirm warm white is visible on the physical lights.');
+  await expect(page.getByTestId('playlist-card-status')).toHaveAttribute('role', 'status');
+});
+
+test('Playlist reports a bounded failure when dedicated light recovery is rejected', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-playlist-output-test' }));
+  });
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-playlist-output-test', firmwareVersion: '1.0.0' }),
+  }));
+  await page.route('**/api/control', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, cardId: 'lw-playlist-output-test' }),
+  }));
+  await page.route('**/api/wiring/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, state: 'known-good', currentOutputs: [] }),
+  }));
+  await page.route('**/api/recover-lights', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: false, accepted: false, privateReason: '<script>unsafe</script>' }),
+  }));
+  await gotoPlaylist(page, project);
+
+  await page.locator('.pl-row').first().getByRole('button', { name: 'Live' }).click();
+  const alert = page.getByTestId('playlist-card-status');
   await alert.getByRole('button', { name: 'Recover lights' }).click();
 
-  await expect.poll(() => controlCount).toBe(2);
-  await expect(alert).toHaveCount(0);
+  await expect(alert).toContainText('Light recovery did not complete. The physical preview could not be confirmed. Check the card connection and try again.');
+  await expect(alert).not.toContainText('unsafe');
 });

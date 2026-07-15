@@ -44,6 +44,7 @@ import {
 import {
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
+  recoverCardLights,
   resetLiveOutputOnCard,
 } from '../lib/cardLiveControl.js';
 import {
@@ -112,6 +113,7 @@ function realPatternShape(patternId) {
     const [playlistStatus, setPlaylistStatus] = useState(null);
     const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [playlistSyncing, setPlaylistSyncing] = useState(false);
+    const [recoveryPending, setRecoveryPending] = useState(false);
     const previewSequence = React.useRef(0);
     const latestLiveItem = useRef(null);
     const [drag, setDrag] = useState({ from: null, over: null });
@@ -305,13 +307,43 @@ function realPatternShape(patternId) {
       } catch { /* best-effort */ }
     };
 
+    const recoverPhysicalOutput = async () => {
+      if (recoveryPending) return;
+      previewSequence.current += 1;
+      setHandoffUrl('');
+      setRecoveryPending(true);
+      try {
+        await recoverCardLights(
+          { patternId: 'warm-white', brightness: 1, syncZones: true },
+          { host, timeoutMs: 3200, restartCard: true },
+        );
+        dispatchPreviewAction({ type: 'reset' });
+        setLive(null);
+        setPlaylistStatus({
+          kind: 'ok',
+          message: 'Recovery frame sent. Confirm warm white is visible on the physical lights.',
+        });
+      } catch (error) {
+        const failure = classifyCardActionFailure(error);
+        setPlaylistStatus({
+          kind: 'err',
+          message: `Light recovery did not complete. ${failure.message}`,
+          physicalPreview: true,
+          recoveryFailure: true,
+          failure,
+        });
+      } finally {
+        setRecoveryPending(false);
+      }
+    };
+
     const previewFailureHandler = (() => {
       switch (playlistStatus?.failure?.actionId) {
         case 'update-card': return () => { window.location.hash = '#screen=flash'; };
         case 'reconnect-card': return openConnectionCenter;
         case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
-        case 'retry': return retryLatestPreview;
-        case 'recover-lights': return resetLiveOutput;
+        case 'retry': return playlistStatus?.recoveryFailure ? recoverPhysicalOutput : retryLatestPreview;
+        case 'recover-lights': return recoverPhysicalOutput;
         default: return null;
       }
     })();
@@ -457,7 +489,7 @@ function realPatternShape(patternId) {
                 }
                 <div className="pmx-status-actions">
                   {playlistStatus.physicalPreview && previewFailureHandler &&
-                    <button className="btn primary" onClick={previewFailureHandler}>{playlistStatus.failure.actionLabel}</button>
+                    <button className="btn primary" disabled={recoveryPending} onClick={previewFailureHandler}>{playlistStatus.failure.actionLabel}</button>
                   }
                   {playlistStatus.action &&
                     <button
