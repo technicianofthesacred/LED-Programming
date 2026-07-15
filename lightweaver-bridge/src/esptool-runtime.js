@@ -9,6 +9,13 @@ function normalizeMac(value) {
   return hex;
 }
 
+function runtimeFailure(code, message, phase) {
+  const error = new Error(message);
+  error.code = code;
+  error.phase = phase;
+  return error;
+}
+
 async function connectWithTrackedCleanup({ core, port, createTransport, createLoader }) {
   let releaseFailure = null;
   const trackedTransport = candidate => {
@@ -55,10 +62,16 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
     async inspectOne() {
       const connection = await connectOne();
       try {
-        return await identify(connection);
+        const identity = await identify(connection);
+        try {
+          await reset(connection);
+        } catch (error) {
+          throw runtimeFailure('card-restoration-failed', `Card restoration failed: ${error?.message || 'hard reset failed'}`, 'inspection-restoration');
+        }
+        return identity;
       } finally {
         try { await connection.transport.disconnect(); } catch (error) {
-          throw new Error(`USB release failed: ${error?.message || 'unknown close failure'}`);
+          throw runtimeFailure('usb-release-failed', `USB release failed: ${error?.message || 'unknown close failure'}`, 'usb-release');
         }
       }
     },

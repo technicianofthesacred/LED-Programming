@@ -33,18 +33,29 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
     return 'recovery-required';
   }
 
-  function failureMessage(classification) {
+  function failureMessage(classification, error) {
     if (classification === 'recoverable-failure') return 'No card changes were confirmed. Inspect again before retrying.';
+    if (classification === 'usb-ownership-uncertain' && error?.verification === 'flash-verified') {
+      return 'Flash was verified and the card restarted. Restart the Bridge or unplug and reconnect the card; do not reflash.';
+    }
     if (classification === 'usb-ownership-uncertain') return 'USB release could not be confirmed. Restart the Bridge before retrying.';
     return 'Installation may have been interrupted after erase began. Recover the current release.';
   }
 
   function failurePayload(error) {
-    return createRendererResult(failureState(error?.classification), failureMessage(error?.classification), {
+    return createRendererResult(failureState(error?.classification), failureMessage(error?.classification, error), {
       code: error?.code,
       classification: error?.classification,
       phase: error?.phase,
       nextAction: error?.nextAction,
+      verification: error?.verification,
+      physicalOutput: error?.physicalOutput,
+      pipelineComplete: error?.pipelineComplete,
+      expectedCardId: error?.expectedCardId,
+      firmwareVersion: error?.firmwareVersion,
+      buildId: error?.buildId,
+      target: error?.target,
+      nextCheckpoint: error?.nextCheckpoint,
     });
   }
 

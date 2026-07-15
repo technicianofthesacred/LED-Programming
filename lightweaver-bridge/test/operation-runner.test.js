@@ -288,6 +288,21 @@ test('inspection validates chip and flash, emits bounded identity, and releases 
   assert.equal(JSON.stringify(result).includes('fingerprint'), false);
 });
 
+test('inspection restoration failure remains structured and cannot authorize an install', async () => {
+  const failure = Object.assign(new Error('Card restoration failed'), {
+    code: 'card-restoration-failed', phase: 'inspection-restoration',
+  });
+  const h = harness({ runtime: { async inspectOne() { throw failure; } } });
+  await assert.rejects(() => h.runner.inspect(), error => {
+    assert.equal(error.code, 'card-restoration-failed');
+    assert.equal(error.phase, 'inspection-restoration');
+    assert.equal(error.classification, 'recoverable-failure');
+    assert.equal(error.nextAction, 'unplug-replug-card');
+    return true;
+  });
+  assert.equal(h.runner.hasInspection(), false);
+});
+
 test('zero and multiple candidates remain distinct recoverable pre-erase failures', async () => {
   for (const [error, code] of [[new Error('No compatible candidate'), 'no-compatible-card'], [new Error('Multiple compatible candidates'), 'multiple-compatible-cards']]) {
     const h = harness({ runtime: { async inspectOne() { throw error; } } });
@@ -348,17 +363,56 @@ test('disconnect before erase is recoverable; write/MD5 failures after erase req
   }
 });
 
-test('reset and USB release failures are bounded recovery outcomes and release is always attempted', async () => {
+test('reset failure remains safe recovery and release is always attempted', async () => {
   const reset = harness({ runtime: { async reset() { throw new Error('reset failed /dev/cu.secret'); } } });
   const resetAuth = await authorize(reset);
   await assert.rejects(() => reset.runner.execute({ operation: 'install-current-release', cardId: resetAuth.inspected.cardId, token: resetAuth.confirmation.confirmationToken }), value => value.code === 'restart-failed' && !value.message.includes('/dev/'));
   assert.equal(reset.calls.includes('disconnect'), true);
 
+});
+
+test('USB close failure preserves verified flash after restart without requesting reflash', async () => {
   const releaseFail = harness({ runtime: { async connectForWrite() {
     return { loader: { IS_STUB: false, writeFlash() {}, async flashDeflBegin() {} }, identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' }, transport: { async disconnect() { throw new Error('close /dev/ttyUSB1'); } } };
   } } });
   const releaseAuth = await authorize(releaseFail);
-  await assert.rejects(() => releaseFail.runner.execute({ operation: 'install-current-release', cardId: releaseAuth.inspected.cardId, token: releaseAuth.confirmation.confirmationToken }), value => value.code === 'usb-release-failed' && value.outcome === 'needs-safe-recovery');
+  await assert.rejects(() => releaseFail.runner.execute({ operation: 'install-current-release', cardId: releaseAuth.inspected.cardId, token: releaseAuth.confirmation.confirmationToken }), error => {
+    assert.equal(error.code, 'usb-release-failed');
+    assert.equal(error.classification, 'usb-ownership-uncertain');
+    assert.equal(error.verification, 'flash-verified');
+    assert.equal(error.physicalOutput, 'unconfirmed');
+    assert.equal(error.pipelineComplete, false);
+    assert.equal(error.expectedCardId, releaseAuth.inspected.cardId);
+    assert.match(error.nextAction, /restart.*unplug/i);
+    assert.doesNotMatch(error.nextAction, /recover|flash/i);
+    return true;
+  });
+});
+
+test('USB close failure keeps safe recovery when write or restart outcome is uncertain', async () => {
+  for (const failure of ['write', 'reset']) {
+    const h = harness({
+      runtime: {
+        async connectForWrite() {
+          return {
+            loader: { IS_STUB: false, writeFlash() {}, async flashDeflBegin() {} },
+            identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' },
+            transport: { async disconnect() { throw new Error('close failed'); } },
+          };
+        },
+        ...(failure === 'reset' ? { async reset() { throw new Error('reset failed'); } } : {}),
+      },
+      ...(failure === 'write' ? { core: { async writeVerifiedFlash(loader) {
+        await loader.flashDeflBegin();
+        throw new Error('write failed');
+      } } } : {}),
+    });
+    const auth = await authorize(h);
+    await assert.rejects(() => h.runner.execute({
+      operation: 'install-current-release', cardId: auth.inspected.cardId,
+      token: auth.confirmation.confirmationToken,
+    }), error => error.classification === 'needs-safe-recovery' && error.nextAction === 'recover-current-release');
+  }
 });
 
 test('closed vocabulary and concurrency are rejected before hardware/network', async () => {

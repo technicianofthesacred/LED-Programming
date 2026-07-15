@@ -21,7 +21,13 @@ class BridgeOperationError extends Error {
 
 function classifyDiscoveryError(error) {
   const message = String(error?.message || 'Card inspection failed');
-  if (/USB release failed/i.test(message)) return new BridgeOperationError('usb-release-failed', message, { outcome: 'usb-ownership-uncertain' });
+  if (error?.code === 'usb-release-failed' || /USB release failed/i.test(message)) return new BridgeOperationError('usb-release-failed', message, { outcome: 'usb-ownership-uncertain' });
+  if (error?.code === 'card-restoration-failed') {
+    return new BridgeOperationError('card-restoration-failed', message, {
+      phase: 'inspection-restoration',
+      nextAction: 'unplug-replug-card',
+    });
+  }
   if (/multiple/i.test(message)) return new BridgeOperationError('multiple-compatible-cards', 'Multiple compatible cards are connected. Disconnect all but one and inspect again.', { phase: 'inspection' });
   if (/\bno\b.*(?:candidate|card|port)|not found/i.test(message)) return new BridgeOperationError('no-compatible-card', 'No compatible Lightweaver card was found.', { phase: 'inspection' });
   return new BridgeOperationError('inspection-failed', message, { phase: 'inspection' });
@@ -203,6 +209,8 @@ function createOperationRunner({
 
       let connection = null;
       let eraseStarted = false;
+      let flashVerified = false;
+      let cardRestarted = false;
       let primaryError = null;
       let result;
       try {
@@ -244,6 +252,7 @@ function createOperationRunner({
         if (!eraseStarted) {
           throw new BridgeOperationError('write-not-started', 'The verified flash operation ended before writing began. Nothing was erased.');
         }
+        flashVerified = true;
         emit(onEvent, 'write-completed', { progress: 100 });
         emit(onEvent, 'flash-verification-completed', { verification: 'flash-verified' });
         try {
@@ -251,6 +260,7 @@ function createOperationRunner({
         } catch (error) {
           throw new BridgeOperationError('restart-failed', error?.message || 'Card restart failed', { mutation: 'written', outcome: 'needs-safe-recovery' });
         }
+        cardRestarted = true;
         emit(onEvent, 'card-restarted');
         result = Object.freeze({
           state: 'awaiting-card-acknowledgement',
@@ -273,12 +283,25 @@ function createOperationRunner({
             await connection.transport.disconnect();
             emit(onEvent, 'usb-released');
           } catch (error) {
+            const verifiedAndRestarted = flashVerified && cardRestarted;
             primaryError = new BridgeOperationError('usb-release-failed', error?.message || 'USB release failed', {
-              mutation: eraseStarted ? 'uncertain' : 'none',
-              outcome: eraseStarted ? 'needs-safe-recovery' : 'usb-ownership-uncertain',
+              mutation: verifiedAndRestarted ? 'written' : eraseStarted ? 'uncertain' : 'none',
+              outcome: verifiedAndRestarted || !eraseStarted ? 'usb-ownership-uncertain' : 'needs-safe-recovery',
               phase: 'usb-release',
-              nextAction: eraseStarted ? 'recover-current-release' : 'restart-bridge-before-retrying',
+              nextAction: verifiedAndRestarted ? 'restart-bridge-or-unplug-replug-card' : eraseStarted ? 'recover-current-release' : 'restart-bridge-before-retrying',
             });
+            if (verifiedAndRestarted) {
+              Object.assign(primaryError, {
+                verification: 'flash-verified',
+                physicalOutput: 'unconfirmed',
+                pipelineComplete: false,
+                expectedCardId: selected.cardId,
+                firmwareVersion: verifiedRelease.manifest.firmwareVersion,
+                buildId: verifiedRelease.manifest.buildId,
+                target: verifiedRelease.manifest.target,
+                nextCheckpoint: 'stable-card-identity-acknowledged',
+              });
+            }
           }
         }
         inspection = null;

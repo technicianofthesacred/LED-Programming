@@ -195,6 +195,10 @@ test('IPC preserves structured failure classifications and truthful distinct res
     window.webContents.send = (channel, payload) => sent.push([channel, payload]);
     const error = Object.assign(new Error('failed /dev/cu.secret'), {
       code: 'structured-failure', classification, phase: 'before-erase', nextAction: classification,
+      ...(classification === 'usb-ownership-uncertain' ? {
+        verification: 'flash-verified', physicalOutput: 'unconfirmed', pipelineComplete: false,
+        expectedCardId: 'lw-441bf681feb0', nextCheckpoint: 'stable-card-identity-acknowledged',
+      } : {}),
     });
     const operation = createOperationState();
     const handlers = createIpcHandlers({
@@ -215,6 +219,14 @@ test('IPC preserves structured failure classifications and truthful distinct res
     assert.equal(payload.code, 'structured-failure');
     assert.equal(payload.message.includes('/dev/'), false);
     assert.match(payload.message, expectedGuidance);
+    if (classification === 'usb-ownership-uncertain') {
+      assert.equal(payload.verification, 'flash-verified');
+      assert.equal(payload.physicalOutput, 'unconfirmed');
+      assert.equal(payload.pipelineComplete, false);
+      assert.equal(payload.expectedCardId, 'lw-441bf681feb0');
+      assert.equal(payload.nextCheckpoint, 'stable-card-identity-acknowledged');
+      assert.match(payload.message, /do not reflash/i);
+    }
   }
 });
 

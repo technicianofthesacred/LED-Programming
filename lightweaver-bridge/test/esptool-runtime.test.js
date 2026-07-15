@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-test('native runtime derives card id from eFuse MAC and never returns port metadata', async () => {
+test('native runtime derives card id, restores application boot, then releases USB', async () => {
   const calls = [];
   const transport = { async disconnect() { calls.push('disconnect'); } };
   const loader = {
@@ -25,7 +25,62 @@ test('native runtime derives card id from eFuse MAC and never returns port metad
   assert.match(identity.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(identity).includes('/dev/'), false);
   assert.equal(JSON.stringify(identity).includes('SECRET'), false);
-  assert.deepEqual(calls, ['disconnect']);
+  assert.deepEqual(calls, ['reset', 'disconnect']);
+});
+
+test('inspection failure skips reset but still releases USB', async () => {
+  const calls = [];
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: { async detectFlashSize() { calls.push('identify'); throw new Error('identity failed'); } },
+      transport: { async disconnect() { calls.push('disconnect'); } },
+    }),
+    reset: async () => calls.push('reset'),
+  });
+  await assert.rejects(() => runtime.inspectOne(), /identity failed/);
+  assert.deepEqual(calls, ['identify', 'disconnect']);
+});
+
+test('inspection reset failure is structured and still releases USB', async () => {
+  const calls = [];
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: {
+        chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } },
+        async detectFlashSize() { return '16MB'; },
+      },
+      transport: { async disconnect() { calls.push('disconnect'); } },
+    }),
+    reset: async () => { calls.push('reset'); throw new Error('hard reset failed'); },
+  });
+  await assert.rejects(() => runtime.inspectOne(), error => {
+    assert.equal(error.code, 'card-restoration-failed');
+    assert.equal(error.phase, 'inspection-restoration');
+    return true;
+  });
+  assert.deepEqual(calls, ['reset', 'disconnect']);
+});
+
+test('USB ownership uncertainty takes precedence when reset and release both fail', async () => {
+  const calls = [];
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: {
+        chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } },
+        async detectFlashSize() { return '16MB'; },
+      },
+      transport: { async disconnect() { calls.push('disconnect'); throw new Error('close failed'); } },
+    }),
+    reset: async () => { calls.push('reset'); throw new Error('hard reset failed'); },
+  });
+  await assert.rejects(() => runtime.inspectOne(), error => error.code === 'usb-release-failed' && error.phase === 'usb-release');
+  assert.deepEqual(calls, ['reset', 'disconnect']);
 });
 
 test('native runtime reports uncertain USB ownership when cleanup fails, even after identity failure', async () => {
