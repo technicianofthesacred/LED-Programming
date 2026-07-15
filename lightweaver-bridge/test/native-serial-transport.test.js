@@ -14,7 +14,8 @@ const {
 class FakeSerialPort extends EventEmitter {
   constructor({ writeReturns = true, deferWrites = false, deferOpen = false, deferClose = false } = {}) {
     super();
-    this.isOpen = false;
+    this.bindingOpen = false;
+    this.closing = false;
     this.writes = [];
     this.signals = [];
     this.writeReturns = writeReturns;
@@ -24,6 +25,7 @@ class FakeSerialPort extends EventEmitter {
     this.pendingWrites = [];
     this.pendingOpen = null;
     this.pendingCloses = [];
+    this.closeCallbacks = [];
     this.openCalls = 0;
     this.closeCalls = 0;
     this.drainCalls = 0;
@@ -34,7 +36,7 @@ class FakeSerialPort extends EventEmitter {
     this.openCalls += 1;
     if (this.deferOpen) this.pendingOpen = callback;
     else {
-      this.isOpen = true;
+      this.bindingOpen = true;
       queueMicrotask(() => callback(null));
     }
   }
@@ -42,19 +44,22 @@ class FakeSerialPort extends EventEmitter {
   completeOpen(error = null) {
     const callback = this.pendingOpen;
     this.pendingOpen = null;
-    this.isOpen = !error;
+    this.bindingOpen = !error;
     if (callback) callback(error);
   }
 
   close(callback) {
     this.closeCalls += 1;
+    this.closing = true;
+    this.closeCallbacks.push(callback);
     if (this.deferClose) this.pendingCloses.push(callback);
     else this._finishClose(callback, null);
   }
 
   _finishClose(callback, error) {
-    if (!error) this.isOpen = false;
     queueMicrotask(() => {
+      if (!error) this.bindingOpen = false;
+      this.closing = false;
       callback(error);
       if (!error) this.emit('close');
     });
@@ -63,6 +68,15 @@ class FakeSerialPort extends EventEmitter {
   completeClose(error = null) {
     const callback = this.pendingCloses.shift();
     if (callback) this._finishClose(callback, error);
+  }
+
+  get isOpen() {
+    return this.bindingOpen && !this.closing;
+  }
+
+  set isOpen(value) {
+    this.bindingOpen = Boolean(value);
+    if (!value) this.closing = false;
   }
 
   write(data, callback) {
@@ -428,7 +442,9 @@ test('close timeout rejects with ownership and listeners retained until late suc
   const { transport } = createHarness({ port, closeTimeoutMs: 10 });
   await transport.connect();
   await assert.rejects(transport.disconnect(), (error) => error.code === 'SERIAL_DISCONNECT_FAILED');
-  assert.equal(port.isOpen, true);
+  assert.equal(port.isOpen, false);
+  assert.equal(port.bindingOpen, true);
+  assert.equal(port.closing, true);
   assert.equal(port.listenerCount('error'), 1);
   assert.equal(port.closeCalls, 1);
   port.completeClose();
@@ -436,6 +452,20 @@ test('close timeout rejects with ownership and listeners retained until late suc
   assert.equal(port.listenerCount('error'), 0);
   await transport.disconnect();
   assert.equal(port.closeCalls, 1);
+});
+
+test('retry after close timeout awaits the same pending native close instead of finalizing early', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 10 });
+  await transport.connect();
+  await assert.rejects(transport.disconnect(), /close timed out/i);
+  await assert.rejects(transport.disconnect(), /close timed out/i);
+  assert.equal(port.closeCalls, 1);
+  assert.equal(port.bindingOpen, true);
+  assert.equal(port.listenerCount('error'), 1);
+  port.completeClose();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(port.listenerCount('error'), 0);
 });
 
 test('close error retains ownership and permits a bounded retry', async () => {
@@ -454,6 +484,24 @@ test('close error retains ownership and permits a bounded retry', async () => {
   await retry;
   assert.equal(port.closeCalls, 2);
   assert.equal(port.listenerCount('error'), 0);
+});
+
+test('late close callback cannot mutate a subsequently opened connection generation', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 10 });
+  await transport.connect();
+  await assert.rejects(transport.disconnect(), /close timed out/i);
+  const staleCallback = port.closeCallbacks[0];
+  port.completeClose();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.deferClose = false;
+  await transport.connect();
+  staleCallback(null);
+  await new Promise((resolve) => setImmediate(resolve));
+  transport.readLoop();
+  assert.equal(port.listenerCount('error'), 1);
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 2);
 });
 
 test('double disconnect callers share one timed-out close attempt safely', async () => {

@@ -632,8 +632,10 @@ class NativeSerialTransport {
   async disconnect() {
     if (this._disconnecting) return this._disconnecting;
     if (!this._port && !this._connected) return;
-    this._disconnectRequested = true;
-    this._connectionGeneration += 1;
+    if (!this._disconnectRequested) {
+      this._disconnectRequested = true;
+      this._connectionGeneration += 1;
+    }
     if (!this._terminalError) this._terminalError = new Error('Serial transport disconnected');
     this._wakeWaiters();
     this._disconnecting = this._disconnectSequence().finally(() => { this._disconnecting = null; });
@@ -676,10 +678,12 @@ class NativeSerialTransport {
     return error;
   }
 
-  _finalizeClosedPort(port) {
+  _finalizeClosedPort(port, generation = this._connectionGeneration, attempt = null) {
+    if (attempt && this._closeAttempt === attempt) this._closeAttempt = null;
+    if (this._port !== port || generation !== this._connectionGeneration) return;
     this._removeListeners(port);
     this._buffer = Buffer.alloc(0);
-    if (this._port === port) this._port = null;
+    this._port = null;
     this._nativeIo.clear();
     this._nativeIoStuck = false;
     if (this._closeAttempt && this._closeAttempt.port === port) this._closeAttempt = null;
@@ -687,11 +691,19 @@ class NativeSerialTransport {
   }
 
   async _closePort(port) {
+    let attempt = this._closeAttempt;
+    if (attempt && attempt.port === port) {
+      try {
+        await withTimeout(attempt.settlement, this._closeTimeoutMs, 'Serial close timed out');
+        return;
+      } catch (error) {
+        throw this._disconnectFailure(error.message || 'close failed', error);
+      }
+    }
     if (!port.isOpen) {
       this._finalizeClosedPort(port);
       return;
     }
-    let attempt = this._closeAttempt;
     if (!attempt || attempt.port !== port) {
       let resolveSettlement;
       let rejectSettlement;
@@ -699,18 +711,23 @@ class NativeSerialTransport {
         resolveSettlement = resolve;
         rejectSettlement = reject;
       });
-      attempt = { port, settlement, settled: false };
+      attempt = {
+        port,
+        settlement,
+        settled: false,
+        generation: this._connectionGeneration,
+      };
       this._closeAttempt = attempt;
       const callback = (error) => {
         if (attempt.settled) return;
         attempt.settled = true;
         if (error) {
           if (this._closeAttempt === attempt) this._closeAttempt = null;
-          this._intentionalClose = false;
+          if (attempt.generation === this._connectionGeneration) this._intentionalClose = false;
           rejectSettlement(error);
           return;
         }
-        this._finalizeClosedPort(port);
+        this._finalizeClosedPort(port, attempt.generation, attempt);
         resolveSettlement();
       };
       try {
@@ -734,6 +751,10 @@ class NativeSerialTransport {
       this._readLoopStarted = false;
     }
     this._wakeWaiters();
+    if (this._closeAttempt && this._closeAttempt.port === port) {
+      await this._closePort(port);
+      return;
+    }
     if (port.isOpen) {
       if (resetSignals) {
         try {
