@@ -12,7 +12,7 @@ const {
 } = require('../src/native-serial-transport');
 
 class FakeSerialPort extends EventEmitter {
-  constructor({ writeReturns = true, deferWrites = false, deferOpen = false } = {}) {
+  constructor({ writeReturns = true, deferWrites = false, deferOpen = false, deferClose = false } = {}) {
     super();
     this.isOpen = false;
     this.writes = [];
@@ -20,8 +20,10 @@ class FakeSerialPort extends EventEmitter {
     this.writeReturns = writeReturns;
     this.deferWrites = deferWrites;
     this.deferOpen = deferOpen;
+    this.deferClose = deferClose;
     this.pendingWrites = [];
     this.pendingOpen = null;
+    this.pendingCloses = [];
     this.openCalls = 0;
     this.closeCalls = 0;
     this.drainCalls = 0;
@@ -46,11 +48,21 @@ class FakeSerialPort extends EventEmitter {
 
   close(callback) {
     this.closeCalls += 1;
-    this.isOpen = false;
+    if (this.deferClose) this.pendingCloses.push(callback);
+    else this._finishClose(callback, null);
+  }
+
+  _finishClose(callback, error) {
+    if (!error) this.isOpen = false;
     queueMicrotask(() => {
-      callback(null);
-      this.emit('close');
+      callback(error);
+      if (!error) this.emit('close');
     });
+  }
+
+  completeClose(error = null) {
+    const callback = this.pendingCloses.shift();
+    if (callback) this._finishClose(callback, error);
   }
 
   write(data, callback) {
@@ -141,6 +153,46 @@ test('late open error after timeout releases listeners without attempting close'
   assert.equal(port.closeCalls, 0);
   assert.equal(port.listenerCount('error'), 0);
   assert.equal(port.listenerCount('close'), 0);
+});
+
+test('disconnect during open success cancels connect continuation and closes the opened port', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({ port, disconnectTimeoutMs: 100 });
+  const connecting = transport.connect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const disconnecting = transport.disconnect();
+  port.completeOpen();
+  await assert.rejects(connecting, /cancelled.*disconnect/i);
+  await disconnecting;
+  assert.equal(port.closeCalls, 1);
+  await assert.rejects(transport.readLoop(), /disconnect/i);
+});
+
+test('disconnect during open error still owns listener cleanup and never reconnects', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({ port, disconnectTimeoutMs: 100 });
+  const connecting = transport.connect();
+  await new Promise((resolve) => setImmediate(resolve));
+  const disconnecting = transport.disconnect();
+  port.completeOpen(new Error('open failed'));
+  await assert.rejects(connecting, /open failed|cancelled/i);
+  await disconnecting;
+  assert.equal(port.closeCalls, 0);
+  assert.equal(port.listenerCount('error'), 0);
+});
+
+test('disconnect during an open timeout continues cleanup after late success', async () => {
+  const port = new FakeSerialPort({ deferOpen: true });
+  const { transport } = createHarness({
+    port, openTimeoutMs: 10, disconnectTimeoutMs: 100, closeTimeoutMs: 100,
+  });
+  const connecting = transport.connect();
+  const disconnecting = transport.disconnect();
+  await assert.rejects(connecting, /open timed out/i);
+  port.completeOpen();
+  await disconnecting;
+  assert.equal(port.closeCalls, 1);
+  await assert.rejects(transport.readLoop(), /disconnect|timed out/i);
 });
 
 test('readLoop collects chunks and read unescapes complete and partial SLIP packets', async () => {
@@ -261,6 +313,28 @@ test('disconnect skips signals when a public write timeout leaves its native cal
   assert.equal(port.closeCalls, 1);
 });
 
+test('queued I/O admission caps operations and raw bytes, then recovers reservations', async () => {
+  const port = new FakeSerialPort({ deferWrites: true });
+  const { transport } = createHarness({
+    port, maxQueuedOperations: 2, maxQueuedBytes: 4, writeTimeoutMs: 1000,
+  });
+  await transport.connect();
+  const first = transport.write(Uint8Array.of(1, 2, 3));
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(transport.write(Uint8Array.of(4, 5)), /queued.*byte/i);
+  const second = transport.write(Uint8Array.of(4));
+  await assert.rejects(transport.write(Uint8Array.of()), /queued.*operation/i);
+  port.completeWrite();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeWrite();
+  await Promise.all([first, second]);
+  const recovered = transport.write(Uint8Array.of(1, 2, 3, 4));
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeWrite();
+  await recovered;
+  await transport.disconnect();
+});
+
 test('rejects oversized and stalled writes rather than buffering without a bound', async () => {
   const port = new FakeSerialPort({ deferWrites: true, writeReturns: false });
   const { transport } = createHarness({ port, maxWriteBytes: 4, writeTimeoutMs: 15 });
@@ -308,6 +382,55 @@ test('disconnect rejects pending reads, removes listeners, resets buffers, and i
   assert.equal(port.listenerCount('close'), 0);
   assert.equal(transport.inWaiting(), 0);
   assert.equal(lost, 0);
+});
+
+test('close timeout rejects with ownership and listeners retained until late success confirms release', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 10 });
+  await transport.connect();
+  await assert.rejects(transport.disconnect(), (error) => error.code === 'SERIAL_DISCONNECT_FAILED');
+  assert.equal(port.isOpen, true);
+  assert.equal(port.listenerCount('error'), 1);
+  assert.equal(port.closeCalls, 1);
+  port.completeClose();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(port.listenerCount('error'), 0);
+  await transport.disconnect();
+  assert.equal(port.closeCalls, 1);
+});
+
+test('close error retains ownership and permits a bounded retry', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 50 });
+  await transport.connect();
+  const first = transport.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeClose(new Error('close failed'));
+  await assert.rejects(first, (error) => error.code === 'SERIAL_DISCONNECT_FAILED');
+  assert.equal(port.isOpen, true);
+  assert.equal(port.listenerCount('error'), 1);
+  const retry = transport.disconnect();
+  await new Promise((resolve) => setImmediate(resolve));
+  port.completeClose();
+  await retry;
+  assert.equal(port.closeCalls, 2);
+  assert.equal(port.listenerCount('error'), 0);
+});
+
+test('double disconnect callers share one timed-out close attempt safely', async () => {
+  const port = new FakeSerialPort({ deferClose: true });
+  const { transport } = createHarness({ port, closeTimeoutMs: 10 });
+  await transport.connect();
+  const first = transport.disconnect();
+  const second = transport.disconnect();
+  await Promise.all([
+    assert.rejects(first, /disconnect.*close|close.*timed out/i),
+    assert.rejects(second, /disconnect.*close|close.*timed out/i),
+  ]);
+  assert.equal(port.closeCalls, 1);
+  assert.equal(port.listenerCount('error'), 1);
+  port.completeClose();
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 test('port errors and unexpected close reject reads, close resources, and notify device-lost once', async () => {
@@ -381,6 +504,19 @@ test('port discovery has a bounded deadline', async () => {
     listPorts: () => new Promise(() => {}),
     discoveryTimeoutMs: 15,
   }), /discovery timed out/i);
+});
+
+test('constructor rejects invalid resource and timeout limits before creating state', () => {
+  const keys = [
+    'maxBufferBytes', 'maxWriteBytes', 'maxTraceBytes', 'maxHexBytes',
+    'maxReadTimeoutMs', 'writeTimeoutMs', 'disconnectTimeoutMs', 'openTimeoutMs',
+    'closeTimeoutMs', 'maxQueuedOperations', 'maxQueuedBytes',
+  ];
+  for (const key of keys) {
+    for (const value of [Infinity, Number.NaN, -1, 0, 1.5]) {
+      assert.throws(() => createHarness({ [key]: value }), new RegExp(key, 'i'), `${key} accepted ${value}`);
+    }
+  }
 });
 
 test('pinned ESPLoader connects through the native transport contract without missing methods', async () => {

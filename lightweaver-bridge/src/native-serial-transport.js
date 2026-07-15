@@ -95,6 +95,11 @@ function withTimeout(promise, timeout, message) {
   ]).finally(() => clearTimeout(timer));
 }
 
+function requirePositiveSafeInteger(name, value) {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive safe integer`);
+  return value;
+}
+
 class NativeSerialTransport {
   constructor({
     createPort = defaultCreatePort,
@@ -106,12 +111,20 @@ class NativeSerialTransport {
     maxTraceBytes = 64 * 1024,
     maxHexBytes = 256,
     maxReadTimeoutMs = 120000,
+    maxQueuedOperations = 32,
+    maxQueuedBytes = 2 * 1024 * 1024,
     writeTimeoutMs = 30000,
     disconnectTimeoutMs = 5000,
     openTimeoutMs = 10000,
     closeTimeoutMs = 5000,
     logger = null,
   } = {}) {
+    const limits = {
+      maxBufferBytes, maxWriteBytes, maxTraceBytes, maxHexBytes, maxReadTimeoutMs,
+      maxQueuedOperations, maxQueuedBytes, writeTimeoutMs, disconnectTimeoutMs,
+      openTimeoutMs, closeTimeoutMs,
+    };
+    for (const [name, value] of Object.entries(limits)) requirePositiveSafeInteger(name, value);
     const info = normalizedPortInfo(portInfo);
     if (!info) throw new TypeError('A serial port with normalized USB metadata is required');
     this._createPort = createPort;
@@ -125,6 +138,8 @@ class NativeSerialTransport {
     this._maxTraceBytes = maxTraceBytes;
     this._maxHexBytes = maxHexBytes;
     this._maxReadTimeoutMs = maxReadTimeoutMs;
+    this._maxQueuedOperations = maxQueuedOperations;
+    this._maxQueuedBytes = maxQueuedBytes;
     this._writeTimeoutMs = writeTimeoutMs;
     this._disconnectTimeoutMs = disconnectTimeoutMs;
     this._openTimeoutMs = openTimeoutMs;
@@ -136,6 +151,8 @@ class NativeSerialTransport {
     this._waiters = new Set();
     this._ioTail = Promise.resolve();
     this._ioAbortWaiters = new Set();
+    this._queuedOperationCount = 0;
+    this._queuedWriteBytes = 0;
     this._nativeIo = new Set();
     this._nativeIoStuck = false;
     this._connected = false;
@@ -143,7 +160,10 @@ class NativeSerialTransport {
     this._activeRead = false;
     this._intentionalClose = false;
     this._disconnecting = null;
+    this._disconnectRequested = false;
+    this._connectionGeneration = 0;
     this._openingSettlement = null;
+    this._closeAttempt = null;
     this._terminalError = null;
     this._deviceLostCallback = null;
     this._deviceLostNotified = false;
@@ -230,6 +250,8 @@ class NativeSerialTransport {
 
   async connect(baud = 115200, serialOptions = {}) {
     if (this._connected || this._port) throw new Error('Serial transport is already connected or opening');
+    this._disconnectRequested = false;
+    const generation = ++this._connectionGeneration;
     if (!Number.isInteger(baud) || baud <= 0 || baud > 5000000) throw new RangeError('Unsupported serial baud rate');
     const dataBits = serialOptions.dataBits === undefined ? 8 : serialOptions.dataBits;
     const stopBits = serialOptions.stopBits === undefined ? 1 : serialOptions.stopBits;
@@ -257,11 +279,18 @@ class NativeSerialTransport {
     this._attachLifecycleListeners(port);
     try {
       await this._openPort(port);
+      if (this._disconnectRequested || generation !== this._connectionGeneration) {
+        const error = new Error('Serial connect cancelled during disconnect');
+        error.code = 'SERIAL_CONNECT_CANCELLED';
+        throw error;
+      }
       this._connected = true;
       this.baudrate = baud;
     } catch (error) {
       this._terminalError = error;
-      if (error.code !== 'SERIAL_OPEN_TIMEOUT') await this._cleanupPort(true, { port, resetSignals: false });
+      if (!this._disconnectRequested && error.code !== 'SERIAL_OPEN_TIMEOUT') {
+        await this._cleanupPort(true, { port, resetSignals: false });
+      }
       throw error;
     }
   }
@@ -366,7 +395,9 @@ class NativeSerialTransport {
     this._wakeWaiters();
     this._abortPendingIo(error);
     if (!this._disconnecting) {
-      this._disconnecting = this._cleanupPort(true, { resetSignals: false }).finally(() => { this._disconnecting = null; });
+      this._disconnecting = this._cleanupPort(true, { resetSignals: false })
+        .catch(() => {})
+        .finally(() => { this._disconnecting = null; });
     }
   }
 
@@ -446,17 +477,44 @@ class NativeSerialTransport {
     }
   }
 
-  _enqueue(task) {
+  _admitIo(bytes) {
     if (!this._connected || !this._port || this._terminalError) {
-      return Promise.reject(this._terminalError || new Error('Serial transport is disconnected'));
+      throw this._terminalError || new Error('Serial transport is disconnected');
+    }
+    if (this._queuedOperationCount + 1 > this._maxQueuedOperations) {
+      throw new Error(`Serial queued operation limit exceeded (${this._maxQueuedOperations})`);
+    }
+    if (this._queuedWriteBytes + bytes > this._maxQueuedBytes) {
+      throw new Error(`Serial queued byte limit exceeded (${this._maxQueuedBytes})`);
+    }
+    this._queuedOperationCount += 1;
+    this._queuedWriteBytes += bytes;
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        this._queuedOperationCount -= 1;
+        this._queuedWriteBytes -= bytes;
+      },
+    };
+  }
+
+  _enqueue(task, reservation = null) {
+    let admitted = reservation;
+    try {
+      if (!admitted) admitted = this._admitIo(0);
+    } catch (error) {
+      return Promise.reject(error);
     }
     const admittedPort = this._port;
     const operation = this._ioTail.then(() => {
       if (this._port !== admittedPort || !admittedPort.isOpen) throw this._terminalError || new Error('Serial transport is disconnected');
       return task(admittedPort);
     });
-    this._ioTail = operation.catch(() => {});
-    return operation;
+    const completed = operation.finally(() => admitted.release());
+    this._ioTail = completed.catch(() => {});
+    return completed;
   }
 
   _abortable(promise) {
@@ -495,7 +553,17 @@ class NativeSerialTransport {
   }
 
   async write(data) {
-    const framed = this.slipWriter(data);
+    const length = data && data.length;
+    if (!Number.isSafeInteger(length) || length < 0) throw new TypeError('Serial write data must have a safe byte length');
+    if (length > this._maxWriteBytes) throw new RangeError(`Serial write exceeds ${this._maxWriteBytes}-byte limit`);
+    const reservation = this._admitIo(length);
+    let framed;
+    try {
+      framed = this.slipWriter(data);
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
     return this._enqueue(async (port) => {
       if (this.tracing) this.trace(`Write ${framed.length} bytes: ${this.hexConvert(framed)}`);
       let accepted = true;
@@ -520,7 +588,7 @@ class NativeSerialTransport {
       } finally {
         cleanupBackpressure();
       }
-    });
+    }, reservation);
   }
 
   async flushOutput() {
@@ -557,6 +625,8 @@ class NativeSerialTransport {
   async disconnect() {
     if (this._disconnecting) return this._disconnecting;
     if (!this._port && !this._connected) return;
+    this._disconnectRequested = true;
+    this._connectionGeneration += 1;
     if (!this._terminalError) this._terminalError = new Error('Serial transport disconnected');
     this._wakeWaiters();
     this._disconnecting = this._disconnectSequence().finally(() => { this._disconnecting = null; });
@@ -566,7 +636,6 @@ class NativeSerialTransport {
   async _disconnectSequence() {
     if (this._openingSettlement) {
       await withTimeout(this._openingSettlement, this._disconnectTimeoutMs, 'Serial open cleanup timed out');
-      return;
     }
     const admittedIo = this._ioTail;
     const nativeIo = Promise.all(Array.from(this._nativeIo, (token) => token.settlement));
@@ -593,6 +662,59 @@ class NativeSerialTransport {
     await this._cleanupPort(false, { resetSignals: ioDrained });
   }
 
+  _disconnectFailure(message, cause) {
+    const error = new Error(`Serial disconnect failed: ${message}`);
+    error.code = 'SERIAL_DISCONNECT_FAILED';
+    error.cause = cause;
+    return error;
+  }
+
+  _finalizeClosedPort(port) {
+    this._removeListeners(port);
+    this._buffer = Buffer.alloc(0);
+    if (this._port === port) this._port = null;
+    this._nativeIo.clear();
+    this._nativeIoStuck = false;
+    if (this._closeAttempt && this._closeAttempt.port === port) this._closeAttempt = null;
+    this._intentionalClose = false;
+  }
+
+  async _closePort(port) {
+    let attempt = this._closeAttempt;
+    if (!attempt || attempt.port !== port) {
+      let resolveSettlement;
+      let rejectSettlement;
+      const settlement = new Promise((resolve, reject) => {
+        resolveSettlement = resolve;
+        rejectSettlement = reject;
+      });
+      attempt = { port, settlement, settled: false };
+      this._closeAttempt = attempt;
+      const callback = (error) => {
+        if (attempt.settled) return;
+        attempt.settled = true;
+        if (error) {
+          if (this._closeAttempt === attempt) this._closeAttempt = null;
+          this._intentionalClose = false;
+          rejectSettlement(error);
+          return;
+        }
+        this._finalizeClosedPort(port);
+        resolveSettlement();
+      };
+      try {
+        port.close(callback);
+      } catch (error) {
+        callback(error);
+      }
+    }
+    try {
+      await withTimeout(attempt.settlement, this._closeTimeoutMs, 'Serial close timed out');
+    } catch (error) {
+      throw this._disconnectFailure(error.message || 'close failed', error);
+    }
+  }
+
   async _cleanupPort(preserveError, { port = this._port, resetSignals = true } = {}) {
     if (!port) return;
     this._intentionalClose = true;
@@ -610,18 +732,10 @@ class NativeSerialTransport {
           // Closing the port remains mandatory even when a disconnected adapter rejects signal changes.
         }
       }
-      try {
-        await withTimeout(callbackOperation((callback) => port.close(callback)), this._closeTimeoutMs, 'Serial close timed out');
-      } catch (error) {
-        if (!preserveError) this._terminalError = error;
-      }
+      await this._closePort(port);
+      return;
     }
-    this._removeListeners(port);
-    this._buffer = Buffer.alloc(0);
-    if (this._port === port) this._port = null;
-    this._nativeIo.clear();
-    this._nativeIoStuck = false;
-    this._intentionalClose = false;
+    this._finalizeClosedPort(port);
   }
 }
 
