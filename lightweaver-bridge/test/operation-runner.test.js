@@ -30,6 +30,7 @@ function harness(overrides = {}) {
     { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' },
   ];
   const transports = [];
+  const loaders = [];
   const runtime = {
     async inspectOne() {
       calls.push('inspect');
@@ -40,9 +41,13 @@ function harness(overrides = {}) {
     async connectForWrite() {
       calls.push('connect-write');
       const transport = { async disconnect() { calls.push('disconnect'); } };
+      const loader = overrides.createLoader
+        ? overrides.createLoader(calls)
+        : { id: 'loader', IS_STUB: false, writeFlash() {}, async flashDeflBegin() { calls.push('flash-defl-begin'); } };
       transports.push(transport);
+      loaders.push(loader);
       return {
-        loader: { id: 'loader', writeFlash() {} }, transport,
+        loader, transport,
         identity: inspections[Math.min(inspectionIndex++, inspections.length - 1)],
       };
     },
@@ -55,8 +60,9 @@ function harness(overrides = {}) {
       if (value.flashSize !== '16MB') throw new Error('wrong flash size /dev/cu.secret');
     },
     validateProductionInstallRelease() { calls.push('validate-release'); },
-    async writeVerifiedFlash(_loader, options) {
+    async writeVerifiedFlash(loader, options) {
       calls.push(['write', options]);
+      await loader.flashDeflBegin();
       options.reportProgress(0, 10, 100);
       options.reportProgress(0, 100, 100);
     },
@@ -72,7 +78,7 @@ function harness(overrides = {}) {
     inspectionTtlMs: 60_000,
     confirmationTtlMs: 120_000,
   });
-  return { runner, calls, transports, setNow(value) { now = value; } };
+  return { runner, calls, transports, loaders, setNow(value) { now = value; } };
 }
 
 async function authorize(h, operation = 'install-current-release') {
@@ -137,6 +143,138 @@ test('missing write capability fails pre-mutation without erase checkpoint', asy
   assert.equal(events.some(event => event.checkpoint === 'erase-started'), false);
 });
 
+test('missing pinned mutation methods fail preflight without invoking writeFlash', async () => {
+  for (const loader of [
+    { IS_STUB: true, writeFlash() {}, async flashDeflBegin() {} },
+    { IS_STUB: false, writeFlash() {} },
+  ]) {
+    let writeInvoked = false;
+    const events = [];
+    const h = harness({
+      createLoader: () => loader,
+      core: { async writeVerifiedFlash() { writeInvoked = true; } },
+    });
+    const auth = await authorize(h);
+    await assert.rejects(() => h.runner.execute({
+      operation: 'install-current-release', cardId: auth.inspected.cardId,
+      token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+    }), error => error.code === 'write-capability-missing' && error.classification === 'recoverable-failure');
+    assert.equal(writeInvoked, false);
+    assert.equal(events.some(event => event.checkpoint === 'erase-started'), false);
+  }
+});
+
+test('stub eraseAll marks mutation at eraseFlash exactly once and restores wrapped methods', async () => {
+  const originals = {};
+  const h = harness({
+    createLoader(calls) {
+      const loader = {
+        IS_STUB: true,
+        writeFlash() {},
+        async eraseFlash() { calls.push('real-erase'); },
+        async flashDeflBegin() { calls.push('real-defl-begin'); },
+        async flashBegin() { calls.push('real-flash-begin'); },
+      };
+      Object.assign(originals, {
+        eraseFlash: loader.eraseFlash,
+        flashDeflBegin: loader.flashDeflBegin,
+        flashBegin: loader.flashBegin,
+      });
+      return loader;
+    },
+    core: {
+      async writeVerifiedFlash(loader) {
+        h.calls.push('preprocess-complete');
+        await loader.eraseFlash();
+        await loader.flashDeflBegin();
+      },
+    },
+  });
+  const events = [];
+  const auth = await authorize(h);
+  await h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId,
+    token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+  });
+  assert.equal(events.filter(event => event.checkpoint === 'erase-started').length, 1);
+  assert.ok(h.calls.indexOf('preprocess-complete') < h.calls.indexOf('real-erase'));
+  assert.strictEqual(h.loaders[0].eraseFlash, originals.eraseFlash);
+  assert.strictEqual(h.loaders[0].flashDeflBegin, originals.flashDeflBegin);
+  assert.strictEqual(h.loaders[0].flashBegin, originals.flashBegin);
+});
+
+test('non-stub mutation begins immediately before flashDeflBegin', async () => {
+  const order = [];
+  const h = harness({
+    createLoader() {
+      return {
+        IS_STUB: false,
+        writeFlash() {},
+        async flashDeflBegin() { order.push('real-flash-defl-begin'); },
+        async flashBegin() {},
+      };
+    },
+    core: {
+      async writeVerifiedFlash(loader) {
+        order.push('image-params');
+        order.push('md5');
+        order.push('compression');
+        await loader.flashDeflBegin();
+      },
+    },
+  });
+  const auth = await authorize(h);
+  await h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId,
+    token: auth.confirmation.confirmationToken,
+    onEvent: event => { if (event.checkpoint === 'erase-started') order.push('erase-started'); },
+  });
+  assert.deepEqual(order, ['image-params', 'md5', 'compression', 'erase-started', 'real-flash-defl-begin']);
+});
+
+test('image parameter, MD5, and compression preprocessing failures remain pre-mutation', async () => {
+  for (const stage of ['image parameters', 'MD5 calculation', 'compression']) {
+    const events = [];
+    const h = harness({ core: { async writeVerifiedFlash() { throw new Error(`${stage} failed`); } } });
+    const auth = await authorize(h);
+    await assert.rejects(() => h.runner.execute({
+      operation: 'install-current-release', cardId: auth.inspected.cardId,
+      token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+    }), error => error.classification === 'recoverable-failure' && error.phase === 'before-erase' && error.mutation === 'none');
+    assert.equal(events.some(event => event.checkpoint === 'erase-started'), false);
+  }
+});
+
+test('a flash operation that returns without a mutating loader call cannot report completion', async () => {
+  const events = [];
+  const h = harness({ core: { async writeVerifiedFlash() {} } });
+  const auth = await authorize(h);
+  await assert.rejects(() => h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId,
+    token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+  }), error => error.code === 'write-not-started' && error.classification === 'recoverable-failure');
+  assert.equal(events.some(event => event.checkpoint === 'erase-started'), false);
+  assert.equal(events.some(event => event.checkpoint === 'write-completed'), false);
+});
+
+test('a mutating loader method throw requires safe recovery and restores the wrapper', async () => {
+  let original;
+  const h = harness({
+    createLoader() {
+      original = async function flashDeflBegin() { throw new Error('command failed'); };
+      return { IS_STUB: false, writeFlash() {}, flashDeflBegin: original };
+    },
+  });
+  const events = [];
+  const auth = await authorize(h);
+  await assert.rejects(() => h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId,
+    token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+  }), error => error.classification === 'needs-safe-recovery' && error.phase === 'after-erase');
+  assert.equal(events.filter(event => event.checkpoint === 'erase-started').length, 1);
+  assert.strictEqual(h.loaders[0].flashDeflBegin, original);
+});
+
 test('inspection validates chip and flash, emits bounded identity, and releases USB internally', async () => {
   for (const [field, value, message] of [['chipName', 'ESP32-C3', /wrong chip/i], ['flashSize', '8MB', /flash size/i]]) {
     const card = { cardId: 'lw-441bf681feb0', fingerprint: 'fp', chipName: 'ESP32-S3', flashSize: '16MB', [field]: value };
@@ -196,7 +334,10 @@ test('disconnect before erase is recoverable; write/MD5 failures after erase req
   await assert.rejects(() => before.runner.execute({ operation: 'install-current-release', cardId: beforeAuth.inspected.cardId, token: beforeAuth.confirmation.confirmationToken }), value => value.mutation === 'none' && value.code === 'card-disconnected');
 
   for (const message of ['write disconnected', 'MD5 of file does not match data in flash']) {
-    const after = harness({ core: { async writeVerifiedFlash() { throw new Error(message); } } });
+    const after = harness({ core: { async writeVerifiedFlash(loader) {
+      await loader.flashDeflBegin();
+      throw new Error(message);
+    } } });
     const afterAuth = await authorize(after);
     await assert.rejects(() => after.runner.execute({ operation: 'install-current-release', cardId: afterAuth.inspected.cardId, token: afterAuth.confirmation.confirmationToken }), value => {
       assert.equal(value.outcome, 'needs-safe-recovery');
@@ -214,7 +355,7 @@ test('reset and USB release failures are bounded recovery outcomes and release i
   assert.equal(reset.calls.includes('disconnect'), true);
 
   const releaseFail = harness({ runtime: { async connectForWrite() {
-    return { loader: { writeFlash() {} }, identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' }, transport: { async disconnect() { throw new Error('close /dev/ttyUSB1'); } } };
+    return { loader: { IS_STUB: false, writeFlash() {}, async flashDeflBegin() {} }, identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' }, transport: { async disconnect() { throw new Error('close /dev/ttyUSB1'); } } };
   } } });
   const releaseAuth = await authorize(releaseFail);
   await assert.rejects(() => releaseFail.runner.execute({ operation: 'install-current-release', cardId: releaseAuth.inspected.cardId, token: releaseAuth.confirmation.confirmationToken }), value => value.code === 'usb-release-failed' && value.outcome === 'needs-safe-recovery');

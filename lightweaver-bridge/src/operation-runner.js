@@ -4,6 +4,7 @@ const { redactSensitiveText, validateOperation } = require('./protocol');
 
 const CARD_ID_PATTERN = /^lw-[a-f0-9]{12}$/;
 const DESTRUCTIVE_OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
+const MUTATING_LOADER_METHODS = Object.freeze(['eraseFlash', 'flashDeflBegin', 'flashBegin']);
 
 class BridgeOperationError extends Error {
   constructor(code, message, { mutation = 'none', outcome = 'recoverable-failure', phase, nextAction } = {}) {
@@ -27,7 +28,8 @@ function classifyDiscoveryError(error) {
 }
 
 function classifyExecutionError(error, eraseStarted) {
-  if (error instanceof BridgeOperationError) return error;
+  if (error instanceof BridgeOperationError && !eraseStarted) return error;
+  if (error instanceof BridgeOperationError && error.outcome === 'needs-safe-recovery') return error;
   const message = String(error?.message || 'Installation failed');
   if (!eraseStarted) {
     if (/USB release failed/i.test(message)) return new BridgeOperationError('usb-release-failed', message, { outcome: 'usb-ownership-uncertain' });
@@ -42,6 +44,46 @@ function classifyExecutionError(error, eraseStarted) {
 
 function publicInspection(identity) {
   return Object.freeze({ compatible: true, cardId: identity.cardId, productName: 'Lightweaver ESP32-S3 card' });
+}
+
+function trackFlashMutation(loader, onMutationStart) {
+  const required = loader?.IS_STUB === true ? ['eraseFlash', 'flashDeflBegin'] : ['flashDeflBegin'];
+  for (const name of required) {
+    if (typeof loader?.[name] !== 'function') {
+      throw new BridgeOperationError('write-capability-missing', 'The connected card is missing a required flash method. Nothing was erased.');
+    }
+  }
+
+  const originals = [];
+  try {
+    for (const name of MUTATING_LOADER_METHODS) {
+      const method = loader[name];
+      if (typeof method !== 'function') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(loader, name);
+      const wrapped = function trackedFlashMutation(...args) {
+        onMutationStart();
+        return method.apply(this, args);
+      };
+      Object.defineProperty(loader, name, {
+        configurable: descriptor?.configurable ?? true,
+        enumerable: descriptor?.enumerable ?? false,
+        writable: descriptor?.writable ?? true,
+        value: wrapped,
+      });
+      originals.push({ name, descriptor });
+    }
+  } catch (error) {
+    restoreFlashMethods(loader, originals);
+    throw new BridgeOperationError('write-capability-missing', error?.message || 'Flash methods could not be tracked. Nothing was erased.');
+  }
+  return () => restoreFlashMethods(loader, originals);
+}
+
+function restoreFlashMethods(loader, originals) {
+  for (const { name, descriptor } of originals.reverse()) {
+    if (descriptor) Object.defineProperty(loader, name, descriptor);
+    else delete loader[name];
+  }
 }
 
 function createOperationRunner({
@@ -189,9 +231,19 @@ function createOperationRunner({
             } catch {}
           },
         };
-        eraseStarted = true;
-        emit(onEvent, 'erase-started', { progress: 0 });
-        await core.writeVerifiedFlash(connection.loader, writeOptions);
+        const restoreMutationMethods = trackFlashMutation(connection.loader, () => {
+          if (eraseStarted) return;
+          eraseStarted = true;
+          emit(onEvent, 'erase-started', { progress: 0 });
+        });
+        try {
+          await core.writeVerifiedFlash(connection.loader, writeOptions);
+        } finally {
+          restoreMutationMethods();
+        }
+        if (!eraseStarted) {
+          throw new BridgeOperationError('write-not-started', 'The verified flash operation ended before writing began. Nothing was erased.');
+        }
         emit(onEvent, 'write-completed', { progress: 100 });
         emit(onEvent, 'flash-verification-completed', { verification: 'flash-verified' });
         try {
