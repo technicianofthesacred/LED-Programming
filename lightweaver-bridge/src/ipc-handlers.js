@@ -9,6 +9,7 @@ const MAINTENANCE_OPERATIONS = new Set(['inspect-compatible-card', 'release-usb'
 function createIpcHandlers({
   getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {},
   claimLaunchContext = () => null, retryCallback = async () => ({ state: 'callback-returned', message: 'Result returned to Studio.' }),
+  dismissExpiredLaunch = () => false,
 }) {
   let pendingAuthority = null;
   let pendingLaunch = null;
@@ -67,6 +68,13 @@ function createIpcHandlers({
     });
   }
 
+  function launchExpiredPayload(error) {
+    if (error?.code !== 'launch-expired') return null;
+    return createRendererResult('launch-expired', 'This website request expired. Return to Studio and try again.', {
+      code: 'launch-expired',
+    });
+  }
+
   async function inspectCard() {
     pendingAuthority = null;
     pendingLaunch = null;
@@ -81,9 +89,10 @@ function createIpcHandlers({
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!MAINTENANCE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported maintenance bridge operation');
-      const launchContext = claimLaunchContext(requestedOperation);
+      let launchContext;
       let payload;
       try {
+        launchContext = claimLaunchContext(requestedOperation);
         const result = await runner.runMaintenance(requestedOperation);
         payload = createRendererResult('awaiting-card-acknowledgement', 'Maintenance operation completed. Reconnect in Studio to verify the card and lights.', {
           ...result,
@@ -91,6 +100,8 @@ function createIpcHandlers({
           verification: 'not-verified', physicalOutput: 'unconfirmed',
         });
       } catch (error) {
+        const expired = launchExpiredPayload(error);
+        if (expired) return expired;
         payload = failurePayload(error);
       }
       const delivery = await onBoundedResult(payload, requestedOperation, launchContext);
@@ -104,12 +115,15 @@ function createIpcHandlers({
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!DESTRUCTIVE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported destructive bridge operation');
-      const launchContext = claimLaunchContext(requestedOperation);
+      let launchContext;
       try {
+        launchContext = claimLaunchContext(requestedOperation);
         const result = await inspectCard();
         pendingLaunch = Object.freeze({ operation: requestedOperation, context: launchContext });
         return result;
       } catch (error) {
+        const expired = launchExpiredPayload(error);
+        if (expired) return expired;
         const payload = failurePayload(error);
         const delivery = await onBoundedResult(payload, requestedOperation, launchContext);
         return delivery?.state ? delivery : payload;
@@ -181,6 +195,11 @@ function createIpcHandlers({
     'bridge:retry-callback': async (event) => {
       assertTrusted(event);
       return retryCallback();
+    },
+    'bridge:dismiss-expired-launch': async (event) => {
+      assertTrusted(event);
+      dismissExpiredLaunch();
+      return createRendererResult('select-card', 'Connect a Lightweaver card to continue.');
     },
   };
 

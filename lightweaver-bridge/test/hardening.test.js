@@ -227,6 +227,45 @@ test('synchronous maintenance response preserves callback delivery failure as th
   assert.equal(result.state, 'callback-delivery-failed');
 });
 
+test('expired website launch before a visible maintenance or destructive click never reaches hardware', async () => {
+  const { createLaunchRouter } = require('../src/deep-link-protocol');
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  for (const [channel, requestedOperation] of [
+    ['bridge:maintenance-operation', 'inspect-compatible-card'],
+    ['bridge:inspect-for-operation', 'install-current-release'],
+  ]) {
+    const { window, event } = trustedWindowAndEvent();
+    let hardwareCalls = 0;
+    let now = 0;
+    const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => now });
+    const nonce = Buffer.alloc(32, requestedOperation === 'install-current-release' ? 3 : 4).toString('base64url');
+    router.route(`lightweaver://run?operation=${requestedOperation}&nonce=${nonce}&version=1`);
+    now = 300_000;
+    const handlers = createIpcHandlers({
+      getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+      claimLaunchContext: operation => router.claim(operation),
+      dismissExpiredLaunch: () => router.dismissExpired(),
+      runner: {
+        async inspect() { hardwareCalls += 1; },
+        async runMaintenance() { hardwareCalls += 1; },
+      },
+    });
+    const result = await handlers[channel](event, requestedOperation);
+    assert.equal(result.state, 'launch-expired');
+    assert.equal(result.code, 'launch-expired');
+    assert.match(result.message, /website request expired.*return to studio.*try again/i);
+    assert.doesNotMatch(result.message, /recovery|required/i);
+    assert.equal(hardwareCalls, 0);
+    const repeated = await handlers[channel](event, requestedOperation);
+    assert.equal(repeated.state, 'launch-expired');
+    assert.equal(hardwareCalls, 0);
+    const dismissed = await handlers['bridge:dismiss-expired-launch'](event);
+    assert.equal(dismissed.state, 'select-card');
+    assert.equal(router.active, null);
+  }
+});
+
 test('destructive launch inspection failure emits a matching structured callback without preparing', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
@@ -481,7 +520,7 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   vm.runInContext(preloadSource, context, { filename: 'preload.js' });
 
   assert.deepEqual(Object.keys(exposed).sort(), [
-    'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'inspectCompatibleCard',
+    'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'dismissExpiredLaunch', 'inspectCompatibleCard',
     'inspectForOperation', 'onCallbackDelivery', 'onLaunchRequest', 'onProgress', 'onResult',
     'retryStudioCallback', 'runMaintenanceOperation', 'startOperation',
   ]);

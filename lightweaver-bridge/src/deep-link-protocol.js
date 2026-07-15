@@ -131,9 +131,9 @@ function createLaunchRouter({
     deliver(active);
   }
   function route(value) {
+    const parsed = parseLaunchUrl(value);
     if (active && active.expiresAt <= now()) clearActive();
     if (active) throw new Error('Another launch request is active or pending');
-    const parsed = parseLaunchUrl(value);
     if (!canAccept(parsed)) throw new Error('Bridge is busy with another local workflow');
     const context = createContext();
     if (typeof context !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(context)) throw new Error('Invalid launch workflow context');
@@ -148,13 +148,19 @@ function createLaunchRouter({
     setReady() { ready = true; deliverActive(); },
     claim(operation) {
       if (!active || active.expiresAt <= now()) {
-        clearActive();
-        throw new Error('Launch request expired or is unavailable');
+        const error = new Error('This website request expired. Return to Studio and try again.');
+        error.code = 'launch-expired';
+        throw error;
       }
       if (active.operation !== operation) throw new Error('Claimed operation does not match the pending launch');
       if (claimed) throw new Error('Launch request was already claimed');
       claimed = true;
       return active.context;
+    },
+    dismissExpired() {
+      if (!active || active.expiresAt > now()) return false;
+      clearActive();
+      return true;
     },
     complete() { clearActive(); },
     get active() { return active; },

@@ -107,6 +107,7 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   },
   cancelBeforeCriticalSection: () => ipcRenderer.invoke('bridge:cancel').then(sanitizeCancellation),
   retryStudioCallback: () => ipcRenderer.invoke('bridge:retry-callback').then(sanitizePayload),
+  dismissExpiredLaunch: () => ipcRenderer.invoke('bridge:dismiss-expired-launch').then(sanitizePayload),
 }));
 
 ipcRenderer.send('bridge:preload-ready');

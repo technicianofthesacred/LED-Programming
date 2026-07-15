@@ -121,6 +121,7 @@ function registerIpcHandlers(runner) {
     onBoundedResult: returnBoundedResult,
     claimLaunchContext: requestedOperation => launchRouter.active ? launchRouter.claim(requestedOperation) : null,
     retryCallback: retryBoundedResult,
+    dismissExpiredLaunch: () => launchRouter.dismissExpired(),
   });
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }

@@ -83,6 +83,19 @@ test('launch router clears expired active work before admitting a fresh request 
   }
 });
 
+test('invalid replacement cannot erase expired authority behind a still-visible launch prompt', () => {
+  const { createLaunchRouter } = require('../src/deep-link-protocol');
+  let now = 0;
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => now });
+  router.route(VALID);
+  now = 300_000;
+  assert.throws(() => router.route('lightweaver://run?operation=invalid&nonce=x&version=1'), /invalid/i);
+  assert.notEqual(router.active, null);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.throws(() => router.claim('install-current-release'), error => error.code === 'launch-expired');
+  }
+});
+
 test('nonce store persists only hashes and rejects replay across restart', () => {
   const { createNonceStore } = require('../src/deep-link-protocol');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-nonce-'));

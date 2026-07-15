@@ -101,3 +101,31 @@ test('callback delivery failure offers a typed retry without rerunning card hard
   assert.equal(hardwareCalls, 0);
   assert.equal(elements.get('#state-title').textContent, 'Returned to Studio');
 });
+
+test('expired website request is noncritical and dismisses without calling hardware', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  let onDelivery;
+  let hardwareCalls = 0;
+  let dismissCalls = 0;
+  const bridge = {
+    inspectCompatibleCard: async () => { hardwareCalls += 1; }, inspectForOperation: async () => { hardwareCalls += 1; },
+    startOperation: async () => { hardwareCalls += 1; }, confirmDestructiveAction: async () => { hardwareCalls += 1; },
+    runMaintenanceOperation: async () => { hardwareCalls += 1; }, retryStudioCallback: async () => ({}),
+    dismissExpiredLaunch: async () => { dismissCalls += 1; return { state: 'select-card', message: 'Connect a Lightweaver card' }; },
+    cancelBeforeCriticalSection: async () => ({ cancelled: true }), onProgress() {}, onResult() {}, onLaunchRequest() {},
+    onCallbackDelivery(listener) { onDelivery = listener; },
+  };
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
+  vm.runInNewContext(source, { window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) } });
+  onDelivery({ state: 'launch-expired', code: 'launch-expired', message: 'This website request expired. Return to Studio and try again.' });
+  assert.match(elements.get('#state-message').textContent, /website request expired.*return to studio.*try again/i);
+  assert.equal(elements.get('#primary-action').disabled, false);
+  assert.equal(elements.get('#primary-action').textContent, 'Dismiss');
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(hardwareCalls, 0);
+  assert.equal(dismissCalls, 1);
+  assert.equal(elements.get('#state-title').textContent, 'Connect a Lightweaver card');
+});

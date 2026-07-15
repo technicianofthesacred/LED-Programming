@@ -14,6 +14,20 @@ function memoryStorage() {
   };
 }
 
+function memoryLocks() {
+  const tails = new Map();
+  return {
+    request(name, _options, callback) {
+      const prior = tails.get(name) ?? Promise.resolve();
+      const result = prior.catch(() => {}).then(callback);
+      const tail = result.then(() => {}, () => {});
+      tails.set(name, tail);
+      tail.finally(() => { if (tails.get(name) === tail) tails.delete(name); });
+      return result;
+    },
+  };
+}
+
 test('Studio generates a 32-byte Web Crypto nonce and stores one short-lived pending operation', async () => {
   const { createBridgeLaunch } = await import('./bridgeProtocol.js');
   const storage = memoryStorage();
@@ -30,26 +44,26 @@ test('Studio callback consumes matching pending state once and clears callback h
   createBridgeLaunch('inspect-compatible-card', { crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } }, storage, now: () => 5_000 });
   const callback = `https://led.mandalacodes.com/#bridge-result?status=recoverable-failure&code=no-compatible-card&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
   const replaced = [];
-  const result = consumeBridgeCallback(callback, {
+  const result = await consumeBridgeCallback(callback, {
     currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 6_000,
     history: { replaceState: (...args) => replaced.push(args) },
   });
   assert.equal(result.operation, 'inspect-compatible-card');
   assert.equal(result.status, 'recoverable-failure');
   assert.deepEqual(replaced, [[null, '', '/']]);
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 6_000 }), /pending|used/i);
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 6_000 }), /pending|used/i);
 });
 
 test('Studio rejects wrong origin, nonce, expiry, malformed results, and physical-success claims', async () => {
   const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
   const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=flash-verified&cardId=lw-441bf681feb0&firmwareVersion=1.2.3&buildId=${'a'.repeat(40)}&target=lightweaver-controller-esp32s3&verification=flash-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
   const setup = () => { const storage = memoryStorage(); createBridgeLaunch('install-current-release', { crypto: { getRandomValues(b) { b.fill(1); return b; } }, storage, now: () => 0 }); return storage; };
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://preview.example', storage: setup(), now: () => 1 }));
-  assert.throws(() => consumeBridgeCallback(callback.replace(NONCE, 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }), /nonce/i);
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 300_001 }), /expired/i);
-  assert.throws(() => consumeBridgeCallback(callback.replace('physicalOutput=unconfirmed', 'physicalOutput=verified'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
-  assert.throws(() => consumeBridgeCallback(callback.replace('awaiting-card-acknowledgement', 'complete'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
-  assert.throws(() => consumeBridgeCallback(`${callback}&extra=1`, { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://preview.example', storage: setup(), now: () => 1 }));
+  await assert.rejects(() => consumeBridgeCallback(callback.replace(NONCE, 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }), /nonce/i);
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 300_001 }), /expired/i);
+  await assert.rejects(() => consumeBridgeCallback(callback.replace('physicalOutput=unconfirmed', 'physicalOutput=verified'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
+  await assert.rejects(() => consumeBridgeCallback(callback.replace('awaiting-card-acknowledgement', 'complete'), { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
+  await assert.rejects(() => consumeBridgeCallback(`${callback}&extra=1`, { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
 });
 
 test('Studio always clears callback fields but preserves pending state for wrong nonce or malformed results', async () => {
@@ -60,10 +74,10 @@ test('Studio always clears callback fields but preserves pending state for wrong
   const valid = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&cardId=lw-441bf681feb0&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
   const historyCalls = [];
   const deps = { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 1, history: { replaceState: (...args) => historyCalls.push(args) } };
-  assert.throws(() => consumeBridgeCallback(valid.replace(NONCE, 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'), deps), /nonce/i);
-  assert.throws(() => consumeBridgeCallback(`${valid}&extra=1`, deps));
+  await assert.rejects(() => consumeBridgeCallback(valid.replace(NONCE, 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'), deps), /nonce/i);
+  await assert.rejects(() => consumeBridgeCallback(`${valid}&extra=1`, deps));
   assert.equal(historyCalls.length, 2);
-  assert.equal(consumeBridgeCallback(valid, deps).operation, 'restart-card');
+  assert.equal((await consumeBridgeCallback(valid, deps)).operation, 'restart-card');
   assert.equal(historyCalls.length, 3);
 });
 
@@ -72,17 +86,17 @@ test('Studio clears history for absent and expired pending state and rejects alt
   const callback = `https://led.mandalacodes.com/#bridge-result?status=recoverable-failure&code=no-compatible-card&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
   const historyCalls = [];
   const history = { replaceState: (...args) => historyCalls.push(args) };
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history }), /pending/i);
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history }), /pending/i);
   const storage = memoryStorage();
   createBridgeLaunch('release-usb', { crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } }, storage, now: () => 0 });
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 300_000, history }), /expired/i);
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 300_000, history }), /expired/i);
   assert.equal(historyCalls.length, 2);
   for (const bytes of [16, 64]) {
-    assert.throws(() => consumeBridgeCallback(callback.replace(NONCE, Buffer.alloc(bytes).toString('base64url')), {
+    await assert.rejects(() => consumeBridgeCallback(callback.replace(NONCE, Buffer.alloc(bytes).toString('base64url')), {
       currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history,
     }));
   }
-  assert.throws(() => consumeBridgeCallback(callback.replace(NONCE, `${NONCE.slice(0, -1)}B`), {
+  await assert.rejects(() => consumeBridgeCallback(callback.replace(NONCE, `${NONCE.slice(0, -1)}B`), {
     currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history,
   }));
 });
@@ -105,9 +119,9 @@ test('callback tab consumes a pending operation created in another tab through b
   const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: originSession, localStorage, now: () => 10 });
   const nonce = new URL(launch).searchParams.get('nonce');
   const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
-  const result = consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } });
+  const result = await consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } });
   assert.equal(result.operation, 'restart-card');
-  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } }), /pending|used/i);
+  await assert.rejects(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } }), /pending|used/i);
 });
 
 test('separate originating tabs retain independent active operations in one bounded registry', async () => {
@@ -130,10 +144,10 @@ test('wrong, malformed, and one expired tab callback preserve another tab pendin
   const secondNonce = new URL(second).searchParams.get('nonce');
   const callback = nonce => `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
   const dependencies = { currentOrigin: 'https://led.mandalacodes.com', localStorage, now: () => 300_000, history: { replaceState() {} } };
-  assert.throws(() => consumeBridgeCallback(`${callback(secondNonce)}&extra=1`, dependencies));
-  assert.throws(() => consumeBridgeCallback(callback(firstNonce), dependencies), /expired/i);
-  assert.throws(() => consumeBridgeCallback(callback(Buffer.alloc(32, 9).toString('base64url')), dependencies), /nonce/i);
-  assert.equal(consumeBridgeCallback(callback(secondNonce), dependencies).operation, 'release-usb');
+  await assert.rejects(() => consumeBridgeCallback(`${callback(secondNonce)}&extra=1`, dependencies));
+  await assert.rejects(() => consumeBridgeCallback(callback(firstNonce), dependencies), /expired/i);
+  await assert.rejects(() => consumeBridgeCallback(callback(Buffer.alloc(32, 9).toString('base64url')), dependencies), /nonce/i);
+  assert.equal((await consumeBridgeCallback(callback(secondNonce), dependencies)).operation, 'release-usb');
 });
 
 test('result semantics must match the pending operation before single-use consumption', async () => {
@@ -148,7 +162,74 @@ test('result semantics must match the pending operation before single-use consum
   const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
   const nonce = new URL(launch).searchParams.get('nonce');
   const wrong = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=flash-verified&cardId=lw-441bf681feb0&firmwareVersion=1.2.3&buildId=${'a'.repeat(40)}&target=lightweaver-controller-esp32s3&verification=flash-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
-  assert.throws(() => consumeBridgeCallback(wrong, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } }), /operation|semantic/i);
+  await assert.rejects(() => consumeBridgeCallback(wrong, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } }), /operation|semantic/i);
   const correct = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
-  assert.equal(consumeBridgeCallback(correct, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } }).operation, 'restart-card');
+  assert.equal((await consumeBridgeCallback(correct, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } })).operation, 'restart-card');
+});
+
+test('two callback tabs racing under the same-origin lock accept exactly once', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  const locks = memoryLocks();
+  const launch = createBridgeLaunch('release-usb', {
+    crypto: { getRandomValues(bytes) { bytes.fill(7); return bytes; } },
+    sessionStorage: memoryStorage(), localStorage, now: () => 0,
+  });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  const dependencies = { currentOrigin: 'https://led.mandalacodes.com', localStorage, locks, now: () => 1, history: { replaceState() {} } };
+  const settled = await Promise.allSettled([
+    consumeBridgeCallback(callback, { ...dependencies, sessionStorage: memoryStorage() }),
+    consumeBridgeCallback(callback, { ...dependencies, sessionStorage: memoryStorage() }),
+  ]);
+  assert.deepEqual(settled.map(item => item.status).sort(), ['fulfilled', 'rejected']);
+});
+
+test('fallback callback lease recovers stale claims and still accepts only one concurrent consumer', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  const claimKey = `lightweaver.bridge.callback-claim.v1.${nonce}`;
+  localStorage.setItem(claimKey, JSON.stringify({ owner: Buffer.alloc(16, 9).toString('base64url'), createdAt: 0, expiresAt: 2_000 }));
+  const dependencies = {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage, locks: null, crypto,
+    now: () => 3_000, delay: () => Promise.resolve(), history: { replaceState() {} },
+  };
+  const settled = await Promise.allSettled([consumeBridgeCallback(callback, dependencies), consumeBridgeCallback(callback, dependencies)]);
+  assert.deepEqual(settled.map(item => item.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(localStorage.getItem(claimKey), null);
+});
+
+test('fallback callback claim namespace prunes stale entries and rejects a bounded active cap', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  const prefix = 'lightweaver.bridge.callback-claim.v1.';
+  for (let index = 0; index < 16; index += 1) {
+    localStorage.setItem(`${prefix}${Buffer.alloc(32, index + 20).toString('base64url')}`, JSON.stringify({
+      owner: Buffer.alloc(16, index + 20).toString('base64url'), createdAt: 0, expiresAt: 2_000,
+    }));
+  }
+  const dependencies = {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage, locks: null, crypto,
+    now: () => 1_000, delay: () => Promise.resolve(), history: { replaceState() {} },
+  };
+  await assert.rejects(() => consumeBridgeCallback(callback, dependencies), /claim|pending|busy|many/i);
+  assert.equal([...Array(localStorage.length).keys()].map(index => localStorage.key(index)).filter(key => key.startsWith(prefix)).length, 16);
+  for (let index = 0; index < 16; index += 1) {
+    localStorage.setItem(`${prefix}${Buffer.alloc(32, index + 60).toString('base64url')}`, JSON.stringify({
+      owner: Buffer.alloc(16, index + 60).toString('base64url'), createdAt: 0, expiresAt: 2_000,
+    }));
+  }
+  dependencies.now = () => 3_000;
+  assert.equal((await consumeBridgeCallback(callback, dependencies)).operation, 'restart-card');
+  assert.equal([...Array(localStorage.length).keys()].map(index => localStorage.key(index)).filter(key => key.startsWith(prefix)).length, 0);
 });
