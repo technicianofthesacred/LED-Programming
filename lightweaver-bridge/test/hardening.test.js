@@ -14,9 +14,19 @@ const DEVICE_REDACTION_VECTORS = Object.freeze([
   ['/dev/tty.usbmodem14101', '{"path":"/dev/tty.usbmodem14101","error":"denied"}'],
   ['/dev/cu.usbserial-0001', 'port=/dev/cu.usbserial-0001'],
   ['/dev/ttyUSB7', 'cannot access /dev/ttyUSB7: busy'],
+  ['/dev/ttyS0', 'legacy UART failed at /dev/ttyS0'],
+  ['/dev/ttyAMA0', '{"path":"/dev/ttyAMA0"}'],
   ['/dev/serial/by-id/usb-Espressif_ABC123-if00', '{"device":"/dev/serial/by-id/usb-Espressif_ABC123-if00"}'],
+  ['/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0-port0', 'error=/dev/serial/by-path/platform-3f980000.usb-usb-0:1.2:1.0-port0'],
   ['COM12', '{"port":"COM12","error":"busy"}'],
   ['\\\\.\\COM18', 'Windows device \\\\.\\COM18 unavailable'],
+]);
+const SERIAL_REDACTION_VECTORS = Object.freeze([
+  ['ABC123', 'serial=ABC123'],
+  ['CASE456', 'SeRiAl=CASE456'],
+  ['JSON789', '{"serial":"JSON789"}'],
+  ['UNDER012', '{"serial_number":"UNDER012"}'],
+  ['CAMEL345', '{"serialNumber":"CAMEL345"}'],
 ]);
 
 function trustedWindowAndEvent() {
@@ -159,6 +169,11 @@ test('main-process redaction removes complete serial device tokens from text, JS
     if (secret.includes('ABC123')) assert.equal(redacted.includes('ABC123'), false);
     assert.match(redacted, /\[redacted-device\]/);
   }
+  for (const [secret, message] of SERIAL_REDACTION_VECTORS) {
+    const redacted = redactSensitiveText(message);
+    assert.equal(redacted.includes(secret), false, `leaked serial ${secret}: ${redacted}`);
+    assert.match(redacted, /\[redacted-serial\]/);
+  }
 });
 
 test('privileged handler errors are redacted before crossing IPC', async () => {
@@ -238,6 +253,11 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
     assert.equal(received.message.includes(secret), false, `preload leaked ${secret}: ${received.message}`);
     if (secret.includes('ABC123')) assert.equal(received.message.includes('ABC123'), false);
     assert.match(received.message, /\[redacted-device\]/);
+  }
+  for (const [secret, message] of SERIAL_REDACTION_VECTORS) {
+    listeners.get('bridge:progress')({}, { state: 'installing', message });
+    assert.equal(received.message.includes(secret), false, `preload leaked serial ${secret}: ${received.message}`);
+    assert.match(received.message, /\[redacted-serial\]/);
   }
   unsubscribe();
   assert.equal(listeners.has('bridge:progress'), false);
