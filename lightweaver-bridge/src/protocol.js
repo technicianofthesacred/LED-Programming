@@ -10,8 +10,8 @@ function redactSensitiveText(value, limit = 512) {
   if (typeof value !== 'string') return '';
   return value
     .slice(0, limit)
-    .replace(/\/dev\/(?:cu\.[^\s,;]+|ttyUSB\d+)/gi, '[redacted-device]')
-    .replace(/\bCOM\d+\b/gi, '[redacted-device]')
+    .replace(/\/dev\/(?:cu\.[^\s"'`,;}\])]+|tty(?:USB\d+|ACM\d+|\.[^\s"'`,;}\])]+)|serial\/by-id\/[^\s"'`,;}\])]+)/gi, '[redacted-device]')
+    .replace(/(?:\\\\\.\\)?\bCOM\d+\b/gi, '[redacted-device]')
     .replace(/["']?(?:serialNumber|serial_number|usbSerialNumber|serial\s+number|USB\s+serial\s+number|SN)["']?\s*[:=]\s*["']?[^"'\s,;}]+["']?/gi, '[redacted-serial]');
 }
 

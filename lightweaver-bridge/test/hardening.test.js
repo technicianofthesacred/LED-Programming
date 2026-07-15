@@ -9,6 +9,15 @@ const vm = require('node:vm');
 const bridgeRoot = path.resolve(__dirname, '..');
 const rendererPath = path.join(bridgeRoot, 'src', 'renderer', 'index.html');
 const rendererUrl = new URL(`file://${rendererPath}`).href;
+const DEVICE_REDACTION_VECTORS = Object.freeze([
+  ['/dev/ttyACM0', 'open failed: /dev/ttyACM0'],
+  ['/dev/tty.usbmodem14101', '{"path":"/dev/tty.usbmodem14101","error":"denied"}'],
+  ['/dev/cu.usbserial-0001', 'port=/dev/cu.usbserial-0001'],
+  ['/dev/ttyUSB7', 'cannot access /dev/ttyUSB7: busy'],
+  ['/dev/serial/by-id/usb-Espressif_ABC123-if00', '{"device":"/dev/serial/by-id/usb-Espressif_ABC123-if00"}'],
+  ['COM12', '{"port":"COM12","error":"busy"}'],
+  ['\\\\.\\COM18', 'Windows device \\\\.\\COM18 unavailable'],
+]);
 
 function trustedWindowAndEvent() {
   const mainFrame = { url: rendererUrl };
@@ -142,6 +151,16 @@ test('redaction handles JSON-shaped and abbreviated USB serial identifiers', () 
   for (const secret of ['JSON123', 'USB456', 'SHORT789']) assert.equal(redacted.includes(secret), false);
 });
 
+test('main-process redaction removes complete serial device tokens from text, JSON, and errors', () => {
+  const { redactSensitiveText } = require('../src/protocol');
+  for (const [secret, message] of DEVICE_REDACTION_VECTORS) {
+    const redacted = redactSensitiveText(message);
+    assert.equal(redacted.includes(secret), false, `leaked ${secret}: ${redacted}`);
+    if (secret.includes('ABC123')) assert.equal(redacted.includes('ABC123'), false);
+    assert.match(redacted, /\[redacted-device\]/);
+  }
+});
+
 test('privileged handler errors are redacted before crossing IPC', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
@@ -214,6 +233,12 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.equal(received.message.includes('usbmodem1'), false);
   assert.equal(received.message.includes('RAW123'), false);
   assert.equal(Object.isFrozen(received), true);
+  for (const [secret, message] of DEVICE_REDACTION_VECTORS) {
+    listeners.get('bridge:progress')({}, { state: 'installing', message });
+    assert.equal(received.message.includes(secret), false, `preload leaked ${secret}: ${received.message}`);
+    if (secret.includes('ABC123')) assert.equal(received.message.includes('ABC123'), false);
+    assert.match(received.message, /\[redacted-device\]/);
+  }
   unsubscribe();
   assert.equal(listeners.has('bridge:progress'), false);
 
