@@ -2,7 +2,9 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const OPERATIONS = new Set(['install-firmware']);
+const OPERATIONS = new Set([
+  'install-current-release', 'recover-current-release', 'inspect-compatible-card', 'release-usb', 'restart-card',
+]);
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
 ]);
@@ -43,7 +45,13 @@ function sanitizePayload(value) {
     result.confirmationToken = source.confirmationToken;
   }
   if (typeof source.compatible === 'boolean') result.compatible = source.compatible;
+  if (typeof source.cardId === 'string' && /^lw-[a-f0-9]{12}$/.test(source.cardId)) result.cardId = source.cardId;
   if (typeof source.productName === 'string') result.productName = redactSensitiveText(source.productName, 128);
+  if (typeof source.firmwareVersion === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(source.firmwareVersion)) result.firmwareVersion = source.firmwareVersion;
+  if (typeof source.buildId === 'string' && /^[a-f0-9]{40}$/.test(source.buildId)) result.buildId = source.buildId;
+  if (typeof source.target === 'string' && /^[a-z0-9-]{1,64}$/.test(source.target)) result.target = source.target;
+  if (source.verification === 'flash-verified') result.verification = source.verification;
+  if (source.physicalOutput === 'unconfirmed') result.physicalOutput = source.physicalOutput;
   return Object.freeze(result);
 }
 

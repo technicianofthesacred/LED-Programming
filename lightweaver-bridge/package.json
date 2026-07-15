@@ -16,6 +16,7 @@
     "electron-builder": "26.15.3"
   },
   "dependencies": {
+    "@lightweaver/installer-core": "file:../packages/installer-core",
     "esptool-js": "0.6.0",
     "serialport": "13.0.0"
   }

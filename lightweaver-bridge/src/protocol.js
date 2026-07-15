@@ -1,6 +1,12 @@
 'use strict';
 
-const OPERATIONS = new Set(['install-firmware']);
+const OPERATIONS = new Set([
+  'install-current-release',
+  'recover-current-release',
+  'inspect-compatible-card',
+  'release-usb',
+  'restart-card',
+]);
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
 ]);
@@ -35,16 +41,23 @@ function createRendererResult(state, message, fields = {}) {
     message: redactSensitiveText(message),
   };
   if (typeof fields.compatible === 'boolean') result.compatible = fields.compatible;
+  if (typeof fields.cardId === 'string' && /^lw-[a-f0-9]{12}$/.test(fields.cardId)) result.cardId = fields.cardId;
   if (typeof fields.productName === 'string') result.productName = redactSensitiveText(fields.productName, 128);
   if (Number.isFinite(fields.progress)) result.progress = Math.max(0, Math.min(100, fields.progress));
   if (typeof fields.code === 'string') result.code = redactSensitiveText(fields.code, 64);
   if (typeof fields.confirmationToken === 'string' && TOKEN_PATTERN.test(fields.confirmationToken)) {
     result.confirmationToken = fields.confirmationToken;
   }
+  if (typeof fields.firmwareVersion === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(fields.firmwareVersion)) result.firmwareVersion = fields.firmwareVersion;
+  if (typeof fields.buildId === 'string' && /^[a-f0-9]{40}$/.test(fields.buildId)) result.buildId = fields.buildId;
+  if (typeof fields.target === 'string' && /^[a-z0-9-]{1,64}$/.test(fields.target)) result.target = fields.target;
+  if (fields.verification === 'flash-verified') result.verification = fields.verification;
+  if (fields.physicalOutput === 'unconfirmed') result.physicalOutput = fields.physicalOutput;
   return Object.freeze(result);
 }
 
 module.exports = {
+  OPERATIONS,
   createRendererResult,
   redactSensitiveText,
   validateOperation,

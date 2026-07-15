@@ -5,6 +5,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { createIpcHandlers } = require('./ipc-handlers');
+const { createProductionDependencies } = require('./esptool-runtime');
+const { createOperationRunner } = require('./operation-runner');
 const { createOperationState } = require('./operation-state');
 const { redactSensitiveText } = require('./protocol');
 const { createWindowOptions, installWebContentsGuards, isTrustedIpcEvent } = require('./security');
@@ -12,16 +14,24 @@ const { createWindowOptions, installWebContentsGuards, isTrustedIpcEvent } = req
 const rendererPath = path.join(__dirname, 'renderer', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.js');
 const smokeTest = process.argv.includes('--smoke-test');
+const inspectCardSmoke = process.argv.includes('--inspect-card');
 const operationState = createOperationState();
 let mainWindow = null;
 
-function registerIpcHandlers() {
+async function createProductionRunner() {
+  const dependencies = await createProductionDependencies();
+  return createOperationRunner({
+    ...dependencies,
+    randomBytes: size => crypto.randomBytes(size),
+  });
+}
+
+function registerIpcHandlers(runner) {
   const handlers = createIpcHandlers({
     getActiveWindow: () => mainWindow,
     rendererPath,
     operation: operationState,
-    inspectCard: async () => ({ compatible: false }),
-    createToken: () => crypto.randomBytes(24).toString('hex'),
+    runner,
   });
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }
@@ -91,7 +101,14 @@ function verifyNavigationIsDenied(window) {
 }
 
 async function run() {
-  registerIpcHandlers();
+  const runner = await createProductionRunner();
+  if (inspectCardSmoke) {
+    const inspection = await runner.inspect();
+    process.stdout.write(`Compatible card inspected and USB released: ${inspection.cardId}\n`);
+    app.exit(0);
+    return;
+  }
+  registerIpcHandlers(runner);
   mainWindow = await createMainWindow();
   if (smokeTest) {
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Smoke-test window was not created');
@@ -108,11 +125,11 @@ app.whenReady().then(run).catch((error) => {
 });
 
 app.on('window-all-closed', () => {
-  if (!smokeTest) app.quit();
+  if (!smokeTest && !inspectCardSmoke) app.quit();
 });
 
 app.on('activate', async () => {
-  if (!smokeTest && BrowserWindow.getAllWindows().length === 0) mainWindow = await createMainWindow();
+  if (!smokeTest && !inspectCardSmoke && BrowserWindow.getAllWindows().length === 0) mainWindow = await createMainWindow();
 });
 
 if (smokeTest) {

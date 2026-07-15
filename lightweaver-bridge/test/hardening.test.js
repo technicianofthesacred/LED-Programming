@@ -96,13 +96,12 @@ test('every privileged IPC handler rejects untrusted senders before state mutati
     getActiveWindow: () => window,
     rendererPath,
     operation,
-    inspectCard: async () => ({ compatible: true, productName: 'Lightweaver Card' }),
-    createToken: () => 'a'.repeat(48),
+    runner: { inspect: async () => ({ compatible: true }), prepare: async () => ({}), execute: async () => ({}) },
   });
   const badEvent = { sender: window.webContents, senderFrame: { url: rendererUrl } };
 
   for (const [channel, handler] of Object.entries(handlers)) {
-    const argument = channel === 'bridge:start-operation' ? 'install-firmware' : channel === 'bridge:confirm-destructive' ? 'a'.repeat(48) : undefined;
+    const argument = channel === 'bridge:start-operation' ? 'install-current-release' : channel === 'bridge:confirm-destructive' ? 'a'.repeat(48) : undefined;
     await assert.rejects(Promise.resolve().then(() => handler(badEvent, argument)), /untrusted/i);
     assert.equal(operation.current, 'select-card');
   }
@@ -117,20 +116,91 @@ test('IPC handlers require a successful compatible inspection before start and l
     getActiveWindow: () => window,
     rendererPath,
     operation,
-    inspectCard: async () => ({ compatible: true, productName: 'Lightweaver Card' }),
-    createToken: () => 'b'.repeat(48),
+    runner: {
+      inspect: async () => ({ compatible: true, productName: 'Lightweaver Card', cardId: 'lw-441bf681feb0' }),
+      prepare: async () => ({ confirmationToken: 'b'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Factory install replaces card configuration.' }),
+      execute: () => new Promise(() => {}),
+    },
   });
 
-  await assert.rejects(() => handlers['bridge:start-operation'](event, 'install-firmware'), /inspection/i);
+  await assert.rejects(() => handlers['bridge:start-operation'](event, 'install-current-release'), /inspection/i);
   const inspection = await handlers['bridge:inspect'](event);
   assert.equal(inspection.compatible, true);
-  const confirmation = await handlers['bridge:start-operation'](event, 'install-firmware');
+  const confirmation = await handlers['bridge:start-operation'](event, 'install-current-release');
   assert.equal(confirmation.state, 'confirm');
   await handlers['bridge:confirm-destructive'](event, confirmation.confirmationToken);
   assert.equal(operation.current, 'installing');
   await assert.rejects(() => handlers['bridge:inspect'](event), /transition/i);
-  await assert.rejects(() => handlers['bridge:start-operation'](event, 'install-firmware'), /transition|inspection/i);
+  await assert.rejects(() => handlers['bridge:start-operation'](event, 'install-current-release'), /transition|inspection/i);
   assert.deepEqual(await handlers['bridge:cancel'](event), { cancelled: false, state: 'installing' });
+});
+
+test('confirmation returns installing promptly while async runner drives verified completion to only the active frame', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const sent = [];
+  window.webContents.send = (channel, payload) => sent.push([channel, payload]);
+  let finish;
+  const operation = createOperationState();
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window,
+    rendererPath,
+    operation,
+    runner: {
+      inspect: async () => ({ compatible: true, cardId: 'lw-441bf681feb0' }),
+      prepare: async () => ({ confirmationToken: 'd'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Factory install replaces card configuration.' }),
+      execute: ({ onEvent }) => new Promise(resolve => {
+        finish = () => {
+          onEvent({ checkpoint: 'erase-started', progress: 1 });
+          onEvent({ checkpoint: 'flash-verification-completed', progress: 100 });
+          resolve({
+            cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
+            target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+            physicalOutput: 'unconfirmed', message: 'Reconnect in Studio and confirm lights.',
+          });
+        };
+      }),
+    },
+  });
+  await handlers['bridge:inspect'](event);
+  const confirmation = await handlers['bridge:start-operation'](event, 'install-current-release');
+  const installing = await handlers['bridge:confirm-destructive'](event, confirmation.confirmationToken);
+  assert.equal(installing.state, 'installing');
+  assert.equal(operation.current, 'installing');
+  await new Promise(resolve => setImmediate(resolve));
+  finish();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(operation.current, 'complete');
+  assert.deepEqual(sent.map(([channel]) => channel), ['bridge:progress', 'bridge:progress', 'bridge:result']);
+  const result = sent.at(-1)[1];
+  assert.equal(result.verification, 'flash-verified');
+  assert.equal(result.physicalOutput, 'unconfirmed');
+});
+
+test('window recreation cannot inherit destructive confirmation authority', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const first = trustedWindowAndEvent();
+  let activeWindow = first.window;
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => activeWindow,
+    rendererPath,
+    operation: createOperationState(),
+    runner: {
+      inspect: async () => ({ compatible: true, cardId: 'lw-441bf681feb0' }),
+      prepare: async () => ({ confirmationToken: 'e'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Factory install replaces card configuration.' }),
+      execute: async () => ({}),
+    },
+  });
+  await handlers['bridge:inspect'](first.event);
+  const confirmation = await handlers['bridge:start-operation'](first.event, 'install-current-release');
+  const replacement = trustedWindowAndEvent();
+  activeWindow = replacement.window;
+  await assert.rejects(
+    () => handlers['bridge:confirm-destructive'](replacement.event, confirmation.confirmationToken),
+    /expired|match|window/i,
+  );
 });
 
 test('privileged messages and logs redact device paths and raw USB serial identifiers', () => {
@@ -184,8 +254,7 @@ test('privileged handler errors are redacted before crossing IPC', async () => {
     getActiveWindow: () => window,
     rendererPath,
     operation: createOperationState(),
-    inspectCard: async () => { throw new Error('Failed /dev/cu.usbmodem1 serialNumber=LEAK123'); },
-    createToken: () => 'c'.repeat(48),
+    runner: { inspect: async () => { throw new Error('Failed /dev/cu.usbmodem1 serialNumber=LEAK123'); } },
   });
   await assert.rejects(
     () => handlers['bridge:inspect'](event),
@@ -234,8 +303,8 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.equal(inspected.message.includes('INVOKE123'), false);
   assert.equal(Object.isFrozen(inspected), true);
   await assert.rejects(() => exposed.startOperation('arbitrary'), /operation/i);
-  await exposed.startOperation('install-firmware');
-  assert.deepEqual(invokes.at(-1), ['bridge:start-operation', 'install-firmware']);
+  await exposed.startOperation('install-current-release');
+  assert.deepEqual(invokes.at(-1), ['bridge:start-operation', 'install-current-release']);
 
   let received;
   const unsubscribe = exposed.onProgress((payload) => { received = payload; });
@@ -282,5 +351,9 @@ test('declared smoke command runs the packaged artifact helper', () => {
 
 test('runtime USB dependencies are pinned exactly', () => {
   const pkg = require('../package.json');
-  assert.deepEqual(pkg.dependencies, { 'esptool-js': '0.6.0', serialport: '13.0.0' });
+  assert.deepEqual(pkg.dependencies, {
+    '@lightweaver/installer-core': 'file:../packages/installer-core',
+    'esptool-js': '0.6.0',
+    serialport: '13.0.0',
+  });
 });

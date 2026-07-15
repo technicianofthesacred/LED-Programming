@@ -15,8 +15,8 @@ const views = Object.freeze({
   confirm: ['Confirm', 'Confirm firmware installation', 'Installing firmware replaces the card configuration. Confirm only if this is the intended card.', 'Confirm and install'],
   installing: ['Installing', 'Installing firmware', 'Keep the card connected. This critical section cannot be cancelled.', 'Installing…'],
   verifying: ['Verifying', 'Verifying installation', 'Checking the installed firmware before releasing the card.', 'Verifying…'],
-  complete: ['Complete', 'Card is ready', 'Installation and verification completed.', 'Inspect another card'],
-  'recovery-required': ['Recovery required', 'No card changes were made', 'Reconnect the card and inspect it again. If an install was interrupted, follow the recovery procedure.', 'Inspect again'],
+  complete: ['Flash verified', 'Reconnect and confirm lights', 'The factory image was verified. Physical LED output is still unconfirmed; reconnect in Studio and confirm the lights.', 'Inspect another card'],
+  'recovery-required': ['Recovery required', 'Installation needs safe recovery', 'Reconnect the card and inspect it again. The Bridge will not claim whether physical output is working.', 'Inspect again'],
 });
 
 let currentState = 'select-card';
@@ -46,7 +46,7 @@ primaryAction.addEventListener('click', async () => {
       render({ state: 'select-card' });
     } else {
       const inspected = await bridge.inspectCompatibleCard();
-      if (inspected.compatible) render(await bridge.startOperation('install-firmware'));
+      if (inspected.compatible) render(await bridge.startOperation('install-current-release'));
       else render(inspected);
     }
   } catch {
