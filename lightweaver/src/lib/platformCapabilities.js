@@ -12,6 +12,7 @@ function normalizePlatform({ userAgent, platform, maxTouchPoints }) {
 
 export function detectPlatformCapabilities({
   secureContext = false,
+  topLevel = false,
   serial = null,
   userAgent = '',
   platform = '',
@@ -26,9 +27,15 @@ export function detectPlatformCapabilities({
   const isMobile = normalizedPlatform === 'android'
     || normalizedPlatform === 'ios'
     || /Mobile/i.test(normalizedUserAgent);
+  const observedSecureContext = secureContext === true;
+  const observedTopLevel = topLevel === true;
 
   return {
-    canWebSerialInstall: secureContext === true && Boolean(serial),
+    topLevel: observedTopLevel,
+    embedded: !observedTopLevel,
+    secureContext: observedSecureContext,
+    canWebSerialInstall: observedSecureContext && observedTopLevel && Boolean(serial),
+    mustEscapeToSecureInstaller: !observedSecureContext || !observedTopLevel,
     canControlInstalledCard: true,
     isMobile,
     platform: normalizedPlatform,
