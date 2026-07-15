@@ -12,6 +12,7 @@ import {
   MAX_FACTORY_IMAGE_SIZE,
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
   MINIMUM_PRODUCTION_FIRMWARE_VERSION,
+  PRODUCTION_FIRMWARE_ORIGIN,
   canonicalFirmwareManifestBytes,
   loadProductionFirmwareRelease,
   validateFirmwareManifest,
@@ -128,7 +129,7 @@ test('verifies a fixed signed manifest before fetching and hashing its image', a
 
   assert.equal(release.manifest.firmwareVersion, '1.2.3');
   assert.equal(release.bytes.byteLength, release.manifest.image.size);
-  assert.equal(calls.at(-1), release.manifest.image.url);
+  assert.equal(calls.at(-1), `${PRODUCTION_FIRMWARE_ORIGIN}${release.manifest.image.url}`);
 });
 
 test('rejects a tampered manifest before requesting any image', async () => {
@@ -341,7 +342,7 @@ test('committed production release is signed and content-addressed by the pinned
   const fetchImpl = async (url) => {
     if (String(url).endsWith('release-manifest.json')) return response(manifest);
     if (String(url).endsWith('release-manifest.sig')) return response(signature);
-    if (url === parsed.image.url) return response(image);
+    if (String(url).endsWith(parsed.image.url)) return response(image);
     return response('missing', false);
   };
   const release = await loadProductionFirmwareRelease(fetchImpl, webcrypto);
