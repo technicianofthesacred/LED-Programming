@@ -42,7 +42,7 @@ function harness(overrides = {}) {
       const transport = { async disconnect() { calls.push('disconnect'); } };
       transports.push(transport);
       return {
-        loader: { id: 'loader' }, transport,
+        loader: { id: 'loader', writeFlash() {} }, transport,
         identity: inspections[Math.min(inspectionIndex++, inspections.length - 1)],
       };
     },
@@ -55,7 +55,11 @@ function harness(overrides = {}) {
       if (value.flashSize !== '16MB') throw new Error('wrong flash size /dev/cu.secret');
     },
     validateProductionInstallRelease() { calls.push('validate-release'); },
-    async writeVerifiedFlash(_loader, options) { calls.push(['write', options]); },
+    async writeVerifiedFlash(_loader, options) {
+      calls.push(['write', options]);
+      options.reportProgress(0, 10, 100);
+      options.reportProgress(0, 100, 100);
+    },
     ...overrides.core,
   };
   const { createOperationRunner } = require('../src/operation-runner');
@@ -95,15 +99,42 @@ test('successful install writes exactly one verified factory image and never con
   assert.equal(write.fileArray[0].data[0], 0xe9);
   assert.equal(write.eraseAll, true);
   assert.equal(write.compress, true);
+  assert.equal(result.state, 'awaiting-card-acknowledgement');
+  assert.equal(result.pipelineComplete, false);
   assert.equal(result.verification, 'flash-verified');
   assert.equal(result.physicalOutput, 'unconfirmed');
+  assert.equal(result.expectedCardId, inspected.cardId);
+  assert.equal(result.nextCheckpoint, 'stable-card-identity-acknowledged');
+  assert.equal('success' in result, false);
   assert.match(result.message, /reconnect.*confirm.*lights/i);
   assert.equal(JSON.stringify(result).includes('confirmed'), true);
   assert.deepEqual(events.filter(e => e.checkpoint).map(e => e.checkpoint), [
-    'environment-selected', 'compatible-card-identified', 'usb-released', 'release-verified',
-    'destructive-action-confirmed', 'compatible-card-identified', 'erase-started', 'write-completed',
+    'environment-selected', 'release-verified', 'compatible-card-identified',
+    'destructive-action-confirmed', 'erase-started', 'write-completed',
     'flash-verification-completed', 'card-restarted', 'usb-released',
   ]);
+});
+
+test('missing write capability fails pre-mutation without erase checkpoint', async () => {
+  const h = harness({ runtime: { async connectForWrite() {
+    const transport = { async disconnect() { h.calls.push('disconnect'); } };
+    return {
+      loader: {}, transport,
+      identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' },
+    };
+  } } });
+  const events = [];
+  const auth = await authorize(h);
+  await assert.rejects(() => h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId,
+    token: auth.confirmation.confirmationToken, onEvent: event => events.push(event),
+  }), error => {
+    assert.equal(error.classification, 'recoverable-failure');
+    assert.equal(error.phase, 'before-erase');
+    assert.equal(error.mutation, 'none');
+    return true;
+  });
+  assert.equal(events.some(event => event.checkpoint === 'erase-started'), false);
 });
 
 test('inspection validates chip and flash, emits bounded identity, and releases USB internally', async () => {
@@ -183,7 +214,7 @@ test('reset and USB release failures are bounded recovery outcomes and release i
   assert.equal(reset.calls.includes('disconnect'), true);
 
   const releaseFail = harness({ runtime: { async connectForWrite() {
-    return { loader: {}, identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' }, transport: { async disconnect() { throw new Error('close /dev/ttyUSB1'); } } };
+    return { loader: { writeFlash() {} }, identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' }, transport: { async disconnect() { throw new Error('close /dev/ttyUSB1'); } } };
   } } });
   const releaseAuth = await authorize(releaseFail);
   await assert.rejects(() => releaseFail.runner.execute({ operation: 'install-current-release', cardId: releaseAuth.inspected.cardId, token: releaseAuth.confirmation.confirmationToken }), value => value.code === 'usb-release-failed' && value.outcome === 'needs-safe-recovery');

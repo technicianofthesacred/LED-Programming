@@ -9,6 +9,7 @@ const OPERATIONS = new Set([
 ]);
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
+  'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 
@@ -53,6 +54,12 @@ function createRendererResult(state, message, fields = {}) {
   if (typeof fields.target === 'string' && /^[a-z0-9-]{1,64}$/.test(fields.target)) result.target = fields.target;
   if (fields.verification === 'flash-verified') result.verification = fields.verification;
   if (fields.physicalOutput === 'unconfirmed') result.physicalOutput = fields.physicalOutput;
+  if (fields.pipelineComplete === false) result.pipelineComplete = false;
+  if (typeof fields.expectedCardId === 'string' && /^lw-[a-f0-9]{12}$/.test(fields.expectedCardId)) result.expectedCardId = fields.expectedCardId;
+  if (fields.nextCheckpoint === 'stable-card-identity-acknowledged') result.nextCheckpoint = fields.nextCheckpoint;
+  if (['recoverable-failure', 'needs-safe-recovery', 'usb-ownership-uncertain'].includes(fields.classification)) result.classification = fields.classification;
+  if (typeof fields.phase === 'string' && /^[a-z0-9-]{1,48}$/.test(fields.phase)) result.phase = fields.phase;
+  if (typeof fields.nextAction === 'string' && /^[a-z0-9-]{1,64}$/.test(fields.nextAction)) result.nextAction = fields.nextAction;
   return Object.freeze(result);
 }
 

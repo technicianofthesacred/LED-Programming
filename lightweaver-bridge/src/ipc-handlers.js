@@ -18,11 +18,33 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
 
   function progressPayload(event) {
     const checkpoint = event.checkpoint;
+    if (!checkpoint) return createRendererResult('installing', 'Writing verified factory image', { progress: event.progress });
     const verifying = checkpoint === 'flash-verification-completed' || checkpoint === 'card-restarted' || checkpoint === 'usb-released';
     if (verifying && operation.current === 'installing') operation.advanceVerification();
     return createRendererResult(verifying ? 'verifying' : 'installing', checkpoint.replaceAll('-', ' '), {
       progress: event.progress,
       code: checkpoint,
+    });
+  }
+
+  function failureState(classification) {
+    if (classification === 'recoverable-failure') return 'operation-failed';
+    if (classification === 'usb-ownership-uncertain') return 'usb-ownership-uncertain';
+    return 'recovery-required';
+  }
+
+  function failureMessage(classification) {
+    if (classification === 'recoverable-failure') return 'No card changes were confirmed. Inspect again before retrying.';
+    if (classification === 'usb-ownership-uncertain') return 'USB release could not be confirmed. Restart the Bridge before retrying.';
+    return 'Installation may have been interrupted after erase began. Recover the current release.';
+  }
+
+  function failurePayload(error) {
+    return createRendererResult(failureState(error?.classification), failureMessage(error?.classification), {
+      code: error?.code,
+      classification: error?.classification,
+      phase: error?.phase,
+      nextAction: error?.nextAction,
     });
   }
 
@@ -67,14 +89,12 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
         onEvent: progress => sendIfStillTrusted(event, 'bridge:progress', progressPayload(progress)),
       })).then(result => {
         if (operation.current === 'installing') operation.advanceVerification();
-        operation.finish(true);
-        sendIfStillTrusted(event, 'bridge:result', createRendererResult('complete', result.message, result));
+        operation.finishFlashVerified();
+        sendIfStillTrusted(event, 'bridge:result', createRendererResult('awaiting-card-acknowledgement', result.message, result));
       }).catch(error => {
-        if (operation.current === 'installing') operation.failCriticalSection();
-        else if (operation.current === 'verifying') operation.finish(false);
-        sendIfStillTrusted(event, 'bridge:result', createRendererResult('recovery-required', error?.message || 'Installation interrupted.', {
-          code: error?.code,
-        }));
+        if (operation.current === 'installing') operation.failCriticalSection(error?.classification);
+        else if (operation.current === 'verifying') operation.finishFailure(error?.classification);
+        sendIfStillTrusted(event, 'bridge:result', failurePayload(error));
       });
       return createRendererResult('installing', 'Installation started. Keep the card connected.');
     },
@@ -88,7 +108,14 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner })
 
   return Object.freeze(Object.fromEntries(Object.entries(handlers).map(([channel, handler]) => [channel, async (...args) => {
     try { return await handler(...args); } catch (error) {
-      throw new Error(redactSensitiveText(error?.message) || 'Bridge operation failed');
+      if (['recoverable-failure', 'needs-safe-recovery', 'usb-ownership-uncertain'].includes(error?.classification)) {
+        return failurePayload(error);
+      }
+      const safeError = new Error(redactSensitiveText(error?.message) || 'Bridge operation failed');
+      for (const field of ['code', 'classification', 'phase', 'nextAction']) {
+        if (typeof error?.[field] === 'string') safeError[field] = redactSensitiveText(error[field], 64);
+      }
+      throw safeError;
     }
   }])));
 }

@@ -59,7 +59,7 @@ test('operation state enforces compatible inspection and its transition graph', 
   assert.equal(operation.advanceVerification(), 'verifying');
   assert.throws(() => operation.beginInspection(), /transition/i);
   assert.equal(operation.cancel(), false);
-  assert.equal(operation.finish(true), 'complete');
+  assert.equal(operation.finishFlashVerified(), 'awaiting-card-acknowledgement');
   assert.equal(operation.shouldPreventClose(), false);
 });
 
@@ -155,9 +155,11 @@ test('confirmation returns installing promptly while async runner drives verifie
           onEvent({ checkpoint: 'erase-started', progress: 1 });
           onEvent({ checkpoint: 'flash-verification-completed', progress: 100 });
           resolve({
+            state: 'awaiting-card-acknowledgement', pipelineComplete: false,
             cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
             target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
-            physicalOutput: 'unconfirmed', message: 'Reconnect in Studio and confirm lights.',
+            physicalOutput: 'unconfirmed', expectedCardId: 'lw-441bf681feb0',
+            nextCheckpoint: 'stable-card-identity-acknowledged', message: 'Reconnect in Studio and confirm lights.',
           });
         };
       }),
@@ -171,11 +173,65 @@ test('confirmation returns installing promptly while async runner drives verifie
   await new Promise(resolve => setImmediate(resolve));
   finish();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(operation.current, 'complete');
+  assert.equal(operation.current, 'awaiting-card-acknowledgement');
   assert.deepEqual(sent.map(([channel]) => channel), ['bridge:progress', 'bridge:progress', 'bridge:result']);
   const result = sent.at(-1)[1];
   assert.equal(result.verification, 'flash-verified');
   assert.equal(result.physicalOutput, 'unconfirmed');
+  assert.equal(result.pipelineComplete, false);
+  assert.equal(result.state, 'awaiting-card-acknowledgement');
+});
+
+test('IPC preserves structured failure classifications and truthful distinct result states', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  for (const [classification, expectedState, expectedGuidance] of [
+    ['recoverable-failure', 'operation-failed', /inspect again/i],
+    ['needs-safe-recovery', 'recovery-required', /recover/i],
+    ['usb-ownership-uncertain', 'usb-ownership-uncertain', /restart.*bridge/i],
+  ]) {
+    const { window, event } = trustedWindowAndEvent();
+    const sent = [];
+    window.webContents.send = (channel, payload) => sent.push([channel, payload]);
+    const error = Object.assign(new Error('failed /dev/cu.secret'), {
+      code: 'structured-failure', classification, phase: 'before-erase', nextAction: classification,
+    });
+    const operation = createOperationState();
+    const handlers = createIpcHandlers({
+      getActiveWindow: () => window, rendererPath, operation,
+      runner: {
+        inspect: async () => ({ compatible: true, cardId: 'lw-441bf681feb0' }),
+        prepare: async () => ({ confirmationToken: 'f'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Replace config.' }),
+        execute: async () => { throw error; },
+      },
+    });
+    await handlers['bridge:inspect'](event);
+    const confirmation = await handlers['bridge:start-operation'](event, 'install-current-release');
+    await handlers['bridge:confirm-destructive'](event, confirmation.confirmationToken);
+    await new Promise(resolve => setImmediate(resolve));
+    const payload = sent.at(-1)[1];
+    assert.equal(payload.state, expectedState);
+    assert.equal(payload.classification, classification);
+    assert.equal(payload.code, 'structured-failure');
+    assert.equal(payload.message.includes('/dev/'), false);
+    assert.match(payload.message, expectedGuidance);
+  }
+});
+
+test('synchronous IPC errors return bounded structured codes without raw paths', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { inspect: async () => { throw Object.assign(new Error('No card /dev/cu.secret'), {
+      code: 'no-compatible-card', classification: 'recoverable-failure', phase: 'inspection', nextAction: 'inspect-again',
+    }); } },
+  });
+  const result = await handlers['bridge:inspect'](event);
+  assert.equal(result.code, 'no-compatible-card');
+  assert.equal(result.classification, 'recoverable-failure');
+  assert.equal(result.message.includes('/dev/'), false);
 });
 
 test('window recreation cannot inherit destructive confirmation authority', async () => {

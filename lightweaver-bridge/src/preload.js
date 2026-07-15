@@ -7,6 +7,7 @@ const OPERATIONS = new Set([
 ]);
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
+  'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 
@@ -52,6 +53,12 @@ function sanitizePayload(value) {
   if (typeof source.target === 'string' && /^[a-z0-9-]{1,64}$/.test(source.target)) result.target = source.target;
   if (source.verification === 'flash-verified') result.verification = source.verification;
   if (source.physicalOutput === 'unconfirmed') result.physicalOutput = source.physicalOutput;
+  if (source.pipelineComplete === false) result.pipelineComplete = false;
+  if (typeof source.expectedCardId === 'string' && /^lw-[a-f0-9]{12}$/.test(source.expectedCardId)) result.expectedCardId = source.expectedCardId;
+  if (source.nextCheckpoint === 'stable-card-identity-acknowledged') result.nextCheckpoint = source.nextCheckpoint;
+  if (['recoverable-failure', 'needs-safe-recovery', 'usb-ownership-uncertain'].includes(source.classification)) result.classification = source.classification;
+  if (typeof source.phase === 'string' && /^[a-z0-9-]{1,48}$/.test(source.phase)) result.phase = source.phase;
+  if (typeof source.nextAction === 'string' && /^[a-z0-9-]{1,64}$/.test(source.nextAction)) result.nextAction = source.nextAction;
   return Object.freeze(result);
 }
 

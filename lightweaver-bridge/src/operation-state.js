@@ -4,8 +4,11 @@ const TRANSITIONS = Object.freeze({
   'select-card': Object.freeze(['inspect']),
   inspect: Object.freeze(['inspect', 'confirm', 'select-card']),
   confirm: Object.freeze(['installing', 'select-card']),
-  installing: Object.freeze(['verifying', 'recovery-required']),
-  verifying: Object.freeze(['complete', 'recovery-required']),
+  installing: Object.freeze(['verifying', 'operation-failed', 'usb-ownership-uncertain', 'recovery-required']),
+  verifying: Object.freeze(['awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain', 'recovery-required']),
+  'awaiting-card-acknowledgement': Object.freeze(['complete', 'inspect', 'select-card']),
+  'operation-failed': Object.freeze(['inspect', 'select-card']),
+  'usb-ownership-uncertain': Object.freeze(['inspect', 'select-card']),
   complete: Object.freeze(['inspect', 'select-card']),
   'recovery-required': Object.freeze(['inspect', 'select-card']),
 });
@@ -55,11 +58,20 @@ function createOperationState() {
     advanceVerification() {
       return transition('verifying');
     },
-    finish(success) {
-      return transition(success ? 'complete' : 'recovery-required');
+    finishFlashVerified() {
+      return transition('awaiting-card-acknowledgement');
     },
-    failCriticalSection() {
-      return transition('recovery-required');
+    finishFailure(classification) {
+      const target = classification === 'recoverable-failure'
+        ? 'operation-failed'
+        : classification === 'usb-ownership-uncertain' ? 'usb-ownership-uncertain' : 'recovery-required';
+      return transition(target);
+    },
+    failCriticalSection(classification = 'needs-safe-recovery') {
+      const target = classification === 'recoverable-failure'
+        ? 'operation-failed'
+        : classification === 'usb-ownership-uncertain' ? 'usb-ownership-uncertain' : 'recovery-required';
+      return transition(target);
     },
     reset() {
       if (CRITICAL_STATES.has(state)) throw new Error('Cannot reset during a critical operation');

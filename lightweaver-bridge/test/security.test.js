@@ -76,6 +76,9 @@ test('renderer contains all local workflow states and a restrictive CSP', () => 
     'installing',
     'verifying',
     'complete',
+    'awaiting-card-acknowledgement',
+    'operation-failed',
+    'usb-ownership-uncertain',
     'recovery-required',
   ]) {
     assert.match(combined, new RegExp(state));
