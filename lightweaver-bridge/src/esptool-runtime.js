@@ -16,6 +16,10 @@ function runtimeFailure(code, message, phase) {
   return error;
 }
 
+function usbReleaseFailure() {
+  return runtimeFailure('usb-release-failed', 'USB release failed; ownership could not be confirmed.', 'usb-release');
+}
+
 async function connectWithTrackedCleanup({ core, port, createTransport, createLoader }) {
   let releaseFailure = null;
   const trackedTransport = candidate => {
@@ -56,7 +60,11 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
 
   async function connectOne() {
     const port = await selectPort();
-    const connection = await connect(port);
+    let connection;
+    try { connection = await connect(port); } catch (error) {
+      if (error?.code === 'usb-release-failed' || /USB release failed/i.test(error?.message || '')) throw usbReleaseFailure();
+      throw error;
+    }
     const disconnect = connection.transport.disconnect.bind(connection.transport);
     connection.transport.disconnect = async () => {
       try {
@@ -89,7 +97,7 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
         }
       } finally {
         try { await connection.transport.disconnect(); } catch (error) {
-          releaseError = runtimeFailure('usb-release-failed', `USB release failed: ${error?.message || 'unknown close failure'}`, 'usb-release');
+          releaseError = usbReleaseFailure();
         }
       }
       if (releaseError) throw releaseError;
@@ -103,27 +111,35 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
         return { ...connection, identity: await identify(connection) };
       } catch (error) {
         try { await connection.transport.disconnect(); } catch (releaseError) {
-          throw new Error(`USB release failed: ${releaseError?.message || 'unknown close failure'}`);
+          throw usbReleaseFailure();
         }
         throw error;
       }
     },
     async restartOne() {
       const connection = await connectOne();
+      let result;
+      let primaryError = null;
+      let releaseError = null;
       try {
         const identity = await identify(connection);
         await reset(connection);
-        return identity;
+        result = identity;
+      } catch (error) {
+        primaryError = error;
       } finally {
-        await connection.transport.disconnect();
+        try { await connection.transport.disconnect(); } catch { releaseError = usbReleaseFailure(); }
       }
+      if (releaseError) throw releaseError;
+      if (primaryError) throw primaryError;
+      return result;
     },
     async releaseUsb() {
       const failures = [];
       for (const connection of [...ownedConnections]) {
         try { await connection.transport.disconnect(); } catch (error) { failures.push(error); }
       }
-      if (failures.length) throw runtimeFailure('usb-release-failed', `USB release failed: ${failures[0]?.message || 'unknown close failure'}`, 'usb-release');
+      if (failures.length) throw usbReleaseFailure();
       return Object.freeze({ released: true });
     },
     reset,

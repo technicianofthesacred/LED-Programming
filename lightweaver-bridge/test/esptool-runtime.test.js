@@ -43,6 +43,24 @@ test('native restart identifies, hard-resets to the app, and always releases USB
   assert.deepEqual(calls, ['reset', 'disconnect']);
 });
 
+test('native restart normalizes raw close errors as unresolved USB ownership', async () => {
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: { chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } }, async detectFlashSize() { return '16MB'; } },
+      transport: { async disconnect() { throw new Error('close timeout /dev/cu.secret'); } },
+    }),
+    reset: async () => {},
+  });
+  await assert.rejects(() => runtime.restartOne(), error => {
+    assert.equal(error.code, 'usb-release-failed');
+    assert.equal(error.phase, 'usb-release');
+    assert.equal(error.message.includes('/dev/'), false);
+    return true;
+  });
+});
+
 test('native USB release closes owned connections and is idempotent', async () => {
   let disconnects = 0;
   const { createEsptoolRuntime } = require('../src/esptool-runtime');

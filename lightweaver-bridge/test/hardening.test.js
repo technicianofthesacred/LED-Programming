@@ -226,6 +226,44 @@ test('destructive launch inspection failure emits a matching structured callback
   await assert.rejects(() => handlers['bridge:inspect-for-operation'](event, 'restart-card'), /destructive/i);
 });
 
+test('raw maintenance close failures reach callbacks as USB ownership uncertainty with safe guidance', async () => {
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const { createOperationRunner } = require('../src/operation-runner');
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  for (const requestedOperation of ['restart-card', 'release-usb']) {
+    const runtime = createEsptoolRuntime({
+      selectPort: async () => ({}),
+      connect: async () => ({
+        loader: { chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } }, async detectFlashSize() { return '16MB'; } },
+        transport: { async disconnect() { throw new Error('native close timeout /dev/cu.secret serialNumber=LEAK'); } },
+      }),
+      reset: async () => {},
+    });
+    if (requestedOperation === 'release-usb') await runtime.connectForWrite();
+    const runner = createOperationRunner({
+      runtime,
+      core: { validateInstallHardware() {}, validateProductionInstallRelease() {}, writeVerifiedFlash() {} },
+      loadRelease: async () => { throw new Error('not used'); }, randomBytes: () => Buffer.alloc(24),
+    });
+    const bounded = [];
+    const { window, event } = trustedWindowAndEvent();
+    const handlers = createIpcHandlers({
+      getActiveWindow: () => window, rendererPath, operation: createOperationState(), runner,
+      onBoundedResult: (payload, operation) => bounded.push([payload, operation]),
+    });
+    const result = await handlers['bridge:maintenance-operation'](event, requestedOperation);
+    assert.equal(result.classification, 'usb-ownership-uncertain');
+    assert.equal(result.code, 'usb-release-failed');
+    assert.match(result.message, /restart.*bridge/i);
+    assert.match(result.message, /unplug.*reconnect/i);
+    assert.equal(JSON.stringify(result).includes('/dev/'), false);
+    assert.equal(JSON.stringify(result).includes('LEAK'), false);
+    assert.equal(bounded[0][1], requestedOperation);
+    assert.equal(bounded[0][0], result);
+  }
+});
+
 test('IPC preserves structured failure classifications and truthful distinct result states', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');

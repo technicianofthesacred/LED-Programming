@@ -42,7 +42,7 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
     if (classification === 'usb-ownership-uncertain' && error?.verification === 'flash-verified') {
       return 'Flash was verified and the card restarted. Restart the Bridge or unplug and reconnect the card; do not reflash.';
     }
-    if (classification === 'usb-ownership-uncertain') return 'USB release could not be confirmed. Restart the Bridge before retrying.';
+    if (classification === 'usb-ownership-uncertain') return 'USB release could not be confirmed. Restart the Bridge, or unplug and reconnect the card USB, before retrying.';
     return 'Installation may have been interrupted after erase began. Recover the current release.';
   }
 
