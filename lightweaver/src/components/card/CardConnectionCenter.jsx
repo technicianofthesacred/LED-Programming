@@ -128,7 +128,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
       rememberedCard,
       ...flowEvidence,
     });
-    if (next.id !== 'open-setup-network') connect();
+    if (next.legacyId !== 'open-setup-network') connect();
   };
 
   const chooseBlankCard = () => {
@@ -165,7 +165,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     && (!link.activity || link.activity === 'idle')
     && NEUTRAL_FIRST_RUN_REASONS.has(link.reason)
     && !hasKnownCard;
-  const setupSteps = action.id === 'open-setup-network';
+  const setupSteps = action.legacyId === 'open-setup-network';
 
   return (
     <section
@@ -210,7 +210,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
             </ol>
           )}
 
-          {action.id === 'connected' && link.card && (
+          {action.legacyId === 'connected' && link.card && (
             <dl className="card-acknowledged-facts">
               {link.card.name && <><dt>Name</dt><dd>{link.card.name}</dd></>}
               {link.card.pixelCount > 0 && <><dt>Pixels</dt><dd>{link.card.pixelCount}</dd></>}
@@ -220,11 +220,11 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           )}
 
           <div className="card-connection-actions">
-            {action.id === 'connected' ? (
+            {action.legacyId === 'connected' ? (
               <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>
-            ) : action.id === 'web-serial-install' ? (
+            ) : action.legacyId === 'web-serial-install' ? (
               <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>
-            ) : action.id === 'supported-browser-handoff' || action.id === 'supported-device-handoff' ? null : (
+            ) : action.legacyId === 'supported-browser-handoff' || action.legacyId === 'supported-device-handoff' ? null : (
               <button
                 type="button"
                 className="btn primary"

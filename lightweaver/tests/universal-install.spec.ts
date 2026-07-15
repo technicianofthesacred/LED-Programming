@@ -41,14 +41,14 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeEnabled();
 });
 
-test('unsupported install mode gives the card connection handoff and keeps the project in Studio', async ({ page }) => {
+test('desktop without browser USB launches the native helper path and keeps the project in Studio', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
   await page.goto('/#screen=flash&mode=install');
 
-  await expect(page.getByRole('heading', { name: /supported (browser|computer)/i })).toBeVisible();
-  await expect(page.getByText(/Chrome or Edge|Mac, Windows, or Linux/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Lightweaver USB helper/i })).toBeVisible();
+  await expect(page.getByText(/card plugged into this computer/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
 });
@@ -66,7 +66,7 @@ test('technician controls remain separately labelled outside install mode', asyn
 
 test('Studio navigation is held on the installer while an install is active', async ({ page }) => {
   await page.goto('/#screen=flash&mode=install');
-  await expect(page.getByRole('heading', { name: /supported (browser|computer)|Install Lightweaver/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /USB helper|Continue on a computer|Install Lightweaver/i })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } })));
   await page.getByRole('button', { name: 'Layout' }).click();
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);

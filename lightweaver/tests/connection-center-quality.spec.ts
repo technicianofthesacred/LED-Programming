@@ -55,3 +55,18 @@ test('normalizes a bare local card name before validation and storage', async ({
   await expect(page.getByRole('alert')).toContainText('local Lightweaver hostname');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('lightweaver.local');
 });
+
+test('renders verified card behavior through the new orchestrator state', async ({ page }) => {
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified',
+    via: 'bridge',
+    host: 'lightweaver.local',
+    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0' },
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+  await expect(dialog).toContainText('Gallery card');
+  await expect(dialog).toContainText('440');
+});

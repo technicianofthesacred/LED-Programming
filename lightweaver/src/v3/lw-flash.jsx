@@ -279,13 +279,21 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
   }
 
   function UnsupportedInstall({ action }) {
+    const firstStep = action.legacyId === 'supported-device-handoff'
+      ? 'Open led.mandalacodes.com on a Mac, Windows, or Linux computer.'
+      : action.legacyId === 'connector-fallback'
+        ? 'Keep the card plugged into this computer and follow the recovery instructions.'
+        : action.id === 'escape-insecure-card-frame'
+          ? 'Open led.mandalacodes.com in its own secure tab.'
+          : 'Open the Lightweaver USB helper on this computer.';
+
     return (
       <div className="card install-handoff" role="status">
         <div className="eyebrow">Your project is safe in Studio</div>
         <h1>{action.title}</h1>
         <p>{action.explanation}</p>
         <ol>
-          <li>Open <strong>led.mandalacodes.com</strong> on the supported computer or browser.</li>
+          <li>{firstStep}</li>
           <li>Open this project, then choose <strong>Connect card</strong> and <strong>Blank or not responding</strong>.</li>
           <li>Plug the Lightweaver card into that computer by USB.</li>
         </ol>

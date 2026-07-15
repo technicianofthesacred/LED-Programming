@@ -13,51 +13,61 @@ export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
 
 const ACTION_COPY = Object.freeze({
   'ready-browser-usb': Object.freeze({
+    legacyId: 'web-serial-install',
     title: 'Connect the card by USB',
     explanation: 'Plug the Lightweaver card into this computer with a data cable, then choose the card.',
     primaryLabel: 'Choose USB card',
   }),
   'escape-insecure-card-frame': Object.freeze({
-    title: 'Open secure Lightweaver Studio',
-    explanation: 'Open Studio in its own secure tab, then connect the card by USB there.',
-    primaryLabel: 'Open secure Studio',
+    legacyId: 'supported-browser-handoff',
+    title: 'Open secure installer',
+    explanation: 'Studio is inside the local card page, where USB installation is blocked. Open the secure installer in its own tab.',
+    primaryLabel: 'Open secure installer',
   }),
   'ready-local-card': Object.freeze({
+    legacyId: 'connected',
     title: 'Lightweaver card ready',
     explanation: 'Studio verified the connected card and can control it now.',
     primaryLabel: 'Continue',
   }),
   'needs-card-update': Object.freeze({
+    legacyId: 'web-serial-install',
     title: 'Update this Lightweaver card',
     explanation: 'Keep the card plugged into this computer and install the current Lightweaver software.',
     primaryLabel: 'Update card',
   }),
   'launch-native-bridge': Object.freeze({
+    legacyId: 'supported-browser-handoff',
     title: 'Open the Lightweaver USB helper',
     explanation: 'Keep the card plugged into this computer, then open the USB helper to continue.',
     primaryLabel: 'Open USB helper',
   }),
   'install-native-bridge': Object.freeze({
+    legacyId: 'connector-fallback',
     title: 'Install the Lightweaver USB helper',
     explanation: 'Install the USB helper on this computer, then return here with the card plugged in.',
     primaryLabel: 'Install USB helper',
   }),
   'handoff-supported-device': Object.freeze({
+    legacyId: 'supported-device-handoff',
     title: 'Continue on a computer',
     explanation: 'Plug the card into a Mac, Windows, or Linux computer and open Lightweaver Studio there.',
     primaryLabel: 'Show computer steps',
   }),
   'wrong-card': Object.freeze({
+    legacyId: 'reconnect-known-card',
     title: 'Connect the expected card',
     explanation: 'Studio found a different Lightweaver card. Unplug it and connect the expected card.',
     primaryLabel: 'Check again',
   }),
   'recoverable-failure': Object.freeze({
+    legacyId: 'retry-card-page',
     title: 'Check the card and try again',
     explanation: 'Keep the card powered, check that its page is open, then try the connection again.',
     primaryLabel: 'Try again',
   }),
   'needs-safe-recovery': Object.freeze({
+    legacyId: 'connector-fallback',
     title: 'Recover the card safely',
     explanation: 'Leave the card powered and connected. Follow the recovery steps before writing to it again.',
     primaryLabel: 'Start safe recovery',
@@ -174,9 +184,9 @@ export function nextCardConnectionAction(input = {}) {
     return action('needs-card-update');
   }
 
-  if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
-
   if (requiresInstaller(input.intent, reason)) return installationRoute(capabilities);
+
+  if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
 
   if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge') {
     return action('recoverable-failure', {

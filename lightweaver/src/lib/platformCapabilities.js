@@ -12,7 +12,7 @@ function normalizePlatform({ userAgent, platform, maxTouchPoints }) {
 
 export function detectPlatformCapabilities({
   secureContext = false,
-  topLevel = false,
+  topLevel = true,
   serial = null,
   userAgent = '',
   platform = '',

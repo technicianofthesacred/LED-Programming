@@ -34,12 +34,12 @@ test('detects an embedded Studio beneath an insecure ancestor as needing a secur
   assert.equal(result.mustEscapeToSecureInstaller, true);
 });
 
-test('defaults unknown page position conservatively instead of authorizing USB', () => {
+test('keeps secure Web Serial working when a legacy caller omits page position', () => {
   const result = detectPlatformCapabilities({ secureContext: true, serial: {} });
 
-  assert.equal(result.topLevel, false);
-  assert.equal(result.embedded, true);
-  assert.equal(result.canWebSerialInstall, false);
+  assert.equal(result.topLevel, true);
+  assert.equal(result.embedded, false);
+  assert.equal(result.canWebSerialInstall, true);
 });
 
 test('escapes whenever page position or security blocks the installer', () => {

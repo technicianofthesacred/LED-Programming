@@ -42,6 +42,25 @@ test('exports the exact approved orchestrator vocabulary', () => {
   assert.equal(Object.isFrozen(CARD_CONNECTION_ACTION_IDS), true);
 });
 
+test('provides explicit legacy behavior metadata while live consumers migrate', () => {
+  const cases = [
+    [{ intent: 'blank-card', capabilities: secureBrowserUsb }, 'web-serial-install'],
+    [{ intent: 'blank-card', capabilities: insecureChromeFrame }, 'supported-browser-handoff'],
+    [{ link: { state: 'connected-direct', card: { id: 'lw-a' } } }, 'connected'],
+    [{ link: { reason: 'firmware-too-old' }, capabilities: secureBrowserUsb }, 'web-serial-install'],
+    [{ intent: 'blank-card', capabilities: { platform: 'macos' } }, 'supported-browser-handoff'],
+    [{ link: { reason: 'native-bridge-missing' } }, 'connector-fallback'],
+    [{ intent: 'blank-card', capabilities: { platform: 'ios', isMobile: true } }, 'supported-device-handoff'],
+    [{ link: { reason: 'wrong-card' } }, 'reconnect-known-card'],
+    [{ link: { reason: 'no-answer' } }, 'retry-card-page'],
+    [{ link: { reason: 'preview-unconfirmed' } }, 'connector-fallback'],
+  ];
+
+  for (const [input, legacyId] of cases) {
+    assert.equal(nextCardConnectionAction(input).legacyId, legacyId);
+  }
+});
+
 test('routes a secure top-level Web Serial page to browser USB', () => {
   assert.equal(nextCardConnectionAction({
     intent: 'blank-card',
@@ -56,8 +75,36 @@ test('escapes an insecure embedded card frame before considering desktop fallbac
   });
 
   assert.equal(action.id, 'escape-insecure-card-frame');
+  assert.equal(action.title, 'Open secure installer');
+  assert.equal(action.primaryLabel, 'Open secure installer');
+  assert.match(action.explanation, /inside the local card page/i);
   assert.doesNotMatch(`${action.title} ${action.explanation}`, /unsupported|supported browser/i);
   assert.match(`${action.title} ${action.explanation}`, /open|Studio|secure/i);
+});
+
+test('explicit install and recovery intents outrank stale transient connection reasons', () => {
+  for (const intent of ['blank-card', 'deep-recovery']) {
+    for (const reason of ['never-connected', 'card-unreachable']) {
+      assert.equal(nextCardConnectionAction({
+        intent,
+        link: { state: 'disconnected', reason },
+        capabilities: secureBrowserUsb,
+      }).id, 'ready-browser-usb', `${intent}: ${reason}`);
+    }
+  }
+});
+
+test('uncertain writes and wrong-card failures still outrank explicit install intent', () => {
+  assert.equal(nextCardConnectionAction({
+    intent: 'blank-card',
+    link: { reason: 'preview-unconfirmed' },
+    capabilities: secureBrowserUsb,
+  }).id, 'needs-safe-recovery');
+  assert.equal(nextCardConnectionAction({
+    intent: 'deep-recovery',
+    link: { reason: 'wrong-card' },
+    capabilities: secureBrowserUsb,
+  }).id, 'wrong-card');
 });
 
 test('launches the desktop native bridge when browser USB is unavailable', () => {
