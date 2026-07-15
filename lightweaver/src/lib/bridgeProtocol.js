@@ -201,6 +201,24 @@ export function createBridgeLaunch(operation, dependencies = {}) {
   return `lightweaver://run?operation=${operation}&nonce=${nonce}&version=1`;
 }
 
+export function clearPendingBridgeLaunch(dependencies = {}) {
+  const sessionStorage = dependencies.sessionStorage ?? dependencies.storage ?? globalThis.sessionStorage;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
+  if (!sessionStorage || !localStorage) throw new Error('Pending Bridge registry storage is unavailable');
+  const tabId = sessionStorage.getItem(TAB_KEY);
+  if (!tabId) return false;
+  if (!/^[A-Za-z0-9_-]{22}$/.test(tabId)) throw new Error('Originating Bridge tab ID is invalid');
+  const records = readRegistry(localStorage);
+  let cleared = false;
+  for (const record of records) {
+    if (record.tabId === tabId) {
+      removeRecord(localStorage, record.nonce);
+      cleared = true;
+    }
+  }
+  return cleared;
+}
+
 function parseCallback(value) {
   if (typeof value !== 'string' || value.length > 1024) throw new TypeError('Invalid Bridge callback');
   const url = new URL(value);
@@ -254,7 +272,8 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
       if (!validateOperationResult(pending.operation, result)) throw new Error('Bridge callback result is incompatible with the pending operation semantics');
       assertOwner?.();
       removeRecord(localStorage, result.nonce);
-      return Object.freeze({ operation: pending.operation, ...result, physicalProof: false });
+      const { nonce: _consumedNonce, ...safeResult } = result;
+      return Object.freeze({ operation: pending.operation, ...safeResult, originTabId: pending.tabId, physicalProof: false });
     };
     const locks = dependencies.locks === undefined ? globalThis.navigator?.locks : dependencies.locks;
     if (locks?.request) {

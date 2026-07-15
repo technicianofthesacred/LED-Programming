@@ -19,6 +19,9 @@ import {
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
+import { BRIDGE_OPEN_TIMEOUT_MS, launchBridgeOperation } from '../lib/bridgeLaunch.js';
+import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
+import { useProject } from '../state/ProjectContext.jsx';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -279,7 +282,8 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     });
   }
 
-  function UnsupportedInstall({ action }) {
+  function UnsupportedInstall({ action, onLaunchBridge }) {
+    const [bridgeState, setBridgeState] = useState('idle');
     let firstStep;
     let showSecureInstaller = false;
     switch (action.id) {
@@ -322,11 +326,35 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
         {showSecureInstaller && (
           <a className="btn-lg" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">Open secure installer</a>
         )}
+        {(action.id === 'launch-native-bridge' || action.id === 'install-native-bridge') && (
+          <>
+            <button
+              className="btn-lg"
+              type="button"
+              disabled={bridgeState === 'opening' || bridgeState === 'waiting'}
+              onClick={async () => {
+                setBridgeState('opening');
+                try {
+                  await onLaunchBridge('install-current-release');
+                  setBridgeState('waiting');
+                  window.setTimeout(() => setBridgeState('missing'), BRIDGE_OPEN_TIMEOUT_MS);
+                } catch { setBridgeState('error'); }
+              }}
+            >
+              {bridgeState === 'opening' || bridgeState === 'waiting' ? 'Opening Lightweaver Bridge…' : 'Open Lightweaver Bridge'}
+            </button>
+            {bridgeState === 'waiting' && <p>Waiting for Bridge to return to Studio…</p>}
+            {bridgeState === 'missing' && <p>Bridge may not be installed. Studio did not receive a matching return; this is not installation detection.</p>}
+            {(bridgeState === 'missing' || action.id === 'install-native-bridge') && <p>A verified signed installer is not yet available. Studio does not offer an unsigned download.</p>}
+            {bridgeState === 'error' && <p role="alert">Studio could not save the project and open Bridge. Save the project, then try again.</p>}
+          </>
+        )}
       </div>
     );
   }
 
   function AutomaticInstallScreen() {
+    const { serializeProject, markProjectPersisted } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
     const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
@@ -380,7 +408,19 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
       };
     }, [installState]);
 
-    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} />;
+    const launchBridge = operation => launchBridgeOperation(operation, {
+      persistProject: async () => {
+        saveCurrentProjectToLibrary(serializeProject());
+        markProjectPersisted('browser');
+      },
+      navigate: url => {
+        const testNavigate = window.__LW_BRIDGE_NAVIGATE_FOR_TEST__;
+        if (typeof testNavigate === 'function') testNavigate(url);
+        else window.location.assign(url);
+      },
+    });
+
+    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} />;
 
     const findCard = async () => {
       if (findingRef.current || installingRef.current) return;

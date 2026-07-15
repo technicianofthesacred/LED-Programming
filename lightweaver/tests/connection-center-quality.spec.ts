@@ -39,6 +39,32 @@ function actionRegion(page) {
   return page.locator('.card-connection-action');
 }
 
+async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}) {
+  await page.evaluate(extra => {
+    const targetTabId = sessionStorage.getItem('lightweaver.bridge.origin-tab.v1');
+    const message = {
+      version: 1,
+      type: 'bridge-result',
+      deliveryId: 'AQEBAQEBAQEBAQEB',
+      targetTabId,
+      operation: 'install-current-release',
+      status: 'awaiting-card-acknowledgement',
+      code: 'flash-verified',
+      cardId: 'lw-441bf681feb0',
+      firmwareVersion: '1.2.3',
+      buildId: 'a'.repeat(40),
+      target: 'lightweaver-controller-esp32s3',
+      verification: 'flash-verified',
+      physicalOutput: 'unconfirmed',
+      ...extra,
+    };
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: 'lightweaver.bridge.result.v1',
+      newValue: JSON.stringify(message),
+    }));
+  }, overrides);
+}
+
 test('announces asynchronous connection states without repeating card metadata', async ({ page }) => {
   const announcement = page.getByRole('status');
 
@@ -131,23 +157,33 @@ test('secure iframe escapes to the fixed canonical installer in a new top-level 
   await installer.close();
 });
 
-test('native bridge states and supported-device handoff stay passive', async ({ page }) => {
+test('desktop Bridge launch persists the project, launches once, then shows a truthful signed-installer gap', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+    (window as any).__lwBridgeUrls = [];
+    (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = (url: string) => (window as any).__lwBridgeUrls.push(url);
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'launch-native-bridge');
-  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
-
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'native-bridge-missing' });
+  await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
+  await expect(actionRegion(page)).toContainText('Waiting for Lightweaver Bridge');
+  await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+  const urls = await page.evaluate(() => (window as any).__lwBridgeUrls);
+  expect(urls).toHaveLength(1);
+  expect(urls[0]).toMatch(/^lightweaver:\/\/run\?operation=install-current-release&nonce=[A-Za-z0-9_-]{43}&version=1$/);
+  await page.waitForTimeout(4100);
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'install-native-bridge');
-  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+  await expect(actionRegion(page)).toContainText(/may not be installed/i);
+  await expect(actionRegion(page)).toContainText(/signed installer is not yet available/i);
+  await expect(actionRegion(page).getByRole('link')).toHaveCount(0);
+});
 
+test('mobile handoff stays passive', async ({ page }) => {
   await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (Linux; Android 14) Mobile' });
     Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Linux armv8l' });
   });
@@ -156,6 +192,92 @@ test('native bridge states and supported-device handoff stay passive', async ({ 
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'handoff-supported-device');
   await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+});
+
+test('missing native Bridge does not expose an unsigned download', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'native-bridge-missing' });
+  await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'install-native-bridge');
+  await expect(actionRegion(page)).toContainText(/signed installer is not yet available/i);
+  await expect(actionRegion(page).getByRole('link')).toHaveCount(0);
+});
+
+test('originating tab resumes once, verifies exact card build, and requires human-visible warm white', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+    (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
+    (window as any).__lightChecks = 0;
+    (window as any).__LW_RECOVER_LIGHTS_FOR_TEST__ = async () => {
+      (window as any).__lightChecks += 1;
+      return { ok: true, accepted: true };
+    };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'Blank or not responding' }).click();
+  await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
+
+  await deliverBridgeResult(page);
+  await expect(page.getByRole('heading', { name: 'Firmware installed — verify the card' })).toBeVisible();
+  await page.waitForTimeout(4100);
+  await expect(page.getByRole('heading', { name: 'Firmware installed — verify the card' })).toBeVisible();
+
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-222222222222', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+  });
+  await expect(page.getByRole('dialog')).toContainText(/expected lw-441bf681feb0, but lw-222222222222 answered/i);
+
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.2', buildId: 'a'.repeat(40) },
+  });
+  await expect(page.getByRole('dialog')).toContainText(/expected firmware 1.2.3/i);
+
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'b'.repeat(40) },
+  });
+  await expect(page.getByRole('dialog')).toContainText(/build does not match/i);
+
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+  });
+  await page.getByRole('button', { name: 'Run light check' }).click();
+  await expect(page.getByText('Are the lights warm white?')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__lightChecks)).toBe(1);
+
+  await deliverBridgeResult(page);
+  await expect.poll(() => page.evaluate(() => (window as any).__lightChecks)).toBe(1);
+  await page.getByRole('button', { name: 'Yes, they are warm white' }).click();
+  await expect(page.getByRole('heading', { name: 'Lightweaver is ready' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toContainText('visible warm-white lights are confirmed');
+});
+
+test('a negative physical check offers real recovery and reconnect actions', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+    (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
+    (window as any).__LW_RECOVER_LIGHTS_FOR_TEST__ = async () => ({ ok: true, accepted: true });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByRole('button', { name: 'Blank or not responding' }).click();
+  await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
+  await deliverBridgeResult(page);
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+  });
+  await page.getByRole('button', { name: 'Run light check' }).click();
+  await page.getByRole('button', { name: 'No', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Recover current release' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reconnect', exact: true })).toBeVisible();
 });
 
 test('wrong-card and recoverable failures retry the existing connection step', async ({ page }) => {
@@ -198,7 +320,7 @@ test('card update and safe recovery use install only when browser USB is usable'
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
 });
 
-test('safe recovery without browser USB is passive and names the coming Bridge path', async ({ page }) => {
+test('safe recovery without browser USB offers the real Bridge recovery path', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
@@ -207,11 +329,11 @@ test('safe recovery without browser USB is passive and names the coming Bridge p
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'recovery-unconfirmed' });
 
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-safe-recovery');
-  await expect(actionRegion(page)).toContainText(/Bridge recovery is coming/i);
-  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
+  await expect(actionRegion(page)).toContainText(/keep the card powered/i);
 });
 
-test('old firmware without browser USB gives passive supported-computer guidance', async ({ page }) => {
+test('old firmware without browser USB offers the real Bridge update path', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
@@ -220,9 +342,8 @@ test('old firmware without browser USB gives passive supported-computer guidance
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'firmware-too-old' });
 
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-card-update');
-  await expect(actionRegion(page)).toContainText(/Bridge update is coming/i);
-  await expect(actionRegion(page)).toContainText(/supported computer/i);
-  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+  await expect(actionRegion(page)).toContainText(/Bridge installs the current release/i);
+  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
 });
 
 test('working setup card restores AP steps and continues through 192.168.4.1', async ({ page }) => {

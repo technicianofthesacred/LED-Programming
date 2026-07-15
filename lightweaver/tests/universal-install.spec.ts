@@ -41,16 +41,16 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeEnabled();
 });
 
-test('desktop without browser USB gives a truthful passive fallback and keeps the project in Studio', async ({ page }) => {
+test('desktop without browser USB offers Lightweaver Bridge and keeps the canonical Studio URL', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
   await page.goto('/#screen=flash&mode=install');
 
-  await expect(page.getByRole('heading', { name: /secure Lightweaver Studio/i })).toBeVisible();
-  await expect(page.getByText(/USB helper is not available yet/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+  await expect(page.locator('body')).not.toContainText('/design');
 });
 
 test('installer inside a secure iframe escapes to the fixed top-level installer', async ({ page }) => {

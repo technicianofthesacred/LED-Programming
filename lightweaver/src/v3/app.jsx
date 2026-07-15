@@ -7,6 +7,12 @@ import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
+import {
+  bootstrapBridgeCallback,
+  createBridgeResultChannel,
+  isBridgeCallbackLocation,
+  launchBridgeOperation,
+} from '../lib/bridgeLaunch.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
 import {
   bootstrapCardLink,
@@ -162,7 +168,9 @@ function applyStoredStudioTheme() {
 }
 
 function Shell() {
-  const [view, setView] = useState(viewFromHash);
+  const [bridgeBooting, setBridgeBooting] = useState(() => isBridgeCallbackLocation());
+  const [bridgeResult, setBridgeResult] = useState(null);
+  const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
   const [installActive, setInstallActive] = useState(false);
   const installActiveRef = useRef(false);
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
@@ -173,6 +181,27 @@ function Shell() {
   } = useProject();
   const [saveLabel, setSaveLabel] = useState('');
   const fileInputRef = useRef(null);
+  useEffect(() => {
+    const channel = createBridgeResultChannel({
+      onResult: result => {
+        setBridgeResult(result);
+        setView('layout');
+        setConnectionCenterOpen(true);
+      },
+    });
+    let active = true;
+    void bootstrapBridgeCallback({ publish: result => channel.publish(result) }).then(outcome => {
+      if (!active) return;
+      if (outcome.kind === 'result') setBridgeResult(outcome.result);
+      if (outcome.kind === 'failure') setBridgeResult(outcome);
+      if (outcome.kind !== 'none') {
+        setView('layout');
+        setConnectionCenterOpen(true);
+      }
+      setBridgeBooting(false);
+    });
+    return () => { active = false; channel.close(); };
+  }, []);
   useEffect(() => {
     applyStoredStudioTheme();
     window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
@@ -195,6 +224,7 @@ function Shell() {
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
   // count" button land on the right Layout mode; other screens carry no mode.
   useEffect(() => {
+    if (bridgeBooting) return;
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', view);
     if (view !== 'layout' && !(view === 'flash' && params.get('mode') === 'install')) params.delete('mode');
@@ -203,7 +233,7 @@ function Shell() {
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
     }
-  }, [view]);
+  }, [view, bridgeBooting]);
   useEffect(() => {
     const onHash = () => {
       if (installActiveRef.current) {
@@ -298,6 +328,19 @@ function Shell() {
     }
     catch { setSaveLabel('save failed'); }
   }, [markProjectPersisted, serializeProject]);
+  const onLaunchBridge = useCallback(async operation => {
+    await launchBridgeOperation(operation, {
+      persistProject: async () => {
+        saveCurrentProjectToLibrary(serializeProject());
+        markProjectPersisted('browser');
+      },
+      navigate: url => {
+        const testNavigate = window.__LW_BRIDGE_NAVIGATE_FOR_TEST__;
+        if (typeof testNavigate === 'function') testNavigate(url);
+        else window.location.assign(url);
+      },
+    });
+  }, [markProjectPersisted, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
       `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`,
@@ -361,6 +404,10 @@ function Shell() {
         link={cardLink}
         onClose={closeConnectionCenter}
         onConnectCard={onConnectCard}
+        onLaunchBridge={onLaunchBridge}
+        bridgeResult={bridgeResult}
+        onClearBridgeResult={outcome => setBridgeResult(outcome === 'complete' ? { kind: 'complete' } : null)}
+        recoverLights={typeof window.__LW_RECOVER_LIGHTS_FOR_TEST__ === 'function' ? window.__LW_RECOVER_LIGHTS_FOR_TEST__ : undefined}
         setupEvidence={{
           host: cardLink.host || cardStatus.host,
           mode: cardStatus.status?.setupMode || cardStatus.status?.mode,
