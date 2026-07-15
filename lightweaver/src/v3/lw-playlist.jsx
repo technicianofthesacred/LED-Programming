@@ -52,9 +52,9 @@ import {
   makePlaylistPushSuccessState,
 } from '../lib/studioActionStatus.js';
 import {
-  PHYSICAL_PREVIEW_FAILURE_MESSAGE,
   cardActionReducer,
   cardActionStatusLabel,
+  classifyCardActionFailure,
   createCardActionState,
 } from '../lib/cardAction.js';
 
@@ -201,8 +201,9 @@ function realPatternShape(patternId) {
         }
       } catch (error) {
         if (sequence !== previewSequence.current || error?.reason === 'superseded') return false;
-        dispatchPreviewAction({ type: 'fail', revision: sequence });
-        setPlaylistStatus({ kind: 'err', message: PHYSICAL_PREVIEW_FAILURE_MESSAGE, physicalPreview: true });
+        const failure = classifyCardActionFailure(error);
+        dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
+        setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
       }
       return false;
     };
@@ -257,8 +258,9 @@ function realPatternShape(patternId) {
         }
       } catch (error) {
         if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
-        dispatchPreviewAction({ type: 'fail', revision: sequence });
-        setPlaylistStatus({ kind: 'err', message: PHYSICAL_PREVIEW_FAILURE_MESSAGE, physicalPreview: true });
+        const failure = classifyCardActionFailure(error);
+        dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
+        setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
       }
       return false;
     };
@@ -279,6 +281,16 @@ function realPatternShape(patternId) {
     const openConnectionCenter = useCallback(() => {
       document.querySelector('[data-testid="card-link-status"]')?.click();
     }, []);
+
+    const previewFailureHandler = (() => {
+      switch (playlistStatus?.failure?.actionId) {
+        case 'update-card': return () => { window.location.hash = '#screen=flash'; };
+        case 'reconnect-card': return openConnectionCenter;
+        case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
+        case 'retry': return retryLatestPreview;
+        default: return null;
+      }
+    })();
 
     const fallbackLiveLook = () => {
       const firstItem = playlist[0];
@@ -440,11 +452,8 @@ function realPatternShape(patternId) {
                   <div className="pmx-status-hint">{playlistStatus.action.hint}</div>
                 }
                 <div className="pmx-status-actions">
-                  {playlistStatus.physicalPreview &&
-                    <>
-                      <button className="btn primary" onClick={openConnectionCenter}>Reconnect</button>
-                      <button className="btn" onClick={retryLatestPreview}>Retry</button>
-                    </>
+                  {playlistStatus.physicalPreview && previewFailureHandler &&
+                    <button className="btn primary" onClick={previewFailureHandler}>{playlistStatus.failure.actionLabel}</button>
                   }
                   {playlistStatus.action &&
                     <button

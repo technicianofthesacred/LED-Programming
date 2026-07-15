@@ -765,8 +765,11 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
 
 function normalizePreviewError(host, error) {
   if (error instanceof CardPushError) return error;
-  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host'].includes(error?.reason)) {
+  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host', 'bridge-missing', 'card-rejected', 'physical-output-unconfirmed'].includes(error?.reason)) {
     return new CardPushError(error.reason, error.message, error);
+  }
+  if (['bridge-timeout', 'timeout', 'card-page-closed'].includes(error?.reason)) {
+    return new CardPushError('timeout', 'The card did not answer before the preview request timed out.', error);
   }
   if (isMixedContentBlocked()) {
     return new CardPushError(
@@ -778,7 +781,7 @@ function normalizePreviewError(host, error) {
     );
   }
   if (error?.name === 'AbortError') {
-    return new CardPushError('offline', `Timed out reaching ${cardHostToUrl(host)}`, error);
+    return new CardPushError('timeout', `Timed out reaching ${cardHostToUrl(host)}`, error);
   }
   return new CardPushError('offline', `Could not reach ${cardHostToUrl(host)}`, error);
 }

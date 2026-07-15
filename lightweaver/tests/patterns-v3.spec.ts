@@ -132,7 +132,26 @@ test('Studio preview changes immediately while physical playback waits for the p
   await expect(page.getByTestId('physical-preview-status')).toHaveText('Playing on Lightweaver');
 });
 
-test('an unconfirmed physical preview keeps the Studio selection and offers reconnect plus retry', async ({ page }) => {
+test('an old card keeps the Studio selection and offers a card software update', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' }));
+  });
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ firmwareVersion: '0.9.0' }),
+  }));
+  await gotoFreshPatterns(page);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
+  const alert = page.getByRole('alert').filter({ hasText: 'This card is running old software and cannot confirm physical previews.' });
+  await expect(alert).toBeVisible();
+  await expect(alert.getByRole('button', { name: 'Update card' })).toBeVisible();
+  await expect(alert.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
+});
+
+test('an unknown preview failure stays bounded and does not render the card response', async ({ page }) => {
   await page.route('**/api/firmware-info', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -140,20 +159,17 @@ test('an unconfirmed physical preview keeps the Studio selection and offers reco
   }));
   await page.route('**/api/control', route => route.fulfill({
     status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ ok: false, cardId: 'lw-preview-test' }),
+    contentType: 'text/plain',
+    body: 'PRIVATE-CARD-RESPONSE <script>owned</script>',
   }));
   await gotoFreshPatterns(page);
   await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' })));
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
-  const alert = page.getByRole('alert').filter({ hasText: 'The Studio preview changed, but the physical lights did not. Reconnect and retry.' });
+  const alert = page.getByRole('alert').filter({ hasText: 'The physical preview could not be confirmed. Check the card connection and try again.' });
   await expect(alert).toBeVisible();
-  await expect(alert.getByRole('button', { name: 'Reconnect' })).toBeVisible();
-  await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
-  await alert.getByRole('button', { name: 'Reconnect' }).click();
-  await expect(page.getByRole('heading', { name: 'Connect Lightweaver' })).toBeVisible();
+  await expect(alert).not.toContainText('PRIVATE-CARD-RESPONSE');
+  await expect(alert.getByRole('button')).toHaveCount(0);
 });
 
 test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {

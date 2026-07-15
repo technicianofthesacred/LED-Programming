@@ -53,9 +53,9 @@ import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import {
-  PHYSICAL_PREVIEW_FAILURE_MESSAGE,
   cardActionReducer,
   cardActionStatusLabel,
+  classifyCardActionFailure,
   createCardActionState,
 } from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
@@ -343,6 +343,7 @@ import {
     const [recoveryConfirmation, setRecoveryConfirmation] = useState('');
     const [cardSave, dispatchCardSave] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
+    const [previewFailure, setPreviewFailure] = useState(null);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
@@ -361,6 +362,7 @@ import {
         livePreviewTimer.current = null;
       }
       dispatchPreviewAction({ type: 'reset' });
+      setPreviewFailure(null);
     }, []);
 
     // Warm default so first load reads warm (Lava Lamp-like) like the mockup,
@@ -515,6 +517,7 @@ import {
       const sequence = ++livePreviewSeq.current;
       latestPreviewIntent.current = { look: nextLook, target };
       dispatchPreviewAction({ type: 'start', revision: sequence });
+      setPreviewFailure(null);
       const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
       livePreviewTimer.current = setTimeout(async () => {
         setHandoffUrl('');
@@ -539,6 +542,7 @@ import {
           );
           if (sequence === livePreviewSeq.current) {
             dispatchPreviewAction({ type: 'confirm', revision: sequence });
+            setPreviewFailure(null);
             markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
             setStatusKind('');
             setStatus('');
@@ -548,12 +552,14 @@ import {
             return;
           }
           if (sequence === livePreviewSeq.current) {
-            dispatchPreviewAction({ type: 'fail', revision: sequence });
+            const failure = classifyCardActionFailure(error);
+            dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
+            setPreviewFailure(failure);
             setStatusKind('err');
             if (error?.reason === 'mixed-content') {
               setHandoffUrl(buildCardConfigHandoffUrl(cardHost, runtimePackage));
             }
-            setStatus(PHYSICAL_PREVIEW_FAILURE_MESSAGE);
+            setStatus(failure.message);
           }
         }
       }, delayMs);
@@ -1072,6 +1078,28 @@ import {
     const targetTotal = Math.max(0, sectionTargets.length - 1) || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
     const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
+    const hasPreviewFailureAction = previewAction.status === 'failed' && Boolean(previewFailure?.actionId);
+    const runPreviewFailureAction = () => {
+      switch (previewFailure?.actionId) {
+        case 'update-card':
+          window.location.hash = '#screen=flash';
+          break;
+        case 'reconnect-card':
+          openConnectionCenter();
+          break;
+        case 'open-card-page':
+          openCardPage();
+          break;
+        case 'retry':
+          retryLatestPreview();
+          break;
+        case 'recover-lights':
+          void repairLed();
+          break;
+        default:
+          break;
+      }
+    };
 
     return (
       <div className="screen">
@@ -1123,10 +1151,9 @@ import {
                     <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
                   </div>
                 }
-                {status === PHYSICAL_PREVIEW_FAILURE_MESSAGE && previewAction.status === 'failed' &&
+                {hasPreviewFailureAction &&
                   <div className="pmx-status-actions">
-                    <button type="button" className="btn primary" onClick={openConnectionCenter}>Reconnect</button>
-                    <button type="button" className="btn" onClick={retryLatestPreview}>Retry</button>
+                    <button type="button" className="btn primary" onClick={runPreviewFailureAction}>{previewFailure.actionLabel}</button>
                   </div>
                 }
                 {recoveryConfirmation === 'pending' &&
