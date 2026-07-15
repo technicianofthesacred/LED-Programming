@@ -282,16 +282,6 @@ function realPatternShape(patternId) {
       document.querySelector('[data-testid="card-link-status"]')?.click();
     }, []);
 
-    const previewFailureHandler = (() => {
-      switch (playlistStatus?.failure?.actionId) {
-        case 'update-card': return () => { window.location.hash = '#screen=flash'; };
-        case 'reconnect-card': return openConnectionCenter;
-        case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
-        case 'retry': return retryLatestPreview;
-        default: return null;
-      }
-    })();
-
     const fallbackLiveLook = () => {
       const firstItem = playlist[0];
       if (firstItem?.type === 'combo') {
@@ -303,7 +293,10 @@ function realPatternShape(patternId) {
     };
 
     const resetLiveOutput = async () => {
+      previewSequence.current += 1;
+      dispatchPreviewAction({ type: 'reset' });
       setHandoffUrl('');
+      setPlaylistStatus(null);
       try {
         const testStrip = readTestStrip();
         if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
@@ -311,6 +304,17 @@ function realPatternShape(patternId) {
         setLive(null);
       } catch { /* best-effort */ }
     };
+
+    const previewFailureHandler = (() => {
+      switch (playlistStatus?.failure?.actionId) {
+        case 'update-card': return () => { window.location.hash = '#screen=flash'; };
+        case 'reconnect-card': return openConnectionCenter;
+        case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
+        case 'retry': return retryLatestPreview;
+        case 'recover-lights': return resetLiveOutput;
+        default: return null;
+      }
+    })();
 
     const loadPlaylistToCard = async ({ allowLayoutChange = false, allowProjectChange = false } = {}) => {
       previewSequence.current += 1;

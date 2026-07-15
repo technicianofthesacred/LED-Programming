@@ -158,7 +158,7 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   const explicitlyLegacy = options.previewAcknowledgementCapability === 'legacy-ok-only';
   if (hasRequestedIntent && !hasConfirmedLook && !hasConfirmedRevision && !explicitlyLegacy) {
     throw previewAckError(
-      'preview-unconfirmed',
+      'physical-output-unconfirmed',
       'The card answered, but did not confirm which physical preview it applied.',
     );
   }

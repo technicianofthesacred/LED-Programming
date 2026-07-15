@@ -988,6 +988,8 @@ import {
     const repairLed = async () => {
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
       const sequence = ++livePreviewSeq.current;
+      dispatchPreviewAction({ type: 'reset' });
+      setPreviewFailure(null);
       setHandoffUrl('');
       setRecoveryConfirmation('');
       setStatusKind('');

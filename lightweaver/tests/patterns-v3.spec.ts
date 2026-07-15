@@ -136,7 +136,7 @@ test('an old card keeps the Studio selection and offers a card software update',
   await page.addInitScript(() => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' }));
   });
-  await page.route('**/api/firmware-info', route => route.fulfill({
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({ firmwareVersion: '0.9.0' }),
@@ -170,6 +170,56 @@ test('an unknown preview failure stays bounded and does not render the card resp
   await expect(alert).toBeVisible();
   await expect(alert).not.toContainText('PRIVATE-CARD-RESPONSE');
   await expect(alert.getByRole('button')).toHaveCount(0);
+});
+
+test('unconfirmed physical output recovers lights and clears the failed preview action', async ({ page }) => {
+  let recoveryCount = 0;
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-output-test' }));
+  });
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-output-test', firmwareVersion: '1.0.0' }),
+  }));
+  await page.route('**/api/control', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, cardId: 'lw-output-test' }),
+  }));
+  await page.route('**/api/wiring/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, state: 'known-good', currentOutputs: [] }),
+  }));
+  await page.route('**/api/recover-lights', route => {
+    recoveryCount += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        accepted: true,
+        diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+      }),
+    });
+  });
+  await page.route('**/api/reboot', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true }),
+  }));
+  await gotoFreshPatterns(page);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  const alert = page.getByRole('alert').filter({ hasText: 'The preview reached the card, but the lights did not confirm physical output.' });
+  await expect(alert.getByRole('button', { name: 'Recover lights' })).toBeVisible();
+  await alert.getByRole('button', { name: 'Recover lights' }).click();
+
+  await expect(alert).toHaveCount(0);
+  await expect.poll(() => recoveryCount).toBe(2);
+  await expect(page.getByText('Recovery frame sent. Do you see warm white on the real LEDs?')).toBeVisible();
+  await expect(page.getByRole('alert').getByRole('button', { name: 'Recover lights' })).toHaveCount(0);
 });
 
 test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {

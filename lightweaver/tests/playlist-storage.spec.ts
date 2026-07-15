@@ -170,3 +170,41 @@ test('Playlist transport timeout keeps its prior live row and offers a bounded r
   await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
   await expect(alert.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
 });
+
+test('Playlist unconfirmed physical output routes Recover lights to reset live', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  let controlCount = 0;
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-playlist-output-test' }));
+  });
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-playlist-output-test', firmwareVersion: '1.0.0' }),
+  }));
+  await page.route('**/api/zones', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, zones: [] }),
+  }));
+  await page.route('**/api/control', route => {
+    controlCount += 1;
+    const request = JSON.parse(route.request().postData() || '{}');
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(controlCount === 1
+        ? { ok: true, cardId: 'lw-playlist-output-test' }
+        : { ok: true, cardId: 'lw-playlist-output-test', patternId: request.patternId }),
+    });
+  });
+  await gotoPlaylist(page, project);
+
+  await page.locator('.pl-row').first().getByRole('button', { name: 'Live' }).click();
+  const alert = page.getByTestId('playlist-card-status');
+  await expect(alert).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await alert.getByRole('button', { name: 'Recover lights' }).click();
+
+  await expect.poll(() => controlCount).toBe(2);
+  await expect(alert).toHaveCount(0);
+});

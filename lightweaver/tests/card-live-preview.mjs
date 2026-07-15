@@ -126,7 +126,7 @@ for (const [label, responseBody, reason] of [
   ['malformed JSON', null, 'invalid-acknowledgement'],
   ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed'],
   ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card'],
-  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'preview-unconfirmed'],
+  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'physical-output-unconfirmed'],
   ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch'],
   ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch'],
 ]) {

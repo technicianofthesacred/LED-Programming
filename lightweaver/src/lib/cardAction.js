@@ -52,13 +52,11 @@ const CARD_ACTION_FAILURE_ALIASES = Object.freeze({
 });
 
 export function classifyCardActionFailure(error) {
-  const reportedCode = typeof error?.reason === 'string'
-    ? error.reason
-    : typeof error?.code === 'string'
-      ? error.code
-      : '';
-  const code = CARD_ACTION_FAILURE_ALIASES[reportedCode] ||
-    (Object.hasOwn(CARD_ACTION_FAILURES, reportedCode) ? reportedCode : 'unknown');
+  const code = [error?.reason, error?.code].reduce((recognized, value) => {
+    if (recognized || typeof value !== 'string') return recognized;
+    const canonical = CARD_ACTION_FAILURE_ALIASES[value] || value;
+    return canonical !== 'unknown' && Object.hasOwn(CARD_ACTION_FAILURES, canonical) ? canonical : '';
+  }, '') || 'unknown';
   return { code, ...CARD_ACTION_FAILURES[code] };
 }
 

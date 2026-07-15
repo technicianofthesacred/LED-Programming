@@ -31,6 +31,20 @@ test('classifies the wrong card with an explicit identity recovery', () => {
   });
 });
 
+test('uses the first recognized value across reason and code', () => {
+  assert.deepEqual(
+    classifyCardActionFailure({ reason: 'bridge', code: 'wrong-card', message: 'untrusted detail' }),
+    {
+      code: 'wrong-card',
+      message: 'Studio reached a different Lightweaver card. Reconnect the expected card, or explicitly choose this card.',
+      actionId: 'reconnect-card',
+      actionLabel: 'Reconnect card',
+    },
+  );
+  assert.equal(classifyCardActionFailure({ reason: 'untrusted', code: 'bridge-timeout' }).code, 'timeout');
+  assert.equal(classifyCardActionFailure({ reason: 'untrusted', code: 'also-untrusted' }).code, 'unknown');
+});
+
 test('classifies a missing local bridge with a card-page recovery', () => {
   assert.deepEqual(classifyCardActionFailure({ reason: 'bridge-missing' }), {
     code: 'bridge-missing',
