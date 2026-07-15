@@ -87,6 +87,29 @@ async function authorize(h, operation = 'install-current-release') {
   return { inspected, confirmation };
 }
 
+test('maintenance operations use explicit safe runtime methods without loading or writing firmware', async () => {
+  const h = harness({ runtime: {
+    async restartOne() { h.calls.push('restart-one'); return { cardId: 'lw-441bf681feb0', fingerprint: 'fp', chipName: 'ESP32-S3', flashSize: '16MB' }; },
+    async releaseUsb() { h.calls.push('release-usb'); return { released: true }; },
+  } });
+  const inspected = await h.runner.runMaintenance('inspect-compatible-card');
+  const restarted = await h.runner.runMaintenance('restart-card');
+  const released = await h.runner.runMaintenance('release-usb');
+  assert.equal(inspected.cardId, 'lw-441bf681feb0');
+  assert.equal(restarted.cardId, 'lw-441bf681feb0');
+  assert.equal(released.released, true);
+  assert.deepEqual(h.calls, ['inspect', 'restart-one', 'release-usb']);
+});
+
+test('maintenance identity and USB failures remain structured and pre-mutation', async () => {
+  const wrong = harness({
+    runtime: { async restartOne() { return { cardId: 'lw-441bf681feb0', fingerprint: 'fp', chipName: 'ESP32', flashSize: '4MB' }; } },
+  });
+  await assert.rejects(() => wrong.runner.runMaintenance('restart-card'), error => error.classification === 'recoverable-failure' && error.phase === 'inspection');
+  const release = harness({ runtime: { async releaseUsb() { throw Object.assign(new Error('USB release failed'), { code: 'usb-release-failed' }); } } });
+  await assert.rejects(() => release.runner.runMaintenance('release-usb'), error => error.classification === 'usb-ownership-uncertain');
+});
+
 test('successful install writes exactly one verified factory image and never confirms LEDs', async () => {
   const h = harness();
   const events = [];

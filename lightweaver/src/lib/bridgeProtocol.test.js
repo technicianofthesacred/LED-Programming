@@ -46,6 +46,41 @@ test('Studio rejects wrong origin, nonce, expiry, malformed results, and physica
   assert.throws(() => consumeBridgeCallback(`${callback}&extra=1`, { currentOrigin: 'https://led.mandalacodes.com', storage: setup(), now: () => 1 }));
 });
 
+test('Studio always clears callback fields but preserves pending state for wrong nonce or malformed results', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const storage = memoryStorage();
+  const crypto = { getRandomValues(bytes) { bytes.fill(1); return bytes; } };
+  createBridgeLaunch('restart-card', { crypto, storage, now: () => 0 });
+  const valid = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&cardId=lw-441bf681feb0&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
+  const historyCalls = [];
+  const deps = { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 1, history: { replaceState: (...args) => historyCalls.push(args) } };
+  assert.throws(() => consumeBridgeCallback(valid.replace(NONCE, 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI'), deps), /nonce/i);
+  assert.throws(() => consumeBridgeCallback(`${valid}&extra=1`, deps));
+  assert.equal(historyCalls.length, 2);
+  assert.equal(consumeBridgeCallback(valid, deps).operation, 'restart-card');
+  assert.equal(historyCalls.length, 3);
+});
+
+test('Studio clears history for absent and expired pending state and rejects alternate nonce lengths', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=recoverable-failure&code=no-compatible-card&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${NONCE}&version=1`;
+  const historyCalls = [];
+  const history = { replaceState: (...args) => historyCalls.push(args) };
+  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history }), /pending/i);
+  const storage = memoryStorage();
+  createBridgeLaunch('release-usb', { crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } }, storage, now: () => 0 });
+  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', storage, now: () => 300_000, history }), /expired/i);
+  assert.equal(historyCalls.length, 2);
+  for (const bytes of [16, 64]) {
+    assert.throws(() => consumeBridgeCallback(callback.replace(NONCE, Buffer.alloc(bytes).toString('base64url')), {
+      currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history,
+    }));
+  }
+  assert.throws(() => consumeBridgeCallback(callback.replace(NONCE, `${NONCE.slice(0, -1)}B`), {
+    currentOrigin: 'https://led.mandalacodes.com', storage: memoryStorage(), now: () => 0, history,
+  }));
+});
+
 test('Bridge and Studio protocol constants cannot silently drift', async () => {
   const studio = await import('./bridgeProtocol.js');
   const bridge = await import('../../../lightweaver-bridge/src/deep-link-protocol.js');

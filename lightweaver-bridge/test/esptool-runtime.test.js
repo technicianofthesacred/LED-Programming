@@ -28,6 +28,38 @@ test('native runtime derives card id, restores application boot, then releases U
   assert.deepEqual(calls, ['reset', 'disconnect']);
 });
 
+test('native restart identifies, hard-resets to the app, and always releases USB', async () => {
+  const calls = [];
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: { chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } }, async detectFlashSize() { return '16MB'; } },
+      transport: { async disconnect() { calls.push('disconnect'); } },
+    }),
+    reset: async () => calls.push('reset'),
+  });
+  assert.equal((await runtime.restartOne()).cardId, 'lw-441bf681feb0');
+  assert.deepEqual(calls, ['reset', 'disconnect']);
+});
+
+test('native USB release closes owned connections and is idempotent', async () => {
+  let disconnects = 0;
+  const { createEsptoolRuntime } = require('../src/esptool-runtime');
+  const runtime = createEsptoolRuntime({
+    selectPort: async () => ({}),
+    connect: async () => ({
+      loader: { chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } }, async detectFlashSize() { return '16MB'; } },
+      transport: { async disconnect() { disconnects += 1; } },
+    }),
+    reset: async () => {},
+  });
+  await runtime.connectForWrite();
+  await runtime.releaseUsb();
+  await runtime.releaseUsb();
+  assert.equal(disconnects, 1);
+});
+
 function failingIdentityLoader(stage, calls) {
   return {
     chip: {

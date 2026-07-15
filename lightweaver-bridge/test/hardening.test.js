@@ -187,6 +187,45 @@ test('confirmation returns installing promptly while async runner drives verifie
   assert.equal(bounded[0][1], 'install-current-release');
 });
 
+test('typed maintenance IPC executes each visible operation and emits a bounded callback result', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const called = [];
+  const bounded = [];
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { async runMaintenance(operation) { called.push(operation); return operation === 'release-usb' ? { released: true } : { compatible: true, cardId: 'lw-441bf681feb0' }; } },
+    onBoundedResult: (payload, operation) => bounded.push([payload, operation]),
+  });
+  for (const operation of ['inspect-compatible-card', 'release-usb', 'restart-card']) {
+    const result = await handlers['bridge:maintenance-operation'](event, operation);
+    assert.equal(result.state, 'awaiting-card-acknowledgement');
+    assert.equal(result.code, 'operation-complete');
+    assert.equal(result.verification, 'not-verified');
+    assert.equal(result.physicalOutput, 'unconfirmed');
+  }
+  assert.deepEqual(called, ['inspect-compatible-card', 'release-usb', 'restart-card']);
+  assert.deepEqual(bounded.map(value => value[1]), called);
+  await assert.rejects(() => handlers['bridge:maintenance-operation'](event, 'install-current-release'), /maintenance/i);
+});
+
+test('destructive launch inspection failure emits a matching structured callback without preparing', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const bounded = [];
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { async inspect() { throw Object.assign(new Error('No card'), { code: 'no-compatible-card', classification: 'recoverable-failure', phase: 'inspection' }); } },
+    onBoundedResult: (payload, operation) => bounded.push([payload, operation]),
+  });
+  const result = await handlers['bridge:inspect-for-operation'](event, 'recover-current-release');
+  assert.equal(result.classification, 'recoverable-failure');
+  assert.equal(bounded[0][1], 'recover-current-release');
+  await assert.rejects(() => handlers['bridge:inspect-for-operation'](event, 'restart-card'), /destructive/i);
+});
+
 test('IPC preserves structured failure classifications and truthful distinct result states', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
@@ -386,7 +425,7 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
 
   assert.deepEqual(Object.keys(exposed).sort(), [
     'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'inspectCompatibleCard',
-    'onLaunchRequest', 'onProgress', 'onResult', 'startOperation',
+    'inspectForOperation', 'onLaunchRequest', 'onProgress', 'onResult', 'runMaintenanceOperation', 'startOperation',
   ]);
   assert.equal('ipcRenderer' in exposed, false);
   const inspected = await exposed.inspectCompatibleCard();

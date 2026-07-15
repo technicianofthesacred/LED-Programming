@@ -51,7 +51,7 @@ function sanitizePayload(value) {
   if (typeof source.firmwareVersion === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(source.firmwareVersion)) result.firmwareVersion = source.firmwareVersion;
   if (typeof source.buildId === 'string' && /^[a-f0-9]{40}$/.test(source.buildId)) result.buildId = source.buildId;
   if (typeof source.target === 'string' && /^[a-z0-9-]{1,64}$/.test(source.target)) result.target = source.target;
-  if (source.verification === 'flash-verified') result.verification = source.verification;
+  if (source.verification === 'flash-verified' || source.verification === 'not-verified') result.verification = source.verification;
   if (source.physicalOutput === 'unconfirmed') result.physicalOutput = source.physicalOutput;
   if (source.pipelineComplete === false) result.pipelineComplete = false;
   if (typeof source.expectedCardId === 'string' && /^lw-[a-f0-9]{12}$/.test(source.expectedCardId)) result.expectedCardId = source.expectedCardId;
@@ -79,7 +79,19 @@ function sanitizeCancellation(value) {
 
 contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   inspectCompatibleCard: () => ipcRenderer.invoke('bridge:inspect').then(sanitizePayload),
+  inspectForOperation: (operation) => {
+    if (!['install-current-release', 'recover-current-release'].includes(operation)) {
+      return Promise.reject(new TypeError('Unsupported destructive operation'));
+    }
+    return ipcRenderer.invoke('bridge:inspect-for-operation', operation).then(sanitizePayload);
+  },
   startOperation: invokeOperation,
+  runMaintenanceOperation: (operation) => {
+    if (!['inspect-compatible-card', 'release-usb', 'restart-card'].includes(operation)) {
+      return Promise.reject(new TypeError('Unsupported maintenance operation'));
+    }
+    return ipcRenderer.invoke('bridge:maintenance-operation', operation).then(sanitizePayload);
+  },
   confirmDestructiveAction: invokeConfirmation,
   onProgress: (callback) => subscribe('bridge:progress', callback),
   onResult: (callback) => subscribe('bridge:result', callback),

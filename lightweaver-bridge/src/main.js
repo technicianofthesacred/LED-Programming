@@ -5,7 +5,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const {
-  createLaunchRouter, createNonceStore, createSafeCallbackOpener, findLaunchUrlInArgv, registerProtocolClient,
+  createBoundedResultCoordinator, createLaunchRouter, createNonceStore, createSafeCallbackOpener,
+  findLaunchUrlInArgv, registerProtocolClient,
 } = require('./deep-link-protocol');
 const { createIpcHandlers } = require('./ipc-handlers');
 const { createProductionDependencies } = require('./esptool-runtime');
@@ -51,6 +52,10 @@ const launchRouter = createLaunchRouter({
     mainWindow.webContents.send('bridge:launch-request', Object.freeze({ operation: request.operation }));
   },
 });
+const resultCoordinator = createBoundedResultCoordinator({
+  launchRouter,
+  openCallback: (request, result) => callbackOpener.open(request, result),
+});
 
 function routeLaunch(value) {
   try { launchRouter.route(value); } catch (error) {
@@ -59,14 +64,7 @@ function routeLaunch(value) {
 }
 
 async function returnBoundedResult(payload, completedOperation) {
-  const request = launchRouter.active;
-  if (!request) return;
-  if (request.operation !== completedOperation) {
-    launchRouter.complete();
-    return;
-  }
-  try { await callbackOpener.open(request, publicCallbackResult(payload)); }
-  finally { launchRouter.complete(); }
+  await resultCoordinator.complete(completedOperation, publicCallbackResult(payload));
 }
 
 async function createProductionRunner() {

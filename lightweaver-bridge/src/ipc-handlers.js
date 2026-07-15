@@ -4,6 +4,7 @@ const { createRendererResult, redactSensitiveText, validateOperation, validateTo
 const { isTrustedIpcEvent } = require('./security');
 
 const DESTRUCTIVE_OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
+const MAINTENANCE_OPERATIONS = new Set(['inspect-compatible-card', 'release-usb', 'restart-card']);
 
 function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {} }) {
   let pendingAuthority = null;
@@ -62,29 +63,66 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
     });
   }
 
+  async function inspectCard() {
+    pendingAuthority = null;
+    const attempt = operation.beginInspection();
+    const inspection = await runner.inspect();
+    operation.completeInspection(attempt, inspection.compatible === true);
+    return createRendererResult('inspect', 'Compatible Lightweaver card inspected. USB released.', inspection);
+  }
+
   const handlers = {
+    'bridge:maintenance-operation': async (event, requestedOperation) => {
+      assertTrusted(event);
+      validateOperation(requestedOperation);
+      if (!MAINTENANCE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported maintenance bridge operation');
+      let payload;
+      try {
+        const result = await runner.runMaintenance(requestedOperation);
+        payload = createRendererResult('awaiting-card-acknowledgement', 'Maintenance operation completed. Reconnect in Studio to verify the card and lights.', {
+          ...result,
+          code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+          verification: 'not-verified', physicalOutput: 'unconfirmed',
+        });
+      } catch (error) {
+        payload = failurePayload(error);
+      }
+      Promise.resolve(onBoundedResult(payload, requestedOperation)).catch(() => {});
+      return payload;
+    },
     'bridge:inspect': async (event) => {
       assertTrusted(event);
-      pendingAuthority = null;
-      const attempt = operation.beginInspection();
-      const inspection = await runner.inspect();
-      operation.completeInspection(attempt, inspection.compatible === true);
-      return createRendererResult('inspect', 'Compatible Lightweaver card inspected. USB released.', inspection);
+      return inspectCard();
+    },
+    'bridge:inspect-for-operation': async (event, requestedOperation) => {
+      assertTrusted(event);
+      validateOperation(requestedOperation);
+      if (!DESTRUCTIVE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported destructive bridge operation');
+      try { return await inspectCard(); } catch (error) {
+        const payload = failurePayload(error);
+        Promise.resolve(onBoundedResult(payload, requestedOperation)).catch(() => {});
+        return payload;
+      }
     },
     'bridge:start-operation': async (event, requestedOperation) => {
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!DESTRUCTIVE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported destructive bridge operation');
-      const prepared = await runner.prepare(requestedOperation);
-      operation.startOperation();
-      pendingAuthority = Object.freeze({
-        operation: requestedOperation,
-        cardId: prepared.cardId,
-        token: prepared.confirmationToken,
-        sender: event.sender,
-        senderFrame: event.senderFrame,
-      });
-      return createRendererResult('confirm', prepared.warning, prepared);
+      try {
+        const prepared = await runner.prepare(requestedOperation);
+        operation.startOperation();
+        pendingAuthority = Object.freeze({
+          operation: requestedOperation,
+          cardId: prepared.cardId,
+          token: prepared.confirmationToken,
+          sender: event.sender,
+          senderFrame: event.senderFrame,
+        });
+        return createRendererResult('confirm', prepared.warning, prepared);
+      } catch (error) {
+        Promise.resolve(onBoundedResult(failurePayload(error), requestedOperation)).catch(() => {});
+        throw error;
+      }
     },
     'bridge:confirm-destructive': async (event, token) => {
       assertTrusted(event);

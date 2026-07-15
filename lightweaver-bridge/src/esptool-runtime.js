@@ -44,6 +44,7 @@ async function connectWithTrackedCleanup({ core, port, createTransport, createLo
 }
 
 function createEsptoolRuntime({ selectPort, connect, reset }) {
+  const ownedConnections = new Set();
   async function identify(connection) {
     const { loader } = connection;
     const chipName = loader?.chip?.CHIP_NAME || connection.chip;
@@ -55,7 +56,17 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
 
   async function connectOne() {
     const port = await selectPort();
-    return connect(port);
+    const connection = await connect(port);
+    const disconnect = connection.transport.disconnect.bind(connection.transport);
+    connection.transport.disconnect = async () => {
+      try {
+        const result = await disconnect();
+        ownedConnections.delete(connection);
+        return result;
+      } catch (error) { throw error; }
+    };
+    ownedConnections.add(connection);
+    return connection;
   }
 
   return Object.freeze({
@@ -96,6 +107,24 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
         }
         throw error;
       }
+    },
+    async restartOne() {
+      const connection = await connectOne();
+      try {
+        const identity = await identify(connection);
+        await reset(connection);
+        return identity;
+      } finally {
+        await connection.transport.disconnect();
+      }
+    },
+    async releaseUsb() {
+      const failures = [];
+      for (const connection of [...ownedConnections]) {
+        try { await connection.transport.disconnect(); } catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw runtimeFailure('usb-release-failed', `USB release failed: ${failures[0]?.message || 'unknown close failure'}`, 'usb-release');
+      return Object.freeze({ released: true });
     },
     reset,
   });

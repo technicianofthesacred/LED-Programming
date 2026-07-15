@@ -52,12 +52,17 @@ function render(payload = {}) {
 
 primaryAction.addEventListener('click', async () => {
   try {
-    if (currentState === 'confirm') {
+    if (currentState === 'select-card' && ['inspect-compatible-card', 'release-usb', 'restart-card'].includes(selectedOperation)) {
+      render({ state: 'inspect', message: `${selectedOperation.replaceAll('-', ' ')} is running. Keep the card connected.` });
+      render(await bridge.runMaintenanceOperation(selectedOperation));
+    } else if (currentState === 'confirm') {
       render(await bridge.confirmDestructiveAction(confirmationToken));
     } else if (['complete', 'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain'].includes(currentState)) {
       render({ state: 'select-card' });
     } else {
-      const inspected = await bridge.inspectCompatibleCard();
+      const inspected = selectedOperation === 'install-current-release' || selectedOperation === 'recover-current-release'
+        ? await bridge.inspectForOperation(selectedOperation)
+        : await bridge.inspectCompatibleCard();
       if (inspected.compatible && (selectedOperation === 'install-current-release' || selectedOperation === 'recover-current-release')) {
         render(await bridge.startOperation(selectedOperation));
       } else render(inspected);
@@ -80,5 +85,12 @@ bridge.onLaunchRequest(({ operation }) => {
     state: 'select-card',
     message: `Studio requested ${operation.replaceAll('-', ' ')}. Inspect the connected card; the Bridge will still require confirmation before any destructive action.`,
   });
+  primaryAction.textContent = ({
+    'install-current-release': 'Inspect before install',
+    'recover-current-release': 'Inspect before recovery',
+    'inspect-compatible-card': 'Inspect connected card',
+    'release-usb': 'Release USB safely',
+    'restart-card': 'Restart connected card',
+  })[operation];
 });
 render({ state: 'select-card' });

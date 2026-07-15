@@ -20,6 +20,10 @@ test('launch parser accepts only the exact bounded canonical form', () => {
     VALID.replace('operation=', 'operation=x&operation='), VALID.replace('&nonce=', '&nonce=x&nonce='),
     VALID.replace('version=1', 'version=2'), VALID.replace('nonce=', 'nonce=%41'),
     VALID.replace('nonce=', 'nonce=+'), VALID.replace(NONCE, 'short'),
+    VALID.replace(NONCE, Buffer.alloc(16).toString('base64url')),
+    VALID.replace(NONCE, Buffer.alloc(64).toString('base64url')),
+    VALID.replace(NONCE, `${NONCE}=`),
+    VALID.replace(NONCE, `${NONCE.slice(0, -1)}B`),
     VALID.replace('install-current-release', 'flash-file'), 'lightweaver://run',
     `lightweaver://run?nonce=${NONCE}&operation=install-current-release&version=1`,
     `${VALID}${'x'.repeat(300)}`,
@@ -62,6 +66,21 @@ test('launch router never delivers a queued request after its five-minute expiry
   assert.throws(() => router.setReady(), /expired/i);
   assert.equal(delivered.length, 0);
   assert.equal(router.active, null);
+});
+
+test('launch router clears expired active work before admitting a fresh request at and beyond expiry', () => {
+  const { createLaunchRouter } = require('../src/deep-link-protocol');
+  for (const timestamp of [300_000, 300_001]) {
+    let now = 0;
+    const consumed = [];
+    const router = createLaunchRouter({ consumeNonce: value => consumed.push(value), deliver() {}, now: () => now });
+    router.route(VALID);
+    now = timestamp;
+    const fresh = VALID.replace(NONCE, Buffer.alloc(32, 7).toString('base64url'));
+    assert.doesNotThrow(() => router.route(fresh));
+    assert.equal(router.active.nonce, Buffer.alloc(32, 7).toString('base64url'));
+    assert.equal(consumed.length, 2);
+  }
 });
 
 test('nonce store persists only hashes and rejects replay across restart', () => {
@@ -112,6 +131,16 @@ test('fixed callback includes only bounded truthful fields and round-trips throu
   assert.equal(url.includes('/dev/cu.secret'), false);
 });
 
+test('maintenance callbacks are bounded, unverified, and never claim physical proof', () => {
+  const { buildCallbackUrl, validateCallbackUrl } = require('../src/deep-link-protocol');
+  const url = buildCallbackUrl({ nonce: NONCE, version: 1 }, {
+    status: 'awaiting-card-acknowledgement', code: 'operation-complete', cardId: 'lw-441bf681feb0',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+  });
+  assert.equal(validateCallbackUrl(url).verification, 'not-verified');
+  assert.equal(url.includes('firmwareVersion'), false);
+});
+
 test('failure callbacks omit identity and never include raw card errors', () => {
   const { buildCallbackUrl } = require('../src/deep-link-protocol');
   const url = buildCallbackUrl({ nonce: NONCE, version: 1 }, {
@@ -144,6 +173,27 @@ test('safe callback opener builds and immediately revalidates its own fixed URL'
   assert.ok(opened[0].startsWith('https://led.mandalacodes.com/#bridge-result?'));
   assert.equal('openUrl' in opener, false);
   await assert.rejects(() => opener.open({ nonce: NONCE, version: 1 }, { status: 'complete' }));
+});
+
+test('all five operations complete only their matching callback and release the router', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  const opened = [];
+  let index = 1;
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0 });
+  const coordinator = createBoundedResultCoordinator({ launchRouter: router, openCallback: async (request, result) => opened.push([request, result]) });
+  for (const operation of ['install-current-release', 'recover-current-release', 'inspect-compatible-card', 'release-usb', 'restart-card']) {
+    const nonce = Buffer.alloc(32, index++).toString('base64url');
+    router.route(`lightweaver://run?operation=${operation}&nonce=${nonce}&version=1`);
+    const result = operation === 'install-current-release' || operation === 'recover-current-release'
+      ? { status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', physicalOutput: 'unconfirmed' }
+      : { status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
+    await coordinator.complete(operation, result);
+    assert.equal(router.active, null);
+  }
+  assert.equal(opened.length, 5);
+  router.route(`lightweaver://run?operation=restart-card&nonce=${Buffer.alloc(32, 9).toString('base64url')}&version=1`);
+  await assert.rejects(() => coordinator.complete('release-usb', { status: 'recoverable-failure' }), /match/i);
+  assert.equal(router.active, null);
 });
 
 test('packaging declares the Lightweaver scheme and main wires every native launch route', () => {

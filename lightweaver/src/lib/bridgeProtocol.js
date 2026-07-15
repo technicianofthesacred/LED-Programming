@@ -22,13 +22,22 @@ function encodeBase64Url(bytes) {
   return encoded.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 }
 
+function isCanonicalNonce(value) {
+  if (typeof value !== 'string' || !NONCE_PATTERN.test(value)) return false;
+  try {
+    const base64 = value.replaceAll('-', '+').replaceAll('_', '/') + '=';
+    const binary = typeof atob === 'function' ? atob(base64) : Buffer.from(base64, 'base64').toString('binary');
+    return binary.length === 32 && encodeBase64Url(Uint8Array.from(binary, character => character.charCodeAt(0))) === value;
+  } catch { return false; }
+}
+
 function readPending(storage) {
   const raw = storage.getItem(STORAGE_KEY);
   if (!raw) return null;
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('Pending Bridge operation is invalid'); }
   if (!value || Object.keys(value).sort().join(',') !== 'createdAt,expiresAt,nonce,operation'
-    || !BRIDGE_OPERATIONS.includes(value.operation) || !NONCE_PATTERN.test(value.nonce)
+    || !BRIDGE_OPERATIONS.includes(value.operation) || !isCanonicalNonce(value.nonce)
     || !Number.isSafeInteger(value.createdAt) || !Number.isSafeInteger(value.expiresAt)
     || value.expiresAt <= value.createdAt || value.expiresAt - value.createdAt > TTL_MS) throw new Error('Pending Bridge operation is invalid');
   return value;
@@ -61,15 +70,20 @@ function parseCallback(value) {
   if (keys.length !== new Set(keys).size) throw new TypeError('Duplicate Bridge callback fields');
   const result = Object.fromEntries(params);
   const success = result.status === 'awaiting-card-acknowledgement';
-  const expected = success
+  const flashSuccess = success && result.verification === 'flash-verified';
+  const maintenanceSuccess = success && result.verification === 'not-verified' && result.code === 'operation-complete';
+  const expected = flashSuccess
     ? ['status', 'code', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'physicalOutput', 'nonce', 'version']
-    : ['status', 'code', 'target', 'verification', 'physicalOutput', 'nonce', 'version'];
+    : maintenanceSuccess && result.cardId !== undefined
+      ? ['status', 'code', 'cardId', 'target', 'verification', 'physicalOutput', 'nonce', 'version']
+      : ['status', 'code', 'target', 'verification', 'physicalOutput', 'nonce', 'version'];
   if (keys.join(',') !== expected.join(',') || !BRIDGE_RESULT_STATUSES.includes(result.status)
     || !CODE_PATTERN.test(result.code || '') || result.target !== TARGET
     || !['flash-verified', 'not-verified'].includes(result.verification) || result.physicalOutput !== 'unconfirmed'
-    || !NONCE_PATTERN.test(result.nonce || '') || result.version !== '1') throw new TypeError('Invalid Bridge callback result');
-  if (success && (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '')
-    || !BUILD_PATTERN.test(result.buildId || '') || result.verification !== 'flash-verified')) throw new TypeError('Invalid Bridge callback identity');
+    || !isCanonicalNonce(result.nonce) || result.version !== '1' || (success && !flashSuccess && !maintenanceSuccess)) throw new TypeError('Invalid Bridge callback result');
+  if (flashSuccess && (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '')
+    || !BUILD_PATTERN.test(result.buildId || ''))) throw new TypeError('Invalid Bridge callback identity');
+  if (maintenanceSuccess && result.cardId !== undefined && !CARD_PATTERN.test(result.cardId)) throw new TypeError('Invalid Bridge callback identity');
   const canonical = `${BRIDGE_CALLBACK_ORIGIN}/#bridge-result?${new URLSearchParams(expected.map(key => [key, result[key]])).toString()}`;
   if (value !== canonical) throw new TypeError('Bridge callback is not canonical');
   return { ...result, version: 1 };
@@ -80,15 +94,16 @@ export function consumeBridgeCallback(value, dependencies = {}) {
   const storage = dependencies.storage ?? globalThis.sessionStorage;
   const now = dependencies.now ?? Date.now;
   const history = dependencies.history ?? globalThis.history;
-  if (currentOrigin !== BRIDGE_CALLBACK_ORIGIN || !storage) throw new Error('Bridge callbacks are accepted only in the public Studio');
-  const pending = readPending(storage);
-  if (!pending) throw new Error('No pending Bridge operation; callback was already used');
-  const preliminary = new URL(value);
-  const nonce = new URLSearchParams(preliminary.hash.slice('#bridge-result?'.length)).get('nonce');
-  if (nonce !== pending.nonce) throw new Error('Bridge callback nonce does not match');
-  if (pending.expiresAt <= now()) { storage.removeItem(STORAGE_KEY); throw new Error('Pending Bridge operation expired'); }
-  storage.removeItem(STORAGE_KEY);
-  let result;
-  try { result = parseCallback(value); } finally { history?.replaceState?.(null, '', '/'); }
-  return Object.freeze({ operation: pending.operation, ...result, physicalProof: false });
+  try {
+    if (currentOrigin !== BRIDGE_CALLBACK_ORIGIN || !storage) throw new Error('Bridge callbacks are accepted only in the public Studio');
+    const result = parseCallback(value);
+    const pending = readPending(storage);
+    if (!pending) throw new Error('No pending Bridge operation; callback was already used');
+    if (result.nonce !== pending.nonce) throw new Error('Bridge callback nonce does not match');
+    if (pending.expiresAt <= now()) { storage.removeItem(STORAGE_KEY); throw new Error('Pending Bridge operation expired'); }
+    storage.removeItem(STORAGE_KEY);
+    return Object.freeze({ operation: pending.operation, ...result, physicalProof: false });
+  } finally {
+    history?.replaceState?.(null, '', '/');
+  }
 }

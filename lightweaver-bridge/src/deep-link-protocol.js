@@ -16,17 +16,17 @@ const TARGET = 'lightweaver-controller-esp32s3';
 const NONCE_TTL_MS = 300_000;
 const NONCE_STORE_MAX_BYTES = 16_384;
 const NONCE_STORE_MAX_RECORDS = 64;
-const NONCE_PATTERN = /^[A-Za-z0-9_-]{22,86}$/;
+const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const TOKEN_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
 const SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const BUILD_PATTERN = /^[a-f0-9]{40}$/;
-const LAUNCH_PATTERN = /^lightweaver:\/\/run\?operation=([a-z-]+)&nonce=([A-Za-z0-9_-]{22,86})&version=1$/;
+const LAUNCH_PATTERN = /^lightweaver:\/\/run\?operation=([a-z-]+)&nonce=([A-Za-z0-9_-]{43})&version=1$/;
 
 function validateNonce(nonce) {
   if (typeof nonce !== 'string' || !NONCE_PATTERN.test(nonce)) throw new TypeError('Invalid launch nonce');
   const bytes = Buffer.from(nonce, 'base64url');
-  if (bytes.length < 16 || bytes.length > 64 || bytes.toString('base64url') !== nonce) throw new TypeError('Invalid launch nonce');
+  if (bytes.length !== 32 || bytes.toString('base64url') !== nonce) throw new TypeError('Invalid launch nonce');
   return nonce;
 }
 
@@ -122,6 +122,7 @@ function createLaunchRouter({ consumeNonce, deliver, now = Date.now } = {}) {
     deliver(active);
   }
   function route(value) {
+    if (active && active.expiresAt <= now()) active = null;
     if (active) throw new Error('Another launch request is active or pending');
     const parsed = parseLaunchUrl(value);
     active = Object.freeze({ ...parsed, expiresAt: now() + NONCE_TTL_MS });
@@ -144,10 +145,15 @@ function callbackEntries(request, result) {
   if (result.target !== TARGET || !['flash-verified', 'not-verified'].includes(result.verification)
     || result.physicalOutput !== 'unconfirmed') throw new TypeError('Invalid callback result');
   const success = result.status === 'awaiting-card-acknowledgement';
-  if (success && (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '')
-    || !BUILD_PATTERN.test(result.buildId || '') || result.verification !== 'flash-verified')) throw new TypeError('Invalid callback identity');
+  const flashSuccess = success && result.verification === 'flash-verified';
+  const maintenanceSuccess = success && result.verification === 'not-verified' && code === 'operation-complete';
+  if (!flashSuccess && !maintenanceSuccess && success) throw new TypeError('Invalid callback result');
+  if (flashSuccess && (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '')
+    || !BUILD_PATTERN.test(result.buildId || ''))) throw new TypeError('Invalid callback identity');
+  if (maintenanceSuccess && result.cardId !== undefined && !CARD_PATTERN.test(result.cardId)) throw new TypeError('Invalid callback identity');
   const entries = [['status', result.status], ['code', code]];
-  if (success) entries.push(['cardId', result.cardId], ['firmwareVersion', result.firmwareVersion], ['buildId', result.buildId]);
+  if (flashSuccess) entries.push(['cardId', result.cardId], ['firmwareVersion', result.firmwareVersion], ['buildId', result.buildId]);
+  else if (maintenanceSuccess && result.cardId) entries.push(['cardId', result.cardId]);
   entries.push(['target', TARGET], ['verification', result.verification], ['physicalOutput', 'unconfirmed'], ['nonce', request.nonce], ['version', '1']);
   return entries;
 }
@@ -193,8 +199,23 @@ function createSafeCallbackOpener({ openExternal } = {}) {
   });
 }
 
+function createBoundedResultCoordinator({ launchRouter, openCallback } = {}) {
+  if (!launchRouter || typeof openCallback !== 'function') throw new TypeError('Result coordinator dependencies are required');
+  return Object.freeze({
+    async complete(completedOperation, result) {
+      const request = launchRouter.active;
+      if (!request) return false;
+      try {
+        if (request.operation !== completedOperation) throw new Error('Completed operation does not match the pending launch');
+        await openCallback(request, result);
+        return true;
+      } finally { launchRouter.complete(); }
+    },
+  });
+}
+
 module.exports = {
   CALLBACK_ORIGIN, NONCE_STORE_MAX_BYTES, NONCE_TTL_MS, OPERATIONS, RESULT_STATUSES,
-  buildCallbackUrl, createLaunchRouter, createNonceStore, createSafeCallbackOpener, findLaunchUrlInArgv,
+  buildCallbackUrl, createBoundedResultCoordinator, createLaunchRouter, createNonceStore, createSafeCallbackOpener, findLaunchUrlInArgv,
   parseLaunchUrl, registerProtocolClient, validateCallbackUrl, validateNonce,
 };

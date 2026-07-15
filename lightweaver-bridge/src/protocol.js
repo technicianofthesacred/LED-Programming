@@ -52,7 +52,7 @@ function createRendererResult(state, message, fields = {}) {
   if (typeof fields.firmwareVersion === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(fields.firmwareVersion)) result.firmwareVersion = fields.firmwareVersion;
   if (typeof fields.buildId === 'string' && /^[a-f0-9]{40}$/.test(fields.buildId)) result.buildId = fields.buildId;
   if (typeof fields.target === 'string' && /^[a-z0-9-]{1,64}$/.test(fields.target)) result.target = fields.target;
-  if (fields.verification === 'flash-verified') result.verification = fields.verification;
+  if (fields.verification === 'flash-verified' || fields.verification === 'not-verified') result.verification = fields.verification;
   if (fields.physicalOutput === 'unconfirmed') result.physicalOutput = fields.physicalOutput;
   if (fields.pipelineComplete === false) result.pipelineComplete = false;
   if (typeof fields.expectedCardId === 'string' && /^lw-[a-f0-9]{12}$/.test(fields.expectedCardId)) result.expectedCardId = fields.expectedCardId;

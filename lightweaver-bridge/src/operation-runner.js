@@ -312,7 +312,32 @@ function createOperationRunner({
     });
   }
 
-  return Object.freeze({ inspect, prepare, execute, hasInspection: () => Boolean(inspection && inspection.expiresAt > now()) });
+  async function runMaintenance(operation) {
+    validateOperation(operation);
+    if (operation === 'inspect-compatible-card') return inspect();
+    if (operation === 'restart-card') {
+      return exclusive(async () => {
+        let identity;
+        try {
+          identity = await runtime.restartOne();
+          core.validateInstallHardware(identity);
+        } catch (error) { throw classifyDiscoveryError(error); }
+        return Object.freeze({ ...publicInspection(identity), restarted: true });
+      });
+    }
+    if (operation === 'release-usb') {
+      return exclusive(async () => {
+        try { await runtime.releaseUsb(); } catch (error) { throw classifyDiscoveryError(error); }
+        inspection = null;
+        authority = null;
+        verifiedRelease = null;
+        return Object.freeze({ released: true });
+      });
+    }
+    throw new BridgeOperationError('unsupported-operation', 'Unsupported maintenance bridge operation');
+  }
+
+  return Object.freeze({ inspect, prepare, execute, runMaintenance, hasInspection: () => Boolean(inspection && inspection.expiresAt > now()) });
 }
 
 module.exports = { BridgeOperationError, createOperationRunner };
