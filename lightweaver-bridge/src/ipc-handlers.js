@@ -6,8 +6,12 @@ const { isTrustedIpcEvent } = require('./security');
 const DESTRUCTIVE_OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
 const MAINTENANCE_OPERATIONS = new Set(['inspect-compatible-card', 'release-usb', 'restart-card']);
 
-function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {} }) {
+function createIpcHandlers({
+  getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {},
+  claimLaunchContext = () => null, retryCallback = async () => ({ state: 'callback-returned', message: 'Result returned to Studio.' }),
+}) {
   let pendingAuthority = null;
+  let pendingLaunch = null;
 
   function assertTrusted(event) {
     if (!isTrustedIpcEvent(event, getActiveWindow(), rendererPath)) throw new Error('Untrusted renderer IPC sender');
@@ -65,6 +69,7 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
 
   async function inspectCard() {
     pendingAuthority = null;
+    pendingLaunch = null;
     const attempt = operation.beginInspection();
     const inspection = await runner.inspect();
     operation.completeInspection(attempt, inspection.compatible === true);
@@ -76,6 +81,7 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!MAINTENANCE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported maintenance bridge operation');
+      const launchContext = claimLaunchContext(requestedOperation);
       let payload;
       try {
         const result = await runner.runMaintenance(requestedOperation);
@@ -87,8 +93,8 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
       } catch (error) {
         payload = failurePayload(error);
       }
-      Promise.resolve(onBoundedResult(payload, requestedOperation)).catch(() => {});
-      return payload;
+      const delivery = await onBoundedResult(payload, requestedOperation, launchContext);
+      return delivery?.state ? delivery : payload;
     },
     'bridge:inspect': async (event) => {
       assertTrusted(event);
@@ -98,16 +104,23 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!DESTRUCTIVE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported destructive bridge operation');
-      try { return await inspectCard(); } catch (error) {
+      const launchContext = claimLaunchContext(requestedOperation);
+      try {
+        const result = await inspectCard();
+        pendingLaunch = Object.freeze({ operation: requestedOperation, context: launchContext });
+        return result;
+      } catch (error) {
         const payload = failurePayload(error);
-        Promise.resolve(onBoundedResult(payload, requestedOperation)).catch(() => {});
-        return payload;
+        const delivery = await onBoundedResult(payload, requestedOperation, launchContext);
+        return delivery?.state ? delivery : payload;
       }
     },
     'bridge:start-operation': async (event, requestedOperation) => {
       assertTrusted(event);
       validateOperation(requestedOperation);
       if (!DESTRUCTIVE_OPERATIONS.has(requestedOperation)) throw new Error('Unsupported destructive bridge operation');
+      const launchContext = pendingLaunch?.operation === requestedOperation ? pendingLaunch.context : null;
+      pendingLaunch = null;
       try {
         const prepared = await runner.prepare(requestedOperation);
         operation.startOperation();
@@ -117,10 +130,12 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
           token: prepared.confirmationToken,
           sender: event.sender,
           senderFrame: event.senderFrame,
+          launchContext,
         });
         return createRendererResult('confirm', prepared.warning, prepared);
       } catch (error) {
-        Promise.resolve(onBoundedResult(failurePayload(error), requestedOperation)).catch(() => {});
+        const delivery = await onBoundedResult(failurePayload(error), requestedOperation, launchContext);
+        if (delivery?.state) return delivery;
         throw error;
       }
     },
@@ -144,21 +159,28 @@ function createIpcHandlers({ getActiveWindow, rendererPath, operation, runner, o
         operation.finishFlashVerified();
         const payload = createRendererResult('awaiting-card-acknowledgement', result.message, result);
         sendIfStillTrusted(event, 'bridge:result', payload);
-        Promise.resolve(onBoundedResult(payload, authority.operation)).catch(() => {});
+        return onBoundedResult(payload, authority.operation, authority.launchContext);
       }).catch(error => {
         if (operation.current === 'installing') operation.failCriticalSection(error?.classification);
         else if (operation.current === 'verifying') operation.finishFailure(error?.classification);
         const payload = failurePayload(error);
         sendIfStillTrusted(event, 'bridge:result', payload);
-        Promise.resolve(onBoundedResult(payload, authority.operation)).catch(() => {});
+        return onBoundedResult(payload, authority.operation, authority.launchContext);
       });
       return createRendererResult('installing', 'Installation started. Keep the card connected.');
     },
     'bridge:cancel': async (event) => {
       assertTrusted(event);
       const cancelled = operation.cancel();
-      if (cancelled) pendingAuthority = null;
+      if (cancelled) {
+        pendingAuthority = null;
+        pendingLaunch = null;
+      }
       return Object.freeze({ cancelled, state: operation.current });
+    },
+    'bridge:retry-callback': async (event) => {
+      assertTrusted(event);
+      return retryCallback();
     },
   };
 

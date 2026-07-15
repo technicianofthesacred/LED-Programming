@@ -21,6 +21,7 @@ const smokeTest = process.argv.includes('--smoke-test');
 const inspectCardSmoke = process.argv.includes('--inspect-card');
 const operationState = createOperationState();
 let mainWindow = null;
+let productionRunner = null;
 const callbackOpener = createSafeCallbackOpener({ openExternal: url => shell.openExternal(url) });
 const nonceStore = createNonceStore({ userDataPath: app.getPath('userData') });
 
@@ -45,6 +46,7 @@ function publicCallbackResult(payload) {
 
 const launchRouter = createLaunchRouter({
   consumeNonce: request => nonceStore.consume(request),
+  canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.(),
   deliver: request => {
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Bridge window is unavailable');
     mainWindow.show();
@@ -63,8 +65,43 @@ function routeLaunch(value) {
   }
 }
 
-async function returnBoundedResult(payload, completedOperation) {
-  await resultCoordinator.complete(completedOperation, publicCallbackResult(payload));
+function sendCallbackDelivery(state, message) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('bridge:callback-delivery', Object.freeze({ state, message }));
+}
+
+async function returnBoundedResult(payload, completedOperation, context) {
+  try {
+    return await resultCoordinator.complete(completedOperation, publicCallbackResult(payload), context);
+  } catch (error) {
+    if (error?.code === 'callback-delivery-failed') {
+      const delivery = Object.freeze({ state: 'callback-delivery-failed', message: 'Studio could not be opened. Return to Studio again without rerunning the card operation.' });
+      sendCallbackDelivery(delivery.state, delivery.message);
+      return delivery;
+    }
+    if (error?.code === 'launch-expired') {
+      const delivery = Object.freeze({ state: 'launch-expired', message: 'The secure return window expired. Open led.mandalacodes.com manually to continue.' });
+      sendCallbackDelivery(delivery.state, delivery.message);
+      return delivery;
+    }
+    process.stderr.write(`Lightweaver Bridge rejected callback result: ${redactSensitiveText(error?.message)}\n`);
+    return null;
+  }
+}
+
+async function retryBoundedResult() {
+  try {
+    const returned = await resultCoordinator.retry();
+    if (!returned) return Object.freeze({ state: 'launch-expired', message: 'No pending Studio result remains. Open led.mandalacodes.com manually.' });
+    return Object.freeze({ state: 'callback-returned', message: 'Result returned to Studio.' });
+  } catch (error) {
+    const state = error?.code === 'launch-expired' ? 'launch-expired' : 'callback-delivery-failed';
+    const message = state === 'launch-expired'
+      ? 'The secure return window expired. Open led.mandalacodes.com manually to continue.'
+      : 'Studio still could not be opened. Try Return to Studio again.';
+    sendCallbackDelivery(state, message);
+    return Object.freeze({ state, message });
+  }
 }
 
 async function createProductionRunner() {
@@ -82,6 +119,8 @@ function registerIpcHandlers(runner) {
     operation: operationState,
     runner,
     onBoundedResult: returnBoundedResult,
+    claimLaunchContext: requestedOperation => launchRouter.active ? launchRouter.claim(requestedOperation) : null,
+    retryCallback: retryBoundedResult,
   });
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }
@@ -153,6 +192,7 @@ function verifyNavigationIsDenied(window) {
 
 async function run() {
   const runner = await createProductionRunner();
+  productionRunner = runner;
   if (inspectCardSmoke) {
     const inspection = await runner.inspect();
     process.stdout.write(`Compatible card inspected and USB released: ${inspection.cardId}\n`);

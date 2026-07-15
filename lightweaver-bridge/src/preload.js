@@ -8,6 +8,7 @@ const OPERATIONS = new Set([
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
   'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
+  'callback-delivery-failed', 'callback-returned', 'launch-expired',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 
@@ -95,6 +96,7 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   confirmDestructiveAction: invokeConfirmation,
   onProgress: (callback) => subscribe('bridge:progress', callback),
   onResult: (callback) => subscribe('bridge:result', callback),
+  onCallbackDelivery: (callback) => subscribe('bridge:callback-delivery', callback),
   onLaunchRequest: (callback) => {
     if (typeof callback !== 'function') throw new TypeError('A callback function is required');
     const listener = (_event, payload) => {
@@ -104,6 +106,7 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
     return () => ipcRenderer.removeListener('bridge:launch-request', listener);
   },
   cancelBeforeCriticalSection: () => ipcRenderer.invoke('bridge:cancel').then(sanitizeCancellation),
+  retryStudioCallback: () => ipcRenderer.invoke('bridge:retry-callback').then(sanitizePayload),
 }));
 
 ipcRenderer.send('bridge:preload-ready');

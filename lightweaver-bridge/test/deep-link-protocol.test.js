@@ -179,21 +179,101 @@ test('all five operations complete only their matching callback and release the 
   const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
   const opened = [];
   let index = 1;
-  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0 });
-  const coordinator = createBoundedResultCoordinator({ launchRouter: router, openCallback: async (request, result) => opened.push([request, result]) });
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0, createContext: () => `ctx-${index}` });
+  const coordinator = createBoundedResultCoordinator({ launchRouter: router, openCallback: async (request, result) => opened.push([request, result]), now: () => 0 });
   for (const operation of ['install-current-release', 'recover-current-release', 'inspect-compatible-card', 'release-usb', 'restart-card']) {
     const nonce = Buffer.alloc(32, index++).toString('base64url');
     router.route(`lightweaver://run?operation=${operation}&nonce=${nonce}&version=1`);
+    const context = router.claim(operation);
     const result = operation === 'install-current-release' || operation === 'recover-current-release'
       ? { status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', physicalOutput: 'unconfirmed' }
       : { status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
-    await coordinator.complete(operation, result);
+    await coordinator.complete(operation, result, context);
     assert.equal(router.active, null);
   }
   assert.equal(opened.length, 5);
   router.route(`lightweaver://run?operation=restart-card&nonce=${Buffer.alloc(32, 9).toString('base64url')}&version=1`);
-  await assert.rejects(() => coordinator.complete('release-usb', { status: 'recoverable-failure' }), /match/i);
+  const context = router.claim('restart-card');
+  await assert.rejects(() => coordinator.complete('release-usb', { status: 'recoverable-failure' }, context), /match/i);
+  assert.notEqual(router.active, null);
+  await assert.rejects(() => coordinator.complete('restart-card', { status: 'recoverable-failure' }, 'unrelated-context'), /context/i);
+  assert.notEqual(router.active, null);
+});
+
+test('busy local workflow is refused before replay admission or delivery', () => {
+  const { createLaunchRouter } = require('../src/deep-link-protocol');
+  let consumed = 0;
+  const router = createLaunchRouter({ consumeNonce() { consumed += 1; }, deliver() {}, canAccept: () => false });
+  assert.throws(() => router.route(VALID), /busy/i);
+  assert.equal(consumed, 0);
   assert.equal(router.active, null);
+});
+
+test('callback delivery failure retains one validated result for retry without rerunning hardware', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  let now = 0;
+  let attempts = 0;
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => now, createContext: () => 'a'.repeat(32) });
+  router.route(VALID);
+  const context = router.claim('install-current-release');
+  const result = { status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
+  const coordinator = createBoundedResultCoordinator({
+    launchRouter: router, now: () => now,
+    openCallback: async () => { attempts += 1; if (attempts === 1) throw new Error('browser unavailable'); },
+  });
+  await assert.rejects(() => coordinator.complete('install-current-release', result, context), error => error.code === 'callback-delivery-failed');
+  assert.equal(router.active.operation, 'install-current-release');
+  assert.equal(coordinator.hasPendingResult, true);
+  await coordinator.retry();
+  assert.equal(attempts, 2);
+  assert.equal(router.active, null);
+  assert.equal(coordinator.hasPendingResult, false);
+});
+
+test('concurrent callback retries share one delivery attempt and cannot produce a stale failure', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  let attempts = 0;
+  let finish;
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0 });
+  router.route(VALID);
+  const context = router.claim('install-current-release');
+  const result = { status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
+  const coordinator = createBoundedResultCoordinator({
+    launchRouter: router, now: () => 0,
+    openCallback: () => { attempts += 1; return new Promise(resolve => { finish = resolve; }); },
+  });
+  const completion = coordinator.complete('install-current-release', result, context);
+  const retry = coordinator.retry();
+  assert.equal(attempts, 1);
+  finish();
+  assert.deepEqual(await Promise.all([completion, retry]), [true, true]);
+  assert.equal(router.active, null);
+});
+
+test('callback completion and retry enforce expiry at the exact TTL boundary', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  let now = 0;
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => now, createContext: () => 'b'.repeat(32) });
+  router.route(VALID);
+  const context = router.claim('install-current-release');
+  const coordinator = createBoundedResultCoordinator({ launchRouter: router, now: () => now, openCallback: async () => { throw new Error('offline'); } });
+  const result = { status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
+  await assert.rejects(() => coordinator.complete('install-current-release', result, context));
+  now = 300_000;
+  await assert.rejects(() => coordinator.retry(), error => error.code === 'launch-expired');
+  assert.equal(router.active, null);
+  assert.equal(coordinator.hasPendingResult, false);
+
+  now = 300_001;
+  router.route(VALID);
+  const secondContext = router.claim('install-current-release');
+  now = 600_001;
+  await assert.rejects(
+    () => coordinator.complete('install-current-release', result, secondContext),
+    error => error.code === 'launch-expired',
+  );
+  assert.equal(router.active, null);
+  assert.equal(coordinator.hasPendingResult, false);
 });
 
 test('packaging declares the Lightweaver scheme and main wires every native launch route', () => {

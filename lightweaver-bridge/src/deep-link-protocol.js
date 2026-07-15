@@ -109,31 +109,54 @@ function createNonceStore({ userDataPath, now = Date.now } = {}) {
   });
 }
 
-function createLaunchRouter({ consumeNonce, deliver, now = Date.now } = {}) {
+function createLaunchRouter({
+  consumeNonce, deliver, now = Date.now, canAccept = () => true,
+  createContext = () => crypto.randomBytes(16).toString('hex'),
+} = {}) {
   if (typeof consumeNonce !== 'function' || typeof deliver !== 'function') throw new TypeError('Launch router dependencies are required');
+  if (typeof canAccept !== 'function' || typeof createContext !== 'function') throw new TypeError('Launch router dependencies are required');
   let ready = false;
   let active = null;
+  let claimed = false;
+  function clearActive() {
+    active = null;
+    claimed = false;
+  }
   function deliverActive() {
     if (!active) return;
     if (active.expiresAt <= now()) {
-      active = null;
+      clearActive();
       throw new Error('Queued launch request expired');
     }
     deliver(active);
   }
   function route(value) {
-    if (active && active.expiresAt <= now()) active = null;
+    if (active && active.expiresAt <= now()) clearActive();
     if (active) throw new Error('Another launch request is active or pending');
     const parsed = parseLaunchUrl(value);
-    active = Object.freeze({ ...parsed, expiresAt: now() + NONCE_TTL_MS });
-    try { consumeNonce(active); } catch (error) { active = null; throw error; }
+    if (!canAccept(parsed)) throw new Error('Bridge is busy with another local workflow');
+    const context = createContext();
+    if (typeof context !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(context)) throw new Error('Invalid launch workflow context');
+    active = Object.freeze({ ...parsed, expiresAt: now() + NONCE_TTL_MS, context });
+    claimed = false;
+    try { consumeNonce(active); } catch (error) { clearActive(); throw error; }
     if (ready) deliverActive();
     return active;
   }
   return Object.freeze({
     route,
     setReady() { ready = true; deliverActive(); },
-    complete() { active = null; },
+    claim(operation) {
+      if (!active || active.expiresAt <= now()) {
+        clearActive();
+        throw new Error('Launch request expired or is unavailable');
+      }
+      if (active.operation !== operation) throw new Error('Claimed operation does not match the pending launch');
+      if (claimed) throw new Error('Launch request was already claimed');
+      claimed = true;
+      return active.context;
+    },
+    complete() { clearActive(); },
     get active() { return active; },
   });
 }
@@ -199,18 +222,69 @@ function createSafeCallbackOpener({ openExternal } = {}) {
   });
 }
 
-function createBoundedResultCoordinator({ launchRouter, openCallback } = {}) {
+function resultMatchesOperation(operation, result) {
+  if (!OPERATIONS.includes(operation) || !result || !RESULT_STATUSES.includes(result.status)) return false;
+  if (result.status !== 'awaiting-card-acknowledgement') return true;
+  const destructive = operation === 'install-current-release' || operation === 'recover-current-release';
+  return destructive
+    ? result.verification === 'flash-verified' && result.code !== 'operation-complete'
+    : result.verification === 'not-verified' && result.code === 'operation-complete';
+}
+
+function createBoundedResultCoordinator({ launchRouter, openCallback, now = Date.now } = {}) {
   if (!launchRouter || typeof openCallback !== 'function') throw new TypeError('Result coordinator dependencies are required');
+  let pendingResult = null;
+  let deliveryPromise = null;
+
+  function expiryError() {
+    const error = new Error('The Studio return window expired; open Studio manually to continue');
+    error.code = 'launch-expired';
+    return error;
+  }
+
+  function clearExpired(request) {
+    if (!request || request.expiresAt <= now()) {
+      pendingResult = null;
+      if (request) launchRouter.complete();
+      throw expiryError();
+    }
+  }
+
+  function deliverPending() {
+    if (deliveryPromise) return deliveryPromise;
+    const pending = pendingResult;
+    if (!pending) return Promise.resolve(false);
+    try { clearExpired(pending.request); } catch (error) { return Promise.reject(error); }
+    deliveryPromise = (async () => {
+      try {
+        await openCallback(pending.request, pending.result);
+      } catch {
+        const error = new Error('Could not return the result to Studio; retry without rerunning the card operation');
+        error.code = 'callback-delivery-failed';
+        throw error;
+      }
+      pendingResult = null;
+      launchRouter.complete();
+      return true;
+    })().finally(() => { deliveryPromise = null; });
+    return deliveryPromise;
+  }
+
   return Object.freeze({
-    async complete(completedOperation, result) {
+    async complete(completedOperation, result, context) {
       const request = launchRouter.active;
       if (!request) return false;
-      try {
-        if (request.operation !== completedOperation) throw new Error('Completed operation does not match the pending launch');
-        await openCallback(request, result);
-        return true;
-      } finally { launchRouter.complete(); }
+      clearExpired(request);
+      if (request.operation !== completedOperation) throw new Error('Completed operation does not match the pending launch');
+      if (request.context !== context) throw new Error('Completed workflow context does not match the pending launch');
+      if (pendingResult) throw new Error('A callback result is already pending delivery');
+      if (!resultMatchesOperation(completedOperation, result)) throw new TypeError('Callback result does not match the pending operation');
+      buildCallbackUrl(request, result);
+      pendingResult = Object.freeze({ request, result: Object.freeze({ ...result }) });
+      return deliverPending();
     },
+    retry: deliverPending,
+    get hasPendingResult() { return pendingResult !== null; },
   });
 }
 

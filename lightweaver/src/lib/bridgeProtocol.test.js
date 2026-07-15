@@ -5,7 +5,13 @@ const NONCE = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
 
 function memoryStorage() {
   const values = new Map();
-  return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  return {
+    get length() { return values.size; },
+    key: index => [...values.keys()][index] ?? null,
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
 }
 
 test('Studio generates a 32-byte Web Crypto nonce and stores one short-lived pending operation', async () => {
@@ -87,4 +93,62 @@ test('Bridge and Studio protocol constants cannot silently drift', async () => {
   assert.deepEqual([...studio.BRIDGE_OPERATIONS], [...bridge.OPERATIONS]);
   assert.deepEqual([...studio.BRIDGE_RESULT_STATUSES], [...bridge.RESULT_STATUSES]);
   assert.equal(studio.BRIDGE_CALLBACK_ORIGIN, bridge.CALLBACK_ORIGIN);
+});
+
+test('callback tab consumes a pending operation created in another tab through bounded shared local storage', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  const originSession = memoryStorage();
+  const callbackSession = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: originSession, localStorage, now: () => 10 });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  const result = consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } });
+  assert.equal(result.operation, 'restart-card');
+  assert.throws(() => consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: callbackSession, localStorage, now: () => 20, history: { replaceState() {} } }), /pending|used/i);
+});
+
+test('separate originating tabs retain independent active operations in one bounded registry', async () => {
+  const { createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  assert.doesNotThrow(() => createBridgeLaunch('inspect-compatible-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 }));
+  assert.doesNotThrow(() => createBridgeLaunch('release-usb', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 }));
+});
+
+test('wrong, malformed, and one expired tab callback preserve another tab pending record', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const first = createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  const second = createBridgeLaunch('release-usb', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 100 });
+  const firstNonce = new URL(first).searchParams.get('nonce');
+  const secondNonce = new URL(second).searchParams.get('nonce');
+  const callback = nonce => `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  const dependencies = { currentOrigin: 'https://led.mandalacodes.com', localStorage, now: () => 300_000, history: { replaceState() {} } };
+  assert.throws(() => consumeBridgeCallback(`${callback(secondNonce)}&extra=1`, dependencies));
+  assert.throws(() => consumeBridgeCallback(callback(firstNonce), dependencies), /expired/i);
+  assert.throws(() => consumeBridgeCallback(callback(Buffer.alloc(32, 9).toString('base64url')), dependencies), /nonce/i);
+  assert.equal(consumeBridgeCallback(callback(secondNonce), dependencies).operation, 'release-usb');
+});
+
+test('result semantics must match the pending operation before single-use consumption', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback, validateOperationResult } = await import('./bridgeProtocol.js');
+  assert.equal(validateOperationResult('install-current-release', { status: 'awaiting-card-acknowledgement', verification: 'flash-verified', code: 'flash-verified' }), true);
+  assert.equal(validateOperationResult('install-current-release', { status: 'awaiting-card-acknowledgement', verification: 'not-verified', code: 'operation-complete' }), false);
+  assert.equal(validateOperationResult('restart-card', { status: 'awaiting-card-acknowledgement', verification: 'flash-verified', code: 'flash-verified' }), false);
+  assert.equal(validateOperationResult('restart-card', { status: 'awaiting-card-acknowledgement', verification: 'not-verified', code: 'operation-complete' }), true);
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const launch = createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const wrong = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=flash-verified&cardId=lw-441bf681feb0&firmwareVersion=1.2.3&buildId=${'a'.repeat(40)}&target=lightweaver-controller-esp32s3&verification=flash-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  assert.throws(() => consumeBridgeCallback(wrong, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } }), /operation|semantic/i);
+  const correct = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&version=1`;
+  assert.equal(consumeBridgeCallback(correct, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage, now: () => 1, history: { replaceState() {} } }).operation, 'restart-card');
 });

@@ -24,7 +24,7 @@ test('unplug-replug guidance requires a deliberate acknowledgement before inspec
     confirmDestructiveAction: async () => ({}),
     cancelBeforeCriticalSection: async () => ({ cancelled: true }),
     runMaintenanceOperation: async () => ({ state: 'awaiting-card-acknowledgement', code: 'operation-complete' }),
-    onProgress() {},
+    onProgress() {}, onCallbackDelivery() {},
     onResult(listener) { onResult = listener; },
     onLaunchRequest() {},
   };
@@ -59,7 +59,7 @@ test('native launch requests require an operation-specific visible click before 
   const bridge = {
     inspectCompatibleCard: async () => ({}), startOperation: async () => ({}), confirmDestructiveAction: async () => ({}),
     inspectForOperation: async () => ({}),
-    cancelBeforeCriticalSection: async () => ({ cancelled: true }), onProgress() {}, onResult() {},
+    cancelBeforeCriticalSection: async () => ({ cancelled: true }), onProgress() {}, onResult() {}, onCallbackDelivery() {},
     onLaunchRequest(listener) { launch = listener; },
     async runMaintenanceOperation(operation) { calls.push(operation); return { state: 'awaiting-card-acknowledgement', code: 'operation-complete' }; },
   };
@@ -72,4 +72,32 @@ test('native launch requests require an operation-specific visible click before 
     await elements.get('#primary-action').listeners.get('click')();
     assert.equal(calls.at(-1), operation);
   }
+});
+
+test('callback delivery failure offers a typed retry without rerunning card hardware', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  let onDelivery;
+  let hardwareCalls = 0;
+  let retryCalls = 0;
+  const bridge = {
+    inspectCompatibleCard: async () => { hardwareCalls += 1; },
+    inspectForOperation: async () => { hardwareCalls += 1; },
+    startOperation: async () => { hardwareCalls += 1; },
+    confirmDestructiveAction: async () => { hardwareCalls += 1; },
+    runMaintenanceOperation: async () => { hardwareCalls += 1; },
+    cancelBeforeCriticalSection: async () => ({ cancelled: true }),
+    retryStudioCallback: async () => { retryCalls += 1; return { state: 'callback-returned', message: 'Result returned to Studio.' }; },
+    onCallbackDelivery(listener) { onDelivery = listener; }, onProgress() {}, onResult() {}, onLaunchRequest() {},
+  };
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
+  vm.runInNewContext(source, { window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) } });
+  onDelivery({ state: 'callback-delivery-failed', message: 'Studio could not be opened.' });
+  assert.equal(elements.get('#primary-action').textContent, 'Return to Studio');
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(retryCalls, 1);
+  assert.equal(hardwareCalls, 0);
+  assert.equal(elements.get('#state-title').textContent, 'Returned to Studio');
 });

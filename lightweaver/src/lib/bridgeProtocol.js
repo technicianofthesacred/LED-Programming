@@ -6,8 +6,11 @@ export const BRIDGE_RESULT_STATUSES = Object.freeze([
 ]);
 export const BRIDGE_CALLBACK_ORIGIN = 'https://led.mandalacodes.com';
 
-const STORAGE_KEY = 'lightweaver.bridge.pending.v1';
+const REGISTRY_PREFIX = 'lightweaver.bridge.pending.v1.';
+const TAB_KEY = 'lightweaver.bridge.origin-tab.v1';
 const TTL_MS = 300_000;
+const MAX_RECORDS = 16;
+const MAX_REGISTRY_BYTES = 8_192;
 const TARGET = 'lightweaver-controller-esp32s3';
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -31,33 +34,88 @@ function isCanonicalNonce(value) {
   } catch { return false; }
 }
 
-function readPending(storage) {
-  const raw = storage.getItem(STORAGE_KEY);
-  if (!raw) return null;
-  let value;
-  try { value = JSON.parse(raw); } catch { throw new Error('Pending Bridge operation is invalid'); }
-  if (!value || Object.keys(value).sort().join(',') !== 'createdAt,expiresAt,nonce,operation'
-    || !BRIDGE_OPERATIONS.includes(value.operation) || !isCanonicalNonce(value.nonce)
-    || !Number.isSafeInteger(value.createdAt) || !Number.isSafeInteger(value.expiresAt)
-    || value.expiresAt <= value.createdAt || value.expiresAt - value.createdAt > TTL_MS) throw new Error('Pending Bridge operation is invalid');
-  return value;
+function registryKeys(storage) {
+  if (!Number.isSafeInteger(storage.length) || storage.length < 0 || typeof storage.key !== 'function') {
+    throw new Error('Pending Bridge registry storage is unavailable');
+  }
+  const keys = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (typeof key === 'string' && key.startsWith(REGISTRY_PREFIX)) keys.push(key);
+  }
+  return keys;
+}
+
+function readRegistry(storage) {
+  const keys = registryKeys(storage);
+  if (keys.length > MAX_RECORDS) throw new Error('Too many pending Bridge operations');
+  let totalBytes = 0;
+  const records = keys.map(key => {
+    const raw = storage.getItem(key);
+    totalBytes += key.length + (raw?.length ?? 0);
+    if (typeof raw !== 'string') throw new Error('Pending Bridge registry is invalid');
+    let record;
+    try { record = JSON.parse(raw); } catch { throw new Error('Pending Bridge registry is invalid'); }
+    if (!record || Object.keys(record).sort().join(',') !== 'createdAt,expiresAt,nonce,operation,tabId'
+      || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
+      || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
+      || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
+      || record.expiresAt - record.createdAt > TTL_MS || key !== `${REGISTRY_PREFIX}${record.nonce}`) {
+      throw new Error('Pending Bridge registry is invalid');
+    }
+    return record;
+  });
+  if (totalBytes > MAX_REGISTRY_BYTES || new Set(records.map(record => record.tabId)).size !== records.length) {
+    throw new Error('Pending Bridge registry is invalid');
+  }
+  return records;
+}
+
+function removeRecord(storage, nonce) {
+  storage.removeItem(`${REGISTRY_PREFIX}${nonce}`);
+}
+
+function writeRecord(storage, record) {
+  const key = `${REGISTRY_PREFIX}${record.nonce}`;
+  const raw = JSON.stringify(record);
+  if (key.length + raw.length > MAX_REGISTRY_BYTES) throw new Error('Pending Bridge registry is too large');
+  storage.setItem(key, raw);
+}
+
+function getTabId(sessionStorage, cryptoApi) {
+  const existing = sessionStorage.getItem(TAB_KEY);
+  if (existing && /^[A-Za-z0-9_-]{22}$/.test(existing)) return existing;
+  if (existing) throw new Error('Originating Bridge tab ID is invalid');
+  const bytes = new Uint8Array(16);
+  cryptoApi.getRandomValues(bytes);
+  const tabId = encodeBase64Url(bytes);
+  sessionStorage.setItem(TAB_KEY, tabId);
+  return tabId;
 }
 
 export function createBridgeLaunch(operation, dependencies = {}) {
   const cryptoApi = dependencies.crypto ?? globalThis.crypto;
-  const storage = dependencies.storage ?? globalThis.sessionStorage;
+  const sessionStorage = dependencies.sessionStorage ?? dependencies.storage ?? globalThis.sessionStorage;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
   const now = dependencies.now ?? Date.now;
   if (!BRIDGE_OPERATIONS.includes(operation)) throw new TypeError('Unsupported Bridge operation');
-  if (!cryptoApi?.getRandomValues || !storage) throw new Error('Secure Bridge launch dependencies are unavailable');
+  if (!cryptoApi?.getRandomValues || !sessionStorage || !localStorage) throw new Error('Secure Bridge launch dependencies are unavailable');
   const timestamp = now();
-  const existing = readPending(storage);
-  if (existing && existing.expiresAt > timestamp) throw new Error('A Bridge operation is already pending');
-  if (existing) storage.removeItem(STORAGE_KEY);
+  const tabId = getTabId(sessionStorage, cryptoApi);
+  const allRecords = readRegistry(localStorage);
+  const records = allRecords.filter(record => record.expiresAt > timestamp);
+  for (const record of allRecords) if (record.expiresAt <= timestamp) removeRecord(localStorage, record.nonce);
+  if (records.some(record => record.tabId === tabId)) throw new Error('A Bridge operation is already pending in this tab');
+  if (records.length >= MAX_RECORDS) throw new Error('Too many pending Bridge operations');
   const bytes = new Uint8Array(32);
   cryptoApi.getRandomValues(bytes);
   const nonce = encodeBase64Url(bytes);
-  const pending = { operation, nonce, createdAt: timestamp, expiresAt: timestamp + TTL_MS };
-  storage.setItem(STORAGE_KEY, JSON.stringify(pending));
+  const pending = { operation, nonce, tabId, createdAt: timestamp, expiresAt: timestamp + TTL_MS };
+  writeRecord(localStorage, pending);
+  try { readRegistry(localStorage); } catch (error) {
+    removeRecord(localStorage, nonce);
+    throw error;
+  }
   return `lightweaver://run?operation=${operation}&nonce=${nonce}&version=1`;
 }
 
@@ -91,19 +149,38 @@ function parseCallback(value) {
 
 export function consumeBridgeCallback(value, dependencies = {}) {
   const currentOrigin = dependencies.currentOrigin ?? globalThis.location?.origin;
-  const storage = dependencies.storage ?? globalThis.sessionStorage;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
   const now = dependencies.now ?? Date.now;
   const history = dependencies.history ?? globalThis.history;
   try {
-    if (currentOrigin !== BRIDGE_CALLBACK_ORIGIN || !storage) throw new Error('Bridge callbacks are accepted only in the public Studio');
+    if (currentOrigin !== BRIDGE_CALLBACK_ORIGIN || !localStorage) throw new Error('Bridge callbacks are accepted only in the public Studio');
     const result = parseCallback(value);
-    const pending = readPending(storage);
-    if (!pending) throw new Error('No pending Bridge operation; callback was already used');
-    if (result.nonce !== pending.nonce) throw new Error('Bridge callback nonce does not match');
-    if (pending.expiresAt <= now()) { storage.removeItem(STORAGE_KEY); throw new Error('Pending Bridge operation expired'); }
-    storage.removeItem(STORAGE_KEY);
+    const timestamp = now();
+    const records = readRegistry(localStorage);
+    const pending = records.find(record => record.nonce === result.nonce);
+    if (pending && pending.expiresAt <= timestamp) {
+      for (const record of records) if (record.expiresAt <= timestamp) removeRecord(localStorage, record.nonce);
+      throw new Error('Pending Bridge operation expired');
+    }
+    if (!pending) {
+      const active = records.filter(record => record.expiresAt > timestamp);
+      for (const record of records) if (record.expiresAt <= timestamp) removeRecord(localStorage, record.nonce);
+      if (active.length) throw new Error('Bridge callback nonce does not match');
+      throw new Error('No pending Bridge operation; callback was already used');
+    }
+    if (!validateOperationResult(pending.operation, result)) throw new Error('Bridge callback result is incompatible with the pending operation semantics');
+    removeRecord(localStorage, result.nonce);
     return Object.freeze({ operation: pending.operation, ...result, physicalProof: false });
   } finally {
     history?.replaceState?.(null, '', '/');
   }
+}
+
+export function validateOperationResult(operation, result) {
+  if (!BRIDGE_OPERATIONS.includes(operation) || !result || !BRIDGE_RESULT_STATUSES.includes(result.status)) return false;
+  if (result.status !== 'awaiting-card-acknowledgement') return true;
+  const destructive = operation === 'install-current-release' || operation === 'recover-current-release';
+  return destructive
+    ? result.verification === 'flash-verified' && result.code !== 'operation-complete'
+    : result.verification === 'not-verified' && result.code === 'operation-complete';
 }

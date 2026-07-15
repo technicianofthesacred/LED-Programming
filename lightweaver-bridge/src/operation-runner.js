@@ -337,7 +337,11 @@ function createOperationRunner({
     throw new BridgeOperationError('unsupported-operation', 'Unsupported maintenance bridge operation');
   }
 
-  return Object.freeze({ inspect, prepare, execute, runMaintenance, hasInspection: () => Boolean(inspection && inspection.expiresAt > now()) });
+  return Object.freeze({
+    inspect, prepare, execute, runMaintenance,
+    hasInspection: () => Boolean(inspection && inspection.expiresAt > now()),
+    isActive: () => active,
+  });
 }
 
 module.exports = { BridgeOperationError, createOperationRunner };

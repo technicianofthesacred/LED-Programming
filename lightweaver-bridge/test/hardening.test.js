@@ -193,10 +193,12 @@ test('typed maintenance IPC executes each visible operation and emits a bounded 
   const { window, event } = trustedWindowAndEvent();
   const called = [];
   const bounded = [];
+  const claimed = [];
   const handlers = createIpcHandlers({
     getActiveWindow: () => window, rendererPath, operation: createOperationState(),
     runner: { async runMaintenance(operation) { called.push(operation); return operation === 'release-usb' ? { released: true } : { compatible: true, cardId: 'lw-441bf681feb0' }; } },
-    onBoundedResult: (payload, operation) => bounded.push([payload, operation]),
+    claimLaunchContext: operation => { claimed.push(operation); return `context-${operation}`; },
+    onBoundedResult: (payload, operation, context) => bounded.push([payload, operation, context]),
   });
   for (const operation of ['inspect-compatible-card', 'release-usb', 'restart-card']) {
     const result = await handlers['bridge:maintenance-operation'](event, operation);
@@ -207,7 +209,22 @@ test('typed maintenance IPC executes each visible operation and emits a bounded 
   }
   assert.deepEqual(called, ['inspect-compatible-card', 'release-usb', 'restart-card']);
   assert.deepEqual(bounded.map(value => value[1]), called);
+  assert.deepEqual(claimed, called);
+  assert.deepEqual(bounded.map(value => value[2]), called.map(operation => `context-${operation}`));
   await assert.rejects(() => handlers['bridge:maintenance-operation'](event, 'install-current-release'), /maintenance/i);
+});
+
+test('synchronous maintenance response preserves callback delivery failure as the visible retry state', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { async runMaintenance() { return { released: true }; } },
+    onBoundedResult: async () => ({ state: 'callback-delivery-failed', message: 'Studio could not be opened.' }),
+  });
+  const result = await handlers['bridge:maintenance-operation'](event, 'release-usb');
+  assert.equal(result.state, 'callback-delivery-failed');
 });
 
 test('destructive launch inspection failure emits a matching structured callback without preparing', async () => {
@@ -218,11 +235,13 @@ test('destructive launch inspection failure emits a matching structured callback
   const handlers = createIpcHandlers({
     getActiveWindow: () => window, rendererPath, operation: createOperationState(),
     runner: { async inspect() { throw Object.assign(new Error('No card'), { code: 'no-compatible-card', classification: 'recoverable-failure', phase: 'inspection' }); } },
-    onBoundedResult: (payload, operation) => bounded.push([payload, operation]),
+    claimLaunchContext: () => 'inspection-context',
+    onBoundedResult: (payload, operation, context) => bounded.push([payload, operation, context]),
   });
   const result = await handlers['bridge:inspect-for-operation'](event, 'recover-current-release');
   assert.equal(result.classification, 'recoverable-failure');
   assert.equal(bounded[0][1], 'recover-current-release');
+  assert.equal(bounded[0][2], 'inspection-context');
   await assert.rejects(() => handlers['bridge:inspect-for-operation'](event, 'restart-card'), /destructive/i);
 });
 
@@ -463,7 +482,8 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
 
   assert.deepEqual(Object.keys(exposed).sort(), [
     'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'inspectCompatibleCard',
-    'inspectForOperation', 'onLaunchRequest', 'onProgress', 'onResult', 'runMaintenanceOperation', 'startOperation',
+    'inspectForOperation', 'onCallbackDelivery', 'onLaunchRequest', 'onProgress', 'onResult',
+    'retryStudioCallback', 'runMaintenanceOperation', 'startOperation',
   ]);
   assert.equal('ipcRenderer' in exposed, false);
   const inspected = await exposed.inspectCompatibleCard();
@@ -482,6 +502,16 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.deepEqual(Object.keys(launch), ['operation']);
   assert.equal(launch.operation, 'recover-current-release');
   assert.equal(Object.isFrozen(launch), true);
+
+  let delivery;
+  exposed.onCallbackDelivery(payload => { delivery = payload; });
+  listeners.get('bridge:callback-delivery')({}, {
+    state: 'callback-delivery-failed', message: '/dev/cu.hidden serialNumber=DELIVERY123', extra: 'must not cross',
+  });
+  assert.deepEqual(Object.keys(delivery).sort(), ['message', 'state']);
+  assert.equal(delivery.message.includes('DELIVERY123'), false);
+  await exposed.retryStudioCallback();
+  assert.deepEqual(invokes.at(-1), ['bridge:retry-callback', undefined]);
 
   let received;
   const unsubscribe = exposed.onProgress((payload) => { received = payload; });

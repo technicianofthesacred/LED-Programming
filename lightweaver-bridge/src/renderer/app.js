@@ -18,6 +18,9 @@ const views = Object.freeze({
   'awaiting-card-acknowledgement': ['Flash verified', 'Reconnect in Studio', 'The factory image was verified, but the card and physical lights are not yet acknowledged. Reconnect in Studio to finish.', 'Inspect another card'],
   'operation-failed': ['Not changed', 'Inspect again', 'No card changes were confirmed. Inspect the card again before retrying.', 'Inspect again'],
   'usb-ownership-uncertain': ['USB uncertain', 'Restart the Bridge', 'USB release could not be confirmed. Close and restart the Bridge before retrying.', 'Restart required'],
+  'callback-delivery-failed': ['Return pending', 'Return to Studio', 'Studio could not be opened. Retry the secure return without rerunning the card operation.', 'Return to Studio'],
+  'callback-returned': ['Returned', 'Returned to Studio', 'The existing card result was returned to Studio. No card operation was rerun.', 'Returned'],
+  'launch-expired': ['Expired', 'Open Studio manually', 'The secure return window expired. Open https://led.mandalacodes.com/ manually to continue.', 'Return expired'],
   complete: ['Complete', 'Card acknowledged', 'Studio confirmed the stable card identity.', 'Inspect another card'],
   'recovery-required': ['Recovery required', 'Installation needs safe recovery', 'Reconnect the card, then recover the current signed release. The Bridge will not claim whether physical output is working.', 'Inspect for recovery'],
 });
@@ -43,16 +46,20 @@ function render(payload = {}) {
   if (currentState === 'recovery-required') selectedOperation = 'recover-current-release';
   if (currentState === 'complete' || currentState === 'awaiting-card-acknowledgement') selectedOperation = 'install-current-release';
   const critical = currentState === 'installing' || currentState === 'verifying';
-  primaryAction.disabled = critical || currentState === 'inspect' || currentState === 'usb-ownership-uncertain';
+  primaryAction.disabled = critical || currentState === 'inspect' || currentState === 'usb-ownership-uncertain'
+    || currentState === 'callback-returned' || currentState === 'launch-expired';
   cancelAction.disabled = critical;
-  cancelAction.hidden = ['select-card', 'complete', 'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain'].includes(currentState);
+  cancelAction.hidden = ['select-card', 'complete', 'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
+    'callback-delivery-failed', 'callback-returned', 'launch-expired'].includes(currentState);
   progress.hidden = !critical;
   progressBar.style.width = `${Number.isFinite(payload.progress) ? payload.progress : 0}%`;
 }
 
 primaryAction.addEventListener('click', async () => {
   try {
-    if (currentState === 'select-card' && ['inspect-compatible-card', 'release-usb', 'restart-card'].includes(selectedOperation)) {
+    if (currentState === 'callback-delivery-failed') {
+      render(await bridge.retryStudioCallback());
+    } else if (currentState === 'select-card' && ['inspect-compatible-card', 'release-usb', 'restart-card'].includes(selectedOperation)) {
       render({ state: 'inspect', message: `${selectedOperation.replaceAll('-', ' ')} is running. Keep the card connected.` });
       render(await bridge.runMaintenanceOperation(selectedOperation));
     } else if (currentState === 'confirm') {
@@ -79,6 +86,7 @@ cancelAction.addEventListener('click', async () => {
 
 bridge.onProgress(render);
 bridge.onResult(render);
+bridge.onCallbackDelivery(render);
 bridge.onLaunchRequest(({ operation }) => {
   selectedOperation = operation;
   render({
