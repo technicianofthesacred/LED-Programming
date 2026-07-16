@@ -78,11 +78,11 @@ async function installDriver(page, {
   preflightCurrent = false, preflightThrowsOnce = false, preflightMissingOnce = false,
   restoreThrows = false, invalidInspection = false, recordThrowsOnce = false, recordDelayMs = 0,
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
-  activationFailure = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryDelayMs = 0,
+  activationFailure = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0,
   connectErrorOnce = '',
   disconnectFailureAt = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
 } = {}) {
-  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
+  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion: '1.0.0',
@@ -114,8 +114,10 @@ async function installDriver(page, {
         onProgress(1);
       },
       startPhysical: async ({ frame, output, generation }) => {
+        const attempt = Number(localStorage.getItem('lw_test_physical_delivery_attempts') || 0) + 1;
+        localStorage.setItem('lw_test_physical_delivery_attempts', String(attempt));
         if (physicalDeliveryDelayMs) await new Promise(resolve => setTimeout(resolve, physicalDeliveryDelayMs));
-        if (physicalDeliveryFailure) return { ok: false, generation };
+        if (physicalDeliveryFailure || (physicalDeliveryFailureOnce && attempt === 1)) return { ok: false, generation };
         const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || 'null');
         const current = JSON.parse(localStorage.getItem('lw_test_current_config') || 'null');
         const activeConfig = candidate?.config || current;
@@ -223,7 +225,7 @@ async function installDriver(page, {
         return evidence;
       },
     };
-  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
+  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
 }
 
 test('USB failure shows one safe action and exports only bounded redacted diagnostics', async ({ page }) => {
@@ -556,8 +558,29 @@ test('failed physical delivery never unlocks worker observations', async ({ page
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await expect(page.getByText('The test did not reach the LEDs.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Red end is off' })).toBeDisabled();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-LIGHT-416');
+  await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+  await recovery.getByRole('button', { name: 'Release and restart the light test' }).click();
+  await expect(recovery).toContainText('LW-LIGHT-416');
+  await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+});
+
+test('a failed initial physical delivery can restart and unlock only after a fresh acknowledgement', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, physicalDeliveryFailureOnce: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-LIGHT-416');
+  await recovery.getByRole('button', { name: 'Release and restart the light test' }).click();
+  await expect(recovery).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeEnabled();
 });
 
 test('count correction invalidates a previously checked downstream boundary before completion', async ({ page }) => {

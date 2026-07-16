@@ -148,6 +148,11 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
     setRecoveryEntered(false);
     setRoute({ action: 'release-restart-stream', title, guidance });
   }
+  function recordDeliveryFailure(boundaryId, generation, detail = '') {
+    dispatch({ type: 'delivery-failed', boundaryId, generation });
+    requireBoundaryRestart('Light test did not reach the LEDs', 'Release the failed light stream, then restart this boundary. Nothing can be confirmed until a fresh exact acknowledgement arrives.');
+    if (detail) setError(`${detail} No light test was started.`);
+  }
   async function handleStructuredRecovery(action) {
     if (action === 'retry-physical-stream') { await releaseAndRetry(); return; }
     if (action === 'open-physical-correction') {
@@ -182,15 +187,18 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
         const response = await driver.startPhysical({ boundary, output: snapshot.config.led.outputs.find(output => output.id === boundary.outputId), frame, generation });
         if (generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
         const acknowledged = response?.ok !== false && response?.generation === generation;
-        dispatch({ type: acknowledged ? 'delivered' : 'delivery-failed', boundaryId: boundary.id, generation }); return acknowledged ? STREAM_RESULT.delivered : STREAM_RESULT.deliveryFailed;
+        if (acknowledged) dispatch({ type: 'delivered', boundaryId: boundary.id, generation });
+        else recordDeliveryFailure(boundary.id, generation);
+        return acknowledged ? STREAM_RESULT.delivered : STREAM_RESULT.deliveryFailed;
       }
       const stream = createCardFrameStream({ host: cardHost, fps: 4, onHealth: health => {
         if (generation !== generationRef.current || !mountedRef.current) { void stream.stop(); return; }
-        dispatch({ type: health.delivered ? 'delivered' : 'delivery-failed', boundaryId: boundary.id, generation });
+        if (health.delivered) dispatch({ type: 'delivered', boundaryId: boundary.id, generation });
+        else { recordDeliveryFailure(boundary.id, generation); void stopStream(); }
       } });
       if (generation !== generationRef.current || !mountedRef.current) { await stream.stop(); return STREAM_RESULT.cancelled; }
       streamRef.current = stream; stream.start(); stream.push(frame); return STREAM_RESULT.delivered;
-    } catch (reason) { if (generation === generationRef.current && mountedRef.current) { dispatch({ type: 'delivery-failed', boundaryId: boundary.id, generation }); setError(`${reason?.message || reason} No light test was started.`); } return STREAM_RESULT.deliveryFailed; }
+    } catch (reason) { if (generation === generationRef.current && mountedRef.current) recordDeliveryFailure(boundary.id, generation, reason?.message || String(reason)); return STREAM_RESULT.deliveryFailed; }
   }
 
   async function readConfirmedKnownGood(snapshot) {
