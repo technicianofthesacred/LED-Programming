@@ -1,6 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const IMAGE_SIZE = 600 * 1024;
@@ -260,6 +263,44 @@ test('restart recovery never reflashes, preserves verified truth, and is idempot
   assert.equal(journal.current().usbOwnership, 'released');
 });
 
+test('corrupt canonical predecessor with only pre-mutation recovery fails closed and never clears', async () => {
+  const { createOperationJournal } = require('../src/operation-journal');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-runner-corrupt-'));
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  journal.begin({ operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  journal.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  fs.writeFileSync(path.join(directory, 'operation-journal.json'), '{broken');
+  const restartedJournal = createOperationJournal({ userDataPath: directory, now: () => 2 });
+  const h = harness({ journal: restartedJournal });
+  await assert.rejects(() => h.runner.recoverInterrupted(), error => error.classification === 'needs-safe-recovery'
+    && error.code === 'operation-journal-corrupt');
+  assert.equal(fs.existsSync(path.join(directory, 'operation-journal.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'operation-journal.recovery.json')), true);
+  assert.equal(h.calls.includes('inspect'), false);
+});
+
+test('dual-corrupt startup can recover only through inspected confirmed card and preserves quarantined evidence', async () => {
+  const { createOperationJournal } = require('../src/operation-journal');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-runner-dual-corrupt-'));
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  journal.begin({ operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  journal.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  fs.writeFileSync(path.join(directory, 'operation-journal.json'), '{broken-canonical');
+  fs.writeFileSync(path.join(directory, 'operation-journal.recovery.json'), '{broken-recovery');
+  const restartedJournal = createOperationJournal({ userDataPath: directory, now: () => 2 });
+  const h = harness({ journal: restartedJournal });
+  await assert.rejects(() => h.runner.recoverInterrupted(), error => error.code === 'operation-journal-corrupt');
+  const auth = await authorize(h, 'recover-current-release');
+  const result = await h.runner.execute({
+    operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  });
+  assert.equal(result.verification, 'flash-verified');
+  assert.ok(h.calls.find(value => Array.isArray(value) && value[0] === 'write'));
+  assert.ok(fs.readdirSync(directory).some(name => name.includes('.corrupt-')));
+});
+
 test('restart recovery inspects the exact card before classifying unverified mutation', async () => {
   const journal = memoryJournal({
     operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
@@ -449,6 +490,24 @@ test('failed journal clear preserves acknowledgement and dismissal retry authori
   assert.equal(runner.acknowledgeResult(saved.completionCorrelation), false);
   assert.equal(runner.dismissCompletedResult({ ...runner.recoveredResultContext(), confirmed: true }), false);
   assert.notEqual(journal.current(), null);
+});
+
+test('pending exact result reconstructs cleared journal authority for ACK retry and restart', () => {
+  const { createOperationJournal } = require('../src/operation-journal');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-ack-reconcile-'));
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  const correlation = {
+    receiptHash: '4'.repeat(64), operation: 'install-current-release', cardId: 'lw-441bf681feb0',
+    firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+  };
+  assert.ok(journal.restoreCompletedAuthority(correlation));
+  let runner = harness({ journal }).runner;
+  assert.equal(runner.acknowledgeResult(correlation), true);
+  assert.equal(journal.load(), null);
+  assert.equal(runner.reconcilePendingResult(correlation), true);
+  runner = harness({ journal: createOperationJournal({ userDataPath: directory, now: () => 2 }) }).runner;
+  assert.equal(runner.reconcilePendingResult(correlation), true);
+  assert.equal(runner.acknowledgeResult(correlation), true);
 });
 
 test('a pending verified result blocks new preparation and cannot be cleared by another operation', async () => {

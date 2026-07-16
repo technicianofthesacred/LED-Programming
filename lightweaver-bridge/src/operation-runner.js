@@ -187,7 +187,14 @@ function createOperationRunner({
     if (!DESTRUCTIVE_OPERATIONS.has(operation)) throw new BridgeOperationError('unsupported-operation', 'Unsupported destructive bridge operation');
     return exclusive(async () => {
       const selected = assertFreshInspection();
-      const interrupted = journal?.load?.();
+      let interrupted;
+      let corruptRecovery = false;
+      try {
+        interrupted = journal?.load?.();
+      } catch (error) {
+        if (operation !== 'recover-current-release' || error?.code !== 'operation-journal-corrupt') throw error;
+        corruptRecovery = true;
+      }
       if (interrupted) {
         if (interrupted.flashVerification === 'flash-verified') {
           throw new BridgeOperationError('operation-result-pending', 'The verified operation result must be acknowledged or explicitly dismissed before another operation.', {
@@ -222,6 +229,7 @@ function createOperationRunner({
         cardId: selected.cardId,
         buildId: release.manifest.buildId,
         expiresAt: now() + confirmationTtlMs,
+        corruptRecovery,
       });
       return Object.freeze({
         confirmationToken: token,
@@ -245,6 +253,7 @@ function createOperationRunner({
         throw new BridgeOperationError('confirmation-expired', 'Confirmation token has expired.');
       }
       const selected = assertFreshInspection();
+      const corruptRecovery = authority.corruptRecovery === true;
       authority = null;
       emit(onEvent, 'destructive-action-confirmed', { cardId: selected.cardId });
 
@@ -263,9 +272,16 @@ function createOperationRunner({
           expectedCardId: selected.cardId,
           expectedBuildId: verifiedRelease.manifest.buildId,
         };
-        const interrupted = journal?.load?.();
-        preexistingJournal = Boolean(interrupted);
-        if (!interrupted) {
+        let interrupted;
+        try {
+          interrupted = journal?.load?.();
+        } catch (error) {
+          if (!corruptRecovery || error?.code !== 'operation-journal-corrupt') throw error;
+        }
+        preexistingJournal = Boolean(interrupted) || corruptRecovery;
+        if (corruptRecovery) {
+          journal?.markCorruptRecoveryAcquiring?.({ expectedCardId: selected.cardId });
+        } else if (!interrupted) {
           journal?.begin?.(journalStart);
           journalArmed = Boolean(journal);
           journalCreatedFresh = journalArmed;
@@ -282,7 +298,17 @@ function createOperationRunner({
         if (typeof connection.loader?.writeFlash !== 'function') {
           throw new BridgeOperationError('write-capability-missing', 'The connected card cannot be written. Nothing was erased.');
         }
-        if (interrupted) {
+        if (corruptRecovery) {
+          try {
+            journal.beginCorruptRecovery(journalStart);
+          } catch (error) {
+            throw new BridgeOperationError('recovery-journal-activation-uncertain', error?.message || 'Corrupt recovery journal activation failed', {
+              mutation: 'uncertain', outcome: 'needs-safe-recovery', phase: 'recovery-journal-activation',
+              nextAction: 'recover-current-release',
+            });
+          }
+          journalArmed = true;
+        } else if (interrupted) {
           try {
             journal.replaceForRecovery(journalStart);
           } catch (error) {
@@ -524,6 +550,15 @@ function createOperationRunner({
     return cleared === true || cleared?.cleared === true;
   }
 
+  function reconcilePendingResult(value) {
+    const saved = journal?.load?.();
+    if (saved) {
+      if (completionTupleMatches(saved, value)) return true;
+      return bindCompletedResult(value);
+    }
+    return Boolean(journal?.restoreCompletedAuthority?.(value));
+  }
+
   function dismissCompletedResult(value) {
     const saved = journal?.load?.();
     const expected = recoveredContextFrom(saved);
@@ -536,7 +571,7 @@ function createOperationRunner({
 
   return Object.freeze({
     inspect, prepare, execute, runMaintenance, recoverInterrupted,
-    bindCompletedResult, acknowledgeResult, dismissCompletedResult, recoveredResultContext,
+    bindCompletedResult, acknowledgeResult, reconcilePendingResult, dismissCompletedResult, recoveredResultContext,
     hasInterruptedOperation: () => Boolean(journal?.load?.()),
     hasInspection: () => Boolean(inspection && inspection.expiresAt > now()),
     isActive: () => active,

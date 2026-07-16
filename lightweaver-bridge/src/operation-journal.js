@@ -161,6 +161,10 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     const canonical = canonicalRead.value;
     const recovery = recoveryRead.value;
     const corruptLabels = [canonicalRead, recoveryRead].filter(value => value.corrupt).map(value => value.label);
+    if (canonicalRead.corrupt && recovery && recovery.mutationBoundary === 'before-mutation') {
+      setWarning(['canonical']);
+      throw corruptionFailure();
+    }
     if (!canonical && !recovery && (corruptLabels.length || acquisitionRead.corrupt || acquisitionRead.value)) {
       setWarning([...corruptLabels, ...(acquisitionRead.corrupt || acquisitionRead.value ? ['acquisition'] : [])]);
       throw corruptionFailure();
@@ -303,6 +307,53 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
         version: JOURNAL_VERSION, attemptId: randomBytes(16).toString('hex'), expectedCardId,
         state: 'acquiring-or-owned', createdAt: logicalTime(current),
       });
+    },
+    markCorruptRecoveryAcquiring({ expectedCardId } = {}) {
+      if (!CARD_ID.test(expectedCardId)) throw new Error('Corrupt recovery acquisition card is invalid');
+      return persistAcquisition({
+        version: JOURNAL_VERSION, attemptId: randomBytes(16).toString('hex'), expectedCardId,
+        state: 'acquiring-or-owned', createdAt: logicalTime(),
+      });
+    },
+    beginCorruptRecovery({ operation, expectedCardId, expectedBuildId } = {}) {
+      let confirmedCorrupt = false;
+      try { load(); } catch (error) { confirmedCorrupt = error?.code === 'operation-journal-corrupt'; }
+      if (!confirmedCorrupt || operation !== 'recover-current-release' || !CARD_ID.test(expectedCardId) || !BUILD_ID.test(expectedBuildId)) {
+        throw new Error('Corrupt operation journal cannot enter recovery');
+      }
+      for (const source of [file, recoveryFile, acquisitionFile]) {
+        if (!fs.existsSync(source)) continue;
+        fs.renameSync(source, `${source}.corrupt-${randomBytes(8).toString('hex')}`);
+      }
+      syncDirectory();
+      const timestamp = logicalTime();
+      const record = persist({
+        version: JOURNAL_VERSION, generationId: randomBytes(16).toString('hex'), operation, expectedCardId, expectedBuildId,
+        mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted',
+        usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
+        timestamps: { createdAt: timestamp, updatedAt: timestamp },
+      }, recoveryFile);
+      activeFile = recoveryFile;
+      return record;
+    },
+    restoreCompletedAuthority(value = {}) {
+      if (load()) return false;
+      const timestamp = logicalTime();
+      const pendingResult = {
+        state: 'awaiting-card-acknowledgement', pipelineComplete: false, cardId: value.cardId,
+        expectedCardId: value.cardId, firmwareVersion: value.firmwareVersion, buildId: value.buildId,
+        target: value.target, verification: value.verification, physicalOutput: 'unconfirmed',
+        nextCheckpoint: 'stable-card-identity-acknowledged',
+        message: 'Flash verified. Reconnect in Studio and confirm the physical lights.',
+      };
+      const record = persist({
+        version: JOURNAL_VERSION, generationId: randomBytes(16).toString('hex'), operation: value.operation,
+        expectedCardId: value.cardId, expectedBuildId: value.buildId, mutationBoundary: 'erase-or-write-started',
+        flashVerification: 'flash-verified', restartResult: 'restarted', usbOwnership: 'released',
+        pendingResult, completionCorrelation: { ...value }, timestamps: { createdAt: timestamp, updatedAt: timestamp },
+      });
+      activeFile = file;
+      return record;
     },
     clearRecoveryAcquisition() {
       try { fs.unlinkSync(acquisitionFile); } catch (error) { if (error?.code !== 'ENOENT') throw error; }

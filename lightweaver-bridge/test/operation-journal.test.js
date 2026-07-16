@@ -149,9 +149,17 @@ test('corrupt slots are isolated, safest valid evidence survives, and warnings a
 
   fs.writeFileSync(canonical, '{broken');
   let restarted = createOperationJournal({ userDataPath: directory });
-  assert.equal(restarted.load().operation, 'recover-current-release');
+  assert.throws(() => restarted.load(), error => error.classification === 'needs-safe-recovery'
+    && error.code === 'operation-journal-corrupt');
   assert.match(restarted.warning, /canonical/i);
   assert.ok(restarted.warning.length <= 160);
+
+  fs.writeFileSync(canonical, canonicalBytes);
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  fs.writeFileSync(canonical, '{broken');
+  restarted = createOperationJournal({ userDataPath: directory });
+  assert.equal(restarted.load().operation, 'recover-current-release');
+  assert.equal(restarted.load().mutationBoundary, 'erase-or-write-started');
 
   fs.writeFileSync(canonical, canonicalBytes);
   fs.writeFileSync(recovery, '{broken');

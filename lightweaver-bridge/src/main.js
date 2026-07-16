@@ -92,7 +92,12 @@ function routeProtocol(value) {
       const acceptedContext = resultCoordinator.acknowledgementContext(receipt);
       const acknowledged = resultCoordinator.acknowledge(receipt, () => {
         const correlation = journalCorrelation(acceptedContext);
-        return !correlation || productionRunner?.acknowledgeResult?.(correlation) === true;
+        if (!correlation) return true;
+        if (productionRunner?.acknowledgeResult?.(correlation) !== true) return false;
+        return Object.freeze({
+          committed: true,
+          rollback: () => productionRunner?.reconcilePendingResult?.(correlation),
+        });
       });
       if (acknowledged) {
         sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
@@ -251,7 +256,7 @@ async function run() {
   const runner = await createProductionRunner();
   productionRunner = runner;
   const pendingCorrelation = journalCorrelation(resultCoordinator.pendingContext);
-  if (pendingCorrelation && runner.bindCompletedResult(pendingCorrelation) !== true) {
+  if (pendingCorrelation && runner.reconcilePendingResult(pendingCorrelation) !== true) {
     throw new Error('Saved Studio result did not match the interrupted operation journal');
   }
   try {

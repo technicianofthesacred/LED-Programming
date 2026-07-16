@@ -269,9 +269,16 @@ test('acknowledgement guard clears exact journal authority before deleting pendi
   const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
   const order = [];
   let stored;
+  let storeMode = 'success';
   const resultStore = {
     save(value) { stored = value; }, load() { return stored; },
-    acknowledge() { order.push('pending-result-cleared'); stored = null; return true; },
+    acknowledge() {
+      order.push('pending-result-clear-attempted');
+      if (storeMode === 'false') return false;
+      if (storeMode === 'throw') throw new Error('pending unlink failed');
+      stored = null;
+      return true;
+    },
   };
   const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0, createContext: () => 'context' });
   router.route(VALID);
@@ -286,8 +293,20 @@ test('acknowledgement guard clears exact journal authority before deleting pendi
   assert.equal(coordinator.acknowledge(receipt, () => { order.push('journal-clear-failed'); return false; }), false);
   assert.deepEqual(order, ['journal-clear-failed']);
   assert.equal(coordinator.hasPendingResult, true);
+  storeMode = 'false';
+  assert.equal(coordinator.acknowledge(receipt, () => ({
+    committed: true, rollback() { order.push('journal-restored'); },
+  })), false);
+  assert.deepEqual(order, ['journal-clear-failed', 'pending-result-clear-attempted', 'journal-restored']);
+  assert.equal(coordinator.hasPendingResult, true);
+  storeMode = 'throw';
+  assert.throws(() => coordinator.acknowledge(receipt, () => ({
+    committed: true, rollback() { order.push('journal-restored-after-throw'); },
+  })), /pending unlink failed/);
+  assert.equal(coordinator.hasPendingResult, true);
+  storeMode = 'success';
   assert.equal(coordinator.acknowledge(receipt, () => { order.push('journal-cleared'); return true; }), true);
-  assert.deepEqual(order, ['journal-clear-failed', 'journal-cleared', 'pending-result-cleared']);
+  assert.deepEqual(order.slice(-2), ['journal-cleared', 'pending-result-clear-attempted']);
 });
 
 test('acknowledgement protocol is canonical, one-purpose, and distinct from the five operations', () => {

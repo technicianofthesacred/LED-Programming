@@ -424,8 +424,15 @@ function createBoundedResultCoordinator({ launchRouter, openCallback, resultStor
     acknowledge(receipt, beforeAcknowledge = () => true) {
       let acknowledged = false;
       if (pendingResult?.receipt === receipt) {
-        if (beforeAcknowledge(Object.freeze({ receipt, operation: pendingResult.request.operation, result: pendingResult.result })) !== true) return false;
-        acknowledged = resultStore?.acknowledge ? resultStore.acknowledge(receipt) : true;
+        const transaction = beforeAcknowledge(Object.freeze({ receipt, operation: pendingResult.request.operation, result: pendingResult.result }));
+        if (transaction !== true && (!transaction || transaction.committed !== true)) return false;
+        try {
+          acknowledged = resultStore?.acknowledge ? resultStore.acknowledge(receipt) : true;
+        } catch (error) {
+          transaction?.rollback?.();
+          throw error;
+        }
+        if (!acknowledged) transaction?.rollback?.();
         if (acknowledged) pendingResult = null;
       } else if (resultStore?.acknowledge) acknowledged = resultStore.acknowledge(receipt);
       if (acknowledged) launchRouter.complete();
