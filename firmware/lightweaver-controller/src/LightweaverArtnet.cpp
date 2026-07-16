@@ -6,11 +6,6 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-// Master brightness lives in main.cpp; the customer dimmer must apply during
-// Art-Net streaming. We read it via a forward extern instead of pulling the
-// whole main.cpp header tree in here.
-extern float manualBrightness;
-
 namespace {
 
 CRGB* gLeds = nullptr;
@@ -105,17 +100,9 @@ void decodePacket(const uint8_t* buffer, size_t length) {
   const uint8_t* dmx = buffer + 18;
   CRGB* dst = gLeds + cfg->pixelStart;
 
-  // Per-pixel customer brightness scale, mirroring the WLED realtime path.
-  float brightness = manualBrightness;
-  if (brightness < 0.0f) brightness = 0.0f;
-  if (brightness > 1.0f) brightness = 1.0f;
-  uint8_t scale = uint8_t(brightness * 255.0f + 0.5f);
-
   for (uint16_t i = 0; i < pixelsInPacket; i++) {
     uint16_t base = i * 3;
-    CRGB pixel(dmx[base], dmx[base + 1], dmx[base + 2]);
-    if (scale < 255) pixel.nscale8(scale);
-    dst[i] = pixel;
+    dst[i] = CRGB(dmx[base], dmx[base + 1], dmx[base + 2]);
   }
 
   gUniverseFramesRx[cfgIndex]++;

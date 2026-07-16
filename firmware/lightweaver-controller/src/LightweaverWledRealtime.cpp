@@ -14,10 +14,6 @@ static constexpr uint16_t WLED_REALTIME_PORT = 21324;
 //   bytes 2..N : repeating RGB triplets, one per pixel starting at pixel 0
 static constexpr uint8_t WLED_PROTO_DRGB = 2;
 
-// Customer brightness lives in main.cpp; we scale incoming pixels by it so
-// the user's brightness knob still works during streaming.
-extern float manualBrightness;
-
 namespace {
 WiFiUDP g_udp;
 CRGB* g_leds = nullptr;
@@ -131,13 +127,6 @@ void handleWledRealtime() {
     int pixels = payload / 3;
     if (pixels > g_totalPixels) pixels = g_totalPixels;
 
-    // Apply customer brightness to the incoming frame. The downstream
-    // FastLED.setBrightness(computeBrightnessByte()) still composes the
-    // master/profile/fade ceiling on top, but applying manualBrightness
-    // here keeps the streaming preview perceptually matched to where the
-    // dimmer knob is set.
-    uint8_t brightScale = uint8_t(constrain(int(manualBrightness * 255.0f), 0, 255));
-
     // Skip this frame if a different live source (e.g. Art-Net) owns the canvas.
     if (!frameSourceClaim(FRAME_WLED_REALTIME)) continue;
 
@@ -147,7 +136,6 @@ void handleWledRealtime() {
       g_leds[i].g = p[1];
       g_leds[i].b = p[2];
       p += 3;
-      if (brightScale < 255) g_leds[i].nscale8(brightScale);
     }
 
     frameSourceMarkExternal(FRAME_WLED_REALTIME);

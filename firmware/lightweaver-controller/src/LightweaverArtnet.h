@@ -11,13 +11,11 @@
 // any universe in `universes[]`, and writes the RGB triplets into the global
 // leds[] buffer at the configured pixel offsets.
 //
-// Customer master brightness (`manualBrightness` in main.cpp) is applied
-// per pixel using FastLED's nscale8 — Art-Net streams arrive at full level
-// and we attenuate to match the dimmer state. This mirrors the WLED-realtime
-// pattern Agent A documents in LightweaverFrameSource.
+// Accepted Art-Net RGB values are copied into leds[] unchanged. The shared
+// output policy applies brightness once when the completed frame is shown.
 //
 // Every successful packet write calls frameSourceMarkExternal(FRAME_ARTNET)
-// so Agent A's priority system can yield the render loop to the stream.
+// so the priority system can yield the render loop to the stream.
 
 constexpr uint16_t LW_ARTNET_PORT = 6454;
 constexpr uint16_t LW_ARTNET_PIXELS_PER_UNIVERSE = 170;

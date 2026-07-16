@@ -9,9 +9,9 @@
 // at up to 25 fps.
 //
 // We translate each incoming message into the same render path as the
-// HTTP POST /json/state route: decode hex pixels into leds[], apply
-// customer manualBrightness, and mark the FrameSource as WLED_REALTIME
-// so the priority system yields the internal renderer.
+// HTTP POST /json/state route: decode raw hex pixels into leds[] unchanged
+// and mark the FrameSource as WLED_REALTIME so the priority system yields
+// the internal renderer. The shared output policy applies brightness once.
 
 void setupWledWebSocket();
 void handleWledWebSocket();

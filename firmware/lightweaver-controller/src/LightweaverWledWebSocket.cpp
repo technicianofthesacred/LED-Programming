@@ -12,7 +12,6 @@
 extern CRGB leds[];
 extern uint16_t totalPixels;
 extern RuntimeConfig runtimeConfig;
-extern float manualBrightness;
 extern uint8_t lookCount;
 extern LookConfig looks[];
 
@@ -67,27 +66,28 @@ void applyState(uint8_t* payload, size_t length) {
         bool frameAllowed = frameSourceClaim(FRAME_WLED_REALTIME);
         int writeIdx = s["start"] | 0;
         if (writeIdx < 0) writeIdx = 0;
-        uint8_t scale = uint8_t(manualBrightness * 255.0f);
+        bool frameWritten = false;
         for (JsonVariant v : pixels) {
           if (!frameAllowed || writeIdx >= int(totalPixels)) break;
           if (v.is<const char*>()) {
             uint8_t r, g, b;
             if (hexToRgb(v.as<const char*>(), r, g, b)) {
-              CRGB px(r, g, b);
-              px.nscale8(scale);
-              leds[writeIdx++] = px;
+              leds[writeIdx++] = CRGB(r, g, b);
+              frameWritten = true;
             } else {
               writeIdx++;
             }
           } else if (v.is<JsonArray>()) {
             JsonArray t = v.as<JsonArray>();
             if (t.size() >= 3) {
-              CRGB px(t[0].as<int>() & 0xff, t[1].as<int>() & 0xff, t[2].as<int>() & 0xff);
-              px.nscale8(scale);
-              leds[writeIdx++] = px;
+              leds[writeIdx++] = CRGB(t[0].as<int>() & 0xff,
+                                      t[1].as<int>() & 0xff,
+                                      t[2].as<int>() & 0xff);
+              frameWritten = true;
             }
           }
         }
+        if (frameWritten) frameSourceMarkExternal(FRAME_WLED_REALTIME);
       }
       if (!s["fx"].isNull()) {
         int fx = s["fx"].as<int>();
