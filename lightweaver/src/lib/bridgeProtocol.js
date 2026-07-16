@@ -62,8 +62,12 @@ function readRegistry(storage) {
     if (typeof raw !== 'string') throw new Error('Pending Bridge registry is invalid');
     let record;
     try { record = JSON.parse(raw); } catch { throw new Error('Pending Bridge registry is invalid'); }
-    if (!record || Object.keys(record).sort().join(',') !== 'createdAt,expiresAt,nonce,operation,tabId'
+    const expectedKeys = record?.receipt === undefined
+      ? 'createdAt,expiresAt,nonce,operation,tabId'
+      : 'createdAt,expiresAt,nonce,operation,receipt,tabId';
+    if (!record || Object.keys(record).sort().join(',') !== expectedKeys
       || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
+      || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
       || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
       || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
       || record.expiresAt - record.createdAt > TTL_MS || key !== `${REGISTRY_PREFIX}${record.nonce}`) {
@@ -272,12 +276,22 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
         throw new Error('No pending Bridge operation; callback was already used');
       }
       if (!validateOperationResult(pending.operation, result)) throw new Error('Bridge callback result is incompatible with the pending operation semantics');
+      let targetTabId = pending.tabId;
+      if (dependencies.takeoverTab === true) {
+        const sessionStorage = dependencies.sessionStorage ?? dependencies.storage ?? globalThis.sessionStorage;
+        const cryptoApi = dependencies.crypto ?? globalThis.crypto;
+        if (!sessionStorage) throw new Error('Replacement Studio tab storage is unavailable');
+        targetTabId = getTabId(sessionStorage, cryptoApi);
+      }
       assertOwner?.();
-      removeRecord(localStorage, result.nonce);
+      if (result.receipt) {
+        if (pending.receipt && pending.receipt !== result.receipt) throw new Error('Bridge callback receipt does not match');
+        writeRecord(localStorage, { ...pending, tabId: targetTabId, receipt: result.receipt });
+      } else removeRecord(localStorage, result.nonce);
       const { nonce: _consumedNonce, receipt, ...safeResult } = result;
       return Object.freeze({
-        operation: pending.operation, ...safeResult, originTabId: pending.tabId, physicalProof: false,
-        ...(receipt ? { acknowledgementUrl: `lightweaver://ack?receipt=${receipt}&version=1` } : {}),
+        operation: pending.operation, ...safeResult, originTabId: targetTabId, physicalProof: false,
+        ...(receipt ? { ackReceipt: receipt } : {}),
       });
     };
     const locks = dependencies.locks === undefined ? globalThis.navigator?.locks : dependencies.locks;
@@ -288,6 +302,17 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
   } finally {
     history?.replaceState?.(null, '', '/');
   }
+}
+
+export function confirmBridgeResultReceipt(receipt, dependencies = {}) {
+  if (!isCanonicalNonce(receipt)) return false;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
+  if (!localStorage) return false;
+  const records = readRegistry(localStorage);
+  const pending = records.find(record => record.receipt === receipt);
+  if (!pending) return false;
+  removeRecord(localStorage, pending.nonce);
+  return true;
 }
 
 export async function consumeBridgeReturnCode(value, dependencies = {}) {
@@ -303,7 +328,7 @@ export async function consumeBridgeReturnCode(value, dependencies = {}) {
     if (encodeBase64Url(new TextEncoder().encode(payload)) !== match[1]) throw new Error('non-canonical');
   } catch { throw new TypeError('Invalid Bridge return code'); }
   if (payload.length > 675 || payload.includes('#')) throw new TypeError('Invalid Bridge return code');
-  return consumeBridgeCallback(`${BRIDGE_CALLBACK_ORIGIN}/#bridge-result?${payload}`, dependencies);
+  return consumeBridgeCallback(`${BRIDGE_CALLBACK_ORIGIN}/#bridge-result?${payload}`, { ...dependencies, takeoverTab: true });
 }
 
 export function validateOperationResult(operation, result) {

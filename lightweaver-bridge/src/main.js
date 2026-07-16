@@ -76,9 +76,9 @@ function routeProtocol(value) {
   }
 }
 
-function sendCallbackDelivery(state, message) {
+function sendCallbackDelivery(state, message, returnCode) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send('bridge:callback-delivery', Object.freeze({ state, message }));
+  mainWindow.webContents.send('bridge:callback-delivery', Object.freeze({ state, message, ...(returnCode ? { returnCode } : {}) }));
 }
 
 async function returnBoundedResult(payload, completedOperation, context) {
@@ -87,9 +87,10 @@ async function returnBoundedResult(payload, completedOperation, context) {
     if (!pending) return pending;
     const delivery = Object.freeze({
       state: 'return-pending',
-      message: `Return pending. Paste this one-time code into the original Studio tab if another browser opened: ${pending.returnCode}`,
+      message: 'Return pending. If another browser opened, paste the one-time code into the original Studio tab.',
+      returnCode: pending.returnCode,
     });
-    sendCallbackDelivery(delivery.state, delivery.message);
+    sendCallbackDelivery(delivery.state, delivery.message, delivery.returnCode);
     return delivery;
   } catch (error) {
     if (error?.code === 'callback-delivery-failed') {
@@ -111,7 +112,7 @@ async function retryBoundedResult() {
   try {
     const pending = await resultCoordinator.retry();
     if (!pending) return Object.freeze({ state: 'launch-expired', message: 'No pending Studio result remains. Open led.mandalacodes.com manually.' });
-    return Object.freeze({ state: 'return-pending', message: `Return pending; no card operation reran. Paste into the original Studio tab: ${pending.returnCode}` });
+    return Object.freeze({ state: 'return-pending', message: 'Return pending; no card operation reran. Paste the code into the original Studio tab.', returnCode: pending.returnCode });
   } catch (error) {
     const state = error?.code === 'launch-expired' ? 'launch-expired' : 'callback-delivery-failed';
     const message = state === 'launch-expired'
@@ -174,7 +175,7 @@ async function createMainWindow() {
   }
   launchRouter.setReady();
   if (resultCoordinator.returnCode) {
-    sendCallbackDelivery('return-pending', `Saved return pending. Paste into the original Studio tab: ${resultCoordinator.returnCode}`);
+    sendCallbackDelivery('return-pending', 'A saved return is pending. Paste the code into the original Studio tab.', resultCoordinator.returnCode);
   }
   return window;
 }

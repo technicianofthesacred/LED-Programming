@@ -5,10 +5,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { buildReturnCode } = require('../src/deep-link-protocol');
+
+const FULL_FLASH_RETURN_CODE = buildReturnCode({ nonce: Buffer.alloc(32, 1).toString('base64url'), version: 1 }, {
+  status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0',
+  firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3',
+  verification: 'flash-verified', physicalOutput: 'unconfirmed',
+}, Buffer.alloc(32, 4).toString('base64url'));
 
 test('unplug-replug guidance requires a deliberate acknowledgement before inspecting again', async () => {
   const elements = new Map();
-  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
     elements.set(`#${id}`, {
       textContent: '', disabled: false, hidden: false, style: {},
       listeners: new Map(),
@@ -51,7 +58,7 @@ test('unplug-replug guidance requires a deliberate acknowledgement before inspec
 
 test('native launch requests require an operation-specific visible click before maintenance IPC', async () => {
   const elements = new Map();
-  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
     elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
   }
   let launch;
@@ -76,7 +83,7 @@ test('native launch requests require an operation-specific visible click before 
 
 test('callback delivery failure offers a typed retry without rerunning card hardware', async () => {
   const elements = new Map();
-  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
     elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
   }
   let onDelivery;
@@ -102,9 +109,33 @@ test('callback delivery failure offers a typed retry without rerunning card hard
   assert.equal(elements.get('#state-title').textContent, 'Returned to Studio');
 });
 
+test('a full flash return code renders separately and retries without hardware', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  const returnCode = FULL_FLASH_RETURN_CODE;
+  let retryCalls = 0;
+  const bridge = {
+    inspectCompatibleCard: async () => { throw new Error('hardware must not run'); }, inspectForOperation: async () => { throw new Error('hardware must not run'); },
+    startOperation: async () => { throw new Error('hardware must not run'); }, confirmDestructiveAction: async () => { throw new Error('hardware must not run'); },
+    runMaintenanceOperation: async () => { throw new Error('hardware must not run'); }, cancelBeforeCriticalSection: async () => ({ cancelled: true }),
+    retryStudioCallback: async () => { retryCalls += 1; return { state: 'return-pending', message: 'Still pending', returnCode }; },
+    onCallbackDelivery(listener) { this.delivery = listener; }, onProgress() {}, onResult() {}, onLaunchRequest() {},
+  };
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
+  vm.runInNewContext(source, { window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) } });
+  bridge.delivery({ state: 'return-pending', message: 'Result saved.', returnCode });
+  assert.equal(elements.get('#state-message').textContent, 'Result saved.');
+  assert.equal(elements.get('#return-code').textContent, returnCode);
+  assert.equal(elements.get('#return-code').hidden, false);
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(retryCalls, 1);
+});
+
 test('expired website request is noncritical and dismisses without calling hardware', async () => {
   const elements = new Map();
-  for (const id of ['state-marker', 'state-title', 'state-message', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
     elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
   }
   let onDelivery;

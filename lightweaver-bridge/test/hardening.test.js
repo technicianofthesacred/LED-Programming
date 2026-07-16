@@ -9,6 +9,12 @@ const vm = require('node:vm');
 const bridgeRoot = path.resolve(__dirname, '..');
 const rendererPath = path.join(bridgeRoot, 'src', 'renderer', 'index.html');
 const rendererUrl = new URL(`file://${rendererPath}`).href;
+const { buildReturnCode } = require('../src/deep-link-protocol');
+const FULL_FLASH_RETURN_CODE = buildReturnCode({ nonce: Buffer.alloc(32, 1).toString('base64url'), version: 1 }, {
+  status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0',
+  firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3',
+  verification: 'flash-verified', physicalOutput: 'unconfirmed',
+}, Buffer.alloc(32, 4).toString('base64url'));
 const DEVICE_REDACTION_VECTORS = Object.freeze([
   ['/dev/ttyACM0', 'open failed: /dev/ttyACM0'],
   ['/dev/tty.usbmodem14101', '{"path":"/dev/tty.usbmodem14101","error":"denied"}'],
@@ -545,10 +551,14 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   let delivery;
   exposed.onCallbackDelivery(payload => { delivery = payload; });
   listeners.get('bridge:callback-delivery')({}, {
-    state: 'callback-delivery-failed', message: '/dev/cu.hidden serialNumber=DELIVERY123', extra: 'must not cross',
+    state: 'return-pending', message: '/dev/cu.hidden serialNumber=DELIVERY123',
+    returnCode: FULL_FLASH_RETURN_CODE, extra: 'must not cross',
   });
-  assert.deepEqual(Object.keys(delivery).sort(), ['message', 'state']);
+  assert.deepEqual(Object.keys(delivery).sort(), ['message', 'returnCode', 'state']);
   assert.equal(delivery.message.includes('DELIVERY123'), false);
+  assert.equal(delivery.returnCode, FULL_FLASH_RETURN_CODE);
+  listeners.get('bridge:callback-delivery')({}, { state: 'return-pending', message: 'Safe', returnCode: 'LW1-bad value' });
+  assert.equal('returnCode' in delivery, false);
   await exposed.retryStudioCallback();
   assert.deepEqual(invokes.at(-1), ['bridge:retry-callback', undefined]);
 

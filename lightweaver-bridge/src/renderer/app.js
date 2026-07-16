@@ -4,6 +4,7 @@ const bridge = window.lightweaverBridge;
 const stateMarker = document.querySelector('#state-marker');
 const stateTitle = document.querySelector('#state-title');
 const stateMessage = document.querySelector('#state-message');
+const returnCode = document.querySelector('#return-code');
 const primaryAction = document.querySelector('#primary-action');
 const cancelAction = document.querySelector('#cancel-action');
 const progress = document.querySelector('#progress');
@@ -42,6 +43,8 @@ function render(payload = {}) {
   stateMarker.textContent = marker;
   stateTitle.textContent = title;
   stateMessage.textContent = payload.nextAction === 'unplug-replug-card' ? fallbackMessage : payload.message || fallbackMessage;
+  returnCode.textContent = payload.returnCode || '';
+  returnCode.hidden = !payload.returnCode;
   primaryAction.textContent = button;
   confirmationToken = payload.confirmationToken || confirmationToken;
   if (currentState === 'recovery-required') selectedOperation = 'recover-current-release';

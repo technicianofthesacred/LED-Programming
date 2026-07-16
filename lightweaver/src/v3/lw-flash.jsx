@@ -335,18 +335,18 @@ import { useProject } from '../state/ProjectContext.jsx';
             <button
               className="btn-lg"
               type="button"
-              disabled={bridgeState === 'opening' || bridgeState === 'working' || bridgeState === 'return-pending'}
+              disabled={bridgeState === 'opening' || bridgeState === 'waiting-for-bridge' || bridgeState === 'return-pending'}
               onClick={async () => {
                 setBridgeState('opening');
                 try {
                   await onLaunchBridge('install-current-release');
-                  setBridgeState('working');
+                  setBridgeState('waiting-for-bridge');
                 } catch { setBridgeState('error'); }
               }}
             >
-              {bridgeState === 'opening' ? 'Opening Lightweaver Bridge…' : bridgeState === 'working' || bridgeState === 'return-pending' ? 'Lightweaver Bridge is working…' : 'Open Lightweaver Bridge'}
+              {bridgeState === 'opening' || bridgeState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge…' : bridgeState === 'return-pending' ? 'Return pending…' : 'Open Lightweaver Bridge'}
             </button>
-            {bridgeState === 'working' && <p>Keep this original Studio tab open. If Bridge returns in another browser or profile, paste its one-time return code below.</p>}
+            {bridgeState === 'waiting-for-bridge' && <p>Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available, or paste the one-time return code below.</p>}
             {bridgeState === 'return-pending' && <p>Return pending while Studio validates the code and acknowledges the saved Bridge result.</p>}
             <form onSubmit={async event => {
                 event.preventDefault();
@@ -357,7 +357,7 @@ import { useProject } from '../state/ProjectContext.jsx';
                   await resumeBridgeReturnCode(returnCode, { publish: result => channel.publish(result) });
                   setReturnCode('');
                 } catch {
-                  setBridgeState('working');
+                  setBridgeState('waiting-for-bridge');
                   setReturnError('That return code is invalid, expired, already used, or belongs to another browser profile.');
                 } finally { channel.close(); }
               }}>

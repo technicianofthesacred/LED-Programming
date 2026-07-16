@@ -3,6 +3,7 @@ import {
   BRIDGE_RESULT_STATUSES,
   consumeBridgeCallback,
   consumeBridgeReturnCode,
+  confirmBridgeResultReceipt,
   createBridgeLaunch,
   validateOperationResult,
 } from './bridgeProtocol.js';
@@ -17,6 +18,7 @@ const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
 const SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const BUILD_PATTERN = /^[a-f0-9]{40}$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const ACK_RECEIPT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_MESSAGE_BYTES = 1024;
 
 function defaultNavigate(url) {
@@ -63,6 +65,7 @@ function resultFields(result) {
     target: result.target,
     verification: result.verification,
     physicalOutput: result.physicalOutput,
+    ackReceipt: result.ackReceipt,
   };
   if (result.cardId !== undefined) fields.cardId = result.cardId;
   if (result.firmwareVersion !== undefined) fields.firmwareVersion = result.firmwareVersion;
@@ -76,6 +79,7 @@ export function validateBridgeResultNotification(value) {
   const destructive = message.operation === 'install-current-release' || message.operation === 'recover-current-release';
   const expectedKeys = [
     'code', 'deliveryId', 'operation', 'physicalOutput', 'status', 'target', 'targetTabId', 'type', 'verification', 'version',
+    'ackReceipt',
     ...(message.cardId === undefined ? [] : ['cardId']),
     ...(message.firmwareVersion === undefined ? [] : ['firmwareVersion']),
     ...(message.buildId === undefined ? [] : ['buildId']),
@@ -83,6 +87,7 @@ export function validateBridgeResultNotification(value) {
   if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')
     || value.version !== 1 || value.type !== 'bridge-result'
     || !DELIVERY_PATTERN.test(value.deliveryId || '') || !TAB_PATTERN.test(value.targetTabId || '')
+    || !ACK_RECEIPT_PATTERN.test(value.ackReceipt || '')
     || !BRIDGE_OPERATIONS.includes(value.operation) || !BRIDGE_RESULT_STATUSES.includes(value.status)
     || !CODE_PATTERN.test(value.code || '') || value.target !== 'lightweaver-controller-esp32s3'
     || !['flash-verified', 'not-verified'].includes(value.verification)
@@ -103,7 +108,10 @@ export function createBridgeResultChannel(dependencies = {}) {
   const BroadcastChannelApi = dependencies.BroadcastChannel === undefined ? globalThis.BroadcastChannel : dependencies.BroadcastChannel;
   const cryptoApi = dependencies.crypto ?? globalThis.crypto;
   const onResult = dependencies.onResult;
+  const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
+  const confirmReceipt = dependencies.confirmReceipt ?? (receipt => confirmBridgeResultReceipt(receipt, { localStorage }));
   const delivered = new Set();
+  const acknowledged = new Set();
   let channel = null;
 
   const receive = raw => {
@@ -114,10 +122,22 @@ export function createBridgeResultChannel(dependencies = {}) {
     }
     const message = validateBridgeResultNotification(candidate);
     const tabId = sessionStorage?.getItem?.(BRIDGE_ORIGIN_TAB_KEY) || '';
-    if (!message || !tabId || message.targetTabId !== tabId || delivered.has(message.deliveryId)) return;
+    if (!message || !tabId || message.targetTabId !== tabId) return;
+    if (delivered.has(message.ackReceipt)) {
+      if (onResult && !acknowledged.has(message.ackReceipt)) {
+        acknowledge(`lightweaver://ack?receipt=${message.ackReceipt}&version=1`);
+        acknowledged.add(message.ackReceipt);
+      }
+      return;
+    }
+    if (!onResult) return;
+    const { ackReceipt, ...safeMessage } = message;
+    onResult(Object.freeze(safeMessage));
+    if (!confirmReceipt(ackReceipt)) return;
     if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
-    delivered.add(message.deliveryId);
-    onResult?.(message);
+    delivered.add(ackReceipt);
+    acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
+    acknowledged.add(ackReceipt);
   };
   const onStorage = event => {
     if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receive(event.newValue);
@@ -171,7 +191,6 @@ export async function bootstrapBridgeCallback(dependencies = {}) {
   try {
     const result = await (dependencies.consume ?? consumeBridgeCallback)(href);
     dependencies.publish?.(result);
-    if (result.acknowledgementUrl) (dependencies.acknowledge ?? defaultAcknowledge)(result.acknowledgementUrl);
     return { kind: 'result', result };
   } catch {
     return {
@@ -184,6 +203,5 @@ export async function bootstrapBridgeCallback(dependencies = {}) {
 export async function resumeBridgeReturnCode(value, dependencies = {}) {
   const result = await (dependencies.consume ?? consumeBridgeReturnCode)(value, dependencies.protocolDependencies);
   dependencies.publish?.(result);
-  if (result.acknowledgementUrl) (dependencies.acknowledge ?? defaultAcknowledge)(result.acknowledgementUrl);
   return result;
 }

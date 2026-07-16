@@ -183,13 +183,13 @@ export function CardConnectionCenter({
   };
 
   const launchBridge = async (operation) => {
-    if (bridgeLaunchState === 'opening' || bridgeLaunchState === 'working' || bridgeLaunchState === 'return-pending') return;
+    if (bridgeLaunchState === 'opening' || bridgeLaunchState === 'waiting-for-bridge' || bridgeLaunchState === 'return-pending') return;
     onClearBridgeResult?.();
     setFailure('');
     setBridgeLaunchState('opening');
     try {
       await onLaunchBridge?.(operation);
-      setBridgeLaunchState('working');
+      setBridgeLaunchState('waiting-for-bridge');
     } catch {
       setBridgeLaunchState('idle');
       setFailure('Studio could not save the project and open Bridge. Save the project, then try again.');
@@ -205,13 +205,13 @@ export function CardConnectionCenter({
       await resumeBridgeReturnCode(bridgeReturnCode, { publish: result => channel.publish(result) });
       setBridgeReturnCode('');
     } catch {
-      setBridgeLaunchState('working');
+      setBridgeLaunchState('waiting-for-bridge');
       setFailure('That return code is invalid, expired, already used, or belongs to another browser profile. Copy the current code from Bridge and try again in the original Studio tab.');
     } finally { channel.close(); }
   };
 
   const bridgeOperation = action.id === 'needs-safe-recovery' ? 'recover-current-release' : 'install-current-release';
-  const bridgeBusy = ['opening', 'working', 'return-pending'].includes(bridgeLaunchState);
+  const bridgeBusy = ['opening', 'waiting-for-bridge', 'return-pending'].includes(bridgeLaunchState);
   const effectiveActionId = action.id;
   const bridgeLifecycleState = bridgeLaunchState === 'idle' && action.id === 'install-native-bridge'
     ? 'installer-unavailable' : bridgeLaunchState;
@@ -311,8 +311,8 @@ export function CardConnectionCenter({
         </div>
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
-          <h3>{bridgeLifecycleState === 'opening' ? 'Opening Lightweaver Bridge' : bridgeLifecycleState === 'working' ? 'Working in Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
-          <p>{bridgeLifecycleState === 'opening' ? 'Studio sent the secure launch request.' : bridgeLifecycleState === 'working' ? 'Keep this original Studio tab open while Bridge works. If the result opens in another browser or profile, paste its return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return and asking Bridge to clear its saved result.' : action.explanation}</p>
+          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : action.explanation}</p>
           {(effectiveActionId === 'install-native-bridge') && (
             <p>A verified signed installer is not yet available. No unsigned download is offered. Use secure browser USB or continue on a supported computer.</p>
           )}

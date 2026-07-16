@@ -14,6 +14,27 @@ function memoryStorage() {
   };
 }
 
+function broadcastBus() {
+  const channels = new Set();
+  return class FakeBroadcastChannel {
+    constructor() { this.listeners = new Set(); channels.add(this); }
+    addEventListener(_name, listener) { this.listeners.add(listener); }
+    postMessage(data) {
+      for (const channel of channels) if (channel !== this) for (const listener of channel.listeners) listener({ data });
+    }
+    close() { channels.delete(this); }
+  };
+}
+
+function maintenanceReturnCode(nonce, receipt = Buffer.alloc(32, 4).toString('base64url')) {
+  const payload = new URLSearchParams([
+    ['status', 'awaiting-card-acknowledgement'], ['code', 'operation-complete'],
+    ['target', 'lightweaver-controller-esp32s3'], ['verification', 'not-verified'],
+    ['physicalOutput', 'unconfirmed'], ['nonce', nonce], ['receipt', receipt], ['version', '1'],
+  ]).toString();
+  return `LW1-${Buffer.from(payload).toString('base64url')}`;
+}
+
 test('launch persists the current project before navigating to one exact Bridge URL', async () => {
   const { launchBridgeOperation } = await import('./bridgeLaunch.js');
   const calls = [];
@@ -58,7 +79,7 @@ test('launch never discards an unacknowledged pending correlation before creatin
   assert.deepEqual(calls, ['persist', 'create', 'navigate']);
 });
 
-test('result notification is bounded, nonce-free, operation-valid, targeted, and idempotent', async () => {
+test('target tab accepts a bounded result once before issuing its receipt acknowledgement', async () => {
   const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
   const storage = memoryStorage();
   const listeners = new Set();
@@ -69,9 +90,11 @@ test('result notification is bounded, nonce-free, operation-valid, targeted, and
   const originSession = memoryStorage();
   originSession.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
   const received = [];
+  const acknowledged = [];
   const origin = createBridgeResultChannel({
     sessionStorage: originSession, localStorage: storage, eventTarget,
-    BroadcastChannel: null, onResult: result => received.push(result),
+    BroadcastChannel: null, onResult: result => received.push(result), acknowledge: url => acknowledged.push(url),
+    confirmReceipt: () => true,
   });
   const callback = createBridgeResultChannel({
     sessionStorage: memoryStorage(), localStorage: storage, eventTarget,
@@ -82,7 +105,7 @@ test('result notification is bounded, nonce-free, operation-valid, targeted, and
     code: 'flash-verified', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
     buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3',
     verification: 'flash-verified', physicalOutput: 'unconfirmed', physicalProof: false,
-    originTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', nonce: 'must-not-leak',
+    originTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ', nonce: 'must-not-leak',
   };
   const message = callback.publish(result);
   assert.equal(JSON.stringify(message).includes('nonce'), false);
@@ -91,8 +114,26 @@ test('result notification is bounded, nonce-free, operation-valid, targeted, and
   for (const fn of listeners) fn({ key: 'lightweaver.bridge.result.v1', newValue: JSON.stringify(message) });
   assert.equal(received.length, 1);
   assert.equal(received[0].cardId, result.cardId);
+  assert.equal('ackReceipt' in received[0], false);
+  assert.deepEqual(acknowledged, ['lightweaver://ack?receipt=BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ&version=1']);
   assert.throws(() => callback.publish({ ...result, operation: 'restart-card' }), /semantic|result/i);
   origin.close();
+  callback.close();
+});
+
+test('callback publish cannot acknowledge when the target tab closes before receipt', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const acknowledged = [];
+  const callback = createBridgeResultChannel({
+    sessionStorage: memoryStorage(), localStorage: memoryStorage(), BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, acknowledge: url => acknowledged.push(url),
+  });
+  callback.publish({
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+    originTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ',
+  });
+  assert.deepEqual(acknowledged, []);
   callback.close();
 });
 
@@ -119,10 +160,10 @@ test('callback bootstrap consumes before sanitizing and returns bounded guidance
   });
 });
 
-test('callback and pasted return code acknowledge only after successful Studio consumption', async () => {
+test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
   const { bootstrapBridgeCallback, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
   const calls = [];
-  const consumed = { operation: 'restart-card', acknowledgementUrl: 'lightweaver://ack?receipt=safe&version=1' };
+  const consumed = { operation: 'restart-card', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ' };
   await bootstrapBridgeCallback({
     href: 'https://led.mandalacodes.com/#bridge-result?x=1',
     consume: async () => consumed,
@@ -135,9 +176,76 @@ test('callback and pasted return code acknowledge only after successful Studio c
     acknowledge: url => calls.push(`manual-ack:${url}`),
   });
   assert.deepEqual(calls, [
-    'publish:restart-card', 'ack:lightweaver://ack?receipt=safe&version=1',
-    'manual:restart-card', 'manual-ack:lightweaver://ack?receipt=safe&version=1',
+    'publish:restart-card', 'manual:restart-card',
   ]);
+});
+
+test('Firefox origin survives refresh and accepts a manual return after default Chrome profile mismatch', async () => {
+  const { createBridgeResultChannel, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
+  const { consumeBridgeReturnCode, createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const FirefoxBroadcast = broadcastBus();
+  const firefoxLocal = memoryStorage();
+  const firefoxSession = memoryStorage();
+  const chromeLocal = memoryStorage();
+  const launch = createBridgeLaunch('restart-card', {
+    crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } },
+    sessionStorage: firefoxSession, localStorage: firefoxLocal, now: () => 0,
+  });
+  const code = maintenanceReturnCode(new URL(launch).searchParams.get('nonce'));
+  await assert.rejects(() => consumeBridgeReturnCode(code, {
+    currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(), localStorage: chromeLocal,
+    crypto: { getRandomValues(bytes) { bytes.fill(8); return bytes; } }, now: () => 1,
+  }), /pending|profile|operation/i);
+
+  const received = [];
+  const acknowledgements = [];
+  const refreshedFirefox = createBridgeResultChannel({
+    sessionStorage: firefoxSession, localStorage: firefoxLocal, BroadcastChannel: FirefoxBroadcast,
+    onResult: result => received.push(result), acknowledge: url => acknowledgements.push(url),
+  });
+  const producer = createBridgeResultChannel({
+    sessionStorage: memoryStorage(), localStorage: firefoxLocal, BroadcastChannel: FirefoxBroadcast,
+  });
+  await resumeBridgeReturnCode(code, {
+    protocolDependencies: { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: firefoxSession, localStorage: firefoxLocal, now: () => 1 },
+    publish: result => producer.publish(result),
+  });
+  assert.equal(received.length, 1);
+  assert.equal(received[0].operation, 'restart-card');
+  assert.equal(acknowledgements.length, 1);
+  refreshedFirefox.close();
+  producer.close();
+});
+
+test('closed original tab is replaced by a same-profile tab that receives UI result before one ACK', async () => {
+  const { createBridgeResultChannel, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
+  const { createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const Broadcast = broadcastBus();
+  const sharedLocal = memoryStorage();
+  const closedSession = memoryStorage();
+  const replacementSession = memoryStorage();
+  const launch = createBridgeLaunch('restart-card', {
+    crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } },
+    sessionStorage: closedSession, localStorage: sharedLocal, now: () => 0,
+  });
+  const code = maintenanceReturnCode(new URL(launch).searchParams.get('nonce'));
+  const order = [];
+  const replacement = createBridgeResultChannel({
+    sessionStorage: replacementSession, localStorage: sharedLocal, BroadcastChannel: Broadcast,
+    onResult: result => order.push(`ui:${result.operation}`), acknowledge: () => order.push('ack'),
+  });
+  const producer = createBridgeResultChannel({ sessionStorage: replacementSession, localStorage: sharedLocal, BroadcastChannel: Broadcast });
+  await resumeBridgeReturnCode(code, {
+    protocolDependencies: {
+      currentOrigin: 'https://led.mandalacodes.com', sessionStorage: replacementSession, localStorage: sharedLocal,
+      crypto: { getRandomValues(bytes) { bytes.fill(9); return bytes; } }, now: () => 1,
+    },
+    publish: result => producer.publish(result),
+  });
+  assert.deepEqual(order, ['ui:restart-card', 'ack']);
+  assert.notEqual(replacementSession.getItem('lightweaver.bridge.origin-tab.v1'), closedSession.getItem('lightweaver.bridge.origin-tab.v1'));
+  replacement.close();
+  producer.close();
 });
 
 test('Studio lifecycle source has no four-second missing inference and exposes a pasted return path', () => {
@@ -145,7 +253,8 @@ test('Studio lifecycle source has no four-second missing inference and exposes a
     const source = fs.readFileSync(path.join(import.meta.dirname, file), 'utf8');
     assert.doesNotMatch(source, /BRIDGE_OPEN_TIMEOUT_MS|setBridgeState\('missing'\)|setBridgeLaunchState\('missing'\)|Bridge may not be installed/);
     assert.match(source, /return code/i);
-    assert.match(source, /return-pending|working/);
+    assert.match(source, /return-pending|waiting-for-bridge/);
+    assert.doesNotMatch(source, /setBridge(?:State|LaunchState)\('working'\)|Working in Lightweaver Bridge|Bridge is working/);
     assert.match(source, /installer-unavailable/);
   }
 });

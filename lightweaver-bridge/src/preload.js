@@ -12,6 +12,7 @@ const STATES = new Set([
   'return-pending',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
+const RETURN_CODE_PATTERN = /^LW1-[A-Za-z0-9_-]{1,900}$/;
 
 function invokeOperation(operation) {
   if (typeof operation !== 'string' || !OPERATIONS.has(operation)) {
@@ -44,6 +45,7 @@ function sanitizePayload(value) {
   };
   if (Number.isFinite(source.progress)) result.progress = Math.max(0, Math.min(100, source.progress));
   if (typeof source.code === 'string') result.code = redactSensitiveText(source.code, 64);
+  if (typeof source.returnCode === 'string' && RETURN_CODE_PATTERN.test(source.returnCode)) result.returnCode = source.returnCode;
   if (typeof source.confirmationToken === 'string' && TOKEN_PATTERN.test(source.confirmationToken)) {
     result.confirmationToken = source.confirmationToken;
   }
