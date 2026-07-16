@@ -191,6 +191,66 @@ git add firmware/lightweaver-controller/src/LightweaverArtnet.* \
 git commit -m "fix(firmware): preserve raw live RGB frames"
 ```
 
+### Task 2A: Separate global master and zone brightness
+
+**Files:**
+- Modify: `firmware/lightweaver-controller/src/main.cpp`
+- Modify: `firmware/lightweaver-controller/tests/control-sync-order.mjs`
+- Modify: `firmware/lightweaver-controller/tests/output-policy.mjs`
+
+- [ ] **Step 1: Add failing setter-semantics assertions**
+
+Require these independent behaviors:
+
+```cpp
+void runtimeSetBrightness(float value01) {
+  manualBrightness = clampBrightness(value01);
+}
+
+void runtimeSetBrightnessZ(const String& targetId, float value01) {
+  const float clamped = clampBrightness(value01);
+  applyToZones(targetId, [&](ZoneConfig& zone) { zone.brightness = clamped; });
+}
+```
+
+The contract must prove that top-level WLED `bri` changes the global master only, section/all-section controls change zone brightness only, and the physical rotary continues to change `manualBrightness` only. Preserve the existing sync-zone targeting order.
+
+- [ ] **Step 2: Run tests and verify RED**
+
+Run:
+
+```bash
+node firmware/lightweaver-controller/tests/control-sync-order.mjs
+node firmware/lightweaver-controller/tests/output-policy.mjs
+```
+
+Expected: FAIL because both current setters write `manualBrightness` and zone brightness together.
+
+- [ ] **Step 3: Split the setter responsibilities**
+
+Extract one small clamp helper or preserve the existing bounds in both setters. Remove the zone broadcast from `runtimeSetBrightness()` and remove the empty-target `manualBrightness` assignment from `runtimeSetBrightnessZ()`. Do not change speed, hue, blackout, sync targeting, WLED routing, or rotary handling.
+
+- [ ] **Step 4: Run focused GREEN verification**
+
+Run:
+
+```bash
+node firmware/lightweaver-controller/tests/control-sync-order.mjs
+node firmware/lightweaver-controller/tests/output-policy.mjs
+node lightweaver/tests/wled-control-contract.mjs
+```
+
+Expected: all pass.
+
+- [ ] **Step 5: Commit the setter slice**
+
+```bash
+git add firmware/lightweaver-controller/src/main.cpp \
+  firmware/lightweaver-controller/tests/control-sync-order.mjs \
+  firmware/lightweaver-controller/tests/output-policy.mjs
+git commit -m "fix(firmware): separate master and zone brightness"
+```
+
 ### Task 3: Cached output color pipeline and storage contract
 
 **Files:**
