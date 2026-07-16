@@ -216,8 +216,8 @@ async function installDriver(page, {
           projectFingerprint: current?.projectFingerprint || evidence.projectFingerprint,
           productionJobId: current?.productionJobId || evidence.productionJobId,
           productionJobDigest: current?.productionJobDigest || evidence.productionJobDigest,
-          cardId: physicalIdentityMismatch ? 'lw-other-card' : evidence.cardId,
-          firmwareVersion: physicalFirmwareMismatch ? '0.8.0' : evidence.firmwareVersion,
+          cardId: physicalIdentityMismatch || localStorage.getItem('lw_test_physical_identity_changed') === '1' ? 'lw-other-card' : evidence.cardId,
+          firmwareVersion: physicalFirmwareMismatch || localStorage.getItem('lw_test_physical_firmware_changed') === '1' ? '0.8.0' : evidence.firmwareVersion,
           };
         }
         return evidence;
@@ -638,6 +638,31 @@ test('explicit candidate rollback exposes one restart and requires a fresh bound
   await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeEnabled();
   await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeEnabled();
 });
+
+for (const [kind, storageKey, expectedRoute] of [
+  ['identity', 'lw_test_physical_identity_changed', 'Load verified artwork'],
+  ['firmware', 'lw_test_physical_firmware_changed', 'Connect one USB card'],
+] as const) {
+  test(`${kind} change after rollback preserves its stronger recovery instead of retrying the boundary`, async ({ page }) => {
+    await serveJob(page); await installDriver(page, { preflightCurrent: true });
+    await page.goto('/#screen=production');
+    await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+    await page.getByRole('button', { name: 'Connect one USB card' }).click();
+    await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+    await page.getByRole('button', { name: 'Load verified artwork' }).click();
+    await page.getByRole('button', { name: 'Verify card read-back' }).click();
+    await page.getByRole('button', { name: 'Red end is off' }).click();
+    await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
+    await page.getByRole('button', { name: '+ 1 pixel' }).click();
+    await page.getByRole('button', { name: 'Restore last confirmed wiring' }).click();
+    await page.evaluate(key => localStorage.setItem(key, '1'), storageKey);
+    await page.getByRole('button', { name: 'Release and restart the light test' }).click();
+    await expect(page.getByRole('button', { name: 'Stop test and continue safely' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Release and restart the light test' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Stop test and continue safely' }).click();
+    await expect(page.getByRole('button', { name: expectedRoute })).toBeVisible();
+  });
+}
 
 test('failed candidate rollback stays visibly locked with an actionable retry', async ({ page }) => {
   await serveJob(page); await installDriver(page, { preflightCurrent: true, candidateEvidenceMismatch: true, rollbackFailure: true });

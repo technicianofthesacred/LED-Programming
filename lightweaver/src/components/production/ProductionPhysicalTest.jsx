@@ -19,6 +19,7 @@ import { assignProductionWiringIdentity, productionWiringDigest } from '../../li
 
 const FAILURES = [['nothing-lit', 'Nothing lit'], ['wrong-color', 'Colors wrong'], ['wrong-start-end', 'Blue / red swapped'], ['wrong-count', 'Red end is off'], ['wrong-output', 'Wrong strip lit'], ['flashing-or-frozen', 'Flashing or frozen']];
 const COLOR_ORDERS = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'];
+const STREAM_RESULT = Object.freeze({ verified: 'verified', delivered: 'delivered', deliveryFailed: 'delivery-failed', identityBlocked: 'identity-blocked', firmwareBlocked: 'firmware-blocked', cancelled: 'cancelled' });
 function productionDriver() { return import.meta.env.DEV ? window.__LW_PRODUCTION_DRIVER_FOR_TEST__ : null; }
 function sameSegments(actual = [], expected = []) { return actual.length === expected.length && expected.every((segment, index) => actual[index]?.id === segment.id && Number(actual[index]?.count) === segment.count && (actual[index]?.direction || 'forward') === segment.direction); }
 function sameOutputs(actual = [], expected = []) { return actual.length === expected.length && expected.every((output, index) => actual[index]?.id === output.id && Number(actual[index]?.pin) === output.pin && Number(actual[index]?.pixels) === output.pixels && sameSegments(actual[index]?.segments, output.segments)); }
@@ -158,37 +159,38 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   async function verifyIdentity() {
     const evidence = await readIdentity();
     if (evidence?.firmwareVersion !== job.firmware.version || evidence?.buildId !== job.firmware.buildId) {
-      setRoute(classifyProductionPhysicalObservation('flashing-or-frozen', { firmwareTrusted: false })); return false;
+      setRoute(classifyProductionPhysicalObservation('flashing-or-frozen', { firmwareTrusted: false })); return STREAM_RESULT.firmwareBlocked;
     }
     if (!exactIdentity(evidence, job, expectedCardId)) {
-      setRoute(classifyProductionPhysicalObservation('nothing-lit', { cardIdentityMatches: false })); return false;
+      setRoute(classifyProductionPhysicalObservation('nothing-lit', { cardIdentityMatches: false })); return STREAM_RESULT.identityBlocked;
     }
-    return true;
+    return STREAM_RESULT.verified;
   }
   async function startStream(snapshot = knownGood, boundary = active) {
     const generation = generationRef.current + 1;
     generationRef.current = generation;
     await stopStream({ invalidate: false }); setError('');
-    if (!boundary || generation !== generationRef.current || !mountedRef.current) return false;
+    if (!boundary || generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
     dispatch({ type: 'delivery-started', boundaryId: boundary.id, generation });
     try {
-      if (!await verifyIdentity()) return false;
-      if (generation !== generationRef.current || !mountedRef.current) return false;
+      const identityResult = await verifyIdentity();
+      if (identityResult !== STREAM_RESULT.verified) return identityResult;
+      if (generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
       const frame = buildProductionBoundaryFrame({ snapshot, boundaryId: boundary.id });
       const driver = productionDriver();
       if (driver?.startPhysical) {
         const response = await driver.startPhysical({ boundary, output: snapshot.config.led.outputs.find(output => output.id === boundary.outputId), frame, generation });
-        if (generation !== generationRef.current || !mountedRef.current) return false;
+        if (generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
         const acknowledged = response?.ok !== false && response?.generation === generation;
-        dispatch({ type: acknowledged ? 'delivered' : 'delivery-failed', boundaryId: boundary.id, generation }); return acknowledged;
+        dispatch({ type: acknowledged ? 'delivered' : 'delivery-failed', boundaryId: boundary.id, generation }); return acknowledged ? STREAM_RESULT.delivered : STREAM_RESULT.deliveryFailed;
       }
       const stream = createCardFrameStream({ host: cardHost, fps: 4, onHealth: health => {
         if (generation !== generationRef.current || !mountedRef.current) { void stream.stop(); return; }
         dispatch({ type: health.delivered ? 'delivered' : 'delivery-failed', boundaryId: boundary.id, generation });
       } });
-      if (generation !== generationRef.current || !mountedRef.current) { await stream.stop(); return false; }
-      streamRef.current = stream; stream.start(); stream.push(frame); return true;
-    } catch (reason) { if (generation === generationRef.current && mountedRef.current) { dispatch({ type: 'delivery-failed', boundaryId: boundary.id, generation }); setError(`${reason?.message || reason} No light test was started.`); } return false; }
+      if (generation !== generationRef.current || !mountedRef.current) { await stream.stop(); return STREAM_RESULT.cancelled; }
+      streamRef.current = stream; stream.start(); stream.push(frame); return STREAM_RESULT.delivered;
+    } catch (reason) { if (generation === generationRef.current && mountedRef.current) { dispatch({ type: 'delivery-failed', boundaryId: boundary.id, generation }); setError(`${reason?.message || reason} No light test was started.`); } return STREAM_RESULT.deliveryFailed; }
   }
 
   async function readConfirmedKnownGood(snapshot) {
@@ -244,7 +246,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
     setBusy(true); setError('');
     let stagedCandidate = null;
     try {
-      if (!await verifyIdentity()) throw new Error('Card evidence changed before the candidate test.');
+      if (await verifyIdentity() !== STREAM_RESULT.verified) throw new Error('Card evidence changed before the candidate test.');
       const candidate = buildProductionBoundaryCandidate(knownGood, state.activeBoundaryId, correction);
       await assignProductionWiringIdentity(candidate.config, { revision: knownGood.wiringRevision + 1 });
       candidate.snapshot.wiringRevision = candidate.config.wiringRevision;
@@ -274,7 +276,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
       }), 1000);
       setRoute({ action: 'confirm-output', title: 'Temporary change is active', guidance: 'Only this boundary can be confirmed until the timer ends.' });
       const delivered = await startStream(candidate.snapshot, candidate.snapshot.boundaries.find(boundary => boundary.id === state.activeBoundaryId));
-      if (!delivered) throw new Error('The candidate light frame did not reach this exact boundary.');
+      if (delivered !== STREAM_RESULT.delivered) throw new Error('The candidate light frame did not reach this exact boundary.');
       setFailedObservation(''); setRecoveryEntered(false);
     } catch (reason) {
       if (stagedCandidate) {
@@ -305,9 +307,10 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   async function releaseAndRetry() {
     setBusy(true);
     try {
-      const delivered = await startStream();
-      if (delivered) { setFailedObservation(''); setRecoveryEntered(false); setRoute(null); }
-      else requireBoundaryRestart('Boundary restart did not complete', 'The new exact frame was not acknowledged. Keep this boundary locked and restart it again.');
+      const result = await startStream();
+      if (result === STREAM_RESULT.delivered) { setFailedObservation(''); setRecoveryEntered(false); setRoute(null); }
+      else if (result === STREAM_RESULT.deliveryFailed) requireBoundaryRestart('Boundary restart did not complete', 'The new exact frame was not acknowledged. Keep this boundary locked and restart it again.');
+      else if ([STREAM_RESULT.identityBlocked, STREAM_RESULT.firmwareBlocked].includes(result)) { setFailedObservation(''); setRecoveryEntered(false); }
     } finally { setBusy(false); }
   }
   const currentIndex = knownGood.boundaries.findIndex(boundary => boundary.id === active.id);
