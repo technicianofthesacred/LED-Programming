@@ -173,9 +173,11 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     const recognized = [];
     for (const candidate of quarantineFiles) {
       try {
-        const stat = fs.lstatSync(candidate);
-        if (stat.isFile() && stat.size <= JOURNAL_MAX_BYTES) recognized.push(path.basename(candidate));
-      } catch {}
+        fs.lstatSync(candidate);
+        recognized.push(path.basename(candidate));
+      } catch (error) {
+        if (error?.code !== 'ENOENT') recognized.push(path.basename(candidate));
+      }
     }
     return recognized;
   }

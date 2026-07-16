@@ -441,28 +441,92 @@ test('valid post-mutation recovery outranks a corrupt transaction marker and rem
   assert.equal(fs.readdirSync(directory).some(name => name.includes('.quarantine.')), false);
 });
 
-test('only exact bounded owned quarantines replace a lost marker as fail-closed recovery evidence', () => {
+test('every exact owned quarantine presence is fail-closed without reading or trusting its contents', () => {
   for (const name of ['operation-journal.quarantine.canonical', 'operation-journal.quarantine.recovery',
     'operation-journal.quarantine.acquisition']) {
     const directory = temporaryDirectory();
-    fs.writeFileSync(path.join(directory, name), '{bounded-evidence');
-    assert.throws(() => createOperationJournal({ userDataPath: directory }).load(), error => (
+    fs.writeFileSync(path.join(directory, name), '{partial-malformed-evidence');
+    const guardedFs = Object.create(fs);
+    guardedFs.readFileSync = (candidate, ...args) => {
+      if (candidate === path.join(directory, name)) throw new Error('quarantine content must not be read');
+      return fs.readFileSync(candidate, ...args);
+    };
+    const journal = createOperationJournal({ userDataPath: directory, fs: guardedFs });
+    assert.throws(() => journal.load(), error => (
       error.code === 'operation-journal-corrupt' && error.classification === 'needs-safe-recovery'
     ), name);
+    assert.throws(() => journal.begin({
+      operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId,
+    }), error => error.classification === 'needs-safe-recovery', name);
   }
 
-  for (const [name, contents] of [
-    ['operation-journal.quarantine.attacker', 'bounded'],
-    ['operation-journal.quarantine.canonical.extra', 'bounded'],
-    ['operation-journal.quarantine.canonical', 'x'.repeat(JOURNAL_MAX_BYTES + 1)],
-  ]) {
+  for (const [name, contents] of [['operation-journal.quarantine.attacker', 'bounded'],
+    ['operation-journal.quarantine.canonical.extra', 'bounded']]) {
     const directory = temporaryDirectory();
     fs.writeFileSync(path.join(directory, name), contents);
     assert.equal(createOperationJournal({ userDataPath: directory }).load(), null, name);
   }
+
+  for (const kind of ['oversized', 'directory', 'symlink']) {
+    const directory = temporaryDirectory();
+    const candidate = path.join(directory, 'operation-journal.quarantine.canonical');
+    if (kind === 'oversized') fs.writeFileSync(candidate, 'x'.repeat(JOURNAL_MAX_BYTES + 1));
+    if (kind === 'directory') fs.mkdirSync(candidate);
+    if (kind === 'symlink') {
+      const target = path.join(directory, 'untrusted-target');
+      fs.writeFileSync(target, 'untrusted');
+      fs.symlinkSync(target, candidate);
+    }
+    assert.throws(() => createOperationJournal({ userDataPath: directory }).load(), error => (
+      error.code === 'operation-journal-corrupt' && error.classification === 'needs-safe-recovery'
+    ), kind);
+  }
+  assert.equal(createOperationJournal({ userDataPath: temporaryDirectory() }).load(), null, 'clean ENOENT');
+});
+
+test('inconclusive quarantine metadata is fail-closed and only ENOENT proves absence', () => {
+  for (const code of ['EIO', 'EACCES']) {
+    const directory = temporaryDirectory();
+    const failingFs = Object.create(fs);
+    failingFs.lstatSync = candidate => {
+      if (candidate.endsWith('operation-journal.quarantine.canonical')) {
+        throw Object.assign(new Error(`${code} probing quarantine`), { code });
+      }
+      return fs.lstatSync(candidate);
+    };
+    assert.throws(() => createOperationJournal({ userDataPath: directory, fs: failingFs }).load(), error => (
+      error.code === 'operation-journal-corrupt' && error.classification === 'needs-safe-recovery'
+    ), code);
+  }
   const directory = temporaryDirectory();
-  fs.mkdirSync(path.join(directory, 'operation-journal.quarantine.canonical'));
-  assert.equal(createOperationJournal({ userDataPath: directory }).load(), null, 'non-file quarantine');
+  const absentFs = Object.create(fs);
+  absentFs.lstatSync = candidate => {
+    if (candidate.includes('operation-journal.quarantine.')) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+    return fs.lstatSync(candidate);
+  };
+  assert.equal(createOperationJournal({ userDataPath: directory, fs: absentFs }).load(), null);
+});
+
+test('invalid quarantine stays presence-only and bounded through explicit recovery cleanup', () => {
+  const directory = temporaryDirectory();
+  const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+  fs.writeFileSync(quarantine, 'x'.repeat(JOURNAL_MAX_BYTES + 1));
+  const originalSize = fs.statSync(quarantine).size;
+  const guardedFs = Object.create(fs);
+  guardedFs.readFileSync = (candidate, ...args) => {
+    if (candidate === quarantine) throw new Error('quarantine content must not be read');
+    return fs.readFileSync(candidate, ...args);
+  };
+  const journal = createOperationJournal({ userDataPath: directory, fs: guardedFs, now: () => 1 });
+  assert.throws(() => journal.load(), error => error.classification === 'needs-safe-recovery');
+  journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  assert.equal(fs.statSync(quarantine).size, originalSize);
+  assert.ok(fs.statSync(path.join(directory, 'operation-journal.corrupt-recovery.json')).size <= JOURNAL_MAX_BYTES);
+  assert.ok(fs.statSync(path.join(directory, 'operation-journal.recovery.json')).size <= JOURNAL_MAX_BYTES);
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+  journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+  journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
+  assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] });
 });
 
 test('lost or corrupt marker after quarantine publication remains actionable through explicit corrupt recovery', () => {
