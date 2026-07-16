@@ -653,7 +653,10 @@ bool candidateIdMatches(Preferences& prefs, const String& activationId) {
 }
 
 bool restorePreviousKnownGood(Preferences& prefs) {
-  if (!prefs.getBool(NVS_PROMOTION_ARMED_KEY, false)) return true;
+  if (!prefs.getBool(NVS_PROMOTION_ARMED_KEY, false)) {
+    return !prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) ||
+           prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+  }
   if (!prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY)) return false;
   String previous = prefs.getString(NVS_PREVIOUS_KNOWN_GOOD_KEY, "");
   bool restored = previous == NVS_NO_PREVIOUS_KNOWN_GOOD

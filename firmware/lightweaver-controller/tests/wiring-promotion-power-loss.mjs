@@ -68,7 +68,8 @@ function assertRecoverableCommittedState(state, message) {
 }
 
 const restoreBody = functionBody('restorePreviousKnownGood', 'finalizeCommittedPromotion');
-const restoreActions = orderedActions(restoreBody, [
+const armedRestoreBody = restoreBody.slice(restoreBody.indexOf('String previous'));
+const restoreActions = orderedActions(armedRestoreBody, [
   ['restore-known-good', 'prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY'],
   ['disarm', 'prefs.putBool(NVS_PROMOTION_ARMED_KEY, false)'],
   ['drop-journal', 'prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY'],
@@ -152,6 +153,10 @@ function candidateMetadataValid(state) {
       state.confirmedId === state.candidateId && state.previousKnown !== undefined &&
       state.knownGood === state.candidateConfig);
   }
+  if (state.candidateState === 0 && !state.armed && state.previousKnown !== undefined) {
+    return Boolean(state.candidateConfig && state.candidateId &&
+      state.confirmedId === state.candidateId && state.knownGood === state.candidateConfig);
+  }
   if (state.candidateState === 0 && state.candidateConfig) {
     if (state.knownGood === state.candidateConfig) {
       return Boolean(state.candidateId && state.confirmedId === state.candidateId);
@@ -170,6 +175,7 @@ function bootDisarmedNoneCleanup(state) {
     (!state.candidateConfig && state.candidateId && state.confirmedId &&
       state.confirmedId !== state.candidateId);
   if (rollbackResidue) delete state.confirmedId;
+  state.armed = false;
   delete state.previousKnown;
   delete state.candidateConfig;
   delete state.candidateId;
@@ -248,6 +254,7 @@ assert.equal(candidateMetadataValid({ ...staleBToA, armed: false }), false,
 
 const rollbackResidueWithStaleConfirmation = {
   ...staleCleanupWithMismatchedIds,
+  previousKnown: undefined,
   candidateConfig: 'candidate-a',
   candidateId: 'activation-a',
   confirmedId: 'activation-a',
@@ -388,5 +395,158 @@ for (let cut = 1; cut <= stageActions.length; cut += 1) {
 
 assert.match(storage, /knownGood == candidate &&\s*\(!candidateId\.length\(\)/,
   'only candidate bytes already equal to known-good require committed candidate identity');
+
+assert.match(restoreBody,
+  /if \(!prefs\.getBool\(NVS_PROMOTION_ARMED_KEY, false\)\) \{[\s\S]*NVS_PREVIOUS_KNOWN_GOOD_KEY[\s\S]*prefs\.remove/,
+  'unarmed rollback must durably remove any pre-arm journal before continuing');
+
+const OLD = 'known-good-b';
+const CANDIDATE = 'candidate-a';
+const ACTIVATION = 'activation-a';
+const SENTINEL = '__lightweaver_none__';
+
+function baseState() {
+  return {
+    candidateState: 0,
+    armKeyPresent: true,
+    armed: false,
+    knownGood: OLD,
+  };
+}
+
+function applyWrite(state, write) {
+  if (write === 'store-candidate') state.candidateConfig = CANDIDATE;
+  if (write === 'store-candidate-id') state.candidateId = ACTIVATION;
+  if (write === 'drop-confirmed') delete state.confirmedId;
+  if (write === 'mark-staged') state.candidateState = 1;
+  if (write === 'clear-discovery') state.discoveryActive = false;
+  if (write === 'mark-booting') state.candidateState = 2;
+  if (write === 'mark-awaiting') state.candidateState = 3;
+  if (write === 'write-legacy') state.legacyConfig = state.candidateConfig;
+  if (write === 'journal-old') state.previousKnown = state.knownGood ?? SENTINEL;
+  if (write === 'arm') state.armed = true;
+  if (write === 'promote-candidate') state.knownGood = state.candidateConfig;
+  if (write === 'confirm-id') state.confirmedId = state.candidateId;
+  if (write === 'mark-none') state.candidateState = 0;
+  if (write === 'disarm') state.armed = false;
+  if (write === 'drop-journal') delete state.previousKnown;
+  if (write === 'drop-candidate') delete state.candidateConfig;
+  if (write === 'drop-candidate-id') delete state.candidateId;
+  if (write === 'restore-old') {
+    if (state.previousKnown === SENTINEL) delete state.knownGood;
+    else state.knownGood = state.previousKnown;
+  }
+}
+
+function finishRollback(state) {
+  if (state.armed) {
+    applyWrite(state, 'restore-old');
+    applyWrite(state, 'disarm');
+  }
+  applyWrite(state, 'drop-journal');
+  applyWrite(state, 'mark-none');
+  applyWrite(state, 'drop-confirmed');
+  applyWrite(state, 'drop-candidate');
+  applyWrite(state, 'drop-candidate-id');
+}
+
+function rebootOnce(state) {
+  if (!candidateMetadataValid(state)) return 'safe-defaults';
+  if (state.candidateState === 1) return 'pending-candidate';
+  if (state.candidateState === 2) {
+    applyWrite(state, 'mark-awaiting');
+    return 'pending-candidate';
+  }
+  if (state.candidateState === 3) {
+    finishRollback(state);
+    return state.knownGood === OLD || state.knownGood === undefined
+      ? 'old-known-good' : 'unexpected';
+  }
+  bootDisarmedNoneCleanup(state);
+  return state.knownGood === CANDIDATE ? 'confirmed-new-known-good' : 'old-known-good';
+}
+
+function assertRepeatedBootConvergence(state, expected, label) {
+  const outcomes = [];
+  for (let boot = 0; boot < 3; boot += 1) outcomes.push(rebootOnce(state));
+  assert.equal(outcomes.includes('safe-defaults'), false, `${label} must never enter safe defaults`);
+  assert.equal(outcomes.includes('unexpected'), false, `${label} must stay in a defined recovery state`);
+  assert.equal(outcomes.at(-1), expected, `${label} must converge after repeated boots`);
+}
+
+const stageWrites = ['store-candidate', 'store-candidate-id', 'drop-confirmed', 'mark-staged'];
+for (let cut = 0; cut <= stageWrites.length; cut += 1) {
+  const state = baseState();
+  state.confirmedId = 'activation-b';
+  stageWrites.slice(0, cut).forEach(write => applyWrite(state, write));
+  assertRepeatedBootConvergence(state, cut === stageWrites.length ? 'pending-candidate' : 'old-known-good',
+    `stage write cut ${cut}`);
+}
+
+const stagedState = baseState();
+stageWrites.forEach(write => applyWrite(stagedState, write));
+const activateWrites = ['clear-discovery', 'mark-booting', 'mark-awaiting'];
+for (let cut = 0; cut <= activateWrites.length; cut += 1) {
+  const state = { ...stagedState };
+  activateWrites.slice(0, cut).forEach(write => applyWrite(state, write));
+  assertRepeatedBootConvergence(state, cut >= 2 ? 'old-known-good' : 'pending-candidate',
+    `activation/boot write cut ${cut}`);
+}
+
+const awaitingState = { ...stagedState, candidateState: 3 };
+const confirmWrites = [
+  'journal-old', 'arm', 'promote-candidate', 'confirm-id', 'mark-none', 'write-legacy',
+  'disarm', 'drop-journal', 'drop-candidate', 'drop-candidate-id',
+];
+const confirmBody = functionBody('confirmCandidateRuntimeConfig', 'rollbackCandidateRuntimeConfig');
+const confirmPrefixWrites = orderedActions(confirmBody, [
+  ['journal-old', 'prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY'],
+  ['arm', 'prefs.putBool(NVS_PROMOTION_ARMED_KEY, true)'],
+  ['promote-candidate', 'prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate)'],
+  ['confirm-id', 'prefs.putString(NVS_CONFIRMED_ID_KEY, activationId)'],
+  ['mark-none', 'writeCandidateState(prefs, WIRING_CANDIDATE_NONE)'],
+  ['write-legacy', 'prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate)'],
+]);
+assert.deepEqual([...confirmPrefixWrites, ...finalizeActions], confirmWrites,
+  'confirmation fault model must enumerate the firmware NVS write order');
+for (let cut = 0; cut <= confirmWrites.length; cut += 1) {
+  const state = { ...awaitingState };
+  confirmWrites.slice(0, cut).forEach(write => applyWrite(state, write));
+  assertRepeatedBootConvergence(state, cut >= 5 ? 'confirmed-new-known-good' : 'old-known-good',
+    `confirmation write cut ${cut}`);
+}
+
+const armedRollbackWrites = [
+  'restore-old', 'disarm', 'drop-journal', 'mark-none',
+  'drop-confirmed', 'drop-candidate', 'drop-candidate-id',
+];
+for (let cut = 0; cut <= armedRollbackWrites.length; cut += 1) {
+  const state = {
+    ...awaitingState,
+    armed: true,
+    previousKnown: OLD,
+    knownGood: CANDIDATE,
+    confirmedId: ACTIVATION,
+  };
+  armedRollbackWrites.slice(0, cut).forEach(write => applyWrite(state, write));
+  assertRepeatedBootConvergence(state, 'old-known-good', `armed rollback write cut ${cut}`);
+  assert.equal(state.knownGood, OLD);
+  assert.equal(state.previousKnown, undefined);
+}
+
+const rollbackWrites = [
+  'drop-journal', 'mark-none', 'drop-confirmed', 'drop-candidate', 'drop-candidate-id',
+];
+for (const journal of [OLD, SENTINEL]) {
+  for (let cut = 0; cut <= rollbackWrites.length; cut += 1) {
+    const state = { ...awaitingState, previousKnown: journal };
+    if (journal === SENTINEL) delete state.knownGood;
+    rollbackWrites.slice(0, cut).forEach(write => applyWrite(state, write));
+    assertRepeatedBootConvergence(state, 'old-known-good',
+      `pre-arm ${journal === SENTINEL ? 'sentinel' : 'journal'} rollback cut ${cut}`);
+    assert.equal(state.previousKnown, undefined,
+      `pre-arm journal must be gone after repeated boot cut ${cut}`);
+  }
+}
 
 console.log('wiring-promotion-power-loss tests passed');
