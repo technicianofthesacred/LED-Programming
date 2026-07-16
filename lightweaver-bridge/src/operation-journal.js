@@ -169,6 +169,17 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     }
   }
 
+  function recognizedQuarantines() {
+    const recognized = [];
+    for (const candidate of quarantineFiles) {
+      try {
+        const stat = fs.lstatSync(candidate);
+        if (stat.isFile() && stat.size <= JOURNAL_MAX_BYTES) recognized.push(path.basename(candidate));
+      } catch {}
+    }
+    return recognized;
+  }
+
   function withAcquisition(record, acquisitionRead, corruptLabels) {
     if (!record) return null;
     if (acquisitionRead.corrupt) corruptLabels.push('acquisition');
@@ -184,15 +195,22 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     const recoveryRead = safely(() => readRecord(recoveryFile), 'recovery');
     const acquisitionRead = safely(readAcquisition, 'acquisition');
     const transactionRead = safely(readCorruptRecovery, 'corrupt-recovery-marker');
+    const quarantines = recognizedQuarantines();
     const canonical = canonicalRead.value;
     const recovery = recoveryRead.value;
     const corruptLabels = [canonicalRead, recoveryRead].filter(value => value.corrupt).map(value => value.label);
-    if (transactionRead.corrupt) {
+    const validPostMutation = recovery?.mutationBoundary === 'erase-or-write-started'
+      ? recovery : canonical?.mutationBoundary === 'erase-or-write-started' ? canonical : null;
+    if (transactionRead.corrupt && !validPostMutation) {
       setWarning(['corrupt-recovery-marker']);
       throw corruptionFailure();
     }
-    if (transactionRead.value && (!recovery || recovery.mutationBoundary === 'before-mutation')) {
+    if (transactionRead.value && !validPostMutation) {
       setWarning(corruptLabels);
+      throw corruptionFailure();
+    }
+    if (quarantines.length && !transactionRead.value && !validPostMutation) {
+      setWarning(['recognized quarantine']);
       throw corruptionFailure();
     }
     if (!canonical && recovery && recovery.mutationBoundary === 'before-mutation' && !transactionRead.value) {
@@ -217,7 +235,7 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       source = canonical ? file : null;
     }
     selected = withAcquisition(selected, acquisitionRead, corruptLabels);
-    setWarning(corruptLabels);
+    setWarning([...corruptLabels, ...(transactionRead.corrupt ? ['corrupt-recovery-marker'] : [])]);
     return { record: selected, source };
   }
 
@@ -359,7 +377,8 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       if (!confirmedCorrupt || operation !== 'recover-current-release' || !CARD_ID.test(expectedCardId) || !BUILD_ID.test(expectedBuildId)) {
         throw new Error('Corrupt operation journal cannot enter recovery');
       }
-      let transaction = readCorruptRecovery();
+      let transaction;
+      try { transaction = readCorruptRecovery(); } catch { transaction = null; }
       if (transaction && (transaction.expectedCardId !== expectedCardId || transaction.expectedBuildId !== expectedBuildId)) {
         throw new Error('Corrupt recovery transaction does not match the inspected card and release');
       }

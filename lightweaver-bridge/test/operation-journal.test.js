@@ -322,6 +322,7 @@ test('identical new journals receive distinct bounded generation identities', ()
 test('corrupt recovery transaction marker keeps authority across quarantine and replacement failures', () => {
   for (const failure of ['marker-write', 'marker-file-fsync', 'marker-rename', 'marker-directory-fsync',
     'quarantine-rename', 'recovery-write', 'recovery-file-fsync', 'recovery-rename', 'recovery-directory-fsync']) {
+    for (const markerState of ['as-left', 'missing', 'corrupt']) {
     const directory = temporaryDirectory();
     const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
     original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
@@ -373,11 +374,15 @@ test('corrupt recovery transaction marker keeps authority across quarantine and 
     assert.throws(() => journal.beginCorruptRecovery({
       operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId,
     }), /failed/);
+    const marker = path.join(directory, 'operation-journal.corrupt-recovery.json');
+    if (markerState === 'missing') fs.rmSync(marker, { force: true });
+    if (markerState === 'corrupt') fs.writeFileSync(marker, '{broken-marker');
     const restarted = createOperationJournal({ userDataPath: directory });
-    assert.throws(() => restarted.load(), error => error.classification === 'needs-safe-recovery', failure);
+    assert.throws(() => restarted.load(), error => error.classification === 'needs-safe-recovery', `${failure}:${markerState}`);
     const quarantines = fs.readdirSync(directory).filter(name => name.includes('.quarantine.'));
-    assert.ok(quarantines.length <= 3, failure);
-    assert.ok(quarantines.every(name => fs.statSync(path.join(directory, name)).size <= JOURNAL_MAX_BYTES), failure);
+    assert.ok(quarantines.length <= 3, `${failure}:${markerState}`);
+    assert.ok(quarantines.every(name => fs.statSync(path.join(directory, name)).size <= JOURNAL_MAX_BYTES), `${failure}:${markerState}`);
+    }
   }
 });
 
@@ -410,4 +415,94 @@ test('corrupt recovery cleanup failure preserves completed authority for acknowl
   assert.equal(acknowledgement.cleared, false);
   assert.equal(fs.existsSync(path.join(directory, 'operation-journal.recovery.json')), true);
   assert.deepEqual(createOperationJournal({ userDataPath: directory }).clear(), { cleared: true, remaining: [] });
+});
+
+test('valid post-mutation recovery outranks a corrupt transaction marker and remains cleanable', () => {
+  const directory = temporaryDirectory();
+  const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  original.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  original.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  fs.writeFileSync(path.join(directory, 'operation-journal.json'), '{broken-canonical');
+  fs.writeFileSync(path.join(directory, 'operation-journal.recovery.json'), '{broken-recovery');
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 2 });
+  journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+  fs.writeFileSync(path.join(directory, 'operation-journal.corrupt-recovery.json'), '{broken-marker');
+
+  const restarted = createOperationJournal({ userDataPath: directory });
+  const loaded = restarted.load();
+  assert.equal(loaded.operation, 'recover-current-release');
+  assert.equal(loaded.mutationBoundary, 'erase-or-write-started');
+  assert.match(restarted.warning, /corrupt-recovery-marker/);
+  restarted.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+  restarted.update({ restartResult: 'restarted', usbOwnership: 'released' });
+  assert.deepEqual(restarted.completeCorruptRecovery(), { cleared: true, remaining: [] });
+  assert.equal(fs.readdirSync(directory).some(name => name.includes('.quarantine.')), false);
+});
+
+test('only exact bounded owned quarantines replace a lost marker as fail-closed recovery evidence', () => {
+  for (const name of ['operation-journal.quarantine.canonical', 'operation-journal.quarantine.recovery',
+    'operation-journal.quarantine.acquisition']) {
+    const directory = temporaryDirectory();
+    fs.writeFileSync(path.join(directory, name), '{bounded-evidence');
+    assert.throws(() => createOperationJournal({ userDataPath: directory }).load(), error => (
+      error.code === 'operation-journal-corrupt' && error.classification === 'needs-safe-recovery'
+    ), name);
+  }
+
+  for (const [name, contents] of [
+    ['operation-journal.quarantine.attacker', 'bounded'],
+    ['operation-journal.quarantine.canonical.extra', 'bounded'],
+    ['operation-journal.quarantine.canonical', 'x'.repeat(JOURNAL_MAX_BYTES + 1)],
+  ]) {
+    const directory = temporaryDirectory();
+    fs.writeFileSync(path.join(directory, name), contents);
+    assert.equal(createOperationJournal({ userDataPath: directory }).load(), null, name);
+  }
+  const directory = temporaryDirectory();
+  fs.mkdirSync(path.join(directory, 'operation-journal.quarantine.canonical'));
+  assert.equal(createOperationJournal({ userDataPath: directory }).load(), null, 'non-file quarantine');
+});
+
+test('lost or corrupt marker after quarantine publication remains actionable through explicit corrupt recovery', () => {
+  for (const markerState of ['missing', 'corrupt']) {
+    const directory = temporaryDirectory();
+    const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
+    original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+    original.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+    original.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+    fs.writeFileSync(path.join(directory, 'operation-journal.json'), '{broken-canonical');
+    fs.writeFileSync(path.join(directory, 'operation-journal.recovery.json'), '{broken-recovery');
+
+    const failingFs = Object.create(fs);
+    const descriptors = new Map();
+    failingFs.openSync = (candidate, flags, mode) => {
+      const descriptor = fs.openSync(candidate, flags, mode);
+      descriptors.set(descriptor, candidate);
+      return descriptor;
+    };
+    failingFs.closeSync = descriptor => { descriptors.delete(descriptor); return fs.closeSync(descriptor); };
+    failingFs.writeFileSync = (target, ...args) => {
+      const candidate = typeof target === 'number' ? descriptors.get(target) : target;
+      if (candidate?.includes('operation-journal.recovery.json') && candidate.endsWith('.tmp')) {
+        throw new Error('replacement write failed');
+      }
+      return fs.writeFileSync(target, ...args);
+    };
+    const failed = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 2 });
+    assert.throws(() => failed.beginCorruptRecovery({
+      operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId,
+    }), /replacement write failed/);
+    const marker = path.join(directory, 'operation-journal.corrupt-recovery.json');
+    if (markerState === 'missing') fs.rmSync(marker, { force: true });
+    else fs.writeFileSync(marker, '{broken-marker');
+
+    const restarted = createOperationJournal({ userDataPath: directory, now: () => 3 });
+    assert.throws(() => restarted.load(), error => error.classification === 'needs-safe-recovery');
+    assert.doesNotThrow(() => restarted.beginCorruptRecovery({
+      operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId,
+    }));
+    assert.equal(restarted.load().mutationBoundary, 'before-mutation');
+  }
 });
