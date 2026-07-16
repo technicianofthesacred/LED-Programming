@@ -1,3 +1,5 @@
+import { MAX_PRODUCTION_PHYSICAL_BOUNDARIES } from './productionLimits.js';
+
 export const PRODUCTION_RECORDS_PRIMARY_KEY = 'lw_production_records_v1_primary';
 export const PRODUCTION_RECORDS_BACKUP_KEY = 'lw_production_records_v1_backup';
 export const MAX_PRODUCTION_RECORDS = 250;
@@ -10,6 +12,10 @@ const FIELDS = Object.freeze([
 ]);
 const FIELD_SET = new Set(FIELDS);
 const CONTROL_SET = new Set(['encoder', 'previous', 'next', 'blackout', 'brightness', 'statusLed']);
+const PHYSICAL_RESULT_REQUIRED_KEYS = Object.freeze(['boundaryId', 'colorOrder', 'count', 'direction', 'pin', 'result']);
+const PHYSICAL_RESULT_KEYS = new Set([...PHYSICAL_RESULT_REQUIRED_KEYS, 'activationId', 'wiringRevision', 'wiringDigest']);
+const LEGACY_PHYSICAL_RESULT_KEYS = new Set(['output', 'result']);
+const COLOR_ORDERS = new Set(['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR']);
 const encoder = new TextEncoder();
 
 function defaultStorage() {
@@ -47,13 +53,29 @@ export function validateProductionRecord(record) {
   if (!Number.isSafeInteger(record.projectRevision) || record.projectRevision < 0) throw new Error('Project revision is invalid');
   text(record.projectFingerprint, 'Project fingerprint', { pattern: /^[a-f0-9]{16,64}$/ });
   if (!Array.isArray(record.restoredControls) || record.restoredControls.length > CONTROL_SET.size || record.restoredControls.some(value => !CONTROL_SET.has(value))) throw new Error('Restored controls are invalid');
-  if (!Array.isArray(record.physicalResults) || record.physicalResults.length === 0 || record.physicalResults.length > 16 || record.physicalResults.some(value => (
-    !value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).sort().join(',') !== 'output,result'
-    || !((typeof value.output === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(value.output))
-      || (Number.isSafeInteger(value.output) && value.output >= 1 && value.output <= 16))
-    || value.result !== 'correct'
-  ))) throw new Error('Physical results are required');
+  const boundaryIds = new Set();
+  if (!Array.isArray(record.physicalResults) || record.physicalResults.length === 0 || record.physicalResults.length > MAX_PRODUCTION_PHYSICAL_BOUNDARIES || record.physicalResults.some(value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return true;
+    const keys = Object.keys(value);
+    const legacy = keys.length === LEGACY_PHYSICAL_RESULT_KEYS.size && keys.every(key => LEGACY_PHYSICAL_RESULT_KEYS.has(key));
+    if (legacy) {
+      return !((typeof value.output === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(value.output))
+        || (Number.isSafeInteger(value.output) && value.output >= 1 && value.output <= MAX_PRODUCTION_PHYSICAL_BOUNDARIES))
+        || value.result !== 'correct';
+    }
+    if (keys.some(key => !PHYSICAL_RESULT_KEYS.has(key)) || PHYSICAL_RESULT_REQUIRED_KEYS.some(key => !(key in value))) return true;
+    if (typeof value.boundaryId !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(value.boundaryId) || boundaryIds.has(value.boundaryId)) return true;
+    boundaryIds.add(value.boundaryId);
+    return value.result !== 'correct'
+      || !Number.isSafeInteger(value.count) || value.count < 2 || value.count > 1024
+      || !Number.isSafeInteger(value.pin) || value.pin < 0 || value.pin > 48
+      || !['forward', 'reverse'].includes(value.direction)
+      || !COLOR_ORDERS.has(value.colorOrder)
+      || ('wiringRevision' in value && (!Number.isSafeInteger(value.wiringRevision) || value.wiringRevision < 1))
+      || ('wiringDigest' in value && (typeof value.wiringDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.wiringDigest)))
+      || (('wiringRevision' in value) !== ('wiringDigest' in value))
+      || ('activationId' in value && (typeof value.activationId !== 'string' || !/^[A-Za-z0-9._:-]{1,96}$/.test(value.activationId)));
+  })) throw new Error('Physical results are required and must contain exact confirmed boundary facts');
   if (record.activationConfirmed !== true) throw new Error('Activation confirmation is required');
   text(record.workerId, 'Worker identifier', { max: 80 });
   text(record.passedAt, 'Pass timestamp', { max: 40 });

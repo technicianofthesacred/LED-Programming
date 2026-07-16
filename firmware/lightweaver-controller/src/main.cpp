@@ -78,7 +78,7 @@ uint8_t outputCount = 0;
 uint8_t lookCount = 0;
 uint16_t totalPixels = 0;
 float brightnessLimit = 0.45f;
-uint32_t ledMaxMilliamps = 0;
+uint32_t ledMaxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
 // Cached numeric form of ledColorOrder, refreshed once per frame so the
 // per-pixel remap is a switch instead of 5 String compares (0=RGB passthrough,
 // 1=GRB, 2=BRG, 3=BGR, 4=RBG, 5=GBR).
@@ -453,6 +453,10 @@ bool loadProfile() {
     config.pin = output["pin"] | 0;
     config.pixels = clampPixels(pixels);
     config.start = totalPixels;
+    config.segmentCount = 1;
+    config.segments[0].id = config.id + "-full";
+    config.segments[0].count = config.pixels;
+    config.segments[0].reversed = false;
     config.enabled = true;
     totalPixels += config.pixels;
     outputCount++;
@@ -497,13 +501,11 @@ bool setupLedOutputs() {
   ledOutputsReady = false;
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
-  // Automatic brightness limiter: when a current ceiling is configured, FastLED
-  // scales all pixels down uniformly to keep total draw under budget, which
-  // prevents full-white inrush from sagging the rail into a brownout reset.
-  // 0 = disabled, preserving existing behavior for installs that haven't set it.
-  if (ledMaxMilliamps > 0) {
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, ledMaxMilliamps);
-  }
+  // FastLED owns one controller group, so this ceiling applies to the combined
+  // draw of every output registered below rather than independently per GPIO.
+  // Runtime parsing guarantees a conservative nonzero fallback, and production
+  // packages cannot pass strict validation without an explicit safe value.
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, ledMaxMilliamps);
   uint8_t addedPins[LW_MAX_OUTPUTS] = {};
   uint8_t addedPinCount = 0;
   auto wasAdded = [&](uint8_t pin) {
@@ -1069,8 +1071,20 @@ void copyLogicalToPhysicalLeds() {
   // Resolve the color order once per frame, not once per pixel.
   ledColorOrderCode = computeColorOrderCode(ledColorOrder);
   uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
-  for (uint16_t i = 0; i < limit; i++) {
-    physicalLeds[i] = mapLogicalToPhysicalColor(leds[i]);
+  for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
+    const OutputConfig& output = outputs[outputIndex];
+    uint16_t segmentStart = output.start;
+    for (uint8_t segmentIndex = 0; segmentIndex < output.segmentCount; segmentIndex++) {
+      const OutputSegmentConfig& segment = output.segments[segmentIndex];
+      for (uint16_t offset = 0; offset < segment.count && segmentStart + offset < limit; offset++) {
+        const uint16_t logicalIndex = segmentStart + offset;
+        const uint16_t physicalIndex = segment.reversed
+          ? segmentStart + segment.count - 1 - offset
+          : logicalIndex;
+        physicalLeds[physicalIndex] = mapLogicalToPhysicalColor(leds[logicalIndex]);
+      }
+      segmentStart += segment.count;
+    }
   }
 }
 
@@ -1400,6 +1414,12 @@ String runtimeFirmwareInfo() {
   doc["projectFingerprint"] = runtimeConfig.projectFingerprint;
   doc["productionJobId"] = runtimeConfig.productionJobId;
   doc["productionJobDigest"] = runtimeConfig.productionJobDigest;
+  doc["wiringRevision"] = runtimeConfig.wiringRevision;
+  doc["wiringDigest"] = runtimeConfig.wiringDigest;
+  doc["maxMilliamps"] = runtimeConfig.maxMilliamps;
+  doc["estimatedFullWhiteMilliamps"] = lightweaverFullWhiteMilliamps(totalPixels);
+  doc["limitedFullWhiteMilliamps"] =
+      lightweaverLimitedMilliamps(totalPixels, runtimeConfig.maxMilliamps);
   doc["lookCount"] = lookCount;
   doc["runtimeSource"] = runtimeConfig.source == SOURCE_SD ? "sd" : runtimeConfig.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
@@ -1427,6 +1447,13 @@ String runtimeFirmwareInfo() {
     output["id"] = outputs[i].id;
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
+    JsonArray segments = output["segments"].to<JsonArray>();
+    for (uint8_t segmentIndex = 0; segmentIndex < outputs[i].segmentCount; segmentIndex++) {
+      JsonObject segment = segments.add<JsonObject>();
+      segment["id"] = outputs[i].segments[segmentIndex].id;
+      segment["count"] = outputs[i].segments[segmentIndex].count;
+      segment["direction"] = outputs[i].segments[segmentIndex].reversed ? "reverse" : "forward";
+    }
     output["gpio"] = outputs[i].pin;
     output["count"] = outputs[i].pixels;
   }
@@ -1595,6 +1622,25 @@ String runtimeWiringSafetyStatus() {
   }
   if (safety.discoveryActive) nextStep = "choose-discovery-result-or-next-batch";
   doc["state"] = state;
+  doc["cardId"] = runtimeCardId();
+  doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
+  doc["buildId"] = LW_BUILD_ID;
+  if (!safety.hasCandidate) {
+    doc["projectRevision"] = runtimeConfig.projectRevision;
+    doc["projectFingerprint"] = runtimeConfig.projectFingerprint;
+    doc["productionJobId"] = runtimeConfig.productionJobId;
+    doc["productionJobDigest"] = runtimeConfig.productionJobDigest;
+    doc["wiringRevision"] = runtimeConfig.wiringRevision;
+    doc["wiringDigest"] = runtimeConfig.wiringDigest;
+    doc["maxMilliamps"] = runtimeConfig.maxMilliamps;
+    doc["colorOrder"] = ledColorOrder;
+  }
+  doc["currentWiringRevision"] = runtimeConfig.wiringRevision;
+  doc["currentWiringDigest"] = runtimeConfig.wiringDigest;
+  doc["currentMaxMilliamps"] = runtimeConfig.maxMilliamps;
+  doc["estimatedFullWhiteMilliamps"] = lightweaverFullWhiteMilliamps(totalPixels);
+  doc["limitedFullWhiteMilliamps"] =
+      lightweaverLimitedMilliamps(totalPixels, runtimeConfig.maxMilliamps);
   doc["testing"] = wiringProbationActive;
   uint32_t remaining = 0;
   if (wiringProbationActive && int32_t(wiringProbationDeadlineMs - millis()) > 0) {
@@ -1609,6 +1655,13 @@ String runtimeWiringSafetyStatus() {
     output["id"] = outputs[i].id;
     output["pin"] = outputs[i].pin;
     output["pixels"] = outputs[i].pixels;
+    JsonArray segments = output["segments"].to<JsonArray>();
+    for (uint8_t segmentIndex = 0; segmentIndex < outputs[i].segmentCount; segmentIndex++) {
+      JsonObject segment = segments.add<JsonObject>();
+      segment["id"] = outputs[i].segments[segmentIndex].id;
+      segment["count"] = outputs[i].segments[segmentIndex].count;
+      segment["direction"] = outputs[i].segments[segmentIndex].reversed ? "reverse" : "forward";
+    }
   }
   if (safety.discoveryActive) {
     JsonObject discovery = doc["discovery"].to<JsonObject>();

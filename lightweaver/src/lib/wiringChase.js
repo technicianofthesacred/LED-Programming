@@ -25,9 +25,11 @@ export function buildWiringChaseFrame({ totalPixels = 0, step } = {}) {
   for (let index = start; index < end; index += 1) frame[index] = '001A00';
   if (end - start === 1) frame[start] = '1A001A';
   else if (start < end) {
-    const reversedRun = step.kind === 'run' && step.physicalDirection === 'source-reverse';
-    frame[start] = reversedRun ? '1A0000' : '00001A';
-    frame[end - 1] = reversedRun ? '00001A' : '1A0000';
+    // Runtime output direction is applied once by firmware when the logical
+    // frame is copied to the physical output. Keeping logical endpoints fixed
+    // here prevents reverse candidates from swapping blue/red twice.
+    frame[start] = '00001A';
+    frame[end - 1] = '1A0000';
   }
   return frame;
 }

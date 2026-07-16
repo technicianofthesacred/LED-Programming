@@ -6,6 +6,9 @@ export const CARD_RUNTIME_MAX_ZONES = 10;
 export const CARD_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
 export const CARD_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
 export const CARD_PRODUCTION_JOB_DIGEST_LENGTH = 64;
+export const DEFAULT_PRODUCTION_MAX_MILLIAMPS = 1500;
+export const MIN_PRODUCTION_MAX_MILLIAMPS = 100;
+export const MAX_PRODUCTION_MAX_MILLIAMPS = 20000;
 
 export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
   maxPixels: 1024,
@@ -102,6 +105,7 @@ export const DEFAULT_CARD_LED = Object.freeze({
   outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 44 }],
   colorOrder: 'RGB',
   brightnessLimit: 0.65,
+  maxMilliamps: DEFAULT_PRODUCTION_MAX_MILLIAMPS,
 });
 
 export function normalizeCardRuntimeConfig(config = {}) {
@@ -300,6 +304,14 @@ function normalizeLed(led = {}) {
       name: String(output.name || `Output ${index + 1}`),
       pin: clampInt(output.pin, [16, 17, 18, 21][index] || 16, 0, 48),
       pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
+      direction: ['reverse', 'mixed'].includes(output.direction) ? output.direction : 'forward',
+      segments: Array.isArray(output.segments) && output.segments.length
+        ? output.segments.map((segment, segmentIndex) => ({
+            id: sanitizeId(segment.id || `${output.id || `out${index + 1}`}-segment-${segmentIndex + 1}`),
+            count: clampInt(segment.count, 1, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
+            direction: segment.direction === 'reverse' ? 'reverse' : 'forward',
+          }))
+        : [{ id: `${sanitizeId(output.id || `out${index + 1}`)}-full`, count: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels), direction: output.direction === 'reverse' ? 'reverse' : 'forward' }],
     }));
   const pixels = clampInt(
     led.pixels,
@@ -312,6 +324,7 @@ function normalizeLed(led = {}) {
     outputs: normalizedOutputs,
     colorOrder: normalizeColorOrder(led.colorOrder),
     brightnessLimit: clampUnit(led.brightnessLimit ?? DEFAULT_CARD_LED.brightnessLimit),
+    maxMilliamps: clampInt(led.maxMilliamps, DEFAULT_CARD_LED.maxMilliamps, MIN_PRODUCTION_MAX_MILLIAMPS, MAX_PRODUCTION_MAX_MILLIAMPS),
   };
 }
 

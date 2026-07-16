@@ -81,6 +81,24 @@ test('enforces the workflow graph and recovery source evidence', () => {
   assert.equal(transitionProductionRun(recovery, 'connect-card', { correlation: correlation(recovery) }).state, 'connect-card');
 });
 
+test('physical recovery returns to restore or same-card USB inspection, never blind install', () => {
+  let run = createProductionRun({ ...ids, jobDigest: digest });
+  run = transitionProductionRun(run, 'connect-card', { correlation: correlation(run) });
+  run = transitionProductionRun(run, 'inspect', { correlation: correlation(run), expectedCardId: 'lw-aabbccddeeff' });
+  run = transitionProductionRun(run, 'restore', { correlation: correlation(run) });
+  run = transitionProductionRun(run, 'verify-card', { correlation: correlation(run) });
+  run = transitionProductionRun(run, 'check-lights', { correlation: correlation(run) });
+
+  const restoreRecovery = transitionProductionRun(run, 'recovery', { correlation: correlation(run), recoveryAction: 'restore-project' });
+  assert.equal(restoreRecovery.recoveryReturnState, 'restore');
+  assert.equal(transitionProductionRun(restoreRecovery, 'restore', { correlation: correlation(restoreRecovery) }).state, 'restore');
+
+  const firmwareRecovery = transitionProductionRun(run, 'recovery', { correlation: correlation(run), recoveryAction: 'signed-firmware-recovery' });
+  assert.equal(firmwareRecovery.recoveryReturnState, 'connect-card');
+  assert.equal(transitionProductionRun(firmwareRecovery, 'connect-card', { correlation: correlation(firmwareRecovery) }).state, 'connect-card');
+  assert.throws(() => transitionProductionRun(firmwareRecovery, 'install', { correlation: correlation(firmwareRecovery) }), /recovery/i);
+});
+
 test('persists only bounded non-secret resumable state with primary/backup recovery', async () => {
   const now = Date.now();
   const storage = new MemoryStorage();

@@ -99,14 +99,14 @@ test('a single-pixel chase marker is magenta because it is both first and last',
   assert.deepEqual(frame, ['000000', '1A001A', '000000']);
 });
 
-test('reverse-mapped run swaps blue and red endpoints while output markers stay fixed', () => {
+test('reverse-mapped run keeps logical markers fixed so firmware swaps physical endpoints once', () => {
   const forward = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'run', start: 1, count: 4, physicalDirection: 'source-forward' } });
   const reverse = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'run', start: 1, count: 4, physicalDirection: 'source-reverse' } });
   const output = buildWiringChaseFrame({ totalPixels: 6, step: { kind: 'output', start: 1, count: 4, physicalDirection: 'source-reverse' } });
   assert.equal(forward[1], '00001A');
   assert.equal(forward[4], '1A0000');
-  assert.equal(reverse[1], '1A0000');
-  assert.equal(reverse[4], '00001A');
+  assert.equal(reverse[1], '00001A');
+  assert.equal(reverse[4], '1A0000');
   assert.equal(output[1], '00001A');
   assert.equal(output[4], '1A0000');
 });

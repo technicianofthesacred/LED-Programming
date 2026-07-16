@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MAX_PRODUCTION_RECORDS,
+  PRODUCTION_RECORDS_BACKUP_KEY,
+  PRODUCTION_RECORDS_PRIMARY_KEY,
   appendProductionRecord,
   productionRecordsCsv,
   productionRecordsJson,
@@ -27,17 +29,58 @@ const record = (n = 1) => ({
   projectRevision: n,
   projectFingerprint: 'b'.repeat(32),
   restoredControls: ['encoder', 'brightness'],
-  physicalResults: [{ output: 1, result: 'correct' }],
+  physicalResults: [{ boundaryId: 'outer-run', result: 'correct', count: 44, pin: 16, direction: 'forward', colorOrder: 'GRB' }],
   activationConfirmed: true,
   workerId: 'AR',
   passedAt: new Date(Date.UTC(2026, 0, 1) + n * 86_400_000).toISOString(),
 });
+
+const legacyRecord = (n = 1) => ({
+  ...record(n),
+  physicalResults: [{ output: 1, result: 'correct' }, { output: 'out2', result: 'correct' }],
+});
+
+function checksum(text) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function encodedRecords(records) {
+  const payload = JSON.stringify(records);
+  return JSON.stringify({ version: 1, checksum: checksum(payload), payload });
+}
 
 test('production pass records survive a corrupt primary through the backup copy', () => {
   const storage = new Storage();
   appendProductionRecord(record(), { storage });
   storage.setItem('lw_production_records_v1_primary', '{broken');
   assert.deepEqual(readProductionRecords({ storage }), [record()]);
+});
+
+test('checksum-valid v1 pass records remain readable from primary and backup storage', () => {
+  const primary = new Storage();
+  primary.setItem(PRODUCTION_RECORDS_PRIMARY_KEY, encodedRecords([legacyRecord()]));
+  assert.deepEqual(readProductionRecords({ storage: primary }), [legacyRecord()]);
+
+  const backup = new Storage();
+  backup.setItem(PRODUCTION_RECORDS_PRIMARY_KEY, '{broken');
+  backup.setItem(PRODUCTION_RECORDS_BACKUP_KEY, encodedRecords([legacyRecord(2)]));
+  assert.deepEqual(readProductionRecords({ storage: backup }), [legacyRecord(2)]);
+});
+
+test('appending an enriched pass retains and exports strict legacy records in the same collection', () => {
+  const storage = new Storage();
+  storage.setItem(PRODUCTION_RECORDS_PRIMARY_KEY, encodedRecords([legacyRecord()]));
+  appendProductionRecord(record(2), { storage });
+  assert.deepEqual(readProductionRecords({ storage }), [legacyRecord(), record(2)]);
+  assert.deepEqual(JSON.parse(productionRecordsJson({ storage })).records, [legacyRecord(), record(2)]);
+  const output = productionRecordsCsv({ storage });
+  assert.match(output, /\[\{""output"":1,""result"":""correct""\}/);
+  assert.match(output, /boundaryId.*outer-run.*count.*44/);
 });
 
 test('production pass records are bounded and reject duplicate run IDs', () => {
@@ -56,8 +99,11 @@ test('exports only the bounded workshop facts as JSON and CSV', () => {
   const json = JSON.parse(productionRecordsJson({ storage }));
   assert.equal(json.records.length, 1);
   assert.equal(json.notice, 'These records were stored locally in this browser.');
-  assert.match(productionRecordsCsv({ storage }), /"Moon, ""gold"""/);
-  assert.doesNotMatch(productionRecordsCsv({ storage }), /password|serialPath|rawError/i);
+  assert.deepEqual(json.records[0].physicalResults, record().physicalResults);
+  const exportedCsv = productionRecordsCsv({ storage });
+  assert.match(exportedCsv, /"Moon, ""gold"""/);
+  assert.match(exportedCsv, /outer-run.*count.*44.*pin.*16.*direction.*forward.*colorOrder.*GRB/);
+  assert.doesNotMatch(exportedCsv, /password|serialPath|rawError/i);
 });
 
 test('invalid, secret, and incomplete records fail closed', () => {
@@ -65,6 +111,9 @@ test('invalid, secret, and incomplete records fail closed', () => {
   assert.throws(() => appendProductionRecord({ ...record(), password: 'secret' }, { storage }), /unsupported field/i);
   assert.throws(() => appendProductionRecord({ ...record(), cardId: '' }, { storage }), /card ID/i);
   assert.throws(() => appendProductionRecord({ ...record(), activationConfirmed: false }, { storage }), /activation confirmation/i);
+  assert.throws(() => appendProductionRecord({ ...record(), physicalResults: [{ boundaryId: 'outer-run', result: 'correct' }] }, { storage }), /physical results/i);
+  assert.throws(() => appendProductionRecord({ ...record(), physicalResults: [{ ...record().physicalResults[0], password: 'secret' }] }, { storage }), /physical results/i);
+  assert.throws(() => appendProductionRecord({ ...legacyRecord(), physicalResults: [{ output: 1, result: 'correct', password: 'secret' }] }, { storage }), /physical results/i);
 });
 
 test('CSV exports neutralize spreadsheet formulas, including after whitespace', () => {

@@ -89,6 +89,8 @@ export function normalizeCardWiringStatus(response = {}) {
     state: normalizeState(response.state),
     activationId: String(response.activationId || ''),
     outputs: outputs.map(output => ({ ...output })),
+    ...(Array.isArray(response.candidateOutputs) ? { candidateOutputs: response.candidateOutputs.map(output => ({ ...output })) } : {}),
+    ...(response.colorOrder || response.led?.colorOrder ? { colorOrder: String(response.colorOrder || response.led?.colorOrder) } : {}),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : 0,
     nextStep: String(response.nextStep || response.action || ''),
     ...(response.cardId || response.id ? { cardId: String(response.cardId || response.id) } : {}),
@@ -98,6 +100,9 @@ export function normalizeCardWiringStatus(response = {}) {
     ...(response.projectFingerprint ? { projectFingerprint: String(response.projectFingerprint) } : {}),
     ...(response.productionJobId ? { productionJobId: String(response.productionJobId) } : {}),
     ...(response.productionJobDigest ? { productionJobDigest: String(response.productionJobDigest).toLowerCase() } : {}),
+    ...(response.wiringRevision !== undefined ? { wiringRevision: Number(response.wiringRevision) } : {}),
+    ...(response.wiringDigest ? { wiringDigest: String(response.wiringDigest).toLowerCase() } : {}),
+    ...(response.maxMilliamps !== undefined || response.led?.maxMilliamps !== undefined ? { maxMilliamps: Number(response.maxMilliamps ?? response.led.maxMilliamps) } : {}),
     raw: response,
   };
 }
@@ -222,6 +227,10 @@ export async function readCardWiringCandidateEvidence(activationId, options = {}
   if (status.state !== 'staged' || status.activationId !== id) throw wiringError('activation-mismatch', 'Card candidate status belongs to a different wiring transaction.', { response: status.raw });
   if (!status.cardId || !status.firmwareVersion || !status.buildId || !Number.isSafeInteger(status.projectRevision) || !status.projectFingerprint) {
     throw wiringError('invalid-response', 'Card candidate status is waiting for exact candidate identity evidence.', { response: status.raw });
+  }
+  if (!Number.isSafeInteger(status.wiringRevision) || status.wiringRevision < 1 || !/^[a-f0-9]{64}$/.test(status.wiringDigest || '')
+    || !Number.isSafeInteger(status.maxMilliamps) || status.maxMilliamps < 100 || status.maxMilliamps > 20000) {
+    throw wiringError('invalid-response', 'Card candidate status is missing exact wiring and current-limit evidence.', { response: status.raw });
   }
   if (status.projectRevision < 0 || status.projectRevision > 0xffffffff ||
       !/^[a-f0-9]{16,64}$/.test(status.projectFingerprint) ||

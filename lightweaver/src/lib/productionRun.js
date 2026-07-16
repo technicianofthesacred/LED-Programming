@@ -40,7 +40,7 @@ const RECOVERY_RULES = Object.freeze({
   'reconnect-card': { target: 'reconnect', sources: ['install', 'reconnect'] },
   'restore-project': { target: 'restore', sources: ['restore', 'verify-card', 'check-lights', 'record'] },
   'rerun-lights': { target: 'check-lights', sources: ['check-lights', 'record'] },
-  'signed-firmware-recovery': { target: 'install', sources: ['inspect', 'install', 'reconnect', 'restore', 'verify-card', 'check-lights'] },
+  'signed-firmware-recovery': { target: 'connect-card', sources: ['inspect', 'install', 'reconnect', 'restore', 'verify-card', 'check-lights'] },
 });
 const CARD_REQUIRED_STATES = new Set(['install', 'reconnect', 'restore', 'verify-card', 'check-lights', 'record', 'complete']);
 

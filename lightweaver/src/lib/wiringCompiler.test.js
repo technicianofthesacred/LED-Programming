@@ -29,8 +29,8 @@ test('compiler applies physical direction, ignores creative reversal, counts ina
   const result = compileWiring({ wiring: wiring(), strips, capabilities });
   assert.equal(result.ok, true);
   assert.equal(result.totalPixels, 9);
-  assert.deepEqual(result.pixels.map(pixel => pixel.sourceLed), [3, 2, 1, 0, null, null, null, 0, 1]);
-  assert.deepEqual(result.outputs, [{ id: 'o1', name: 'One', pin: 16, start: 0, count: 9, pixels: 9 }]);
+  assert.deepEqual(result.pixels.map(pixel => pixel.sourceLed), [0, 1, 2, 3, null, null, null, 0, 1]);
+  assert.deepEqual(result.outputs, [{ id: 'o1', name: 'One', pin: 16, start: 0, count: 9, pixels: 9, direction: 'mixed', segments: [{ id: 'a', count: 4, direction: 'reverse' }, { id: 'gap', count: 3, direction: 'forward' }, { id: 'b', count: 2, direction: 'forward' }] }]);
   assert.deepEqual(result.zones.map(zone => zone.ranges[0]), [{ start: 0, count: 4 }, { start: 7, count: 2 }]);
 });
 
@@ -56,6 +56,18 @@ test('compiler supports four outputs and split ranges with unique global offsets
   assert.equal(result.ok, true);
   assert.deepEqual(result.outputs.map(output => output.start), [0, 2, 4, 5]);
   assert.equal(result.totalPixels, 6);
+});
+
+test('inactive address space does not change the physical strip direction summary', () => {
+  const result = compileWiring({
+    strips, capabilities,
+    wiring: wiring({
+      outputs: [{ id: 'o1', pin: 16, runIds: ['a', 'gap'] }],
+      runs: wiring().runs.filter(run => run.id === 'a' || run.id === 'gap'),
+    }),
+  });
+  assert.equal(result.outputs[0].direction, 'reverse');
+  assert.deepEqual(result.outputs[0].segments.map(segment => segment.direction), ['reverse', 'forward']);
 });
 
 test('logical split, resize, and reverse edits preserve physical output identities and GPIOs', () => {
@@ -114,7 +126,7 @@ test('seam rotation changes physical source order without changing inclusive cov
 test('reverse direction walks backward from the selected seam', () => {
   const model = wiring({ outputs: [{ id: 'o', pin: 16, runIds: ['a'] }], runs: [{ id: 'a', type: 'strip', source: { stripId: 'a', from: 0, to: 3 }, physicalDirection: 'source-reverse', seamLed: 2 }] });
   const result = compileWiring({ wiring: model, strips, capabilities });
-  assert.deepEqual(result.pixels.map(pixel => pixel.sourceLed), [2, 1, 0, 3]);
+  assert.deepEqual(result.pixels.map(pixel => pixel.sourceLed), [2, 3, 0, 1]);
 });
 
 test('compiler rejects missing/duplicate runs and firmware limits instead of truncating', () => {

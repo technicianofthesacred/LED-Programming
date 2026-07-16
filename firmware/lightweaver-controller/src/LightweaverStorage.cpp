@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include <new>
 #include <esp_system.h>
+#include <mbedtls/sha256.h>
 
 #ifndef LW_FIRMWARE_VERSION
 #define LW_FIRMWARE_VERSION "1.0.0"
@@ -87,6 +88,7 @@ uint8_t clampByte(int value, uint8_t fallback) {
 
 uint32_t clampMilliamps(long value) {
   if (value < 0) return 0;
+  if (value == 0) return LW_DEFAULT_MAX_MILLIAMPS;
   if (value > static_cast<long>(LW_MAX_MILLIAMPS)) return LW_MAX_MILLIAMPS;
   return static_cast<uint32_t>(value);
 }
@@ -97,6 +99,8 @@ void resetOutput(OutputConfig& output) {
   output.pin = 0;
   output.pixels = 0;
   output.start = 0;
+  output.segmentCount = 0;
+  for (uint8_t i = 0; i < LW_MAX_OUTPUT_SEGMENTS; i++) output.segments[i] = OutputSegmentConfig();
   output.enabled = false;
 }
 
@@ -180,9 +184,12 @@ void resetConfig(RuntimeConfig& config) {
   config.projectFingerprint = "";
   config.productionJobId = "";
   config.productionJobDigest = "";
+  config.wiringRevision = 0;
+  config.wiringDigest = "";
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
   config.brightnessLimit = 0.65f;
+  config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
   config.outputCount = 0;
   for (uint8_t i = 0; i < LW_MAX_LOOKS; i++) resetLook(config.looks[i]);
@@ -207,12 +214,14 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.projectFingerprint = String(doc["projectFingerprint"] | "");
   config.productionJobId = String(doc["productionJobId"] | "");
   config.productionJobDigest = String(doc["productionJobDigest"] | "");
+  config.wiringRevision = doc["wiringRevision"] | 0U;
+  config.wiringDigest = String(doc["wiringDigest"] | "");
   config.startupLookId = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
 
   JsonObject led = doc["led"].as<JsonObject>();
   config.ledColorOrder = String(led["colorOrder"] | "RGB");
   config.brightnessLimit = clampUnit(led["brightnessLimit"] | 0.65f);
-  config.maxMilliamps = clampMilliamps(led["maxMilliamps"] | 0L);
+  config.maxMilliamps = clampMilliamps(led["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS);
 
   JsonObject controlsJson = doc["controls"].as<JsonObject>();
   JsonObject encoder = controlsJson["encoder"].as<JsonObject>();
@@ -249,6 +258,23 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
     next.pin = output["pin"] | 16;
     next.pixels = pixels;
     next.start = totalPixels;
+    JsonArray segmentJson = output["segments"].as<JsonArray>();
+    if (!segmentJson.isNull()) {
+      for (JsonVariant segmentValue : segmentJson) {
+        if (next.segmentCount >= LW_MAX_OUTPUT_SEGMENTS) break;
+        JsonObject segment = segmentValue.as<JsonObject>();
+        OutputSegmentConfig& parsedSegment = next.segments[next.segmentCount++];
+        parsedSegment.id = String(segment["id"] | "segment");
+        parsedSegment.count = segment["count"] | 0;
+        parsedSegment.reversed = String(segment["direction"] | "forward") == "reverse";
+      }
+    }
+    if (next.segmentCount == 0) {
+      next.segmentCount = 1;
+      next.segments[0].id = next.id + "-full";
+      next.segments[0].count = pixels;
+      next.segments[0].reversed = String(output["direction"] | "forward") == "reverse";
+    }
     next.enabled = true;
     totalPixels += next.pixels;
     config.outputCount++;
@@ -362,6 +388,59 @@ bool isLowerHex(const String& value) {
   return true;
 }
 
+String sha256Hex(const String& value) {
+  uint8_t digest[32] = {};
+  mbedtls_sha256_ret(reinterpret_cast<const unsigned char*>(value.c_str()),
+                     value.length(), digest, 0);
+  char encoded[LW_WIRING_DIGEST_LENGTH + 1] = {};
+  for (uint8_t i = 0; i < sizeof(digest); i++) {
+    snprintf(encoded + (i * 2), 3, "%02x", digest[i]);
+  }
+  return String(encoded);
+}
+
+// This compact JSON is the cross-platform Lightweaver wiring-digest v1
+// contract. Key and array order are significant and intentionally fixed.
+String calculateWiringDigest(JsonDocument& doc) {
+  JsonDocument canonical;
+  JsonObject canonicalLed = canonical.to<JsonObject>();
+  canonicalLed["version"] = 1;
+  canonicalLed["colorOrder"] = String(doc["led"]["colorOrder"] | "RGB");
+  canonicalLed["maxMilliamps"] =
+      doc["led"]["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS;
+  JsonArray sourceOutputs = doc["led"]["outputs"].as<JsonArray>();
+  if (sourceOutputs.isNull()) sourceOutputs = doc["outputs"].as<JsonArray>();
+  JsonArray canonicalOutputs = canonicalLed["outputs"].to<JsonArray>();
+  for (JsonVariant outputValue : sourceOutputs) {
+    JsonObject source = outputValue.as<JsonObject>();
+    JsonObject canonicalOutput = canonicalOutputs.add<JsonObject>();
+    String outputId = String(source["id"] | "");
+    uint16_t pixels = source["pixels"] | 0;
+    canonicalOutput["id"] = outputId;
+    canonicalOutput["pin"] = source["pin"] | 16;
+    canonicalOutput["pixels"] = pixels;
+    JsonArray canonicalSegments = canonicalOutput["segments"].to<JsonArray>();
+    JsonArray sourceSegments = source["segments"].as<JsonArray>();
+    if (sourceSegments.isNull()) {
+      JsonObject canonicalSegment = canonicalSegments.add<JsonObject>();
+      canonicalSegment["id"] = outputId + "-full";
+      canonicalSegment["count"] = pixels;
+      canonicalSegment["direction"] = String(source["direction"] | "forward");
+    } else {
+      for (JsonVariant segmentValue : sourceSegments) {
+        JsonObject segment = segmentValue.as<JsonObject>();
+        JsonObject canonicalSegment = canonicalSegments.add<JsonObject>();
+        canonicalSegment["id"] = String(segment["id"] | "segment");
+        canonicalSegment["count"] = segment["count"] | 0;
+        canonicalSegment["direction"] = String(segment["direction"] | "forward");
+      }
+    }
+  }
+  String serialized;
+  serializeJson(canonical, serialized);
+  return sha256Hex(serialized);
+}
+
 bool isSafeProductionJobId(const String& value) {
   if (!value.length() || value.length() > LW_PRODUCTION_JOB_ID_MAX_LENGTH) return false;
   for (size_t i = 0; i < value.length(); i++) {
@@ -416,6 +495,32 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     return false;
   }
 
+  JsonVariant wiringRevisionValue = doc["wiringRevision"];
+  uint32_t wiringRevision = wiringRevisionValue | 0U;
+  String wiringDigest = String(doc["wiringDigest"] | "");
+  if (!wiringRevisionValue.isNull() && !wiringRevisionValue.is<uint32_t>()) {
+    message = "wiring revision must be a non-negative integer";
+    return false;
+  }
+  if (wiringDigest.length() &&
+      (wiringDigest.length() != LW_WIRING_DIGEST_LENGTH || !isLowerHex(wiringDigest))) {
+    message = "wiring digest must be 64 lowercase hex characters";
+    return false;
+  }
+  if (static_cast<bool>(wiringRevision) != static_cast<bool>(wiringDigest.length())) {
+    message = "wiring revision and digest must be provided together";
+    return false;
+  }
+  if (productionJobId.length() && wiringRevision == 0) {
+    message = "production wiring revision must be a positive integer";
+    return false;
+  }
+  if (productionJobId.length() &&
+      (wiringDigest.length() != LW_WIRING_DIGEST_LENGTH || !isLowerHex(wiringDigest))) {
+    message = "production wiring digest must be 64 lowercase hex characters";
+    return false;
+  }
+
   JsonArray outputJson = doc["led"]["outputs"].as<JsonArray>();
   if (outputJson.isNull()) outputJson = doc["outputs"].as<JsonArray>();
   if (outputJson.isNull() || outputJson.size() == 0) {
@@ -427,9 +532,25 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     return false;
   }
 
-  long maxMilliamps = doc["led"]["maxMilliamps"] | 0L;
+  JsonVariant maxMilliampsValue = doc["led"]["maxMilliamps"];
+  long maxMilliamps = maxMilliampsValue | static_cast<long>(LW_DEFAULT_MAX_MILLIAMPS);
+  if (!maxMilliampsValue.isNull() && !maxMilliampsValue.is<uint32_t>()) {
+    message = "unsafe LED current limit";
+    return false;
+  }
+  if (productionJobId.length() &&
+      (maxMilliampsValue.isNull() || maxMilliamps < static_cast<long>(LW_MIN_PRODUCTION_MILLIAMPS) ||
+       maxMilliamps > static_cast<long>(LW_MAX_MILLIAMPS))) {
+    message = String("production config requires a current limit between 100 and ") +
+              LW_MAX_MILLIAMPS + " milliamps";
+    return false;
+  }
   if (maxMilliamps < 0 || maxMilliamps > static_cast<long>(LW_MAX_MILLIAMPS)) {
     message = "unsafe LED current limit";
+    return false;
+  }
+  if (wiringDigest.length() && calculateWiringDigest(doc) != wiringDigest) {
+    message = "wiring digest does not match physical configuration";
     return false;
   }
   float brightnessLimit = doc["led"]["brightnessLimit"] | 0.65f;
@@ -481,6 +602,28 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     if (pixels <= 0) {
       message = "output pixel count must be positive";
       return false;
+    }
+    JsonArray segments = output["segments"].as<JsonArray>();
+    if (!segments.isNull()) {
+      if (segments.size() == 0 || segments.size() > LW_MAX_OUTPUT_SEGMENTS) {
+        message = "output segment count is invalid";
+        return false;
+      }
+      uint32_t segmentPixels = 0;
+      for (JsonVariant segmentValue : segments) {
+        JsonObject segment = segmentValue.as<JsonObject>();
+        int count = segment["count"] | 0;
+        String direction = String(segment["direction"] | "");
+        if (count <= 0 || (direction != "forward" && direction != "reverse")) {
+          message = "output segment is invalid";
+          return false;
+        }
+        segmentPixels += count;
+      }
+      if (segmentPixels != static_cast<uint32_t>(pixels)) {
+        message = "output segments must sum to output pixels";
+        return false;
+      }
     }
     totalPixels += static_cast<uint32_t>(pixels);
     if (totalPixels > LW_MAX_PIXELS) {
@@ -825,12 +968,17 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
   config.brightnessLimit = 0.65f;
+  config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   config.outputCount = 1;
   config.outputs[0].id = "out1";
   config.outputs[0].name = "Output 1";
   config.outputs[0].pin = 16;
   config.outputs[0].pixels = 44;
   config.outputs[0].start = 0;
+  config.outputs[0].segmentCount = 1;
+  config.outputs[0].segments[0].id = "out1-full";
+  config.outputs[0].segments[0].count = 44;
+  config.outputs[0].segments[0].reversed = false;
   config.outputs[0].enabled = true;
 
   const char* ids[] = {
@@ -1285,6 +1433,19 @@ String runtimeWiringSafetyStatusJson() {
         doc["projectFingerprint"] = String(candidateDoc["projectFingerprint"] | "");
         doc["productionJobId"] = String(candidateDoc["productionJobId"] | "");
         doc["productionJobDigest"] = String(candidateDoc["productionJobDigest"] | "");
+        doc["wiringRevision"] = candidateDoc["wiringRevision"] | 0U;
+        doc["wiringDigest"] = String(candidateDoc["wiringDigest"] | "");
+        doc["colorOrder"] = String(candidateDoc["led"]["colorOrder"] | "");
+        doc["maxMilliamps"] = candidateDoc["led"]["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS;
+        JsonArray candidateOutputs = doc["candidateOutputs"].to<JsonArray>();
+        for (JsonVariant outputValue : candidateDoc["led"]["outputs"].as<JsonArray>()) {
+          JsonObject source = outputValue.as<JsonObject>();
+          JsonObject target = candidateOutputs.add<JsonObject>();
+          target["id"] = source["id"];
+          target["pin"] = source["pin"];
+          target["pixels"] = source["pixels"];
+          target["segments"] = source["segments"];
+        }
       }
     }
   }
@@ -1307,11 +1468,19 @@ bool runtimeConfigJsonChangesWiring(const String& json, const RuntimeConfig& cur
     return false;
   }
   changes = parsed->outputCount != current.outputCount;
+  changes = changes || parsed->wiringRevision != current.wiringRevision ||
+            parsed->wiringDigest != current.wiringDigest ||
+            parsed->maxMilliamps != current.maxMilliamps;
   for (uint8_t i = 0; !changes && i < parsed->outputCount; i++) {
     const OutputConfig& next = parsed->outputs[i];
     const OutputConfig& active = current.outputs[i];
     changes = next.id != active.id || next.pin != active.pin ||
-              next.pixels != active.pixels;
+              next.pixels != active.pixels || next.segmentCount != active.segmentCount;
+    for (uint8_t segment = 0; !changes && segment < next.segmentCount; segment++) {
+      changes = next.segments[segment].id != active.segments[segment].id ||
+                next.segments[segment].count != active.segments[segment].count ||
+                next.segments[segment].reversed != active.segments[segment].reversed;
+    }
   }
   delete parsed;
   message = changes ? "physical wiring changed" : "physical wiring unchanged";
@@ -1444,6 +1613,11 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["led"]["pixels"] = totalPixels;
   doc["led"]["colorOrder"] = config.ledColorOrder;
   doc["led"]["maxMilliamps"] = config.maxMilliamps;
+  doc["led"]["estimatedFullWhiteMilliamps"] = lightweaverFullWhiteMilliamps(totalPixels);
+  doc["led"]["limitedFullWhiteMilliamps"] =
+      lightweaverLimitedMilliamps(totalPixels, config.maxMilliamps);
+  doc["wiringRevision"] = config.wiringRevision;
+  doc["wiringDigest"] = config.wiringDigest;
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
   doc["piece"]["hostname"] = config.activeHostname;
@@ -1455,6 +1629,14 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
     output["pixels"] = config.outputs[i].pixels;
     output["gpio"] = config.outputs[i].pin;
     output["count"] = config.outputs[i].pixels;
+    JsonArray segments = output["segments"].to<JsonArray>();
+    for (uint8_t segmentIndex = 0; segmentIndex < config.outputs[i].segmentCount; segmentIndex++) {
+      const OutputSegmentConfig& source = config.outputs[i].segments[segmentIndex];
+      JsonObject segment = segments.add<JsonObject>();
+      segment["id"] = source.id;
+      segment["count"] = source.count;
+      segment["direction"] = source.reversed ? "reverse" : "forward";
+    }
   }
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["hostname"] = config.activeHostname;

@@ -21,6 +21,7 @@ import {
 } from './productionJobPackage.js';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
+import { assignProductionWiringIdentity } from './productionWiringIdentity.js';
 
 const hex = (value, length) => value.repeat(length);
 
@@ -102,6 +103,38 @@ function source(overrides = {}) {
 
 async function validPackage(overrides) {
   return buildProductionJob(source(overrides), { cryptoImpl: webcrypto });
+}
+
+function sourceWithStripRuns(runCount, pixelsPerRun = 2) {
+  const value = source();
+  const snapshot = value.project.restoreSnapshot;
+  const stripCount = Math.ceil(runCount / 4);
+  snapshot.layout.strips = Array.from({ length: stripCount }, (_, index) => ({
+    id: `strip-${index + 1}`, name: `Strip ${index + 1}`,
+    pixelCount: Math.min(4, runCount - index * 4) * pixelsPerRun,
+  }));
+  snapshot.layout.wiring.runs = Array.from({ length: runCount }, (_, index) => {
+    const strip = snapshot.layout.strips[Math.floor(index / 4)];
+    const localIndex = index % 4;
+    return {
+      id: `run-${index + 1}`, type: 'strip', verified: true,
+      source: { stripId: strip.id, from: localIndex * pixelsPerRun, to: (localIndex + 1) * pixelsPerRun - 1 },
+      directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null,
+    };
+  });
+  snapshot.layout.wiring.outputs[0].runIds = snapshot.layout.wiring.runs.map(run => run.id);
+  const pixels = runCount * pixelsPerRun;
+  snapshot.devices.standaloneController.outputs[0].pixels = pixels;
+  value.project.fingerprint = fingerprintCommissioningProject(snapshot);
+  value.configuration = buildCardRuntimePackageFromProject({
+    projectId: snapshot.id, projectName: snapshot.name,
+    projectRevision: value.project.revision, projectFingerprint: value.project.fingerprint,
+    productionJobId: value.jobId, productionJobDigest: hex('0', 64),
+    strips: snapshot.layout.strips, patchBoard: null, wiring: snapshot.layout.wiring,
+    standaloneController: snapshot.devices.standaloneController,
+  });
+  value.expectedOutputs[0].pixels = pixels;
+  return value;
 }
 
 function schemaErrors(schema, value, path = '$', root = schema) {
@@ -191,6 +224,56 @@ test('requires complete controls and outputs and rejects GPIO conflicts before U
   conflict.configuration.config.controls.next = 16;
   await assert.rejects(buildProductionJob(conflict, { cryptoImpl: webcrypto }), /GPIO 16/i);
 
+  const invalidSegment = source();
+  invalidSegment.configuration.config.led.outputs[0].segments[0].direction = 'sideways';
+  await assert.rejects(buildProductionJob(invalidSegment, { cryptoImpl: webcrypto }), /segment direction/i);
+
+});
+
+test('production runtime always carries a nonzero aggregate current ceiling with a conservative legacy default', async () => {
+  const legacy = await buildProductionJob(source(), { cryptoImpl: webcrypto });
+  assert.equal(legacy.configuration.config.led.maxMilliamps, 1500);
+  const disabled = source();
+  disabled.configuration.config.led.maxMilliamps = 0;
+  await assert.rejects(buildProductionJob(disabled, { cryptoImpl: webcrypto }), /maxMilliamps|current ceiling/i);
+});
+
+test('rejects schema-valid production jobs with more than 16 physical strip boundaries before USB', async () => {
+  const invalid = sourceWithStripRuns(17, 2);
+  await assignProductionWiringIdentity(invalid.configuration.config, { cryptoImpl: webcrypto });
+  const schema = JSON.parse(await readFile(resolve(process.cwd(), '../release/production-job.schema.json'), 'utf8'));
+  assert.deepEqual(schemaErrors(schema, { format: 'lightweaver-production-job', ...invalid, digest: hex('0', 64) }), []);
+  await assert.rejects(buildProductionJob(invalid, { cryptoImpl: webcrypto }), /16.*physical strip boundaries/i);
+});
+
+test('rejects a schema-valid one-pixel testable strip boundary before USB while retaining spacer support', async () => {
+  const invalid = sourceWithStripRuns(1, 1);
+  await assignProductionWiringIdentity(invalid.configuration.config, { cryptoImpl: webcrypto });
+  const schema = JSON.parse(await readFile(resolve(process.cwd(), '../release/production-job.schema.json'), 'utf8'));
+  assert.deepEqual(schemaErrors(schema, { format: 'lightweaver-production-job', ...invalid, digest: hex('0', 64) }), []);
+  await assert.rejects(buildProductionJob(invalid, { cryptoImpl: webcrypto }), /physical strip boundary.*at least two pixels/i);
+
+  const withSpacer = sourceWithStripRuns(1, 2);
+  withSpacer.project.restoreSnapshot.layout.wiring.outputs[0].runIds.push('spacer-1');
+  withSpacer.project.restoreSnapshot.layout.wiring.runs.push({ id: 'spacer-1', type: 'inactive', verified: true, count: 1 });
+  withSpacer.project.restoreSnapshot.devices.standaloneController.outputs[0].pixels = 3;
+  withSpacer.project.fingerprint = fingerprintCommissioningProject(withSpacer.project.restoreSnapshot);
+  withSpacer.configuration = buildCardRuntimePackageFromProject({
+    projectId: withSpacer.project.id, projectName: withSpacer.project.restoreSnapshot.name,
+    projectRevision: withSpacer.project.revision, projectFingerprint: withSpacer.project.fingerprint,
+    productionJobId: withSpacer.jobId, productionJobDigest: hex('0', 64),
+    strips: withSpacer.project.restoreSnapshot.layout.strips, patchBoard: null,
+    wiring: withSpacer.project.restoreSnapshot.layout.wiring,
+    standaloneController: withSpacer.project.restoreSnapshot.devices.standaloneController,
+  });
+  withSpacer.expectedOutputs[0].pixels = 3;
+  assert.equal((await buildProductionJob(withSpacer, { cryptoImpl: webcrypto })).configuration.config.led.outputs[0].segments.at(-1).count, 1);
+});
+
+test('requires every restore strip run to match one exact runtime segment', async () => {
+  const invalid = sourceWithStripRuns(1, 2);
+  invalid.configuration.config.led.outputs[0].segments[0].id = 'different-segment';
+  await assert.rejects(buildProductionJob(invalid, { cryptoImpl: webcrypto }), /physical strip boundar.*runtime segments/i);
 });
 
 test('preflights the compact firmware configuration against the 3968-byte capacity', async () => {
@@ -218,17 +301,23 @@ test('external imports fail closed without a complete envelope or trusted key ID
   assert.equal(PRODUCTION_JOB_TRUST_SET.version, 1);
 });
 
-test('accepts an exact artifact signed by the pinned production-job key', async () => {
+test('verifies the pinned production-job key against its immutable signed fixture', async () => {
   const job = await validPackage();
+  delete job.configuration.config.led.maxMilliamps;
+  delete job.configuration.config.wiringRevision;
+  delete job.configuration.config.wiringDigest;
+  job.configuration.config.productionJobDigest = '0'.repeat(64);
+  job.digest = createHash('sha256').update(canonicalProductionJobBytes(job, { omitDigest: true })).digest('hex');
+  job.configuration.config.productionJobDigest = job.digest;
   const bytes = canonicalProductionJobBytes(job);
   const signature = {
     keyId: 'lightweaver-production-job-2026-01',
     algorithm: PRODUCTION_JOB_SIGNATURE_ALGORITHM,
-    value: 'FeKGXb9xeK3f9mj1YJJwW-y8-FyjmoZoHDqDbqjEzYgDicNo6a9vBCr-ZiQPAGAxMRmKx28uEmrKUtFSyeomRg',
+    value: 'g3CzPhlaACbRG3zUuQBeNhoAKJfBtN8XDetuQTT5W1q654yE8-f6gjTw6oeIJGGBSu0kyieobxozGNQOEp3QHA',
   };
   assert.equal(PRODUCTION_JOB_TRUST_SET.keys.length, 1);
   assert.equal(PRODUCTION_JOB_TRUST_SET.keys[0].keyId, signature.keyId);
-  assert.equal((await parseProductionJobPackage(bytes, { trust: { kind: 'external', signature }, cryptoImpl: webcrypto })).digest, job.digest);
+  assert.equal(await verifyProductionJobSignature(bytes, signature, webcrypto), true);
 });
 
 test('isolated verifier binds algorithm, key ID, domain, and exact artifact bytes', async () => {

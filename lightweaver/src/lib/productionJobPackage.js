@@ -1,11 +1,13 @@
 import { EXPECTED_FIRMWARE_TARGET, MINIMUM_PRODUCTION_FIRMWARE_VERSION } from './firmwareRelease.js';
-import { CARD_HARDWARE_CAPABILITIES } from './cardRuntimeContract.js';
+import { CARD_HARDWARE_CAPABILITIES, MAX_PRODUCTION_MAX_MILLIAMPS, MIN_PRODUCTION_MAX_MILLIAMPS } from './cardRuntimeContract.js';
 import { prepareCardStoragePayload } from './cardStoragePayload.js';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
 import { normalizeWiring } from './wiringModel.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
 import { normalizeCardPlaylist } from './cardPlaylist.js';
+import { MAX_PRODUCTION_PHYSICAL_BOUNDARIES } from './productionLimits.js';
+import { assignProductionWiringIdentity, productionWiringDigest } from './productionWiringIdentity.js';
 
 export const PRODUCTION_JOB_SCHEMA_VERSION = 1;
 export const PRODUCTION_JOB_FORMAT = 'lightweaver-production-job';
@@ -36,10 +38,12 @@ const SOURCE_TOP_KEYS = TOP_KEYS.filter(key => key !== 'digest');
 const FIRMWARE_KEYS = ['buildId', 'minimumVersion', 'target', 'version'];
 const PROJECT_KEYS = ['fingerprint', 'id', 'restoreSnapshot', 'revision'];
 const PACKAGE_KEYS = ['app', 'config', 'format', 'version'];
-const CONFIG_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'productionJobDigest', 'productionJobId', 'projectFingerprint', 'projectRevision', 'startupPatternId', 'syncZones', 'version', 'zones'];
+const CONFIG_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'productionJobDigest', 'productionJobId', 'projectFingerprint', 'projectRevision', 'startupPatternId', 'syncZones', 'version', 'wiringDigest', 'wiringRevision', 'zones'];
 const OUTPUT_KEYS = ['colorOrder', 'direction', 'id', 'label', 'pin', 'pixels'];
-const LED_KEYS = ['brightnessLimit', 'colorOrder', 'outputs', 'pixels'];
+const LED_KEYS = ['brightnessLimit', 'colorOrder', 'maxMilliamps', 'outputs', 'pixels'];
 const LED_OUTPUT_KEYS = ['id', 'name', 'pin', 'pixels'];
+const RUNTIME_LED_OUTPUT_KEYS = ['direction', 'id', 'name', 'pin', 'pixels', 'segments'];
+const RUNTIME_SEGMENT_KEYS = ['count', 'direction', 'id'];
 const CONTROL_KEYS = ['blackout', 'brightness', 'encoder', 'next', 'previous', 'statusLed'];
 const ENCODER_KEYS = ['a', 'alternatePress', 'b', 'brightnessStep', 'press', 'rotateDirection'];
 const ENCODER_OPTIONAL_KEYS = ['patternCycleIds'];
@@ -53,7 +57,8 @@ const STRIP_OPTIONAL_KEYS = ['angle', 'brightness', 'closed', 'color', 'emit', '
 const STANDALONE_KEYS = ['activeLookId', 'controls', 'defaultLook', 'led', 'looks', 'outputs', 'playlist', 'runtimeMode'];
 const STANDALONE_OPTIONAL_KEYS = ['activeLookId', 'looks', 'runtimeMode'];
 const STANDALONE_REQUIRED_KEYS = STANDALONE_KEYS.filter(key => !STANDALONE_OPTIONAL_KEYS.includes(key));
-const STANDALONE_LED_KEYS = ['brightnessLimit', 'colorOrder', 'type'];
+const STANDALONE_LED_REQUIRED_KEYS = ['brightnessLimit', 'colorOrder', 'type'];
+const STANDALONE_LED_OPTIONAL_KEYS = ['maxMilliamps'];
 const VISUAL_LOOK_KEYS = ['brightness', 'customBreathe', 'customDrift', 'customHue', 'customSaturation', 'hueShift', 'patternId', 'speed'];
 const PLAYLIST_PATTERN_KEYS = ['createdAt', 'enabled', 'id', 'label', 'patternId', 'type'];
 const PLAYLIST_COMBO_KEYS = ['createdAt', 'enabled', 'id', 'label', 'lookId', 'type'];
@@ -179,7 +184,11 @@ function validateRestoreSnapshot(snapshot) {
   standalone.outputs.forEach(output => exactKeys(output, LED_OUTPUT_KEYS, 'restore snapshot standalone output'));
   exactKeys(standalone.controls, CONTROL_KEYS, 'restore snapshot controls');
   exactRequiredAndOptionalKeys(standalone.controls.encoder, ENCODER_KEYS, ENCODER_OPTIONAL_KEYS, 'restore snapshot encoder controls');
-  exactKeys(standalone.led, STANDALONE_LED_KEYS, 'restore snapshot LED settings');
+  exactRequiredAndOptionalKeys(standalone.led, STANDALONE_LED_REQUIRED_KEYS, STANDALONE_LED_OPTIONAL_KEYS, 'restore snapshot LED settings');
+  if (standalone.led.maxMilliamps !== undefined && (!Number.isSafeInteger(standalone.led.maxMilliamps)
+    || standalone.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS || standalone.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS)) {
+    throw new Error('Restore snapshot aggregate current ceiling is invalid');
+  }
   exactKeys(standalone.defaultLook, VISUAL_LOOK_KEYS, 'restore snapshot default look');
   if (!Array.isArray(standalone.looks || []) || stableJson(normalizeSavedLooks(standalone.looks)) !== stableJson(standalone.looks)) throw new Error('Restore snapshot saved looks contain unsupported fields or non-canonical values');
   if (!Array.isArray(standalone.playlist)) throw new Error('Restore snapshot playlist is invalid');
@@ -193,7 +202,7 @@ function validateRestoreSnapshot(snapshot) {
 
 function rebuildRuntime(job, productionJobDigest) {
   const snapshot = job.project.restoreSnapshot;
-  return buildCardRuntimePackageFromProject({
+  const runtime = buildCardRuntimePackageFromProject({
     projectId: snapshot.id,
     projectName: snapshot.name,
     projectRevision: job.project.revision,
@@ -205,6 +214,39 @@ function rebuildRuntime(job, productionJobDigest) {
     wiring: snapshot.layout.wiring,
     standaloneController: snapshot.devices.standaloneController,
   });
+  runtime.config.wiringRevision = job.configuration.config.wiringRevision;
+  runtime.config.wiringDigest = job.configuration.config.wiringDigest;
+  return runtime;
+}
+
+function validateProductionPhysicalBoundaries(snapshot, config) {
+  const wiringRuns = new Map(snapshot.layout.wiring.runs.map(run => [run.id, run]));
+  const stripRuns = snapshot.layout.wiring.runs.filter(run => run.type === 'strip');
+  if (stripRuns.length === 0 || stripRuns.length > MAX_PRODUCTION_PHYSICAL_BOUNDARIES) {
+    throw new Error(`Production jobs require 1 to ${MAX_PRODUCTION_PHYSICAL_BOUNDARIES} physical strip boundaries`);
+  }
+  for (const run of stripRuns) {
+    const count = Math.abs(run.source.to - run.source.from) + 1;
+    if (count < 2) throw new Error(`Physical strip boundary ${run.id} must contain at least two pixels`);
+  }
+
+  for (const wiringOutput of snapshot.layout.wiring.outputs) {
+    const expectedSegments = wiringOutput.runIds.flatMap(runId => {
+      const run = wiringRuns.get(runId);
+      if (run?.type === 'cable') return [];
+      if (run?.type === 'inactive') return run.count > 0 ? [{ id: run.id, count: run.count, direction: 'forward' }] : [];
+      if (run?.type === 'strip') return [{
+        id: run.id,
+        count: Math.abs(run.source.to - run.source.from) + 1,
+        direction: run.physicalDirection === 'source-reverse' ? 'reverse' : 'forward',
+      }];
+      return [];
+    });
+    const runtimeOutput = config.led.outputs.find(output => output.id === wiringOutput.id);
+    if (!runtimeOutput || stableJson(runtimeOutput.segments) !== stableJson(expectedSegments)) {
+      throw new Error(`Physical strip boundaries for output ${wiringOutput.id} do not exactly match runtime segments`);
+    }
+  }
 }
 
 function assertPackageShape(job, { source = false } = {}) {
@@ -252,10 +294,25 @@ function assertPackageShape(job, { source = false } = {}) {
   if (source && config.productionJobDigest !== '0'.repeat(64) && config.productionJobDigest !== undefined) {
     throw new Error('Source production job digest must be omitted or the documented zero placeholder');
   }
+  if (!Number.isSafeInteger(config.wiringRevision) || config.wiringRevision < 1 || config.wiringRevision > 0xffffffff
+    || !/^[a-f0-9]{64}$/.test(config.wiringDigest || '')) throw new Error('Production wiring revision and digest are invalid');
 
   exactKeys(config.led, LED_KEYS, 'LED configuration');
+  if (!Number.isSafeInteger(config.led.maxMilliamps) || config.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS
+    || config.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS) throw new Error('Production LED maxMilliamps current ceiling is invalid');
   if (!Array.isArray(config.led.outputs) || config.led.outputs.length === 0) throw new Error('At least one configured LED output is required');
-  config.led.outputs.forEach(output => exactKeys(output, LED_OUTPUT_KEYS, 'configured LED output'));
+  config.led.outputs.forEach(output => {
+    exactKeys(output, RUNTIME_LED_OUTPUT_KEYS, 'configured LED output');
+    if (!Array.isArray(output.segments) || !output.segments.length || output.segments.length > 32) throw new Error('Configured LED output segments must contain 1 to 32 entries');
+    output.segments.forEach(segment => {
+      exactKeys(segment, RUNTIME_SEGMENT_KEYS, 'configured LED output segment');
+      requiredText(segment.id, 'Configured LED output segment ID', 64);
+      if (!Number.isSafeInteger(segment.count) || segment.count < 1 || segment.count > 1024) throw new Error('Configured LED output segment count is invalid');
+      if (!['forward', 'reverse'].includes(segment.direction)) throw new Error('Configured LED output segment direction is invalid');
+    });
+    if (output.segments.reduce((sum, segment) => sum + segment.count, 0) !== output.pixels) throw new Error('Configured LED output segments must sum to output pixels');
+  });
+  validateProductionPhysicalBoundaries(job.project.restoreSnapshot, config);
   try {
     exactKeys(config.controls, CONTROL_KEYS, 'controls');
     exactRequiredAndOptionalKeys(config.controls.encoder, ENCODER_KEYS, ENCODER_OPTIONAL_KEYS, 'encoder controls');
@@ -284,9 +341,10 @@ function assertPackageShape(job, { source = false } = {}) {
     exactKeys(expected, OUTPUT_KEYS, 'expected output');
     requiredText(expected.id, 'Expected output ID', 64);
     requiredText(expected.label, 'Expected output label', 128);
-    if (!['forward', 'reverse'].includes(expected.direction)) throw new Error('Expected output direction is invalid');
+    if (!['forward', 'reverse', 'mixed'].includes(expected.direction)) throw new Error('Expected output direction is invalid');
     if (!['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'].includes(expected.colorOrder)) throw new Error('Expected output color order is invalid');
     const configured = config.led.outputs.find(output => output.id === expected.id);
+    if (configured?.direction !== expected.direction) throw new Error(`Expected output ${expected.id} does not match canonical wiring direction`);
     if (!configured || configured.pin !== expected.pin || configured.pixels !== expected.pixels || config.led.colorOrder !== expected.colorOrder) {
       throw new Error(`Expected output ${expected.id} does not exactly match the compiled configuration`);
     }
@@ -294,7 +352,8 @@ function assertPackageShape(job, { source = false } = {}) {
     if (!wiringOutput || wiringOutput.pin !== expected.pin) throw new Error(`Expected output ${expected.id} does not match canonical wiring GPIO`);
     const runs = wiringOutput.runIds.map(runId => job.project.restoreSnapshot.layout.wiring.runs.find(run => run.id === runId)).filter(run => run?.type === 'strip');
     const directions = new Set(runs.map(run => run.physicalDirection === 'source-reverse' ? 'reverse' : 'forward'));
-    if (directions.size !== 1 || !directions.has(expected.direction)) throw new Error(`Expected output ${expected.id} does not match canonical wiring direction`);
+    const canonicalDirection = directions.size === 1 ? [...directions][0] : 'mixed';
+    if (expected.direction !== canonicalDirection) throw new Error(`Expected output ${expected.id} does not match canonical wiring direction`);
   }
 }
 
@@ -316,6 +375,7 @@ function objectFromInput(input, bytes) {
 
 export async function buildProductionJob(source, { cryptoImpl = globalThis.crypto } = {}) {
   const job = { format: PRODUCTION_JOB_FORMAT, ...clone(source) };
+  await assignProductionWiringIdentity(job.configuration.config, { cryptoImpl, revision: job.configuration.config.wiringRevision || 1 });
   assertPackageShape(job, { source: true });
   const digest = await sha256(canonicalProductionJobBytes(job, { omitDigest: true }), cryptoImpl);
   job.digest = digest;
@@ -332,6 +392,7 @@ export async function parseProductionJobPackage(input, { trust, cryptoImpl = glo
   if (bytes.byteLength > MAX_PRODUCTION_JOB_BYTES) throw new Error('Production job exceeds the 256 KiB UTF-8 package limit');
   const job = objectFromInput(input, bytes);
   assertPackageShape(job);
+  if (await productionWiringDigest(job.configuration.config.led, cryptoImpl) !== job.configuration.config.wiringDigest) throw new Error('Production wiring digest mismatch');
   if (!DIGEST_PATTERN.test(job.digest || '')) throw new Error('Production job digest is invalid');
   const computed = await sha256(canonicalProductionJobBytes(job, { omitDigest: true }), cryptoImpl);
   if (computed !== job.digest) throw new Error('Production job digest mismatch');

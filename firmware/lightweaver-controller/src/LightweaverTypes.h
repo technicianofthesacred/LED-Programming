@@ -9,6 +9,7 @@
 #endif
 
 constexpr uint8_t LW_MAX_OUTPUTS = 4;
+constexpr uint8_t LW_MAX_OUTPUT_SEGMENTS = 32;
 constexpr uint8_t LW_MAX_LOOKS = 32;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
 constexpr uint8_t LW_MAX_ZONES = 10;
@@ -17,6 +18,7 @@ constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
 constexpr size_t LW_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
 constexpr size_t LW_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
 constexpr size_t LW_PRODUCTION_JOB_DIGEST_LENGTH = 64;
+constexpr size_t LW_WIRING_DIGEST_LENGTH = 64;
 
 // Upper clamp for the FastLED power limiter ceiling (5V rail, milliamps). A
 // single ESP32-S3 LED card runs off a modest PSU; 20A / 100W is a generous
@@ -24,6 +26,23 @@ constexpr size_t LW_PRODUCTION_JOB_DIGEST_LENGTH = 64;
 // (or hostile) maxMilliamps from disabling the brownout-protection limiter
 // or implying a draw the wiring can't carry.
 constexpr uint32_t LW_MAX_MILLIAMPS = 20000;
+constexpr uint32_t LW_MIN_PRODUCTION_MILLIAMPS = 100;
+constexpr uint32_t LW_DEFAULT_MAX_MILLIAMPS = 1500;
+constexpr uint32_t LW_MILLIAMPS_PER_PIXEL_FULL_WHITE = 60;
+
+constexpr uint32_t lightweaverFullWhiteMilliamps(uint16_t pixels) {
+  return static_cast<uint32_t>(pixels) * LW_MILLIAMPS_PER_PIXEL_FULL_WHITE;
+}
+
+constexpr uint32_t lightweaverLimitedMilliamps(uint16_t pixels, uint32_t maxMilliamps) {
+  return lightweaverFullWhiteMilliamps(pixels) < maxMilliamps
+      ? lightweaverFullWhiteMilliamps(pixels)
+      : maxMilliamps;
+}
+
+static_assert(lightweaverLimitedMilliamps(LW_MAX_PIXELS, LW_DEFAULT_MAX_MILLIAMPS) ==
+              LW_DEFAULT_MAX_MILLIAMPS,
+              "1024-pixel full-white estimate must be clamped to the default current cap");
 
 // One Art-Net universe → contiguous pixel range mapping. A single Madrix
 // patch typically streams several universes back-to-back; the card decodes
@@ -78,12 +97,20 @@ struct WiringSafetyStatus {
   uint32_t remainingProbationMs = 0;
 };
 
+struct OutputSegmentConfig {
+  String id;
+  uint16_t count = 0;
+  bool reversed = false;
+};
+
 struct OutputConfig {
   String id;
   String name;
   uint8_t pin = 0;
   uint16_t pixels = 0;
   uint16_t start = 0;
+  OutputSegmentConfig segments[LW_MAX_OUTPUT_SEGMENTS];
+  uint8_t segmentCount = 0;
   bool enabled = false;
 };
 
@@ -178,13 +205,15 @@ struct RuntimeConfig {
   String projectFingerprint;
   String productionJobId;
   String productionJobDigest;
+  uint32_t wiringRevision = 0;
+  String wiringDigest;
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;
-  // Optional total current ceiling (5V rail, milliamps) for FastLED's automatic
-  // power limiter. 0 = disabled (no cap). Set to the PSU rating to prevent
-  // full-white brownout resets.
-  uint32_t maxMilliamps = 0;
+  // Aggregate total current ceiling (5V rail, milliamps) for FastLED's
+  // automatic power limiter. Production configs must explicitly provide a
+  // value; legacy/non-production configs retain this conservative fallback.
+  uint32_t maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   OutputConfig outputs[LW_MAX_OUTPUTS];
   uint8_t outputCount = 0;
   LookConfig looks[LW_MAX_LOOKS];

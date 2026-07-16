@@ -19,11 +19,14 @@ async function productionJob() {
   const restoreSnapshot = {
     version: 4, id: 'moon-01', name: 'Moon',
     layout: {
-      strips: [{ id: 'strip-1', name: 'Outer ring', pixelCount: 8 }], patchBoard: null,
+      strips: [{ id: 'strip-1', name: 'Outer ring', pixelCount: 5 }, { id: 'strip-2', name: 'Inner ring', pixelCount: 3 }], patchBoard: null,
       wiring: {
         version: 1, locked: true, verified: true, controllerAnchor: null, migrationWarnings: [],
-        outputs: [{ id: 'out1', name: 'Outer ring', pin: 16, runIds: ['run-strip-1'] }],
-        runs: [{ id: 'run-strip-1', type: 'strip', verified: true, source: { stripId: 'strip-1', from: 0, to: 7 }, directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null }],
+        outputs: [{ id: 'out1', name: 'Two rings', pin: 16, runIds: ['run-strip-1', 'run-strip-2'] }],
+        runs: [
+          { id: 'run-strip-1', type: 'strip', verified: true, source: { stripId: 'strip-1', from: 0, to: 4 }, directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null },
+          { id: 'run-strip-2', type: 'strip', verified: true, source: { stripId: 'strip-2', from: 0, to: 2 }, directionPolicy: 'flexible', physicalDirection: 'source-reverse', seamLed: null },
+        ],
       },
     },
     devices: { standaloneController },
@@ -38,7 +41,7 @@ async function productionJob() {
     schemaVersion: 1, jobId: 'moon-batch-7', label: 'Moon · batch 7', artwork: 'Moon', batch: '7',
     firmware: { target: 'esp32-s3-n16r8', version: '1.0.0', buildId: 'f5625d5970bd9e737889977f83efa25562c430f0', minimumVersion: '1.0.0' },
     project: { id: 'moon-01', revision: 12, fingerprint, restoreSnapshot }, configuration,
-    expectedOutputs: [{ id: 'out1', label: 'Outer ring', pin: 16, pixels: 8, direction: 'forward', colorOrder: 'GRB' }],
+    expectedOutputs: [{ id: 'out1', label: 'Two rings', pin: 16, pixels: 8, direction: 'mixed', colorOrder: 'GRB' }],
   });
 }
 
@@ -64,16 +67,20 @@ async function reachPassRecord(page) {
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
-  await page.getByLabel(/Outer ring/).check();
-  await page.getByRole('button', { name: 'All outputs look correct' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('button', { name: 'Continue to pass record' }).click();
 }
 
 async function installDriver(page, {
   wrongReconnect = false, wrongLanCard = false, wrongBeforeRestore = false,
   preflightCurrent = false, preflightThrowsOnce = false, preflightMissingOnce = false,
   restoreThrows = false, invalidInspection = false, recordThrowsOnce = false, recordDelayMs = 0,
+  candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
+  activationFailure = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryDelayMs = 0,
 } = {}) {
-  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs }) => {
+  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion: '1.0.0',
@@ -87,8 +94,76 @@ async function installDriver(page, {
       noteLanHandoff: () => localStorage.setItem('lw_test_lan_handoff_count', String(Number(localStorage.getItem('lw_test_lan_handoff_count') || 0) + 1)),
       inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: invalidInspection ? '4MB' : '16MB' }),
       install: async ({ onProgress }) => { localStorage.setItem('lw_test_install_count', String(Number(localStorage.getItem('lw_test_install_count') || 0) + 1)); onProgress(1); },
+      startPhysical: async ({ frame, output, generation }) => {
+        if (physicalDeliveryDelayMs) await new Promise(resolve => setTimeout(resolve, physicalDeliveryDelayMs));
+        if (physicalDeliveryFailure) return { ok: false, generation };
+        const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || 'null');
+        const current = JSON.parse(localStorage.getItem('lw_test_current_config') || 'null');
+        const activeConfig = candidate?.config || current;
+        const configured = activeConfig?.led?.outputs?.find(item => item.id === output.id);
+        const physical = [...frame];
+        if (configured?.segments) {
+          const outputs = activeConfig.led.outputs;
+          let start = outputs.slice(0, outputs.findIndex(item => item.id === output.id)).reduce((sum, item) => sum + item.pixels, 0);
+          for (const segment of configured.segments) {
+            if (segment.direction === 'reverse') physical.splice(start, segment.count, ...physical.slice(start, start + segment.count).reverse());
+            start += segment.count;
+          }
+        }
+        localStorage.setItem('lw_test_physical_frame', JSON.stringify(physical)); return { ok: true, generation };
+      },
+      stageCandidate: async candidate => {
+        const history = JSON.parse(localStorage.getItem('lw_test_candidate_history') || '[]'); history.push(candidate);
+        localStorage.setItem('lw_test_candidate_history', JSON.stringify(history));
+        const activationId = `candidate-production-${history.length}`;
+        localStorage.setItem('lw_test_candidate', JSON.stringify({ ...candidate, state: 'staged', activationId }));
+        return { state: 'staged', activationId };
+      },
+      readCandidateEvidence: async activationId => {
+        const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || '{}');
+        return { app: 'Lightweaver', state: 'staged', activationId, ...evidence, projectFingerprint: candidateEvidenceMismatch ? 'f'.repeat(16) : evidence.projectFingerprint, colorOrder: candidate.config?.led?.colorOrder, maxMilliamps: candidate.config?.led?.maxMilliamps, wiringRevision: candidate.config?.wiringRevision, wiringDigest: candidate.config?.wiringDigest, candidateOutputs: candidate.config?.led?.outputs || [] };
+      },
+      activateCandidate: async activationId => {
+        if (activationFailure) throw new Error('Candidate activation failed');
+        const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || '{}');
+        localStorage.setItem('lw_test_candidate', JSON.stringify({ ...candidate, state: 'testing', activationId }));
+        return { state: 'testing', activationId, remainingMs: 90000 };
+      },
+      confirmCandidate: async activationId => {
+        const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || '{}');
+        localStorage.setItem('lw_test_current_config', JSON.stringify(candidate.config || null));
+        localStorage.removeItem('lw_test_candidate');
+        return { state: 'known-good', activationId };
+      },
+      readWiringStatus: async () => {
+        localStorage.setItem('lw_test_wiring_status_count', String(Number(localStorage.getItem('lw_test_wiring_status_count') || 0) + 1));
+        const rebootReads = Number(localStorage.getItem('lw_test_rollback_reboot_reads') || 0);
+        if (rebootReads > 0) {
+          localStorage.setItem('lw_test_rollback_reboot_reads', String(rebootReads - 1));
+          throw new Error('Card is restarting after rollback');
+        }
+        const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || 'null');
+        const current = JSON.parse(localStorage.getItem('lw_test_current_config') || '{}');
+        return {
+          state: candidate?.state || 'known-good', activationId: candidate?.activationId, ...evidence,
+          projectRevision: current?.projectRevision ?? evidence.projectRevision,
+          projectFingerprint: current?.projectFingerprint || evidence.projectFingerprint,
+          productionJobId: current?.productionJobId || evidence.productionJobId,
+          productionJobDigest: current?.productionJobDigest || evidence.productionJobDigest,
+          colorOrder: current?.led?.colorOrder, maxMilliamps: current?.led?.maxMilliamps,
+          wiringRevision: current?.wiringRevision, wiringDigest: current?.wiringDigest, outputs: current?.led?.outputs || [],
+        };
+      },
+      rollbackCandidate: async activationId => {
+        localStorage.setItem('lw_test_rollback_count', String(Number(localStorage.getItem('lw_test_rollback_count') || 0) + 1));
+        if (rollbackFailure) throw new Error('Rollback transport failed');
+        localStorage.removeItem('lw_test_candidate');
+        if (rollbackRebootReads) localStorage.setItem('lw_test_rollback_reboot_reads', String(rollbackRebootReads));
+        return { state: 'rolled-back', activationId };
+      },
       restore: async configuration => {
         localStorage.setItem('lw_test_restore_count', String(Number(localStorage.getItem('lw_test_restore_count') || 0) + 1));
+        localStorage.setItem('lw_test_current_config', JSON.stringify(configuration.config));
         evidence.projectFingerprint = configuration.config.projectFingerprint;
         evidence.productionJobDigest = configuration.config.productionJobDigest;
         if (restoreThrows) throw new Error('Response lost after card accepted restore');
@@ -115,10 +190,21 @@ async function installDriver(page, {
         }
         if (phase === 'reconnect') return { ...evidence, cardId: wrongReconnect ? 'lw-wrong-card' : evidence.cardId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
         if (phase === 'before-restore') return { ...evidence, cardId: wrongBeforeRestore ? 'lw-wrong-before-restore' : evidence.cardId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
+        if (phase === 'physical') {
+          const current = JSON.parse(localStorage.getItem('lw_test_current_config') || '{}');
+          return {
+          ...evidence, projectRevision: current?.projectRevision ?? evidence.projectRevision,
+          projectFingerprint: current?.projectFingerprint || evidence.projectFingerprint,
+          productionJobId: current?.productionJobId || evidence.productionJobId,
+          productionJobDigest: current?.productionJobDigest || evidence.productionJobDigest,
+          cardId: physicalIdentityMismatch ? 'lw-other-card' : evidence.cardId,
+          firmwareVersion: physicalFirmwareMismatch ? '0.8.0' : evidence.firmwareVersion,
+          };
+        }
         return evidence;
       },
     };
-  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs });
+  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs });
 }
 
 test('worker completes one verified job, retains its pass, and Next artwork resets transient state', async ({ page }) => {
@@ -135,8 +221,10 @@ test('worker completes one verified job, retains its pass, and Next artwork rese
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
-  await page.getByLabel(/Outer ring/).check();
-  await page.getByRole('button', { name: 'All outputs look correct' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('button', { name: 'Continue to pass record' }).click();
   await page.getByLabel('Worker initials or ID').fill('AR');
   await page.getByRole('button', { name: 'Save pass record' }).click();
   await expect(page.getByText('Artwork passed')).toBeVisible();
@@ -147,6 +235,269 @@ test('worker completes one verified job, retains its pass, and Next artwork rese
   await expect(page.evaluate(() => localStorage.getItem('lw_test_restore_count'))).resolves.toBe('1');
   expect(job.digest).toHaveLength(64);
 });
+
+test('physical diagnosis is bounded, requires worker observation, and reverse is an acknowledged reboot-safe candidate', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_physical_frame'))).not.toBeNull();
+  const initial = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_physical_frame') || '[]'));
+  expect(initial).toHaveLength(8);
+  expect(initial[0]).toBe('000020');
+  expect(initial[4]).toBe('200000');
+  expect(initial.slice(1, 4)).toEqual(Array(3).fill('020202'));
+  expect(initial.slice(5)).toEqual(Array(3).fill('000000'));
+  const outerTab = page.getByRole('tab', { name: /Outer ring/ });
+  const innerTab = page.getByRole('tab', { name: /Inner ring/ });
+  await outerTab.focus();
+  await page.keyboard.press('End');
+  await expect(innerTab).toBeFocused();
+  await expect(innerTab).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Home');
+  await expect(outerTab).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
+  await page.setViewportSize({ width: 420, height: 900 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.getByRole('button', { name: 'Blue / red swapped' }).click();
+  await page.getByRole('button', { name: 'Try opposite direction' }).click();
+  await expect(page.getByText(/Temporary boundary test/)).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
+  const candidate = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_candidate') || '{}'));
+  expect(candidate.rollbackAfterMs).toBe(90_000);
+  expect(candidate.config.led.outputs[0].segments[0].direction).toBe('reverse');
+  expect(candidate.config.led.outputs[0].segments[1].direction).toBe('reverse');
+  const reversed = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_physical_frame') || '[]'));
+  expect(reversed[0]).toBe('200000');
+  expect(reversed[4]).toBe('000020');
+  expect(reversed.slice(5)).toEqual(Array(3).fill('000000'));
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await expect(page.getByText('You physically confirmed this boundary.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toBeVisible();
+});
+
+test('sequential boundary corrections preserve the previously confirmed count', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Blue / red swapped' }).click();
+  await page.getByRole('button', { name: 'Try opposite direction' }).click();
+
+  const history = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_candidate_history') || '[]'));
+  expect(history).toHaveLength(2);
+  expect(history[0].config.led.outputs[0].segments[0].count).toBe(6);
+  expect(history[1].config.led.outputs[0].segments[0].count).toBe(6);
+  expect(history[1].config.led.outputs[0].segments[1].direction).toBe('forward');
+});
+
+test('confirmed count correction is saved with final boundary hardware facts', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('button', { name: 'Continue to pass record' }).click();
+  await page.getByLabel('Worker initials or ID').fill('AR');
+  await page.getByRole('button', { name: 'Save pass record' }).click();
+  const records = await page.evaluate(async () => (await import('/src/lib/productionRecords.js')).readProductionRecords());
+  expect(records).toHaveLength(1);
+  const finalDigest = records[0].physicalResults[0].wiringDigest;
+  expect(finalDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect(records[0].physicalResults).toEqual([
+    { boundaryId: 'run-strip-1', result: 'correct', activationId: 'candidate-production-1', count: 6, pin: 16, direction: 'forward', colorOrder: 'GRB', wiringRevision: 2, wiringDigest: finalDigest },
+    { boundaryId: 'run-strip-2', result: 'correct', count: 3, pin: 16, direction: 'reverse', colorOrder: 'GRB', wiringRevision: 2, wiringDigest: finalDigest },
+  ]);
+});
+
+test('save pass re-proves exact final wiring and rejects every post-check mutation', async ({ page }) => {
+  await serveJob(page); await installDriver(page);
+  await page.goto('/#screen=production');
+  await reachPassRecord(page);
+  await page.getByLabel('Worker initials or ID').fill('AR');
+  const baseline = await page.evaluate(() => localStorage.getItem('lw_test_current_config'));
+  expect(baseline).not.toBeNull();
+
+  for (const mutation of ['revision', 'digest', 'output', 'color']) {
+    await page.evaluate(({ baselineConfig, mutationKind }) => {
+      const config = JSON.parse(baselineConfig);
+      if (mutationKind === 'revision') config.wiringRevision += 1;
+      if (mutationKind === 'digest') config.wiringDigest = 'c'.repeat(64);
+      if (mutationKind === 'output') config.led.outputs[0].pin += 1;
+      if (mutationKind === 'color') config.led.colorOrder = 'RGB';
+      localStorage.setItem('lw_test_current_config', JSON.stringify(config));
+    }, { baselineConfig: baseline, mutationKind: mutation });
+    await page.getByRole('button', { name: 'Save pass record' }).click();
+    await expect(page.getByRole('alert')).toContainText('Final wiring read-back did not match');
+    await expect(page.getByRole('button', { name: 'Re-run physical checks' })).toBeVisible();
+    expect(await page.evaluate(async () => (await import('/src/lib/productionRecords.js')).readProductionRecords())).toHaveLength(0);
+    await page.evaluate(value => localStorage.setItem('lw_test_current_config', value), baseline);
+  }
+
+  await page.getByRole('button', { name: 'Save pass record' }).click();
+  await expect(page.getByText('Artwork passed')).toBeVisible();
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRecords.js')).readProductionRecords())).toHaveLength(1);
+});
+
+test('reload during a temporary correction waits through rollback reboot before any new physical frame', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, rollbackRebootReads: 2 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await expect(page.getByText(/Temporary boundary test/)).toBeVisible();
+  await page.evaluate(() => localStorage.removeItem('lw_test_physical_frame'));
+
+  await page.reload();
+  await expect(page.getByText('Test delivered to this exact boundary. Look at the real LEDs — this is not a pass.')).toBeVisible();
+  expect(await page.evaluate(() => ({ rollback: localStorage.getItem('lw_test_rollback_count'), candidate: localStorage.getItem('lw_test_candidate') }))).toEqual({ rollback: '1', candidate: null });
+  const frame = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_physical_frame') || '[]'));
+  expect(frame).toHaveLength(8);
+});
+
+test('reload after a confirmed count correction restores exact progress and wiring identity', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await expect(page.getByText('You physically confirmed this boundary.')).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText('You physically confirmed this boundary.')).toBeVisible();
+  await expect(page.getByText(/Pixel 6 red/)).toBeVisible();
+  const current = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_current_config') || '{}'));
+  expect(current.wiringRevision).toBe(2);
+  expect(current.wiringDigest).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test('failed physical delivery never unlocks worker observations', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, physicalDeliveryFailure: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await expect(page.getByText('The test did not reach the LEDs.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Red end is off' })).toBeDisabled();
+});
+
+test('count correction invalidates a previously checked downstream boundary before completion', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Outer ring/ }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeVisible();
+});
+
+test('candidate evidence mismatch is rejected before activation', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, candidateEvidenceMismatch: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await expect(page.getByRole('alert')).toContainText('Staged candidate evidence did not match');
+  await expect(page.getByText(/Temporary boundary test/)).toHaveCount(0);
+  expect(await page.evaluate(() => ({ rollback: localStorage.getItem('lw_test_rollback_count'), status: localStorage.getItem('lw_test_wiring_status_count') }))).toEqual({ rollback: '1', status: '2' });
+});
+
+test('candidate activation failure rolls back the exact staged activation and proves known-good independently', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, activationFailure: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await expect(page.getByRole('alert')).toContainText('Candidate activation failed');
+  expect(await page.evaluate(() => ({ rollback: localStorage.getItem('lw_test_rollback_count'), status: localStorage.getItem('lw_test_wiring_status_count') }))).toEqual({ rollback: '1', status: '2' });
+  await expect(page.getByText('Temporary candidate cleanup required')).toHaveCount(0);
+});
+
+test('failed candidate rollback stays visibly locked with an actionable retry', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true, candidateEvidenceMismatch: true, rollbackFailure: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await expect(page.getByText('Temporary candidate cleanup required')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore last confirmed wiring' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
+});
+
+for (const [kind, options] of [
+  ['identity', { physicalIdentityMismatch: true }],
+  ['firmware', { physicalFirmwareMismatch: true }],
+] as const) {
+  test(`physical ${kind} failure exposes the safe recovery handoff`, async ({ page }) => {
+    await serveJob(page); await installDriver(page, { preflightCurrent: true, ...options });
+    await page.goto('/#screen=production');
+    await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+    await page.getByRole('button', { name: 'Connect one USB card' }).click();
+    await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+    await page.getByRole('button', { name: 'Load verified artwork' }).click();
+    await page.getByRole('button', { name: 'Verify card read-back' }).click();
+    await page.getByRole('button', { name: 'Stop test and continue safely' }).click();
+    await expect(page.getByRole('button', { name: kind === 'identity' ? 'Load verified artwork' : 'Connect one USB card' })).toBeVisible();
+    expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().state)).toBe(kind === 'identity' ? 'restore' : 'connect-card');
+  });
+}
 
 test('interrupted restore resumes at read-back and never restores twice', async ({ page }) => {
   await serveJob(page); await installDriver(page);

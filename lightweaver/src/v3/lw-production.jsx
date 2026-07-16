@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ProductionJobPicker } from '../components/production/ProductionJobPicker.jsx';
 import { ProductionPassRecord } from '../components/production/ProductionPassRecord.jsx';
+import { ProductionPhysicalTest } from '../components/production/ProductionPhysicalTest.jsx';
 import { clearCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readCardProjectEvidence, pushConfigToCard } from '../lib/cardPushClient.js';
+import { getCardWiringStatus } from '../lib/cardWiringSafety.js';
 import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
 import { flashFirmwareAndRelease } from '../lib/flashWorkflow.js';
 import { validateInstallHardware, validateProductionInstallRelease } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { appendProductionRecord, readProductionRecords } from '../lib/productionRecords.js';
+import { assertProductionFinalWiringStatus } from '../lib/productionPhysicalTest.js';
 import {
   PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY,
   PRODUCTION_RUN_SLOT_A_KEY, PRODUCTION_RUN_SLOT_B_KEY,
@@ -67,6 +70,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
   const [workerId, setWorkerId] = useState('');
   const [observations, setObservations] = useState({});
   const [recordRefresh, setRecordRefresh] = useState(0);
+  const [recordRecoveryNeeded, setRecordRecoveryNeeded] = useState(false);
   const primaryRef = useRef(null);
   const actionRef = useRef(null);
   const loaderRef = useRef(null);
@@ -140,7 +144,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     }
 
     setJob(selected); setRun(preparedRun); setStatus(preparedStatus);
-    setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected'); setObservations({}); restoreStartedRef.current = false;
+    setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected'); setObservations({}); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
     const hash = new URLSearchParams(window.location.hash.slice(1));
     hash.set('screen', 'production'); hash.set('job', selected.jobId);
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${hash}`);
@@ -319,8 +323,10 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     finally { setBusy(false); }
   }
 
-  async function continueAfterLights() {
-    if (!job.expectedOutputs.every(output => observations[output.id])) return;
+  async function continueAfterLights(results = observations) {
+    if (!Array.isArray(results) || !results.length || !results.every(result => result?.result === 'correct')) return;
+    setObservations(results);
+    setRecordRecoveryNeeded(false);
     await advance('record');
     setStatus('Physical observations are complete. Enter the worker identifier and save the pass.');
   }
@@ -331,6 +337,14 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     try {
       const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('record') : await readCardProjectEvidence({ host: cardHost });
       if (!exactEvidence(evidence, job, run.expectedCardId, release.value)) throw new Error('The final card identity changed.');
+      const driver = testDriver();
+      const wiringStatus = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: cardHost });
+      assertProductionFinalWiringStatus({
+        status: wiringStatus, job, cardId: run.expectedCardId,
+        firmwareVersion: release.value.manifest.firmwareVersion, buildId: release.value.manifest.buildId,
+        physicalResults: observations,
+      });
+      setRecordRecoveryNeeded(false);
       const existing = readProductionRecords().some(record => record.runId === run.runId);
       if (!existing) {
         appendProductionRecord({
@@ -338,7 +352,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
           cardId: evidence.cardId, firmwareVersion: evidence.firmwareVersion, firmwareBuildId: evidence.buildId,
           projectRevision: evidence.projectRevision, projectFingerprint: evidence.projectFingerprint,
           restoredControls: Object.keys(job.configuration.config.controls || {}).filter(key => job.configuration.config.controls[key] !== -1),
-          physicalResults: job.expectedOutputs.map(output => ({ output: output.id, result: 'correct' })),
+          physicalResults: observations,
           activationConfirmed: true, workerId: workerId.trim(), passedAt: new Date().toISOString(),
         });
       }
@@ -346,6 +360,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       setRecordRefresh(value => value + 1);
       setStatus('Pass recorded on this browser. Export records before changing computers.');
     } catch (reason) {
+      if (reason?.recoveryAction === 'rerun-lights') setRecordRecoveryNeeded(true);
       setError(`Pass was not completed. ${reason?.message || 'Local record storage or card read-back failed.'} Your checks remain here; fix the issue and save again.`);
     } finally {
       savingPassRef.current = false; setBusy(false);
@@ -363,7 +378,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     const hash = new URLSearchParams(window.location.hash.slice(1)); hash.delete('job'); hash.set('screen', 'production');
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${hash}`);
     setJob(null); setRun(null); setRelease({ state: 'idle', value: null, error: '' }); setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected');
-    setObservations({}); setWorkerId(''); setProgress(0); setError(''); restoreStartedRef.current = false;
+    setObservations({}); setWorkerId(''); setProgress(0); setError(''); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
     setStatus(nextStatus);
   }
 
@@ -376,6 +391,34 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
 
   async function nextArtwork() {
     await resetTransient('Ready for the next artwork. The completed pass records were kept.');
+  }
+
+  async function handlePhysicalRecovery(action) {
+    if (busy || !['restore-project', 'signed-firmware-recovery', 'rerun-lights'].includes(action)) return;
+    setBusy(true); setError('');
+    try {
+      const target = action === 'restore-project' ? 'restore' : action === 'rerun-lights' ? 'check-lights' : 'connect-card';
+      const updated = await updateProductionRunAtomically(current => {
+        const recovery = transitionProductionRun(current, 'recovery', { correlation: correlation(current), recoveryAction: action, usbReleased: true });
+        return transitionProductionRun(recovery, target, { correlation: correlation(recovery), usbReleased: true });
+      });
+      setRun(updated); setObservations({}); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
+      if (target === 'restore') {
+        setStatus('Physical verification stopped. Load the exact verified artwork again, then independently verify the card.');
+      } else if (target === 'check-lights') {
+        setStatus('Final card wiring changed. Re-check every physical boundary before saving a pass.');
+      } else {
+        const driver = testDriver();
+        await (driver?.disconnect
+          ? driver.disconnect({ loader: loaderRef.current, transport: transportRef.current })
+          : disconnectESP(loaderRef.current, transportRef.current)).catch(() => {});
+        loaderRef.current = null; transportRef.current = null;
+        setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected');
+        setStatus('Firmware evidence changed. Reconnect the same USB card and inspect it before any firmware decision.');
+      }
+    } catch (reason) {
+      setError(`Safe recovery could not be saved. The light test remains stopped. ${reason?.message || reason}`);
+    } finally { setBusy(false); }
   }
 
   if (!cap.canProductionWebSerial) {
@@ -414,8 +457,8 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
                 {run?.state === 'reconnect' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={reconnectAfterInstall}>{busy ? 'Checking same card…' : 'Reconnect same card'}</button>}
                 {run?.state === 'restore' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || restoreStartedRef.current} onClick={restoreArtwork}>{busy ? 'Loading artwork once…' : 'Load verified artwork'}</button>}
                 {run?.state === 'verify-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={verifyCard}>{busy ? 'Reading card…' : 'Verify card read-back'}</button>}
-                {run?.state === 'check-lights' && <div className="prod-output-list">{job.expectedOutputs.map(output => <label key={output.id}><input type="checkbox" checked={Boolean(observations[output.id])} onChange={event => setObservations(value => ({ ...value, [output.id]: event.target.checked }))} /><span><strong>{output.label}</strong><small>GPIO {output.pin} · {output.pixels} pixels · blue first / red last</small></span></label>)}<button className="btn primary" disabled={!job.expectedOutputs.every(output => observations[output.id])} onClick={continueAfterLights}>All outputs look correct</button></div>}
-                {run?.state === 'record' && <form className="prod-record-form" onSubmit={event => { event.preventDefault(); void savePass(); }}><label htmlFor="prod-worker">Worker initials or ID</label><input id="prod-worker" value={workerId} maxLength={80} onChange={event => setWorkerId(event.target.value)} /><button className="btn primary" disabled={!workerId.trim() || busy}>{busy ? 'Saving pass…' : 'Save pass record'}</button></form>}
+                {run?.state === 'check-lights' && <ProductionPhysicalTest job={job} runId={run.runId} cardHost={cardHost} expectedCardId={run.expectedCardId} onResultsChange={setObservations} onComplete={continueAfterLights} onRecovery={handlePhysicalRecovery} />}
+                {run?.state === 'record' && <><form className="prod-record-form" onSubmit={event => { event.preventDefault(); void savePass(); }}><label htmlFor="prod-worker">Worker initials or ID</label><input id="prod-worker" value={workerId} maxLength={80} onChange={event => setWorkerId(event.target.value)} /><button className="btn primary" disabled={!workerId.trim() || busy}>{busy ? 'Saving pass…' : 'Save pass record'}</button></form>{recordRecoveryNeeded && <button className="btn" type="button" disabled={busy} onClick={() => void handlePhysicalRecovery('rerun-lights')}>Re-run physical checks</button>}</>}
                 {run?.state === 'complete' && <div className="prod-complete"><strong>Artwork passed</strong><p>The card, exact job, and physical outputs were recorded.</p><button className="btn primary" onClick={nextArtwork}>Next artwork</button></div>}
                 {canChangeJob && <button className="btn prod-change-job" type="button" disabled={busy} onClick={changeJob}>Change job</button>}
                 {error && <p className="prod-error" role="alert">{error}</p>}

@@ -108,12 +108,15 @@ export function buildCardRuntimePackageFromProject({
       pixels: resolvedPixels,
       colorOrder: standaloneController?.led?.colorOrder,
       brightnessLimit: standaloneController?.led?.brightnessLimit,
+      maxMilliamps: standaloneController?.led?.maxMilliamps,
       outputs: outputs.length
         ? outputs.map((output, index) => ({
             id: output.id || `out${index + 1}`,
             name: output.name || `Output ${index + 1}`,
             pin: output.pin,
             pixels: output.pixels,
+            direction: output.direction || 'forward',
+            segments: output.segments || [{ id: `${output.id || `out${index + 1}`}-full`, count: output.pixels, direction: output.direction || 'forward' }],
           }))
         : undefined,
     },
@@ -166,6 +169,8 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
     name: 'Output 1',
     pin: firstOutput.pin ?? DEFAULT_CARD_LED.outputs[0].pin,
     pixels,
+    direction: firstOutput.direction || 'forward',
+    segments: firstOutput.segments || [{ id: 'out1-full', count: pixels, direction: firstOutput.direction || 'forward' }],
   }];
 }
 
