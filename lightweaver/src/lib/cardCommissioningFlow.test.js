@@ -379,8 +379,8 @@ test('two tabs keep exact active flows and share one durable restore lease', asy
   const storage = memoryStorage();
   const tabA = memoryStorage();
   const tabB = memoryStorage();
-  const a = completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-a-1234567890', now: 10 }), installed, { now: 20 });
-  const b = completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-b-1234567890', now: 11 }), installed, { now: 21 });
+  const a = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-a-1234567890', now: 10 }), installed, { now: 20 }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 25 }).flow;
+  const b = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-b-1234567890', now: 11 }), installed, { now: 21 }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 26 }).flow;
   const clockA = () => 30;
   const clockB = () => 31;
   await writeCardCommissioning(a, { storage, sessionStorage: tabA, tabId: 'tab-a', now: clockA, locks: null, delay: async () => {} });
@@ -404,6 +404,31 @@ test('restore claim makes one durable fenced transition before card mutation', a
   assert.deepEqual(await beginCardRestorationMutation(ready, claim.lease, { storage, locks: null }), { ok: false, reason: 'restore-claim-lost' });
   assert.equal(verifyCardRestorationMutation(ready, claim.lease.id, 'wrong-fence-123456', { storage }), false);
   assert.equal(readCardRestorationAttempt(ready, { storage, now: Date.now() + 10 * 60 * 1000 })?.phase, 'post-started');
+});
+
+test('authoritative canonical and staged completion invalidate stale claims and fences', async () => {
+  for (const mode of ['canonical', 'staged']) {
+    const storage = memoryStorage();
+    const sessionStorage = memoryStorage();
+    const flowId = `flow-stale-${mode}-123456`;
+    const ready = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId, now: 10 }), installed, { now: 20 }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 30 }).flow;
+    await writeCardCommissioning(ready, { storage, sessionStorage, locks: null });
+    const stale = JSON.parse(JSON.stringify(ready));
+    const staleClaim = await claimCardRestoration(stale, { storage, sessionStorage, ownerId: `restore-stale-${mode}`, locks: null });
+    const authoritative = readCardCommissioning({ storage, sessionStorage });
+    let completed;
+    if (mode === 'canonical') {
+      const evidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: authoritative.project.fingerprint, productionJobDigest: '' } });
+      completed = markCardProjectRestored(authoritative, evidence);
+    } else {
+      const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-stale-7', outputs: [] });
+      const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-stale-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: authoritative.project.fingerprint }) });
+      completed = stageCardProjectForPhysicalCheck(authoritative, bindCardWiringActivationEvidence(status, candidate));
+    }
+    await writeCardCommissioning(completed, { storage, sessionStorage, locks: null });
+    assert.deepEqual(await claimCardRestoration(stale, { storage, sessionStorage, ownerId: `restore-stale-again-${mode}`, locks: null }), { ok: false, reason: 'stale-flow' });
+    assert.deepEqual(await beginCardRestorationMutation(stale, staleClaim.lease, { storage, locks: null }), { ok: false, reason: 'restore-claim-lost' });
+  }
 });
 
 test('corrupt registry reports a stable recovery state', () => {

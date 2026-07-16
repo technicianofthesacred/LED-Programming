@@ -117,6 +117,7 @@ export function beginCardCommissioning({
   const preserve = strategy === 'preserve-in-place' && compatibilityVerified === true && routineUpdate === true && operation === 'install-current-release';
   return {
     version: VERSION,
+    registryGeneration: 0,
     flowType: flowType === 'production-job' ? 'production-job' : 'studio-project',
     flowId: text(flowId, 96),
     source,
@@ -317,6 +318,7 @@ function requireFlow(flow) {
     throw new Error('Invalid card commissioning progress');
   }
   if (flow.flowType !== undefined && !['studio-project', 'production-job'].includes(flow.flowType)) throw new Error('Invalid card commissioning type');
+  if (!Number.isSafeInteger(flow.registryGeneration ?? 0) || (flow.registryGeneration ?? 0) < 0) throw new Error('Invalid card commissioning generation');
   if (flow.flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(flow.project?.productionJobDigest || '')) throw new Error('Invalid card commissioning production job');
   if (flow.flowType !== 'production-job' && (flow.project?.productionJobDigest || '') !== '') {
     throw new Error('Invalid card commissioning production type invariant');
@@ -376,6 +378,7 @@ function parseRegistry(storage, now = Date.now()) {
         const lease = entry.restoreLease;
         const valid = lease && lease.flowId === flowId && lease.cardId === entry.flow.expectedCard?.id
           && lease.projectFingerprint === entry.flow.project.fingerprint && /^[A-Za-z0-9_-]{16,96}$/.test(lease.id || '')
+          && Number.isSafeInteger(lease.flowGeneration) && lease.flowGeneration === (entry.flow.registryGeneration ?? 0)
           && ['claimed', 'mutating'].includes(lease.state) && Number.isSafeInteger(lease.expiresAt)
           && lease.expiresAt > now && lease.expiresAt <= now + RESTORE_LEASE_MS
           && (lease.state !== 'mutating' || /^[A-Za-z0-9_-]{16,96}$/.test(lease.fencingToken || ''));
@@ -387,6 +390,7 @@ function parseRegistry(storage, now = Date.now()) {
         const attempt = entry.restoreAttempt;
         const valid = attempt.flowId === flowId && attempt.cardId === entry.flow.expectedCard?.id
           && attempt.projectFingerprint === entry.flow.project.fingerprint
+          && Number.isSafeInteger(attempt.flowGeneration) && attempt.flowGeneration === (entry.flow.registryGeneration ?? 0)
           && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.id || '') && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.fencingToken || '')
           && attempt.phase === 'post-started' && Number.isSafeInteger(attempt.startedAt) && attempt.startedAt >= entry.flow.createdAt
           && (attempt.activationId === '' || /^[A-Za-z0-9_-]{1,128}$/.test(attempt.activationId || ''));
@@ -467,6 +471,11 @@ export async function writeCardCommissioning(flow, { storage = defaultStorage(),
     const { registry } = parseRegistry(storage, timestamp);
     const baseRevision = registry.revision;
     const existing = registry.flows[flow.flowId];
+    const callerGeneration = flow.registryGeneration ?? 0;
+    const authoritativeGeneration = existing?.flow?.registryGeneration ?? 0;
+    if (existing && callerGeneration !== authoritativeGeneration) throw new Error('This card setup state is stale. Reload its authoritative progress before continuing.');
+    if (!existing && callerGeneration !== 0) throw new Error('This card setup generation has no authoritative registry entry.');
+    serializable.registryGeneration = authoritativeGeneration + 1;
     registry.flows[flow.flowId] = {
       flow: serializable, tabId: text(tabId, 96), expiresAt: timestamp + FLOW_TTL_MS,
       restoreLease: flow.stage === 'check-lights' ? null : existing?.restoreLease || null,
@@ -484,6 +493,7 @@ export async function writeCardCommissioning(flow, { storage = defaultStorage(),
     assertOwner?.();
     if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during mutation.');
     persistRegistry(storage, registry);
+    flow.registryGeneration = serializable.registryGeneration;
     sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
     notify(serializable);
     return true;
@@ -501,10 +511,15 @@ export async function claimCardRestoration(flow, { storage = defaultStorage(), s
   const { registry } = parseRegistry(storage, timestamp);
   const baseRevision = registry.revision;
   const entry = registry.flows[flow.flowId];
-  if (!entry || entry.flow.project.fingerprint !== flow.project.fingerprint || entry.flow.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
+  const authoritative = entry?.flow;
+  const authoritativeGeneration = authoritative?.registryGeneration ?? 0;
+  if (!entry || authoritative.project.fingerprint !== flow.project.fingerprint || authoritative.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
+  if ((flow.registryGeneration ?? 0) !== authoritativeGeneration) return { ok: false, reason: 'stale-flow' };
+  if (authoritative.stage !== 'set-up-card' || !authoritative.cardAcknowledgedAt
+    || authoritative.project.restoredAt || authoritative.project.pendingActivationId) return { ok: false, reason: 'not-eligible' };
   if (entry.restoreAttempt) return { ok: false, reason: 'recovery-required' };
   if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > timestamp) return { ok: false, reason: 'restore-in-progress' };
-  const lease = { id: ownerId, state: 'claimed', flowId: flow.flowId, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: timestamp + RESTORE_LEASE_MS };
+  const lease = { id: ownerId, state: 'claimed', flowId: flow.flowId, flowGeneration: authoritativeGeneration, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: timestamp + RESTORE_LEASE_MS };
   entry.restoreLease = lease;
   registry.revision = baseRevision + 1;
   assertOwner?.();
@@ -523,11 +538,14 @@ export async function beginCardRestorationMutation(flow, lease, { storage = defa
     const { registry } = parseRegistry(storage, timestamp);
     const baseRevision = registry.revision;
     const entry = registry.flows[flow.flowId];
-    if (!entry?.restoreLease || entry.restoreLease.id !== lease?.id || entry.restoreLease.state !== 'claimed') return { ok: false, reason: 'restore-claim-lost' };
+    if (!entry?.restoreLease || entry.restoreLease.id !== lease?.id || entry.restoreLease.state !== 'claimed'
+      || (flow.registryGeneration ?? 0) !== (entry.flow.registryGeneration ?? 0) || entry.restoreLease.flowGeneration !== (entry.flow.registryGeneration ?? 0)
+      || entry.flow.stage !== 'set-up-card' || !entry.flow.cardAcknowledgedAt) return { ok: false, reason: 'restore-claim-lost' };
     const fencingToken = makeFlowId();
     entry.restoreLease = { ...entry.restoreLease, state: 'mutating', fencingToken };
     entry.restoreAttempt = {
       id: entry.restoreLease.id, fencingToken, phase: 'post-started', flowId: flow.flowId,
+      flowGeneration: entry.flow.registryGeneration ?? 0,
       cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint,
       startedAt: timestamp, activationId: '',
     };
@@ -543,6 +561,8 @@ export function verifyCardRestorationMutation(flow, leaseId, fencingToken, { sto
   const entry = parseRegistry(storage, now).registry.flows[flow?.flowId];
   const lease = entry?.restoreLease;
   return Boolean(lease && lease.id === leaseId && lease.state === 'mutating' && lease.fencingToken === fencingToken
+    && lease.flowGeneration === (entry.flow.registryGeneration ?? 0) && (flow.registryGeneration ?? 0) === (entry.flow.registryGeneration ?? 0)
+    && entry.flow.stage === 'set-up-card' && entry.flow.cardAcknowledgedAt
     && lease.cardId === flow.expectedCard?.id && lease.projectFingerprint === flow.project?.fingerprint && lease.expiresAt > now);
 }
 

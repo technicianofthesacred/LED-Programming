@@ -204,9 +204,10 @@ test('desktop Bridge launch persists the project and commissioning flow without 
   const writeRace = target => target.evaluate(async () => {
     const { beginCardCommissioning, writeCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
     const suffix = window.name || (window.name = crypto.randomUUID().replaceAll('-', '').slice(0, 16));
-    const flow = beginCardCommissioning({
+    const flowId = `flow-race-${suffix}`;
+    const flow = (await import('/src/lib/cardCommissioningFlow.js')).readCardCommissioning({ flowId }) || beginCardCommissioning({
       source: 'web-serial', operation: 'install-current-release', projectRevision: 1,
-      flowId: `flow-race-${suffix}`,
+      flowId,
       projectRecord: { id: `record-${suffix}`, updatedAt: Date.now(), project: { version: 3, id: `project-${suffix}`, name: 'Race', layout: { strips: [], patchBoard: null, wiring: null }, devices: { standaloneController: {} } } },
     });
     return writeCardCommissioning(flow, { locks: null });
@@ -219,6 +220,42 @@ test('desktop Bridge launch persists the project and commissioning flow without 
     return Object.keys(registry.flows).filter(id => id.startsWith('flow-race-'));
   });
   expect(raceFlows).toHaveLength(2);
+  for (const mode of ['canonical', 'staged']) {
+    const flowId = await page.evaluate(async completionMode => {
+      const api = await import('/src/lib/cardCommissioningFlow.js');
+      const id = `flow-real-stale-${completionMode}`;
+      const projectRecord = { id: `record-${completionMode}`, updatedAt: Date.now(), project: { version: 3, id: `project-${completionMode}`, name: 'Stale', layout: { strips: [], patchBoard: null, wiring: null }, devices: { standaloneController: {} } } };
+      let flow = api.beginCardCommissioning({ source: 'web-serial', operation: 'install-current-release', projectRevision: 1, flowId: id, projectRecord });
+      flow = api.completeCardInstall(flow, { cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) });
+      flow = api.acknowledgeCommissionedCard(flow, { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) }).flow;
+      await api.writeCardCommissioning(flow, { locks: null });
+      return id;
+    }, mode);
+    const stale = await peer.evaluate(async id => {
+      const { readCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
+      return readCardCommissioning({ flowId: id });
+    }, flowId);
+    await page.evaluate(async ({ id, completionMode }) => {
+      const api = await import('/src/lib/cardCommissioningFlow.js');
+      const current = api.readCardCommissioning({ flowId: id });
+      let completed;
+      if (completionMode === 'canonical') {
+        const evidence = api.adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: current.expectedCard.id, firmwareVersion: current.expectedCard.firmwareVersion, buildId: current.expectedCard.buildId, projectRevision: current.project.revision, projectFingerprint: current.project.fingerprint, productionJobDigest: '' } });
+        completed = api.markCardProjectRestored(current, evidence);
+      } else {
+        const wiring = await import('/src/lib/cardWiringSafety.js');
+        const status = wiring.normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-real-stale', outputs: [] });
+        const candidate = await wiring.getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-real-stale', outputs: [], cardId: current.expectedCard.id, firmwareVersion: current.expectedCard.firmwareVersion, buildId: current.expectedCard.buildId, projectRevision: current.project.revision, projectFingerprint: current.project.fingerprint }) });
+        completed = api.stageCardProjectForPhysicalCheck(current, api.bindCardWiringActivationEvidence(status, candidate));
+      }
+      await api.writeCardCommissioning(completed, { locks: null });
+    }, { id: flowId, completionMode: mode });
+    const staleResult = await peer.evaluate(async staleFlow => {
+      const { claimCardRestoration } = await import('/src/lib/cardCommissioningFlow.js');
+      return claimCardRestoration(staleFlow, { locks: null });
+    }, stale);
+    expect(staleResult).toEqual({ ok: false, reason: 'stale-flow' });
+  }
   await peer.close();
 });
 
