@@ -11,9 +11,8 @@
 // Call setupWledRealtime() once from setup() after WiFi has joined.
 // Call handleWledRealtime() every loop() iteration. The listener will
 // mark the frame source as FRAME_WLED_REALTIME whenever it accepts a
-// packet, scale pixels by the customer's manualBrightness so the
-// downstream FastLED.setBrightness() compositing still feels right, and
-// otherwise stay silent.
+// packet and copy its RGB values unchanged; the shared output policy applies
+// brightness once when the frame is shown. Otherwise the listener stays silent.
 
 void setupWledRealtime(CRGB* leds, uint16_t totalPixels);
 void handleWledRealtime();
