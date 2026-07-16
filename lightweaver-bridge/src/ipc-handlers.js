@@ -5,6 +5,21 @@ const { isTrustedIpcEvent } = require('./security');
 
 const DESTRUCTIVE_OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
 const MAINTENANCE_OPERATIONS = new Set(['inspect-compatible-card', 'release-usb', 'restart-card']);
+const RECOVERED_DISMISSAL_FIELDS = Object.freeze([
+  'operation', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'resultIdentityHash', 'confirmed',
+]);
+
+function validRecoveredDismissal(value) {
+  return value && typeof value === 'object'
+    && Object.keys(value).sort().join(',') === [...RECOVERED_DISMISSAL_FIELDS].sort().join(',')
+    && value.confirmed === true && DESTRUCTIVE_OPERATIONS.has(value.operation)
+    && /^lw-[a-f0-9]{12}$/.test(value.cardId)
+    && /^[0-9A-Za-z.+-]{1,32}$/.test(value.firmwareVersion)
+    && /^[a-f0-9]{40}$/.test(value.buildId)
+    && /^[a-z0-9-]{1,64}$/.test(value.target)
+    && value.verification === 'flash-verified'
+    && /^[a-f0-9]{64}$/.test(value.resultIdentityHash);
+}
 
 function createIpcHandlers({
   getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {},
@@ -203,7 +218,7 @@ function createIpcHandlers({
     },
     'bridge:dismiss-recovered-result': async (event, confirmation) => {
       assertTrusted(event);
-      if (!confirmation || confirmation.confirmed !== true || Object.keys(confirmation).length !== 1) {
+      if (!validRecoveredDismissal(confirmation)) {
         throw new Error('Explicit recovered-result dismissal confirmation is required');
       }
       const dismissed = runner.dismissCompletedResult?.(confirmation) === true;

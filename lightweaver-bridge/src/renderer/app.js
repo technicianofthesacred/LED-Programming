@@ -31,9 +31,16 @@ const views = Object.freeze({
 let currentState = 'select-card';
 let confirmationToken = null;
 let selectedOperation = 'install-current-release';
+let recoveredDismissalContext = null;
+const recoveredResultFields = Object.freeze([
+  'operation', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'resultIdentityHash',
+]);
 
 function render(payload = {}) {
   currentState = views[payload.state] ? payload.state : 'recovery-required';
+  recoveredDismissalContext = currentState === 'recovered-result-pending'
+    ? Object.freeze(Object.fromEntries(recoveredResultFields.map(field => [field, payload[field]])))
+    : null;
   let [marker, title, fallbackMessage, button] = views[currentState];
   if (payload.nextAction === 'unplug-replug-card') {
     marker = 'Reconnect';
@@ -65,7 +72,7 @@ primaryAction.addEventListener('click', async () => {
     if (currentState === 'launch-expired') {
       render(await bridge.dismissExpiredLaunch());
     } else if (currentState === 'recovered-result-pending') {
-      render(await bridge.dismissRecoveredResult());
+      render(await bridge.dismissRecoveredResult(recoveredDismissalContext));
     } else if (currentState === 'callback-delivery-failed' || currentState === 'return-pending') {
       render(await bridge.retryStudioCallback());
     } else if (currentState === 'select-card' && ['inspect-compatible-card', 'release-usb', 'restart-card'].includes(selectedOperation)) {

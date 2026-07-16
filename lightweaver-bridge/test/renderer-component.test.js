@@ -20,22 +20,29 @@ test('recovered verified result requires a visible explicit dismissal and never 
   }
   let onResult;
   let dismissed = 0;
+  let dismissalContext;
   let hardware = 0;
   const bridge = {
     inspectCompatibleCard: async () => { hardware += 1; }, inspectForOperation: async () => { hardware += 1; },
     startOperation: async () => { hardware += 1; }, confirmDestructiveAction: async () => { hardware += 1; },
     runMaintenanceOperation: async () => { hardware += 1; }, cancelBeforeCriticalSection: async () => ({ cancelled: true }),
-    dismissRecoveredResult: async () => { dismissed += 1; return { state: 'select-card', message: 'Saved result dismissed.' }; },
+    dismissRecoveredResult: async context => { dismissed += 1; dismissalContext = context; return { state: 'select-card', message: 'Saved result dismissed.' }; },
     onResult(listener) { onResult = listener; }, onProgress() {}, onCallbackDelivery() {}, onLaunchRequest() {},
   };
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
   vm.runInNewContext(source, { window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) } });
-  onResult({ state: 'recovered-result-pending', verification: 'flash-verified', message: 'Recovered verified result.' });
+  const recoveredContext = {
+    operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
+    buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    resultIdentityHash: 'b'.repeat(64),
+  };
+  onResult({ state: 'recovered-result-pending', message: 'Recovered verified result.', ...recoveredContext });
   assert.match(elements.get('#state-title').textContent, /recovered/i);
   assert.match(elements.get('#primary-action').textContent, /dismiss/i);
   assert.equal(dismissed, 0);
   await elements.get('#primary-action').listeners.get('click')();
   assert.equal(dismissed, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(dismissalContext)), recoveredContext);
   assert.equal(hardware, 0);
 });
 

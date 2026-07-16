@@ -205,14 +205,23 @@ test('completed recovered result can be explicitly dismissed through trusted IPC
   const { createOperationState } = require('../src/operation-state');
   const { window, event } = trustedWindowAndEvent();
   let dismissed = 0;
+  let dismissal;
+  const recoveredContext = {
+    operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
+    buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    resultIdentityHash: 'b'.repeat(64), confirmed: true,
+  };
   const handlers = createIpcHandlers({
     getActiveWindow: () => window, rendererPath, operation: createOperationState(),
-    runner: { dismissCompletedResult() { dismissed += 1; return true; } },
+    runner: { dismissCompletedResult(value) { dismissed += 1; dismissal = value; return true; } },
   });
-  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event, { confirmed: true }), { dismissed: true, state: 'select-card' });
+  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event, recoveredContext), { dismissed: true, state: 'select-card' });
   assert.equal(dismissed, 1);
+  assert.deepEqual(dismissal, recoveredContext);
   await assert.rejects(() => handlers['bridge:dismiss-recovered-result'](event), /confirmation/i);
-  await assert.rejects(() => handlers['bridge:dismiss-recovered-result']({ sender: window.webContents, senderFrame: { url: rendererUrl } }, { confirmed: true }), /untrusted/i);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result'](event, { ...recoveredContext, resultIdentityHash: 'invalid' }), /confirmation/i);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result'](event, { ...recoveredContext, extra: true }), /confirmation/i);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result']({ sender: window.webContents, senderFrame: { url: rendererUrl } }, recoveredContext), /untrusted/i);
   assert.equal(dismissed, 1);
 });
 
@@ -584,10 +593,15 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.equal('returnCode' in delivery, false);
   await exposed.retryStudioCallback();
   assert.deepEqual(invokes.at(-1), ['bridge:retry-callback', undefined]);
-  await exposed.dismissRecoveredResult();
+  const recoveredContext = {
+    operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
+    buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    resultIdentityHash: 'b'.repeat(64),
+  };
+  await exposed.dismissRecoveredResult(recoveredContext);
   assert.equal(invokes.at(-1)[0], 'bridge:dismiss-recovered-result');
-  assert.equal(invokes.at(-1)[1].confirmed, true);
-  assert.deepEqual(Object.keys(invokes.at(-1)[1]), ['confirmed']);
+  assert.deepEqual(JSON.parse(JSON.stringify(invokes.at(-1)[1])), { ...recoveredContext, confirmed: true });
+  await assert.rejects(() => exposed.dismissRecoveredResult({ ...recoveredContext, resultIdentityHash: 'invalid' }), /context/i);
 
   let received;
   const unsubscribe = exposed.onProgress((payload) => { received = payload; });

@@ -144,3 +144,24 @@ test('verified flash may retain its pending result before restart outcome is kno
   assert.doesNotThrow(() => journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() }));
   assert.equal(journal.load().restartResult, 'not-attempted');
 });
+
+test('recovery replacement failure retains prior journal bytes even after rename before directory fsync', () => {
+  const directory = temporaryDirectory();
+  const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  original.update({ mutationBoundary: 'erase-or-write-started', restartResult: 'unknown', usbOwnership: 'uncertain' });
+  const file = path.join(directory, 'operation-journal.json');
+  const before = fs.readFileSync(file);
+  let fsyncCalls = 0;
+  const failingFs = Object.create(fs);
+  failingFs.fsyncSync = descriptor => {
+    fsyncCalls += 1;
+    if (fsyncCalls === 2) throw new Error('directory fsync failed');
+    return fs.fsyncSync(descriptor);
+  };
+  const journal = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 2 });
+  assert.throws(() => journal.replaceForRecovery({
+    operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: 'b'.repeat(40),
+  }), /directory fsync failed/);
+  assert.deepEqual(fs.readFileSync(file), before);
+});

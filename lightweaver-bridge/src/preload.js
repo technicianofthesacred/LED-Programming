@@ -14,6 +14,23 @@ const STATES = new Set([
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 const RETURN_CODE_PATTERN = /^LW1-[A-Za-z0-9_-]{1,900}$/;
+const RECOVERED_RESULT_FIELDS = Object.freeze([
+  'operation', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'resultIdentityHash',
+]);
+
+function recoveredResultContext(value) {
+  if (!value || typeof value !== 'object' || Object.keys(value).sort().join(',') !== [...RECOVERED_RESULT_FIELDS].sort().join(',')
+    || !['install-current-release', 'recover-current-release'].includes(value.operation)
+    || !/^lw-[a-f0-9]{12}$/.test(value.cardId)
+    || !/^[0-9A-Za-z.+-]{1,32}$/.test(value.firmwareVersion)
+    || !/^[a-f0-9]{40}$/.test(value.buildId)
+    || !/^[a-z0-9-]{1,64}$/.test(value.target)
+    || value.verification !== 'flash-verified'
+    || !/^[a-f0-9]{64}$/.test(value.resultIdentityHash)) {
+    throw new TypeError('Invalid recovered-result dismissal context');
+  }
+  return Object.freeze(Object.fromEntries(RECOVERED_RESULT_FIELDS.map(field => [field, value[field]])));
+}
 
 function invokeOperation(operation) {
   if (typeof operation !== 'string' || !OPERATIONS.has(operation)) {
@@ -57,6 +74,8 @@ function sanitizePayload(value) {
   if (typeof source.buildId === 'string' && /^[a-f0-9]{40}$/.test(source.buildId)) result.buildId = source.buildId;
   if (typeof source.target === 'string' && /^[a-z0-9-]{1,64}$/.test(source.target)) result.target = source.target;
   if (source.verification === 'flash-verified' || source.verification === 'not-verified') result.verification = source.verification;
+  if (typeof source.operation === 'string' && OPERATIONS.has(source.operation)) result.operation = source.operation;
+  if (typeof source.resultIdentityHash === 'string' && /^[a-f0-9]{64}$/.test(source.resultIdentityHash)) result.resultIdentityHash = source.resultIdentityHash;
   if (source.physicalOutput === 'unconfirmed') result.physicalOutput = source.physicalOutput;
   if (source.pipelineComplete === false) result.pipelineComplete = false;
   if (typeof source.expectedCardId === 'string' && /^lw-[a-f0-9]{12}$/.test(source.expectedCardId)) result.expectedCardId = source.expectedCardId;
@@ -112,7 +131,13 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   cancelBeforeCriticalSection: () => ipcRenderer.invoke('bridge:cancel').then(sanitizeCancellation),
   retryStudioCallback: () => ipcRenderer.invoke('bridge:retry-callback').then(sanitizePayload),
   dismissExpiredLaunch: () => ipcRenderer.invoke('bridge:dismiss-expired-launch').then(sanitizePayload),
-  dismissRecoveredResult: () => ipcRenderer.invoke('bridge:dismiss-recovered-result', Object.freeze({ confirmed: true })).then(sanitizePayload),
+  dismissRecoveredResult: (context) => {
+    try {
+      return ipcRenderer.invoke('bridge:dismiss-recovered-result', Object.freeze({ ...recoveredResultContext(context), confirmed: true })).then(sanitizePayload);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  },
 }));
 
 ipcRenderer.send('bridge:preload-ready');

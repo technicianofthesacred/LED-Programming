@@ -145,13 +145,38 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
         || operation !== 'recover-current-release' || expectedCardId !== current.expectedCardId) {
         throw new Error('Operation journal cannot be replaced for recovery');
       }
+      const previousBytes = fs.readFileSync(file);
       const timestamp = now();
-      return persist({
-        version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
-        mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
-        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
-        timestamps: { createdAt: timestamp, updatedAt: timestamp },
-      });
+      try {
+        return persist({
+          version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
+          mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
+          restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
+          timestamps: { createdAt: timestamp, updatedAt: timestamp },
+        });
+      } catch (error) {
+        let temporary;
+        let descriptor;
+        try {
+          if (!fs.existsSync(file) || !fs.readFileSync(file).equals(previousBytes)) {
+            temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.restore.tmp`;
+            fs.writeFileSync(temporary, previousBytes, { mode: 0o600, flag: 'wx' });
+            descriptor = fs.openSync(temporary, 'r');
+            fs.fsyncSync(descriptor);
+            fs.closeSync(descriptor);
+            descriptor = undefined;
+            fs.renameSync(temporary, file);
+            try { fs.chmodSync(file, 0o600); } catch (chmodError) { if (process.platform !== 'win32') throw chmodError; }
+            const directoryDescriptor = fs.openSync(userDataPath, 'r');
+            try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
+          }
+        } catch {}
+        finally {
+          if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {}
+          if (temporary) try { fs.unlinkSync(temporary); } catch {}
+        }
+        throw error;
+      }
     },
     update(fields = {}) {
       if (!fields || typeof fields !== 'object' || Array.isArray(fields)

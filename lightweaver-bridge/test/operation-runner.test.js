@@ -94,6 +94,11 @@ function memoryJournal(initial = null) {
       record = { ...value, mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null };
       return record;
     },
+    replaceForRecovery(value) {
+      calls.push(['journal-replace', value]);
+      record = { ...value, mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null };
+      return record;
+    },
     update(value) { calls.push(['journal-update', value]); record = { ...record, ...value }; return record; },
     clear() { calls.push('journal-clear'); const present = Boolean(record); record = null; return present; },
     current() { return record; },
@@ -242,8 +247,9 @@ test('restart recovery never reflashes, preserves verified truth, and is idempot
   const h = harness({ journal });
   const first = await h.runner.recoverInterrupted();
   const second = await h.runner.recoverInterrupted();
-  assert.deepEqual(first, saved.pendingResult);
-  assert.deepEqual(second, saved.pendingResult);
+  const expected = { ...saved.pendingResult, ...h.runner.recoveredResultContext() };
+  assert.deepEqual(first, expected);
+  assert.deepEqual(second, expected);
   assert.equal(h.calls.filter(value => value === 'inspect').length, 2);
   assert.equal(h.calls.includes('connect-write'), false);
   assert.equal(h.calls.some(value => Array.isArray(value) && value[0] === 'write'), false);
@@ -292,7 +298,7 @@ test('journal clears only after acknowledgement or explicit safe dismissal of a 
     usbOwnership: 'uncertain', pendingResult: pendingResultForRunner(),
   });
   const runner = harness({ journal: complete }).runner;
-  assert.equal(runner.dismissCompletedResult({ confirmed: true }), true);
+  assert.equal(runner.dismissCompletedResult({ ...runner.recoveredResultContext(), confirmed: true }), true);
   assert.equal(complete.current(), null);
 });
 
@@ -362,6 +368,41 @@ test('recovery operation also retains uncertain ownership when reacquisition fai
   }), error => error.classification === 'usb-ownership-uncertain');
   assert.equal(journal.current().usbOwnership, 'uncertain');
   assert.equal(journal.calls.includes('journal-clear'), false);
+});
+
+test('failed recovery journal replacement retains prior post-mutation evidence and never clears it', async () => {
+  const prior = {
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'not-verified', restartResult: 'unknown',
+    usbOwnership: 'uncertain', pendingResult: null, completionCorrelation: null,
+  };
+  const journal = memoryJournal(prior);
+  journal.replaceForRecovery = value => { journal.calls.push(['journal-replace', value]); throw new Error('rename failed'); };
+  const h = harness({ journal });
+  const auth = await authorize(h, 'recover-current-release');
+  await assert.rejects(() => h.runner.execute({ operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken }), /rename failed/i);
+  assert.deepEqual(journal.current(), prior);
+  assert.equal(journal.calls.includes('journal-clear'), false);
+});
+
+test('explicit dismissal requires the exact displayed recovered-result identity and is one-shot', async () => {
+  const journalA = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'released', pendingResult: pendingResultForRunner(), completionCorrelation: null,
+  });
+  const runnerA = harness({ journal: journalA }).runner;
+  const displayedA = runnerA.recoveredResultContext();
+  assert.equal(runnerA.dismissCompletedResult({ ...displayedA, resultIdentityHash: 'f'.repeat(64), confirmed: true }), false);
+  assert.notEqual(journalA.current(), null);
+
+  const journalB = memoryJournal({ ...journalA.current(), expectedBuildId: 'b'.repeat(40), pendingResult: { ...pendingResultForRunner(), buildId: 'b'.repeat(40) } });
+  const runnerB = harness({ journal: journalB }).runner;
+  const displayedB = runnerB.recoveredResultContext();
+  assert.equal(runnerB.dismissCompletedResult({ ...displayedA, confirmed: true }), false);
+  assert.notEqual(journalB.current(), null);
+  assert.equal(runnerB.dismissCompletedResult({ ...displayedB, confirmed: true }), true);
+  assert.equal(runnerB.dismissCompletedResult({ ...displayedB, confirmed: true }), false);
 });
 
 test('a pending verified result blocks new preparation and cannot be cleared by another operation', async () => {
