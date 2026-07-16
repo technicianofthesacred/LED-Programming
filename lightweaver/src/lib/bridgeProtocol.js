@@ -25,6 +25,8 @@ const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
 const SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const BUILD_PATTERN = /^[a-f0-9]{40}$/;
+const FLOW_PATTERN = /^[A-Za-z0-9_-]{16,96}$/;
+const FINGERPRINT_PATTERN = /^[a-f0-9]{16,64}$/;
 
 function encodeBase64Url(bytes) {
   let binary = '';
@@ -56,13 +58,18 @@ function registryKeys(storage) {
 
 function validateRegistryRecords(records, totalBytes) {
   for (const record of records) {
+    const hasCorrelation = record?.flowId !== undefined || record?.projectFingerprint !== undefined || record?.expectedCardId !== undefined;
     const expectedKeys = [
       'createdAt', 'expiresAt', 'nonce', 'operation', 'tabId',
+      ...(hasCorrelation ? ['expectedCardId', 'flowId', 'projectFingerprint'] : []),
       ...(record?.receipt === undefined ? [] : ['receipt']),
       ...(record?.claimOwner === undefined ? [] : ['claimExpiresAt', 'claimOwner']),
     ].sort().join(',');
     if (!record || Object.keys(record).sort().join(',') !== expectedKeys
       || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
+      || (hasCorrelation && (!FLOW_PATTERN.test(record.flowId || '')
+        || !FINGERPRINT_PATTERN.test(record.projectFingerprint || '')
+        || (record.expectedCardId !== '' && !CARD_PATTERN.test(record.expectedCardId || ''))))
       || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
       || (record.claimOwner !== undefined && (record.receipt === undefined || !OWNER_PATTERN.test(record.claimOwner)
         || !Number.isSafeInteger(record.claimExpiresAt) || record.claimExpiresAt > record.expiresAt))
@@ -235,7 +242,21 @@ export function createBridgeLaunch(operation, dependencies = {}) {
   const bytes = new Uint8Array(32);
   cryptoApi.getRandomValues(bytes);
   const nonce = encodeBase64Url(bytes);
-  const pending = { operation, nonce, tabId, createdAt: timestamp, expiresAt: timestamp + TTL_MS };
+  const correlation = dependencies.correlation;
+  const hasCorrelation = correlation && typeof correlation === 'object';
+  if (hasCorrelation && (!FLOW_PATTERN.test(correlation.flowId || '')
+    || !FINGERPRINT_PATTERN.test(correlation.projectFingerprint || '')
+    || ((correlation.expectedCardId || '') !== '' && !CARD_PATTERN.test(correlation.expectedCardId)))) {
+    throw new Error('Bridge commissioning correlation is invalid');
+  }
+  const pending = {
+    operation, nonce, tabId, createdAt: timestamp, expiresAt: timestamp + TTL_MS,
+    ...(hasCorrelation ? {
+      flowId: correlation.flowId,
+      projectFingerprint: correlation.projectFingerprint,
+      expectedCardId: correlation.expectedCardId || '',
+    } : {}),
+  };
   writeRecord(localStorage, pending);
   try { readRegistry(localStorage); } catch (error) {
     removeRecord(localStorage, nonce);
@@ -329,6 +350,12 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
       const { nonce: _consumedNonce, receipt, ...safeResult } = result;
       return Object.freeze({
         operation: pending.operation, ...safeResult, originTabId: targetTabId, physicalProof: false,
+        ...(pending.flowId ? {
+          flowId: pending.flowId,
+          projectFingerprint: pending.projectFingerprint,
+          expectedCardId: pending.expectedCardId || safeResult.cardId || '',
+          acceptedResultId: receipt || pending.nonce,
+        } : {}),
         ...(receipt ? { ackReceipt: receipt } : {}),
       });
     };

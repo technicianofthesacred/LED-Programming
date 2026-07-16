@@ -90,6 +90,28 @@ test('launch never discards an unacknowledged pending correlation before creatin
   assert.deepEqual(calls, ['persist', 'create', 'navigate']);
 });
 
+test('a correlated failure remains reportable without inventing an expected card', async () => {
+  const { validateBridgeResultNotification } = await import('./bridgeLaunch.js');
+  const message = {
+    version: 1,
+    type: 'bridge-result',
+    deliveryId: 'delivery12345678',
+    targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+    operation: 'install-current-release',
+    status: 'recoverable-failure',
+    code: 'no-compatible-card',
+    target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified',
+    physicalOutput: 'unconfirmed',
+    ackReceipt: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
+    flowId: 'flow-tab-a-1234567890',
+    projectFingerprint: 'a'.repeat(16),
+    expectedCardId: '',
+    acceptedResultId: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
+  };
+  assert.ok(validateBridgeResultNotification(message));
+});
+
 test('target claims authority and durably saves a sanitized result before UI and acknowledgement', async () => {
   const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
   const storage = memoryStorage();

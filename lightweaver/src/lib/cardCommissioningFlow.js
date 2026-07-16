@@ -12,6 +12,7 @@ export const CARD_COMMISSIONING_CHANGED_EVENT = 'lightweaver-card-commissioning-
 const VERSION = 1;
 const SOURCES = new Set(['web-serial', 'native-bridge']);
 const OPERATIONS = new Set(['inspect-card', 'install-current-release', 'recover-current-release', 'release-usb', 'restart-card']);
+const CARD_RESTORATION_READBACKS = new WeakSet();
 
 function text(value, max = 128) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -85,6 +86,7 @@ export function beginCardCommissioning({
   projectRecord,
   projectRevision,
   installTarget = null,
+  productionJobDigest = '',
   flowId = makeFlowId(),
   now = Date.now(),
 } = {}) {
@@ -109,6 +111,7 @@ export function beginCardCommissioning({
       buildId: text(installTarget.buildId, 96),
     } : null,
     expectedCard: null,
+    acceptedResultId: '',
     cardAcknowledgedAt: null,
     lastConnectionIssue: '',
     project: {
@@ -116,6 +119,7 @@ export function beginCardCommissioning({
       recordUpdatedAt: Number(projectRecord.updatedAt) || Number(now),
       revision: Math.max(0, Number(projectRevision) || 0),
       fingerprint: fingerprintCommissioningProject(snapshot),
+      productionJobDigest: text(productionJobDigest, 64).toLowerCase(),
       snapshot,
       savedInBrowser: true,
       restoredAt: null,
@@ -129,6 +133,11 @@ export function completeCardInstall(flow, result = {}, { now = Date.now() } = {}
   requireFlow(flow);
   if (flow.stage !== 'install-safely' && flow.stage !== 'set-up-card') throw new Error('Card installation is not awaiting a verified result');
   if (result.operation && result.operation !== flow.operation) throw new Error('The install result does not match the active commissioning operation');
+  if (flow.source === 'native-bridge') {
+    if (text(result.flowId, 96) !== flow.flowId) throw new Error('The Bridge result does not match the active commissioning flow');
+    if (text(result.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The Bridge result does not match the active project fingerprint');
+    if (!/^[A-Za-z0-9_-]{16,96}$/.test(result.acceptedResultId || '')) throw new Error('The Bridge result is missing its accepted result identity');
+  }
   const expectedCard = {
     id: text(result.cardId || result.expectedCardId, 64),
     firmwareVersion: text(result.firmwareVersion, 48),
@@ -137,12 +146,16 @@ export function completeCardInstall(flow, result = {}, { now = Date.now() } = {}
   if (!expectedCard.id || !expectedCard.firmwareVersion || !expectedCard.buildId) {
     throw new Error('The verified install result is missing exact card or firmware identity');
   }
+  if (result.expectedCardId && text(result.expectedCardId, 64) !== expectedCard.id) {
+    throw new Error('The Bridge result does not match the expected card');
+  }
   return {
     ...clone(flow),
     stage: 'set-up-card',
     updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
     networkState: flow.strategy === 'preserve-in-place' ? 'preserved' : 'setup-required',
     expectedCard,
+    acceptedResultId: flow.source === 'native-bridge' ? text(result.acceptedResultId, 96) : '',
     cardAcknowledgedAt: null,
   };
 }
@@ -186,11 +199,39 @@ export function resumeInstalledCardAfterInterruption(flow, card = {}, { now = Da
   }, { now }) };
 }
 
+export function adaptCardRestorationReadback({ method, endpoint, response } = {}) {
+  if (method !== 'GET' || endpoint !== '/api/firmware-info' || !response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('Project restoration requires an independent firmware-info GET read-back');
+  }
+  const evidence = Object.freeze({
+    source: 'firmware-info-readback',
+    method: 'GET',
+    cardId: text(response.cardId || response.id, 64),
+    firmwareVersion: text(response.firmwareVersion, 48),
+    buildId: text(response.buildId || response.firmwareBuild || response.build, 96),
+    projectRevision: Number(response.projectRevision),
+    projectFingerprint: text(response.projectFingerprint, 64),
+    productionJobDigest: text(response.productionJobDigest, 64).toLowerCase(),
+  });
+  CARD_RESTORATION_READBACKS.add(evidence);
+  return evidence;
+}
+
 export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card' || !flow.cardAcknowledgedAt) throw new Error('The exact installed card must acknowledge its firmware before restoration');
+  if (!CARD_RESTORATION_READBACKS.has(acknowledgement)) {
+    throw new Error('Project restoration requires an independent card read-back');
+  }
   if (text(acknowledgement.cardId, 64) !== flow.expectedCard.id) throw new Error('Project restoration was not acknowledged by the expected card');
+  if (text(acknowledgement.firmwareVersion, 48) !== flow.expectedCard.firmwareVersion) throw new Error('Project restoration read-back has the wrong firmware version');
+  if (text(acknowledgement.buildId, 96) !== flow.expectedCard.buildId) throw new Error('Project restoration read-back has the wrong firmware build');
+  if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The card did not acknowledge the saved Studio project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The card did not acknowledge the saved Studio project revision');
+  if (!/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest || '')
+    || text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest) {
+    throw new Error('The card did not acknowledge the production job digest');
+  }
   return {
     ...clone(flow),
     stage: 'check-lights',
@@ -206,6 +247,7 @@ export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date
 export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card' || !flow.cardAcknowledgedAt) throw new Error('The exact installed card must acknowledge its firmware before restoration');
+  if (acknowledgement.source !== 'card-activation-response') throw new Error('The wiring candidate requires a card-issued activation response');
   if (text(acknowledgement.cardId, 64) !== flow.expectedCard.id) throw new Error('Project restoration was not staged on the expected card');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The staged project is not the saved Studio revision');
   const activationId = text(acknowledgement.activationId, 128);
@@ -227,11 +269,14 @@ function requireFlow(flow) {
     || !Number.isSafeInteger(flow.createdAt) || !Number.isSafeInteger(flow.updatedAt)
     || flow.createdAt < 0 || flow.updatedAt < flow.createdAt
     || !['unknown', 'preserved', 'setup-required', 'connected'].includes(flow.networkState)
+    || (flow.acceptedResultId !== undefined && flow.acceptedResultId !== '' && !/^[A-Za-z0-9_-]{16,96}$/.test(flow.acceptedResultId))
     || !flow.project || !text(flow.project.recordId, 128)
     || !Number.isSafeInteger(flow.project.revision) || flow.project.revision < 0
     || !/^[a-f0-9]{16}$/.test(flow.project.fingerprint || '')) {
     throw new Error('Invalid card commissioning progress');
   }
+  if (flow.project.productionJobDigest !== undefined && flow.project.productionJobDigest !== ''
+    && !/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest)) throw new Error('Invalid card commissioning production job');
   if (!flow.project?.snapshot || fingerprintCommissioningProject(flow.project.snapshot) !== flow.project.fingerprint) {
     throw new Error('The saved commissioning project revision is invalid');
   }

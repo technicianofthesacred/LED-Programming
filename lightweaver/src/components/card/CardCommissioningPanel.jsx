@@ -6,6 +6,7 @@ import { saveCurrentProjectToLibrary } from '../../lib/projectStorage.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
   CARD_COMMISSIONING_STAGES,
+  adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
   beginCardCommissioning,
   completeCardInstall,
@@ -61,6 +62,7 @@ export function CardCommissioningPanel({
   onReconnect,
   onComplete,
   pushProject = pushConfigToCard,
+  readProjectEvidence = null,
 }) {
   const { serializeProject, projectLifecycle, markProjectPersisted, markProjectInstalled } = useProject();
   const [flow, setFlow] = useState(readCardCommissioning);
@@ -145,20 +147,27 @@ export function CardCommissioningPanel({
         allowLayoutChange: true,
       });
       if (response?.state === 'staged') {
-        const next = stageCardProjectForPhysicalCheck(flow, {
-          cardId: flow.expectedCard.id,
-          projectFingerprint: flow.project.fingerprint,
-          activationId: response.activationId,
-        });
+        const next = stageCardProjectForPhysicalCheck(flow, response);
         writeCardCommissioning(next);
         setFlow(next);
         setRestoreState('complete');
         return;
       }
-      const next = markCardProjectRestored(flow, {
-        cardId: flow.expectedCard.id,
-        projectFingerprint: flow.project.fingerprint,
+      const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
+        ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
+        : readProjectEvidence;
+      if (typeof selectedReadback !== 'function') {
+        throw new Error('The project was sent, but this firmware does not yet provide independent restoration read-back. Studio has not marked it restored.');
+      }
+      const responseReadback = await selectedReadback({
+        host: link.host,
+        endpoint: '/api/firmware-info',
+        expectedCardId: flow.expectedCard.id,
       });
+      const evidence = adaptCardRestorationReadback({
+        method: 'GET', endpoint: '/api/firmware-info', response: responseReadback,
+      });
+      const next = markCardProjectRestored(flow, evidence);
       writeCardCommissioning(next);
       markProjectInstalled(flow.project.revision);
       setFlow(next);

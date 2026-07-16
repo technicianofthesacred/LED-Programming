@@ -217,7 +217,7 @@ test('missing native Bridge does not expose an unsigned download', async ({ page
   await expect(actionRegion(page).getByRole('link')).toHaveCount(0);
 });
 
-test('Bridge return resumes one four-stage flow, restores the exact saved project, then hands off to Check lights', async ({ page }) => {
+test('Bridge return does not call a successful POST independent restoration proof', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
@@ -264,21 +264,30 @@ test('Bridge return resumes one four-stage flow, restores the exact saved projec
   });
   await expect(page.getByRole('button', { name: 'Restore saved project' })).toBeVisible();
   await page.getByRole('button', { name: 'Restore saved project' }).click();
-  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
-  await expect(page.getByText(/saved Studio project revision is installed on this exact card/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText(/independent.*read-back|not marked.*restored/i);
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(1);
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
-  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
 });
 
 test('a staged GPIO restoration stops at the Check lights handoff without legacy full-white output', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
-    (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async () => ({ state: 'staged', activationId: 'candidate-safe-7' });
+    (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async () => {
+      const flow = JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}');
+      return {
+        state: 'staged',
+        source: 'card-activation-response',
+        cardId: 'lw-441bf681feb0',
+        projectFingerprint: flow.project?.fingerprint,
+        activationId: 'candidate-safe-7',
+      };
+    };
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();

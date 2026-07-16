@@ -30,6 +30,24 @@ export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
       ids.add(id);
       pins.add(pin);
     }
+    const controls = config.controls || {};
+    const controlPins = [
+      ['encoder A', controls.encoder?.a],
+      ['encoder B', controls.encoder?.b],
+      ['encoder press', controls.encoder?.press],
+      ['encoder alternate press', controls.encoder?.alternatePress],
+      ['previous', controls.previous],
+      ['next', controls.next],
+      ['blackout', controls.blackout],
+      ['analog brightness', controls.brightness],
+      ['status LED', controls.statusLed],
+    ];
+    for (const [label, rawPin] of controlPins) {
+      if (rawPin === undefined || rawPin === null || Number(rawPin) < 0) continue;
+      const pin = Number(rawPin);
+      if (!Number.isInteger(pin) || pin > 48) throw new RangeError(`${label} control pin must be a supported GPIO.`);
+      if (pins.has(pin)) throw new RangeError(`${label} control GPIO ${pin} conflicts with an LED output GPIO.`);
+    }
     if (zones.length > this.maxZones) throw new RangeError(`Hardware supports at most ${this.maxZones} zones.`);
     for (const zone of zones) {
       if ((zone.ranges || []).length > this.maxRangesPerZone) {

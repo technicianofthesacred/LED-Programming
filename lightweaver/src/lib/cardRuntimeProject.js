@@ -120,16 +120,18 @@ export function buildCardRuntimePackageFromProject({
 
 function cardSafeControls(controls = {}, playlist = []) {
   const playlistLookIds = derivePlaylistLookIds(playlist);
+  const configuredCycleIds = Array.isArray(controls?.encoder?.patternCycleIds)
+    ? controls.encoder.patternCycleIds
+    : [];
   return {
     ...(controls || {}),
-    brightness: DEFAULT_CARD_CONTROLS.brightness,
     encoder: {
       ...(controls?.encoder || {}),
-      press: DEFAULT_CARD_CONTROLS.encoder.press,
-      alternatePress: DEFAULT_CARD_CONTROLS.encoder.alternatePress,
-      patternCycleIds: playlistLookIds.length
+      patternCycleIds: configuredCycleIds.length
+        ? configuredCycleIds
+        : playlistLookIds.length
         ? playlistLookIds
-        : (controls?.encoder?.patternCycleIds || DEFAULT_CARD_CONTROLS.encoder.patternCycleIds),
+        : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
     },
   };
 }

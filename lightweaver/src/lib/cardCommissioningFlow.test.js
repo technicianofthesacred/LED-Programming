@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CARD_COMMISSIONING_STAGES,
   CARD_COMMISSIONING_STORAGE_KEY,
+  adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
   beginCardCommissioning,
   cardIdFromEspMac,
@@ -52,6 +53,17 @@ const installed = {
   firmwareVersion: '1.2.3',
   buildId: 'a'.repeat(40),
 };
+
+function acceptedBridgeResult(flow, overrides = {}) {
+  return {
+    ...installed,
+    flowId: flow.flowId,
+    projectFingerprint: flow.project.fingerprint,
+    expectedCardId: installed.cardId,
+    acceptedResultId: `receipt-${flow.flowId}`.slice(0, 96),
+    ...overrides,
+  };
+}
 
 test('uses one exact four-stage commissioning vocabulary', () => {
   assert.deepEqual(CARD_COMMISSIONING_STAGES, [
@@ -106,7 +118,8 @@ test('direct Web Serial and Bridge results converge on setup with the same exact
       source, operation: installed.operation, strategy: 'clean-recovery',
       projectRecord, projectRevision: 7, flowId: `flow-${source}-1234567890`, now: 10,
     });
-    const next = completeCardInstall(initial, installed, { now: 20 });
+    const result = source === 'native-bridge' ? acceptedBridgeResult(initial) : installed;
+    const next = completeCardInstall(initial, result, { now: 20 });
     assert.equal(next.stage, 'set-up-card');
     assert.deepEqual(next.expectedCard, {
       id: installed.cardId,
@@ -123,6 +136,34 @@ test('a result from another operation cannot replace the active commissioning fl
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
   });
   assert.throws(() => completeCardInstall(flow, installed), /does not match/i);
+});
+
+test('a same-operation result from another tab and job fingerprint cannot advance this flow', () => {
+  const flowA = beginCardCommissioning({
+    source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-tab-a-1234567890', now: 10,
+  });
+  const otherJob = JSON.parse(JSON.stringify(projectRecord));
+  otherJob.id = 'project-record-8';
+  otherJob.project.id = 'other-job';
+  otherJob.project.layout.strips[0].pixelCount = 89;
+  const flowB = beginCardCommissioning({
+    source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord: otherJob, projectRevision: 8, flowId: 'flow-tab-b-1234567890', now: 11,
+  });
+
+  const resultFromTabA = {
+    ...installed,
+    flowId: flowA.flowId,
+    projectFingerprint: flowA.project.fingerprint,
+    expectedCardId: installed.cardId,
+    acceptedResultId: 'receipt-tab-a-1234567890abcdef',
+  };
+
+  assert.throws(() => completeCardInstall(flowB, resultFromTabA), /flow|fingerprint/i);
+  const advancedA = completeCardInstall(flowA, resultFromTabA);
+  assert.equal(advancedA.stage, 'set-up-card');
+  assert.equal(advancedA.acceptedResultId, resultFromTabA.acceptedResultId);
 });
 
 test('an interrupted direct install resumes from exact card evidence without flashing again', () => {
@@ -143,10 +184,11 @@ test('an interrupted direct install resumes from exact card evidence without fla
 });
 
 test('rejects a wrong card, firmware version, or build before project restoration', () => {
-  const ready = completeCardInstall(beginCardCommissioning({
+  const initial = beginCardCommissioning({
     source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
-  }), installed, { now: 20 });
+  });
+  const ready = completeCardInstall(initial, acceptedBridgeResult(initial), { now: 20 });
 
   const wrongCard = acknowledgeCommissionedCard(ready, {
     id: 'lw-ffffffffffff', firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
@@ -164,36 +206,67 @@ test('rejects a wrong card, firmware version, or build before project restoratio
   assert.deepEqual(wrongBuild, { ok: false, reason: 'wrong-firmware-build' });
 });
 
-test('only an exact card acknowledgement unlocks canonical project restoration', () => {
+test('a POST success or echoed expected values cannot mark a project restored', () => {
   const ready = completeCardInstall(beginCardCommissioning({
-    source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
+    productionJobDigest: 'b'.repeat(64),
   }), installed, { now: 20 });
-
   const acknowledgement = acknowledgeCommissionedCard(ready, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
   }, { now: 30 });
-  assert.equal(acknowledgement.ok, true);
-  assert.equal(acknowledgement.flow.cardAcknowledgedAt, 30);
 
-  const restored = markCardProjectRestored(acknowledgement.flow, {
+  assert.throws(() => markCardProjectRestored(acknowledgement.flow, { ok: true }), /independent|read-back/i);
+  assert.throws(() => markCardProjectRestored(acknowledgement.flow, {
+    source: 'post-response',
     cardId: installed.cardId,
+    firmwareVersion: installed.firmwareVersion,
+    buildId: installed.buildId,
+    projectRevision: acknowledgement.flow.project.revision,
     projectFingerprint: acknowledgement.flow.project.fingerprint,
-  }, { now: 40 });
+    productionJobDigest: acknowledgement.flow.project.productionJobDigest,
+  }), /independent|read-back/i);
+});
+
+test('only exact independent card read-back unlocks canonical project restoration', () => {
+  const ready = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
+    productionJobDigest: 'b'.repeat(64),
+  }), installed, { now: 20 });
+  const acknowledged = acknowledgeCommissionedCard(ready, {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 }).flow;
+
+  const evidence = adaptCardRestorationReadback({
+    method: 'GET',
+    endpoint: '/api/firmware-info',
+    response: {
+      cardId: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: installed.buildId,
+      projectRevision: acknowledged.project.revision,
+      projectFingerprint: acknowledged.project.fingerprint,
+      productionJobDigest: acknowledged.project.productionJobDigest,
+    },
+  });
+  const restored = markCardProjectRestored(acknowledged, evidence, { now: 40 });
   assert.equal(restored.stage, 'check-lights');
   assert.equal(restored.project.restoredAt, 40);
   assert.equal(restored.project.restoredFingerprint, restored.project.fingerprint);
 });
 
 test('a safety-staged GPIO restore stays in the same flow and is not falsely called restored', () => {
-  const ready = completeCardInstall(beginCardCommissioning({
+  const initial = beginCardCommissioning({
     source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
-  }), installed, { now: 20 });
+  });
+  const ready = completeCardInstall(initial, acceptedBridgeResult(initial), { now: 20 });
   const acknowledged = acknowledgeCommissionedCard(ready, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
   }, { now: 30 }).flow;
   const staged = stageCardProjectForPhysicalCheck(acknowledged, {
+    source: 'card-activation-response',
     cardId: installed.cardId,
     projectFingerprint: acknowledged.project.fingerprint,
     activationId: 'wiring-activation-7',
@@ -224,10 +297,11 @@ test('progress survives refresh, new tabs, Wi-Fi switching, and recoverable disc
   const storage = memoryStorage();
   const recordWithUnrelatedPrivateFields = JSON.parse(JSON.stringify(projectRecord));
   recordWithUnrelatedPrivateFields.project.credentials = { password: 'never-copy-this' };
-  const initial = completeCardInstall(beginCardCommissioning({
+  const started = beginCardCommissioning({
     source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord: recordWithUnrelatedPrivateFields, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
-  }), installed, { now: 20 });
+  });
+  const initial = completeCardInstall(started, acceptedBridgeResult(started), { now: 20 });
   const resumable = { ...initial, lastConnectionIssue: 'card-page-closed' };
   assert.equal(writeCardCommissioning(resumable, { storage }), true);
 

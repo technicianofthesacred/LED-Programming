@@ -228,10 +228,57 @@ assert.equal(projectPkg.config.piece.name, 'Customer V3');
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
-assert.equal(projectPkg.config.controls.encoder.press, 0);
+assert.equal(projectPkg.config.controls.encoder.press, 6);
 assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
-assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
+assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
+
+const customControlsPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Custom controls',
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+    controls: {
+      encoder: {
+        a: 10,
+        b: 11,
+        press: 12,
+        alternatePress: 13,
+        rotateDirection: 'clockwise-dimmer',
+        brightnessStep: 7,
+        patternCycleIds: ['ember', 'scanner'],
+      },
+      previous: 14,
+      next: 15,
+      blackout: 19,
+      brightness: 20,
+      statusLed: 47,
+    },
+  },
+});
+assert.deepEqual(customControlsPkg.config.controls, {
+  encoder: {
+    a: 10,
+    b: 11,
+    press: 12,
+    alternatePress: 13,
+    rotateDirection: 'clockwise-dimmer',
+    brightnessStep: 7,
+    patternCycleIds: ['ember', 'scanner'],
+  },
+  previous: 14,
+  next: 15,
+  blackout: 19,
+  brightness: 20,
+  statusLed: 47,
+});
+
+assert.throws(() => buildCardRuntimePackageFromProject({
+  projectName: 'Conflicting controls',
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+    controls: { encoder: { a: 16, b: 5 } },
+  },
+}), /control.*GPIO 16.*LED output|LED output.*GPIO 16/i);
 
 const fullPiece395Pkg = buildCardRuntimePackageFromProject({
   projectId: 'lwproj-395',
@@ -456,15 +503,15 @@ const singleOutputPkg = buildCardRuntimePackageFromProject({
 assert.equal(singleOutputPkg.config.led.outputs.length, 1);
 assert.deepEqual(singleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
 
-const staleAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
-  projectName: 'No Floating Analog Brightness',
+const savedAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Saved Analog Brightness',
   standaloneController: {
     controls: {
       brightness: 1,
     },
   },
 });
-assert.equal(staleAnalogBrightnessPkg.config.controls.brightness, -1);
+assert.equal(savedAnalogBrightnessPkg.config.controls.brightness, 1);
 
 const gallerySectionCounts = [46, 46, 46, 45, 45, 45, 45, 45, 45, 45];
 const galleryStrips = gallerySectionCounts.map((pixelCount, index) => ({

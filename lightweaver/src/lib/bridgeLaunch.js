@@ -10,6 +10,7 @@ import {
   releaseBridgeResultReceipt,
   validateOperationResult,
 } from './bridgeProtocol.js';
+import { readCardCommissioning } from './cardCommissioningFlow.js';
 
 export const BRIDGE_RESULT_CHANNEL = 'lightweaver.bridge.result.v1';
 export const BRIDGE_RESULT_STORAGE_KEY = 'lightweaver.bridge.result.v1';
@@ -45,7 +46,17 @@ export async function launchBridgeOperation(operation, dependencies = {}) {
   await dependencies.persistProject();
   const createLaunch = dependencies.createLaunch ?? createBridgeLaunch;
   const navigate = dependencies.navigate ?? defaultNavigate;
-  const url = createLaunch(operation, dependencies.protocolDependencies);
+  const commissioning = dependencies.getCommissioningFlow?.() ?? readCardCommissioning();
+  const correlation = commissioning?.source === 'native-bridge'
+    && commissioning?.operation === operation
+    && commissioning?.stage === 'install-safely'
+    ? {
+        flowId: commissioning.flowId,
+        projectFingerprint: commissioning.project?.fingerprint,
+        expectedCardId: commissioning.installTarget?.id || commissioning.expectedCard?.id || '',
+      }
+    : undefined;
+  const url = createLaunch(operation, { ...(dependencies.protocolDependencies || {}), ...(correlation ? { correlation } : {}) });
   navigate(url);
   return url;
 }
@@ -80,6 +91,10 @@ function resultFields(result) {
   if (result.cardId !== undefined) fields.cardId = result.cardId;
   if (result.firmwareVersion !== undefined) fields.firmwareVersion = result.firmwareVersion;
   if (result.buildId !== undefined) fields.buildId = result.buildId;
+  if (result.flowId !== undefined) fields.flowId = result.flowId;
+  if (result.projectFingerprint !== undefined) fields.projectFingerprint = result.projectFingerprint;
+  if (result.expectedCardId !== undefined) fields.expectedCardId = result.expectedCardId;
+  if (result.acceptedResultId !== undefined) fields.acceptedResultId = result.acceptedResultId;
   return fields;
 }
 
@@ -96,6 +111,10 @@ function uiResultFields(result) {
   if (result.cardId !== undefined) fields.cardId = result.cardId;
   if (result.firmwareVersion !== undefined) fields.firmwareVersion = result.firmwareVersion;
   if (result.buildId !== undefined) fields.buildId = result.buildId;
+  if (result.flowId !== undefined) fields.flowId = result.flowId;
+  if (result.projectFingerprint !== undefined) fields.projectFingerprint = result.projectFingerprint;
+  if (result.expectedCardId !== undefined) fields.expectedCardId = result.expectedCardId;
+  if (result.acceptedResultId !== undefined) fields.acceptedResultId = result.acceptedResultId;
   return fields;
 }
 
@@ -107,6 +126,7 @@ function validateBridgeUiResult(value) {
     ...(result.cardId === undefined ? [] : ['cardId']),
     ...(result.firmwareVersion === undefined ? [] : ['firmwareVersion']),
     ...(result.buildId === undefined ? [] : ['buildId']),
+    ...(result.flowId === undefined ? [] : ['flowId', 'projectFingerprint', 'expectedCardId', 'acceptedResultId']),
   ].sort();
   if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')
     || !BRIDGE_OPERATIONS.includes(result.operation) || !BRIDGE_RESULT_STATUSES.includes(result.status)
@@ -114,6 +134,10 @@ function validateBridgeUiResult(value) {
     || !['flash-verified', 'not-verified'].includes(result.verification)
     || result.physicalOutput !== 'unconfirmed' || result.physicalProof !== false
     || !validateOperationResult(result.operation, result)) return null;
+  if (result.flowId !== undefined && (!/^[A-Za-z0-9_-]{16,96}$/.test(result.flowId)
+    || !/^[a-f0-9]{16,64}$/.test(result.projectFingerprint || '')
+    || (result.expectedCardId !== '' && !CARD_PATTERN.test(result.expectedCardId || ''))
+    || !/^[A-Za-z0-9_-]{16,96}$/.test(result.acceptedResultId || ''))) return null;
   const destructive = result.operation === 'install-current-release' || result.operation === 'recover-current-release';
   if (result.status === 'awaiting-card-acknowledgement' && destructive) {
     if (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '') || !BUILD_PATTERN.test(result.buildId || '')) return null;
@@ -286,6 +310,7 @@ export function validateBridgeResultNotification(value) {
     ...(message.cardId === undefined ? [] : ['cardId']),
     ...(message.firmwareVersion === undefined ? [] : ['firmwareVersion']),
     ...(message.buildId === undefined ? [] : ['buildId']),
+    ...(message.flowId === undefined ? [] : ['flowId', 'projectFingerprint', 'expectedCardId', 'acceptedResultId']),
   ].sort();
   if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')
     || value.version !== 1 || value.type !== 'bridge-result'
@@ -295,6 +320,10 @@ export function validateBridgeResultNotification(value) {
     || !CODE_PATTERN.test(value.code || '') || value.target !== 'lightweaver-controller-esp32s3'
     || !['flash-verified', 'not-verified'].includes(value.verification)
     || value.physicalOutput !== 'unconfirmed' || !validateOperationResult(value.operation, value)) return null;
+  if (value.flowId !== undefined && (!/^[A-Za-z0-9_-]{16,96}$/.test(value.flowId)
+    || !/^[a-f0-9]{16,64}$/.test(value.projectFingerprint || '')
+    || (value.expectedCardId !== '' && !CARD_PATTERN.test(value.expectedCardId || ''))
+    || !/^[A-Za-z0-9_-]{16,96}$/.test(value.acceptedResultId || ''))) return null;
   if (value.status === 'awaiting-card-acknowledgement' && destructive) {
     if (!CARD_PATTERN.test(value.cardId || '') || !SEMVER_PATTERN.test(value.firmwareVersion || '') || !BUILD_PATTERN.test(value.buildId || '')) return null;
   } else if (value.firmwareVersion !== undefined || value.buildId !== undefined || (value.cardId !== undefined && !CARD_PATTERN.test(value.cardId))) {

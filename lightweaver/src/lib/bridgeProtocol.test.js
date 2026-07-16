@@ -38,6 +38,56 @@ test('Studio generates a 32-byte Web Crypto nonce and stores one short-lived pen
   assert.throws(() => createBridgeLaunch('shell-text', { crypto, storage, now: () => 1_001 }));
 });
 
+test('two tabs keep same-operation commissioning results bound to their own flow and job without deep-link project data', async () => {
+  const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  const sessionA = memoryStorage();
+  const sessionB = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const correlationA = {
+    flowId: 'flow-tab-a-1234567890',
+    projectFingerprint: 'a'.repeat(16),
+    expectedCardId: '',
+  };
+  const correlationB = {
+    flowId: 'flow-tab-b-1234567890',
+    projectFingerprint: 'b'.repeat(16),
+    expectedCardId: '',
+  };
+  const launchA = createBridgeLaunch('install-current-release', {
+    crypto, sessionStorage: sessionA, localStorage, now: () => 10, correlation: correlationA,
+  });
+  const launchB = createBridgeLaunch('install-current-release', {
+    crypto, sessionStorage: sessionB, localStorage, now: () => 11, correlation: correlationB,
+  });
+  for (const launch of [launchA, launchB]) {
+    assert.deepEqual([...new URL(launch).searchParams.keys()], ['operation', 'nonce', 'version']);
+  }
+  const callbackFor = (launch, cardId, receiptByte) => {
+    const nonce = new URL(launch).searchParams.get('nonce');
+    const receipt = Buffer.alloc(32, receiptByte).toString('base64url');
+    return `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=flash-verified&cardId=${cardId}&firmwareVersion=1.2.3&buildId=${'a'.repeat(40)}&target=lightweaver-controller-esp32s3&verification=flash-verified&physicalOutput=unconfirmed&nonce=${nonce}&receipt=${receipt}&version=1`;
+  };
+  const resultA = await consumeBridgeCallback(callbackFor(launchA, 'lw-111111111111', 7), {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage, now: () => 20, history: { replaceState() {} },
+  });
+  const resultB = await consumeBridgeCallback(callbackFor(launchB, 'lw-222222222222', 8), {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage, now: () => 21, history: { replaceState() {} },
+  });
+  assert.deepEqual({
+    flowId: resultA.flowId,
+    projectFingerprint: resultA.projectFingerprint,
+    expectedCardId: resultA.expectedCardId,
+  }, { ...correlationA, expectedCardId: 'lw-111111111111' });
+  assert.deepEqual({
+    flowId: resultB.flowId,
+    projectFingerprint: resultB.projectFingerprint,
+    expectedCardId: resultB.expectedCardId,
+  }, { ...correlationB, expectedCardId: 'lw-222222222222' });
+  assert.notEqual(resultA.acceptedResultId, resultB.acceptedResultId);
+});
+
 test('Studio callback consumes matching pending state once and clears callback history', async () => {
   const { createBridgeLaunch, consumeBridgeCallback } = await import('./bridgeProtocol.js');
   const storage = memoryStorage();
