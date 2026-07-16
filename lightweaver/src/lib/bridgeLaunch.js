@@ -454,7 +454,9 @@ export function createBridgeResultChannel(dependencies = {}) {
       || error?.message === 'Durable Bridge result registry is busy';
     if (expected || typeof onError !== 'function') return;
     try {
-      onError(Object.freeze({ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }));
+      const diagnostic = onError(Object.freeze({ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }));
+      // Diagnostics are non-authoritative: a failed sink stays silent and cannot reopen UI, ACK, or receipt state.
+      Promise.resolve(diagnostic).catch(() => {});
     } catch { /* Event delivery failures never escape the event boundary. */ }
   };
   const receiveFromEvent = raw => {

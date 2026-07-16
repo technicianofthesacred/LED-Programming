@@ -733,18 +733,26 @@ test('unexpected event delivery failures use one bounded diagnostic without esca
   sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
   let localListener;
   const calls = [];
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
   const channel = createBridgeResultChannel({ sessionStorage, localStorage: memoryStorage(), BroadcastChannel: null,
     eventTarget: { addEventListener(name, listener) { if (name === 'lightweaver-bridge-result') localListener = listener; }, removeEventListener() {} },
     claimReceipt: () => true, revalidateReceipt: () => true, releaseReceipt() {}, persistResult: () => { throw new Error('secret raw failure'); },
     onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
-    onError: diagnostic => calls.push(diagnostic) });
+    onError: diagnostic => { calls.push(diagnostic); return Promise.reject(new Error('diagnostic sink rejected')); } });
   const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 61).toString('base64url'), targetTabId: tabId,
     operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
     verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 61).toString('base64url') };
-  assert.doesNotThrow(() => localListener({ detail: message }));
-  await Promise.resolve();
-  assert.deepEqual(calls, [{ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }]);
-  channel.close();
+  try {
+    assert.doesNotThrow(() => localListener({ detail: message }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, [{ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }]);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    channel.close();
+  }
 });
 
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
