@@ -402,7 +402,7 @@ Build `OutputBrightnessInputs` from the existing limit, active look, fade, knob,
 
 - [ ] **Step 4: Add measured output state without a second scheduler**
 
-Increment a show counter in `showLeds()`. Once per elapsed second, publish the measured FPS, reset the counter, and set FastLED dithering to `true` only at 50 FPS or above. Cache the last brightness byte and source class for diagnostics.
+Increment a show counter in `showLeds()`. Once per elapsed second, publish the measured FPS and reset the counter. Immediately before each physical show, set and cache dithering from FastLED's effective `getFPS() >= 100` boundary; FastLED 3.10 itself forcibly disables controller dithering below that rate. Cache requested and power-limited brightness separately so diagnostics report the scale actually transmitted.
 
 - [ ] **Step 5: Expose capabilities and diagnostics through existing APIs**
 
@@ -525,10 +525,11 @@ git commit -m "docs: add output correctness bench gate"
 - [x] Art-Net, WLED UDP realtime, WLED WebSocket, and WLED JSON ingestion preserve raw RGB (`064e550`).
 - [x] Global master brightness and local zone/look brightness are independent (`6c759f4`).
 - [x] Backward-compatible output gamma and RGB calibration parsing/pipeline implemented (`67353fa`).
-- [x] Every physical transmission uses the measured shared output funnel; diagnostics are exposed through existing status APIs (`30d8546`).
-- [x] Studio export, standalone profile, and repair packages preserve normalized output settings without borrowing pattern-preview gamma (`66ec29d`, `55ab3d1`).
-- [x] Factory image rebuilt from the branch firmware (`4526d4b`), SHA-256 `36860fcc437eccdafe965d25a9b2062ca4923461e4b7e1e0fa33ae8597062afb`.
+- [x] Every physical transmission uses the measured shared output funnel; applied power scale and FastLED-effective dithering are exposed accurately through existing status APIs (`30d8546`, `837472d`).
+- [x] Studio export, standalone profile, and repair packages preserve normalized output settings without borrowing pattern-preview gamma; malformed null/blank/boolean color values fall back to neutral (`66ec29d`, `55ab3d1`, `86f019a`).
+- [x] Factory image rebuilt from the final branch firmware (`f5c5134`), SHA-256 `a0cea5fe691585dd0bffe8114dae13cec231ce82aab51ac0a4d62cda2f06f7cc`.
 - [x] Full `npm run test:core` passed, including factory-image freshness.
-- [x] ESP32-S3 PlatformIO release build passed: RAM `113240 / 327680` bytes (`34.6%`); flash `1047229 / 6553600` bytes (`16.0%`).
+- [x] ESP32-S3 PlatformIO release build passed: RAM `113240 / 327680` bytes (`34.6%`); flash `1047581 / 6553600` bytes (`16.0%`).
+- [x] CI-style `npm run launch:check` passed: core contracts, `9/9` Show browser tests, and production build. Vite retained its existing warning for the `742.51 kB` main chunk (`230.39 kB` gzip); bundle optimization is outside this output-correctness phase.
 - [ ] Physical fixture acceptance is pending. An Espressif USB JTAG/serial device was detected at `/dev/cu.usbmodem142201`, but the branch was not flashed and no LED/power fixture was assumed safe without operator confirmation.
 - [ ] Phase 2 remains gated until the physical acceptance fixture in `docs/deployment-checklist.md` passes and its snapshots/results are recorded.
