@@ -22,8 +22,8 @@ const MAX_FLOWS = 12;
 const MAX_BYTES = 384 * 1024;
 const FLOW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RESTORE_LEASE_MS = 2 * 60 * 1000;
-const REGISTRY_LOCK_KEY = 'lw_card_commissioning_registry_v2_lock';
-const REGISTRY_LOCK_MS = 5000;
+const NODE_STORAGE_QUEUES = new WeakMap();
+const IDB_COORDINATOR_DB = 'lightweaver-card-commissioning-v2';
 
 function text(value, max = 128) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -382,7 +382,18 @@ function parseRegistry(storage, now = Date.now()) {
         if (valid) restoreLease = lease;
         else leaseError = true;
       }
-      flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease };
+      let restoreAttempt = null;
+      if (entry.restoreAttempt) {
+        const attempt = entry.restoreAttempt;
+        const valid = attempt.flowId === flowId && attempt.cardId === entry.flow.expectedCard?.id
+          && attempt.projectFingerprint === entry.flow.project.fingerprint
+          && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.id || '') && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.fencingToken || '')
+          && attempt.phase === 'post-started' && Number.isSafeInteger(attempt.startedAt) && attempt.startedAt >= entry.flow.createdAt
+          && (attempt.activationId === '' || /^[A-Za-z0-9_-]{1,128}$/.test(attempt.activationId || ''));
+        if (!valid) throw new Error('invalid restore attempt');
+        restoreAttempt = attempt;
+      }
+      flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease, restoreAttempt };
     }
     return { registry: { version: REGISTRY_VERSION, revision: parsed.revision, flows }, error: leaseError ? 'invalid-lease' : '' };
   } catch { return { registry: emptyRegistry(), error: 'corrupt' }; }
@@ -399,41 +410,44 @@ function persistRegistry(storage, registry) {
   if (storage.getItem(CARD_COMMISSIONING_STORAGE_KEY) !== encoded) throw new Error('Commissioning storage verification failed. Nothing was changed.');
 }
 
-async function withRegistryMutation({ storage, locks = globalThis.navigator?.locks, delay = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, deadline } = {}, callback) {
-  if (locks?.request) return locks.request('lightweaver.card-commissioning-registry.v2', { mode: 'exclusive' }, () => callback(() => {}));
-  if (!storage?.setItem || typeof delay !== 'function') throw new Error('Atomic card setup storage is unavailable.');
-  const owner = makeFlowId();
-  const stopAt = deadline ?? (now() + 1800);
-  let attempts = 0;
-  while (now() < stopAt && attempts < 64) {
-    attempts += 1;
-    const timestamp = now();
-    let existing = null;
-    try { existing = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch { storage.removeItem(REGISTRY_LOCK_KEY); }
-    const validExisting = existing && /^[A-Za-z0-9_-]{16,96}$/.test(existing.owner || '')
-      && Number.isSafeInteger(existing.expiresAt) && existing.expiresAt > timestamp && existing.expiresAt <= timestamp + REGISTRY_LOCK_MS;
-    if (validExisting && existing.owner !== owner) { await delay(Math.min(75, Math.max(20, existing.expiresAt - timestamp))); continue; }
-    if (existing && !validExisting) storage.removeItem(REGISTRY_LOCK_KEY);
-    const claim = JSON.stringify({ owner, expiresAt: timestamp + REGISTRY_LOCK_MS });
-    storage.setItem(REGISTRY_LOCK_KEY, claim);
-    await delay(25);
-    const assertOwner = () => {
-      let held = null;
-      try { held = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
-      if (held?.owner !== owner || held.expiresAt <= now() || held.expiresAt > now() + REGISTRY_LOCK_MS) throw new Error('Card setup storage claim was lost.');
+function withIndexedDbCoordinator(indexedDB, callback) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(IDB_COORDINATOR_DB, 1);
+    open.onupgradeneeded = () => { if (!open.result.objectStoreNames.contains('mutex')) open.result.createObjectStore('mutex'); };
+    open.onerror = () => reject(open.error || new Error('IndexedDB coordinator could not open.'));
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('mutex', 'readwrite');
+      const store = tx.objectStore('mutex');
+      let result;
+      let callbackError = null;
+      const request = store.get('registry');
+      request.onerror = () => { callbackError = request.error || new Error('IndexedDB coordinator failed.'); try { tx.abort(); } catch {} };
+      request.onsuccess = () => {
+        try {
+          result = callback(() => {});
+          if (result?.then) throw new Error('Commissioning mutation callback must remain synchronous.');
+          store.put(makeFlowId(), 'registry');
+        } catch (error) { callbackError = error; try { tx.abort(); } catch {} }
+      };
+      tx.oncomplete = () => { db.close(); resolve(result); };
+      tx.onabort = tx.onerror = () => { db.close(); reject(callbackError || tx.error || new Error('IndexedDB coordinator failed.')); };
     };
-    try {
-      assertOwner();
-      return await callback(assertOwner);
-    } catch (error) {
-      if (!/claim was lost/.test(error?.message || '')) throw error;
-    } finally {
-      let held = null;
-      try { held = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
-      if (held?.owner === owner) storage.removeItem(REGISTRY_LOCK_KEY);
-    }
-  }
-  throw new Error('Card setup is being updated in another tab. Retry in a moment.');
+  });
+}
+
+function withNodeCoordinator(storage, callback) {
+  const previous = NODE_STORAGE_QUEUES.get(storage) || Promise.resolve();
+  const current = previous.catch(() => {}).then(() => callback(() => {}));
+  NODE_STORAGE_QUEUES.set(storage, current.catch(() => {}));
+  return current;
+}
+
+async function withRegistryMutation({ storage, locks = globalThis.navigator?.locks, indexedDB = globalThis.indexedDB } = {}, callback) {
+  if (locks?.request) return locks.request('lightweaver.card-commissioning-registry.v2', { mode: 'exclusive' }, () => callback(() => {}));
+  if (indexedDB?.open) return withIndexedDbCoordinator(indexedDB, callback);
+  if (typeof window === 'undefined' && storage) return withNodeCoordinator(storage, callback);
+  throw new Error('Atomic card setup storage is unavailable in this browser.');
 }
 
 export function inspectCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now() } = {}) {
@@ -444,17 +458,28 @@ export function inspectCardCommissioning({ storage = defaultStorage(), sessionSt
   return { flow: parsed.registry.flows[id]?.flow || null, error: parsed.registry.flows[id] ? parsed.error : (parsed.error === 'corrupt' ? 'corrupt' : 'missing') };
 }
 
-export async function writeCardCommissioning(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), tabId = '', now = Date.now, locks, delay } = {}) {
+export async function writeCardCommissioning(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), tabId = '', now = Date.now, locks, indexedDB } = {}) {
   if (!storage?.setItem) return false;
   requireFlow(flow);
-  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
     const timestamp = now();
     const serializable = clone(flow);
     const { registry } = parseRegistry(storage, timestamp);
     const baseRevision = registry.revision;
-    registry.flows[flow.flowId] = { flow: serializable, tabId: text(tabId, 96), expiresAt: timestamp + FLOW_TTL_MS, restoreLease: registry.flows[flow.flowId]?.restoreLease || null };
-    const ordered = Object.entries(registry.flows).sort((a, b) => Number(b[1].flow.updatedAt) - Number(a[1].flow.updatedAt)).slice(0, MAX_FLOWS);
-    registry.flows = Object.fromEntries(ordered);
+    const existing = registry.flows[flow.flowId];
+    registry.flows[flow.flowId] = {
+      flow: serializable, tabId: text(tabId, 96), expiresAt: timestamp + FLOW_TTL_MS,
+      restoreLease: flow.stage === 'check-lights' ? null : existing?.restoreLease || null,
+      restoreAttempt: flow.stage === 'check-lights' ? null : existing?.restoreAttempt || null,
+    };
+    const overflow = Object.keys(registry.flows).length - MAX_FLOWS;
+    if (overflow > 0) {
+      const evictable = Object.entries(registry.flows)
+        .filter(([id, entry]) => id !== flow.flowId && !entry.restoreLease && !entry.restoreAttempt)
+        .sort((a, b) => Number(a[1].flow.updatedAt) - Number(b[1].flow.updatedAt));
+      if (evictable.length < overflow) throw new Error('Card setup storage is full with active restores. Finish or recover an active setup before starting another.');
+      for (const [id] of evictable.slice(0, overflow)) delete registry.flows[id];
+    }
     registry.revision = baseRevision + 1;
     assertOwner?.();
     if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during mutation.');
@@ -469,14 +494,15 @@ export function readCardCommissioning(options = {}) {
   return inspectCardCommissioning(options).flow;
 }
 
-export async function claimCardRestoration(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(), now = Date.now, locks, delay } = {}) {
+export async function claimCardRestoration(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(), now = Date.now, locks, indexedDB } = {}) {
   requireFlow(flow);
-  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
   const timestamp = now();
   const { registry } = parseRegistry(storage, timestamp);
   const baseRevision = registry.revision;
   const entry = registry.flows[flow.flowId];
   if (!entry || entry.flow.project.fingerprint !== flow.project.fingerprint || entry.flow.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
+  if (entry.restoreAttempt) return { ok: false, reason: 'recovery-required' };
   if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > timestamp) return { ok: false, reason: 'restore-in-progress' };
   const lease = { id: ownerId, state: 'claimed', flowId: flow.flowId, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: timestamp + RESTORE_LEASE_MS };
   entry.restoreLease = lease;
@@ -490,9 +516,9 @@ export async function claimCardRestoration(flow, { storage = defaultStorage(), s
   });
 }
 
-export async function beginCardRestorationMutation(flow, lease, { storage = defaultStorage(), now = Date.now, locks, delay } = {}) {
+export async function beginCardRestorationMutation(flow, lease, { storage = defaultStorage(), now = Date.now, locks, indexedDB } = {}) {
   requireFlow(flow);
-  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
     const timestamp = now();
     const { registry } = parseRegistry(storage, timestamp);
     const baseRevision = registry.revision;
@@ -500,6 +526,11 @@ export async function beginCardRestorationMutation(flow, lease, { storage = defa
     if (!entry?.restoreLease || entry.restoreLease.id !== lease?.id || entry.restoreLease.state !== 'claimed') return { ok: false, reason: 'restore-claim-lost' };
     const fencingToken = makeFlowId();
     entry.restoreLease = { ...entry.restoreLease, state: 'mutating', fencingToken };
+    entry.restoreAttempt = {
+      id: entry.restoreLease.id, fencingToken, phase: 'post-started', flowId: flow.flowId,
+      cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint,
+      startedAt: timestamp, activationId: '',
+    };
     registry.revision = baseRevision + 1;
     assertOwner?.();
     if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed before project restore.');
@@ -515,8 +546,30 @@ export function verifyCardRestorationMutation(flow, leaseId, fencingToken, { sto
     && lease.cardId === flow.expectedCard?.id && lease.projectFingerprint === flow.project?.fingerprint && lease.expiresAt > now);
 }
 
-export async function releaseCardRestoration(flowId, leaseId, { storage = defaultStorage(), now = Date.now, locks, delay } = {}) {
-  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+export function readCardRestorationAttempt(flow, { storage = defaultStorage(), now = Date.now() } = {}) {
+  requireFlow(flow);
+  return clone(parseRegistry(storage, now).registry.flows[flow.flowId]?.restoreAttempt || null);
+}
+
+export async function recordCardRestorationResponse(flow, leaseId, fencingToken, response = {}, { storage = defaultStorage(), now = Date.now, locks, indexedDB } = {}) {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
+    const timestamp = now();
+    const { registry } = parseRegistry(storage, timestamp);
+    const baseRevision = registry.revision;
+    const entry = registry.flows[flow.flowId];
+    const attempt = entry?.restoreAttempt;
+    if (!attempt || attempt.id !== leaseId || attempt.fencingToken !== fencingToken) return false;
+    attempt.activationId = text(response.activationId, 128);
+    registry.revision = baseRevision + 1;
+    assertOwner?.();
+    if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed after project restore response.');
+    persistRegistry(storage, registry);
+    return true;
+  });
+}
+
+export async function releaseCardRestoration(flowId, leaseId, { storage = defaultStorage(), now = Date.now, locks, indexedDB } = {}) {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
   const timestamp = now();
   const { registry } = parseRegistry(storage, timestamp);
   const baseRevision = registry.revision;
@@ -531,9 +584,9 @@ export async function releaseCardRestoration(flowId, leaseId, { storage = defaul
   });
 }
 
-export async function clearCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now, locks, delay } = {}) {
+export async function clearCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now, locks, indexedDB } = {}) {
   if (!storage?.removeItem) return false;
-  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
   const timestamp = now();
   const id = activeFlowId(sessionStorage, flowId);
   const { registry } = parseRegistry(storage, timestamp);

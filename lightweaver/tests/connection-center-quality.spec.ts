@@ -209,7 +209,7 @@ test('desktop Bridge launch persists the project and commissioning flow without 
       flowId: `flow-race-${suffix}`,
       projectRecord: { id: `record-${suffix}`, updatedAt: Date.now(), project: { version: 3, id: `project-${suffix}`, name: 'Race', layout: { strips: [], patchBoard: null, wiring: null }, devices: { standaloneController: {} } } },
     });
-    return writeCardCommissioning(flow);
+    return writeCardCommissioning(flow, { locks: null });
   });
   for (let iteration = 0; iteration < 10; iteration += 1) {
     await Promise.all([writeRace(page), writeRace(peer)]);
@@ -302,6 +302,17 @@ test('Bridge return does not call a successful POST independent restoration proo
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await page.evaluate(() => {
+    (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
+      const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
+      const flowId = sessionStorage.getItem('lw_card_commissioning_active_v2') || '';
+      const flow = registry.flows?.[flowId]?.flow;
+      return { cardId: flow.expectedCard.id, firmwareVersion: flow.expectedCard.firmwareVersion, buildId: flow.expectedCard.buildId, projectRevision: flow.project.revision, projectFingerprint: flow.project.fingerprint, productionJobDigest: flow.project.productionJobDigest };
+    };
+  });
+  await page.getByRole('button', { name: 'Restore saved project' }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
 });
 
 test('a staged GPIO restoration stops at the Check lights handoff without legacy full-white output', async ({ page }) => {

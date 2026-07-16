@@ -14,6 +14,8 @@ import {
   completeCardInstall,
   markCardProjectRestored,
   readCardCommissioning,
+  readCardRestorationAttempt,
+  recordCardRestorationResponse,
   inspectCardCommissioning,
   releaseCardRestoration,
   verifyCardRestorationMutation,
@@ -146,8 +148,35 @@ export function CardCommissioningPanel({
     setFailure('');
     let lease = null;
     try {
+      const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
+        ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
+        : readProjectEvidence;
+      const priorAttempt = readCardRestorationAttempt(flow);
+      if (priorAttempt) {
+        try {
+          const responseReadback = await selectedReadback({ host: link.host, endpoint: '/api/firmware-info', expectedCardId: flow.expectedCard.id });
+          const evidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: responseReadback });
+          const next = markCardProjectRestored(flow, evidence);
+          await writeCardCommissioning(next);
+          markProjectInstalled(flow.project.revision);
+          setFlow(next);
+          setRestoreState('complete');
+          return;
+        } catch {}
+        if (priorAttempt.activationId) {
+          try {
+            const candidate = await readCandidateEvidence(priorAttempt.activationId, { host: link.host, timeoutMs: 8000 });
+            const next = stageCardProjectForPhysicalCheck(flow, bindCardWiringActivationEvidence(candidate, candidate));
+            await writeCardCommissioning(next);
+            setFlow(next);
+            setRestoreState('complete');
+            return;
+          } catch {}
+        }
+        throw new Error('A previous restore may already have reached this card, but exact independent evidence is inconclusive. Inspect or recover this setup; Studio will not send the project again automatically.');
+      }
       const claim = await claimCardRestoration(flow);
-      if (!claim.ok) throw new Error(claim.reason === 'restore-in-progress' ? 'This exact project restore is already running in another tab. Wait for it to finish or retry after the recovery window.' : 'The saved setup is unavailable. Nothing was sent.');
+      if (!claim.ok) throw new Error(claim.reason === 'restore-in-progress' ? 'This exact project restore is already running in another tab. Wait for it to finish or retry after the recovery window.' : claim.reason === 'recovery-required' ? 'A previous restore requires inspection and will not be sent again automatically.' : 'The saved setup is unavailable. Nothing was sent.');
       lease = claim.lease;
       const runtimePackage = runtimePackageFromSnapshot(flow.project.snapshot);
       const selectedPush = typeof window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ === 'function'
@@ -164,9 +193,7 @@ export function CardCommissioningPanel({
         allowProjectChange: true,
         allowLayoutChange: true,
       });
-      const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
-        ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
-        : readProjectEvidence;
+      await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
       if (typeof selectedReadback !== 'function') {
         throw new Error('The project was sent, but this firmware does not yet provide independent restoration read-back. Studio has not marked it restored.');
       }

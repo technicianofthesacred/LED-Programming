@@ -15,6 +15,7 @@ import {
   markCardProjectRestored,
   stageCardProjectForPhysicalCheck,
   readCardCommissioning,
+  readCardRestorationAttempt,
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
   claimCardRestoration,
@@ -402,6 +403,7 @@ test('restore claim makes one durable fenced transition before card mutation', a
   assert.equal(verifyCardRestorationMutation(ready, claim.lease.id, mutation.fencingToken, { storage }), true);
   assert.deepEqual(await beginCardRestorationMutation(ready, claim.lease, { storage, locks: null }), { ok: false, reason: 'restore-claim-lost' });
   assert.equal(verifyCardRestorationMutation(ready, claim.lease.id, 'wrong-fence-123456', { storage }), false);
+  assert.equal(readCardRestorationAttempt(ready, { storage, now: Date.now() + 10 * 60 * 1000 })?.phase, 'post-started');
 });
 
 test('corrupt registry reports a stable recovery state', () => {
@@ -466,4 +468,25 @@ test('partial backup data is never authoritative and far-future leases are clear
   storage.setItem('lw_card_commissioning_registry_v2_lock', JSON.stringify({ owner: 'lock-future-123456', expiresAt: Date.now() + 99_999_999 }));
   await writeCardCommissioning(a, { storage, sessionStorage, locks: null, delay: async () => {} });
   assert.equal(inspectCardCommissioning({ storage, sessionStorage }).error, '');
+});
+
+test('active claimed and mutating restores cannot be evicted at registry capacity', async () => {
+  const storage = memoryStorage();
+  const sessions = [];
+  const active = [];
+  for (let index = 0; index < 12; index += 1) {
+    const sessionStorage = memoryStorage();
+    const flowId = `flow-capacity-${String(index).padStart(2, '0')}-123456`;
+    const ready = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId, now: 10 + index }), installed, { now: 30 + index }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 50 + index }).flow;
+    await writeCardCommissioning(ready, { storage, sessionStorage, locks: null });
+    const claim = await claimCardRestoration(ready, { storage, sessionStorage, ownerId: `restore-capacity-${String(index).padStart(2, '0')}`, locks: null });
+    sessions.push(sessionStorage);
+    active.push({ ready, claim });
+  }
+  await beginCardRestorationMutation(active[0].ready, active[0].claim.lease, { storage, locks: null });
+  const overflow = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-capacity-overflow', now: 100 });
+  await assert.rejects(writeCardCommissioning(overflow, { storage, sessionStorage: memoryStorage(), locks: null }), /full with active restores/i);
+  const registry = JSON.parse(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY));
+  assert.equal(Object.keys(registry.flows).length, 12);
+  for (const { ready } of active) assert.ok(registry.flows[ready.flowId]);
 });
