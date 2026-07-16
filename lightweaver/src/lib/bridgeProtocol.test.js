@@ -255,8 +255,8 @@ test('Safari launch with Chrome default, a separate profile, and refresh resume 
   const result = await consumeBridgeReturnCode(code, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: originalSession, localStorage: originalLocal, now: () => 1 });
   assert.equal(result.operation, 'restart-card');
   assert.equal(result.ackReceipt, receipt);
-  const deliveryId = Buffer.alloc(12, 5).toString('base64url');
-  const confirmation = { localStorage: originalLocal, operation: result.operation, targetTabId: result.originTabId, deliveryId };
+  const ownerToken = Buffer.alloc(16, 5).toString('base64url');
+  const confirmation = { localStorage: originalLocal, operation: result.operation, targetTabId: result.originTabId, ownerToken, now: () => 2 };
   assert.equal(claimBridgeResultReceipt(receipt, confirmation), true);
   assert.equal(confirmBridgeResultReceipt(receipt, confirmation), true);
   await assert.rejects(() => consumeBridgeReturnCode(code, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: originalSession, localStorage: originalLocal, now: () => 1 }), /pending|used/i);
@@ -277,13 +277,30 @@ test('automatic callback keeps Studio correlation until the actual target tab co
   });
   assert.equal(result.originTabId, originSession.getItem('lightweaver.bridge.origin-tab.v1'));
   assert.equal(result.ackReceipt, receipt);
-  const deliveryId = Buffer.alloc(12, 6).toString('base64url');
-  const confirmation = { localStorage, operation: result.operation, targetTabId: result.originTabId, deliveryId };
+  const ownerToken = Buffer.alloc(16, 6).toString('base64url');
+  const confirmation = { localStorage, operation: result.operation, targetTabId: result.originTabId, ownerToken, now: () => 2 };
   assert.equal(confirmBridgeResultReceipt(Buffer.alloc(32, 5).toString('base64url'), confirmation), false);
   assert.equal(claimBridgeResultReceipt(receipt, confirmation), true);
-  assert.equal(confirmBridgeResultReceipt(receipt, { ...confirmation, deliveryId: Buffer.alloc(12, 7).toString('base64url') }), false);
+  assert.equal(confirmBridgeResultReceipt(receipt, { ...confirmation, ownerToken: Buffer.alloc(16, 7).toString('base64url') }), false);
   assert.equal(confirmBridgeResultReceipt(receipt, confirmation), true);
   assert.equal(confirmBridgeResultReceipt(receipt, confirmation), false);
+});
+
+test('receipt lease rejects another receiver owner until the bounded claim expires', async () => {
+  const { claimBridgeResultReceipt, consumeBridgeCallback, createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const launch = createBridgeLaunch('restart-card', {
+    crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } }, sessionStorage, localStorage, now: () => 0,
+  });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const receipt = Buffer.alloc(32, 4).toString('base64url');
+  const callback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${nonce}&receipt=${receipt}&version=1`;
+  const result = await consumeBridgeCallback(callback, { currentOrigin: 'https://led.mandalacodes.com', localStorage, now: () => 1 });
+  const base = { localStorage, operation: result.operation, targetTabId: result.originTabId };
+  assert.equal(claimBridgeResultReceipt(receipt, { ...base, ownerToken: Buffer.alloc(16, 5).toString('base64url'), now: () => 2 }), true);
+  assert.equal(claimBridgeResultReceipt(receipt, { ...base, ownerToken: Buffer.alloc(16, 6).toString('base64url'), now: () => 3 }), false);
+  assert.equal(claimBridgeResultReceipt(receipt, { ...base, ownerToken: Buffer.alloc(16, 6).toString('base64url'), now: () => 2_003 }), true);
 });
 
 test('a new same-profile tab atomically takes over manual delivery when the original Studio tab was closed', async () => {
@@ -350,8 +367,8 @@ test('manual takeover rejects unchanged when the replacement tab already owns an
     currentOrigin: 'https://led.mandalacodes.com', localStorage: sharedProfile, now: () => 1,
   });
   assert.equal(restartResult.originTabId, closedRestartSession.getItem('lightweaver.bridge.origin-tab.v1'));
-  const deliveryId = Buffer.alloc(12, 8).toString('base64url');
-  const confirmation = { localStorage: sharedProfile, operation: restartResult.operation, targetTabId: restartResult.originTabId, deliveryId };
+  const ownerToken = Buffer.alloc(16, 8).toString('base64url');
+  const confirmation = { localStorage: sharedProfile, operation: restartResult.operation, targetTabId: restartResult.originTabId, ownerToken, now: () => 2 };
   assert.equal(claimBridgeResultReceipt(restartReceipt, confirmation), true);
   assert.equal(confirmBridgeResultReceipt(restartReceipt, confirmation), true);
   const releaseCallback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${releaseNonce}&version=1`;

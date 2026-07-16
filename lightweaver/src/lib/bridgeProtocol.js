@@ -12,13 +12,14 @@ const CLAIM_PREFIX = 'lightweaver.bridge.callback-claim.v1.';
 const TTL_MS = 300_000;
 const CLAIM_TTL_MS = 2_000;
 const CLAIM_SETTLE_MS = 25;
+const RESULT_CLAIM_TTL_MS = 2_000;
 const MAX_RECORDS = 16;
 const MAX_REGISTRY_BYTES = 8_192;
 const MAX_CLAIMS = 16;
 const MAX_CLAIM_BYTES = 4_096;
 const TARGET = 'lightweaver-controller-esp32s3';
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const DELIVERY_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/;
+const OWNER_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const RETURN_CODE_PATTERN = /^LW1-([A-Za-z0-9_-]{1,900})$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
@@ -58,12 +59,14 @@ function validateRegistryRecords(records, totalBytes) {
     const expectedKeys = [
       'createdAt', 'expiresAt', 'nonce', 'operation', 'tabId',
       ...(record?.receipt === undefined ? [] : ['receipt']),
-      ...(record?.claimId === undefined ? [] : ['claimId']),
+      ...(record?.claimOwner === undefined ? [] : ['claimExpiresAt', 'claimOwner']),
     ].sort().join(',');
     if (!record || Object.keys(record).sort().join(',') !== expectedKeys
       || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
       || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
-      || (record.claimId !== undefined && (record.receipt === undefined || !DELIVERY_ID_PATTERN.test(record.claimId)))
+      || (record.claimOwner !== undefined && (record.receipt === undefined || !OWNER_PATTERN.test(record.claimOwner)
+        || !Number.isSafeInteger(record.claimExpiresAt) || record.claimExpiresAt > record.expiresAt))
+      || (record.claimOwner === undefined && record.claimExpiresAt !== undefined)
       || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
       || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
       || record.expiresAt - record.createdAt > TTL_MS) {
@@ -346,13 +349,21 @@ export function confirmBridgeResultReceipt(receipt, dependencies = {}) {
   const records = readRegistry(localStorage);
   const targetTabId = dependencies.targetTabId;
   const operation = dependencies.operation;
-  const deliveryId = dependencies.deliveryId;
+  const ownerToken = dependencies.ownerToken;
   if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
-    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
+    || !OWNER_PATTERN.test(ownerToken || '')) return false;
   const pending = records.find(record => record.receipt === receipt
-    && record.tabId === targetTabId && record.operation === operation && record.claimId === deliveryId);
+    && record.tabId === targetTabId && record.operation === operation && record.claimOwner === ownerToken);
   if (!pending) return false;
-  removeRecord(localStorage, pending.nonce);
+  const key = `${REGISTRY_PREFIX}${pending.nonce}`;
+  const original = localStorage.getItem(key);
+  try {
+    removeRecord(localStorage, pending.nonce);
+    if (localStorage.getItem(key) !== null) throw new Error('Bridge receipt finalization failed');
+  } catch (error) {
+    if (original !== null) localStorage.setItem(key, original);
+    throw error;
+  }
   return true;
 }
 
@@ -363,14 +374,29 @@ export function claimBridgeResultReceipt(receipt, dependencies = {}) {
   const records = readRegistry(localStorage);
   const targetTabId = dependencies.targetTabId;
   const operation = dependencies.operation;
-  const deliveryId = dependencies.deliveryId;
+  const ownerToken = dependencies.ownerToken;
+  const timestamp = (dependencies.now ?? Date.now)();
   if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
-    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
+    || !OWNER_PATTERN.test(ownerToken || '') || !Number.isSafeInteger(timestamp)) return false;
   const pending = records.find(record => record.receipt === receipt
     && record.tabId === targetTabId && record.operation === operation);
   if (!pending) return false;
-  replaceRecord(localStorage, records, pending, { ...pending, claimId: deliveryId });
-  return true;
+  if (pending.claimOwner && pending.claimOwner !== ownerToken && pending.claimExpiresAt > timestamp) return false;
+  replaceRecord(localStorage, records, pending, {
+    ...pending, claimOwner: ownerToken, claimExpiresAt: Math.min(pending.expiresAt, timestamp + RESULT_CLAIM_TTL_MS),
+  });
+  return revalidateBridgeResultReceipt(receipt, dependencies);
+}
+
+export function revalidateBridgeResultReceipt(receipt, dependencies = {}) {
+  if (!isCanonicalNonce(receipt)) return false;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
+  if (!localStorage) return false;
+  const records = readRegistry(localStorage);
+  const timestamp = (dependencies.now ?? Date.now)();
+  return records.some(record => record.receipt === receipt && record.tabId === dependencies.targetTabId
+    && record.operation === dependencies.operation && record.claimOwner === dependencies.ownerToken
+    && record.claimExpiresAt > timestamp);
 }
 
 export function releaseBridgeResultReceipt(receipt, dependencies = {}) {
@@ -380,13 +406,13 @@ export function releaseBridgeResultReceipt(receipt, dependencies = {}) {
   const records = readRegistry(localStorage);
   const targetTabId = dependencies.targetTabId;
   const operation = dependencies.operation;
-  const deliveryId = dependencies.deliveryId;
+  const ownerToken = dependencies.ownerToken;
   if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
-    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
+    || !OWNER_PATTERN.test(ownerToken || '')) return false;
   const pending = records.find(record => record.receipt === receipt && record.tabId === targetTabId
-    && record.operation === operation && record.claimId === deliveryId);
+    && record.operation === operation && record.claimOwner === ownerToken);
   if (!pending) return false;
-  const { claimId: _claimId, ...replacement } = pending;
+  const { claimOwner: _claimOwner, claimExpiresAt: _claimExpiresAt, ...replacement } = pending;
   replaceRecord(localStorage, records, pending, replacement);
   return true;
 }

@@ -298,6 +298,28 @@ test('UI delivery failure releases the claim and leaves the durable result avail
   channel.close();
 });
 
+test('finalization throw releases the receiver claim and never acknowledges', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
+  const calls = [];
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage: memoryStorage(), BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, claimReceipt: () => true,
+    revalidateReceipt: () => true, persistResult() {}, onResult() {},
+    confirmReceipt: () => { calls.push('finalize'); throw new Error('corrupt'); },
+    releaseReceipt: () => calls.push('release'), acknowledge: () => calls.push('ack'),
+  });
+  assert.throws(() => channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB', targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+    ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ',
+  }), /corrupt/);
+  assert.deepEqual(calls, ['finalize', 'release']);
+  channel.close();
+});
+
 test('accepted sanitized result survives refresh and explicit completion or dismissal clears it', async () => {
   const { clearStoredBridgeResult, createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
   const localStorage = memoryStorage();
@@ -323,6 +345,56 @@ test('accepted sanitized result survives refresh and explicit completion or dism
   assert.equal(clearStoredBridgeResult({ sessionStorage, localStorage }), true);
   assert.equal(readStoredBridgeResult({ sessionStorage, localStorage }), null);
   assert.equal(clearStoredBridgeResult({ sessionStorage, localStorage }), false);
+  channel.close();
+});
+
+test('durable accepted results use one bounded registry across one hundred tabs', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  for (let index = 0; index < 100; index += 1) {
+    const tabId = Buffer.alloc(16, index + 1).toString('base64url');
+    const sessionStorage = memoryStorage();
+    sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+    const channel = createBridgeResultChannel({
+      sessionStorage, localStorage, BroadcastChannel: null,
+      eventTarget: { addEventListener() {}, removeEventListener() {} },
+      claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true, acknowledge() {}, onResult() {},
+      now: () => index + 1,
+    });
+    channel.receive({ version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, index + 1).toString('base64url'),
+      targetTabId: tabId, operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+      target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+      ackReceipt: Buffer.alloc(32, index + 1).toString('base64url') });
+    channel.close();
+  }
+  const resultKeys = [...Array(localStorage.length).keys()].map(index => localStorage.key(index)).filter(key => key.includes('accepted-result'));
+  assert.equal(resultKeys.length, 1);
+  assert.ok(localStorage.getItem(resultKeys[0]).length <= 8192);
+});
+
+test('durable result registry prunes expiry and fails closed on corrupt or oversized state', async () => {
+  const { clearStoredBridgeResult, createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 3).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  const channel = createBridgeResultChannel({ sessionStorage, localStorage, BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, claimReceipt: () => true,
+    revalidateReceipt: () => true, confirmReceipt: () => true, acknowledge() {}, onResult() {}, now: () => 1 });
+  channel.receive({ version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 3).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+    ackReceipt: Buffer.alloc(32, 3).toString('base64url') });
+  const key = [...Array(localStorage.length).keys()].map(index => localStorage.key(index)).find(value => value.includes('accepted-result'));
+  assert.ok(readStoredBridgeResult({ sessionStorage, localStorage, now: () => 2 }));
+  assert.equal(readStoredBridgeResult({ sessionStorage, localStorage, now: () => 7 * 24 * 60 * 60 * 1_000 + 2 }), null);
+  assert.deepEqual(JSON.parse(localStorage.getItem(key)).records, []);
+  localStorage.setItem(key, '{bad');
+  assert.equal(readStoredBridgeResult({ sessionStorage, localStorage }), null);
+  assert.equal(clearStoredBridgeResult({ sessionStorage, localStorage }), false);
+  localStorage.setItem(key, 'x'.repeat(8_193));
+  assert.equal(readStoredBridgeResult({ sessionStorage, localStorage }), null);
+  assert.equal(localStorage.length, 1);
   channel.close();
 });
 
@@ -367,7 +439,7 @@ test('Firefox origin survives refresh and accepts a manual return after default 
   const acknowledgements = [];
   const refreshedFirefox = createBridgeResultChannel({
     sessionStorage: firefoxSession, localStorage: firefoxLocal, BroadcastChannel: FirefoxBroadcast,
-    onResult: result => received.push(result), acknowledge: url => acknowledgements.push(url),
+    onResult: result => received.push(result), acknowledge: url => acknowledgements.push(url), now: () => 2,
   });
   const producer = createBridgeResultChannel({
     sessionStorage: memoryStorage(), localStorage: firefoxLocal, BroadcastChannel: FirefoxBroadcast,
@@ -398,7 +470,7 @@ test('closed original tab is replaced by a same-profile tab that receives UI res
   const order = [];
   const replacement = createBridgeResultChannel({
     sessionStorage: replacementSession, localStorage: sharedLocal, BroadcastChannel: Broadcast,
-    onResult: result => order.push(`ui:${result.operation}`), acknowledge: () => order.push('ack'),
+    onResult: result => order.push(`ui:${result.operation}`), acknowledge: () => order.push('ack'), now: () => 2,
   });
   const producer = createBridgeResultChannel({ sessionStorage: replacementSession, localStorage: sharedLocal, BroadcastChannel: Broadcast });
   await resumeBridgeReturnCode(code, {

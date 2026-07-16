@@ -6,6 +6,7 @@ import {
   consumeBridgeReturnCode,
   confirmBridgeResultReceipt,
   createBridgeLaunch,
+  revalidateBridgeResultReceipt,
   releaseBridgeResultReceipt,
   validateOperationResult,
 } from './bridgeProtocol.js';
@@ -22,8 +23,11 @@ const BUILD_PATTERN = /^[a-f0-9]{40}$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ACK_RECEIPT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_MESSAGE_BYTES = 1024;
-const STORED_RESULT_PREFIX = 'lightweaver.bridge.accepted-result.v1.';
+const STORED_RESULT_KEY = 'lightweaver.bridge.accepted-result-registry.v1';
 const MAX_STORED_RESULT_BYTES = 768;
+const MAX_STORED_REGISTRY_BYTES = 8_192;
+const MAX_STORED_RESULTS = 16;
+const STORED_RESULT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 
 function defaultNavigate(url) {
   globalThis.location.href = url;
@@ -117,27 +121,63 @@ function validateBridgeUiResult(value) {
   return Object.freeze(result);
 }
 
-function storedResultKey(sessionStorage, expectedTabId) {
+function storedResultTabId(sessionStorage, expectedTabId) {
   const tabId = sessionStorage?.getItem?.(BRIDGE_ORIGIN_TAB_KEY) || '';
   if (!TAB_PATTERN.test(tabId) || (expectedTabId && tabId !== expectedTabId)) return null;
-  return `${STORED_RESULT_PREFIX}${tabId}`;
+  return tabId;
+}
+
+function readStoredRegistry(localStorage) {
+  const raw = localStorage.getItem(STORED_RESULT_KEY);
+  if (raw === null) return { version: 1, records: [] };
+  if (typeof raw !== 'string' || raw.length > MAX_STORED_REGISTRY_BYTES) throw new Error('Durable Bridge result registry is invalid');
+  let registry;
+  try { registry = JSON.parse(raw); } catch { throw new Error('Durable Bridge result registry is invalid'); }
+  if (!registry || Object.keys(registry).sort().join(',') !== 'records,version' || registry.version !== 1
+    || !Array.isArray(registry.records) || registry.records.length > MAX_STORED_RESULTS) throw new Error('Durable Bridge result registry is invalid');
+  const tabs = new Set();
+  for (const record of registry.records) {
+    if (!record || Object.keys(record).sort().join(',') !== 'acceptedAt,expiresAt,result,tabId'
+      || !TAB_PATTERN.test(record.tabId) || tabs.has(record.tabId) || !Number.isSafeInteger(record.acceptedAt)
+      || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.acceptedAt
+      || record.expiresAt - record.acceptedAt !== STORED_RESULT_TTL_MS || !validateBridgeUiResult(record.result)) {
+      throw new Error('Durable Bridge result registry is invalid');
+    }
+    tabs.add(record.tabId);
+  }
+  return registry;
+}
+
+function writeStoredRegistry(localStorage, registry) {
+  let records = [...registry.records].sort((a, b) => a.acceptedAt - b.acceptedAt).slice(-MAX_STORED_RESULTS);
+  let raw = JSON.stringify({ version: 1, records });
+  while (raw.length > MAX_STORED_REGISTRY_BYTES && records.length) {
+    records = records.slice(1);
+    raw = JSON.stringify({ version: 1, records });
+  }
+  if (raw.length > MAX_STORED_REGISTRY_BYTES) throw new Error('Durable Bridge result registry is too large');
+  localStorage.setItem(STORED_RESULT_KEY, raw);
+  if (localStorage.getItem(STORED_RESULT_KEY) !== raw) throw new Error('Durable Bridge result storage failed');
 }
 
 function persistStoredBridgeResult(result, dependencies = {}) {
   const localStorage = dependencies.localStorage ?? globalThis.localStorage;
   const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
   const safeResult = validateBridgeUiResult(result);
-  const key = storedResultKey(sessionStorage, dependencies.targetTabId);
-  if (!localStorage || !key || !safeResult) throw new Error('Durable Bridge result storage is unavailable');
-  const raw = JSON.stringify(safeResult);
-  const original = localStorage.getItem(key);
+  const tabId = storedResultTabId(sessionStorage, dependencies.targetTabId);
+  if (!localStorage || !tabId || !safeResult) throw new Error('Durable Bridge result storage is unavailable');
+  const now = dependencies.now ?? Date.now;
+  const acceptedAt = now();
+  const original = localStorage.getItem(STORED_RESULT_KEY);
   try {
-    localStorage.setItem(key, raw);
-    if (localStorage.getItem(key) !== raw) throw new Error('Durable Bridge result storage failed');
+    const registry = readStoredRegistry(localStorage);
+    const records = registry.records.filter(record => record.expiresAt > acceptedAt && record.tabId !== tabId);
+    records.push({ tabId, acceptedAt, expiresAt: acceptedAt + STORED_RESULT_TTL_MS, result: safeResult });
+    writeStoredRegistry(localStorage, { version: 1, records });
   } catch (error) {
     try {
-      if (original === null) localStorage.removeItem(key);
-      else localStorage.setItem(key, original);
+      if (original === null) localStorage.removeItem(STORED_RESULT_KEY);
+      else localStorage.setItem(STORED_RESULT_KEY, original);
     } catch { /* Native and browser correlation remain pending. */ }
     throw error;
   }
@@ -147,20 +187,29 @@ function persistStoredBridgeResult(result, dependencies = {}) {
 export function readStoredBridgeResult(dependencies = {}) {
   const localStorage = dependencies.localStorage ?? globalThis.localStorage;
   const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
-  const key = storedResultKey(sessionStorage);
-  if (!localStorage || !key) return null;
-  const raw = localStorage.getItem(key);
-  if (typeof raw !== 'string' || raw.length > MAX_STORED_RESULT_BYTES) return null;
-  try { return validateBridgeUiResult(JSON.parse(raw)); } catch { return null; }
+  const tabId = storedResultTabId(sessionStorage);
+  if (!localStorage || !tabId) return null;
+  try {
+    const now = (dependencies.now ?? Date.now)();
+    const registry = readStoredRegistry(localStorage);
+    const active = registry.records.filter(record => record.expiresAt > now);
+    if (active.length !== registry.records.length) writeStoredRegistry(localStorage, { version: 1, records: active });
+    return active.find(record => record.tabId === tabId)?.result ?? null;
+  } catch { return null; }
 }
 
 export function clearStoredBridgeResult(dependencies = {}) {
   const localStorage = dependencies.localStorage ?? globalThis.localStorage;
   const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
-  const key = storedResultKey(sessionStorage);
-  if (!localStorage || !key || localStorage.getItem(key) === null) return false;
-  localStorage.removeItem(key);
-  return localStorage.getItem(key) === null;
+  const tabId = storedResultTabId(sessionStorage);
+  if (!localStorage || !tabId) return false;
+  try {
+    const registry = readStoredRegistry(localStorage);
+    const records = registry.records.filter(record => record.tabId !== tabId);
+    if (records.length === registry.records.length) return false;
+    writeStoredRegistry(localStorage, { version: 1, records });
+    return true;
+  } catch { return false; }
 }
 
 export function validateBridgeResultNotification(value) {
@@ -197,25 +246,34 @@ export function createBridgeResultChannel(dependencies = {}) {
   const eventTarget = dependencies.eventTarget ?? globalThis;
   const BroadcastChannelApi = dependencies.BroadcastChannel === undefined ? globalThis.BroadcastChannel : dependencies.BroadcastChannel;
   const cryptoApi = dependencies.crypto ?? globalThis.crypto;
+  const locks = dependencies.locks === undefined ? globalThis.navigator?.locks : dependencies.locks;
+  const ownerBytes = new Uint8Array(16);
+  const ownerToken = cryptoApi?.getRandomValues ? base64Url(cryptoApi.getRandomValues(ownerBytes)) : '';
+  const now = dependencies.now ?? Date.now;
   const onResult = dependencies.onResult;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
   const claimReceipt = dependencies.claimReceipt ?? ((receipt, message) => claimBridgeResultReceipt(receipt, {
-    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, ownerToken, now,
   }));
+  const revalidateReceipt = dependencies.revalidateReceipt ?? (dependencies.claimReceipt
+    ? (() => true)
+    : ((receipt, message) => revalidateBridgeResultReceipt(receipt, {
+      localStorage, operation: message.operation, targetTabId: message.targetTabId, ownerToken, now,
+    })));
   const confirmReceipt = dependencies.confirmReceipt ?? ((receipt, message) => confirmBridgeResultReceipt(receipt, {
-    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, ownerToken,
   }));
   const releaseReceipt = dependencies.releaseReceipt ?? ((receipt, message) => releaseBridgeResultReceipt(receipt, {
-    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, ownerToken,
   }));
   const persistResult = dependencies.persistResult ?? ((result, message) => persistStoredBridgeResult(result, {
-    localStorage, sessionStorage, targetTabId: message.targetTabId,
+    localStorage, sessionStorage, targetTabId: message.targetTabId, now,
   }));
   const delivered = new Set();
   const acknowledged = new Set();
   let channel = null;
 
-  const receive = raw => {
+  const receiveUnlocked = raw => {
     let candidate = raw;
     if (typeof raw === 'string') {
       if (raw.length > MAX_MESSAGE_BYTES) return;
@@ -237,20 +295,28 @@ export function createBridgeResultChannel(dependencies = {}) {
     const { ackReceipt } = message;
     try {
       if (!safeMessage) throw new Error('Bridge UI result is invalid');
+      if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
       persistResult(safeMessage, message);
+      if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
       onResult(safeMessage);
+      if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
+      if (!confirmReceipt(ackReceipt, message)) throw new Error('Bridge receipt finalization failed');
     } catch (error) {
-      releaseReceipt(ackReceipt, message);
+      try { releaseReceipt(ackReceipt, message); } catch { /* Preserve the original failure. */ }
       throw error;
-    }
-    if (!confirmReceipt(ackReceipt, message)) {
-      releaseReceipt(ackReceipt, message);
-      return;
     }
     if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
     delivered.add(ackReceipt);
     acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
     acknowledged.add(ackReceipt);
+  };
+  const receive = raw => {
+    if (!locks?.request) return receiveUnlocked(raw);
+    let receipt = '';
+    const candidate = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
+    receipt = candidate?.ackReceipt || '';
+    if (!ACK_RECEIPT_PATTERN.test(receipt)) return undefined;
+    return locks.request(`lightweaver.bridge.result-claim.v1.${receipt}`, { mode: 'exclusive' }, () => receiveUnlocked(raw));
   };
   const onStorage = event => {
     if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receive(event.newValue);
