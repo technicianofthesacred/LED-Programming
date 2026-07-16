@@ -1054,7 +1054,6 @@ void runtimeSetBrightness(float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
   manualBrightness = value01;
-  applyToZones("", [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
 void runtimeSetSpeed(float speed) {
@@ -1091,7 +1090,6 @@ void runtimeSetBlackout(bool on) {
 void runtimeSetBrightnessZ(const String& targetId, float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
-  if (targetId.length() == 0) manualBrightness = value01;
   applyToZones(targetId, [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
@@ -1151,6 +1149,15 @@ void runtimeTriggerIdentify() {
 }
 
 float runtimeGetBrightness() { return manualBrightness; }
+float runtimeGetBrightnessZ(const String& targetId) {
+  if (runtimeConfig.zoneCount == 0) return manualBrightness;
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].brightness;
+    }
+  }
+  return runtimeConfig.zones[0].brightness;
+}
 float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }

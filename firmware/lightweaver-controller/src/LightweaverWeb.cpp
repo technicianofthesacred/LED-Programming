@@ -1009,7 +1009,7 @@ void handleControlPost() {
   // Echo current state back
   JsonDocument out;
   out["ok"] = true;
-  out["brightness"] = runtimeGetBrightness();
+  out["brightness"] = runtimeGetBrightnessZ(zoneTarget);
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
   out["blackout"] = runtimeIsBlackedOut();

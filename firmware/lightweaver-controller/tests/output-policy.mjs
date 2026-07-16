@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -93,11 +94,21 @@ function maskCommentsAndStrings(source) {
 function extractFunction(source, functionName) {
   const masked = maskCommentsAndStrings(source);
   const signature = new RegExp(`\\b${functionName}\\s*\\(`);
-  const match = signature.exec(masked);
-  if (!match) throw new Error(`Cannot find ingestion function ${functionName}`);
-
-  const openBrace = masked.indexOf('{', match.index + match[0].length);
-  if (openBrace < 0) throw new Error(`Cannot find body for ingestion function ${functionName}`);
+  let searchFrom = 0;
+  let openBrace = -1;
+  while (searchFrom < masked.length) {
+    const match = signature.exec(masked.slice(searchFrom));
+    if (!match) throw new Error(`Cannot find function definition ${functionName}`);
+    const signatureEnd = searchFrom + match.index + match[0].length;
+    const candidateBrace = masked.indexOf('{', signatureEnd);
+    const declarationEnd = masked.indexOf(';', signatureEnd);
+    if (candidateBrace >= 0 && (declarationEnd < 0 || candidateBrace < declarationEnd)) {
+      openBrace = candidateBrace;
+      break;
+    }
+    searchFrom = declarationEnd + 1;
+  }
+  if (openBrace < 0) throw new Error(`Cannot find body for function ${functionName}`);
 
   let depth = 0;
   for (let i = openBrace; i < masked.length; i += 1) {
@@ -138,11 +149,42 @@ function verifyRawLiveSourceContracts() {
   }
 }
 
+function verifyBrightnessSetterContracts() {
+  const main = readFileSync(resolve(import.meta.dirname, '../src/main.cpp'), 'utf8');
+  const masterSetter = extractFunction(main, 'runtimeSetBrightness');
+  const zoneSetter = extractFunction(main, 'runtimeSetBrightnessZ');
+  const physicalControls = extractFunction(main, 'handleControlEvent');
+
+  assert.match(masterSetter, /value01\s*<\s*0\.02f/, 'master brightness should retain its 2% lower bound');
+  assert.match(masterSetter, /value01\s*>\s*1\.0f/, 'master brightness should retain its 100% upper bound');
+  assert.match(masterSetter, /manualBrightness\s*=\s*value01/, 'master brightness should write manualBrightness');
+  assert.doesNotMatch(masterSetter, /applyToZones\s*\(/, 'master brightness must not also change zone brightness');
+
+  assert.match(zoneSetter, /value01\s*<\s*0\.02f/, 'zone brightness should retain its 2% lower bound');
+  assert.match(zoneSetter, /value01\s*>\s*1\.0f/, 'zone brightness should retain its 100% upper bound');
+  assert.match(zoneSetter, /applyToZones\s*\(\s*targetId/, 'zone brightness should use the normal zone targeting rules');
+  assert.match(zoneSetter, /z\.brightness\s*=\s*value01/, 'zone brightness should write only the selected zone brightness');
+  assert.doesNotMatch(
+    zoneSetter,
+    /manualBrightness/,
+    'zone brightness must never change master brightness, including for an empty target',
+  );
+
+  assert.match(
+    physicalControls,
+    /manualBrightness\s*=\s*applyRotaryBrightness\s*\(\s*manualBrightness/,
+    'physical rotary brightness should adjust the master brightness',
+  );
+  assert.doesNotMatch(physicalControls, /applyToZones\s*\(/, 'physical rotary brightness must not change zone brightness');
+  assert.doesNotMatch(physicalControls, /runtimeSetBrightnessZ\s*\(/, 'physical rotary brightness must not route through zone brightness');
+}
+
 try {
   execFileSync('c++', ['-std=c++17', testSource, '-o', testBinary], {
     stdio: 'inherit',
   });
   execFileSync(testBinary, { stdio: 'inherit' });
+  verifyBrightnessSetterContracts();
   verifyRawLiveSourceContracts();
   console.log('output-policy tests passed');
 } finally {
