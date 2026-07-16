@@ -22,10 +22,8 @@ import { fileURLToPath } from 'node:url';
 // The flasher's own validation (pure ESM, dependency-free): ESP magic byte +
 // HTML/SPA-fallback detection live in one place instead of being re-implemented.
 import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js';
-import { loadProductionFirmwareRelease } from '../src/lib/firmwareRelease.js';
-import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../src/lib/productionJobPackage.js';
+import { verifyProductionCachePolicies, verifyProductionReleaseSet } from '../src/lib/productionReleaseGate.js';
 import {
-  assertReleaseProvenance,
   assertLegacyRouteRemoved,
   assertStudioRoot,
   resolveProductionUrls,
@@ -103,22 +101,15 @@ try {
 
 let release;
 let productionJobCount = 0;
+const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
+  ...init,
+  signal: AbortSignal.timeout(20_000),
+});
 try {
-  const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
-    ...init,
-    signal: AbortSignal.timeout(20_000),
-  });
-  // The verifier owns the relative manifest/signature paths. productionFetch
-  // binds those trusted paths to the one origin selected above.
-  release = await loadProductionFirmwareRelease(productionFetch, webcrypto);
-  const provenanceResponse = await productionFetch(provenanceUrl, { cache: 'no-store', redirect: 'error' });
-  await assertReleaseProvenance(provenanceResponse, release.manifest, provenanceUrl);
-
-  const jobIndex = await loadProductionJobIndex(productionFetch);
-  for (const entry of jobIndex.jobs) {
-    await loadProductionJobFromIndexEntry(entry, { fetchImpl: productionFetch, cryptoImpl: webcrypto });
-  }
-  productionJobCount = jobIndex.jobs.length;
+  const verified = await verifyProductionReleaseSet(productionFetch, webcrypto);
+  release = verified.release;
+  productionJobCount = verified.jobIndex.jobs.length;
+  await verifyProductionCachePolicies(productionFetch, verified);
 } catch (err) {
   fail(
     `Production's signed firmware/job release set is unavailable or invalid. The website must not flash or load it.\n` +

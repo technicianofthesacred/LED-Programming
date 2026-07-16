@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, sep } from 'node:path';
+import { verifyProductionReleaseSet } from '../src/lib/productionReleaseGate.js';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
@@ -34,7 +36,7 @@ assert.match(pkg.devDependencies.wrangler, /^\d+\.\d+\.\d+$/);
 assert.equal(lock.packages[''].devDependencies.wrangler, pkg.devDependencies.wrangler);
 assert.doesNotMatch(JSON.stringify(pkg.scripts), /npx --yes wrangler/);
 assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-staging\.mjs/);
-assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js');
+assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js');
 assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts --project=chromium --workers=1');
 assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:show && npm run test:production/);
 assert.match(pkg.scripts['launch:source'], /^npm run test:core:source/);
@@ -79,12 +81,14 @@ if (process.argv.includes('--artifact')) {
   const stagedRoot = resolve(root, '.pages/lightweaver');
   const stagedIndexPath = resolve(stagedRoot, 'index.html');
   const stagedRedirectsPath = resolve(stagedRoot, '_redirects');
+  const stagedHeadersPath = resolve(stagedRoot, '_headers');
   const stagedNotFoundPath = resolve(stagedRoot, '404.html');
   const stagedFirmwarePath = resolve(stagedRoot, 'firmware/lightweaver-controller-esp32s3-factory.bin');
   const stagedJobIndexPath = resolve(stagedRoot, 'production/jobs/index.json');
 
   assert.ok(existsSync(stagedIndexPath), 'staged root index.html must exist');
   assert.ok(existsSync(stagedRedirectsPath), 'staged root redirects must exist');
+  assert.ok(existsSync(stagedHeadersPath), 'staged root headers must exist');
   assert.ok(existsSync(stagedNotFoundPath), 'staged top-level 404.html must exist');
   assert.ok(existsSync(stagedFirmwarePath), 'staged root factory firmware must exist');
   assert.ok(existsSync(stagedJobIndexPath), 'staged production job index must exist');
@@ -92,30 +96,22 @@ if (process.argv.includes('--artifact')) {
 
   const stagedIndex = readFileSync(stagedIndexPath, 'utf8');
   const stagedRedirects = readFileSync(stagedRedirectsPath, 'utf8');
+  const stagedHeaders = readFileSync(stagedHeadersPath, 'utf8');
   assert.match(stagedIndex, /(?:src|href)="\/assets\//, 'built asset URLs must be rooted at /assets');
   assert.doesNotMatch(stagedIndex, /(?:src|href)="\/design\//, 'built asset URLs must not use the removed mount');
   assert.equal(stagedRedirects, redirects, 'staging must preserve the root redirect contract from public');
+  assert.equal(stagedHeaders, headers, 'staging must preserve the production cache and security header contract from public');
 
-  const { createHash } = await import('node:crypto');
-  const jobIndex = JSON.parse(readFileSync(stagedJobIndexPath, 'utf8'));
-  assert.deepEqual(Object.keys(jobIndex).sort(), ['jobs', 'schemaVersion']);
-  assert.equal(jobIndex.schemaVersion, 1);
-  assert.ok(Array.isArray(jobIndex.jobs));
-  const seenIds = new Set();
-  const seenDigests = new Set();
-  for (const entry of jobIndex.jobs) {
-    assert.deepEqual(Object.keys(entry).sort(), ['artifactSha256', 'digest', 'jobId', 'label', 'size', 'url']);
-    assert.match(entry.digest, /^[a-f0-9]{64}$/);
-    assert.match(entry.artifactSha256, /^[a-f0-9]{64}$/);
-    assert.equal(entry.url, `/production/jobs/${entry.digest}.lwjob.json`);
-    assert.ok(!seenIds.has(entry.jobId), `duplicate production job ID ${entry.jobId}`);
-    assert.ok(!seenDigests.has(entry.digest), `duplicate production job digest ${entry.digest}`);
-    seenIds.add(entry.jobId);
-    seenDigests.add(entry.digest);
-    const artifact = readFileSync(resolve(stagedRoot, entry.url.slice(1)));
-    assert.equal(artifact.byteLength, entry.size, `production job ${entry.jobId} size must match index`);
-    assert.equal(createHash('sha256').update(artifact).digest('hex'), entry.artifactSha256, `production job ${entry.jobId} hash must match index`);
-  }
+  const stagedFetch = async input => {
+    const pathname = decodeURIComponent(new URL(String(input), 'https://staged.lightweaver.invalid').pathname);
+    const candidate = resolve(stagedRoot, `.${pathname}`);
+    assert.ok(candidate.startsWith(`${stagedRoot}${sep}`), `staged release path escaped artifact root: ${pathname}`);
+    if (!existsSync(candidate)) return new Response('Not found', { status: 404 });
+    const bytes = readFileSync(candidate);
+    return new Response(bytes, { status: 200, headers: { 'content-length': String(bytes.byteLength) } });
+  };
+  const verified = await verifyProductionReleaseSet(stagedFetch, webcrypto);
+  assert.equal(verified.jobs.length, verified.jobIndex.jobs.length, 'every staged production job index entry must load and verify');
 }
 
 console.log('pages-staging tests passed');

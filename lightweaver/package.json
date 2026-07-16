@@ -16,7 +16,7 @@
     "doctor:wled": "node scripts/wled-doctor.mjs",
     "launch:source": "npm run test:core:source && npm run test:prod-deploy && npm run test:show && npm run test:production && node scripts/ensure-rollup-native.mjs && npm run build && npm run stage:pages && npm run verify:pages",
     "launch:check": "npm run launch:source && npm run firmware:check-bin",
-    "test:prod-deploy": "node --test src/lib/productionDeploymentCheck.test.js",
+    "test:prod-deploy": "node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js",
     "test:show": "playwright test tests/show-screen.spec.ts",
     "test:production": "playwright test tests/production-setup.spec.ts --project=chromium --workers=1",
     "test:installer-core": "node --test ../packages/installer-core/test/*.test.js",
