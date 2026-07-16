@@ -27,6 +27,21 @@ assert.match(
 );
 assert.match(
   mainSource,
+  /LightweaverColorPipeline\s+outputColorPipeline;/,
+  'firmware should keep one configured output color pipeline',
+);
+assert.match(
+  mainSource,
+  /physicalLeds\[i\]\s*=\s*outputColorPipeline\.transform\(leds\[i\],\s*ledColorOrderCode\);/,
+  'logical RGB should be transformed into the physical buffer without modifying the logical canvas',
+);
+assert.doesNotMatch(
+  mainSource,
+  /leds\[i\]\s*=\s*outputColorPipeline\.transform/,
+  'the output transform must never overwrite logical RGB',
+);
+assert.match(
+  mainSource,
   /runtimeSetLedColorOrder\(const String& order\)/,
   'firmware should expose a runtime color-order setter',
 );

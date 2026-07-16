@@ -90,6 +90,24 @@ bool controlBool(JsonDocument& doc, const char* key) {
   return value == "1" || value == "true" || value == "yes" || value == "on";
 }
 
+String outputStatusJson() {
+  JsonDocument doc;
+  doc["contract"] = 1;
+  doc["sourceClass"] = runtimeOutputSourceClass();
+  doc["brightnessByte"] = runtimeOutputBrightnessByte();
+  doc["brightnessScale"] = runtimeOutputBrightnessScale();
+  doc["gammaEnabled"] = runtimeOutputGammaEnabled();
+  doc["gammaValue"] = runtimeOutputGammaValue();
+  doc["calibration"]["red"] = runtimeOutputCalibrationRed();
+  doc["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  doc["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  doc["measuredFps"] = runtimeOutputMeasuredFps();
+  doc["dithering"] = runtimeOutputDithering();
+  String out;
+  serializeJson(doc, out);
+  return out;
+}
+
 String escapeHtml(const String& in) {
   String out;
   out.reserve(in.length());
@@ -893,7 +911,8 @@ void handleStatus() {
   int lastBrace = body.lastIndexOf('}');
   if (lastBrace > 0) {
     String tail = String(",\"streaming\":") + (runtimeIsStreaming() ? "true" : "false") +
-                  ",\"frameSource\":\"" + srcLabel + "\"}";
+                  ",\"frameSource\":\"" + srcLabel + "\"" +
+                  ",\"lwOutput\":" + outputStatusJson() + "}";
     body = body.substring(0, lastBrace) + tail;
   }
   server.send(200, "application/json", body);

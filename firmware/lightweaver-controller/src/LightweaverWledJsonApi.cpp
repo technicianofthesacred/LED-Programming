@@ -68,7 +68,7 @@ String buildInfoJson() {
   doc["live"] = frameSourceIsStreaming();
   doc["lc"] = 1;                      // light capability bits — RGB only
   doc["leds"]["count"] = totalPixels;
-  doc["leds"]["fps"] = 30;            // our renderer ceiling
+  doc["leds"]["fps"] = runtimeOutputMeasuredFps();
   doc["leds"]["rgbw"] = false;
   doc["leds"]["wv"] = 0;
   doc["leds"]["pwr"] = 0;
@@ -93,6 +93,18 @@ String buildInfoJson() {
   doc["lwLive"]["streaming"] = frameSourceIsStreaming();
   doc["lwLive"]["source"] = src == 1 ? "wled-realtime"
                           : src == 2 ? "artnet" : "self";
+  JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
+  lwOutput["contract"] = 1;
+  lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
+  lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
+  lwOutput["gammaValue"] = runtimeOutputGammaValue();
+  lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();
+  lwOutput["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  lwOutput["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  lwOutput["measuredFps"] = runtimeOutputMeasuredFps();
+  lwOutput["dithering"] = runtimeOutputDithering();
   String out;
   serializeJson(doc, out);
   return out;

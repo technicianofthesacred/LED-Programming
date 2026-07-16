@@ -61,3 +61,16 @@ bool runtimeRename(const String& pieceName, const String& hostname, String& mess
 bool runtimeIsStreaming();
 uint8_t runtimeFrameSource();
 void runtimeCancelStream();
+
+// Cached state from the physical LED output boundary. These values describe
+// frames that actually reached FastLED.show(), not incoming packet rates.
+uint8_t runtimeOutputBrightnessByte();
+float runtimeOutputBrightnessScale();
+const char* runtimeOutputSourceClass();
+bool runtimeOutputGammaEnabled();
+float runtimeOutputGammaValue();
+float runtimeOutputCalibrationRed();
+float runtimeOutputCalibrationGreen();
+float runtimeOutputCalibrationBlue();
+uint16_t runtimeOutputMeasuredFps();
+bool runtimeOutputDithering();
