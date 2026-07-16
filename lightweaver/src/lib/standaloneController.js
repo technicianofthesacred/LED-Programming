@@ -29,6 +29,25 @@ export const STANDALONE_RUNTIME_MODES = ['sequence', 'procedural', 'preset'];
 
 export const DEFAULT_STANDALONE_RUNTIME_MODE = 'sequence';
 
+export function normalizeStandaloneLed(led = {}) {
+  const source = led && typeof led === 'object' ? led : {};
+  const calibration = source.calibration && typeof source.calibration === 'object'
+    ? source.calibration
+    : {};
+  return {
+    ...DEFAULT_STANDALONE_LED,
+    ...source,
+    brightnessLimit: clamp01(source.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
+    outputGammaEnabled: source.outputGammaEnabled === true,
+    outputGammaValue: clampNumber(source.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
+    calibration: {
+      red: clamp01(calibration.red, DEFAULT_STANDALONE_LED.calibration.red),
+      green: clamp01(calibration.green, DEFAULT_STANDALONE_LED.calibration.green),
+      blue: clamp01(calibration.blue, DEFAULT_STANDALONE_LED.calibration.blue),
+    },
+  };
+}
+
 export function normalizeStandaloneOutputs(outputs = DEFAULT_STANDALONE_OUTPUTS) {
   return outputs
     .slice(0, 4)
@@ -67,18 +86,7 @@ export function buildStandaloneProfile({
       id: sanitizeId(projectName),
       name: projectName || 'Untitled Project',
     },
-    led: {
-      ...DEFAULT_STANDALONE_LED,
-      ...led,
-      brightnessLimit: clamp01(led.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
-      outputGammaEnabled: led.outputGammaEnabled === true,
-      outputGammaValue: clampNumber(led.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
-      calibration: {
-        red: clamp01(led.calibration?.red, DEFAULT_STANDALONE_LED.calibration.red),
-        green: clamp01(led.calibration?.green, DEFAULT_STANDALONE_LED.calibration.green),
-        blue: clamp01(led.calibration?.blue, DEFAULT_STANDALONE_LED.calibration.blue),
-      },
-    },
+    led: normalizeStandaloneLed(led),
     outputs: normalizedOutputs,
     controls: normalizeControls(controls),
     looks: normalizedLooks,

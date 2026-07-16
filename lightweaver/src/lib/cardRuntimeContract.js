@@ -34,10 +34,13 @@ export const DEFAULT_CARD_LED = Object.freeze({
 });
 
 export function normalizeCardOutputSettings(led = {}) {
-  const calibration = led.calibration || {};
+  const source = led && typeof led === 'object' ? led : {};
+  const calibration = source.calibration && typeof source.calibration === 'object'
+    ? source.calibration
+    : {};
   return {
-    outputGammaEnabled: led.outputGammaEnabled === true,
-    outputGammaValue: clampNumber(led.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
+    outputGammaEnabled: source.outputGammaEnabled === true,
+    outputGammaValue: clampNumber(source.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
     calibration: {
       red: clampUnit(calibration.red, DEFAULT_CARD_LED.calibration.red),
       green: clampUnit(calibration.green, DEFAULT_CARD_LED.calibration.green),

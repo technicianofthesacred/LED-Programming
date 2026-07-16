@@ -184,6 +184,11 @@ assert.equal(legacyRepairPackage.config.led.outputGammaEnabled, false);
 assert.equal(legacyRepairPackage.config.led.outputGammaValue, 2.2);
 assert.deepEqual(legacyRepairPackage.config.led.calibration, { red: 1, green: 1, blue: 1 });
 
+const malformedRepairPackage = buildMirroredLedRepairPackage({ config: { led: null } });
+assert.equal(malformedRepairPackage.config.led.outputGammaEnabled, false);
+assert.equal(malformedRepairPackage.config.led.outputGammaValue, 2.2);
+assert.deepEqual(malformedRepairPackage.config.led.calibration, { red: 1, green: 1, blue: 1 });
+
 const repairRequests = [];
 globalThis.fetch = async (url, options = {}) => {
   repairRequests.push({ url, options });

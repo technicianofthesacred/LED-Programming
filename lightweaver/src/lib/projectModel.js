@@ -12,10 +12,10 @@ import {
 } from './wledControlContract.js';
 import {
   DEFAULT_STANDALONE_CONTROLS,
-  DEFAULT_STANDALONE_LED,
   DEFAULT_STANDALONE_RUNTIME_MODE,
   DEFAULT_STANDALONE_OUTPUTS,
   STANDALONE_RUNTIME_MODES,
+  normalizeStandaloneLed,
 } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
@@ -98,10 +98,7 @@ export function defaultStandaloneController(overrides = {}) {
         patternCycleIds: deriveLegacyPatternCycleIds(playlist),
       },
     },
-    led: {
-      ...DEFAULT_STANDALONE_LED,
-      ...(overrides.led || {}),
-    },
+    led: normalizeStandaloneLed(overrides.led),
     defaultLook,
     activeLookId: String(overrides.activeLookId || ''),
     looks,

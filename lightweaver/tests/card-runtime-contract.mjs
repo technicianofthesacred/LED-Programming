@@ -145,6 +145,24 @@ const cleanStudioController = defaultStandaloneController({
 assert.deepEqual(cleanStudioController.playlist, []);
 assert.deepEqual(cleanStudioController.controls.encoder.patternCycleIds, []);
 
+const firstDefaultController = defaultStandaloneController();
+const secondDefaultController = defaultStandaloneController();
+assert.notEqual(firstDefaultController.led.calibration, secondDefaultController.led.calibration);
+firstDefaultController.led.calibration.red = 0.25;
+assert.equal(secondDefaultController.led.calibration.red, 1);
+assert.equal(DEFAULT_STANDALONE_LED.calibration.red, 1);
+
+const normalizedDefaultController = defaultStandaloneController({
+  led: {
+    outputGammaEnabled: true,
+    outputGammaValue: 8,
+    calibration: { red: -1, green: 0.5, blue: Number.POSITIVE_INFINITY },
+  },
+});
+assert.equal(normalizedDefaultController.led.outputGammaEnabled, true);
+assert.equal(normalizedDefaultController.led.outputGammaValue, 3);
+assert.deepEqual(normalizedDefaultController.led.calibration, { red: 0, green: 0.5, blue: 1 });
+
 const pkg = makeCardRuntimePackage({
   projectId: 'lwproj-bench-123',
   projectName: 'Bench Piece',
