@@ -1,8 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { buildProductionJob, canonicalProductionJobBytes } from '../src/lib/productionJobPackage.js';
 import { fingerprintCommissioningProject } from '../src/lib/cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+
+const signedRelease = JSON.parse(await readFile(new URL('../public/firmware/release-manifest.json', import.meta.url), 'utf8'));
 
 async function productionJob() {
   const standaloneController = {
@@ -39,7 +42,12 @@ async function productionJob() {
   });
   return buildProductionJob({
     schemaVersion: 1, jobId: 'moon-batch-7', label: 'Moon · batch 7', artwork: 'Moon', batch: '7',
-    firmware: { target: 'esp32-s3-n16r8', version: '1.0.0', buildId: 'f5625d5970bd9e737889977f83efa25562c430f0', minimumVersion: '1.0.0' },
+    firmware: {
+      target: signedRelease.target,
+      version: signedRelease.firmwareVersion,
+      buildId: signedRelease.buildId,
+      minimumVersion: '1.0.0',
+    },
     project: { id: 'moon-01', revision: 12, fingerprint, restoreSnapshot }, configuration,
     expectedOutputs: [{ id: 'out1', label: 'Two rings', pin: 16, pixels: 8, direction: 'mixed', colorOrder: 'GRB' }],
   });
@@ -82,11 +90,11 @@ async function installDriver(page, {
   connectErrorOnce = '',
   disconnectFailureAt = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
 } = {}) {
-  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
-      cardId: 'lw-aabbccddeeff', firmwareVersion: '1.0.0',
-      buildId: 'f5625d5970bd9e737889977f83efa25562c430f0', projectRevision: 12,
+      cardId: 'lw-aabbccddeeff', firmwareVersion,
+      buildId: firmwareBuildId, projectRevision: 12,
       projectFingerprint: '', productionJobId: 'moon-batch-7', productionJobDigest: '',
     };
     window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
@@ -225,8 +233,17 @@ async function installDriver(page, {
         return evidence;
       },
     };
-  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
 }
+
+test('production fixture tracks the exact currently signed firmware release', async () => {
+  const job = await productionJob();
+  expect(job.firmware).toMatchObject({
+    target: signedRelease.target,
+    version: signedRelease.firmwareVersion,
+    buildId: signedRelease.buildId,
+  });
+});
 
 test('USB failure shows one safe action and exports only bounded redacted diagnostics', async ({ page }) => {
   await serveJob(page);
