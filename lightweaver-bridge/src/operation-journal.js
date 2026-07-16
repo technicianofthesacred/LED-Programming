@@ -6,6 +6,8 @@ const path = require('node:path');
 
 const JOURNAL_VERSION = 1;
 const JOURNAL_MAX_BYTES = 4096;
+const CLEANUP_MAX_DEPTH = 16;
+const CLEANUP_MAX_ENTRIES = 256;
 const OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
 const BOUNDARIES = new Set(['before-mutation', 'erase-or-write-started']);
 const VERIFICATIONS = new Set(['not-verified', 'flash-verified']);
@@ -297,6 +299,38 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     return Object.freeze({ ...value });
   }
 
+  function ownedPathExistsOrUnknown(candidate) {
+    try { fs.lstatSync(candidate); return true; } catch (error) { return error?.code !== 'ENOENT'; }
+  }
+
+  function removeOwnedPath(candidate) {
+    const budget = { entries: 0 };
+    function removeEntry(entry, depth) {
+      let stat;
+      try { stat = fs.lstatSync(entry); } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
+      budget.entries += 1;
+      if (budget.entries > CLEANUP_MAX_ENTRIES || depth > CLEANUP_MAX_DEPTH) {
+        throw new Error('Reserved recovery cleanup exceeds its safe bound');
+      }
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        fs.unlinkSync(entry);
+        return;
+      }
+      const names = fs.readdirSync(entry);
+      if (budget.entries + names.length > CLEANUP_MAX_ENTRIES) {
+        throw new Error('Reserved recovery cleanup exceeds its safe bound');
+      }
+      for (const name of names) {
+        if (name === '.' || name === '..' || path.basename(name) !== name) {
+          throw new Error('Reserved recovery cleanup entry is invalid');
+        }
+        removeEntry(path.join(entry, name), depth + 1);
+      }
+      fs.rmdirSync(entry);
+    }
+    removeEntry(candidate, 0);
+  }
+
   function clear() {
     const candidates = [file, recoveryFile, acquisitionFile, corruptRecoveryFile, ...quarantineFiles];
     let authority = activeFile;
@@ -305,17 +339,13 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     }
     const auxiliary = candidates.filter(candidate => candidate !== authority);
     for (const candidate of auxiliary) {
-      try { fs.unlinkSync(candidate); } catch (error) { if (error?.code !== 'ENOENT') continue; }
+      try { removeOwnedPath(candidate); } catch {}
     }
-    const auxiliaryRemaining = auxiliary.some(candidate => {
-      try { return fs.existsSync(candidate); } catch { return true; }
-    });
+    const auxiliaryRemaining = auxiliary.some(ownedPathExistsOrUnknown);
     if (!auxiliaryRemaining && authority) {
-      try { fs.unlinkSync(authority); } catch (error) { if (error?.code !== 'ENOENT') {} }
+      try { removeOwnedPath(authority); } catch {}
     }
-    const remaining = candidates.filter(candidate => {
-      try { return fs.existsSync(candidate); } catch { return true; }
-    }).map(candidate => path.basename(candidate));
+    const remaining = candidates.filter(ownedPathExistsOrUnknown).map(candidate => path.basename(candidate));
     if (!remaining.length) activeFile = null;
     return Object.freeze({ cleared: remaining.length === 0, remaining: Object.freeze(remaining) });
   }
@@ -413,7 +443,7 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       if (!current || current.flashVerification !== 'flash-verified' || current.restartResult !== 'restarted') return false;
       const remaining = [];
       for (const candidate of [corruptRecoveryFile, ...quarantineFiles]) {
-        try { fs.unlinkSync(candidate); } catch (error) { if (error?.code !== 'ENOENT') remaining.push(path.basename(candidate)); }
+        try { removeOwnedPath(candidate); } catch { remaining.push(path.basename(candidate)); }
       }
       return Object.freeze({ cleared: remaining.length === 0, remaining: Object.freeze(remaining) });
     },

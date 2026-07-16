@@ -529,6 +529,74 @@ test('invalid quarantine stays presence-only and bounded through explicit recove
   assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] });
 });
 
+test('explicit completed recovery safely removes empty and nonempty reserved quarantine directories', () => {
+  for (const kind of ['empty', 'nonempty']) {
+    const directory = temporaryDirectory();
+    const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+    const outside = path.join(directory, 'outside-target');
+    fs.mkdirSync(quarantine);
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'preserved.txt'), 'preserve');
+    if (kind === 'nonempty') {
+      const nested = path.join(quarantine, 'nested');
+      fs.mkdirSync(nested);
+      fs.writeFileSync(path.join(nested, 'debris.bin'), 'debris');
+      fs.symlinkSync(outside, path.join(nested, 'outside-link'));
+    }
+    const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+    journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+    journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+    journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+    journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
+    assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] }, kind);
+    assert.equal(fs.existsSync(quarantine), false, kind);
+    assert.equal(fs.readFileSync(path.join(outside, 'preserved.txt'), 'utf8'), 'preserve', kind);
+  }
+});
+
+test('directory cleanup permission failure retains completed authority and succeeds on retry', () => {
+  const directory = temporaryDirectory();
+  const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+  const debris = path.join(quarantine, 'debris.bin');
+  fs.mkdirSync(quarantine);
+  fs.writeFileSync(debris, 'debris');
+  const failingFs = Object.create(fs);
+  failingFs.unlinkSync = candidate => {
+    if (candidate === debris) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    return fs.unlinkSync(candidate);
+  };
+  const journal = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 1 });
+  journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+  journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+  journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
+  assert.deepEqual(journal.completeCorruptRecovery(), {
+    cleared: false, remaining: ['operation-journal.quarantine.canonical'],
+  });
+  assert.equal(journal.load().flashVerification, 'flash-verified');
+  assert.equal(journal.clear().cleared, false);
+  assert.equal(fs.existsSync(path.join(directory, 'operation-journal.recovery.json')), true);
+  const retry = createOperationJournal({ userDataPath: directory });
+  assert.deepEqual(retry.completeCorruptRecovery(), { cleared: true, remaining: [] });
+  assert.equal(retry.load().flashVerification, 'flash-verified');
+});
+
+test('Windows junction-like quarantine is unlinked without traversing its target', () => {
+  const directory = temporaryDirectory();
+  const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+  const outside = path.join(directory, 'junction-target');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'preserved.txt'), 'preserve');
+  fs.symlinkSync(outside, quarantine, 'dir');
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1, platform: 'win32' });
+  journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+  journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+  journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
+  assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] });
+  assert.equal(fs.readFileSync(path.join(outside, 'preserved.txt'), 'utf8'), 'preserve');
+});
+
 test('lost or corrupt marker after quarantine publication remains actionable through explicit corrupt recovery', () => {
   for (const markerState of ['missing', 'corrupt']) {
     const directory = temporaryDirectory();
