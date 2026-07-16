@@ -440,6 +440,38 @@ test('distinct receipt accepts share one registry mutation lock and both restore
   }
 });
 
+test('fallback registry contention waits for release and times out without UI or ACK', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 11).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  const leaseKey = 'lightweaver.bridge.accepted-result-registry.lease.v1';
+  let now = 1;
+  localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 12).toString('base64url'), expiresAt: 50 }));
+  const calls = [];
+  const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+    claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+    releaseReceipt: () => calls.push('release'), onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
+    now: () => now, registryDelay: async () => { now = 51; localStorage.removeItem(leaseKey); } });
+  const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 11).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 11).toString('base64url') };
+  await channel.receive(message);
+  assert.deepEqual(calls, ['ui', 'ack']);
+  calls.length = 0; now = 100;
+  localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 12).toString('base64url'), expiresAt: 10_000 }));
+  const blocked = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+    claimReceipt: () => true, revalidateReceipt: () => true, releaseReceipt: () => calls.push('release'),
+    onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'), now: () => now,
+    registryDelay: async () => { now += 900; } });
+  await assert.rejects(() => blocked.receive({ ...message, deliveryId: Buffer.alloc(12, 13).toString('base64url'), ackReceipt: Buffer.alloc(32, 13).toString('base64url') }), /busy/);
+  assert.deepEqual(calls, ['release']);
+  channel.close(); blocked.close();
+});
+
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
   const { bootstrapBridgeCallback, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
   const calls = [];
