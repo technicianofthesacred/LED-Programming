@@ -125,6 +125,27 @@ This is the actual customer flow for the ESP32-only runtime. Run through end-to-
 
 If any step fails, see Section 7.
 
+### Output-correctness acceptance fixture
+
+Run this fixture after firmware or controller-package changes and before approving any new effect work. Use a strip with the first LED clearly marked **blue end** and the final LED clearly marked **red end**. Keep the same power supply, LED count, color order, brightness limit, and camera exposure for the whole run.
+
+Record `GET /api/status` before and after each source change. Its `lwOutput` object must report the expected `sourceClass`, `brightnessByte`, output gamma/calibration values, measured FPS, and dithering state.
+
+- [ ] **Direction and channel order:** display first LED blue and final LED red, with all LEDs between them black. The marked ends and colors must match exactly.
+- [ ] **Primary/white frames:** display full red, green, blue, then white. No channel may be swapped, stuck, or contaminated by another channel.
+- [ ] **Neutral ramps:** display a gray ramp and a low-level gradient. Brightness must increase monotonically without a black step after the first non-zero value. With output gamma disabled and calibration at `1/1/1`, the result is the legacy-neutral baseline.
+- [ ] **Gamma comparison:** repeat the ramps with output gamma disabled, then enabled at `2.2`. The enabled run must preserve black and full scale while visibly redistributing intermediate levels. Confirm `lwOutput.gammaEnabled` and `gammaValue` match the active package.
+- [ ] **Calibration comparison:** at low brightness, reduce one calibration channel at a time and confirm only that physical channel is reduced. Restore `red/green/blue` to `1/1/1` before continuing.
+- [ ] **Local brightness composition:** play one local look at master `100%`, then `50%`. The second reading and visible output must be lower, with the local look's own brightness/fade still active and no abrupt source change.
+- [ ] **Studio live frame:** send the same known frame at master `100%`, then `50%`. `lwOutput.sourceClass` must read `external`; the active local look brightness/fade must not alter either live frame.
+- [ ] **Art-Net live frame:** send that frame by Art-Net at master `100%`, then `50%`. Confirm the same external-source brightness behavior as Studio and no double dimming.
+- [ ] **Source transitions:** move local → Studio → local → Art-Net → local. Each accepted source must take ownership cleanly, and local playback must resume after the stream watchdog expires without a stuck or stale frame.
+- [ ] **Blackout and recovery:** trigger blackout, confirm all physical LEDs are off, then run **Recover lights**. Confirm frame producers stop before recovery, the recovery output is low brightness, and ordinary local playback can resume.
+- [ ] **Current-limit stress:** show full white at the installation brightness cap for the planned dwell time. Confirm stable voltage, temperature, frame rate, and no resets, flicker, or visible color shift.
+- [ ] **Dithering threshold:** hold an external stream above `50 FPS`, then below `40 FPS`, long enough for measurement. Confirm `lwOutput.dithering` enables and disables at those thresholds without changing the source contract.
+
+Do not mark the output phase visually accepted from software tests alone. Save the card identity, package hash/commit, fixture settings, diagnostic snapshots, and pass/fail notes with the controller record.
+
 ---
 
 ## 7. On-site smoke test (Pi-hosted) _(Deferred — future Pi integration)_

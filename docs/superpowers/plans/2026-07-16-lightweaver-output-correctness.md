@@ -518,3 +518,17 @@ git add docs/deployment-checklist.md \
   docs/superpowers/plans/2026-07-16-lightweaver-output-correctness.md
 git commit -m "docs: add output correctness bench gate"
 ```
+
+## Execution record — 2026-07-16
+
+- [x] Pure output-brightness policy implemented and host-tested (`7628c0e`).
+- [x] Art-Net, WLED UDP realtime, WLED WebSocket, and WLED JSON ingestion preserve raw RGB (`064e550`).
+- [x] Global master brightness and local zone/look brightness are independent (`6c759f4`).
+- [x] Backward-compatible output gamma and RGB calibration parsing/pipeline implemented (`67353fa`).
+- [x] Every physical transmission uses the measured shared output funnel; diagnostics are exposed through existing status APIs (`30d8546`).
+- [x] Studio export, standalone profile, and repair packages preserve normalized output settings without borrowing pattern-preview gamma (`66ec29d`, `55ab3d1`).
+- [x] Factory image rebuilt from the branch firmware (`4526d4b`), SHA-256 `36860fcc437eccdafe965d25a9b2062ca4923461e4b7e1e0fa33ae8597062afb`.
+- [x] Full `npm run test:core` passed, including factory-image freshness.
+- [x] ESP32-S3 PlatformIO release build passed: RAM `113240 / 327680` bytes (`34.6%`); flash `1047229 / 6553600` bytes (`16.0%`).
+- [ ] Physical fixture acceptance is pending. An Espressif USB JTAG/serial device was detected at `/dev/cu.usbmodem142201`, but the branch was not flashed and no LED/power fixture was assumed safe without operator confirmation.
+- [ ] Phase 2 remains gated until the physical acceptance fixture in `docs/deployment-checklist.md` passes and its snapshots/results are recorded.
