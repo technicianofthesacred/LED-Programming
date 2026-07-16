@@ -90,10 +90,11 @@ function routeProtocol(value) {
     if (value.startsWith('lightweaver://ack?')) {
       const receipt = parseAcknowledgementUrl(value).receipt;
       const acceptedContext = resultCoordinator.acknowledgementContext(receipt);
-      const acknowledged = resultCoordinator.acknowledge(receipt);
-      if (acknowledged) {
+      const acknowledged = resultCoordinator.acknowledge(receipt, () => {
         const correlation = journalCorrelation(acceptedContext);
-        if (correlation) productionRunner?.acknowledgeResult?.(correlation);
+        return !correlation || productionRunner?.acknowledgeResult?.(correlation) === true;
+      });
+      if (acknowledged) {
         sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
       }
       return acknowledged;
@@ -266,6 +267,9 @@ async function run() {
       phase: error?.phase,
       nextAction: error?.nextAction,
     });
+  }
+  if (operationJournal.warning) {
+    process.stderr.write(`Lightweaver Bridge journal warning: ${redactSensitiveText(operationJournal.warning)}\n`);
   }
   if (inspectCardSmoke) {
     const inspection = await runner.inspect();

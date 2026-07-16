@@ -265,6 +265,31 @@ test('opening a callback leaves return pending until Studio acknowledges and ret
   assert.equal(coordinator.acknowledge(Buffer.alloc(32, 4).toString('base64url')), false);
 });
 
+test('acknowledgement guard clears exact journal authority before deleting pending result', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  const order = [];
+  let stored;
+  const resultStore = {
+    save(value) { stored = value; }, load() { return stored; },
+    acknowledge() { order.push('pending-result-cleared'); stored = null; return true; },
+  };
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0, createContext: () => 'context' });
+  router.route(VALID);
+  const coordinator = createBoundedResultCoordinator({
+    launchRouter: router, resultStore, randomBytes: size => Buffer.alloc(size, 4), now: () => 0, openCallback: async () => {},
+  });
+  await coordinator.complete('install-current-release', {
+    status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed',
+  }, router.claim('install-current-release'));
+  const receipt = Buffer.alloc(32, 4).toString('base64url');
+  assert.equal(coordinator.acknowledge(receipt, () => { order.push('journal-clear-failed'); return false; }), false);
+  assert.deepEqual(order, ['journal-clear-failed']);
+  assert.equal(coordinator.hasPendingResult, true);
+  assert.equal(coordinator.acknowledge(receipt, () => { order.push('journal-cleared'); return true; }), true);
+  assert.deepEqual(order, ['journal-clear-failed', 'journal-cleared', 'pending-result-cleared']);
+});
+
 test('acknowledgement protocol is canonical, one-purpose, and distinct from the five operations', () => {
   const { OPERATIONS, parseAcknowledgementUrl } = require('../src/deep-link-protocol');
   const receipt = Buffer.alloc(32, 4).toString('base64url');

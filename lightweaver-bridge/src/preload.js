@@ -68,6 +68,7 @@ function sanitizePayload(value) {
     result.confirmationToken = source.confirmationToken;
   }
   if (typeof source.compatible === 'boolean') result.compatible = source.compatible;
+  if (typeof source.dismissed === 'boolean') result.dismissed = source.dismissed;
   if (typeof source.cardId === 'string' && /^lw-[a-f0-9]{12}$/.test(source.cardId)) result.cardId = source.cardId;
   if (typeof source.productName === 'string') result.productName = redactSensitiveText(source.productName, 128);
   if (typeof source.firmwareVersion === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(source.firmwareVersion)) result.firmwareVersion = source.firmwareVersion;

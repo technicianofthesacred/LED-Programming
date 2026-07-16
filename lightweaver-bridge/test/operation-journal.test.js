@@ -89,7 +89,7 @@ test('corrupt, partial, oversized, stale-version, and semantically incompatible 
     const file = path.join(directory, 'operation-journal.json');
     fs.writeFileSync(file, contents);
     const journal = createOperationJournal({ userDataPath: directory });
-    assert.throws(() => journal.load(), /journal.*invalid|too large|version/i);
+    assert.throws(() => journal.load(), /journal.*(?:invalid|corrupt)|too large|version/i);
     assert.equal(fs.existsSync(file), true);
   }
 });
@@ -114,11 +114,95 @@ test('write, fsync, and rename failures are surfaced and do not silently advance
 test('clear is idempotent and only removes the single active record', () => {
   const directory = temporaryDirectory();
   const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
-  assert.equal(journal.clear(), false);
+  assert.deepEqual(journal.clear(), { cleared: true, remaining: [] });
   journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
-  assert.equal(journal.clear(), true);
-  assert.equal(journal.clear(), false);
+  assert.deepEqual(journal.clear(), { cleared: true, remaining: [] });
+  assert.deepEqual(journal.clear(), { cleared: true, remaining: [] });
   assert.equal(journal.load(), null);
+});
+
+test('Windows durable writes fsync a write-capable temp handle and skip unsupported directory fsync', () => {
+  const directory = temporaryDirectory();
+  const opened = [];
+  const windowsFs = Object.create(fs);
+  windowsFs.openSync = (candidate, flags, mode) => {
+    opened.push([candidate, flags]);
+    if (candidate === directory) throw new Error('Windows directory handles are unsupported');
+    return fs.openSync(candidate, flags, mode);
+  };
+  const journal = createOperationJournal({ userDataPath: directory, fs: windowsFs, platform: 'win32', now: () => 1 });
+  assert.doesNotThrow(() => journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId }));
+  assert.ok(opened.some(([candidate, flags]) => candidate.endsWith('.tmp') && flags === 'wx'));
+  assert.equal(opened.some(([candidate]) => candidate === directory), false);
+});
+
+test('corrupt slots are isolated, safest valid evidence survives, and warnings are bounded', () => {
+  const directory = temporaryDirectory();
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  journal.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: 'b'.repeat(40) });
+  const canonical = path.join(directory, 'operation-journal.json');
+  const recovery = path.join(directory, 'operation-journal.recovery.json');
+  const canonicalBytes = fs.readFileSync(canonical);
+  const recoveryBytes = fs.readFileSync(recovery);
+
+  fs.writeFileSync(canonical, '{broken');
+  let restarted = createOperationJournal({ userDataPath: directory });
+  assert.equal(restarted.load().operation, 'recover-current-release');
+  assert.match(restarted.warning, /canonical/i);
+  assert.ok(restarted.warning.length <= 160);
+
+  fs.writeFileSync(canonical, canonicalBytes);
+  fs.writeFileSync(recovery, '{broken');
+  restarted = createOperationJournal({ userDataPath: directory });
+  assert.equal(restarted.load().operation, 'install-current-release');
+  assert.match(restarted.warning, /recovery/i);
+
+  fs.writeFileSync(recovery, recoveryBytes);
+  fs.writeFileSync(path.join(directory, 'operation-journal.acquisition.json'), '{broken');
+  restarted = createOperationJournal({ userDataPath: directory });
+  assert.equal(restarted.load().usbOwnership, 'uncertain');
+  assert.match(restarted.warning, /acquisition/i);
+
+  fs.writeFileSync(canonical, '{broken');
+  fs.writeFileSync(recovery, '{broken');
+  assert.throws(() => createOperationJournal({ userDataPath: directory }).load(), error =>
+    error.classification === 'needs-safe-recovery' && error.code === 'operation-journal-corrupt'
+      && error.nextAction === 'recover-current-release');
+});
+
+test('logical journal timestamps remain monotonic across clock rollback and restart', () => {
+  const directory = temporaryDirectory();
+  let now = 100;
+  let journal = createOperationJournal({ userDataPath: directory, now: () => now });
+  journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  now = 50;
+  assert.equal(journal.update({ usbOwnership: 'acquiring-or-owned' }).timestamps.updatedAt, 100);
+  journal = createOperationJournal({ userDataPath: directory, now: () => 25 });
+  assert.equal(journal.update({ usbOwnership: 'uncertain' }).timestamps.updatedAt, 100);
+});
+
+test('clear attempts every slot, verifies removal, and retains explicit retry authority on partial failure', () => {
+  for (const failedName of ['operation-journal.json', 'operation-journal.recovery.json', 'operation-journal.acquisition.json']) {
+    const directory = temporaryDirectory();
+    const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
+    original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+    original.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+    original.markRecoveryAcquiring({ expectedCardId: cardId });
+    original.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: 'b'.repeat(40) });
+    const failingFs = Object.create(fs);
+    failingFs.unlinkSync = candidate => {
+      if (path.basename(candidate) === failedName) throw new Error('unlink blocked');
+      return fs.unlinkSync(candidate);
+    };
+    const result = createOperationJournal({ userDataPath: directory, fs: failingFs }).clear();
+    assert.equal(result.cleared, false);
+    assert.ok(result.remaining.includes(failedName));
+    assert.equal(fs.existsSync(path.join(directory, failedName)), true);
+    assert.ok(result.remaining.some(name => name === 'operation-journal.json' || name === 'operation-journal.recovery.json'));
+    assert.deepEqual(createOperationJournal({ userDataPath: directory }).clear(), { cleared: true, remaining: [] });
+  }
 });
 
 test('safe recovery atomically replaces only matching uncertain mutation evidence', () => {

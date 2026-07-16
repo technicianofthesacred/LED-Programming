@@ -222,7 +222,9 @@ function createIpcHandlers({
         throw new Error('Explicit recovered-result dismissal confirmation is required');
       }
       const dismissed = runner.dismissCompletedResult?.(confirmation) === true;
-      return Object.freeze({ dismissed, state: operation.current });
+      return dismissed
+        ? Object.freeze({ dismissed: true, state: operation.current })
+        : Object.freeze({ dismissed: false, state: 'recovered-result-pending', message: 'The saved result could not be cleared. Retry dismissal.' });
     },
   };
 

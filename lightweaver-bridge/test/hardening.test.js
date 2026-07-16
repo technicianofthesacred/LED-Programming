@@ -225,6 +225,24 @@ test('completed recovered result can be explicitly dismissed through trusted IPC
   assert.equal(dismissed, 1);
 });
 
+test('failed recovered-result clear remains visibly pending through IPC', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  const context = {
+    operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
+    buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    resultIdentityHash: 'b'.repeat(64), confirmed: true,
+  };
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { dismissCompletedResult: () => false },
+  });
+  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event, context), {
+    dismissed: false, state: 'recovered-result-pending', message: 'The saved result could not be cleared. Retry dismissal.',
+  });
+});
+
 test('typed maintenance IPC executes each visible operation and emits a bounded callback result', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
@@ -535,8 +553,10 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
     invoke(channel, value) {
       invokes.push([channel, value]);
       return Promise.resolve({
-        state: channel === 'bridge:cancel' ? 'select-card' : 'inspect',
+        state: channel === 'bridge:cancel' ? 'select-card'
+          : channel === 'bridge:dismiss-recovered-result' ? 'recovered-result-pending' : 'inspect',
         cancelled: true,
+        dismissed: channel === 'bridge:dismiss-recovered-result' ? false : undefined,
         message: '/dev/ttyUSB8 serialNumber=INVOKE123',
         extra: 'must not cross',
       });
@@ -598,7 +618,9 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
     buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
     resultIdentityHash: 'b'.repeat(64),
   };
-  await exposed.dismissRecoveredResult(recoveredContext);
+  const failedDismissal = await exposed.dismissRecoveredResult(recoveredContext);
+  assert.equal(failedDismissal.dismissed, false);
+  assert.equal(failedDismissal.state, 'recovered-result-pending');
   assert.equal(invokes.at(-1)[0], 'bridge:dismiss-recovered-result');
   assert.deepEqual(JSON.parse(JSON.stringify(invokes.at(-1)[1])), { ...recoveredContext, confirmed: true });
   await assert.rejects(() => exposed.dismissRecoveredResult({ ...recoveredContext, resultIdentityHash: 'invalid' }), /context/i);

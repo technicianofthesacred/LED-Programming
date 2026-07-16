@@ -520,7 +520,8 @@ function createOperationRunner({
   function acknowledgeResult(value) {
     const saved = journal?.load?.();
     if (!completionTupleMatches(saved, value)) return false;
-    return journal.clear();
+    const cleared = journal.clear();
+    return cleared === true || cleared?.cleared === true;
   }
 
   function dismissCompletedResult(value) {
@@ -529,7 +530,8 @@ function createOperationRunner({
     if (!expected || !value || value.confirmed !== true
       || Object.keys(value).sort().join(',') !== [...Object.keys(expected), 'confirmed'].sort().join(',')
       || Object.keys(expected).some(field => value[field] !== expected[field])) return false;
-    return journal.clear();
+    const cleared = journal.clear();
+    return cleared === true || cleared?.cleared === true;
   }
 
   return Object.freeze({

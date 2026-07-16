@@ -433,6 +433,24 @@ test('explicit dismissal requires the exact displayed recovered-result identity 
   assert.equal(runnerB.dismissCompletedResult({ ...displayedB, confirmed: true }), false);
 });
 
+test('failed journal clear preserves acknowledgement and dismissal retry authority', () => {
+  const saved = {
+    generationId: '3'.repeat(32), operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'released', pendingResult: pendingResultForRunner(),
+    completionCorrelation: {
+      receiptHash: '4'.repeat(64), operation: 'install-current-release', cardId: 'lw-441bf681feb0',
+      firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    },
+  };
+  const journal = memoryJournal(saved);
+  journal.clear = () => ({ cleared: false, remaining: ['operation-journal.json'] });
+  const runner = harness({ journal }).runner;
+  assert.equal(runner.acknowledgeResult(saved.completionCorrelation), false);
+  assert.equal(runner.dismissCompletedResult({ ...runner.recoveredResultContext(), confirmed: true }), false);
+  assert.notEqual(journal.current(), null);
+});
+
 test('a pending verified result blocks new preparation and cannot be cleared by another operation', async () => {
   const saved = {
     operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,

@@ -46,6 +46,29 @@ test('recovered verified result requires a visible explicit dismissal and never 
   assert.equal(hardware, 0);
 });
 
+test('failed recovered-result dismissal stays in recovery UI for retry', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  let onResult;
+  const bridge = {
+    dismissRecoveredResult: async () => ({ dismissed: false, state: 'recovered-result-pending', message: 'The saved result could not be cleared. Retry dismissal.' }),
+    onResult(listener) { onResult = listener; }, onProgress() {}, onCallbackDelivery() {}, onLaunchRequest() {},
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8'), {
+    window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) },
+  });
+  onResult({
+    state: 'recovered-result-pending', operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
+    buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', resultIdentityHash: 'b'.repeat(64),
+  });
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.match(elements.get('#state-title').textContent, /recovered/i);
+  assert.match(elements.get('#state-message').textContent, /could not be cleared/i);
+  assert.match(elements.get('#primary-action').textContent, /dismiss/i);
+});
+
 test('unplug-replug guidance requires a deliberate acknowledgement before inspecting again', async () => {
   const elements = new Map();
   for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
