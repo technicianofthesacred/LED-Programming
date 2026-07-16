@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { BRIDGE_OPEN_TIMEOUT_MS } from '../../lib/bridgeLaunch.js';
+import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
 import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
@@ -54,7 +54,7 @@ export function CardConnectionCenter({
   const [failure, setFailure] = useState('');
   const [host, setHost] = useState(readStoredCardHost);
   const [bridgeLaunchState, setBridgeLaunchState] = useState('idle');
-  const bridgeTimerRef = useRef(null);
+  const [bridgeReturnCode, setBridgeReturnCode] = useState('');
   const capabilities = useMemo(platformCapabilities, [open]);
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
@@ -105,13 +105,9 @@ export function CardConnectionCenter({
 
   useEffect(() => {
     if (!bridgeResult) return;
-    window.clearTimeout(bridgeTimerRef.current);
-    bridgeTimerRef.current = null;
     setBridgeLaunchState('idle');
     window.setTimeout(() => panelRef.current?.focus(), 0);
   }, [bridgeResult]);
-
-  useEffect(() => () => window.clearTimeout(bridgeTimerRef.current), []);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -187,24 +183,40 @@ export function CardConnectionCenter({
   };
 
   const launchBridge = async (operation) => {
-    if (bridgeLaunchState === 'opening' || bridgeLaunchState === 'waiting') return;
-    window.clearTimeout(bridgeTimerRef.current);
+    if (bridgeLaunchState === 'opening' || bridgeLaunchState === 'working' || bridgeLaunchState === 'return-pending') return;
     onClearBridgeResult?.();
     setFailure('');
     setBridgeLaunchState('opening');
     try {
       await onLaunchBridge?.(operation);
-      setBridgeLaunchState('waiting');
-      bridgeTimerRef.current = window.setTimeout(() => setBridgeLaunchState('missing'), BRIDGE_OPEN_TIMEOUT_MS);
+      setBridgeLaunchState('working');
     } catch {
       setBridgeLaunchState('idle');
       setFailure('Studio could not save the project and open Bridge. Save the project, then try again.');
     }
   };
 
+  const resumeReturnCode = async (event) => {
+    event.preventDefault();
+    setFailure('');
+    setBridgeLaunchState('return-pending');
+    const channel = createBridgeResultChannel();
+    try {
+      await resumeBridgeReturnCode(bridgeReturnCode, { publish: result => channel.publish(result) });
+      setBridgeReturnCode('');
+    } catch {
+      setBridgeLaunchState('working');
+      setFailure('That return code is invalid, expired, already used, or belongs to another browser profile. Copy the current code from Bridge and try again in the original Studio tab.');
+    } finally { channel.close(); }
+  };
+
   const bridgeOperation = action.id === 'needs-safe-recovery' ? 'recover-current-release' : 'install-current-release';
-  const bridgeBusy = bridgeLaunchState === 'opening' || bridgeLaunchState === 'waiting';
-  const effectiveActionId = bridgeLaunchState === 'missing' ? 'install-native-bridge' : action.id;
+  const bridgeBusy = ['opening', 'working', 'return-pending'].includes(bridgeLaunchState);
+  const effectiveActionId = action.id;
+  const bridgeLifecycleState = bridgeLaunchState === 'idle' && action.id === 'install-native-bridge'
+    ? 'installer-unavailable' : bridgeLaunchState;
+  const showManualReturn = !capabilities.canWebSerialInstall
+    && ['launch-native-bridge', 'install-native-bridge', 'needs-card-update', 'needs-safe-recovery'].includes(action.id);
 
   const initialChoice = !intent
     && link.state === 'disconnected'
@@ -299,8 +311,8 @@ export function CardConnectionCenter({
         </div>
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
-          <h3>{bridgeBusy ? 'Waiting for Lightweaver Bridge' : bridgeLaunchState === 'missing' ? 'Lightweaver Bridge may not be installed' : action.title}</h3>
-          <p>{bridgeBusy ? 'Bridge is opening. Keep this Studio tab open; it will resume here when the card action returns.' : bridgeLaunchState === 'missing' ? 'Studio did not receive a matching Bridge return within four seconds. This does not detect whether Bridge is installed.' : action.explanation}</p>
+          <h3>{bridgeLifecycleState === 'opening' ? 'Opening Lightweaver Bridge' : bridgeLifecycleState === 'working' ? 'Working in Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
+          <p>{bridgeLifecycleState === 'opening' ? 'Studio sent the secure launch request.' : bridgeLifecycleState === 'working' ? 'Keep this original Studio tab open while Bridge works. If the result opens in another browser or profile, paste its return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return and asking Bridge to clear its saved result.' : action.explanation}</p>
           {(effectiveActionId === 'install-native-bridge') && (
             <p>A verified signed installer is not yet available. No unsigned download is offered. Use secure browser USB or continue on a supported computer.</p>
           )}
@@ -309,6 +321,14 @@ export function CardConnectionCenter({
           )}
           {action.id === 'needs-card-update' && !capabilities.canWebSerialInstall && (
             <p>Keep the card powered while Bridge installs the current release.</p>
+          )}
+
+          {showManualReturn && (
+            <form onSubmit={resumeReturnCode} className="bridge-return-code-form">
+              <label htmlFor="bridge-return-code">Return code from Bridge</label>
+              <input id="bridge-return-code" value={bridgeReturnCode} onChange={event => setBridgeReturnCode(event.target.value)} autoComplete="off" spellCheck="false" maxLength={904} />
+              <button type="submit" className="btn" disabled={!bridgeReturnCode.trim() || bridgeLaunchState === 'return-pending'}>Resume in this tab</button>
+            </form>
           )}
 
           {setupSteps && (

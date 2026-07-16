@@ -1,8 +1,8 @@
 import {
   BRIDGE_OPERATIONS,
   BRIDGE_RESULT_STATUSES,
-  clearPendingBridgeLaunch,
   consumeBridgeCallback,
+  consumeBridgeReturnCode,
   createBridgeLaunch,
   validateOperationResult,
 } from './bridgeProtocol.js';
@@ -10,7 +10,6 @@ import {
 export const BRIDGE_RESULT_CHANNEL = 'lightweaver.bridge.result.v1';
 export const BRIDGE_RESULT_STORAGE_KEY = 'lightweaver.bridge.result.v1';
 export const BRIDGE_ORIGIN_TAB_KEY = 'lightweaver.bridge.origin-tab.v1';
-export const BRIDGE_OPEN_TIMEOUT_MS = 4_000;
 
 const TAB_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const DELIVERY_PATTERN = /^[A-Za-z0-9_-]{16}$/;
@@ -24,14 +23,16 @@ function defaultNavigate(url) {
   globalThis.location.href = url;
 }
 
+function defaultAcknowledge(url) {
+  globalThis.location.assign(url);
+}
+
 export async function launchBridgeOperation(operation, dependencies = {}) {
   if (!BRIDGE_OPERATIONS.includes(operation)) throw new TypeError('Unsupported Bridge operation');
   if (typeof dependencies.persistProject !== 'function') throw new Error('Project persistence is unavailable');
   await dependencies.persistProject();
   const createLaunch = dependencies.createLaunch ?? createBridgeLaunch;
   const navigate = dependencies.navigate ?? defaultNavigate;
-  const clearPending = dependencies.clearPending ?? (dependencies.createLaunch ? null : clearPendingBridgeLaunch);
-  clearPending?.(dependencies.protocolDependencies);
   const url = createLaunch(operation, dependencies.protocolDependencies);
   navigate(url);
   return url;
@@ -121,6 +122,7 @@ export function createBridgeResultChannel(dependencies = {}) {
   const onStorage = event => {
     if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receive(event.newValue);
   };
+  const onLocalResult = event => receive(event.detail);
   if (BroadcastChannelApi) {
     try {
       channel = new BroadcastChannelApi(BRIDGE_RESULT_CHANNEL);
@@ -131,6 +133,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     }
   }
   eventTarget?.addEventListener?.('storage', onStorage);
+  eventTarget?.addEventListener?.('lightweaver-bridge-result', onLocalResult);
 
   return {
     publish(result) {
@@ -138,6 +141,9 @@ export function createBridgeResultChannel(dependencies = {}) {
       const candidate = resultFields({ ...result, deliveryId: makeDeliveryId(cryptoApi) });
       const message = validateBridgeResultNotification(candidate);
       if (!message) throw new TypeError('Invalid Bridge result notification semantics');
+      if (eventTarget?.dispatchEvent && typeof CustomEvent === 'function') {
+        eventTarget.dispatchEvent(new CustomEvent('lightweaver-bridge-result', { detail: candidate }));
+      }
       channel?.postMessage?.(candidate);
       if (localStorage) {
         const raw = JSON.stringify(candidate);
@@ -149,6 +155,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     receive,
     close() {
       eventTarget?.removeEventListener?.('storage', onStorage);
+      eventTarget?.removeEventListener?.('lightweaver-bridge-result', onLocalResult);
       channel?.close?.();
     },
   };
@@ -164,11 +171,19 @@ export async function bootstrapBridgeCallback(dependencies = {}) {
   try {
     const result = await (dependencies.consume ?? consumeBridgeCallback)(href);
     dependencies.publish?.(result);
+    if (result.acknowledgementUrl) (dependencies.acknowledge ?? defaultAcknowledge)(result.acknowledgementUrl);
     return { kind: 'result', result };
   } catch {
     return {
       kind: 'failure',
-      message: 'Studio could not match this Bridge return. Return to Studio and start the card action again.',
+      message: 'Studio could not match this Bridge return. Paste the one-time return code from Bridge into the original Studio tab.',
     };
   }
+}
+
+export async function resumeBridgeReturnCode(value, dependencies = {}) {
+  const result = await (dependencies.consume ?? consumeBridgeReturnCode)(value, dependencies.protocolDependencies);
+  dependencies.publish?.(result);
+  if (result.acknowledgementUrl) (dependencies.acknowledge ?? defaultAcknowledge)(result.acknowledgementUrl);
+  return result;
 }

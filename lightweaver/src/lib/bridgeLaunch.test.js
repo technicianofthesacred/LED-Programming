@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 function memoryStorage() {
@@ -44,7 +46,7 @@ test('failed persistence does not create or navigate a Bridge launch', async () 
   assert.equal(navigated, 0);
 });
 
-test('a deliberate retry clears only this tab pending launch before creating the replacement', async () => {
+test('launch never discards an unacknowledged pending correlation before creating a replacement', async () => {
   const { launchBridgeOperation } = await import('./bridgeLaunch.js');
   const calls = [];
   await launchBridgeOperation('restart-card', {
@@ -53,7 +55,7 @@ test('a deliberate retry clears only this tab pending launch before creating the
     createLaunch: () => { calls.push('create'); return 'lightweaver://run?operation=restart-card&nonce=safe&version=1'; },
     navigate: () => calls.push('navigate'),
   });
-  assert.deepEqual(calls, ['persist', 'clear-pending', 'create', 'navigate']);
+  assert.deepEqual(calls, ['persist', 'create', 'navigate']);
 });
 
 test('result notification is bounded, nonce-free, operation-valid, targeted, and idempotent', async () => {
@@ -113,6 +115,37 @@ test('callback bootstrap consumes before sanitizing and returns bounded guidance
   });
   assert.deepEqual(failure, {
     kind: 'failure',
-    message: 'Studio could not match this Bridge return. Return to Studio and start the card action again.',
+    message: 'Studio could not match this Bridge return. Paste the one-time return code from Bridge into the original Studio tab.',
   });
+});
+
+test('callback and pasted return code acknowledge only after successful Studio consumption', async () => {
+  const { bootstrapBridgeCallback, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
+  const calls = [];
+  const consumed = { operation: 'restart-card', acknowledgementUrl: 'lightweaver://ack?receipt=safe&version=1' };
+  await bootstrapBridgeCallback({
+    href: 'https://led.mandalacodes.com/#bridge-result?x=1',
+    consume: async () => consumed,
+    publish: result => calls.push(`publish:${result.operation}`),
+    acknowledge: url => calls.push(`ack:${url}`),
+  });
+  await resumeBridgeReturnCode('LW1-safe', {
+    consume: async () => consumed,
+    publish: result => calls.push(`manual:${result.operation}`),
+    acknowledge: url => calls.push(`manual-ack:${url}`),
+  });
+  assert.deepEqual(calls, [
+    'publish:restart-card', 'ack:lightweaver://ack?receipt=safe&version=1',
+    'manual:restart-card', 'manual-ack:lightweaver://ack?receipt=safe&version=1',
+  ]);
+});
+
+test('Studio lifecycle source has no four-second missing inference and exposes a pasted return path', () => {
+  for (const file of ['../components/card/CardConnectionCenter.jsx', '../v3/lw-flash.jsx']) {
+    const source = fs.readFileSync(path.join(import.meta.dirname, file), 'utf8');
+    assert.doesNotMatch(source, /BRIDGE_OPEN_TIMEOUT_MS|setBridgeState\('missing'\)|setBridgeLaunchState\('missing'\)|Bridge may not be installed/);
+    assert.match(source, /return code/i);
+    assert.match(source, /return-pending|working/);
+    assert.match(source, /installer-unavailable/);
+  }
 });

@@ -188,6 +188,84 @@ test('safe callback opener builds and immediately revalidates its own fixed URL'
   await assert.rejects(() => opener.open({ nonce: NONCE, version: 1 }, { status: 'complete' }));
 });
 
+test('manual return codes contain only bounded public result fields and one-time correlation', () => {
+  const { buildReturnCode, parseReturnCode } = require('../src/deep-link-protocol');
+  const receipt = Buffer.alloc(32, 4).toString('base64url');
+  const result = {
+    status: 'recoverable-failure', code: 'no-compatible-card', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed',
+  };
+  const code = buildReturnCode({ nonce: NONCE, version: 1 }, result, receipt);
+  assert.match(code, /^LW1-[A-Za-z0-9_-]{1,900}$/);
+  assert.equal(/https?:|led\.mandalacodes|\/|\\|project|credential|firmwareBytes/i.test(code), false);
+  assert.deepEqual(parseReturnCode(code), { ...result, nonce: NONCE, receipt, version: 1 });
+  assert.throws(() => parseReturnCode(`${code}A`));
+  assert.throws(() => buildReturnCode({ nonce: NONCE, version: 1 }, { ...result, callbackUrl: 'https://evil.invalid' }, receipt));
+});
+
+test('pending result store survives restart until one acknowledgement and rejects replay or expiry', () => {
+  const { createPendingResultStore } = require('../src/deep-link-protocol');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lw-result-'));
+  let now = 10;
+  const receipt = Buffer.alloc(32, 4).toString('base64url');
+  const record = {
+    request: { operation: 'restart-card', nonce: NONCE, version: 1, createdAt: 0, expiresAt: 300_000, context: 'context' },
+    result: { status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' },
+    receipt,
+  };
+  createPendingResultStore({ userDataPath: dir, now: () => now }).save(record);
+  const restarted = createPendingResultStore({ userDataPath: dir, now: () => now });
+  assert.equal(restarted.load().receipt, receipt);
+  assert.equal(restarted.acknowledge(receipt), true);
+  assert.equal(restarted.load(), null);
+  assert.equal(restarted.acknowledge(receipt), false);
+  restarted.save(record);
+  now = 300_000;
+  assert.equal(restarted.load(), null);
+});
+
+test('opening a callback leaves return pending until Studio acknowledges and retry never reruns hardware', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  let openCount = 0;
+  let saveCount = 0;
+  let cleared = 0;
+  const stored = { value: null };
+  const resultStore = {
+    save(value) { saveCount += 1; stored.value = value; },
+    load() { return stored.value; },
+    acknowledge(receipt) { if (stored.value?.receipt !== receipt) return false; stored.value = null; cleared += 1; return true; },
+  };
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0, createContext: () => 'context' });
+  router.route(VALID);
+  const context = router.claim('install-current-release');
+  const coordinator = createBoundedResultCoordinator({
+    launchRouter: router, resultStore, randomBytes: size => Buffer.alloc(size, 4), now: () => 0,
+    openCallback: async () => { openCount += 1; },
+  });
+  const result = { status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
+  const first = await coordinator.complete('install-current-release', result, context);
+  assert.equal(first.state, 'return-pending');
+  assert.match(first.returnCode, /^LW1-/);
+  assert.equal(saveCount, 1);
+  assert.equal(router.active.operation, 'install-current-release');
+  await coordinator.retry();
+  assert.equal(openCount, 2);
+  assert.equal(saveCount, 1);
+  assert.equal(coordinator.acknowledge(Buffer.alloc(32, 4).toString('base64url')), true);
+  assert.equal(cleared, 1);
+  assert.equal(router.active, null);
+  assert.equal(coordinator.acknowledge(Buffer.alloc(32, 4).toString('base64url')), false);
+});
+
+test('acknowledgement protocol is canonical, one-purpose, and distinct from the five operations', () => {
+  const { OPERATIONS, parseAcknowledgementUrl } = require('../src/deep-link-protocol');
+  const receipt = Buffer.alloc(32, 4).toString('base64url');
+  assert.equal(OPERATIONS.length, 5);
+  assert.deepEqual(parseAcknowledgementUrl(`lightweaver://ack?receipt=${receipt}&version=1`), { receipt, version: 1 });
+  assert.throws(() => parseAcknowledgementUrl(`lightweaver://ack?version=1&receipt=${receipt}`));
+  assert.throws(() => parseAcknowledgementUrl(`lightweaver://ack?receipt=${receipt}&version=1&operation=restart-card`));
+});
+
 test('all five operations complete only their matching callback and release the router', async () => {
   const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
   const opened = [];
@@ -201,7 +279,9 @@ test('all five operations complete only their matching callback and release the 
     const result = operation === 'install-current-release' || operation === 'recover-current-release'
       ? { status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', physicalOutput: 'unconfirmed' }
       : { status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
-    await coordinator.complete(operation, result, context);
+    const pending = await coordinator.complete(operation, result, context);
+    const receipt = require('../src/deep-link-protocol').parseReturnCode(pending.returnCode).receipt;
+    assert.equal(coordinator.acknowledge(receipt), true);
     assert.equal(router.active, null);
   }
   assert.equal(opened.length, 5);
@@ -237,10 +317,12 @@ test('callback delivery failure retains one validated result for retry without r
   await assert.rejects(() => coordinator.complete('install-current-release', result, context), error => error.code === 'callback-delivery-failed');
   assert.equal(router.active.operation, 'install-current-release');
   assert.equal(coordinator.hasPendingResult, true);
-  await coordinator.retry();
+  const pending = await coordinator.retry();
   assert.equal(attempts, 2);
+  assert.notEqual(router.active, null);
+  assert.equal(coordinator.hasPendingResult, true);
+  assert.equal(coordinator.acknowledge(require('../src/deep-link-protocol').parseReturnCode(pending.returnCode).receipt), true);
   assert.equal(router.active, null);
-  assert.equal(coordinator.hasPendingResult, false);
 });
 
 test('concurrent callback retries share one delivery attempt and cannot produce a stale failure', async () => {
@@ -259,8 +341,9 @@ test('concurrent callback retries share one delivery attempt and cannot produce 
   const retry = coordinator.retry();
   assert.equal(attempts, 1);
   finish();
-  assert.deepEqual(await Promise.all([completion, retry]), [true, true]);
-  assert.equal(router.active, null);
+  const returned = await Promise.all([completion, retry]);
+  assert.deepEqual(returned.map(value => value.state), ['return-pending', 'return-pending']);
+  assert.notEqual(router.active, null);
 });
 
 test('callback completion and retry enforce expiry at the exact TTL boundary', async () => {
@@ -296,6 +379,6 @@ test('packaging declares the Lightweaver scheme and main wires every native laun
   assert.match(main, /requestSingleInstanceLock/);
   assert.match(main, /open-url/);
   assert.match(main, /second-instance/);
-  assert.match(main, /findLaunchUrlInArgv\(process\.argv\)/);
+  assert.match(main, /findProtocolUrlInArgv\(process\.argv\)/);
   assert.match(main, /bridge:launch-request/);
 });

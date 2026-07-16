@@ -19,7 +19,7 @@ import {
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
-import { BRIDGE_OPEN_TIMEOUT_MS, launchBridgeOperation } from '../lib/bridgeLaunch.js';
+import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCode } from '../lib/bridgeLaunch.js';
 import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
 import { useProject } from '../state/ProjectContext.jsx';
 
@@ -284,6 +284,10 @@ import { useProject } from '../state/ProjectContext.jsx';
 
   function UnsupportedInstall({ action, onLaunchBridge }) {
     const [bridgeState, setBridgeState] = useState('idle');
+    const [returnCode, setReturnCode] = useState('');
+    const [returnError, setReturnError] = useState('');
+    const bridgeLifecycleState = bridgeState === 'idle' && action.id === 'install-native-bridge'
+      ? 'installer-unavailable' : bridgeState;
     let firstStep;
     let showSecureInstaller = false;
     switch (action.id) {
@@ -316,7 +320,7 @@ import { useProject } from '../state/ProjectContext.jsx';
     return (
       <div className="card install-handoff" role="status">
         <div className="eyebrow">Your project is safe in Studio</div>
-        <h1>{action.title}</h1>
+        <h1>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h1>
         <p>{action.explanation}</p>
         <ol>
           <li>{firstStep}</li>
@@ -331,21 +335,38 @@ import { useProject } from '../state/ProjectContext.jsx';
             <button
               className="btn-lg"
               type="button"
-              disabled={bridgeState === 'opening' || bridgeState === 'waiting'}
+              disabled={bridgeState === 'opening' || bridgeState === 'working' || bridgeState === 'return-pending'}
               onClick={async () => {
                 setBridgeState('opening');
                 try {
                   await onLaunchBridge('install-current-release');
-                  setBridgeState('waiting');
-                  window.setTimeout(() => setBridgeState('missing'), BRIDGE_OPEN_TIMEOUT_MS);
+                  setBridgeState('working');
                 } catch { setBridgeState('error'); }
               }}
             >
-              {bridgeState === 'opening' || bridgeState === 'waiting' ? 'Opening Lightweaver Bridge…' : 'Open Lightweaver Bridge'}
+              {bridgeState === 'opening' ? 'Opening Lightweaver Bridge…' : bridgeState === 'working' || bridgeState === 'return-pending' ? 'Lightweaver Bridge is working…' : 'Open Lightweaver Bridge'}
             </button>
-            {bridgeState === 'waiting' && <p>Waiting for Bridge to return to Studio…</p>}
-            {bridgeState === 'missing' && <p>Bridge may not be installed. Studio did not receive a matching return; this is not installation detection.</p>}
-            {(bridgeState === 'missing' || action.id === 'install-native-bridge') && <p>A verified signed installer is not yet available. Studio does not offer an unsigned download.</p>}
+            {bridgeState === 'working' && <p>Keep this original Studio tab open. If Bridge returns in another browser or profile, paste its one-time return code below.</p>}
+            {bridgeState === 'return-pending' && <p>Return pending while Studio validates the code and acknowledges the saved Bridge result.</p>}
+            <form onSubmit={async event => {
+                event.preventDefault();
+                setReturnError('');
+                setBridgeState('return-pending');
+                const channel = createBridgeResultChannel();
+                try {
+                  await resumeBridgeReturnCode(returnCode, { publish: result => channel.publish(result) });
+                  setReturnCode('');
+                } catch {
+                  setBridgeState('working');
+                  setReturnError('That return code is invalid, expired, already used, or belongs to another browser profile.');
+                } finally { channel.close(); }
+              }}>
+                <label htmlFor="installer-bridge-return-code">Return code from Bridge</label>
+                <input id="installer-bridge-return-code" value={returnCode} onChange={event => setReturnCode(event.target.value)} autoComplete="off" spellCheck="false" maxLength={904} />
+                <button type="submit" disabled={!returnCode.trim() || bridgeState === 'return-pending'}>Resume in this tab</button>
+            </form>
+            {action.id === 'install-native-bridge' && <p>A verified signed installer is not yet available. Studio does not offer an unsigned download.</p>}
+            {returnError && <p role="alert">{returnError}</p>}
             {bridgeState === 'error' && <p role="alert">Studio could not save the project and open Bridge. Save the project, then try again.</p>}
           </>
         )}

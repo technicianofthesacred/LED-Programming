@@ -18,6 +18,7 @@ const MAX_CLAIMS = 16;
 const MAX_CLAIM_BYTES = 4_096;
 const TARGET = 'lightweaver-controller-esp32s3';
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const RETURN_CODE_PATTERN = /^LW1-([A-Za-z0-9_-]{1,900})$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
 const SEMVER_PATTERN = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -231,14 +232,15 @@ function parseCallback(value) {
   const flashSuccess = success && result.verification === 'flash-verified';
   const maintenanceSuccess = success && result.verification === 'not-verified' && result.code === 'operation-complete';
   const expected = flashSuccess
-    ? ['status', 'code', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'physicalOutput', 'nonce', 'version']
+    ? ['status', 'code', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'physicalOutput', 'nonce', ...(result.receipt === undefined ? [] : ['receipt']), 'version']
     : maintenanceSuccess && result.cardId !== undefined
-      ? ['status', 'code', 'cardId', 'target', 'verification', 'physicalOutput', 'nonce', 'version']
-      : ['status', 'code', 'target', 'verification', 'physicalOutput', 'nonce', 'version'];
+      ? ['status', 'code', 'cardId', 'target', 'verification', 'physicalOutput', 'nonce', ...(result.receipt === undefined ? [] : ['receipt']), 'version']
+      : ['status', 'code', 'target', 'verification', 'physicalOutput', 'nonce', ...(result.receipt === undefined ? [] : ['receipt']), 'version'];
   if (keys.join(',') !== expected.join(',') || !BRIDGE_RESULT_STATUSES.includes(result.status)
     || !CODE_PATTERN.test(result.code || '') || result.target !== TARGET
     || !['flash-verified', 'not-verified'].includes(result.verification) || result.physicalOutput !== 'unconfirmed'
-    || !isCanonicalNonce(result.nonce) || result.version !== '1' || (success && !flashSuccess && !maintenanceSuccess)) throw new TypeError('Invalid Bridge callback result');
+    || !isCanonicalNonce(result.nonce) || (result.receipt !== undefined && !isCanonicalNonce(result.receipt))
+    || result.version !== '1' || (success && !flashSuccess && !maintenanceSuccess)) throw new TypeError('Invalid Bridge callback result');
   if (flashSuccess && (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '')
     || !BUILD_PATTERN.test(result.buildId || ''))) throw new TypeError('Invalid Bridge callback identity');
   if (maintenanceSuccess && result.cardId !== undefined && !CARD_PATTERN.test(result.cardId)) throw new TypeError('Invalid Bridge callback identity');
@@ -272,8 +274,11 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
       if (!validateOperationResult(pending.operation, result)) throw new Error('Bridge callback result is incompatible with the pending operation semantics');
       assertOwner?.();
       removeRecord(localStorage, result.nonce);
-      const { nonce: _consumedNonce, ...safeResult } = result;
-      return Object.freeze({ operation: pending.operation, ...safeResult, originTabId: pending.tabId, physicalProof: false });
+      const { nonce: _consumedNonce, receipt, ...safeResult } = result;
+      return Object.freeze({
+        operation: pending.operation, ...safeResult, originTabId: pending.tabId, physicalProof: false,
+        ...(receipt ? { acknowledgementUrl: `lightweaver://ack?receipt=${receipt}&version=1` } : {}),
+      });
     };
     const locks = dependencies.locks === undefined ? globalThis.navigator?.locks : dependencies.locks;
     if (locks?.request) {
@@ -283,6 +288,22 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
   } finally {
     history?.replaceState?.(null, '', '/');
   }
+}
+
+export async function consumeBridgeReturnCode(value, dependencies = {}) {
+  if (typeof value !== 'string' || value.length > 904) throw new TypeError('Invalid Bridge return code');
+  const trimmed = value.trim();
+  const match = RETURN_CODE_PATTERN.exec(trimmed);
+  if (!match) throw new TypeError('Invalid Bridge return code');
+  let payload;
+  try {
+    const base64 = match[1].replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - (match[1].length % 4)) % 4);
+    const binary = typeof atob === 'function' ? atob(base64) : Buffer.from(match[1], 'base64url').toString('binary');
+    payload = new TextDecoder().decode(Uint8Array.from(binary, character => character.charCodeAt(0)));
+    if (encodeBase64Url(new TextEncoder().encode(payload)) !== match[1]) throw new Error('non-canonical');
+  } catch { throw new TypeError('Invalid Bridge return code'); }
+  if (payload.length > 675 || payload.includes('#')) throw new TypeError('Invalid Bridge return code');
+  return consumeBridgeCallback(`${BRIDGE_CALLBACK_ORIGIN}/#bridge-result?${payload}`, dependencies);
 }
 
 export function validateOperationResult(operation, result) {

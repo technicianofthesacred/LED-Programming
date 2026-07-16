@@ -9,6 +9,7 @@ const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
   'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
   'callback-delivery-failed', 'callback-returned', 'launch-expired',
+  'return-pending',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 

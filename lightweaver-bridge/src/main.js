@@ -5,8 +5,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const {
-  createBoundedResultCoordinator, createLaunchRouter, createNonceStore, createSafeCallbackOpener,
-  findLaunchUrlInArgv, registerProtocolClient,
+  createBoundedResultCoordinator, createLaunchRouter, createNonceStore, createPendingResultStore, createSafeCallbackOpener,
+  findProtocolUrlInArgv, parseAcknowledgementUrl, registerProtocolClient,
 } = require('./deep-link-protocol');
 const { createIpcHandlers } = require('./ipc-handlers');
 const { createProductionDependencies } = require('./esptool-runtime');
@@ -24,6 +24,7 @@ let mainWindow = null;
 let productionRunner = null;
 const callbackOpener = createSafeCallbackOpener({ openExternal: url => shell.openExternal(url) });
 const nonceStore = createNonceStore({ userDataPath: app.getPath('userData') });
+const pendingResultStore = createPendingResultStore({ userDataPath: app.getPath('userData') });
 
 function publicCallbackResult(payload) {
   const status = payload.state === 'awaiting-card-acknowledgement'
@@ -46,7 +47,7 @@ function publicCallbackResult(payload) {
 
 const launchRouter = createLaunchRouter({
   consumeNonce: request => nonceStore.consume(request),
-  canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.(),
+  canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.() && !resultCoordinator?.hasPendingResult,
   deliver: request => {
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Bridge window is unavailable');
     mainWindow.show();
@@ -56,12 +57,22 @@ const launchRouter = createLaunchRouter({
 });
 const resultCoordinator = createBoundedResultCoordinator({
   launchRouter,
-  openCallback: (request, result) => callbackOpener.open(request, result),
+  openCallback: (request, result, receipt) => callbackOpener.open(request, result, receipt),
+  resultStore: pendingResultStore,
 });
 
-function routeLaunch(value) {
-  try { launchRouter.route(value); } catch (error) {
-    process.stderr.write(`Lightweaver Bridge rejected launch request: ${redactSensitiveText(error?.message)}\n`);
+function routeProtocol(value) {
+  try {
+    if (value.startsWith('lightweaver://ack?')) {
+      const acknowledged = resultCoordinator.acknowledge(parseAcknowledgementUrl(value).receipt);
+      if (acknowledged) sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
+      return acknowledged;
+    }
+    launchRouter.route(value);
+    return true;
+  } catch (error) {
+    process.stderr.write(`Lightweaver Bridge rejected protocol request: ${redactSensitiveText(error?.message)}\n`);
+    return false;
   }
 }
 
@@ -72,7 +83,14 @@ function sendCallbackDelivery(state, message) {
 
 async function returnBoundedResult(payload, completedOperation, context) {
   try {
-    return await resultCoordinator.complete(completedOperation, publicCallbackResult(payload), context);
+    const pending = await resultCoordinator.complete(completedOperation, publicCallbackResult(payload), context);
+    if (!pending) return pending;
+    const delivery = Object.freeze({
+      state: 'return-pending',
+      message: `Return pending. Paste this one-time code into the original Studio tab if another browser opened: ${pending.returnCode}`,
+    });
+    sendCallbackDelivery(delivery.state, delivery.message);
+    return delivery;
   } catch (error) {
     if (error?.code === 'callback-delivery-failed') {
       const delivery = Object.freeze({ state: 'callback-delivery-failed', message: 'Studio could not be opened. Return to Studio again without rerunning the card operation.' });
@@ -91,9 +109,9 @@ async function returnBoundedResult(payload, completedOperation, context) {
 
 async function retryBoundedResult() {
   try {
-    const returned = await resultCoordinator.retry();
-    if (!returned) return Object.freeze({ state: 'launch-expired', message: 'No pending Studio result remains. Open led.mandalacodes.com manually.' });
-    return Object.freeze({ state: 'callback-returned', message: 'Result returned to Studio.' });
+    const pending = await resultCoordinator.retry();
+    if (!pending) return Object.freeze({ state: 'launch-expired', message: 'No pending Studio result remains. Open led.mandalacodes.com manually.' });
+    return Object.freeze({ state: 'return-pending', message: `Return pending; no card operation reran. Paste into the original Studio tab: ${pending.returnCode}` });
   } catch (error) {
     const state = error?.code === 'launch-expired' ? 'launch-expired' : 'callback-delivery-failed';
     const message = state === 'launch-expired'
@@ -155,6 +173,9 @@ async function createMainWindow() {
     throw new Error('Renderer loaded an unexpected URL');
   }
   launchRouter.setReady();
+  if (resultCoordinator.returnCode) {
+    sendCallbackDelivery('return-pending', `Saved return pending. Paste into the original Studio tab: ${resultCoordinator.returnCode}`);
+  }
   return window;
 }
 
@@ -217,13 +238,13 @@ else registerProtocolClient(app);
 
 app.on('open-url', (event, url) => {
   event.preventDefault();
-  routeLaunch(url);
+  routeProtocol(url);
 });
 
 app.on('second-instance', (_event, argv) => {
   try {
-    const value = findLaunchUrlInArgv(argv);
-    if (value) routeLaunch(value);
+    const value = findProtocolUrlInArgv(argv);
+    if (value) routeProtocol(value);
   } catch (error) {
     process.stderr.write(`Lightweaver Bridge rejected argv: ${redactSensitiveText(error?.message)}\n`);
   }
@@ -231,8 +252,8 @@ app.on('second-instance', (_event, argv) => {
 
 if (singleInstance) {
   try {
-    const initialLaunch = findLaunchUrlInArgv(process.argv);
-    if (initialLaunch) routeLaunch(initialLaunch);
+    const initialLaunch = findProtocolUrlInArgv(process.argv);
+    if (initialLaunch) routeProtocol(initialLaunch);
   } catch (error) {
     process.stderr.write(`Lightweaver Bridge rejected initial argv: ${redactSensitiveText(error?.message)}\n`);
   }
