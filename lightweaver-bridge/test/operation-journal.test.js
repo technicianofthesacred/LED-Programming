@@ -34,13 +34,19 @@ test('journal atomically persists one strict versioned operation and survives re
   journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
   now = 102;
   journal.update({ flashVerification: 'flash-verified', restartResult: 'restarted', usbOwnership: 'released', pendingResult: pendingResult() });
+  now = 103;
+  const completionCorrelation = {
+    receiptHash: 'c'.repeat(64), operation: 'install-current-release', cardId,
+    firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+  };
+  journal.update({ completionCorrelation });
 
   const loaded = createOperationJournal({ userDataPath: directory, now: () => 999 }).load();
   assert.deepEqual(loaded, {
     version: 1, operation: 'install-current-release', expectedCardId: cardId,
     expectedBuildId: buildId, mutationBoundary: 'erase-or-write-started',
     flashVerification: 'flash-verified', restartResult: 'restarted', usbOwnership: 'released',
-    pendingResult: pendingResult(), timestamps: { createdAt: 100, updatedAt: 102 },
+    pendingResult: pendingResult(), completionCorrelation, timestamps: { createdAt: 100, updatedAt: 103 },
   });
   assert.equal(Object.isFrozen(loaded), true);
   assert.equal(fs.statSync(path.join(directory, 'operation-journal.json')).mode & 0o777, 0o600);

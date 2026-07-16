@@ -13,6 +13,32 @@ const FULL_FLASH_RETURN_CODE = buildReturnCode({ nonce: Buffer.alloc(32, 1).toSt
   verification: 'flash-verified', physicalOutput: 'unconfirmed',
 }, Buffer.alloc(32, 4).toString('base64url'));
 
+test('recovered verified result requires a visible explicit dismissal and never reruns hardware', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  let onResult;
+  let dismissed = 0;
+  let hardware = 0;
+  const bridge = {
+    inspectCompatibleCard: async () => { hardware += 1; }, inspectForOperation: async () => { hardware += 1; },
+    startOperation: async () => { hardware += 1; }, confirmDestructiveAction: async () => { hardware += 1; },
+    runMaintenanceOperation: async () => { hardware += 1; }, cancelBeforeCriticalSection: async () => ({ cancelled: true }),
+    dismissRecoveredResult: async () => { dismissed += 1; return { state: 'select-card', message: 'Saved result dismissed.' }; },
+    onResult(listener) { onResult = listener; }, onProgress() {}, onCallbackDelivery() {}, onLaunchRequest() {},
+  };
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8');
+  vm.runInNewContext(source, { window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) } });
+  onResult({ state: 'recovered-result-pending', verification: 'flash-verified', message: 'Recovered verified result.' });
+  assert.match(elements.get('#state-title').textContent, /recovered/i);
+  assert.match(elements.get('#primary-action').textContent, /dismiss/i);
+  assert.equal(dismissed, 0);
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(dismissed, 1);
+  assert.equal(hardware, 0);
+});
+
 test('unplug-replug guidance requires a deliberate acknowledgement before inspecting again', async () => {
   const elements = new Map();
   for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {

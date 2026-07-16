@@ -196,7 +196,7 @@ test('journal exists before USB write connection is acquired', async () => {
   const auth = await authorize(h);
   await h.runner.execute({ operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken });
   assert.equal(observed?.mutationBoundary, 'before-mutation');
-  assert.equal(observed?.usbOwnership, 'not-acquired');
+  assert.equal(observed?.usbOwnership, 'acquiring-or-owned');
 });
 
 test('production MD5 boundary journals verified truth before writeFlash returns', async () => {
@@ -286,16 +286,82 @@ test('journal clears only after acknowledgement or explicit safe dismissal of a 
   assert.equal(incompleteRunner.acknowledgeResult(), false);
   assert.equal(incomplete.current().flashVerification, 'not-verified');
 
-  for (const method of ['acknowledgeResult', 'dismissCompletedResult']) {
-    const complete = memoryJournal({
-      operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
-      mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
-      usbOwnership: 'uncertain', pendingResult: pendingResultForRunner(),
-    });
-    const runner = harness({ journal: complete }).runner;
-    assert.equal(runner[method](), true);
-    assert.equal(complete.current(), null);
-  }
+  const complete = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'uncertain', pendingResult: pendingResultForRunner(),
+  });
+  const runner = harness({ journal: complete }).runner;
+  assert.equal(runner.dismissCompletedResult({ confirmed: true }), true);
+  assert.equal(complete.current(), null);
+});
+
+test('acknowledgement clears only the exact correlated Task10A result tuple', () => {
+  const complete = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'released', pendingResult: pendingResultForRunner(), completionCorrelation: null,
+  });
+  const runner = harness({ journal: complete }).runner;
+  const exact = {
+    receiptHash: '1'.repeat(64), operation: 'install-current-release', cardId: 'lw-441bf681feb0',
+    firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+  };
+  assert.equal(runner.bindCompletedResult(exact), true);
+  assert.equal(runner.acknowledgeResult({ ...exact, receiptHash: '2'.repeat(64) }), false);
+  assert.equal(runner.acknowledgeResult({ ...exact, operation: 'recover-current-release' }), false);
+  assert.notEqual(complete.current(), null);
+  assert.equal(runner.acknowledgeResult(exact), true);
+  assert.equal(complete.current(), null);
+});
+
+test('receipt A cannot clear journal B with a different bounded result tuple', () => {
+  const complete = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'released', pendingResult: pendingResultForRunner(),
+    completionCorrelation: {
+      receiptHash: 'b'.repeat(64), operation: 'install-current-release', cardId: 'lw-441bf681feb0',
+      firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+    },
+  });
+  const runner = harness({ journal: complete }).runner;
+  assert.equal(runner.acknowledgeResult({
+    receiptHash: 'a'.repeat(64), operation: 'install-current-release', cardId: 'lw-441bf681feb0',
+    firmwareVersion: '1.2.3', buildId, target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',
+  }), false);
+  assert.notEqual(complete.current(), null);
+});
+
+test('USB acquisition is conservatively journaled before connect and retained uncertain on connect failure', async () => {
+  const journal = memoryJournal();
+  let ownershipDuringConnect;
+  const h = harness({ journal, runtime: { async connectForWrite() {
+    ownershipDuringConnect = journal.current()?.usbOwnership;
+    throw new Error('acquire failed');
+  } } });
+  const auth = await authorize(h);
+  await assert.rejects(() => h.runner.execute({
+    operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  }), error => error.classification === 'usb-ownership-uncertain');
+  assert.equal(ownershipDuringConnect, 'acquiring-or-owned');
+  assert.equal(journal.current().usbOwnership, 'uncertain');
+  assert.equal(journal.calls.includes('journal-clear'), false);
+});
+
+test('recovery operation also retains uncertain ownership when reacquisition fails', async () => {
+  const journal = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'not-verified', restartResult: 'unknown',
+    usbOwnership: 'released', pendingResult: null, completionCorrelation: null,
+  });
+  const h = harness({ journal, runtime: { async connectForWrite() { throw new Error('recovery acquire failed'); } } });
+  const auth = await authorize(h, 'recover-current-release');
+  await assert.rejects(() => h.runner.execute({
+    operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  }), error => error.classification === 'usb-ownership-uncertain');
+  assert.equal(journal.current().usbOwnership, 'uncertain');
+  assert.equal(journal.calls.includes('journal-clear'), false);
 });
 
 test('a pending verified result blocks new preparation and cannot be cleared by another operation', async () => {

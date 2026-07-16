@@ -10,6 +10,7 @@ const STATES = new Set([
   'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
   'callback-delivery-failed', 'callback-returned', 'launch-expired',
   'return-pending',
+  'recovered-result-pending',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 const RETURN_CODE_PATTERN = /^LW1-[A-Za-z0-9_-]{1,900}$/;
@@ -111,6 +112,7 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
   cancelBeforeCriticalSection: () => ipcRenderer.invoke('bridge:cancel').then(sanitizeCancellation),
   retryStudioCallback: () => ipcRenderer.invoke('bridge:retry-callback').then(sanitizePayload),
   dismissExpiredLaunch: () => ipcRenderer.invoke('bridge:dismiss-expired-launch').then(sanitizePayload),
+  dismissRecoveredResult: () => ipcRenderer.invoke('bridge:dismiss-recovered-result', Object.freeze({ confirmed: true })).then(sanitizePayload),
 }));
 
 ipcRenderer.send('bridge:preload-ready');

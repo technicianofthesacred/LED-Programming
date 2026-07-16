@@ -10,10 +10,11 @@ const OPERATIONS = new Set(['install-current-release', 'recover-current-release'
 const BOUNDARIES = new Set(['before-mutation', 'erase-or-write-started']);
 const VERIFICATIONS = new Set(['not-verified', 'flash-verified']);
 const RESTART_RESULTS = new Set(['not-attempted', 'restarted', 'failed', 'unknown']);
-const USB_STATES = new Set(['not-acquired', 'owned', 'released', 'uncertain']);
-const RECORD_KEYS = ['expectedBuildId', 'expectedCardId', 'flashVerification', 'mutationBoundary', 'operation', 'pendingResult', 'restartResult', 'timestamps', 'usbOwnership', 'version'];
-const UPDATE_KEYS = new Set(['flashVerification', 'mutationBoundary', 'pendingResult', 'restartResult', 'usbOwnership']);
+const USB_STATES = new Set(['not-acquired', 'acquiring-or-owned', 'owned', 'released', 'uncertain']);
+const RECORD_KEYS = ['completionCorrelation', 'expectedBuildId', 'expectedCardId', 'flashVerification', 'mutationBoundary', 'operation', 'pendingResult', 'restartResult', 'timestamps', 'usbOwnership', 'version'];
+const UPDATE_KEYS = new Set(['completionCorrelation', 'flashVerification', 'mutationBoundary', 'pendingResult', 'restartResult', 'usbOwnership']);
 const RESULT_KEYS = ['buildId', 'cardId', 'expectedCardId', 'firmwareVersion', 'message', 'nextCheckpoint', 'physicalOutput', 'pipelineComplete', 'state', 'target', 'verification'];
+const CORRELATION_KEYS = ['buildId', 'cardId', 'firmwareVersion', 'operation', 'receiptHash', 'target', 'verification'];
 const CARD_ID = /^lw-[a-f0-9]{12}$/;
 const BUILD_ID = /^[a-f0-9]{40}$/;
 
@@ -59,12 +60,22 @@ function validateRecord(record) {
   if (record.pendingResult && record.flashVerification !== 'flash-verified') {
     throw new Error('Operation journal is semantically invalid');
   }
+  if (record.completionCorrelation !== null) {
+    const value = record.completionCorrelation;
+    if (!exactKeys(value, CORRELATION_KEYS) || !/^[a-f0-9]{64}$/.test(value.receiptHash)
+      || value.operation !== record.operation || value.cardId !== record.expectedCardId
+      || value.buildId !== record.expectedBuildId || value.firmwareVersion !== record.pendingResult?.firmwareVersion
+      || value.target !== record.pendingResult?.target || value.verification !== record.pendingResult?.verification) {
+      throw new Error('Operation journal completion correlation is invalid');
+    }
+  }
   return record;
 }
 
 function deepFreeze(record) {
   if (!record) return null;
   if (record.pendingResult) Object.freeze(record.pendingResult);
+  if (record.completionCorrelation) Object.freeze(record.completionCorrelation);
   Object.freeze(record.timestamps);
   return Object.freeze(record);
 }
@@ -124,7 +135,7 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       return persist({
         version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
         mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
-        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null,
+        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
         timestamps: { createdAt: timestamp, updatedAt: timestamp },
       });
     },
@@ -138,7 +149,7 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       return persist({
         version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
         mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
-        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null,
+        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
         timestamps: { createdAt: timestamp, updatedAt: timestamp },
       });
     },

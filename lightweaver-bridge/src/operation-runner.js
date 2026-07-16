@@ -262,16 +262,18 @@ function createOperationRunner({
           expectedBuildId: verifiedRelease.manifest.buildId,
         };
         const interrupted = journal?.load?.();
+        journalArmed = Boolean(journal);
         if (!interrupted) {
           journal?.begin?.(journalStart);
-          journalArmed = Boolean(journal);
         }
+        journalUpdate({ usbOwnership: 'acquiring-or-owned' });
         connection = await runtime.connectForWrite();
         const current = connection.identity;
         core.validateInstallHardware(current);
         if (current?.cardId !== selected.cardId || current?.fingerprint !== selected.fingerprint) {
           throw new BridgeOperationError('card-changed', 'The inspected card changed or was swapped. Nothing was erased.');
         }
+        journalUpdate({ usbOwnership: 'owned' });
         if (typeof connection.loader?.writeFlash !== 'function') {
           throw new BridgeOperationError('write-capability-missing', 'The connected card cannot be written. Nothing was erased.');
         }
@@ -345,6 +347,12 @@ function createOperationRunner({
         emit(onEvent, 'card-restarted');
       } catch (error) {
         primaryError = classifyExecutionError(error, eraseStarted);
+        if (journalArmed && !connection) {
+          try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
+          primaryError = new BridgeOperationError('usb-acquisition-uncertain', 'USB acquisition did not return a confirmed release state.', {
+            outcome: 'usb-ownership-uncertain', phase: 'usb-acquire', nextAction: 'restart-bridge-before-retrying',
+          });
+        }
         if (eraseStarted && !flashVerified) {
           try { journalUpdate({ restartResult: 'unknown' }); } catch (journalError) { primaryError = classifyExecutionError(journalError, true); }
         } else if (flashVerified && !cardRestarted) {
@@ -457,7 +465,31 @@ function createOperationRunner({
     });
   }
 
-  function clearCompletedJournal() {
+  function completionTupleMatches(saved, value) {
+    if (!saved?.completionCorrelation || !value || typeof value !== 'object') return false;
+    return ['receiptHash', 'operation', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification']
+      .every(field => saved.completionCorrelation[field] === value[field]);
+  }
+
+  function bindCompletedResult(value) {
+    const saved = journal?.load?.();
+    if (!saved || saved.flashVerification !== 'flash-verified' || saved.restartResult !== 'restarted' || !saved.pendingResult
+      || value?.operation !== saved.operation || value?.cardId !== saved.expectedCardId
+      || value?.firmwareVersion !== saved.pendingResult.firmwareVersion || value?.buildId !== saved.expectedBuildId
+      || value?.target !== saved.pendingResult.target || value?.verification !== saved.pendingResult.verification
+      || typeof value?.receiptHash !== 'string' || !/^[a-f0-9]{64}$/.test(value.receiptHash)) return false;
+    journal.update({ completionCorrelation: Object.freeze({ ...value }) });
+    return true;
+  }
+
+  function acknowledgeResult(value) {
+    const saved = journal?.load?.();
+    if (!completionTupleMatches(saved, value)) return false;
+    return journal.clear();
+  }
+
+  function dismissCompletedResult(value) {
+    if (!value || value.confirmed !== true || Object.keys(value).length !== 1) return false;
     const saved = journal?.load?.();
     if (!saved || saved.flashVerification !== 'flash-verified' || saved.restartResult !== 'restarted' || !saved.pendingResult) return false;
     return journal.clear();
@@ -465,8 +497,7 @@ function createOperationRunner({
 
   return Object.freeze({
     inspect, prepare, execute, runMaintenance, recoverInterrupted,
-    acknowledgeResult: clearCompletedJournal,
-    dismissCompletedResult: clearCompletedJournal,
+    bindCompletedResult, acknowledgeResult, dismissCompletedResult,
     hasInterruptedOperation: () => Boolean(journal?.load?.()),
     hasInspection: () => Boolean(inspection && inspection.expiresAt > now()),
     isActive: () => active,

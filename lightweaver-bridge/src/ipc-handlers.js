@@ -168,12 +168,12 @@ function createIpcHandlers({
         cardId: authority.cardId,
         token: authority.token,
         onEvent: progress => sendIfStillTrusted(event, 'bridge:progress', progressPayload(progress)),
-      })).then(result => {
+      })).then(async result => {
         if (operation.current === 'installing') operation.advanceVerification();
         operation.finishFlashVerified();
         const payload = createRendererResult('awaiting-card-acknowledgement', result.message, result);
+        await onBoundedResult(payload, authority.operation, authority.launchContext);
         sendIfStillTrusted(event, 'bridge:result', payload);
-        return onBoundedResult(payload, authority.operation, authority.launchContext);
       }).catch(error => {
         if (operation.current === 'installing') operation.failCriticalSection(error?.classification);
         else if (operation.current === 'verifying') operation.finishFailure(error?.classification);
@@ -201,9 +201,12 @@ function createIpcHandlers({
       dismissExpiredLaunch();
       return createRendererResult('select-card', 'Connect a Lightweaver card to continue.');
     },
-    'bridge:dismiss-recovered-result': async (event) => {
+    'bridge:dismiss-recovered-result': async (event, confirmation) => {
       assertTrusted(event);
-      const dismissed = runner.dismissCompletedResult?.() === true;
+      if (!confirmation || confirmation.confirmed !== true || Object.keys(confirmation).length !== 1) {
+        throw new Error('Explicit recovered-result dismissal confirmation is required');
+      }
+      const dismissed = runner.dismissCompletedResult?.(confirmation) === true;
       return Object.freeze({ dismissed, state: operation.current });
     },
   };

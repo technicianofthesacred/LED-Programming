@@ -349,8 +349,8 @@ function resultMatchesOperation(operation, result) {
     : result.verification === 'not-verified' && result.code === 'operation-complete';
 }
 
-function createBoundedResultCoordinator({ launchRouter, openCallback, resultStore, randomBytes = crypto.randomBytes, now = Date.now } = {}) {
-  if (!launchRouter || typeof openCallback !== 'function') throw new TypeError('Result coordinator dependencies are required');
+function createBoundedResultCoordinator({ launchRouter, openCallback, resultStore, onPersisted = () => {}, randomBytes = crypto.randomBytes, now = Date.now } = {}) {
+  if (!launchRouter || typeof openCallback !== 'function' || typeof onPersisted !== 'function') throw new TypeError('Result coordinator dependencies are required');
   let pendingResult = resultStore?.load?.() ?? null;
   let deliveryPromise = null;
 
@@ -402,9 +402,25 @@ function createBoundedResultCoordinator({ launchRouter, openCallback, resultStor
       validateReceipt(receipt);
       pendingResult = Object.freeze({ request, result: Object.freeze({ ...result }), receipt });
       resultStore?.save?.(pendingResult);
+      try {
+        onPersisted(Object.freeze({ receipt, operation: request.operation, result: pendingResult.result }));
+      } catch (error) {
+        resultStore?.acknowledge?.(receipt);
+        pendingResult = null;
+        throw error;
+      }
       return deliverPending();
     },
     retry: deliverPending,
+    acknowledgementContext(receipt) {
+      validateReceipt(receipt);
+      if (!pendingResult || pendingResult.receipt !== receipt) return null;
+      return Object.freeze({
+        receipt,
+        operation: pendingResult.request.operation,
+        result: Object.freeze({ ...pendingResult.result }),
+      });
+    },
     acknowledge(receipt) {
       let acknowledged = false;
       if (pendingResult?.receipt === receipt) {
@@ -415,6 +431,9 @@ function createBoundedResultCoordinator({ launchRouter, openCallback, resultStor
       return acknowledged;
     },
     get returnCode() { return pendingResult ? buildReturnCode(pendingResult.request, pendingResult.result, pendingResult.receipt) : null; },
+    get pendingContext() {
+      return pendingResult ? Object.freeze({ receipt: pendingResult.receipt, operation: pendingResult.request.operation, result: pendingResult.result }) : null;
+    },
     get hasPendingResult() { return pendingResult !== null; },
   });
 }

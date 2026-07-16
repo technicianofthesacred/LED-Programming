@@ -229,9 +229,10 @@ test('opening a callback leaves return pending until Studio acknowledges and ret
   let openCount = 0;
   let saveCount = 0;
   let cleared = 0;
+  const order = [];
   const stored = { value: null };
   const resultStore = {
-    save(value) { saveCount += 1; stored.value = value; },
+    save(value) { saveCount += 1; stored.value = value; order.push('saved'); },
     load() { return stored.value; },
     acknowledge(receipt) { if (stored.value?.receipt !== receipt) return false; stored.value = null; cleared += 1; return true; },
   };
@@ -240,14 +241,21 @@ test('opening a callback leaves return pending until Studio acknowledges and ret
   const context = router.claim('install-current-release');
   const coordinator = createBoundedResultCoordinator({
     launchRouter: router, resultStore, randomBytes: size => Buffer.alloc(size, 4), now: () => 0,
-    openCallback: async () => { openCount += 1; },
+    onPersisted: () => order.push('correlated'),
+    openCallback: async () => { openCount += 1; order.push('opened'); },
   });
   const result = { status: 'recoverable-failure', code: 'inspection-failed', target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed' };
   const first = await coordinator.complete('install-current-release', result, context);
   assert.equal(first.state, 'return-pending');
   assert.match(first.returnCode, /^LW1-/);
   assert.equal(saveCount, 1);
+  assert.deepEqual(order, ['saved', 'correlated', 'opened']);
   assert.equal(router.active.operation, 'install-current-release');
+  assert.equal(coordinator.acknowledgementContext(Buffer.alloc(32, 9).toString('base64url')), null);
+  assert.deepEqual(coordinator.acknowledgementContext(Buffer.alloc(32, 4).toString('base64url')), {
+    receipt: Buffer.alloc(32, 4).toString('base64url'), operation: 'install-current-release', result,
+  });
+  assert.deepEqual(coordinator.pendingContext, coordinator.acknowledgementContext(Buffer.alloc(32, 4).toString('base64url')));
   await coordinator.retry();
   assert.equal(openCount, 2);
   assert.equal(saveCount, 1);
@@ -264,6 +272,33 @@ test('acknowledgement protocol is canonical, one-purpose, and distinct from the 
   assert.deepEqual(parseAcknowledgementUrl(`lightweaver://ack?receipt=${receipt}&version=1`), { receipt, version: 1 });
   assert.throws(() => parseAcknowledgementUrl(`lightweaver://ack?version=1&receipt=${receipt}`));
   assert.throws(() => parseAcknowledgementUrl(`lightweaver://ack?receipt=${receipt}&version=1&operation=restart-card`));
+});
+
+test('correlation persistence failure rolls back Task10A result before callback exposure', async () => {
+  const { createBoundedResultCoordinator, createLaunchRouter } = require('../src/deep-link-protocol');
+  let stored = null;
+  let opened = 0;
+  const store = {
+    load: () => stored,
+    save: value => { stored = value; },
+    acknowledge: receipt => { if (stored?.receipt !== receipt) return false; stored = null; return true; },
+  };
+  const router = createLaunchRouter({ consumeNonce() {}, deliver() {}, now: () => 0, createContext: () => 'context' });
+  router.route(VALID);
+  const context = router.claim('install-current-release');
+  const coordinator = createBoundedResultCoordinator({
+    launchRouter: router, resultStore: store, randomBytes: size => Buffer.alloc(size, 7), now: () => 0,
+    onPersisted: () => { throw new Error('journal fsync failed'); },
+    openCallback: async () => { opened += 1; },
+  });
+  await assert.rejects(() => coordinator.complete('install-current-release', {
+    status: 'awaiting-card-acknowledgement', code: 'flash-verified', cardId: 'lw-441bf681feb0',
+    firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3',
+    verification: 'flash-verified', physicalOutput: 'unconfirmed',
+  }, context), /journal fsync/i);
+  assert.equal(stored, null);
+  assert.equal(coordinator.hasPendingResult, false);
+  assert.equal(opened, 0);
 });
 
 test('all five operations complete only their matching callback and release the router', async () => {

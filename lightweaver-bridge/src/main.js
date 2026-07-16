@@ -48,6 +48,20 @@ function publicCallbackResult(payload) {
   });
 }
 
+function journalCorrelation(context) {
+  if (!context || context.result?.status !== 'awaiting-card-acknowledgement'
+    || context.result.verification !== 'flash-verified' || typeof context.result.cardId !== 'string') return null;
+  return Object.freeze({
+    receiptHash: crypto.createHash('sha256').update(context.receipt).digest('hex'),
+    operation: context.operation,
+    cardId: context.result.cardId,
+    firmwareVersion: context.result.firmwareVersion,
+    buildId: context.result.buildId,
+    target: context.result.target,
+    verification: context.result.verification,
+  });
+}
+
 const launchRouter = createLaunchRouter({
   consumeNonce: request => nonceStore.consume(request),
   canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.()
@@ -63,14 +77,23 @@ const resultCoordinator = createBoundedResultCoordinator({
   launchRouter,
   openCallback: (request, result, receipt) => callbackOpener.open(request, result, receipt),
   resultStore: pendingResultStore,
+  onPersisted: context => {
+    const correlation = journalCorrelation(context);
+    if (correlation && productionRunner?.bindCompletedResult?.(correlation) !== true) {
+      throw new Error('Persisted Studio result did not match the completed operation journal');
+    }
+  },
 });
 
 function routeProtocol(value) {
   try {
     if (value.startsWith('lightweaver://ack?')) {
-      const acknowledged = resultCoordinator.acknowledge(parseAcknowledgementUrl(value).receipt);
+      const receipt = parseAcknowledgementUrl(value).receipt;
+      const acceptedContext = resultCoordinator.acknowledgementContext(receipt);
+      const acknowledged = resultCoordinator.acknowledge(receipt);
       if (acknowledged) {
-        productionRunner?.acknowledgeResult?.();
+        const correlation = journalCorrelation(acceptedContext);
+        if (correlation) productionRunner?.acknowledgeResult?.(correlation);
         sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
       }
       return acknowledged;
@@ -111,7 +134,7 @@ async function returnBoundedResult(payload, completedOperation, context) {
       return delivery;
     }
     process.stderr.write(`Lightweaver Bridge rejected callback result: ${redactSensitiveText(error?.message)}\n`);
-    return null;
+    throw new Error('Bridge result persistence failed');
   }
 }
 
@@ -185,7 +208,7 @@ async function createMainWindow() {
   if (resultCoordinator.returnCode) {
     sendCallbackDelivery('return-pending', 'A saved return is pending. Paste the code into the original Studio tab.', resultCoordinator.returnCode);
   } else if (recoveredOperationResult) {
-    window.webContents.send('bridge:result', recoveredOperationResult);
+    window.webContents.send('bridge:result', Object.freeze({ ...recoveredOperationResult, state: 'recovered-result-pending' }));
   }
   return window;
 }
@@ -226,6 +249,10 @@ function verifyNavigationIsDenied(window) {
 async function run() {
   const runner = await createProductionRunner();
   productionRunner = runner;
+  const pendingCorrelation = journalCorrelation(resultCoordinator.pendingContext);
+  if (pendingCorrelation && runner.bindCompletedResult(pendingCorrelation) !== true) {
+    throw new Error('Saved Studio result did not match the interrupted operation journal');
+  }
   try {
     recoveredOperationResult = await runner.recoverInterrupted();
   } catch (error) {

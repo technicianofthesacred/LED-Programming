@@ -21,6 +21,7 @@ const views = Object.freeze({
   'usb-ownership-uncertain': ['USB uncertain', 'Restart the Bridge', 'USB release could not be confirmed. Close and restart the Bridge before retrying.', 'Restart required'],
   'callback-delivery-failed': ['Return pending', 'Return to Studio', 'Studio could not be opened. Retry the secure return without rerunning the card operation.', 'Return to Studio'],
   'return-pending': ['Return pending', 'Return to Studio', 'The result is saved until the originating Studio acknowledges it.', 'Return to Studio again'],
+  'recovered-result-pending': ['Recovered', 'Recovered verified result', 'The verified result survived a Bridge restart. Dismiss it only after recording or returning it to Studio.', 'Dismiss saved result'],
   'callback-returned': ['Returned', 'Returned to Studio', 'The existing card result was returned to Studio. No card operation was rerun.', 'Returned'],
   'launch-expired': ['Expired', 'Website request expired', 'This website request expired. Return to Studio and try again.', 'Dismiss'],
   complete: ['Complete', 'Card acknowledged', 'Studio confirmed the stable card identity.', 'Inspect another card'],
@@ -54,7 +55,7 @@ function render(payload = {}) {
     || currentState === 'callback-returned';
   cancelAction.disabled = critical;
   cancelAction.hidden = ['select-card', 'complete', 'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
-    'callback-delivery-failed', 'return-pending', 'callback-returned', 'launch-expired'].includes(currentState);
+    'callback-delivery-failed', 'return-pending', 'recovered-result-pending', 'callback-returned', 'launch-expired'].includes(currentState);
   progress.hidden = !critical;
   progressBar.style.width = `${Number.isFinite(payload.progress) ? payload.progress : 0}%`;
 }
@@ -63,6 +64,8 @@ primaryAction.addEventListener('click', async () => {
   try {
     if (currentState === 'launch-expired') {
       render(await bridge.dismissExpiredLaunch());
+    } else if (currentState === 'recovered-result-pending') {
+      render(await bridge.dismissRecoveredResult());
     } else if (currentState === 'callback-delivery-failed' || currentState === 'return-pending') {
       render(await bridge.retryStudioCallback());
     } else if (currentState === 'select-card' && ['inspect-compatible-card', 'release-usb', 'restart-card'].includes(selectedOperation)) {

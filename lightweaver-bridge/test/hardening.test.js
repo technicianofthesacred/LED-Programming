@@ -147,6 +147,7 @@ test('confirmation returns installing promptly while async runner drives verifie
   const { window, event } = trustedWindowAndEvent();
   const sent = [];
   const bounded = [];
+  let releaseBounded;
   window.webContents.send = (channel, payload) => sent.push([channel, payload]);
   let finish;
   const operation = createOperationState();
@@ -154,7 +155,10 @@ test('confirmation returns installing promptly while async runner drives verifie
     getActiveWindow: () => window,
     rendererPath,
     operation,
-    onBoundedResult: (payload, requestedOperation) => bounded.push([payload, requestedOperation]),
+    onBoundedResult: (payload, requestedOperation) => new Promise(resolve => {
+      bounded.push([payload, requestedOperation]);
+      releaseBounded = resolve;
+    }),
     runner: {
       inspect: async () => ({ compatible: true, cardId: 'lw-441bf681feb0' }),
       prepare: async () => ({ confirmationToken: 'd'.repeat(48), cardId: 'lw-441bf681feb0', warning: 'Factory install replaces card configuration.' }),
@@ -182,6 +186,9 @@ test('confirmation returns installing promptly while async runner drives verifie
   finish();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(operation.current, 'awaiting-card-acknowledgement');
+  assert.deepEqual(sent.map(([channel]) => channel), ['bridge:progress', 'bridge:progress']);
+  releaseBounded();
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(sent.map(([channel]) => channel), ['bridge:progress', 'bridge:progress', 'bridge:result']);
   const result = sent.at(-1)[1];
   assert.equal(result.verification, 'flash-verified');
@@ -202,9 +209,10 @@ test('completed recovered result can be explicitly dismissed through trusted IPC
     getActiveWindow: () => window, rendererPath, operation: createOperationState(),
     runner: { dismissCompletedResult() { dismissed += 1; return true; } },
   });
-  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event), { dismissed: true, state: 'select-card' });
+  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event, { confirmed: true }), { dismissed: true, state: 'select-card' });
   assert.equal(dismissed, 1);
-  await assert.rejects(() => handlers['bridge:dismiss-recovered-result']({ sender: window.webContents, senderFrame: { url: rendererUrl } }), /untrusted/i);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result'](event), /confirmation/i);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result']({ sender: window.webContents, senderFrame: { url: rendererUrl } }, { confirmed: true }), /untrusted/i);
   assert.equal(dismissed, 1);
 });
 
@@ -541,7 +549,7 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   vm.runInContext(preloadSource, context, { filename: 'preload.js' });
 
   assert.deepEqual(Object.keys(exposed).sort(), [
-    'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'dismissExpiredLaunch', 'inspectCompatibleCard',
+    'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'dismissExpiredLaunch', 'dismissRecoveredResult', 'inspectCompatibleCard',
     'inspectForOperation', 'onCallbackDelivery', 'onLaunchRequest', 'onProgress', 'onResult',
     'retryStudioCallback', 'runMaintenanceOperation', 'startOperation',
   ]);
@@ -576,6 +584,10 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.equal('returnCode' in delivery, false);
   await exposed.retryStudioCallback();
   assert.deepEqual(invokes.at(-1), ['bridge:retry-callback', undefined]);
+  await exposed.dismissRecoveredResult();
+  assert.equal(invokes.at(-1)[0], 'bridge:dismiss-recovered-result');
+  assert.equal(invokes.at(-1)[1].confirmed, true);
+  assert.deepEqual(Object.keys(invokes.at(-1)[1]), ['confirmed']);
 
   let received;
   const unsubscribe = exposed.onProgress((payload) => { received = payload; });
