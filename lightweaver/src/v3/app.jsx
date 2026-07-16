@@ -348,7 +348,7 @@ function Shell() {
         const record = saveCurrentProjectToLibrary(serializeProject());
         markProjectPersisted('browser');
         if (operation === 'install-current-release' || operation === 'recover-current-release') {
-          writeCardCommissioning(beginCardCommissioning({
+          await writeCardCommissioning(beginCardCommissioning({
             source: 'native-bridge',
             operation,
             strategy: 'clean-recovery',

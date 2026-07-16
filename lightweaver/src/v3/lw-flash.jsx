@@ -511,7 +511,7 @@ import {
             buildId: releaseState.release.manifest.buildId,
           },
         });
-        writeCardCommissioning(started);
+        await writeCardCommissioning(started);
         setCommissioning(started);
         await flashFirmwareAndRelease({
           loader: loaderRef.current,
@@ -532,7 +532,7 @@ import {
           firmwareVersion: releaseState.release.manifest.firmwareVersion,
           buildId: releaseState.release.manifest.buildId,
         });
-        writeCardCommissioning(completed);
+        await writeCardCommissioning(completed);
         setCommissioning(completed);
         setInstallState('complete');
       } catch (error) {

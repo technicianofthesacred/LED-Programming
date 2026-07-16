@@ -9,12 +9,14 @@ import {
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
   bindCardWiringActivationEvidence,
+  beginCardRestorationMutation,
   claimCardRestoration,
   completeCardInstall,
   markCardProjectRestored,
   readCardCommissioning,
   inspectCardCommissioning,
   releaseCardRestoration,
+  verifyCardRestorationMutation,
   resumeInstalledCardAfterInterruption,
   stageCardProjectForPhysicalCheck,
   writeCardCommissioning,
@@ -74,6 +76,8 @@ export function CardCommissioningPanel({
   const [restoreState, setRestoreState] = useState('idle');
   const [failure, setFailure] = useState(initialState.error === 'corrupt'
     ? 'Saved card setup data is corrupt. Nothing was changed; restart the exact setup.'
+    : initialState.error === 'invalid-lease'
+      ? 'A saved card restore claim was invalid or stale and has been cleared. Verify the same card, then retry.'
     : '');
 
   useEffect(() => {
@@ -81,6 +85,7 @@ export function CardCommissioningPanel({
       const state = inspectCardCommissioning();
       setFlow(state.flow);
       if (state.error === 'corrupt') setFailure('Saved card setup data is corrupt. Nothing was changed; restart the exact setup.');
+      if (state.error === 'invalid-lease') setFailure('A saved card restore claim was invalid or stale and has been cleared. Verify the same card, then retry.');
     };
     window.addEventListener('storage', sync);
     window.addEventListener(CARD_COMMISSIONING_CHANGED_EVENT, sync);
@@ -92,19 +97,19 @@ export function CardCommissioningPanel({
 
   useEffect(() => {
     if (result?.status !== 'awaiting-card-acknowledgement') return;
-    try {
+    void (async () => { try {
       let current = readCardCommissioning({ flowId: result.flowId });
       if (!current) throw new Error('This Bridge result has no matching saved setup in this browser profile. It was not applied; restart that exact setup.');
       if (current.source !== 'native-bridge') throw new Error('This Bridge result belongs to a different card setup attempt. Return to the setup that started it.');
       if (current.stage === 'install-safely') {
         current = completeCardInstall(current, result);
-        writeCardCommissioning(current);
+        await writeCardCommissioning(current);
       }
       setFlow(current);
       setFailure('');
     } catch (error) {
       setFailure(error?.message || 'Studio could not resume this card setup result.');
-    }
+    } })();
   }, [result]);
 
   const cardAcknowledgement = useMemo(() => {
@@ -119,18 +124,18 @@ export function CardCommissioningPanel({
 
   useEffect(() => {
     if (!interruptedInstallEvidence?.ok) return;
-    try {
-      writeCardCommissioning(interruptedInstallEvidence.flow);
+    void (async () => { try {
+      await writeCardCommissioning(interruptedInstallEvidence.flow);
       setFlow(interruptedInstallEvidence.flow);
-    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); }
+    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
   }, [interruptedInstallEvidence]);
 
   useEffect(() => {
     if (!cardAcknowledgement?.ok || flow?.cardAcknowledgedAt) return;
-    try {
-      writeCardCommissioning(cardAcknowledgement.flow);
+    void (async () => { try {
+      await writeCardCommissioning(cardAcknowledgement.flow);
       setFlow(cardAcknowledgement.flow);
-    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); }
+    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
   }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
 
   if (!flow) return <div className="card-commissioning" aria-live="polite"><CardCommissioningSteps stage="connect-card" />{failure && <p className="card-connection-failure" role="alert">{failure}</p>}</div>;
@@ -141,13 +146,17 @@ export function CardCommissioningPanel({
     setFailure('');
     let lease = null;
     try {
-      const claim = claimCardRestoration(flow);
+      const claim = await claimCardRestoration(flow);
       if (!claim.ok) throw new Error(claim.reason === 'restore-in-progress' ? 'This exact project restore is already running in another tab. Wait for it to finish or retry after the recovery window.' : 'The saved setup is unavailable. Nothing was sent.');
       lease = claim.lease;
       const runtimePackage = runtimePackageFromSnapshot(flow.project.snapshot);
       const selectedPush = typeof window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ === 'function'
         ? window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__
         : pushProject;
+      const mutation = await beginCardRestorationMutation(flow, lease);
+      if (!mutation.ok || !verifyCardRestorationMutation(flow, lease.id, mutation.fencingToken)) {
+        throw new Error('The durable project restore claim was lost before the card mutation. Nothing was sent.');
+      }
       const response = await selectedPush(runtimePackage, {
         host: link.host,
         timeoutMs: 8000,
@@ -173,13 +182,13 @@ export function CardCommissioningPanel({
         const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
         const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
         const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
-        writeCardCommissioning(next);
+        await writeCardCommissioning(next);
         setFlow(next);
         setRestoreState('complete');
         return;
       }
       const next = markCardProjectRestored(flow, evidence);
-      writeCardCommissioning(next);
+      await writeCardCommissioning(next);
       markProjectInstalled(flow.project.revision);
       setFlow(next);
       setRestoreState('complete');
@@ -187,7 +196,7 @@ export function CardCommissioningPanel({
       setFailure(error?.message || 'Studio could not restore the saved project. Reconnect the same card and try again.');
       setRestoreState('idle');
     } finally {
-      if (lease) releaseCardRestoration(flow.flowId, lease.id);
+      if (lease) await releaseCardRestoration(flow.flowId, lease.id).catch(() => false);
     }
   };
 

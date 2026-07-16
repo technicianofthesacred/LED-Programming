@@ -39,6 +39,14 @@ function actionRegion(page) {
   return page.locator('.card-connection-action');
 }
 
+async function activeCommissioning(page) {
+  return page.evaluate(() => {
+    const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
+    const flowId = sessionStorage.getItem('lw_card_commissioning_active_v2') || '';
+    return registry.flows?.[flowId]?.flow || null;
+  });
+}
+
 async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}) {
   await page.evaluate(extra => {
     return (async () => {
@@ -169,7 +177,7 @@ test('secure iframe escapes to the fixed canonical installer in a new top-level 
   await installer.close();
 });
 
-test('desktop Bridge launch persists the project and commissioning flow without inferring failure from elapsed time', async ({ page }) => {
+test('desktop Bridge launch persists the project and commissioning flow without inferring failure from elapsed time', async ({ page, context }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__lwBridgeUrls = [];
@@ -183,13 +191,35 @@ test('desktop Bridge launch persists the project and commissioning flow without 
   await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
   await expect(actionRegion(page)).toContainText('Waiting for Lightweaver Bridge');
   await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}').stage)).toBe('install-safely');
+  await expect.poll(async () => (await activeCommissioning(page))?.stage).toBe('install-safely');
   const urls = await page.evaluate(() => (window as any).__lwBridgeUrls);
   expect(urls).toHaveLength(1);
   expect(urls[0]).toMatch(/^lightweaver:\/\/run\?operation=install-current-release&nonce=[A-Za-z0-9_-]{43}&version=1$/);
   await page.waitForTimeout(4100);
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'launch-native-bridge');
   await expect(actionRegion(page)).toContainText('Waiting for Lightweaver Bridge');
+
+  const peer = await context.newPage();
+  await peer.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  const writeRace = target => target.evaluate(async () => {
+    const { beginCardCommissioning, writeCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
+    const suffix = window.name || (window.name = crypto.randomUUID().replaceAll('-', '').slice(0, 16));
+    const flow = beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', projectRevision: 1,
+      flowId: `flow-race-${suffix}`,
+      projectRecord: { id: `record-${suffix}`, updatedAt: Date.now(), project: { version: 3, id: `project-${suffix}`, name: 'Race', layout: { strips: [], patchBoard: null, wiring: null }, devices: { standaloneController: {} } } },
+    });
+    return writeCardCommissioning(flow);
+  });
+  for (let iteration = 0; iteration < 10; iteration += 1) {
+    await Promise.all([writeRace(page), writeRace(peer)]);
+  }
+  const raceFlows = await page.evaluate(() => {
+    const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
+    return Object.keys(registry.flows).filter(id => id.startsWith('flow-race-'));
+  });
+  expect(raceFlows).toHaveLength(2);
+  await peer.close();
 });
 
 test('mobile handoff stays passive', async ({ page }) => {
@@ -265,7 +295,7 @@ test('Bridge return does not call a successful POST independent restoration proo
   await expect(page.getByRole('button', { name: 'Restore saved project' })).toBeVisible();
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText(/independent.*read-back|not marked.*restored/i);
+  await expect(page.getByRole('alert')).toContainText(/independent.*(?:read-back|firmware and project evidence)|not marked.*restored/i);
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(1);
 
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -275,6 +305,14 @@ test('Bridge return does not call a successful POST independent restoration proo
 });
 
 test('a staged GPIO restoration stops at the Check lights handoff without legacy full-white output', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/wiring/status', async route => {
+    const flow = await activeCommissioning(page);
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true, state: 'staged', activationId: 'candidate-safe-7', outputs: [{ pin: 18, pixels: 44 }],
+      cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
+      projectRevision: flow?.project?.revision, projectFingerprint: flow?.project?.fingerprint,
+    }) });
+  });
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
@@ -287,7 +325,9 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
       });
     };
     (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
-      const flow = JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}');
+      const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
+      const flowId = sessionStorage.getItem('lw_card_commissioning_active_v2') || '';
+      const flow = registry.flows?.[flowId]?.flow || {};
       return {
         cardId: 'lw-441bf681feb0',
         firmwareVersion: '1.2.3',
@@ -312,7 +352,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await expect(page.getByText(/staged on this exact card/i)).toBeVisible();
   await expect(page.getByText(/test its GPIO wiring before making it permanent/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /Run light check|warm white/i })).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}').project?.pendingActivationId)).toBe('candidate-safe-7');
+  await expect.poll(async () => (await activeCommissioning(page))?.project?.pendingActivationId).toBe('candidate-safe-7');
 });
 
 test('wrong-card and recoverable failures retry the existing connection step', async ({ page }) => {

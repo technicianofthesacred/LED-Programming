@@ -110,6 +110,9 @@ export function beginCardCommissioning({
   if (!SOURCES.has(source)) throw new Error('A supported commissioning source is required');
   if (!OPERATIONS.has(operation)) throw new Error('A supported card operation is required');
   if (!validProjectRecord(projectRecord)) throw new Error('Save the Studio project before changing card firmware');
+  const normalizedJobDigest = text(productionJobDigest, 64).toLowerCase();
+  if (normalizedJobDigest && flowType !== 'production-job') throw new Error('A production job digest requires the production-job flow type');
+  if (flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(normalizedJobDigest)) throw new Error('A production-job flow requires a valid production job digest');
   const snapshot = cardRestoreSnapshot(projectRecord.project);
   const preserve = strategy === 'preserve-in-place' && compatibilityVerified === true && routineUpdate === true && operation === 'install-current-release';
   return {
@@ -137,7 +140,7 @@ export function beginCardCommissioning({
       recordUpdatedAt: Number(projectRecord.updatedAt) || Number(now),
       revision: Math.max(0, Number(projectRevision) || 0),
       fingerprint: fingerprintCommissioningProject(snapshot),
-      productionJobDigest: text(productionJobDigest, 64).toLowerCase(),
+      productionJobDigest: normalizedJobDigest,
       snapshot,
       savedInBrowser: true,
       restoredAt: null,
@@ -351,23 +354,35 @@ function notify(flow) {
 function emptyRegistry() { return { version: REGISTRY_VERSION, revision: 0, flows: {} }; }
 
 function parseRegistry(storage, now = Date.now()) {
-  let corrupt = false;
-  for (const key of [CARD_COMMISSIONING_STORAGE_KEY, CARD_COMMISSIONING_BACKUP_STORAGE_KEY]) {
-    const raw = storage?.getItem?.(key);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed?.version !== REGISTRY_VERSION || !parsed.flows || typeof parsed.flows !== 'object') throw new Error('bad registry');
-      const flows = {};
-      for (const [flowId, entry] of Object.entries(parsed.flows).slice(0, MAX_FLOWS * 2)) {
-        if (!entry?.flow || Number(entry.expiresAt) <= now || flowId !== entry.flow.flowId) continue;
-        requireFlow(entry.flow);
-        flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease: entry.restoreLease || null };
+  const raw = storage?.getItem?.(CARD_COMMISSIONING_STORAGE_KEY);
+  if (!raw) return { registry: emptyRegistry(), error: 'missing' };
+  try {
+    if (raw.length > MAX_BYTES) throw new Error('oversize registry');
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== REGISTRY_VERSION || !Number.isSafeInteger(parsed.revision) || parsed.revision < 0
+      || !parsed.flows || typeof parsed.flows !== 'object') throw new Error('bad registry');
+    if (Object.keys(parsed.flows).length > MAX_FLOWS) throw new Error('oversize registry');
+    const flows = {};
+    let leaseError = false;
+    for (const [flowId, entry] of Object.entries(parsed.flows)) {
+      if (!entry?.flow || !Number.isSafeInteger(entry.expiresAt) || entry.expiresAt <= now || entry.expiresAt > now + FLOW_TTL_MS
+        || flowId !== entry.flow.flowId) continue;
+      requireFlow(entry.flow);
+      let restoreLease = null;
+      if (entry.restoreLease) {
+        const lease = entry.restoreLease;
+        const valid = lease && lease.flowId === flowId && lease.cardId === entry.flow.expectedCard?.id
+          && lease.projectFingerprint === entry.flow.project.fingerprint && /^[A-Za-z0-9_-]{16,96}$/.test(lease.id || '')
+          && ['claimed', 'mutating'].includes(lease.state) && Number.isSafeInteger(lease.expiresAt)
+          && lease.expiresAt > now && lease.expiresAt <= now + RESTORE_LEASE_MS
+          && (lease.state !== 'mutating' || /^[A-Za-z0-9_-]{16,96}$/.test(lease.fencingToken || ''));
+        if (valid) restoreLease = lease;
+        else leaseError = true;
       }
-      return { registry: { version: REGISTRY_VERSION, revision: Number(parsed.revision) || 0, flows }, error: '' };
-    } catch { corrupt = true; }
-  }
-  return { registry: emptyRegistry(), error: corrupt ? 'corrupt' : 'missing' };
+      flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease };
+    }
+    return { registry: { version: REGISTRY_VERSION, revision: parsed.revision, flows }, error: leaseError ? 'invalid-lease' : '' };
+  } catch { return { registry: emptyRegistry(), error: 'corrupt' }; }
 }
 
 function activeFlowId(sessionStorage, explicitFlowId) {
@@ -377,25 +392,45 @@ function activeFlowId(sessionStorage, explicitFlowId) {
 function persistRegistry(storage, registry) {
   const encoded = JSON.stringify(registry);
   if (encoded.length > MAX_BYTES) throw new Error('Commissioning storage is full. Finish or clear an older card setup, then retry.');
-  storage.setItem(CARD_COMMISSIONING_BACKUP_STORAGE_KEY, encoded);
   storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, encoded);
+  if (storage.getItem(CARD_COMMISSIONING_STORAGE_KEY) !== encoded) throw new Error('Commissioning storage verification failed. Nothing was changed.');
 }
 
-function acquireRegistryLock(storage, now = Date.now()) {
-  const token = makeFlowId();
-  let current = null;
-  try { current = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
-  if (current?.token && Number(current.expiresAt) > now) throw new Error('Card setup is being updated in another tab. Retry in a moment.');
-  storage.setItem(REGISTRY_LOCK_KEY, JSON.stringify({ token, expiresAt: now + REGISTRY_LOCK_MS }));
-  let verified = null;
-  try { verified = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
-  if (verified?.token !== token) throw new Error('Card setup is being updated in another tab. Retry in a moment.');
-  return () => {
+async function withRegistryMutation({ storage, locks = globalThis.navigator?.locks, delay = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now, deadline } = {}, callback) {
+  if (locks?.request) return locks.request('lightweaver.card-commissioning-registry.v2', { mode: 'exclusive' }, () => callback(() => {}));
+  if (!storage?.setItem || typeof delay !== 'function') throw new Error('Atomic card setup storage is unavailable.');
+  const owner = makeFlowId();
+  const stopAt = deadline ?? (now() + 1800);
+  let attempts = 0;
+  while (now() < stopAt && attempts < 64) {
+    attempts += 1;
+    const timestamp = now();
+    let existing = null;
+    try { existing = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch { storage.removeItem(REGISTRY_LOCK_KEY); }
+    const validExisting = existing && /^[A-Za-z0-9_-]{16,96}$/.test(existing.owner || '')
+      && Number.isSafeInteger(existing.expiresAt) && existing.expiresAt > timestamp && existing.expiresAt <= timestamp + REGISTRY_LOCK_MS;
+    if (validExisting && existing.owner !== owner) { await delay(Math.min(75, Math.max(20, existing.expiresAt - timestamp))); continue; }
+    if (existing && !validExisting) storage.removeItem(REGISTRY_LOCK_KEY);
+    const claim = JSON.stringify({ owner, expiresAt: timestamp + REGISTRY_LOCK_MS });
+    storage.setItem(REGISTRY_LOCK_KEY, claim);
+    await delay(25);
+    const assertOwner = () => {
+      let held = null;
+      try { held = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
+      if (held?.owner !== owner || held.expiresAt <= now() || held.expiresAt > now() + REGISTRY_LOCK_MS) throw new Error('Card setup storage claim was lost.');
+    };
     try {
-      const owner = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null');
-      if (owner?.token === token) storage.removeItem(REGISTRY_LOCK_KEY);
-    } catch {}
-  };
+      assertOwner();
+      return await callback(assertOwner);
+    } catch (error) {
+      if (!/claim was lost/.test(error?.message || '')) throw error;
+    } finally {
+      let held = null;
+      try { held = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
+      if (held?.owner === owner) storage.removeItem(REGISTRY_LOCK_KEY);
+    }
+  }
+  throw new Error('Card setup is being updated in another tab. Retry in a moment.');
 }
 
 export function inspectCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now() } = {}) {
@@ -403,74 +438,110 @@ export function inspectCardCommissioning({ storage = defaultStorage(), sessionSt
   const parsed = parseRegistry(storage, now);
   const id = activeFlowId(sessionStorage, flowId) || (!sessionStorage?.getItem ? Object.keys(parsed.registry.flows)[0] : '');
   if (!id) return { flow: null, error: parsed.error === 'corrupt' ? 'corrupt' : 'missing' };
-  return { flow: parsed.registry.flows[id]?.flow || null, error: parsed.registry.flows[id] ? '' : (parsed.error === 'corrupt' ? 'corrupt' : 'missing') };
+  return { flow: parsed.registry.flows[id]?.flow || null, error: parsed.registry.flows[id] ? parsed.error : (parsed.error === 'corrupt' ? 'corrupt' : 'missing') };
 }
 
-export function writeCardCommissioning(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), tabId = '', now = Date.now() } = {}) {
+export async function writeCardCommissioning(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), tabId = '', now = Date.now, locks, delay } = {}) {
   if (!storage?.setItem) return false;
   requireFlow(flow);
-  const unlock = acquireRegistryLock(storage, now);
-  try {
+  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+    const timestamp = now();
     const serializable = clone(flow);
-    const { registry } = parseRegistry(storage, now);
-    registry.flows[flow.flowId] = { flow: serializable, tabId: text(tabId, 96), expiresAt: now + FLOW_TTL_MS, restoreLease: registry.flows[flow.flowId]?.restoreLease || null };
+    const { registry } = parseRegistry(storage, timestamp);
+    const baseRevision = registry.revision;
+    registry.flows[flow.flowId] = { flow: serializable, tabId: text(tabId, 96), expiresAt: timestamp + FLOW_TTL_MS, restoreLease: registry.flows[flow.flowId]?.restoreLease || null };
     const ordered = Object.entries(registry.flows).sort((a, b) => Number(b[1].flow.updatedAt) - Number(a[1].flow.updatedAt)).slice(0, MAX_FLOWS);
     registry.flows = Object.fromEntries(ordered);
-    registry.revision += 1;
+    registry.revision = baseRevision + 1;
+    assertOwner?.();
+    if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during mutation.');
     persistRegistry(storage, registry);
     sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
     notify(serializable);
     return true;
-  } finally { unlock(); }
+  });
 }
 
 export function readCardCommissioning(options = {}) {
   return inspectCardCommissioning(options).flow;
 }
 
-export function claimCardRestoration(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(), now = Date.now() } = {}) {
+export async function claimCardRestoration(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(), now = Date.now, locks, delay } = {}) {
   requireFlow(flow);
-  let unlock;
-  try { unlock = acquireRegistryLock(storage, now); } catch { return { ok: false, reason: 'restore-in-progress' }; }
-  try {
-  const { registry } = parseRegistry(storage, now);
+  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  const timestamp = now();
+  const { registry } = parseRegistry(storage, timestamp);
+  const baseRevision = registry.revision;
   const entry = registry.flows[flow.flowId];
   if (!entry || entry.flow.project.fingerprint !== flow.project.fingerprint || entry.flow.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
-  if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > now) return { ok: false, reason: 'restore-in-progress' };
-  const lease = { id: ownerId, flowId: flow.flowId, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: now + RESTORE_LEASE_MS };
+  if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > timestamp) return { ok: false, reason: 'restore-in-progress' };
+  const lease = { id: ownerId, state: 'claimed', flowId: flow.flowId, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: timestamp + RESTORE_LEASE_MS };
   entry.restoreLease = lease;
-  registry.revision += 1;
+  registry.revision = baseRevision + 1;
+  assertOwner?.();
+  if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during restore claim.');
   persistRegistry(storage, registry);
   sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
-  const verified = parseRegistry(storage, now).registry.flows[flow.flowId]?.restoreLease;
+  const verified = parseRegistry(storage, timestamp).registry.flows[flow.flowId]?.restoreLease;
   return verified?.id === ownerId ? { ok: true, lease } : { ok: false, reason: 'restore-in-progress' };
-  } finally { unlock(); }
+  });
 }
 
-export function releaseCardRestoration(flowId, leaseId, { storage = defaultStorage(), now = Date.now() } = {}) {
-  const unlock = acquireRegistryLock(storage, now);
-  try {
-  const { registry } = parseRegistry(storage, now);
+export async function beginCardRestorationMutation(flow, lease, { storage = defaultStorage(), now = Date.now, locks, delay } = {}) {
+  requireFlow(flow);
+  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+    const timestamp = now();
+    const { registry } = parseRegistry(storage, timestamp);
+    const baseRevision = registry.revision;
+    const entry = registry.flows[flow.flowId];
+    if (!entry?.restoreLease || entry.restoreLease.id !== lease?.id || entry.restoreLease.state !== 'claimed') return { ok: false, reason: 'restore-claim-lost' };
+    const fencingToken = makeFlowId();
+    entry.restoreLease = { ...entry.restoreLease, state: 'mutating', fencingToken };
+    registry.revision = baseRevision + 1;
+    assertOwner?.();
+    if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed before project restore.');
+    persistRegistry(storage, registry);
+    return { ok: true, fencingToken };
+  });
+}
+
+export function verifyCardRestorationMutation(flow, leaseId, fencingToken, { storage = defaultStorage(), now = Date.now() } = {}) {
+  const entry = parseRegistry(storage, now).registry.flows[flow?.flowId];
+  const lease = entry?.restoreLease;
+  return Boolean(lease && lease.id === leaseId && lease.state === 'mutating' && lease.fencingToken === fencingToken
+    && lease.cardId === flow.expectedCard?.id && lease.projectFingerprint === flow.project?.fingerprint && lease.expiresAt > now);
+}
+
+export async function releaseCardRestoration(flowId, leaseId, { storage = defaultStorage(), now = Date.now, locks, delay } = {}) {
+  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  const timestamp = now();
+  const { registry } = parseRegistry(storage, timestamp);
+  const baseRevision = registry.revision;
   const entry = registry.flows[text(flowId, 96)];
   if (!entry?.restoreLease || entry.restoreLease.id !== leaseId) return false;
   entry.restoreLease = null;
-  registry.revision += 1;
+  registry.revision = baseRevision + 1;
+  assertOwner?.();
+  if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during restore release.');
   persistRegistry(storage, registry);
   return true;
-  } finally { unlock(); }
+  });
 }
 
-export function clearCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId } = {}) {
+export async function clearCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now, locks, delay } = {}) {
   if (!storage?.removeItem) return false;
-  const unlock = acquireRegistryLock(storage);
-  try {
+  return withRegistryMutation({ storage, locks, delay, now }, assertOwner => {
+  const timestamp = now();
   const id = activeFlowId(sessionStorage, flowId);
-  const { registry } = parseRegistry(storage);
+  const { registry } = parseRegistry(storage, timestamp);
+  const baseRevision = registry.revision;
   if (id) delete registry.flows[id];
-  registry.revision += 1;
+  registry.revision = baseRevision + 1;
+  assertOwner?.();
+  if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) throw new Error('Card setup registry changed during clear.');
   persistRegistry(storage, registry);
   sessionStorage?.removeItem?.(CARD_COMMISSIONING_ACTIVE_KEY);
   notify(null);
   return true;
-  } finally { unlock(); }
+  });
 }

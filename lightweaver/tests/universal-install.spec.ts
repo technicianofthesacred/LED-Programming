@@ -107,7 +107,7 @@ test('an interrupted browser install inspects the exact result and never flashes
     const { createDefaultProject } = await import('/src/lib/projectModel.js');
     const project = createDefaultProject();
     const record = saveCurrentProjectToLibrary(project);
-    writeCardCommissioning(beginCardCommissioning({
+    await writeCardCommissioning(beginCardCommissioning({
       source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
       projectRecord: record, projectRevision: 3,
       installTarget: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
