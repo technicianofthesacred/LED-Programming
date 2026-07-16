@@ -346,23 +346,9 @@ export function bootstrapCardBridgeFromOpener() {
   return true;
 }
 
-function bridgeStudioUrl(rawHost = '', rawStudioUrl = '') {
-  const win = browserWindow();
-  const host = normalizeCardHost(rawHost || readStoredCardHost());
-  const fallback = win?.location?.href || 'https://led.mandalacodes.com/#screen=patterns';
-  const studio = new URL(rawStudioUrl || fallback, fallback);
-  studio.searchParams.set('cardBridge', '1');
-  studio.searchParams.set('cardHost', host);
-  studio.searchParams.set('studioTakeover', '1');
-  if (!studio.hash) studio.hash = '#screen=patterns';
-  return studio.href;
-}
-
-export function buildCardBridgeLaunchUrl(rawHost = '', rawStudioUrl = '') {
+export function buildCardBridgeLaunchUrl(rawHost = '') {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const url = new URL(`${cardHostToUrl(host)}/`);
-  url.searchParams.set('studioAutoOpen', '1');
-  url.searchParams.set('studioUrl', bridgeStudioUrl(host, rawStudioUrl));
   url.hash = '#studioBridge=1';
   return url.href;
 }

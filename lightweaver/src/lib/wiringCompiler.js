@@ -5,7 +5,6 @@ const stripCount = strip => Math.max(0, Math.trunc(Number(strip?.pixelCount ?? s
 
 function sourceOrder(run) {
   let values = Array.from({ length: run.source.to - run.source.from + 1 }, (_, index) => run.source.from + index);
-  if (run.physicalDirection === 'source-reverse') values.reverse();
   if (run.seamLed != null) {
     const seamIndex = values.indexOf(run.seamLed);
     if (seamIndex >= 0) values = [...values.slice(seamIndex), ...values.slice(0, seamIndex)];
@@ -83,7 +82,11 @@ export function compileWiring({ wiring, strips = [], groups = [], capabilities =
       zoneMap.set(zoneId, zone);
     }
     const count = pixels.length - outputStart;
-    outputs.push({ id: output.id, name: output.name || output.id, pin: output.pin, start: outputStart, count, pixels: count });
+    const outputRuns = runs.filter(run => run.outputId === output.id && run.count > 0 && run.type !== 'cable');
+    const segments = outputRuns.map(run => ({ id: run.id, count: run.count, direction: run.reversed ? 'reverse' : 'forward' }));
+    const stripDirections = new Set(outputRuns.filter(run => run.type === 'strip').map(run => run.reversed ? 'reverse' : 'forward'));
+    const direction = stripDirections.size === 1 ? [...stripDirections][0] : stripDirections.size > 1 ? 'mixed' : 'forward';
+    outputs.push({ id: output.id, name: output.name || output.id, pin: output.pin, start: outputStart, count, pixels: count, direction, segments });
   }
 
   if (pixels.length > capabilities.maxPixels) errors.push({ code: 'pixel-limit', message: `Compiled wiring uses ${pixels.length} pixels; hardware supports ${capabilities.maxPixels}.` });

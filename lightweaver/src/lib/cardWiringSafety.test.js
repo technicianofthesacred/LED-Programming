@@ -11,9 +11,82 @@ import {
   getCardWiringStatus,
   normalizeCardWiringStatus,
   rollbackCardWiringCandidate,
+  readCardWiringCandidateEvidence,
   stageCardWiringCandidate,
   waitForCardWiringReconnect,
 } from './cardWiringSafety.js';
+
+test('candidate evidence is an uncached exact status GET and rejects another activation', async () => {
+  const calls = [];
+  const common = { host: '192.168.4.1', transport: 'direct', fetchImpl: async (url, init) => {
+    calls.push([url, init]);
+    return jsonResponse({ app: 'Lightweaver', ok: true, state: 'staged', activationId: 'candidate-a', outputs: [], cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), projectRevision: 7, projectFingerprint: 'f'.repeat(16), productionJobId: 'job-42', productionJobDigest: 'b'.repeat(64), wiringRevision: 2, wiringDigest: 'd'.repeat(64), maxMilliamps: 1500 });
+  } };
+  const evidence = await readCardWiringCandidateEvidence('candidate-a', common);
+  assert.equal(evidence.activationId, 'candidate-a');
+  assert.equal(evidence.productionJobId, 'job-42');
+  assert.equal(evidence.productionJobDigest, 'b'.repeat(64));
+  assert.equal(calls[0][1].method, 'GET');
+  assert.equal(calls[0][1].cache, 'no-store');
+  await assert.rejects(readCardWiringCandidateEvidence('candidate-b', common), /different wiring transaction/i);
+});
+
+test('candidate evidence rejects status without an exact Lightweaver provenance marker', async () => {
+  await assert.rejects(readCardWiringCandidateEvidence('candidate-a', {
+    host: '192.168.4.1',
+    transport: 'bridge',
+    bridgeRequestImpl: async () => ({
+      ok: true,
+      state: 'staged',
+      activationId: 'candidate-a',
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'build-123',
+      projectRevision: 7,
+      projectFingerprint: 'a'.repeat(16),
+    }),
+  }), /Lightweaver/i);
+});
+
+test('candidate evidence rejects malformed card-owned project identity', async () => {
+  await assert.rejects(readCardWiringCandidateEvidence('candidate-a', {
+    host: '192.168.4.1',
+    transport: 'bridge',
+    bridgeRequestImpl: async () => ({
+      app: 'Lightweaver',
+      ok: true,
+      state: 'staged',
+      activationId: 'candidate-a',
+      outputs: [],
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'build-123',
+      projectRevision: 7,
+      projectFingerprint: 'NOT-HEX',
+      wiringRevision: 2, wiringDigest: 'd'.repeat(64), maxMilliamps: 1500,
+    }),
+  }), /project identity/i);
+});
+
+test('candidate evidence rejects a partial production job identity', async () => {
+  await assert.rejects(readCardWiringCandidateEvidence('candidate-a', {
+    host: '192.168.4.1',
+    transport: 'bridge',
+    bridgeRequestImpl: async () => ({
+      app: 'Lightweaver',
+      ok: true,
+      state: 'staged',
+      activationId: 'candidate-a',
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'build-123',
+      projectRevision: 7,
+      projectFingerprint: 'a'.repeat(16),
+      productionJobId: 'job-42',
+      wiringRevision: 2, wiringDigest: 'd'.repeat(64), maxMilliamps: 1500,
+    }),
+  }), /production job identity/i);
+});
 
 function jsonResponse(body, { ok = true, status = 200 } = {}) {
   return {
@@ -39,6 +112,9 @@ test('normalizes every public wiring state and rejects unknown states', () => {
       currentOutputs: [{ pin: 18, pixels: 44 }],
       probationRemainingMs: 81234,
       nextStep: 'confirm',
+      wiringRevision: 3,
+      wiringDigest: 'd'.repeat(64),
+      maxMilliamps: 1500,
     });
   assert.deepEqual(
     { ...normalized, raw: undefined },
@@ -49,6 +125,9 @@ test('normalizes every public wiring state and rejects unknown states', () => {
       outputs: [{ pin: 18, pixels: 44 }],
       remainingMs: 81234,
       nextStep: 'confirm',
+      wiringRevision: 3,
+      wiringDigest: 'd'.repeat(64),
+      maxMilliamps: 1500,
       raw: undefined,
     },
   );

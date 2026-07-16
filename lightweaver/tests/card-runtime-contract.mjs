@@ -17,6 +17,15 @@ import { defaultStandaloneController } from '../src/lib/projectModel.js';
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
+const aliasControls = normalizeCardRuntimeConfig({
+  led: { pixels: 44, outputs: [{ id: 'main', pin: '16', pixels: 44 }] },
+  controls: { encoder: { pinA: '10', pinB: '11', pressPin: '12', alternatePressPin: '13' }, previousPin: '14', nextPin: '15', blackoutPin: '19', brightnessPin: '20', statusLedPin: '47' },
+}).controls;
+assert.deepEqual(aliasControls.encoder.a, 10);
+assert.equal('pinA' in aliasControls.encoder, false);
+assert.equal('previousPin' in aliasControls, false);
+assert.throws(() => normalizeCardRuntimeConfig({ led: { pixels: 44, outputs: [{ id: 'main', pin: 16, pixels: 44 }] }, controls: { encoder: { a: 10, b: 10, press: 12, alternatePress: -1 }, previous: -1, next: -1, blackout: -1, brightness: -1, statusLed: -1 } }), /already owned/i);
+
 assert.ok(DEFAULT_CARD_PATTERN_BANK.length >= 24);
 for (const id of ['aurora', 'ember', 'rainbow', 'breathe', 'scanner', 'warm-white']) {
   assert.ok(DEFAULT_CARD_PATTERN_BANK.some(pattern => pattern.id === id), `missing default pattern ${id}`);
@@ -127,6 +136,9 @@ for (const badRange of [
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
+for (const field of ['projectRevision', 'projectFingerprint', 'productionJobId', 'productionJobDigest']) {
+  assert.equal(field in fallback, false, `ordinary Studio packages should omit absent ${field}`);
+}
 assert.equal(fallback.piece.id, 'bench-piece');
 assert.equal(fallback.piece.name, 'Bench Piece');
 assert.equal(fallback.controls.encoder.brightnessStep, 18);
@@ -149,6 +161,10 @@ assert.deepEqual(cleanStudioController.controls.encoder.patternCycleIds, []);
 const pkg = makeCardRuntimePackage({
   projectId: 'lwproj-bench-123',
   projectName: 'Bench Piece',
+  projectRevision: 7,
+  projectFingerprint: 'a'.repeat(16),
+  productionJobId: 'batch-2026.07:artwork_42',
+  productionJobDigest: 'b'.repeat(64),
   mode: 'website-flash',
   led: { pixels: 44, colorOrder: 'RGB' },
   controls: normalized.controls,
@@ -160,8 +176,27 @@ assert.equal(pkg.version, 1);
 assert.equal(pkg.config.mode, 'website-flash');
 assert.equal(pkg.config.piece.id, 'lwproj-bench-123');
 assert.equal(pkg.config.piece.name, 'Bench Piece');
+assert.equal(pkg.config.projectRevision, 7);
+assert.equal(pkg.config.projectFingerprint, 'a'.repeat(16));
+assert.equal(pkg.config.productionJobId, 'batch-2026.07:artwork_42');
+assert.equal(pkg.config.productionJobDigest, 'b'.repeat(64));
 assert.equal(pkg.config.led.pixels, 44);
 assert.deepEqual(pkg.config.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+
+for (const invalidIdentity of [
+  { projectRevision: -1, projectFingerprint: 'a'.repeat(16) },
+  { projectRevision: 1.5, projectFingerprint: 'a'.repeat(16) },
+  { projectRevision: 1, projectFingerprint: 'A'.repeat(16) },
+  { projectRevision: 1, projectFingerprint: 'a'.repeat(65) },
+  { productionJobId: 'job id with spaces' },
+  { productionJobId: 'x'.repeat(97) },
+  { productionJobDigest: 'b'.repeat(63) },
+  { productionJobDigest: 'B'.repeat(64) },
+  { productionJobId: 'job-42' },
+  { productionJobDigest: 'b'.repeat(64) },
+]) {
+  assert.throws(() => makeCardRuntimePackage(invalidIdentity), /revision|fingerprint|production job/i);
+}
 
 const zoned = makeCardRuntimePackage({
   projectName: 'Zoned Piece',
@@ -202,6 +237,8 @@ assert.deepEqual(tenZonePackage.config.zones.map(zone => zone.id).slice(-2), ['z
 const projectPkg = buildCardRuntimePackageFromProject({
   projectId: 'lwproj-customer-v3',
   projectName: 'Customer V3',
+  projectRevision: 11,
+  projectFingerprint: 'c'.repeat(16),
   strips: [
     { id: 'inner', name: 'Inner', pixelCount: 8 },
     { id: 'outer', name: 'Outer', pixelCount: 12 },
@@ -220,18 +257,67 @@ const projectPkg = buildCardRuntimePackageFromProject({
   standaloneController: {
     led: { colorOrder: 'GRB', brightnessLimit: 0.55 },
     outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
-    controls: { encoder: { press: 6, patternCycleIds: ['ember', 'scanner'] } },
+    controls: { encoder: { press: 6, alternatePress: -1, patternCycleIds: ['ember', 'scanner'] } },
   },
 });
 assert.equal(projectPkg.config.piece.id, 'lwproj-customer-v3');
 assert.equal(projectPkg.config.piece.name, 'Customer V3');
+assert.equal(projectPkg.config.projectRevision, 11);
+assert.equal(projectPkg.config.projectFingerprint, 'c'.repeat(16));
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
-assert.equal(projectPkg.config.controls.encoder.press, 0);
-assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
-assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['aurora', 'ember', 'scanner']);
+assert.equal(projectPkg.config.controls.encoder.press, 6);
+assert.equal(projectPkg.config.controls.encoder.alternatePress, -1);
+assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
+
+const customControlsPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Custom controls',
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+    controls: {
+      encoder: {
+        a: 10,
+        b: 11,
+        press: 12,
+        alternatePress: 13,
+        rotateDirection: 'clockwise-dimmer',
+        brightnessStep: 7,
+        patternCycleIds: ['ember', 'scanner'],
+      },
+      previous: 14,
+      next: 15,
+      blackout: 19,
+      brightness: 20,
+      statusLed: 47,
+    },
+  },
+});
+assert.deepEqual(customControlsPkg.config.controls, {
+  encoder: {
+    a: 10,
+    b: 11,
+    press: 12,
+    alternatePress: 13,
+    rotateDirection: 'clockwise-dimmer',
+    brightnessStep: 7,
+    patternCycleIds: ['ember', 'scanner'],
+  },
+  previous: 14,
+  next: 15,
+  blackout: 19,
+  brightness: 20,
+  statusLed: 47,
+});
+
+assert.throws(() => buildCardRuntimePackageFromProject({
+  projectName: 'Conflicting controls',
+  standaloneController: {
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+    controls: { encoder: { a: 16, b: 5 } },
+  },
+}), /control.*GPIO 16.*LED output|LED output.*GPIO 16/i);
 
 const fullPiece395Pkg = buildCardRuntimePackageFromProject({
   projectId: 'lwproj-395',
@@ -456,15 +542,15 @@ const singleOutputPkg = buildCardRuntimePackageFromProject({
 assert.equal(singleOutputPkg.config.led.outputs.length, 1);
 assert.deepEqual(singleOutputPkg.config.led.outputs.map(output => output.pixels), [44]);
 
-const staleAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
-  projectName: 'No Floating Analog Brightness',
+const savedAnalogBrightnessPkg = buildCardRuntimePackageFromProject({
+  projectName: 'Saved Analog Brightness',
   standaloneController: {
     controls: {
       brightness: 1,
     },
   },
 });
-assert.equal(staleAnalogBrightnessPkg.config.controls.brightness, -1);
+assert.equal(savedAnalogBrightnessPkg.config.controls.brightness, 1);
 
 const gallerySectionCounts = [46, 46, 46, 45, 45, 45, 45, 45, 45, 45];
 const galleryStrips = gallerySectionCounts.map((pixelCount, index) => ({

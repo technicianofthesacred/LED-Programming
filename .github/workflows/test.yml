@@ -14,12 +14,18 @@ on:
   push:
     paths:
       - 'lightweaver/**'
+      - 'packages/installer-core/**'
       - 'firmware/**'
+      - 'release/production-job.schema.json'
+      - 'scripts/build-production-job.mjs'
       - '.github/workflows/test.yml'
   pull_request:
     paths:
       - 'lightweaver/**'
+      - 'packages/installer-core/**'
       - 'firmware/**'
+      - 'release/production-job.schema.json'
+      - 'scripts/build-production-job.mjs'
       - '.github/workflows/test.yml'
   # Lets deploy-site.yml reuse this exact test job as its deploy gate instead
   # of maintaining a near-copy of these steps.
@@ -64,6 +70,15 @@ jobs:
         # the e2e step fails with "Executable doesn't exist" and reddens main.
         run: npx playwright install --with-deps chromium
 
-      - name: Launch check (core tests + production build)
+      # Feature branches cannot use the protected firmware signing key. They
+      # still run every source/runtime/browser/build/staging check; only main
+      # may prove that its committed binary came from the protected signer.
+      - name: Source launch gate (feature branches and pull requests)
+        if: github.ref != 'refs/heads/main'
+        working-directory: lightweaver
+        run: npm run launch:source
+
+      - name: Signed production launch gate (main and deploys)
+        if: github.ref == 'refs/heads/main'
         working-directory: lightweaver
         run: npm run launch:check

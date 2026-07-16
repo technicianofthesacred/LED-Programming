@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
 import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
@@ -10,12 +11,17 @@ import {
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
-import { detectPlatformCapabilities } from '../../lib/platformCapabilities.js';
+import {
+  SECURE_INSTALLER_URL,
+  detectPlatformCapabilities,
+} from '../../lib/platformCapabilities.js';
+import { BridgeResumePanel } from './BridgeResumePanel.jsx';
 
 function platformCapabilities() {
   if (typeof window === 'undefined') return detectPlatformCapabilities();
   return detectPlatformCapabilities({
     secureContext: window.isSecureContext,
+    topLevel: window.top === window.self,
     serial: navigator.serial,
     userAgent: navigator.userAgent,
     platform: navigator.platform,
@@ -24,22 +30,31 @@ function platformCapabilities() {
 }
 
 function goToInstall() {
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  params.set('screen', 'flash');
-  params.set('mode', 'install');
-  window.location.hash = params.toString();
+  window.location.hash = 'screen=flash&mode=install';
 }
 
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
 
-export function CardConnectionCenter({ open, link, onClose, onConnectCard = connectCardLink, setupEvidence = {} }) {
+export function CardConnectionCenter({
+  open,
+  link,
+  onClose,
+  onConnectCard = connectCardLink,
+  onLaunchBridge,
+  bridgeResult,
+  onClearBridgeResult,
+  recoverLights,
+  setupEvidence = {},
+}) {
   const panelRef = useRef(null);
   const restoreFocusRef = useRef(null);
   const shouldRestoreFocusRef = useRef(false);
   const [intent, setIntent] = useState('');
   const [failure, setFailure] = useState('');
   const [host, setHost] = useState(readStoredCardHost);
+  const [bridgeLaunchState, setBridgeLaunchState] = useState('idle');
+  const [bridgeReturnCode, setBridgeReturnCode] = useState('');
   const capabilities = useMemo(platformCapabilities, [open]);
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
@@ -67,6 +82,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     shouldRestoreFocusRef.current = false;
     setFailure('');
     setIntent('');
+    setBridgeLaunchState('idle');
     const timer = window.setTimeout(() => panelRef.current?.focus(), 0);
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -86,6 +102,12 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
       if (shouldRestoreFocusRef.current) restoreFocusRef.current?.focus?.();
     };
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!bridgeResult) return;
+    setBridgeLaunchState('idle');
+    window.setTimeout(() => panelRef.current?.focus(), 0);
+  }, [bridgeResult]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -128,7 +150,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
       rememberedCard,
       ...flowEvidence,
     });
-    if (next.id !== 'open-setup-network') connect();
+    if (next.route !== 'setup-network') connect();
   };
 
   const chooseBlankCard = () => {
@@ -160,12 +182,92 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
     setFailure('');
   };
 
+  const launchBridge = async (operation) => {
+    if (bridgeLaunchState === 'opening' || bridgeLaunchState === 'waiting-for-bridge' || bridgeLaunchState === 'return-pending') return;
+    onClearBridgeResult?.();
+    setFailure('');
+    setBridgeLaunchState('opening');
+    try {
+      await onLaunchBridge?.(operation);
+      setBridgeLaunchState('waiting-for-bridge');
+    } catch {
+      setBridgeLaunchState('idle');
+      setFailure('Studio could not save the project and open Bridge. Save the project, then try again.');
+    }
+  };
+
+  const resumeReturnCode = async (event) => {
+    event.preventDefault();
+    setFailure('');
+    setBridgeLaunchState('return-pending');
+    const channel = createBridgeResultChannel();
+    try {
+      await resumeBridgeReturnCode(bridgeReturnCode, { publish: result => channel.publish(result) });
+      setBridgeReturnCode('');
+    } catch {
+      setBridgeLaunchState('waiting-for-bridge');
+      setFailure('That return code is invalid, expired, already used, or belongs to another browser profile. Copy the current code from Bridge and try again in the original Studio tab.');
+    } finally { channel.close(); }
+  };
+
+  const bridgeOperation = action.id === 'needs-safe-recovery' ? 'recover-current-release' : 'install-current-release';
+  const bridgeBusy = ['opening', 'waiting-for-bridge', 'return-pending'].includes(bridgeLaunchState);
+  const effectiveActionId = action.id;
+  const bridgeLifecycleState = bridgeLaunchState === 'idle' && action.id === 'install-native-bridge'
+    ? 'installer-unavailable' : bridgeLaunchState;
+  const showManualReturn = !capabilities.canWebSerialInstall
+    && ['launch-native-bridge', 'install-native-bridge', 'needs-card-update', 'needs-safe-recovery'].includes(action.id);
+
   const initialChoice = !intent
     && link.state === 'disconnected'
     && (!link.activity || link.activity === 'idle')
     && NEUTRAL_FIRST_RUN_REASONS.has(link.reason)
     && !hasKnownCard;
-  const setupSteps = action.id === 'open-setup-network';
+  const setupSteps = action.id === 'recoverable-failure' && action.route === 'setup-network';
+
+  const renderPrimaryAction = () => {
+    switch (action.id) {
+      case 'ready-local-card':
+        return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
+      case 'ready-browser-usb':
+        return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
+      case 'escape-insecure-card-frame':
+        return (
+          <a className="btn primary" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">
+            Open secure installer
+          </a>
+        );
+      case 'needs-card-update':
+        return capabilities.canWebSerialInstall
+          ? <button type="button" className="btn primary" onClick={openInstall}>Update card</button>
+          : <button type="button" className="btn primary" onClick={() => launchBridge('install-current-release')} disabled={bridgeBusy}>Open Lightweaver Bridge</button>;
+      case 'launch-native-bridge':
+        return <button type="button" className="btn primary" onClick={() => launchBridge(bridgeOperation)} disabled={bridgeBusy}>{bridgeBusy ? 'Opening Lightweaver Bridge…' : 'Open Lightweaver Bridge'}</button>;
+      case 'install-native-bridge':
+        return <button type="button" className="btn primary" onClick={() => launchBridge(bridgeOperation)} disabled={bridgeBusy}>Try Lightweaver Bridge again</button>;
+      case 'handoff-supported-device':
+        return null;
+      case 'wrong-card':
+        return <button type="button" className="btn primary" onClick={() => connect()}>Reconnect expected card</button>;
+      case 'recoverable-failure':
+        return (
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
+            disabled={action.primaryDisabled}
+          >
+            {setupSteps ? 'Continue' : action.primaryLabel}
+          </button>
+        );
+      case 'needs-safe-recovery':
+        return capabilities.canWebSerialInstall
+          ? <button type="button" className="btn primary" onClick={openInstall}>Start safe recovery</button>
+          : <button type="button" className="btn primary" onClick={() => launchBridge('recover-current-release')} disabled={bridgeBusy}>Open Lightweaver Bridge</button>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <section
@@ -185,7 +287,17 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
         <button type="button" className="card-connection-close" onClick={closeAndRestore} aria-label="Close connection center">×</button>
       </header>
 
-      {initialChoice ? (
+      {bridgeResult ? (
+        <BridgeResumePanel
+          result={bridgeResult}
+          link={link}
+          onReconnect={() => connect()}
+          onRetry={launchBridge}
+          onDismiss={onClearBridgeResult}
+          onComplete={() => onClearBridgeResult?.('complete')}
+          recoverLights={recoverLights}
+        />
+      ) : initialChoice ? (
         <div className="card-condition-choices">
           <p>Look at the card and its LEDs, then choose what you see.</p>
           <button type="button" className="card-condition-choice" onClick={chooseWorkingCard}>
@@ -198,9 +310,26 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           </button>
         </div>
       ) : (
-        <div className="card-connection-action" aria-live="polite" aria-busy={action.busy || undefined}>
-          <h3>{action.title}</h3>
-          <p>{action.explanation}</p>
+        <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
+          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : action.explanation}</p>
+          {(effectiveActionId === 'install-native-bridge') && (
+            <p>A verified signed installer is not yet available. No unsigned download is offered. Use secure browser USB or continue on a supported computer.</p>
+          )}
+          {action.id === 'needs-safe-recovery' && !capabilities.canWebSerialInstall && (
+            <p>Keep the card powered while Bridge performs safe recovery.</p>
+          )}
+          {action.id === 'needs-card-update' && !capabilities.canWebSerialInstall && (
+            <p>Keep the card powered while Bridge installs the current release.</p>
+          )}
+
+          {showManualReturn && (
+            <form onSubmit={resumeReturnCode} className="bridge-return-code-form">
+              <label htmlFor="bridge-return-code">Return code from Bridge</label>
+              <input id="bridge-return-code" value={bridgeReturnCode} onChange={event => setBridgeReturnCode(event.target.value)} autoComplete="off" spellCheck="false" maxLength={904} />
+              <button type="submit" className="btn" disabled={!bridgeReturnCode.trim() || bridgeLaunchState === 'return-pending'}>Resume in this tab</button>
+            </form>
+          )}
 
           {setupSteps && (
             <ol className="card-setup-steps">
@@ -210,7 +339,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
             </ol>
           )}
 
-          {action.id === 'connected' && link.card && (
+          {action.id === 'ready-local-card' && link.card && (
             <dl className="card-acknowledged-facts">
               {link.card.name && <><dt>Name</dt><dd>{link.card.name}</dd></>}
               {link.card.pixelCount > 0 && <><dt>Pixels</dt><dd>{link.card.pixelCount}</dd></>}
@@ -220,20 +349,7 @@ export function CardConnectionCenter({ open, link, onClose, onConnectCard = conn
           )}
 
           <div className="card-connection-actions">
-            {action.id === 'connected' ? (
-              <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>
-            ) : action.id === 'web-serial-install' ? (
-              <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>
-            ) : action.id === 'supported-browser-handoff' || action.id === 'supported-device-handoff' ? null : (
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
-                disabled={action.primaryDisabled}
-              >
-                {setupSteps ? 'Continue' : action.primaryLabel}
-              </button>
-            )}
+            {renderPrimaryAction()}
             {action.secondaryAction?.id === 'adopt-discovered-card' && (
               <button type="button" className="btn" onClick={useDiscoveredCard}>Use this card instead</button>
             )}

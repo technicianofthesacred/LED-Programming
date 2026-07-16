@@ -8,6 +8,9 @@ test('install mode is a single safe workflow without technician controls', async
 
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
   await expect(page.getByText(/Official Lightweaver .* verified and ready/)).toBeVisible();
+  for (const label of ['Connect card', 'Install safely', 'Set up card', 'Check lights']) {
+    await expect(page.getByRole('listitem').filter({ hasText: label })).toBeVisible();
+  }
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeVisible();
   await expect(page.getByText('Technician diagnostics')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Browse \.bin/i })).not.toBeVisible();
@@ -41,16 +44,34 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeEnabled();
 });
 
-test('unsupported install mode gives the card connection handoff and keeps the project in Studio', async ({ page }) => {
+test('desktop without browser USB offers Lightweaver Bridge and keeps the canonical Studio URL', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
   await page.goto('/#screen=flash&mode=install');
 
-  await expect(page.getByRole('heading', { name: /supported (browser|computer)/i })).toBeVisible();
-  await expect(page.getByText(/Chrome or Edge|Mac, Windows, or Linux/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+  await expect(page.locator('body')).not.toContainText('/design');
+});
+
+test('installer inside a secure iframe escapes to the fixed top-level installer', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout');
+  await page.evaluate(() => {
+    const frame = document.createElement('iframe');
+    frame.id = 'installer-frame';
+    frame.src = `${location.origin}/#screen=flash&mode=install&url=https://evil.example/fw.bin`;
+    document.body.append(frame);
+  });
+  const installer = page.frameLocator('#installer-frame');
+  await expect(installer.getByRole('heading', { name: 'Open secure installer' })).toBeVisible();
+  const escape = installer.getByRole('link', { name: 'Open secure installer' });
+  await expect(escape).toHaveAttribute('href', 'https://led.mandalacodes.com/#screen=flash&mode=install');
+  await expect(escape).toHaveAttribute('target', '_blank');
 });
 
 test('technician controls remain separately labelled outside install mode', async ({ page }) => {
@@ -66,11 +87,43 @@ test('technician controls remain separately labelled outside install mode', asyn
 
 test('Studio navigation is held on the installer while an install is active', async ({ page }) => {
   await page.goto('/#screen=flash&mode=install');
-  await expect(page.getByRole('heading', { name: /supported (browser|computer)|Install Lightweaver/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /secure Lightweaver Studio|Continue on a computer|Install Lightweaver/i })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } })));
   await page.getByRole('button', { name: 'Layout' }).click();
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } })));
   await page.getByRole('button', { name: 'Layout' }).click();
   await expect(page).toHaveURL(/#screen=layout$/);
+});
+
+test('an interrupted browser install inspects the exact result and never flashes again automatically', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+  });
+  await page.goto('/#screen=flash&mode=install');
+  await page.evaluate(async () => {
+    const { beginCardCommissioning, writeCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
+    const { saveCurrentProjectToLibrary } = await import('/src/lib/projectStorage.js');
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const project = createDefaultProject();
+    const record = saveCurrentProjectToLibrary(project);
+    await writeCardCommissioning(beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord: record, projectRevision: 3,
+      installTarget: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(/will not flash again automatically/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reconnect and inspect card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Erase card and install/i })).toHaveCount(0);
+
+  await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    getSharedCardLink().dispatch({
+      type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+      card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    });
+  });
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
 });

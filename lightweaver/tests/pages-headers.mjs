@@ -10,7 +10,7 @@ assert.doesNotMatch(headers, /^\/design/m, 'headers must not preserve the remove
 assert.doesNotMatch(
   headers,
   /^ \s*X-Frame-Options:/im,
-  'Studio must not send X-Frame-Options because the card page embeds it in an iframe for Edit in Studio',
+  'Studio keeps legacy iframe compatibility for already-installed cards',
 );
 
 const cspLine = headers.split('\n').find(line => /Content-Security-Policy:/i.test(line)) || '';

@@ -14,6 +14,7 @@ This repo owns `led.mandalacodes.com`:
 - **Production (`led.mandalacodes.com/`)** opens Studio directly. There is no second mount or parent-site build step.
 - **Firmware on the live site** comes from `lightweaver/public/firmware/` in the same deployment.
 - **Cards already in the field** only update by **USB reflash** (there is no OTA). Reflash from the Flash screen at `led.mandalacodes.com/` or a verified preview deployment.
+- **Workshop cards** use the guided root Studio route `https://led.mandalacodes.com/#screen=production` in desktop Chrome or Edge. The website verifies the immutable artwork job and official firmware before it asks for USB; no native app or paid signing service is required for this browser-first lane.
 
 **Customer entry policy:** every install, connection, configuration, update, and recovery flow starts at `https://led.mandalacodes.com/`. The root Studio is the product; `/design` is not required. `lightweaver.local`, `192.168.4.1`, and numeric card addresses are technician diagnostics only. Studio may open a card-local session as part of its guided connection flow, but customers are not instructed to type or remember those addresses.
 
@@ -36,8 +37,9 @@ cd lightweaver && npm run check:prod
 
 It hashes the live `/firmware/*.bin` against the committed binary and checks the ESP magic byte; it exits 0 with a SKIPPED note when offline (deploy-time check — not part of `test:core`).
 It also requires the root Studio shell and an exact branded HTTP 404 at the
-retired route. For a preview, set `PROD_ORIGIN` once so all three checks use the
-same deployment.
+retired route. It verifies the detached firmware signature, published provenance,
+production-job index, and every indexed content-addressed job artifact. For a
+preview, set `PROD_ORIGIN` once so every check uses the same deployment.
 
 ---
 
@@ -47,7 +49,8 @@ Run this before the controller leaves the bench, and again after any code, firmw
 
 - [ ] **Runtime lane chosen and written down:** standalone Lightweaver card, WLED + Pi-hosted visitor UI, or advanced Madrix / Art-Net live host.
 - [ ] **Single entry confirmed:** customer instructions, QR codes, install, reconnect, configuration, update, and recovery all begin at `https://led.mandalacodes.com/`; no customer step requires a local hostname or IP.
-- [ ] **Launch check passes:** from `lightweaver/`, run `npm run launch:check`. This runs the core runtime contract tests and production Vite build.
+- [ ] **Source gate passes:** from `lightweaver/`, run `npm run launch:source`. This runs source/runtime contracts, both Show and Production Setup Playwright suites, the production build, and staged Pages assertions without pretending a feature branch can sign firmware.
+- [ ] **Signed launch gate passes:** run `npm run launch:check` on the protected release commit. It repeats the source gate and then requires the committed signed factory binary to be fresh against firmware source. A source-only firmware change must fail here.
 - [ ] **Signed release complete:** after firmware changes, confirm protected CI committed the rebuilt image, signed manifest/signature, immutable release, and provenance before running the deploy workflow.
 - [ ] **Launch package identified:** record the Studio git commit, firmware version, manifest `buildId`, provenance source revision, exported project package, and any microSD package used for this piece.
 - [ ] **Installer policy reviewed:** verify the production firmware floor was unchanged for an ordinary release, or record the safety reason and replacement release when deliberately raising it.
@@ -56,6 +59,20 @@ Run this before the controller leaves the bench, and again after any code, firmw
 - [ ] **Standalone card API sanity — technician diagnostic only:** after confirming the stable card ID, inspect `/api/status`, `/api/config`, and `/api/recover-lights` at the card's confirmed local address. Never substitute this diagnostic for the customer website flow.
 - [ ] **Pi proxy sanity** (if Pi-hosted): on the Pi, confirm `curl http://localhost:3000/api/health` and `curl "http://localhost:3000/api/wled/info?ip=<wled-ip>"`.
 - [ ] **Controller record saved:** MAC address, final IP/hostname, pixel count, GPIO/output mapping, color order, brightness cap, and latest WLED/controller JSON snapshot.
+
+### Workshop Production Setup acceptance
+
+The worker procedure is [worker-flash-runbook.md](worker-flash-runbook.md). Complete this gate before telling workers to use the production website.
+
+- [ ] **Job release prepared:** publish each job with `scripts/build-production-job.mjs`; confirm `public/production/jobs/index.json` names only immutable digest URLs and the staged artifact verification passes.
+- [ ] **Protected firmware release prepared:** let `build-firmware.yml` build and sign the exact merged firmware source. Never copy a locally built binary over the signed artifact or weaken `firmware:check-bin`.
+- [ ] **Root route verified:** run the Production Setup Playwright suite, then confirm the deployed `https://led.mandalacodes.com/#screen=production` opens the worker workflow from the root site without `/design` or Bridge.
+- [ ] **Live assets verified:** after Pages publishes, run `PROD_CHECK_REQUIRED=1 npm run check:prod`; require the root shell, retired-route 404, signed image, matching provenance, immutable job index/artifacts, and committed/live firmware hash to agree.
+- [ ] **No-code worker rehearsal:** a worker who did not build the software completes the runbook using only the website, printed job code/QR, one data cable, one card, and the powered fixture.
+- [ ] **Real physical acceptance:** on an actual card and strip, record install/update, exact identity read-back, every blue/red/dark boundary, a temporary correction confirmed, a correction allowed to roll back, reboot recovery, pass export, and Next-artwork reset.
+- [ ] **Records exported:** save both CSV and JSON outside browser storage at the end of the batch.
+
+**Current release limiter (2026-07-16):** Production Setup source and automated browser coverage exist, but the committed public factory artifact predates the latest firmware source. Protected CI must rebuild/sign the merged source, then the site must deploy and the real-card checklist above must be completed. Until those steps are recorded, do not claim the new production workflow is live or physically accepted.
 
 ### Physical wiring acceptance — real card and artwork required
 

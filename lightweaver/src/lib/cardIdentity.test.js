@@ -11,6 +11,7 @@ import {
 } from './cardIdentity.js';
 
 const firmwareInfo = {
+  app: 'Lightweaver',
   cardId: 'lw-001122aabbcc',
   piece: { name: 'Front Mandala' },
   firmwareVersion: '1.4.0',
@@ -22,6 +23,10 @@ const firmwareInfo = {
   ],
   limits: { pixels: 1024, outputs: 4, looks: 32 },
   wifi: { hostname: 'lightweaver-aabbcc', ip: '192.168.18.70' },
+  projectRevision: 7,
+  projectFingerprint: 'a'.repeat(16),
+  productionJobId: 'job-42',
+  productionJobDigest: 'b'.repeat(64),
 };
 
 test('normalizes firmware info into stable card identity and output summary', () => {
@@ -42,6 +47,10 @@ test('normalizes firmware info into stable card identity and output summary', ()
     pixelCount: 56,
     gpioSummary: 'GPIO 16 · 44, GPIO 17 · 12',
     limits: { pixels: 1024, outputs: 4, looks: 32 },
+    projectRevision: 7,
+    projectFingerprint: 'a'.repeat(16),
+    productionJobId: 'job-42',
+    productionJobDigest: 'b'.repeat(64),
   });
 });
 

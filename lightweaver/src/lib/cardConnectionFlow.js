@@ -1,72 +1,97 @@
 export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
-  'connected',
-  'reconnect-known-card',
-  'choose-card-condition',
-  'open-setup-network',
-  'open-card-page',
-  'retry-card-page',
-  'web-serial-install',
-  'supported-browser-handoff',
-  'supported-device-handoff',
-  'connector-fallback',
+  'ready-browser-usb',
+  'escape-insecure-card-frame',
+  'ready-local-card',
+  'needs-card-update',
+  'launch-native-bridge',
+  'install-native-bridge',
+  'handoff-supported-device',
+  'wrong-card',
+  'recoverable-failure',
+  'needs-safe-recovery',
 ]);
 
 const ACTION_COPY = Object.freeze({
-  connected: Object.freeze({
-    title: 'Lightweaver connected',
-    explanation: 'Studio has verified your card and is ready to control it.',
-    primaryLabel: 'Done',
+  'ready-browser-usb': Object.freeze({
+    legacyId: 'web-serial-install',
+    title: 'Connect the card by USB',
+    explanation: 'Plug the Lightweaver card into this computer with a data cable, then choose the card.',
+    primaryLabel: 'Choose USB card',
   }),
-  'reconnect-known-card': Object.freeze({
-    title: 'Reconnect your Lightweaver',
-    explanation: 'Studio knows which card to look for and can reconnect it.',
-    primaryLabel: 'Reconnect',
+  'escape-insecure-card-frame': Object.freeze({
+    legacyId: 'supported-browser-handoff',
+    title: 'Open secure installer',
+    explanation: 'Studio is inside the local card page, where USB installation is blocked. Open the secure installer in its own tab.',
+    primaryLabel: 'Open secure installer',
   }),
-  'choose-card-condition': Object.freeze({
-    title: 'Tell us about your card',
-    explanation: 'Choose whether this card is already running Lightweaver or still needs installation.',
-    primaryLabel: 'Choose card condition',
+  'ready-local-card': Object.freeze({
+    legacyId: 'connected',
+    title: 'Lightweaver card ready',
+    explanation: 'Studio verified the connected card and can control it now.',
+    primaryLabel: 'Continue',
   }),
-  'open-setup-network': Object.freeze({
-    title: 'Finish card setup',
-    explanation: 'Join the Lightweaver setup network, finish Wi-Fi setup, then return to Studio.',
-    primaryLabel: 'Open setup',
+  'needs-card-update': Object.freeze({
+    legacyId: 'web-serial-install',
+    title: 'Update this Lightweaver card',
+    explanation: 'Keep the card plugged into this computer and install the current Lightweaver software.',
+    primaryLabel: 'Update card',
   }),
-  'open-card-page': Object.freeze({
-    title: 'Open your Lightweaver card',
-    explanation: 'Open the card page so Studio can find and verify your Lightweaver.',
-    primaryLabel: 'Open card page',
+  'launch-native-bridge': Object.freeze({
+    legacyId: 'supported-browser-handoff',
+    title: 'Continue in secure Lightweaver Studio',
+    explanation: 'The Lightweaver USB helper is not available yet. Use secure Studio in a browser with USB support, or continue on another supported computer.',
+    primaryLabel: 'Show supported options',
   }),
-  'retry-card-page': Object.freeze({
-    title: 'Try the card page again',
-    explanation: 'Keep the card page open, then try the connection again.',
-    primaryLabel: 'Try again',
+  'install-native-bridge': Object.freeze({
+    legacyId: 'connector-fallback',
+    title: 'Continue in secure Lightweaver Studio',
+    explanation: 'The Lightweaver USB helper is not available yet. Use secure Studio in a browser with USB support, or continue on another supported computer.',
+    primaryLabel: 'Show supported options',
   }),
-  'web-serial-install': Object.freeze({
-    title: 'Install Lightweaver',
-    explanation: 'This device can prepare a blank card for Lightweaver.',
-    primaryLabel: 'Start installation',
-  }),
-  'supported-browser-handoff': Object.freeze({
-    title: 'Continue in a supported browser',
-    explanation: 'Open Studio in Chrome or Edge on this computer to install Lightweaver.',
-    primaryLabel: 'Show browser steps',
-  }),
-  'supported-device-handoff': Object.freeze({
-    title: 'Continue on a supported computer',
-    explanation: 'Use a Mac, Windows, or Linux computer with Chrome or Edge to continue.',
+  'handoff-supported-device': Object.freeze({
+    legacyId: 'supported-device-handoff',
+    title: 'Continue on a computer',
+    explanation: 'Plug the card into a Mac, Windows, or Linux computer and open Lightweaver Studio there.',
     primaryLabel: 'Show computer steps',
   }),
-  'connector-fallback': Object.freeze({
-    title: 'Use advanced recovery',
-    explanation: 'This card needs the recovery connector and the advanced recovery steps.',
-    primaryLabel: 'Open recovery options',
+  'wrong-card': Object.freeze({
+    legacyId: 'reconnect-known-card',
+    title: 'Connect the expected card',
+    explanation: 'Studio found a different Lightweaver card. Unplug it and connect the expected card.',
+    primaryLabel: 'Check again',
+  }),
+  'recoverable-failure': Object.freeze({
+    legacyId: 'retry-card-page',
+    title: 'Check the card and try again',
+    explanation: 'Keep the card powered, check that its page is open, then try the connection again.',
+    primaryLabel: 'Try again',
+  }),
+  'needs-safe-recovery': Object.freeze({
+    legacyId: 'connector-fallback',
+    title: 'Recover the card safely',
+    explanation: 'Leave the card powered and connected. Follow the recovery steps before writing to it again.',
+    primaryLabel: 'Start safe recovery',
   }),
 });
 
-const RETRY_REASONS = new Set(['popup-blocked', 'no-answer', 'card-page-closed']);
-const INSTALL_RECOVERY_REASONS = new Set(['identity-missing', 'firmware-too-old']);
-const MOBILE_PLATFORMS = new Set(['android', 'ios', 'unknown']);
+const UPDATE_REASONS = new Set(['identity-missing', 'firmware-too-old']);
+const TRANSIENT_REASONS = new Set([
+  'popup-blocked',
+  'no-answer',
+  'card-page-closed',
+  'card-stopped-answering',
+  'card-unreachable',
+  'bridge-missing',
+  'never-connected',
+  'recovery-timeout',
+]);
+const UNCERTAIN_REASONS = new Set([
+  'preview-unconfirmed',
+  'recovery-unconfirmed',
+  'write-status-unknown',
+  'recovery-status-unknown',
+]);
+const MOBILE_PLATFORMS = new Set(['android', 'ios']);
 const DESKTOP_PLATFORMS = new Set(['macos', 'windows', 'linux']);
 
 function action(id, additions = {}) {
@@ -95,17 +120,12 @@ function cardLabel(value, fallback) {
   return fallback;
 }
 
-function hasKnownCard(input, link) {
-  return [
-    input.expectedCard,
-    input.rememberedCard,
-    input.discoveredCard,
-    input.detectedCard,
-    input.card,
-    input.discovery?.card,
-    link.expectedCard,
-    link.card,
-  ].some(hasCardIdentity);
+function isMobile(capabilities) {
+  return capabilities.isMobile === true || MOBILE_PLATFORMS.has(capabilities.platform);
+}
+
+function requiresInstaller(intent, reason) {
+  return intent === 'blank-card' || intent === 'deep-recovery' || UPDATE_REASONS.has(reason);
 }
 
 function isSetupMode(value) {
@@ -131,47 +151,79 @@ function hasSetupEvidence(input, link) {
     || isSetupMode(link.card?.mode);
 }
 
-function unsupportedInstallHandoff(capabilities) {
-  if (capabilities.handoffKind === 'supported-browser-handoff') {
-    return 'supported-browser-handoff';
+function installationRoute(capabilities) {
+  if (capabilities.mustEscapeToSecureInstaller === true) {
+    return action('escape-insecure-card-frame');
   }
-  if (capabilities.handoffKind === 'supported-device-handoff') {
-    return 'supported-device-handoff';
+  if (capabilities.canWebSerialInstall === true) return action('ready-browser-usb');
+  if (isMobile(capabilities) || capabilities.platform === 'unknown') {
+    return action('handoff-supported-device');
   }
-  if (capabilities.isMobile === true || MOBILE_PLATFORMS.has(capabilities.platform)) {
-    return 'supported-device-handoff';
-  }
-  if (DESKTOP_PLATFORMS.has(capabilities.platform)) {
-    return 'supported-browser-handoff';
-  }
-  return 'supported-device-handoff';
-}
-
-function installRecoveryAction(capabilities) {
-  if (capabilities.canWebSerialInstall === true) return action('web-serial-install');
-  return action(unsupportedInstallHandoff(capabilities));
+  if (DESKTOP_PLATFORMS.has(capabilities.platform)) return action('launch-native-bridge');
+  return action('handoff-supported-device');
 }
 
 export function nextCardConnectionAction(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return action('choose-card-condition');
+    return action('recoverable-failure');
   }
 
   const link = input.link && typeof input.link === 'object' ? input.link : {};
   const capabilities = input.capabilities && typeof input.capabilities === 'object'
     ? input.capabilities
     : {};
+  const reason = link.reason;
 
   if (
     (link.state === 'connected-bridge' || link.state === 'connected-direct')
     && hasCardIdentity(link.card)
   ) {
-    return action('connected');
+    return action('ready-local-card');
   }
 
+  if (UNCERTAIN_REASONS.has(reason)) return action('needs-safe-recovery');
+
+  if (reason === 'wrong-card') {
+    const expected = cardLabel(input.expectedCard || link.expectedCard, 'the expected card');
+    const detected = cardLabel(
+      input.detectedCard || input.discoveredCard || input.card || link.card,
+      'a different card',
+    );
+    return action('wrong-card', {
+      explanation: `Studio expected ${expected}, but found ${detected}. Unplug it and connect the expected card.`,
+      secondaryAction: {
+        id: 'adopt-discovered-card',
+        label: 'Use this card instead',
+      },
+    });
+  }
+
+  if (reason === 'native-bridge-missing') return action('install-native-bridge');
+
+  if (UPDATE_REASONS.has(reason)) {
+    if (capabilities.mustEscapeToSecureInstaller === true) {
+      return action('escape-insecure-card-frame');
+    }
+    return action('needs-card-update');
+  }
+
+  if (requiresInstaller(input.intent, reason)) return installationRoute(capabilities);
+
+  if (input.intent === 'working-card' && hasSetupEvidence(input, link)) {
+    return action('recoverable-failure', {
+      route: 'setup-network',
+      title: 'Finish card setup',
+      explanation: 'Join the Lightweaver setup network, finish Wi-Fi setup, then return to Studio.',
+      primaryLabel: 'Continue',
+    });
+  }
+
+  if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
+
   if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge') {
-    return action('reconnect-known-card', {
-      explanation: 'Studio is reconnecting to your Lightweaver now.',
+    return action('recoverable-failure', {
+      title: 'Connecting to the Lightweaver card',
+      explanation: 'Keep the card powered and leave its page open while Studio checks it.',
       primaryLabel: 'Connecting…',
       busy: true,
       pending: true,
@@ -179,39 +231,5 @@ export function nextCardConnectionAction(input = {}) {
     });
   }
 
-  if (link.reason === 'wrong-card') {
-    const expected = cardLabel(input.expectedCard || link.expectedCard, 'your expected card');
-    const detected = cardLabel(input.detectedCard || input.discoveredCard || input.card || link.card, 'a different card');
-    return action('reconnect-known-card', {
-      explanation: `Studio expected ${expected}, but found ${detected}. Reconnect the expected card or explicitly choose the detected card.`,
-      primaryLabel: 'Reconnect expected card',
-      secondaryAction: {
-        id: 'adopt-discovered-card',
-        label: 'Use this card instead',
-      },
-    });
-  }
-  if (INSTALL_RECOVERY_REASONS.has(link.reason)) return installRecoveryAction(capabilities);
-  if (RETRY_REASONS.has(link.reason)) return action('retry-card-page');
-
-  if (input.intent === 'working-card') {
-    if (hasKnownCard(input, link)) return action('reconnect-known-card');
-    if (hasSetupEvidence(input, link)) return action('open-setup-network');
-    return action('open-card-page');
-  }
-
-  if (input.intent === 'blank-card') {
-    if (capabilities.canWebSerialInstall === true) return action('web-serial-install');
-    return action(unsupportedInstallHandoff(capabilities));
-  }
-
-  if (input.intent === 'deep-recovery') {
-    if (capabilities.canWebSerialInstall === true) return action('web-serial-install');
-    const mobile = capabilities.isMobile === true
-      || MOBILE_PLATFORMS.has(capabilities.platform)
-      || capabilities.handoffKind === 'supported-device-handoff';
-    return action(mobile ? 'supported-device-handoff' : 'connector-fallback');
-  }
-
-  return action('choose-card-condition');
+  return action('recoverable-failure');
 }

@@ -19,6 +19,16 @@ uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
 size_t controlRequestBodyLength = 0;
 bool controlRequestBodyReady = false;
 bool controlRequestBodyRejected = false;
+constexpr size_t LW_MAX_RUNTIME_REQUEST_BODY_BYTES = 3968;
+constexpr size_t LW_CANDIDATE_ENVELOPE_BYTES = 14;
+constexpr size_t LW_MAX_CANDIDATE_REQUEST_BODY_BYTES =
+  LW_MAX_RUNTIME_REQUEST_BODY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES;
+uint8_t runtimeRequestBody[LW_MAX_CANDIDATE_REQUEST_BODY_BYTES + 1] = {};
+size_t runtimeRequestBodyLength = 0;
+size_t runtimeRequestExpectedLength = 0;
+size_t runtimeRequestBodyLimit = 0;
+bool runtimeRequestBodyReady = false;
+bool runtimeRequestBodyRejected = false;
 
 // Bridge protocol version — the card-page postMessage bridge contract shared
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
@@ -120,39 +130,28 @@ String cardBridgeHost(const RuntimeConfig& cfg) {
 String studioBridgeUrl(const RuntimeConfig& cfg) {
   String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
   url += cardBridgeHost(cfg);
-  url += "&studioTakeover=1";
   url += "#screen=patterns";
   return url;
 }
 
 String studioOpenScript() {
   String script;
-  script.reserve(1100);
+  script.reserve(900);
   script += F("function lwOpenStudio(event,url){"
            "if(event)event.preventDefault();"
-           "try{const u=new URL(url);u.searchParams.set('cardHost',location.host);url=u.href}catch(_){}"
-           "const frame=document.createElement('iframe');"
-           "frame.src=url;"
-           "frame.title='Lightweaver Studio';"
-           "frame.style.cssText='position:fixed;inset:0;width:100vw;height:100vh;border:0;background:#050505;z-index:9999';"
-           "const ready=()=>{try{const o=new URL(frame.src).origin;frame.contentWindow&&frame.contentWindow.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
-  script += String(LW_BRIDGE_VERSION);
-  script += F(",href:location.href,host:location.host},o)}catch(_){}};"
-           "frame.addEventListener('load',ready);"
-           "document.documentElement.style.background='#050505';"
-           "document.body.style.margin='0';"
-           "document.body.innerHTML='';"
-           "document.body.appendChild(frame);"
-           "setTimeout(ready,300);"
+           "try{"
+             "const requested=new URL(url,'https://led.mandalacodes.com/');"
+             "const u=new URL('https://led.mandalacodes.com/');"
+             "u.searchParams.set('cardBridge','1');"
+             "u.searchParams.set('cardHost',location.host);"
+             "for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value))u.searchParams.set(key,value)}"
+             "u.hash='#screen=patterns';url=u.href"
+           "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=patterns'}"
+           "const opened=window.open(url,'lightweaver-studio');"
+           "if(!opened)alert('Allow pop-ups for this page, then tap Open Studio again.');"
+           "else try{opened.focus()}catch(_){}"
            "return false"
-           "}"
-           "function lwMaybeAutoOpenStudio(){"
-           "try{const p=new URLSearchParams(location.search);"
-           "if(p.get('studioAutoOpen')==='1'){"
-           "const link=document.getElementById('studio-link');"
-           "const url=p.get('studioUrl')||(link&&link.href)||'';"
-           "if(url)setTimeout(()=>lwOpenStudio(null,url),80)"
-           "}}catch(_){}}");
+           "}");
   return script;
 }
 
@@ -501,7 +500,6 @@ void handleRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
-            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "let controlRetry=null,controlErrorOwner=null;"
             "const clearControlError=owner=>{if(owner&&controlErrorOwner&&owner!==controlErrorOwner)return;controlRetry=null;controlErrorOwner=null;$('control-error').classList.remove('on');$('control-error-text').textContent=''};"
@@ -514,7 +512,7 @@ void handleRoot() {
             "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
             "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
-            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.searchParams.set('studioTakeover','1');u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
             "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
             "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
             /*LW_CONFIRMED_CONTROL_START*/
@@ -847,7 +845,6 @@ void handleAdvancedRoot() {
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
-            "lwMaybeAutoOpenStudio();"
             "const showHandoff=(text,kind)=>{let el=$('handoff');if(!el){el=document.createElement('div');el.id='handoff';document.querySelector('.wrap').prepend(el)}el.className='handoff '+(kind||'');el.textContent=text};"
             "const b64urlDecode=s=>{s=(s||'').replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';const bin=atob(s);const bytes=[];for(let i=0;i<bin.length;i++)bytes.push('%'+bin.charCodeAt(i).toString(16).padStart(2,'0'));return decodeURIComponent(bytes.join(''))};"
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);if(j.state==='staged'){showHandoff('New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.','ok');return}showHandoff('Saved on the card.','ok');if(j.requiresReboot===true&&params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
@@ -876,7 +873,7 @@ void handleAdvancedRoot() {
               "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
               "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
               "const setNow=p=>{$('now-name').textContent=p?p.label:'—';$('now-mode').textContent=p?p.mode:'—'};"
-              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.searchParams.set('studioTakeover','1');u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
               "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
               "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.onclick=async()=>{currentId=p.id;renderGrid();setNow(p);await post('/api/control',{patternId:p.id})};g.appendChild(b)})};"
@@ -945,19 +942,22 @@ void handleStatus() {
 
 void handleConfigPost() {
   sendCors();
-  if (!server.hasArg("plain")) {
+  if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
     return;
   }
+  String requestJson(reinterpret_cast<const char*>(runtimeRequestBody));
+  runtimeRequestBodyReady = false;
+  runtimeRequestBodyLength = 0;
   String message;
   bool wiringChanged = false;
-  if (!runtimeConfigJsonChangesWiring(server.arg("plain"), *runtimeConfigPtr, wiringChanged, message)) {
+  if (!runtimeConfigJsonChangesWiring(requestJson, *runtimeConfigPtr, wiringChanged, message)) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
   if (wiringChanged) {
     String activationId;
-    bool staged = stageRuntimeConfigJson(server.arg("plain"), activationId, message);
+    bool staged = stageRuntimeConfigJson(requestJson, activationId, message);
     JsonDocument response;
     response["ok"] = staged;
     response["state"] = staged ? "staged" : "known-good";
@@ -970,7 +970,7 @@ void handleConfigPost() {
     server.send(staged ? 200 : 400, "application/json", body);
     return;
   }
-  bool ok = saveRuntimeConfigJson(server.arg("plain"), *runtimeConfigPtr, message);
+  bool ok = saveRuntimeConfigJson(requestJson, *runtimeConfigPtr, message);
   if (!ok) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
@@ -1025,17 +1025,33 @@ void handleWiringCandidate() {
   sendCors();
   JsonDocument doc;
   String message;
-  if (!readWiringRequest(doc, message)) {
+  if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
+    sendWiringOperation(false, "known-good", "", "missing json body");
+    return;
+  }
+  DeserializationError parseError = deserializeJson(doc, runtimeRequestBody, runtimeRequestBodyLength);
+  runtimeRequestBodyReady = false;
+  runtimeRequestBodyLength = 0;
+  if (parseError) {
+    message = String("json parse failed: ") + parseError.c_str();
     sendWiringOperation(false, "known-good", "", message);
     return;
   }
   JsonVariant candidate = doc["candidate"];
-  if (candidate.isNull()) {
+  if (doc.size() != 1 || candidate.isNull() || !candidate.is<JsonObject>()) {
     sendWiringOperation(false, "known-good", "", "candidate config missing");
     return;
   }
   String candidateJson;
   serializeJson(candidate, candidateJson);
+  String canonicalEnvelope = String("{\"candidate\":") + candidateJson + "}";
+  if (candidateJson.length() > LW_MAX_RUNTIME_REQUEST_BODY_BYTES ||
+      runtimeRequestExpectedLength != candidateJson.length() + LW_CANDIDATE_ENVELOPE_BYTES ||
+      canonicalEnvelope.length() != runtimeRequestExpectedLength ||
+      memcmp(canonicalEnvelope.c_str(), runtimeRequestBody, runtimeRequestExpectedLength) != 0) {
+    sendWiringOperation(false, "known-good", "", "candidate envelope must be canonical and within config capacity");
+    return;
+  }
   String activationId;
   bool ok = stageRuntimeConfigJson(candidateJson, activationId, message);
   sendWiringOperation(ok, ok ? "staged" : "known-good", activationId, message);
@@ -1182,6 +1198,81 @@ void handleReboot() {
 }
 
 void handleControlPost();
+
+void handleRuntimeRequestRaw(const String& uri, HTTPRaw& raw) {
+  if (raw.status == RAW_START) {
+    runtimeRequestBodyLength = 0;
+    runtimeRequestBodyReady = false;
+    runtimeRequestBodyRejected = false;
+    runtimeRequestExpectedLength = server.clientContentLength();
+    runtimeRequestBodyLimit = uri == "/api/wiring/candidate"
+      ? LW_MAX_CANDIDATE_REQUEST_BODY_BYTES
+      : LW_MAX_RUNTIME_REQUEST_BODY_BYTES;
+    if (runtimeRequestExpectedLength == 0 ||
+        runtimeRequestExpectedLength > runtimeRequestBodyLimit) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      int status = runtimeRequestExpectedLength == 0 ? 411 : 413;
+      const char* error = runtimeRequestExpectedLength == 0 ? "content length required" : "runtime request too large";
+      server.send(status, "application/json", String("{\"ok\":false,\"error\":\"") + error + "\"}");
+      server.client().stop();
+    }
+    return;
+  }
+  if (raw.status == RAW_WRITE) {
+    if (runtimeRequestBodyRejected) return;
+    if (runtimeRequestBodyLength + raw.currentSize > runtimeRequestExpectedLength ||
+        runtimeRequestBodyLength + raw.currentSize > runtimeRequestBodyLimit) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      server.send(413, "application/json", "{\"ok\":false,\"error\":\"runtime request too large\"}");
+      server.client().stop();
+      return;
+    }
+    memcpy(runtimeRequestBody + runtimeRequestBodyLength, raw.buf, raw.currentSize);
+    runtimeRequestBodyLength += raw.currentSize;
+    return;
+  }
+  if (raw.status == RAW_END) {
+    if (runtimeRequestBodyRejected) return;
+    if (runtimeRequestBodyLength != runtimeRequestExpectedLength) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"partial runtime request\"}");
+      server.client().stop();
+      return;
+    }
+    runtimeRequestBody[runtimeRequestBodyLength] = 0;
+    runtimeRequestBodyReady = true;
+    return;
+  }
+  if (raw.status == RAW_ABORTED) {
+    runtimeRequestBodyLength = 0;
+    runtimeRequestExpectedLength = 0;
+    runtimeRequestBodyReady = false;
+    runtimeRequestBodyRejected = false;
+  }
+}
+
+class BoundedRuntimeRequestHandler final : public RequestHandler {
+ public:
+  bool canHandle(HTTPMethod method, String uri) override {
+    return method == HTTP_POST && (uri == "/api/config" || uri == "/api/wiring/candidate");
+  }
+  bool canUpload(String uri) override { (void)uri; return false; }
+  bool canRaw(String uri) override { return uri == "/api/config" || uri == "/api/wiring/candidate"; }
+  bool handle(WebServer& webServer, HTTPMethod method, String uri) override {
+    (void)webServer;
+    if (!canHandle(method, uri)) return false;
+    if (uri == "/api/config") handleConfigPost();
+    else handleWiringCandidate();
+    return true;
+  }
+  void raw(WebServer& webServer, String uri, HTTPRaw& rawBody) override {
+    (void)webServer;
+    if (canRaw(uri)) handleRuntimeRequestRaw(uri, rawBody);
+  }
+};
 
 // Arduino-ESP32 WebServer normally allocates a Content-Length-sized plainBuf
 // before invoking a POST handler. Registering the custom RequestHandler below
@@ -1774,11 +1865,10 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
-  server.on("/api/config", HTTP_POST, handleConfigPost);
   server.on("/api/wiring/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/wiring/status", HTTP_GET, handleWiringStatus);
   server.on("/api/wiring/candidate", HTTP_OPTIONS, handleOptions);
-  server.on("/api/wiring/candidate", HTTP_POST, handleWiringCandidate);
+  server.addHandler(new BoundedRuntimeRequestHandler());
   server.on("/api/wiring/activate", HTTP_OPTIONS, handleOptions);
   server.on("/api/wiring/activate", HTTP_POST, handleWiringActivate);
   server.on("/api/wiring/confirm", HTTP_OPTIONS, handleOptions);

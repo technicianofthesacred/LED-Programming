@@ -31,7 +31,7 @@ test('prepares all 19 playlist looks within the card flash storage limit', () =>
   const verboseBytes = Buffer.byteLength(JSON.stringify(runtimePackage.config), 'utf8');
 
   assert.deepEqual(runtimePackage.config.led.outputs, [
-    { id: 'out1', name: 'Output 1', pin: 16, pixels: 4 },
+    { id: 'out1', name: 'Output 1', pin: 16, pixels: 4, direction: 'forward', segments: [{ id: 'out1-full', count: 4, direction: 'forward' }] },
   ]);
   assert.ok(verboseBytes > CARD_CONFIG_STORAGE_LIMIT_BYTES, `expected verbose config over limit, got ${verboseBytes}`);
 

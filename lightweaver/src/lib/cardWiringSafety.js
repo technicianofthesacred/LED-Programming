@@ -14,6 +14,7 @@ export const CARD_WIRING_STATES = Object.freeze([
   'rolled-back',
   'safe-mode',
 ]);
+const CANDIDATE_STATUS_READBACKS = new WeakSet();
 
 const STATE_ALIASES = Object.freeze({
   none: 'known-good',
@@ -83,12 +84,25 @@ export function normalizeCardWiringStatus(response = {}) {
     0,
   );
   return {
+    ...(response.app ? { app: String(response.app) } : {}),
     ok: response.ok !== false,
     state: normalizeState(response.state),
     activationId: String(response.activationId || ''),
     outputs: outputs.map(output => ({ ...output })),
+    ...(Array.isArray(response.candidateOutputs) ? { candidateOutputs: response.candidateOutputs.map(output => ({ ...output })) } : {}),
+    ...(response.colorOrder || response.led?.colorOrder ? { colorOrder: String(response.colorOrder || response.led?.colorOrder) } : {}),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : 0,
     nextStep: String(response.nextStep || response.action || ''),
+    ...(response.cardId || response.id ? { cardId: String(response.cardId || response.id) } : {}),
+    ...(response.firmwareVersion ? { firmwareVersion: String(response.firmwareVersion) } : {}),
+    ...(response.buildId || response.firmwareBuild || response.build ? { buildId: String(response.buildId || response.firmwareBuild || response.build) } : {}),
+    ...(response.projectRevision !== undefined ? { projectRevision: Number(response.projectRevision) } : {}),
+    ...(response.projectFingerprint ? { projectFingerprint: String(response.projectFingerprint) } : {}),
+    ...(response.productionJobId ? { productionJobId: String(response.productionJobId) } : {}),
+    ...(response.productionJobDigest ? { productionJobDigest: String(response.productionJobDigest).toLowerCase() } : {}),
+    ...(response.wiringRevision !== undefined ? { wiringRevision: Number(response.wiringRevision) } : {}),
+    ...(response.wiringDigest ? { wiringDigest: String(response.wiringDigest).toLowerCase() } : {}),
+    ...(response.maxMilliamps !== undefined || response.led?.maxMilliamps !== undefined ? { maxMilliamps: Number(response.maxMilliamps ?? response.led.maxMilliamps) } : {}),
     raw: response,
   };
 }
@@ -124,7 +138,7 @@ async function directRequest(endpoint, payload, {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const request = { method: endpoint.method, signal: ctrl.signal };
+    const request = { method: endpoint.method, signal: ctrl.signal, ...(endpoint.method === 'GET' ? { cache: 'no-store' } : {}) };
     if (endpoint.method !== 'GET') {
       request.headers = { 'Content-Type': 'application/json' };
       request.body = JSON.stringify(payload || {});
@@ -199,8 +213,38 @@ function requireReturnedActivation(status) {
 }
 
 export async function getCardWiringStatus(options = {}) {
-  return normalizeCardWiringStatus(await requestCardWiring('wiring-status', {}, options));
+  const status = normalizeCardWiringStatus(await requestCardWiring('wiring-status', {}, options));
+  CANDIDATE_STATUS_READBACKS.add(status);
+  return status;
 }
+
+export async function readCardWiringCandidateEvidence(activationId, options = {}) {
+  const id = requireActivationId(activationId);
+  const status = await getCardWiringStatus(options);
+  if (status.app !== 'Lightweaver') {
+    throw wiringError('wrong-product', 'Candidate evidence did not come from a Lightweaver card.', { response: status.raw });
+  }
+  if (status.state !== 'staged' || status.activationId !== id) throw wiringError('activation-mismatch', 'Card candidate status belongs to a different wiring transaction.', { response: status.raw });
+  if (!status.cardId || !status.firmwareVersion || !status.buildId || !Number.isSafeInteger(status.projectRevision) || !status.projectFingerprint) {
+    throw wiringError('invalid-response', 'Card candidate status is waiting for exact candidate identity evidence.', { response: status.raw });
+  }
+  if (!Number.isSafeInteger(status.wiringRevision) || status.wiringRevision < 1 || !/^[a-f0-9]{64}$/.test(status.wiringDigest || '')
+    || !Number.isSafeInteger(status.maxMilliamps) || status.maxMilliamps < 100 || status.maxMilliamps > 20000) {
+    throw wiringError('invalid-response', 'Card candidate status is missing exact wiring and current-limit evidence.', { response: status.raw });
+  }
+  if (status.projectRevision < 0 || status.projectRevision > 0xffffffff ||
+      !/^[a-f0-9]{16,64}$/.test(status.projectFingerprint) ||
+      (status.productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(status.productionJobId)) ||
+      (status.productionJobDigest && !/^[a-f0-9]{64}$/.test(status.productionJobDigest))) {
+    throw wiringError('invalid-response', 'Card candidate status returned malformed project identity.', { response: status.raw });
+  }
+  if (Boolean(status.productionJobId) !== Boolean(status.productionJobDigest)) {
+    throw wiringError('invalid-response', 'Card candidate status returned a partial production job identity.', { response: status.raw });
+  }
+  return status;
+}
+
+export function isCardWiringCandidateReadback(value) { return CANDIDATE_STATUS_READBACKS.has(value); }
 
 export async function stageCardWiringCandidate(candidate, options = {}) {
   const response = await requestCardWiring('wiring-candidate', { candidate }, options);

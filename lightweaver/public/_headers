@@ -18,3 +18,9 @@
 
 /firmware/releases/*
   Cache-Control: public, max-age=31536000, immutable
+
+/production/jobs/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/production/jobs/index.json
+  Cache-Control: no-store

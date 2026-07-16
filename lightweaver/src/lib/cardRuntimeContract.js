@@ -3,6 +3,12 @@ import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = 10;
+export const CARD_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
+export const CARD_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
+export const CARD_PRODUCTION_JOB_DIGEST_LENGTH = 64;
+export const DEFAULT_PRODUCTION_MAX_MILLIAMPS = 1500;
+export const MIN_PRODUCTION_MAX_MILLIAMPS = 100;
+export const MAX_PRODUCTION_MAX_MILLIAMPS = 20000;
 
 export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
   maxPixels: 1024,
@@ -28,6 +34,25 @@ export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
       if (!this.supportedOutputPins.includes(pin)) throw new RangeError(`Unsupported LED output pin: ${pin}.`);
       if (pins.has(pin)) throw new RangeError(`Output pins must be unique: ${pin}.`);
       ids.add(id);
+      pins.add(pin);
+    }
+    const controls = config.controls || {};
+    const controlPins = [
+      ['encoder A', controls.encoder?.a],
+      ['encoder B', controls.encoder?.b],
+      ['encoder press', controls.encoder?.press],
+      ['encoder alternate press', controls.encoder?.alternatePress],
+      ['previous', controls.previous],
+      ['next', controls.next],
+      ['blackout', controls.blackout],
+      ['analog brightness', controls.brightness],
+      ['status LED', controls.statusLed],
+    ];
+    for (const [label, rawPin] of controlPins) {
+      if (rawPin === undefined || rawPin === null || Number(rawPin) < 0) continue;
+      const pin = Number(rawPin);
+      if (!Number.isInteger(pin) || pin > 48) throw new RangeError(`${label} control pin must be a supported GPIO.`);
+      if (pins.has(pin)) throw new RangeError(`${label} control GPIO ${pin} is already owned by an LED output or another control.`);
       pins.add(pin);
     }
     if (zones.length > this.maxZones) throw new RangeError(`Hardware supports at most ${this.maxZones} zones.`);
@@ -80,19 +105,22 @@ export const DEFAULT_CARD_LED = Object.freeze({
   outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 44 }],
   colorOrder: 'RGB',
   brightnessLimit: 0.65,
+  maxMilliamps: DEFAULT_PRODUCTION_MAX_MILLIAMPS,
 });
 
 export function normalizeCardRuntimeConfig(config = {}) {
-  CARD_HARDWARE_CAPABILITIES.assertSupported(config);
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
-  const requestedCycleIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
+  const controls = normalizeControls(config.controls);
+  const requestedCycleIds = normalizePatternIds(controls.encoder.patternCycleIds);
   const led = normalizeLed(config.led);
+  CARD_HARDWARE_CAPABILITIES.assertSupported({ ...config, led, controls });
   const totalPixels = led.pixels;
   const zones = normalizeZones(config.zones, totalPixels);
   const patterns = normalizePatterns(config.patterns);
   const looks = normalizeLooks(config.looks, patterns);
   const lookIds = looks.map(look => look.id);
   const patternIds = requestedCycleIds.length ? requestedCycleIds : lookIds;
+  const projectIdentity = normalizeCardProjectIdentity(config);
   return {
     version: 1,
     mode,
@@ -100,11 +128,12 @@ export function normalizeCardRuntimeConfig(config = {}) {
       id: sanitizeId(config.piece?.id || config.projectId || config.projectName || 'lightweaver-piece'),
       name: String(config.piece?.name || config.projectName || 'Lightweaver Piece'),
     },
+    ...projectIdentity,
     led,
     controls: normalizeControls({
-      ...config.controls,
+      ...controls,
       encoder: {
-        ...(config.controls?.encoder || {}),
+        ...controls.encoder,
         patternCycleIds: patternIds.length ? patternIds : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
       },
     }),
@@ -183,6 +212,10 @@ function clampSpeed(value) {
 export function buildCardRuntimeConfig({
   projectId = '',
   projectName = 'Lightweaver Piece',
+  projectRevision,
+  projectFingerprint,
+  productionJobId,
+  productionJobDigest,
   mode = 'factory-flash',
   led = {},
   controls = {},
@@ -196,6 +229,10 @@ export function buildCardRuntimeConfig({
     projectId,
     mode,
     projectName,
+    projectRevision,
+    projectFingerprint,
+    productionJobId,
+    productionJobDigest,
     led,
     controls,
     patterns,
@@ -204,6 +241,43 @@ export function buildCardRuntimeConfig({
     zones,
     syncZones,
   });
+}
+
+export function normalizeCardProjectIdentity(config = {}) {
+  const revisionProvided = config.projectRevision !== undefined && config.projectRevision !== null && config.projectRevision !== '';
+  const fingerprint = String(config.projectFingerprint || '').trim();
+  let projectRevision = 0;
+  if (revisionProvided) {
+    const revision = Number(config.projectRevision);
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > 0xffffffff) {
+      throw new RangeError('Project revision must be a non-negative integer no greater than 4294967295.');
+    }
+    projectRevision = revision;
+  }
+  if ((revisionProvided || fingerprint) && !/^[a-f0-9]{16,64}$/.test(fingerprint)) {
+    throw new RangeError('Project fingerprint must be 16 to 64 lowercase hex characters.');
+  }
+  if (fingerprint && !revisionProvided) {
+    throw new RangeError('Project fingerprint requires a project revision.');
+  }
+
+  const productionJobId = String(config.productionJobId || '').trim();
+  if (productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(productionJobId)) {
+    throw new RangeError('Production job id must use 1 to 96 safe characters.');
+  }
+  const productionJobDigest = String(config.productionJobDigest || '').trim();
+  if (productionJobDigest && !/^[a-f0-9]{64}$/.test(productionJobDigest)) {
+    throw new RangeError('Production job digest must be 64 lowercase hex characters.');
+  }
+  if (Boolean(productionJobId) !== Boolean(productionJobDigest)) {
+    throw new RangeError('Production job id and digest must be provided together.');
+  }
+
+  return {
+    ...(revisionProvided ? { projectRevision, projectFingerprint: fingerprint } : {}),
+    ...(productionJobId ? { productionJobId } : {}),
+    ...(productionJobDigest ? { productionJobDigest } : {}),
+  };
 }
 
 export function makeCardRuntimePackage(options = {}) {
@@ -230,6 +304,14 @@ function normalizeLed(led = {}) {
       name: String(output.name || `Output ${index + 1}`),
       pin: clampInt(output.pin, [16, 17, 18, 21][index] || 16, 0, 48),
       pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
+      direction: ['reverse', 'mixed'].includes(output.direction) ? output.direction : 'forward',
+      segments: Array.isArray(output.segments) && output.segments.length
+        ? output.segments.map((segment, segmentIndex) => ({
+            id: sanitizeId(segment.id || `${output.id || `out${index + 1}`}-segment-${segmentIndex + 1}`),
+            count: clampInt(segment.count, 1, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
+            direction: segment.direction === 'reverse' ? 'reverse' : 'forward',
+          }))
+        : [{ id: `${sanitizeId(output.id || `out${index + 1}`)}-full`, count: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels), direction: output.direction === 'reverse' ? 'reverse' : 'forward' }],
     }));
   const pixels = clampInt(
     led.pixels,
@@ -242,19 +324,21 @@ function normalizeLed(led = {}) {
     outputs: normalizedOutputs,
     colorOrder: normalizeColorOrder(led.colorOrder),
     brightnessLimit: clampUnit(led.brightnessLimit ?? DEFAULT_CARD_LED.brightnessLimit),
+    maxMilliamps: clampInt(led.maxMilliamps, DEFAULT_CARD_LED.maxMilliamps, MIN_PRODUCTION_MAX_MILLIAMPS, MAX_PRODUCTION_MAX_MILLIAMPS),
   };
 }
 
 function normalizeControls(controls = {}) {
   const encoder = controls.encoder || {};
+  const alias = (canonical, ...aliases) => canonical !== undefined
+    ? canonical
+    : aliases.find(value => value !== undefined);
   return {
     encoder: {
-      ...DEFAULT_CARD_CONTROLS.encoder,
-      ...encoder,
-      a: clampInt(encoder.a, DEFAULT_CARD_CONTROLS.encoder.a, 0, 48),
-      b: clampInt(encoder.b, DEFAULT_CARD_CONTROLS.encoder.b, 0, 48),
-      press: clampInt(encoder.press, DEFAULT_CARD_CONTROLS.encoder.press, 0, 48),
-      alternatePress: clampInt(encoder.alternatePress, DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48),
+      a: clampInt(alias(encoder.a, encoder.pinA), DEFAULT_CARD_CONTROLS.encoder.a, 0, 48),
+      b: clampInt(alias(encoder.b, encoder.pinB), DEFAULT_CARD_CONTROLS.encoder.b, 0, 48),
+      press: clampInt(alias(encoder.press, encoder.pressPin, encoder.pinPress), DEFAULT_CARD_CONTROLS.encoder.press, 0, 48),
+      alternatePress: clampInt(alias(encoder.alternatePress, encoder.alternatePressPin, encoder.pinAlternatePress), DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48),
       rotateDirection: encoder.rotateDirection === 'clockwise-dimmer'
         ? 'clockwise-dimmer'
         : 'clockwise-brighter',
@@ -263,11 +347,11 @@ function normalizeControls(controls = {}) {
         ? normalizePatternIds(encoder.patternCycleIds)
         : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
     },
-    previous: clampInt(controls.previous, DEFAULT_CARD_CONTROLS.previous, -1, 48),
-    next: clampInt(controls.next, DEFAULT_CARD_CONTROLS.next, -1, 48),
-    blackout: clampInt(controls.blackout, DEFAULT_CARD_CONTROLS.blackout, -1, 48),
-    brightness: clampInt(controls.brightness, DEFAULT_CARD_CONTROLS.brightness, -1, 48),
-    statusLed: clampInt(controls.statusLed, DEFAULT_CARD_CONTROLS.statusLed, -1, 48),
+    previous: clampInt(alias(controls.previous, controls.previousPin, controls.pinPrevious), DEFAULT_CARD_CONTROLS.previous, -1, 48),
+    next: clampInt(alias(controls.next, controls.nextPin, controls.pinNext), DEFAULT_CARD_CONTROLS.next, -1, 48),
+    blackout: clampInt(alias(controls.blackout, controls.blackoutPin, controls.pinBlackout), DEFAULT_CARD_CONTROLS.blackout, -1, 48),
+    brightness: clampInt(alias(controls.brightness, controls.brightnessPin, controls.pinBrightness), DEFAULT_CARD_CONTROLS.brightness, -1, 48),
+    statusLed: clampInt(alias(controls.statusLed, controls.statusLedPin, controls.pinStatusLed), DEFAULT_CARD_CONTROLS.statusLed, -1, 48),
   };
 }
 

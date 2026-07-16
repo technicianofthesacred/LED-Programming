@@ -4,8 +4,96 @@ import {
   PHYSICAL_PREVIEW_FAILURE_MESSAGE,
   cardActionReducer,
   cardActionStatusLabel,
+  classifyCardActionFailure,
   createCardActionState,
 } from './cardAction.js';
+
+test('classifies old card software without exposing the thrown message', () => {
+  for (const reason of ['identity-missing', 'firmware-too-old']) {
+    assert.deepEqual(
+      classifyCardActionFailure({ reason, message: '<script>owned</script>' }),
+      {
+        code: reason,
+        message: 'This card is running old software and cannot confirm physical previews. Update the card, then retry.',
+        actionId: 'update-card',
+        actionLabel: 'Update card',
+      },
+    );
+  }
+});
+
+test('classifies the wrong card with an explicit identity recovery', () => {
+  assert.deepEqual(classifyCardActionFailure({ reason: 'wrong-card' }), {
+    code: 'wrong-card',
+    message: 'Studio reached a different Lightweaver card. Reconnect the expected card, or explicitly choose this card.',
+    actionId: 'reconnect-card',
+    actionLabel: 'Reconnect card',
+  });
+});
+
+test('uses the first recognized value across reason and code', () => {
+  assert.deepEqual(
+    classifyCardActionFailure({ reason: 'bridge', code: 'wrong-card', message: 'untrusted detail' }),
+    {
+      code: 'wrong-card',
+      message: 'Studio reached a different Lightweaver card. Reconnect the expected card, or explicitly choose this card.',
+      actionId: 'reconnect-card',
+      actionLabel: 'Reconnect card',
+    },
+  );
+  assert.equal(classifyCardActionFailure({ reason: 'untrusted', code: 'bridge-timeout' }).code, 'timeout');
+  assert.equal(classifyCardActionFailure({ reason: 'untrusted', code: 'also-untrusted' }).code, 'unknown');
+});
+
+test('classifies a missing local bridge with a card-page recovery', () => {
+  assert.deepEqual(classifyCardActionFailure({ reason: 'bridge-missing' }), {
+    code: 'bridge-missing',
+    message: 'The local card page is not open. Reopen it, then retry the physical preview.',
+    actionId: 'open-card-page',
+    actionLabel: 'Open card page',
+  });
+});
+
+test('classifies timeouts and a closed card page with a bounded retry', () => {
+  for (const reason of ['timeout', 'bridge-timeout', 'card-page-closed']) {
+    assert.deepEqual(classifyCardActionFailure({ reason }), {
+      code: 'timeout',
+      message: 'The card did not answer in time. Reconnect if needed, then retry the physical preview.',
+      actionId: 'retry',
+      actionLabel: 'Retry',
+    });
+  }
+});
+
+test('classifies a card rejection with fixed inspection guidance', () => {
+  assert.deepEqual(classifyCardActionFailure({ code: 'card-rejected', message: 'user-controlled rejection' }), {
+    code: 'card-rejected',
+    message: 'The card rejected the physical preview. Open the card page to inspect the reported problem before retrying.',
+    actionId: 'open-card-page',
+    actionLabel: 'Open card page',
+  });
+});
+
+test('classifies unconfirmed physical output with a lights recovery', () => {
+  assert.deepEqual(classifyCardActionFailure({ reason: 'physical-output-unconfirmed' }), {
+    code: 'physical-output-unconfirmed',
+    message: 'The preview reached the card, but the lights did not confirm physical output. Verify the LED wiring or recover the lights.',
+    actionId: 'recover-lights',
+    actionLabel: 'Recover lights',
+  });
+});
+
+test('unknown failures remain bounded and never render arbitrary thrown text', () => {
+  const failure = classifyCardActionFailure(new Error('private host response with <script>markup</script>'));
+  assert.deepEqual(failure, {
+    code: 'unknown',
+    message: 'The physical preview could not be confirmed. Check the card connection and try again.',
+    actionId: '',
+    actionLabel: '',
+  });
+  assert.ok(failure.message.length < 160);
+  assert.doesNotMatch(failure.message, /private|script|markup/);
+});
 
 test('card actions become confirmed only after acknowledgement', () => {
   let state = createCardActionState({ confirmedRevision: 3 });

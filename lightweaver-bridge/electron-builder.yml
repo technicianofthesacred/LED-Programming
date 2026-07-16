@@ -1,0 +1,20 @@
+appId: com.mandalacodes.lightweaver.bridge
+productName: Lightweaver Bridge
+asar: true
+directories:
+  output: dist
+files:
+  - src/**/*
+  - package.json
+protocols:
+  - name: Lightweaver Bridge launch
+    schemes:
+      - lightweaver
+mac:
+  category: public.app-category.utilities
+  target:
+    - dir
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist

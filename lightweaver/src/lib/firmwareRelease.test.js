@@ -354,6 +354,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   const packageJson = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/package.json'), 'utf8'));
   assert.match(workflow, /scripts\/build-firmware-manifest\.mjs/);
   assert.match(workflow, /scripts\/sign-release-artifacts\.mjs/);
+  assert.match(workflow, /packages\/installer-core\/\*\*/);
   assert.match(workflow, /secrets\.LIGHTWEAVER_RELEASE_SIGNING_KEY/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /release-manifest\.sig/);
@@ -384,8 +385,14 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['test:core:source'],
-    'node --test src/lib/firmwareRelease.test.js && node scripts/run-core-source-tests.mjs',
+    'npm run test:installer-core && node --test src/lib/firmwareRelease.test.js && node scripts/run-core-source-tests.mjs',
   );
+  assert.equal(
+    packageJson.scripts['test:installer-core'],
+    'node --test ../packages/installer-core/test/*.test.js',
+  );
+  assert.match(packageJson.scripts['launch:source'], /^npm run test:core:source/);
+  assert.equal(packageJson.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
   assert.equal(
     packageJson.scripts['firmware:check-bin'],
     'node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs',

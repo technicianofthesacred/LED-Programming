@@ -1,0 +1,23 @@
+{
+  "name": "@mandala-codes/lightweaver-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "author": "Mandala Codes",
+  "description": "Local-only desktop bridge for maintaining Lightweaver cards",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "node scripts/smoke-artifact.js",
+    "test": "node --test test/*.test.js",
+    "pack:dir": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --config electron-builder.yml -c.mac.identity=null"
+  },
+  "devDependencies": {
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {
+    "@lightweaver/installer-core": "file:../packages/installer-core",
+    "esptool-js": "0.6.0",
+    "serialport": "13.0.0"
+  }
+}

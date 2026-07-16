@@ -16,6 +16,8 @@ for (const key of ['knownGoodConfig', 'candidateConfig', 'candidateState']) {
   assert.match(storage, new RegExp(`constexpr const char\\* [A-Z_]+ = "${key}"`), `storage should reserve the ${key} NVS key`);
 }
 assert.match(storage, /"candidateId"/);
+assert.match(storage, /"previousKnown"/);
+assert.match(storage, /"promotionArmed"/);
 assert.match(storage, /"discoveryActive"/);
 assert.match(storage, /"discoveryBatch"/);
 
@@ -80,5 +82,27 @@ const saveStart = storage.indexOf('bool saveRuntimeConfigJson(', loadStart);
 const loadBody = storage.slice(loadStart, saveStart);
 assert.match(loadBody, /WIRING_CANDIDATE_BOOTING[\s\S]*NVS_CANDIDATE_CONFIG_KEY[\s\S]*WIRING_CANDIDATE_AWAITING_CONFIRMATION/);
 assert.match(loadBody, /WIRING_CANDIDATE_AWAITING_CONFIRMATION[\s\S]*rollbackCandidateRuntimeConfig/);
+assert.match(loadBody, /rollbackCandidateRuntimeConfig[\s\S]*safe defaults loaded/,
+  'a failed rollback must boot compiled-safe defaults instead of an uncertain known-good slot');
+
+const confirmStart = storage.indexOf('bool confirmCandidateRuntimeConfig(');
+const confirmEnd = storage.indexOf('bool rollbackCandidateRuntimeConfig(', confirmStart);
+const confirmBody = storage.slice(confirmStart, confirmEnd);
+const previousWrite = confirmBody.indexOf('NVS_PREVIOUS_KNOWN_GOOD_KEY', confirmBody.indexOf('String previous ='));
+const armWrite = confirmBody.indexOf('NVS_PROMOTION_ARMED_KEY', previousWrite);
+const knownGoodWrite = confirmBody.indexOf('putString(NVS_KNOWN_GOOD_CONFIG_KEY', armWrite);
+const stateClear = confirmBody.indexOf('writeCandidateState(prefs, WIRING_CANDIDATE_NONE)', knownGoodWrite);
+assert.ok(previousWrite > -1 && armWrite > previousWrite && knownGoodWrite > armWrite && stateClear > knownGoodWrite,
+  'confirmation must journal the prior identity before promotion and clear candidate state last');
+assert.match(confirmBody, /restorePreviousKnownGood\(prefs\)/,
+  'a failed confirmation must restore the prior acknowledged config and identity');
+
+const rollbackStart = storage.indexOf('bool rollbackCandidateRuntimeConfig(');
+const rollbackEnd = storage.indexOf('WiringSafetyStatus getRuntimeWiringSafetyStatus(', rollbackStart);
+const rollbackBody = storage.slice(rollbackStart, rollbackEnd);
+assert.match(rollbackBody, /restorePreviousKnownGood\(prefs\)/,
+  'boot or worker rollback must recover an interrupted promotion before clearing the candidate');
+assert.match(rollbackBody, /remove\(NVS_CONFIRMED_ID_KEY\)/,
+  'rollback must clear an interrupted confirmation marker so it cannot acknowledge a reverted candidate');
 
 console.log('wiring-candidate-storage tests passed');

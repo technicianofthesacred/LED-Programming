@@ -17,8 +17,20 @@ import {
   replaceInstallConnection,
 } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
-import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
+import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
+import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCode } from '../lib/bridgeLaunch.js';
+import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
+import { useProject } from '../state/ProjectContext.jsx';
+import { CardCommissioningPanel, CardCommissioningSteps } from '../components/card/CardCommissioningPanel.jsx';
+import { readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { readCardWiringCandidateEvidence } from '../lib/cardWiringSafety.js';
+import {
+  beginCardCommissioning,
+  completeCardInstall,
+  readCardCommissioning,
+  writeCardCommissioning,
+} from '../lib/cardCommissioningFlow.js';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -271,6 +283,7 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     if (typeof navigator === 'undefined') return detectPlatformCapabilities();
     return detectPlatformCapabilities({
       secureContext: globalThis.isSecureContext === true,
+      topLevel: globalThis.top === globalThis.self,
       serial: navigator.serial,
       userAgent: navigator.userAgent,
       platform: navigator.platform,
@@ -278,22 +291,100 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     });
   }
 
-  function UnsupportedInstall({ action }) {
+  function UnsupportedInstall({ action, onLaunchBridge }) {
+    const [bridgeState, setBridgeState] = useState('idle');
+    const [returnCode, setReturnCode] = useState('');
+    const [returnError, setReturnError] = useState('');
+    const bridgeLifecycleState = bridgeState === 'idle' && action.id === 'install-native-bridge'
+      ? 'installer-unavailable' : bridgeState;
+    let firstStep;
+    let showSecureInstaller = false;
+    switch (action.id) {
+      case 'escape-insecure-card-frame':
+        firstStep = 'Open secure Lightweaver Studio in its own top-level tab.';
+        showSecureInstaller = true;
+        break;
+      case 'handoff-supported-device':
+        firstStep = 'Open led.mandalacodes.com on a Mac, Windows, or Linux computer.';
+        break;
+      case 'launch-native-bridge':
+      case 'install-native-bridge':
+        firstStep = 'Use secure Studio in a browser with USB support, or continue on another supported computer.';
+        break;
+      case 'needs-safe-recovery':
+      case 'needs-card-update':
+        firstStep = 'Keep the card powered and use secure Studio on a supported computer.';
+        break;
+      case 'ready-browser-usb':
+        firstStep = 'Return to the secure top-level installer and connect the card by USB.';
+        break;
+      case 'ready-local-card':
+      case 'wrong-card':
+      case 'recoverable-failure':
+      default:
+        firstStep = 'Return to Studio and check the physical card connection.';
+        break;
+    }
+
     return (
       <div className="card install-handoff" role="status">
         <div className="eyebrow">Your project is safe in Studio</div>
-        <h1>{action.title}</h1>
+        <h1>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h1>
         <p>{action.explanation}</p>
         <ol>
-          <li>Open <strong>led.mandalacodes.com</strong> on the supported computer or browser.</li>
+          <li>{firstStep}</li>
           <li>Open this project, then choose <strong>Connect card</strong> and <strong>Blank or not responding</strong>.</li>
           <li>Plug the Lightweaver card into that computer by USB.</li>
         </ol>
+        {showSecureInstaller && (
+          <a className="btn-lg" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">Open secure installer</a>
+        )}
+        {(action.id === 'launch-native-bridge' || action.id === 'install-native-bridge') && (
+          <>
+            <button
+              className="btn-lg"
+              type="button"
+              disabled={bridgeState === 'opening' || bridgeState === 'waiting-for-bridge' || bridgeState === 'return-pending'}
+              onClick={async () => {
+                setBridgeState('opening');
+                try {
+                  await onLaunchBridge('install-current-release');
+                  setBridgeState('waiting-for-bridge');
+                } catch { setBridgeState('error'); }
+              }}
+            >
+              {bridgeState === 'opening' || bridgeState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge…' : bridgeState === 'return-pending' ? 'Return pending…' : 'Open Lightweaver Bridge'}
+            </button>
+            {bridgeState === 'waiting-for-bridge' && <p>Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available, or paste the one-time return code below.</p>}
+            {bridgeState === 'return-pending' && <p>Return pending while Studio validates the code and acknowledges the saved Bridge result.</p>}
+            <form onSubmit={async event => {
+                event.preventDefault();
+                setReturnError('');
+                setBridgeState('return-pending');
+                const channel = createBridgeResultChannel();
+                try {
+                  await resumeBridgeReturnCode(returnCode, { publish: result => channel.publish(result) });
+                  setReturnCode('');
+                } catch {
+                  setBridgeState('waiting-for-bridge');
+                  setReturnError('That return code is invalid, expired, already used, or belongs to another browser profile.');
+                } finally { channel.close(); }
+              }}>
+                <label htmlFor="installer-bridge-return-code">Return code from Bridge</label>
+                <input id="installer-bridge-return-code" value={returnCode} onChange={event => setReturnCode(event.target.value)} autoComplete="off" spellCheck="false" maxLength={904} />
+                <button type="submit" disabled={!returnCode.trim() || bridgeState === 'return-pending'}>Resume in this tab</button>
+            </form>
+            {action.id === 'install-native-bridge' && <p>A verified signed installer is not yet available. Studio does not offer an unsigned download.</p>}
+            {returnError && <p role="alert">{returnError}</p>}
+            {bridgeState === 'error' && <p role="alert">Studio could not save the project and open Bridge. Save the project, then try again.</p>}
+          </>
+        )}
       </div>
     );
   }
 
-  function AutomaticInstallScreen() {
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard }) {
+    const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
     const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
@@ -302,6 +393,7 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     const [progress, setProgress] = useState(0);
     const [installState, setInstallState] = useState('idle');
     const [releaseAttempt, setReleaseAttempt] = useState(0);
+    const [commissioning, setCommissioning] = useState(readCardCommissioning);
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const mountedRef = useRef(true);
@@ -347,7 +439,19 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
       };
     }, [installState]);
 
-    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} />;
+    const launchBridge = operation => launchBridgeOperation(operation, {
+      persistProject: async () => {
+        saveCurrentProjectToLibrary(serializeProject());
+        markProjectPersisted('browser');
+      },
+      navigate: url => {
+        const testNavigate = window.__LW_BRIDGE_NAVIGATE_FOR_TEST__;
+        if (typeof testNavigate === 'function') testNavigate(url);
+        else window.location.assign(url);
+      },
+    });
+
+    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} />;
 
     const findCard = async () => {
       if (findingRef.current || installingRef.current) return;
@@ -393,6 +497,22 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
       setInstallState('installing');
       setProgress(0);
       try {
+        const record = saveCurrentProjectToLibrary(serializeProject());
+        markProjectPersisted('browser');
+        const started = beginCardCommissioning({
+          source: 'web-serial',
+          operation: 'install-current-release',
+          strategy: 'clean-recovery',
+          projectRecord: record,
+          projectRevision: projectLifecycle.editedRevision,
+          installTarget: {
+            id: cardState.hardware.cardId,
+            firmwareVersion: releaseState.release.manifest.firmwareVersion,
+            buildId: releaseState.release.manifest.buildId,
+          },
+        });
+        await writeCardCommissioning(started);
+        setCommissioning(started);
         await flashFirmwareAndRelease({
           loader: loaderRef.current,
           transport: transportRef.current,
@@ -406,6 +526,14 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
         transportRef.current = null;
         installingRef.current = false;
         setProgress(1);
+        const completed = completeCardInstall(started, {
+          operation: 'install-current-release',
+          cardId: cardState.hardware.cardId,
+          firmwareVersion: releaseState.release.manifest.firmwareVersion,
+          buildId: releaseState.release.manifest.buildId,
+        });
+        await writeCardCommissioning(completed);
+        setCommissioning(completed);
         setInstallState('complete');
       } catch (error) {
         loaderRef.current = null;
@@ -416,14 +544,16 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
       }
     };
 
-    if (installState === 'complete') {
+    if (installState === 'complete' || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
       return (
         <div className="install-flow" aria-live="polite">
-          <div className="install-step-mark complete">Installation complete</div>
-          <h1>Connect your card to Wi-Fi</h1>
-          <p>USB has been released. Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network. Setup should open automatically.</p>
-          <p>If setup does not open, use the button below after joining the card network.</p>
-          <a className="btn-lg" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open card setup</a>
+          <CardCommissioningPanel
+            result={null}
+            link={cardLink}
+            onReconnect={() => onConnectCard?.()}
+            readProjectEvidence={readCardProjectEvidence}
+            readCandidateEvidence={readCardWiringCandidateEvidence}
+          />
         </div>
       );
     }
@@ -431,6 +561,7 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     const releaseReady = releaseState.state === 'ready';
     return (
       <div className="install-flow" aria-live="polite">
+        <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
           <h1>Install Lightweaver</h1>
@@ -483,9 +614,9 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
     );
   }
 
-  function FlashScreen() {
+  function FlashScreen(props) {
     const installMode = typeof window !== 'undefined' && new URLSearchParams(window.location.hash.slice(1)).get('mode') === 'install';
-    return installMode ? <AutomaticInstallScreen /> : <TechnicianFlashScreen />;
+    return installMode ? <AutomaticInstallScreen {...props} /> : <TechnicianFlashScreen />;
   }
 
 export { FlashScreen };

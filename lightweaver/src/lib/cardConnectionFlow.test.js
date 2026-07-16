@@ -6,185 +6,247 @@ import {
   nextCardConnectionAction,
 } from './cardConnectionFlow.js';
 
-const actionCases = [
-  ['connected', { link: { state: 'connected-bridge', card: { id: 'lw-a' } } }, 'connected'],
-  ['reconnecting', { link: { state: 'connecting', activity: 'pending' }, intent: 'blank-card', capabilities: { canWebSerialInstall: true } }, 'reconnect-known-card'],
-  ['choose condition', {}, 'choose-card-condition'],
-  ['setup network', { intent: 'working-card', setupMode: true }, 'open-setup-network'],
-  ['open card page', { intent: 'working-card' }, 'open-card-page'],
-  ['retry card page', { link: { state: 'disconnected', reason: 'popup-blocked' }, intent: 'working-card' }, 'retry-card-page'],
-  ['install', { intent: 'blank-card', capabilities: { canWebSerialInstall: true } }, 'web-serial-install'],
-  ['browser handoff', { intent: 'blank-card', capabilities: { canWebSerialInstall: false, handoffKind: 'supported-browser-handoff' } }, 'supported-browser-handoff'],
-  ['device handoff', { intent: 'blank-card', capabilities: { canWebSerialInstall: false, handoffKind: 'supported-device-handoff' } }, 'supported-device-handoff'],
-  ['connector fallback', { intent: 'deep-recovery', capabilities: { canWebSerialInstall: false, platform: 'macos', isMobile: false } }, 'connector-fallback'],
-];
+const secureBrowserUsb = {
+  secureContext: true,
+  topLevel: true,
+  embedded: false,
+  canWebSerialInstall: true,
+  mustEscapeToSecureInstaller: false,
+  platform: 'macos',
+  isMobile: false,
+};
 
-test('returns the closed action vocabulary with one primary action', () => {
-  for (const [name, input, expectedId] of actionCases) {
-    const action = nextCardConnectionAction(input);
-    assert.equal(action.id, expectedId, name);
-    assert.equal(typeof action.title, 'string', `${name}: title`);
-    assert.ok(action.title.length > 0, `${name}: title content`);
-    assert.equal(typeof action.explanation, 'string', `${name}: explanation`);
-    assert.ok(action.explanation.length > 0, `${name}: explanation content`);
-    assert.equal(typeof action.primaryLabel, 'string', `${name}: primary label`);
-    assert.ok(action.primaryLabel.length > 0, `${name}: primary label content`);
-  }
-});
+const insecureChromeFrame = {
+  secureContext: false,
+  topLevel: false,
+  embedded: true,
+  canWebSerialInstall: false,
+  mustEscapeToSecureInstaller: true,
+  platform: 'macos',
+  isMobile: false,
+};
 
-test('exports the exact frozen ten-action vocabulary', () => {
+test('exports the exact approved orchestrator vocabulary', () => {
   assert.deepEqual(CARD_CONNECTION_ACTION_IDS, [
-    'connected',
-    'reconnect-known-card',
-    'choose-card-condition',
-    'open-setup-network',
-    'open-card-page',
-    'retry-card-page',
-    'web-serial-install',
-    'supported-browser-handoff',
-    'supported-device-handoff',
-    'connector-fallback',
+    'ready-browser-usb',
+    'escape-insecure-card-frame',
+    'ready-local-card',
+    'needs-card-update',
+    'launch-native-bridge',
+    'install-native-bridge',
+    'handoff-supported-device',
+    'wrong-card',
+    'recoverable-failure',
+    'needs-safe-recovery',
   ]);
-  assert.equal(CARD_CONNECTION_ACTION_IDS.length, 10);
   assert.equal(Object.isFrozen(CARD_CONNECTION_ACTION_IDS), true);
-  assert.throws(() => CARD_CONNECTION_ACTION_IDS.push('surprise'), TypeError);
 });
 
-test('requires a verified identity before reporting a connection', () => {
-  assert.equal(nextCardConnectionAction({
-    link: { state: 'connected-direct', card: { id: 'lw-a' } },
-  }).id, 'connected');
-  assert.equal(nextCardConnectionAction({
-    link: { state: 'connected-direct', card: { id: 'x'.repeat(64) } },
-  }).id, 'connected');
-  assert.notEqual(nextCardConnectionAction({
-    link: { state: 'connected-bridge', card: null },
-    intent: 'working-card',
-  }).id, 'connected');
-
-  const malformedIds = [
-    {},
-    [],
-    '   ',
-    'x'.repeat(65),
-  ];
-  for (const id of malformedIds) {
-    assert.notEqual(nextCardConnectionAction({
-      link: { state: 'connected-direct', card: { id } },
-      intent: 'working-card',
-    }).id, 'connected');
-  }
-});
-
-test('keeps in-flight links busy instead of offering a competing connection path', () => {
-  for (const state of ['connecting', 'reconnecting-bridge']) {
-    const action = nextCardConnectionAction({
-      link: { state },
-      intent: 'blank-card',
-      capabilities: { canWebSerialInstall: true },
-    });
-    assert.equal(action.id, 'reconnect-known-card');
-    assert.equal(action.busy, true);
-    assert.equal(action.primaryDisabled, true);
-  }
-});
-
-test('routes known disconnection reasons to honest recovery actions', () => {
+test('provides explicit legacy behavior metadata while live consumers migrate', () => {
   const cases = [
-    ['wrong-card', 'reconnect-known-card'],
-    ['popup-blocked', 'retry-card-page'],
-    ['no-answer', 'retry-card-page'],
-    ['card-page-closed', 'retry-card-page'],
+    [{ intent: 'blank-card', capabilities: secureBrowserUsb }, 'web-serial-install'],
+    [{ intent: 'blank-card', capabilities: insecureChromeFrame }, 'supported-browser-handoff'],
+    [{ link: { state: 'connected-direct', card: { id: 'lw-a' } } }, 'connected'],
+    [{ link: { reason: 'firmware-too-old' }, capabilities: secureBrowserUsb }, 'web-serial-install'],
+    [{ intent: 'blank-card', capabilities: { platform: 'macos' } }, 'supported-browser-handoff'],
+    [{ link: { reason: 'native-bridge-missing' } }, 'connector-fallback'],
+    [{ intent: 'blank-card', capabilities: { platform: 'ios', isMobile: true } }, 'supported-device-handoff'],
+    [{ link: { reason: 'wrong-card' } }, 'reconnect-known-card'],
+    [{ link: { reason: 'no-answer' } }, 'retry-card-page'],
+    [{ link: { reason: 'preview-unconfirmed' } }, 'connector-fallback'],
   ];
 
-  for (const [reason, expectedId] of cases) {
-    const action = nextCardConnectionAction({
-      link: { state: 'disconnected', reason },
-      intent: 'working-card',
-    });
-    assert.equal(action.id, expectedId, reason);
-    assert.notEqual(action.id, 'connected', reason);
+  for (const [input, legacyId] of cases) {
+    assert.equal(nextCardConnectionAction(input).legacyId, legacyId);
   }
 });
 
-test('wrong-card recovery reconnects the expected card and offers explicit adoption only', () => {
+test('routes a secure top-level Web Serial page to browser USB', () => {
+  assert.equal(nextCardConnectionAction({
+    intent: 'blank-card',
+    capabilities: secureBrowserUsb,
+  }).id, 'ready-browser-usb');
+});
+
+test('escapes an insecure embedded card frame before considering desktop fallback', () => {
   const action = nextCardConnectionAction({
-    link: { state: 'disconnected', reason: 'wrong-card' },
+    intent: 'blank-card',
+    capabilities: insecureChromeFrame,
+  });
+
+  assert.equal(action.id, 'escape-insecure-card-frame');
+  assert.equal(action.title, 'Open secure installer');
+  assert.equal(action.primaryLabel, 'Open secure installer');
+  assert.match(action.explanation, /inside the local card page/i);
+  assert.doesNotMatch(`${action.title} ${action.explanation}`, /unsupported|supported browser/i);
+  assert.match(`${action.title} ${action.explanation}`, /open|Studio|secure/i);
+});
+
+test('explicit install and recovery intents outrank stale transient connection reasons', () => {
+  for (const intent of ['blank-card', 'deep-recovery']) {
+    for (const reason of ['never-connected', 'card-unreachable']) {
+      assert.equal(nextCardConnectionAction({
+        intent,
+        link: { state: 'disconnected', reason },
+        capabilities: secureBrowserUsb,
+      }).id, 'ready-browser-usb', `${intent}: ${reason}`);
+    }
+  }
+});
+
+test('uncertain writes and wrong-card failures still outrank explicit install intent', () => {
+  assert.equal(nextCardConnectionAction({
+    intent: 'blank-card',
+    link: { reason: 'preview-unconfirmed' },
+    capabilities: secureBrowserUsb,
+  }).id, 'needs-safe-recovery');
+  assert.equal(nextCardConnectionAction({
+    intent: 'deep-recovery',
+    link: { reason: 'wrong-card' },
+    capabilities: secureBrowserUsb,
+  }).id, 'wrong-card');
+});
+
+test('launches the desktop native bridge when browser USB is unavailable', () => {
+  for (const intent of ['blank-card', 'deep-recovery']) {
+    assert.equal(nextCardConnectionAction({
+      intent,
+      capabilities: {
+        secureContext: true,
+        topLevel: true,
+        canWebSerialInstall: false,
+        platform: 'windows',
+        isMobile: false,
+      },
+    }).id, 'launch-native-bridge', intent);
+  }
+});
+
+test('native bridge states do not promise an app action that is not built', () => {
+  for (const input of [
+    { intent: 'blank-card', capabilities: { platform: 'macos', isMobile: false } },
+    { link: { reason: 'native-bridge-missing' }, capabilities: { platform: 'windows', isMobile: false } },
+  ]) {
+    const result = nextCardConnectionAction(input);
+    assert.match(result.explanation, /not available yet/i);
+    assert.doesNotMatch(`${result.title} ${result.primaryLabel}`, /open USB helper|install USB helper/i);
+  }
+});
+
+test('offers native bridge installation after an exact missing-bridge failure', () => {
+  assert.equal(nextCardConnectionAction({
+    intent: 'blank-card',
+    link: { state: 'disconnected', reason: 'native-bridge-missing' },
+    capabilities: { secureContext: true, topLevel: true, platform: 'linux', isMobile: false },
+  }).id, 'install-native-bridge');
+});
+
+test('hands mobile installation and recovery to a supported device', () => {
+  for (const intent of ['blank-card', 'deep-recovery']) {
+    assert.equal(nextCardConnectionAction({
+      intent,
+      capabilities: { secureContext: true, topLevel: true, platform: 'ios', isMobile: true },
+    }).id, 'handoff-supported-device', intent);
+  }
+});
+
+test('routes identity-missing and firmware-too-old cards to card update', () => {
+  for (const reason of ['identity-missing', 'firmware-too-old']) {
+    assert.equal(nextCardConnectionAction({
+      intent: 'working-card',
+      link: { state: 'disconnected', reason },
+      capabilities: secureBrowserUsb,
+    }).id, 'needs-card-update', reason);
+  }
+});
+
+test('escapes an insecure embedded update before selecting an update transport', () => {
+  assert.equal(nextCardConnectionAction({
     intent: 'working-card',
+    link: { state: 'disconnected', reason: 'firmware-too-old' },
+    capabilities: insecureChromeFrame,
+  }).id, 'escape-insecure-card-frame');
+});
+
+test('reports an exact wrong-card result without silently adopting it', () => {
+  const action = nextCardConnectionAction({
+    intent: 'working-card',
+    link: { state: 'disconnected', reason: 'wrong-card' },
     expectedCard: { id: 'lw-expected', name: 'Gallery Mandala' },
     detectedCard: { id: 'lw-detected', name: 'Workshop Ring' },
   });
 
-  assert.equal(action.id, 'reconnect-known-card');
-  assert.equal(action.primaryLabel, 'Reconnect expected card');
+  assert.equal(action.id, 'wrong-card');
   assert.match(action.explanation, /Gallery Mandala/);
   assert.match(action.explanation, /Workshop Ring/);
   assert.deepEqual(action.secondaryAction, {
     id: 'adopt-discovered-card',
     label: 'Use this card instead',
   });
-  assert.notEqual(action.id, action.secondaryAction.id);
 });
 
-test('identity failures route to installation or supported handoff without reopening the card page', () => {
-  for (const reason of ['identity-missing', 'firmware-too-old']) {
+test('turns bounded transient link failures into a retryable state', () => {
+  for (const reason of ['popup-blocked', 'no-answer', 'card-page-closed']) {
     assert.equal(nextCardConnectionAction({
-      link: { state: 'disconnected', reason },
       intent: 'working-card',
-      capabilities: { canWebSerialInstall: true },
-    }).id, 'web-serial-install', `${reason}: local installation`);
-    assert.equal(nextCardConnectionAction({
       link: { state: 'disconnected', reason },
-      intent: 'working-card',
-      capabilities: { canWebSerialInstall: false, handoffKind: 'supported-browser-handoff' },
-    }).id, 'supported-browser-handoff', `${reason}: browser handoff`);
-    assert.equal(nextCardConnectionAction({
-      link: { state: 'disconnected', reason },
-      intent: 'working-card',
-      capabilities: { canWebSerialInstall: false, handoffKind: 'supported-device-handoff' },
-    }).id, 'supported-device-handoff', `${reason}: device handoff`);
+    }).id, 'recoverable-failure', reason);
   }
 });
 
-test('working-card intent prefers known cards, then setup evidence, then the card page', () => {
-  assert.equal(nextCardConnectionAction({ intent: 'working-card', expectedCard: { id: 'lw-a' } }).id, 'reconnect-known-card');
-  assert.equal(nextCardConnectionAction({ intent: 'working-card', discoveredCard: { id: 'lw-b' } }).id, 'reconnect-known-card');
-  assert.equal(nextCardConnectionAction({ intent: 'working-card', setupNetwork: { available: true } }).id, 'open-setup-network');
-  assert.equal(nextCardConnectionAction({ intent: 'working-card' }).id, 'open-card-page');
+test('keeps setup-network compatibility as an explicit recoverable route', () => {
+  for (const input of [
+    { intent: 'working-card', setupMode: true },
+    { intent: 'working-card', setupNetwork: { available: true, ssid: 'Lightweaver-1234' } },
+  ]) {
+    const result = nextCardConnectionAction(input);
+    assert.equal(result.id, 'recoverable-failure');
+    assert.equal(result.route, 'setup-network');
+    assert.equal(result.primaryLabel, 'Continue');
+    assert.match(result.explanation, /setup network/i);
+  }
 });
 
-test('unsupported install and recovery paths use capability handoff guidance', () => {
+test('requires safe recovery when a write or recovery result is uncertain', () => {
+  for (const reason of ['preview-unconfirmed', 'recovery-unconfirmed']) {
+    assert.equal(nextCardConnectionAction({
+      intent: 'deep-recovery',
+      link: { state: 'disconnected', reason },
+      capabilities: secureBrowserUsb,
+    }).id, 'needs-safe-recovery', reason);
+  }
+});
+
+test('reports ready-local-card only after a verified local connection', () => {
   assert.equal(nextCardConnectionAction({
-    intent: 'blank-card',
-    capabilities: { canWebSerialInstall: false, platform: 'macos', handoffKind: 'supported-browser-handoff' },
-  }).id, 'supported-browser-handoff');
-  assert.equal(nextCardConnectionAction({
-    intent: 'blank-card',
-    capabilities: { canWebSerialInstall: false, platform: 'ios', handoffKind: 'supported-device-handoff' },
-  }).id, 'supported-device-handoff');
-  assert.equal(nextCardConnectionAction({
-    intent: 'deep-recovery',
-    capabilities: { canWebSerialInstall: false, platform: 'android', isMobile: true },
-  }).id, 'supported-device-handoff');
+    link: { state: 'connected-direct', card: { id: 'lw-a' } },
+  }).id, 'ready-local-card');
   assert.notEqual(nextCardConnectionAction({
-    intent: 'blank-card',
-    capabilities: { canWebSerialInstall: false, platform: 'macos' },
-  }).id, 'connector-fallback');
+    link: { state: 'connected-direct', card: null },
+    intent: 'working-card',
+  }).id, 'ready-local-card');
 });
 
-test('unexpected inputs fall back to choosing the card condition', () => {
-  for (const input of [null, [], 'working-card', { intent: 'surprise' }, { capabilities: null }]) {
-    assert.equal(nextCardConnectionAction(input).id, 'choose-card-condition');
-  }
-});
+test('all action copy is physical-action oriented and avoids implementation jargon', () => {
+  const inputs = [
+    { intent: 'blank-card', capabilities: secureBrowserUsb },
+    { intent: 'blank-card', capabilities: insecureChromeFrame },
+    { link: { state: 'connected-direct', card: { id: 'lw-a' } } },
+    { link: { reason: 'firmware-too-old' }, capabilities: secureBrowserUsb },
+    { intent: 'blank-card', capabilities: { secureContext: true, topLevel: true, platform: 'macos' } },
+    { link: { reason: 'native-bridge-missing' }, capabilities: { secureContext: true, topLevel: true, platform: 'macos' } },
+    { intent: 'blank-card', capabilities: { platform: 'android', isMobile: true } },
+    { link: { reason: 'wrong-card' } },
+    { link: { reason: 'no-answer' } },
+    { link: { reason: 'preview-unconfirmed' } },
+  ];
+  const forbidden = /mixed content|postMessage|Web Serial|localhost|(?:\d{1,3}\.){3}\d{1,3}|Chrome is unsupported/i;
 
-test('customer-facing action copy contains no implementation jargon', () => {
-  const forbidden = /mixed content|postMessage|bridge|Web Serial|localhost|(?:\d{1,3}\.){3}\d{1,3}/i;
-  for (const [name, input] of actionCases) {
-    const { title, explanation, primaryLabel, secondaryAction } = nextCardConnectionAction(input);
-    const copy = [title, explanation, primaryLabel, secondaryAction?.label, secondaryAction?.explanation]
-      .filter(Boolean)
-      .join(' ');
-    assert.doesNotMatch(copy, forbidden, name);
+  for (const input of inputs) {
+    const action = nextCardConnectionAction(input);
+    assert.equal(typeof action.title, 'string', action.id);
+    assert.equal(typeof action.explanation, 'string', action.id);
+    assert.equal(typeof action.primaryLabel, 'string', action.id);
+    assert.doesNotMatch(`${action.title} ${action.explanation} ${action.primaryLabel}`, forbidden, action.id);
   }
 });
