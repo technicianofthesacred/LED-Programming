@@ -23,6 +23,8 @@ import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCod
 import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { CardCommissioningPanel, CardCommissioningSteps } from '../components/card/CardCommissioningPanel.jsx';
+import { readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { readCardWiringCandidateEvidence } from '../lib/cardWiringSafety.js';
 import {
   beginCardCommissioning,
   completeCardInstall,
@@ -549,6 +551,8 @@ import {
             result={null}
             link={cardLink}
             onReconnect={() => onConnectCard?.()}
+            readProjectEvidence={readCardProjectEvidence}
+            readCandidateEvidence={readCardWiringCandidateEvidence}
           />
         </div>
       );

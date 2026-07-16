@@ -14,6 +14,7 @@ export const CARD_WIRING_STATES = Object.freeze([
   'rolled-back',
   'safe-mode',
 ]);
+const CANDIDATE_STATUS_READBACKS = new WeakSet();
 
 const STATE_ALIASES = Object.freeze({
   none: 'known-good',
@@ -89,6 +90,12 @@ export function normalizeCardWiringStatus(response = {}) {
     outputs: outputs.map(output => ({ ...output })),
     remainingMs: Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : 0,
     nextStep: String(response.nextStep || response.action || ''),
+    ...(response.cardId || response.id ? { cardId: String(response.cardId || response.id) } : {}),
+    ...(response.firmwareVersion ? { firmwareVersion: String(response.firmwareVersion) } : {}),
+    ...(response.buildId || response.firmwareBuild || response.build ? { buildId: String(response.buildId || response.firmwareBuild || response.build) } : {}),
+    ...(response.projectRevision !== undefined ? { projectRevision: Number(response.projectRevision) } : {}),
+    ...(response.projectFingerprint ? { projectFingerprint: String(response.projectFingerprint) } : {}),
+    ...(response.productionJobDigest ? { productionJobDigest: String(response.productionJobDigest).toLowerCase() } : {}),
     raw: response,
   };
 }
@@ -124,7 +131,7 @@ async function directRequest(endpoint, payload, {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const request = { method: endpoint.method, signal: ctrl.signal };
+    const request = { method: endpoint.method, signal: ctrl.signal, ...(endpoint.method === 'GET' ? { cache: 'no-store' } : {}) };
     if (endpoint.method !== 'GET') {
       request.headers = { 'Content-Type': 'application/json' };
       request.body = JSON.stringify(payload || {});
@@ -199,8 +206,22 @@ function requireReturnedActivation(status) {
 }
 
 export async function getCardWiringStatus(options = {}) {
-  return normalizeCardWiringStatus(await requestCardWiring('wiring-status', {}, options));
+  const status = normalizeCardWiringStatus(await requestCardWiring('wiring-status', {}, options));
+  CANDIDATE_STATUS_READBACKS.add(status);
+  return status;
 }
+
+export async function readCardWiringCandidateEvidence(activationId, options = {}) {
+  const id = requireActivationId(activationId);
+  const status = await getCardWiringStatus(options);
+  if (status.state !== 'staged' || status.activationId !== id) throw wiringError('activation-mismatch', 'Card candidate status belongs to a different wiring transaction.', { response: status.raw });
+  if (!status.cardId || !status.firmwareVersion || !status.buildId || !Number.isSafeInteger(status.projectRevision) || !status.projectFingerprint) {
+    throw wiringError('invalid-response', 'Card candidate status is waiting for exact candidate identity evidence.', { response: status.raw });
+  }
+  return status;
+}
+
+export function isCardWiringCandidateReadback(value) { return CANDIDATE_STATUS_READBACKS.has(value); }
 
 export async function stageCardWiringCandidate(candidate, options = {}) {
   const response = await requestCardWiring('wiring-candidate', { candidate }, options);

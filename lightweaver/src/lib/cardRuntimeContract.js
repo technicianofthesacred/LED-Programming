@@ -46,7 +46,8 @@ export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
       if (rawPin === undefined || rawPin === null || Number(rawPin) < 0) continue;
       const pin = Number(rawPin);
       if (!Number.isInteger(pin) || pin > 48) throw new RangeError(`${label} control pin must be a supported GPIO.`);
-      if (pins.has(pin)) throw new RangeError(`${label} control GPIO ${pin} conflicts with an LED output GPIO.`);
+      if (pins.has(pin)) throw new RangeError(`${label} control GPIO ${pin} is already owned by an LED output or another control.`);
+      pins.add(pin);
     }
     if (zones.length > this.maxZones) throw new RangeError(`Hardware supports at most ${this.maxZones} zones.`);
     for (const zone of zones) {
@@ -101,10 +102,11 @@ export const DEFAULT_CARD_LED = Object.freeze({
 });
 
 export function normalizeCardRuntimeConfig(config = {}) {
-  CARD_HARDWARE_CAPABILITIES.assertSupported(config);
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
-  const requestedCycleIds = normalizePatternIds(config.controls?.encoder?.patternCycleIds);
+  const controls = normalizeControls(config.controls);
+  const requestedCycleIds = normalizePatternIds(controls.encoder.patternCycleIds);
   const led = normalizeLed(config.led);
+  CARD_HARDWARE_CAPABILITIES.assertSupported({ ...config, led, controls });
   const totalPixels = led.pixels;
   const zones = normalizeZones(config.zones, totalPixels);
   const patterns = normalizePatterns(config.patterns);
@@ -120,9 +122,9 @@ export function normalizeCardRuntimeConfig(config = {}) {
     },
     led,
     controls: normalizeControls({
-      ...config.controls,
+      ...controls,
       encoder: {
-        ...(config.controls?.encoder || {}),
+        ...controls.encoder,
         patternCycleIds: patternIds.length ? patternIds : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
       },
     }),
@@ -265,14 +267,15 @@ function normalizeLed(led = {}) {
 
 function normalizeControls(controls = {}) {
   const encoder = controls.encoder || {};
+  const alias = (canonical, ...aliases) => canonical !== undefined
+    ? canonical
+    : aliases.find(value => value !== undefined);
   return {
     encoder: {
-      ...DEFAULT_CARD_CONTROLS.encoder,
-      ...encoder,
-      a: clampInt(encoder.a, DEFAULT_CARD_CONTROLS.encoder.a, 0, 48),
-      b: clampInt(encoder.b, DEFAULT_CARD_CONTROLS.encoder.b, 0, 48),
-      press: clampInt(encoder.press, DEFAULT_CARD_CONTROLS.encoder.press, 0, 48),
-      alternatePress: clampInt(encoder.alternatePress, DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48),
+      a: clampInt(alias(encoder.a, encoder.pinA), DEFAULT_CARD_CONTROLS.encoder.a, 0, 48),
+      b: clampInt(alias(encoder.b, encoder.pinB), DEFAULT_CARD_CONTROLS.encoder.b, 0, 48),
+      press: clampInt(alias(encoder.press, encoder.pressPin, encoder.pinPress), DEFAULT_CARD_CONTROLS.encoder.press, 0, 48),
+      alternatePress: clampInt(alias(encoder.alternatePress, encoder.alternatePressPin, encoder.pinAlternatePress), DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48),
       rotateDirection: encoder.rotateDirection === 'clockwise-dimmer'
         ? 'clockwise-dimmer'
         : 'clockwise-brighter',
@@ -281,11 +284,11 @@ function normalizeControls(controls = {}) {
         ? normalizePatternIds(encoder.patternCycleIds)
         : DEFAULT_CARD_CONTROLS.encoder.patternCycleIds,
     },
-    previous: clampInt(controls.previous, DEFAULT_CARD_CONTROLS.previous, -1, 48),
-    next: clampInt(controls.next, DEFAULT_CARD_CONTROLS.next, -1, 48),
-    blackout: clampInt(controls.blackout, DEFAULT_CARD_CONTROLS.blackout, -1, 48),
-    brightness: clampInt(controls.brightness, DEFAULT_CARD_CONTROLS.brightness, -1, 48),
-    statusLed: clampInt(controls.statusLed, DEFAULT_CARD_CONTROLS.statusLed, -1, 48),
+    previous: clampInt(alias(controls.previous, controls.previousPin, controls.pinPrevious), DEFAULT_CARD_CONTROLS.previous, -1, 48),
+    next: clampInt(alias(controls.next, controls.nextPin, controls.pinNext), DEFAULT_CARD_CONTROLS.next, -1, 48),
+    blackout: clampInt(alias(controls.blackout, controls.blackoutPin, controls.pinBlackout), DEFAULT_CARD_CONTROLS.blackout, -1, 48),
+    brightness: clampInt(alias(controls.brightness, controls.brightnessPin, controls.pinBrightness), DEFAULT_CARD_CONTROLS.brightness, -1, 48),
+    statusLed: clampInt(alias(controls.statusLed, controls.statusLedPin, controls.pinStatusLed), DEFAULT_CARD_CONTROLS.statusLed, -1, 48),
   };
 }
 

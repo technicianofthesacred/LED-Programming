@@ -11,9 +11,23 @@ import {
   getCardWiringStatus,
   normalizeCardWiringStatus,
   rollbackCardWiringCandidate,
+  readCardWiringCandidateEvidence,
   stageCardWiringCandidate,
   waitForCardWiringReconnect,
 } from './cardWiringSafety.js';
+
+test('candidate evidence is an uncached exact status GET and rejects another activation', async () => {
+  const calls = [];
+  const common = { host: '192.168.4.1', transport: 'direct', fetchImpl: async (url, init) => {
+    calls.push([url, init]);
+    return jsonResponse({ ok: true, state: 'staged', activationId: 'candidate-a', outputs: [], cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40), projectRevision: 7, projectFingerprint: 'f'.repeat(16) });
+  } };
+  const evidence = await readCardWiringCandidateEvidence('candidate-a', common);
+  assert.equal(evidence.activationId, 'candidate-a');
+  assert.equal(calls[0][1].method, 'GET');
+  assert.equal(calls[0][1].cache, 'no-store');
+  await assert.rejects(readCardWiringCandidateEvidence('candidate-b', common), /different wiring transaction/i);
+});
 
 function jsonResponse(body, { ok = true, status = 200 } = {}) {
   return {

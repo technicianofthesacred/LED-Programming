@@ -1,3 +1,5 @@
+import { isCardWiringCandidateReadback } from './cardWiringSafety.js';
+
 export const CARD_COMMISSIONING_STAGES = Object.freeze([
   'connect-card',
   'install-safely',
@@ -5,8 +7,9 @@ export const CARD_COMMISSIONING_STAGES = Object.freeze([
   'check-lights',
 ]);
 
-export const CARD_COMMISSIONING_STORAGE_KEY = 'lw_card_commissioning_v1';
-export const CARD_COMMISSIONING_BACKUP_STORAGE_KEY = 'lw_card_commissioning_v1_backup';
+export const CARD_COMMISSIONING_STORAGE_KEY = 'lw_card_commissioning_registry_v2';
+export const CARD_COMMISSIONING_BACKUP_STORAGE_KEY = 'lw_card_commissioning_registry_v2_backup';
+export const CARD_COMMISSIONING_ACTIVE_KEY = 'lw_card_commissioning_active_v2';
 export const CARD_COMMISSIONING_CHANGED_EVENT = 'lightweaver-card-commissioning-changed';
 
 const VERSION = 1;
@@ -14,6 +17,13 @@ const SOURCES = new Set(['web-serial', 'native-bridge']);
 const OPERATIONS = new Set(['inspect-card', 'install-current-release', 'recover-current-release', 'release-usb', 'restart-card']);
 const CARD_RESTORATION_READBACKS = new WeakSet();
 const CARD_WIRING_ACTIVATION_EVIDENCE = new WeakSet();
+const REGISTRY_VERSION = 2;
+const MAX_FLOWS = 12;
+const MAX_BYTES = 384 * 1024;
+const FLOW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const RESTORE_LEASE_MS = 2 * 60 * 1000;
+const REGISTRY_LOCK_KEY = 'lw_card_commissioning_registry_v2_lock';
+const REGISTRY_LOCK_MS = 5000;
 
 function text(value, max = 128) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -46,6 +56,11 @@ function cardRestoreSnapshot(project = {}) {
 
 function defaultStorage() {
   try { return globalThis?.window?.localStorage || globalThis?.localStorage || null; }
+  catch { return null; }
+}
+
+function defaultSessionStorage() {
+  try { return globalThis?.window?.sessionStorage || globalThis?.sessionStorage || null; }
   catch { return null; }
 }
 
@@ -88,6 +103,7 @@ export function beginCardCommissioning({
   projectRevision,
   installTarget = null,
   productionJobDigest = '',
+  flowType = productionJobDigest ? 'production-job' : 'studio-project',
   flowId = makeFlowId(),
   now = Date.now(),
 } = {}) {
@@ -98,6 +114,7 @@ export function beginCardCommissioning({
   const preserve = strategy === 'preserve-in-place' && compatibilityVerified === true && routineUpdate === true && operation === 'install-current-release';
   return {
     version: VERSION,
+    flowType: flowType === 'production-job' ? 'production-job' : 'studio-project',
     flowId: text(flowId, 96),
     source,
     operation,
@@ -224,8 +241,9 @@ export function bindCardWiringActivationEvidence(status = {}, readback = {}) {
     || !text(status.activationId, 128)) {
     throw new Error('The wiring candidate requires the normalized card-issued activation response');
   }
-  if (!CARD_RESTORATION_READBACKS.has(readback)) {
-    throw new Error('The wiring candidate requires an independent card read-back');
+  if (!isCardWiringCandidateReadback(readback) || readback.state !== 'staged'
+    || text(readback.activationId, 128) !== text(status.activationId, 128)) {
+    throw new Error('The wiring candidate requires an independent exact candidate-status GET read-back');
   }
   const evidence = Object.freeze({
     source: 'card-activation-with-readback',
@@ -252,8 +270,8 @@ export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date
   if (text(acknowledgement.buildId, 96) !== flow.expectedCard.buildId) throw new Error('Project restoration read-back has the wrong firmware build');
   if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The card did not acknowledge the saved Studio project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The card did not acknowledge the saved Studio project revision');
-  if (!/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest || '')
-    || text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest) {
+  if (flow.flowType === 'production-job' && (!/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest || '')
+    || text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest)) {
     throw new Error('The card did not acknowledge the production job digest');
   }
   return {
@@ -277,6 +295,10 @@ export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { n
   if (text(acknowledgement.buildId, 96) !== flow.expectedCard.buildId) throw new Error('The staged project read-back has the wrong firmware build');
   if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The staged project read-back has the wrong project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The staged project is not the saved Studio revision');
+  if (flow.flowType === 'production-job'
+    && text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest) {
+    throw new Error('The staged project read-back has the wrong production job digest');
+  }
   const activationId = text(acknowledgement.activationId, 128);
   if (!activationId) throw new Error('The card did not return a wiring activation identifier');
   return {
@@ -291,6 +313,8 @@ function requireFlow(flow) {
   if (!flow || flow.version !== VERSION || !CARD_COMMISSIONING_STAGES.includes(flow.stage)) {
     throw new Error('Invalid card commissioning progress');
   }
+  if (flow.flowType !== undefined && !['studio-project', 'production-job'].includes(flow.flowType)) throw new Error('Invalid card commissioning type');
+  if (flow.flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(flow.project?.productionJobDigest || '')) throw new Error('Invalid card commissioning production job');
   if (!/^[A-Za-z0-9_-]{16,96}$/.test(flow.flowId || '') || !SOURCES.has(flow.source) || !OPERATIONS.has(flow.operation)
     || !['clean-recovery', 'preserve-in-place'].includes(flow.strategy)
     || !Number.isSafeInteger(flow.createdAt) || !Number.isSafeInteger(flow.updatedAt)
@@ -324,33 +348,129 @@ function notify(flow) {
   }
 }
 
-export function writeCardCommissioning(flow, { storage = defaultStorage() } = {}) {
+function emptyRegistry() { return { version: REGISTRY_VERSION, revision: 0, flows: {} }; }
+
+function parseRegistry(storage, now = Date.now()) {
+  let corrupt = false;
+  for (const key of [CARD_COMMISSIONING_STORAGE_KEY, CARD_COMMISSIONING_BACKUP_STORAGE_KEY]) {
+    const raw = storage?.getItem?.(key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed?.version !== REGISTRY_VERSION || !parsed.flows || typeof parsed.flows !== 'object') throw new Error('bad registry');
+      const flows = {};
+      for (const [flowId, entry] of Object.entries(parsed.flows).slice(0, MAX_FLOWS * 2)) {
+        if (!entry?.flow || Number(entry.expiresAt) <= now || flowId !== entry.flow.flowId) continue;
+        requireFlow(entry.flow);
+        flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease: entry.restoreLease || null };
+      }
+      return { registry: { version: REGISTRY_VERSION, revision: Number(parsed.revision) || 0, flows }, error: '' };
+    } catch { corrupt = true; }
+  }
+  return { registry: emptyRegistry(), error: corrupt ? 'corrupt' : 'missing' };
+}
+
+function activeFlowId(sessionStorage, explicitFlowId) {
+  return text(explicitFlowId || sessionStorage?.getItem?.(CARD_COMMISSIONING_ACTIVE_KEY), 96);
+}
+
+function persistRegistry(storage, registry) {
+  const encoded = JSON.stringify(registry);
+  if (encoded.length > MAX_BYTES) throw new Error('Commissioning storage is full. Finish or clear an older card setup, then retry.');
+  storage.setItem(CARD_COMMISSIONING_BACKUP_STORAGE_KEY, encoded);
+  storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, encoded);
+}
+
+function acquireRegistryLock(storage, now = Date.now()) {
+  const token = makeFlowId();
+  let current = null;
+  try { current = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
+  if (current?.token && Number(current.expiresAt) > now) throw new Error('Card setup is being updated in another tab. Retry in a moment.');
+  storage.setItem(REGISTRY_LOCK_KEY, JSON.stringify({ token, expiresAt: now + REGISTRY_LOCK_MS }));
+  let verified = null;
+  try { verified = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null'); } catch {}
+  if (verified?.token !== token) throw new Error('Card setup is being updated in another tab. Retry in a moment.');
+  return () => {
+    try {
+      const owner = JSON.parse(storage.getItem(REGISTRY_LOCK_KEY) || 'null');
+      if (owner?.token === token) storage.removeItem(REGISTRY_LOCK_KEY);
+    } catch {}
+  };
+}
+
+export function inspectCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId, now = Date.now() } = {}) {
+  if (!storage?.getItem) return { flow: null, error: 'unavailable' };
+  const parsed = parseRegistry(storage, now);
+  const id = activeFlowId(sessionStorage, flowId) || (!sessionStorage?.getItem ? Object.keys(parsed.registry.flows)[0] : '');
+  if (!id) return { flow: null, error: parsed.error === 'corrupt' ? 'corrupt' : 'missing' };
+  return { flow: parsed.registry.flows[id]?.flow || null, error: parsed.registry.flows[id] ? '' : (parsed.error === 'corrupt' ? 'corrupt' : 'missing') };
+}
+
+export function writeCardCommissioning(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), tabId = '', now = Date.now() } = {}) {
   if (!storage?.setItem) return false;
   requireFlow(flow);
-  const serializable = clone(flow);
-  const encoded = JSON.stringify(serializable);
-  storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, encoded);
-  try { storage.setItem(CARD_COMMISSIONING_BACKUP_STORAGE_KEY, encoded); } catch {}
-  notify(serializable);
+  const unlock = acquireRegistryLock(storage, now);
+  try {
+    const serializable = clone(flow);
+    const { registry } = parseRegistry(storage, now);
+    registry.flows[flow.flowId] = { flow: serializable, tabId: text(tabId, 96), expiresAt: now + FLOW_TTL_MS, restoreLease: registry.flows[flow.flowId]?.restoreLease || null };
+    const ordered = Object.entries(registry.flows).sort((a, b) => Number(b[1].flow.updatedAt) - Number(a[1].flow.updatedAt)).slice(0, MAX_FLOWS);
+    registry.flows = Object.fromEntries(ordered);
+    registry.revision += 1;
+    persistRegistry(storage, registry);
+    sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
+    notify(serializable);
+    return true;
+  } finally { unlock(); }
+}
+
+export function readCardCommissioning(options = {}) {
+  return inspectCardCommissioning(options).flow;
+}
+
+export function claimCardRestoration(flow, { storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(), now = Date.now() } = {}) {
+  requireFlow(flow);
+  let unlock;
+  try { unlock = acquireRegistryLock(storage, now); } catch { return { ok: false, reason: 'restore-in-progress' }; }
+  try {
+  const { registry } = parseRegistry(storage, now);
+  const entry = registry.flows[flow.flowId];
+  if (!entry || entry.flow.project.fingerprint !== flow.project.fingerprint || entry.flow.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
+  if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > now) return { ok: false, reason: 'restore-in-progress' };
+  const lease = { id: ownerId, flowId: flow.flowId, cardId: flow.expectedCard.id, projectFingerprint: flow.project.fingerprint, expiresAt: now + RESTORE_LEASE_MS };
+  entry.restoreLease = lease;
+  registry.revision += 1;
+  persistRegistry(storage, registry);
+  sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
+  const verified = parseRegistry(storage, now).registry.flows[flow.flowId]?.restoreLease;
+  return verified?.id === ownerId ? { ok: true, lease } : { ok: false, reason: 'restore-in-progress' };
+  } finally { unlock(); }
+}
+
+export function releaseCardRestoration(flowId, leaseId, { storage = defaultStorage(), now = Date.now() } = {}) {
+  const unlock = acquireRegistryLock(storage, now);
+  try {
+  const { registry } = parseRegistry(storage, now);
+  const entry = registry.flows[text(flowId, 96)];
+  if (!entry?.restoreLease || entry.restoreLease.id !== leaseId) return false;
+  entry.restoreLease = null;
+  registry.revision += 1;
+  persistRegistry(storage, registry);
   return true;
+  } finally { unlock(); }
 }
 
-export function readCardCommissioning({ storage = defaultStorage() } = {}) {
-  if (!storage?.getItem) return null;
-  for (const key of [CARD_COMMISSIONING_STORAGE_KEY, CARD_COMMISSIONING_BACKUP_STORAGE_KEY]) {
-    try {
-      const parsed = JSON.parse(storage.getItem(key) || 'null');
-      requireFlow(parsed);
-      return parsed;
-    } catch {}
-  }
-  return null;
-}
-
-export function clearCardCommissioning({ storage = defaultStorage() } = {}) {
+export function clearCardCommissioning({ storage = defaultStorage(), sessionStorage = defaultSessionStorage(), flowId } = {}) {
   if (!storage?.removeItem) return false;
-  storage.removeItem(CARD_COMMISSIONING_STORAGE_KEY);
-  storage.removeItem(CARD_COMMISSIONING_BACKUP_STORAGE_KEY);
+  const unlock = acquireRegistryLock(storage);
+  try {
+  const id = activeFlowId(sessionStorage, flowId);
+  const { registry } = parseRegistry(storage);
+  if (id) delete registry.flows[id];
+  registry.revision += 1;
+  persistRegistry(storage, registry);
+  sessionStorage?.removeItem?.(CARD_COMMISSIONING_ACTIVE_KEY);
   notify(null);
   return true;
+  } finally { unlock(); }
 }

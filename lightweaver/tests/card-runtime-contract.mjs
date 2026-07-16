@@ -17,6 +17,15 @@ import { defaultStandaloneController } from '../src/lib/projectModel.js';
 
 assert.deepEqual(CARD_RUNTIME_MODES, ['factory-flash', 'website-flash', 'sd-sequence', 'live-host']);
 
+const aliasControls = normalizeCardRuntimeConfig({
+  led: { pixels: 44, outputs: [{ id: 'main', pin: '16', pixels: 44 }] },
+  controls: { encoder: { pinA: '10', pinB: '11', pressPin: '12', alternatePressPin: '13' }, previousPin: '14', nextPin: '15', blackoutPin: '19', brightnessPin: '20', statusLedPin: '47' },
+}).controls;
+assert.deepEqual(aliasControls.encoder.a, 10);
+assert.equal('pinA' in aliasControls.encoder, false);
+assert.equal('previousPin' in aliasControls, false);
+assert.throws(() => normalizeCardRuntimeConfig({ led: { pixels: 44, outputs: [{ id: 'main', pin: 16, pixels: 44 }] }, controls: { encoder: { a: 10, b: 10, press: 12, alternatePress: -1 }, previous: -1, next: -1, blackout: -1, brightness: -1, statusLed: -1 } }), /already owned/i);
+
 assert.ok(DEFAULT_CARD_PATTERN_BANK.length >= 24);
 for (const id of ['aurora', 'ember', 'rainbow', 'breathe', 'scanner', 'warm-white']) {
   assert.ok(DEFAULT_CARD_PATTERN_BANK.some(pattern => pattern.id === id), `missing default pattern ${id}`);
@@ -220,7 +229,7 @@ const projectPkg = buildCardRuntimePackageFromProject({
   standaloneController: {
     led: { colorOrder: 'GRB', brightnessLimit: 0.55 },
     outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
-    controls: { encoder: { press: 6, patternCycleIds: ['ember', 'scanner'] } },
+    controls: { encoder: { press: 6, alternatePress: -1, patternCycleIds: ['ember', 'scanner'] } },
   },
 });
 assert.equal(projectPkg.config.piece.id, 'lwproj-customer-v3');
@@ -229,7 +238,7 @@ assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
 assert.equal(projectPkg.config.controls.encoder.press, 6);
-assert.equal(projectPkg.config.controls.encoder.alternatePress, 6);
+assert.equal(projectPkg.config.controls.encoder.alternatePress, -1);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);
 assert.deepEqual(projectPkg.config.zones.map(zone => zone.patternId), ['ember']);
 

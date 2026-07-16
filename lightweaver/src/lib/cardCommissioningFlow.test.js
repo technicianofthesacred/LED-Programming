@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCardWiringStatus } from './cardWiringSafety.js';
+import { getCardWiringStatus, normalizeCardWiringStatus } from './cardWiringSafety.js';
 
 import {
   CARD_COMMISSIONING_STAGES,
@@ -16,6 +16,8 @@ import {
   readCardCommissioning,
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
+  claimCardRestoration,
+  inspectCardCommissioning,
 } from './cardCommissioningFlow.js';
 
 function memoryStorage() {
@@ -258,7 +260,7 @@ test('only exact independent card read-back unlocks canonical project restoratio
   assert.equal(restored.project.restoredFingerprint, restored.project.fingerprint);
 });
 
-test('a safety-staged GPIO restore stays in the same flow and is not falsely called restored', () => {
+test('a safety-staged GPIO restore stays in the same flow and is not falsely called restored', async () => {
   const initial = beginCardCommissioning({
     source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
@@ -273,30 +275,17 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
     activationId: 'wiring-activation-7',
     outputs: [{ pin: 18, pixels: 88 }],
   });
-  const readback = adaptCardRestorationReadback({
-    method: 'GET',
-    endpoint: '/api/firmware-info',
-    response: {
+  const candidateResponse = {
+      ok: true, state: 'staged', activationId: status.activationId, outputs: status.outputs,
       cardId: installed.cardId,
       firmwareVersion: installed.firmwareVersion,
       buildId: installed.buildId,
       projectRevision: acknowledged.project.revision,
       projectFingerprint: acknowledged.project.fingerprint,
       productionJobDigest: '',
-    },
-  });
-  const staleReadback = adaptCardRestorationReadback({
-    method: 'GET',
-    endpoint: '/api/firmware-info',
-    response: {
-      cardId: installed.cardId,
-      firmwareVersion: installed.firmwareVersion,
-      buildId: 'b'.repeat(40),
-      projectRevision: acknowledged.project.revision - 1,
-      projectFingerprint: acknowledged.project.fingerprint,
-      productionJobDigest: '',
-    },
-  });
+  };
+  const readback = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => candidateResponse });
+  const staleReadback = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ...candidateResponse, buildId: 'b'.repeat(40), projectRevision: acknowledged.project.revision - 1 }) });
   const staleEvidence = bindCardWiringActivationEvidence(status, staleReadback);
   assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, staleEvidence), /firmware build|project revision/i);
   const evidence = bindCardWiringActivationEvidence(status, readback);
@@ -353,4 +342,39 @@ test('corrupt or fingerprint-mismatched persisted state fails closed', () => {
   flow.project.snapshot.name = 'Tampered';
   storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(flow));
   assert.equal(readCardCommissioning({ storage }), null);
+});
+
+test('two tabs keep exact active flows and share one durable restore lease', () => {
+  const storage = memoryStorage();
+  const tabA = memoryStorage();
+  const tabB = memoryStorage();
+  const a = completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-a-1234567890', now: 10 }), installed, { now: 20 });
+  const b = completeCardInstall(beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-tab-b-1234567890', now: 11 }), installed, { now: 21 });
+  writeCardCommissioning(a, { storage, sessionStorage: tabA, tabId: 'tab-a', now: 30 });
+  writeCardCommissioning(b, { storage, sessionStorage: tabB, tabId: 'tab-b', now: 31 });
+  assert.equal(readCardCommissioning({ storage, sessionStorage: tabA, now: 32 }).flowId, a.flowId);
+  assert.equal(readCardCommissioning({ storage, sessionStorage: tabB, now: 32 }).flowId, b.flowId);
+  assert.equal(claimCardRestoration(a, { storage, sessionStorage: tabA, ownerId: 'restore-tab-a-1234', now: 40 }).ok, true);
+  assert.deepEqual(claimCardRestoration(a, { storage, sessionStorage: tabB, ownerId: 'restore-tab-b-1234', now: 41 }), { ok: false, reason: 'restore-in-progress' });
+  assert.equal(claimCardRestoration(a, { storage, sessionStorage: tabB, ownerId: 'restore-tab-b-1234', now: 200000 }).ok, true);
+});
+
+test('corrupt registry reports a stable recovery state', () => {
+  const storage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lw_card_commissioning_active_v2', 'flow-missing-123456789');
+  storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, '{bad json');
+  assert.deepEqual(inspectCardCommissioning({ storage, sessionStorage }), { flow: null, error: 'corrupt' });
+});
+
+test('storage quota failure is explicit and does not silently advance the primary registry', () => {
+  const storage = memoryStorage();
+  const setItem = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key === 'lw_card_commissioning_registry_v2_backup') throw new Error('QuotaExceededError');
+    setItem(key, value);
+  };
+  const flow = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-quota-1234567890', now: 10 });
+  assert.throws(() => writeCardCommissioning(flow, { storage, sessionStorage: memoryStorage(), now: 20 }), /QuotaExceededError/);
+  assert.equal(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY), null);
 });

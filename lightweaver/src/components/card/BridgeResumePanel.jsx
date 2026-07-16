@@ -1,5 +1,7 @@
 import React from 'react';
 import { CardCommissioningPanel } from './CardCommissioningPanel.jsx';
+import { readCardProjectEvidence } from '../../lib/cardPushClient.js';
+import { readCardWiringCandidateEvidence } from '../../lib/cardWiringSafety.js';
 
 const DESTRUCTIVE = new Set(['install-current-release', 'recover-current-release']);
 
@@ -27,7 +29,7 @@ export function BridgeResumePanel({ result, link, onReconnect, onRetry, onDismis
     return <div className="bridge-resume" role="status"><h3>{result.kind === 'failure' ? 'Bridge return needs attention' : 'Bridge return pending'}</h3><p>{result.message}</p><button type="button" className="btn" onClick={onDismiss}>Dismiss</button></div>;
   }
   if (result.status === 'awaiting-card-acknowledgement') {
-    return <CardCommissioningPanel result={result} link={link} onReconnect={onReconnect} onComplete={onComplete} />;
+    return <CardCommissioningPanel result={result} link={link} onReconnect={onReconnect} onComplete={onComplete} readProjectEvidence={readCardProjectEvidence} readCandidateEvidence={readCardWiringCandidateEvidence} />;
   }
   const copy = FAILURE_COPY[result.status] || FAILURE_COPY['recoverable-failure'];
   return (

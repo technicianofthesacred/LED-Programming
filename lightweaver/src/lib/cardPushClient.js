@@ -184,11 +184,11 @@ function projectMismatchError(current = {}, runtimePackage = {}) {
   return err;
 }
 
-async function readFirmwareInfoToHost(host, timeoutMs = 1200) {
+async function readFirmwareInfoToHost(host, timeoutMs = 1200, fetchImpl = fetch) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const response = await fetch(`${cardHostToUrl(host)}/api/firmware-info`, { signal: ctrl.signal });
+    const response = await fetchImpl(`${cardHostToUrl(host)}/api/firmware-info`, { method: 'GET', cache: 'no-store', signal: ctrl.signal });
     if (!response.ok) return null;
     return await response.json().catch(() => null);
   } catch {
@@ -196,6 +196,15 @@ async function readFirmwareInfoToHost(host, timeoutMs = 1200) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function readCardProjectEvidence({ host, timeoutMs = 3000, transport, fetchImpl = fetch } = {}) {
+  if (transport === 'bridge' || (transport !== 'direct' && isMixedContentBlocked())) {
+    return sendCardBridgeRequest('firmware-info', { cache: 'no-store', nonce: Date.now() }, { host, timeoutMs, retryOnTimeout: true });
+  }
+  const result = await readFirmwareInfoToHost(host, timeoutMs, fetchImpl);
+  if (!result) throw new CardPushError('readback', 'The card did not return independent firmware and project evidence.');
+  return result;
 }
 
 async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {

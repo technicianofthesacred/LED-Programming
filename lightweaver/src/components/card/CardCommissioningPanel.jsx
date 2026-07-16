@@ -1,18 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../../lib/cardRuntimeProject.js';
-import { pushConfigToCard } from '../../lib/cardPushClient.js';
-import { saveCurrentProjectToLibrary } from '../../lib/projectStorage.js';
+import { pushConfigToCard, readCardProjectEvidence } from '../../lib/cardPushClient.js';
+import { readCardWiringCandidateEvidence } from '../../lib/cardWiringSafety.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
   CARD_COMMISSIONING_STAGES,
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
-  beginCardCommissioning,
   bindCardWiringActivationEvidence,
+  claimCardRestoration,
   completeCardInstall,
   markCardProjectRestored,
   readCardCommissioning,
+  inspectCardCommissioning,
+  releaseCardRestoration,
   resumeInstalledCardAfterInterruption,
   stageCardProjectForPhysicalCheck,
   writeCardCommissioning,
@@ -63,15 +65,23 @@ export function CardCommissioningPanel({
   onReconnect,
   onComplete,
   pushProject = pushConfigToCard,
-  readProjectEvidence = null,
+  readProjectEvidence = readCardProjectEvidence,
+  readCandidateEvidence = readCardWiringCandidateEvidence,
 }) {
-  const { serializeProject, projectLifecycle, markProjectPersisted, markProjectInstalled } = useProject();
-  const [flow, setFlow] = useState(readCardCommissioning);
+  const { markProjectInstalled } = useProject();
+  const [initialState] = useState(() => inspectCardCommissioning());
+  const [flow, setFlow] = useState(initialState.flow);
   const [restoreState, setRestoreState] = useState('idle');
-  const [failure, setFailure] = useState('');
+  const [failure, setFailure] = useState(initialState.error === 'corrupt'
+    ? 'Saved card setup data is corrupt. Nothing was changed; restart the exact setup.'
+    : '');
 
   useEffect(() => {
-    const sync = () => setFlow(readCardCommissioning());
+    const sync = () => {
+      const state = inspectCardCommissioning();
+      setFlow(state.flow);
+      if (state.error === 'corrupt') setFailure('Saved card setup data is corrupt. Nothing was changed; restart the exact setup.');
+    };
     window.addEventListener('storage', sync);
     window.addEventListener(CARD_COMMISSIONING_CHANGED_EVENT, sync);
     return () => {
@@ -83,18 +93,8 @@ export function CardCommissioningPanel({
   useEffect(() => {
     if (result?.status !== 'awaiting-card-acknowledgement') return;
     try {
-      let current = readCardCommissioning();
-      if (!current) {
-        const record = saveCurrentProjectToLibrary(serializeProject());
-        markProjectPersisted('browser');
-        current = beginCardCommissioning({
-          source: 'native-bridge',
-          operation: result.operation,
-          strategy: 'clean-recovery',
-          projectRecord: record,
-          projectRevision: projectLifecycle.editedRevision,
-        });
-      }
+      let current = readCardCommissioning({ flowId: result.flowId });
+      if (!current) throw new Error('This Bridge result has no matching saved setup in this browser profile. It was not applied; restart that exact setup.');
       if (current.source !== 'native-bridge') throw new Error('This Bridge result belongs to a different card setup attempt. Return to the setup that started it.');
       if (current.stage === 'install-safely') {
         current = completeCardInstall(current, result);
@@ -105,7 +105,7 @@ export function CardCommissioningPanel({
     } catch (error) {
       setFailure(error?.message || 'Studio could not resume this card setup result.');
     }
-  }, [markProjectPersisted, projectLifecycle.editedRevision, result, serializeProject]);
+  }, [result]);
 
   const cardAcknowledgement = useMemo(() => {
     if (!flow || flow.stage !== 'set-up-card') return null;
@@ -119,23 +119,31 @@ export function CardCommissioningPanel({
 
   useEffect(() => {
     if (!interruptedInstallEvidence?.ok) return;
-    writeCardCommissioning(interruptedInstallEvidence.flow);
-    setFlow(interruptedInstallEvidence.flow);
+    try {
+      writeCardCommissioning(interruptedInstallEvidence.flow);
+      setFlow(interruptedInstallEvidence.flow);
+    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); }
   }, [interruptedInstallEvidence]);
 
   useEffect(() => {
     if (!cardAcknowledgement?.ok || flow?.cardAcknowledgedAt) return;
-    writeCardCommissioning(cardAcknowledgement.flow);
-    setFlow(cardAcknowledgement.flow);
+    try {
+      writeCardCommissioning(cardAcknowledgement.flow);
+      setFlow(cardAcknowledgement.flow);
+    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); }
   }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
 
-  if (!flow) return <CardCommissioningSteps stage="connect-card" />;
+  if (!flow) return <div className="card-commissioning" aria-live="polite"><CardCommissioningSteps stage="connect-card" />{failure && <p className="card-connection-failure" role="alert">{failure}</p>}</div>;
 
   const restore = async () => {
     if (restoreState === 'working' || !flow.cardAcknowledgedAt) return;
     setRestoreState('working');
     setFailure('');
+    let lease = null;
     try {
+      const claim = claimCardRestoration(flow);
+      if (!claim.ok) throw new Error(claim.reason === 'restore-in-progress' ? 'This exact project restore is already running in another tab. Wait for it to finish or retry after the recovery window.' : 'The saved setup is unavailable. Nothing was sent.');
+      lease = claim.lease;
       const runtimePackage = runtimePackageFromSnapshot(flow.project.snapshot);
       const selectedPush = typeof window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ === 'function'
         ? window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__
@@ -162,7 +170,8 @@ export function CardCommissioningPanel({
         method: 'GET', endpoint: '/api/firmware-info', response: responseReadback,
       });
       if (response?.state === 'staged') {
-        const activationEvidence = bindCardWiringActivationEvidence(response, evidence);
+        const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
+        const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
         const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
         writeCardCommissioning(next);
         setFlow(next);
@@ -177,6 +186,8 @@ export function CardCommissioningPanel({
     } catch (error) {
       setFailure(error?.message || 'Studio could not restore the saved project. Reconnect the same card and try again.');
       setRestoreState('idle');
+    } finally {
+      if (lease) releaseCardRestoration(flow.flowId, lease.id);
     }
   };
 
