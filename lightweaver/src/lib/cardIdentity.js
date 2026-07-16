@@ -62,7 +62,7 @@ export function normalizeCardIdentity(payload = {}, host = '') {
 
 export function normalizeCardProjectEvidence(payload = {}) {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
-  if (source.app !== undefined && cleanText(source.app, 32) !== 'Lightweaver') {
+  if (cleanText(source.app, 32) !== 'Lightweaver') {
     throw cardIdentityError('wrong-product', 'The endpoint did not return Lightweaver card identity.');
   }
   const identity = normalizeCardIdentity(source);
@@ -87,8 +87,11 @@ export function normalizeCardProjectEvidence(payload = {}) {
   if (productionJobDigest && !/^[a-f0-9]{64}$/.test(productionJobDigest)) {
     throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid production job digest.');
   }
+  if (Boolean(productionJobId) !== Boolean(productionJobDigest)) {
+    throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned a partial production job identity.');
+  }
   return {
-    ...(source.app !== undefined ? { app: 'Lightweaver' } : {}),
+    app: 'Lightweaver',
     cardId: identity.id,
     firmwareVersion: identity.firmwareVersion,
     buildId: identity.buildId,

@@ -43,6 +43,7 @@ for (const message of [
   'project fingerprint must be 16 to 64 lowercase hex characters',
   'production job id must use 1 to 96 safe characters',
   'production job digest must be 64 lowercase hex characters',
+  'production job id and digest must be provided together',
 ]) {
   assert.match(storage, new RegExp(message), `strict identity validation should report: ${message}`);
 }

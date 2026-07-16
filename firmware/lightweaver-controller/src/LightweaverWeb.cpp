@@ -19,6 +19,12 @@ uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
 size_t controlRequestBodyLength = 0;
 bool controlRequestBodyReady = false;
 bool controlRequestBodyRejected = false;
+constexpr size_t LW_MAX_RUNTIME_REQUEST_BODY_BYTES = 3968;
+uint8_t runtimeRequestBody[LW_MAX_RUNTIME_REQUEST_BODY_BYTES + 1] = {};
+size_t runtimeRequestBodyLength = 0;
+size_t runtimeRequestExpectedLength = 0;
+bool runtimeRequestBodyReady = false;
+bool runtimeRequestBodyRejected = false;
 
 // Bridge protocol version — the card-page postMessage bridge contract shared
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
@@ -932,19 +938,22 @@ void handleStatus() {
 
 void handleConfigPost() {
   sendCors();
-  if (!server.hasArg("plain")) {
+  if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
     return;
   }
+  String requestJson(reinterpret_cast<const char*>(runtimeRequestBody));
+  runtimeRequestBodyReady = false;
+  runtimeRequestBodyLength = 0;
   String message;
   bool wiringChanged = false;
-  if (!runtimeConfigJsonChangesWiring(server.arg("plain"), *runtimeConfigPtr, wiringChanged, message)) {
+  if (!runtimeConfigJsonChangesWiring(requestJson, *runtimeConfigPtr, wiringChanged, message)) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
   if (wiringChanged) {
     String activationId;
-    bool staged = stageRuntimeConfigJson(server.arg("plain"), activationId, message);
+    bool staged = stageRuntimeConfigJson(requestJson, activationId, message);
     JsonDocument response;
     response["ok"] = staged;
     response["state"] = staged ? "staged" : "known-good";
@@ -957,7 +966,7 @@ void handleConfigPost() {
     server.send(staged ? 200 : 400, "application/json", body);
     return;
   }
-  bool ok = saveRuntimeConfigJson(server.arg("plain"), *runtimeConfigPtr, message);
+  bool ok = saveRuntimeConfigJson(requestJson, *runtimeConfigPtr, message);
   if (!ok) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
@@ -1012,7 +1021,15 @@ void handleWiringCandidate() {
   sendCors();
   JsonDocument doc;
   String message;
-  if (!readWiringRequest(doc, message)) {
+  if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
+    sendWiringOperation(false, "known-good", "", "missing json body");
+    return;
+  }
+  DeserializationError parseError = deserializeJson(doc, runtimeRequestBody, runtimeRequestBodyLength);
+  runtimeRequestBodyReady = false;
+  runtimeRequestBodyLength = 0;
+  if (parseError) {
+    message = String("json parse failed: ") + parseError.c_str();
     sendWiringOperation(false, "known-good", "", message);
     return;
   }
@@ -1169,6 +1186,78 @@ void handleReboot() {
 }
 
 void handleControlPost();
+
+void handleRuntimeRequestRaw(HTTPRaw& raw) {
+  if (raw.status == RAW_START) {
+    runtimeRequestBodyLength = 0;
+    runtimeRequestBodyReady = false;
+    runtimeRequestBodyRejected = false;
+    runtimeRequestExpectedLength = server.clientContentLength();
+    if (runtimeRequestExpectedLength == 0 ||
+        runtimeRequestExpectedLength > LW_MAX_RUNTIME_REQUEST_BODY_BYTES) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      int status = runtimeRequestExpectedLength == 0 ? 411 : 413;
+      const char* error = runtimeRequestExpectedLength == 0 ? "content length required" : "runtime request too large";
+      server.send(status, "application/json", String("{\"ok\":false,\"error\":\"") + error + "\"}");
+      server.client().stop();
+    }
+    return;
+  }
+  if (raw.status == RAW_WRITE) {
+    if (runtimeRequestBodyRejected) return;
+    if (runtimeRequestBodyLength + raw.currentSize > runtimeRequestExpectedLength ||
+        runtimeRequestBodyLength + raw.currentSize > LW_MAX_RUNTIME_REQUEST_BODY_BYTES) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      server.send(413, "application/json", "{\"ok\":false,\"error\":\"runtime request too large\"}");
+      server.client().stop();
+      return;
+    }
+    memcpy(runtimeRequestBody + runtimeRequestBodyLength, raw.buf, raw.currentSize);
+    runtimeRequestBodyLength += raw.currentSize;
+    return;
+  }
+  if (raw.status == RAW_END) {
+    if (runtimeRequestBodyRejected) return;
+    if (runtimeRequestBodyLength != runtimeRequestExpectedLength) {
+      runtimeRequestBodyRejected = true;
+      sendCors();
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"partial runtime request\"}");
+      server.client().stop();
+      return;
+    }
+    runtimeRequestBody[runtimeRequestBodyLength] = 0;
+    runtimeRequestBodyReady = true;
+    return;
+  }
+  if (raw.status == RAW_ABORTED) {
+    runtimeRequestBodyLength = 0;
+    runtimeRequestExpectedLength = 0;
+    runtimeRequestBodyReady = false;
+    runtimeRequestBodyRejected = false;
+  }
+}
+
+class BoundedRuntimeRequestHandler final : public RequestHandler {
+ public:
+  bool canHandle(HTTPMethod method, String uri) override {
+    return method == HTTP_POST && (uri == "/api/config" || uri == "/api/wiring/candidate");
+  }
+  bool canUpload(String uri) override { (void)uri; return false; }
+  bool canRaw(String uri) override { return uri == "/api/config" || uri == "/api/wiring/candidate"; }
+  bool handle(WebServer& webServer, HTTPMethod method, String uri) override {
+    (void)webServer;
+    if (!canHandle(method, uri)) return false;
+    if (uri == "/api/config") handleConfigPost();
+    else handleWiringCandidate();
+    return true;
+  }
+  void raw(WebServer& webServer, String uri, HTTPRaw& rawBody) override {
+    (void)webServer;
+    if (canRaw(uri)) handleRuntimeRequestRaw(rawBody);
+  }
+};
 
 // Arduino-ESP32 WebServer normally allocates a Content-Length-sized plainBuf
 // before invoking a POST handler. Registering the custom RequestHandler below
@@ -1761,11 +1850,10 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/config", HTTP_OPTIONS, handleOptions);
-  server.on("/api/config", HTTP_POST, handleConfigPost);
   server.on("/api/wiring/status", HTTP_OPTIONS, handleOptions);
   server.on("/api/wiring/status", HTTP_GET, handleWiringStatus);
   server.on("/api/wiring/candidate", HTTP_OPTIONS, handleOptions);
-  server.on("/api/wiring/candidate", HTTP_POST, handleWiringCandidate);
+  server.addHandler(new BoundedRuntimeRequestHandler());
   server.on("/api/wiring/activate", HTTP_OPTIONS, handleOptions);
   server.on("/api/wiring/activate", HTTP_POST, handleWiringActivate);
   server.on("/api/wiring/confirm", HTTP_OPTIONS, handleOptions);

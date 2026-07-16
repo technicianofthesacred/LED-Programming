@@ -372,7 +372,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await page.route('http://lightweaver.local/api/wiring/status', async route => {
     const flow = await activeCommissioning(page);
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      ok: true, state: 'staged', activationId: 'candidate-safe-7', outputs: [{ pin: 18, pixels: 44 }],
+      app: 'Lightweaver', ok: true, state: 'staged', activationId: 'candidate-safe-7', outputs: [{ pin: 18, pixels: 44 }],
       cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
       projectRevision: flow?.project?.revision, projectFingerprint: flow?.project?.fingerprint,
     }) });

@@ -36,6 +36,20 @@ test('project evidence reader rejects a response branded as another product', as
   }), /Lightweaver/i);
 });
 
+test('project evidence reader rejects identity without an exact Lightweaver provenance marker', async () => {
+  await assert.rejects(readCardProjectEvidence({
+    host: '192.168.4.1',
+    transport: 'direct',
+    fetchImpl: async () => ({ ok: true, json: async () => ({
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'build-123',
+      projectRevision: 7,
+      projectFingerprint: 'a'.repeat(16),
+    }) }),
+  }), /Lightweaver/i);
+});
+
 test('project evidence reader rejects malformed card-owned identity fields', async () => {
   await assert.rejects(readCardProjectEvidence({
     host: '192.168.4.1',
@@ -49,4 +63,25 @@ test('project evidence reader rejects malformed card-owned identity fields', asy
       projectFingerprint: 'ABCDEF0123456789',
     }) }),
   }), /project fingerprint/i);
+});
+
+test('project evidence rejects a partial production job identity', async () => {
+  for (const partial of [
+    { productionJobId: 'job-42' },
+    { productionJobDigest: 'b'.repeat(64) },
+  ]) {
+    await assert.rejects(readCardProjectEvidence({
+      host: '192.168.4.1',
+      transport: 'direct',
+      fetchImpl: async () => ({ ok: true, json: async () => ({
+        app: 'Lightweaver',
+        cardId: 'lw-aabbccddeeff',
+        firmwareVersion: '1.2.3',
+        buildId: 'build-123',
+        projectRevision: 7,
+        projectFingerprint: 'a'.repeat(16),
+        ...partial,
+      }) }),
+    }), /production job identity/i);
+  }
 });

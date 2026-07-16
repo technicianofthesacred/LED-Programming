@@ -409,6 +409,11 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     message = "production job digest must be 64 lowercase hex characters";
     return false;
   }
+  if (static_cast<bool>(productionJobId.length()) !=
+      static_cast<bool>(productionJobDigest.length())) {
+    message = "production job id and digest must be provided together";
+    return false;
+  }
 
   JsonArray outputJson = doc["led"]["outputs"].as<JsonArray>();
   if (outputJson.isNull()) outputJson = doc["outputs"].as<JsonArray>();
@@ -653,20 +658,26 @@ bool restorePreviousKnownGood(Preferences& prefs) {
   bool restored = previous.length()
     ? prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, previous) == previous.length()
     : (!prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) || prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY));
-  if (restored) {
-    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
-    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
-  }
-  return restored;
+  if (!restored) return false;
+  bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
+                  !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
+  if (!disarmed) return false;
+  prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+  return true;
 }
 
 bool finalizeCommittedPromotion(Preferences& prefs) {
   if (readCandidateState(prefs) != WIRING_CANDIDATE_NONE) return false;
-  bool previousCleared = !prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) ||
-                         prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
   bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
                   !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
-  return previousCleared && disarmed;
+  if (!disarmed) return false;
+  bool previousCleared = !prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) ||
+                         prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+  bool candidateCleared = !prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) ||
+                          prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+  bool candidateIdCleared = !prefs.isKey(NVS_CANDIDATE_ID_KEY) ||
+                            prefs.remove(NVS_CANDIDATE_ID_KEY);
+  return previousCleared && candidateCleared && candidateIdCleared;
 }
 
 String makeActivationId() {
@@ -931,6 +942,17 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "prior promotion cleanup failed";
     return false;
   }
+  // Fence replay of the prior activation before replacing its acknowledged
+  // config. A power cut may lose idempotent replay, but can never make an old
+  // activation acknowledge a newer same-wiring save.
+  bool confirmationCleared = !prefs.isKey(NVS_CONFIRMED_ID_KEY) ||
+                             prefs.remove(NVS_CONFIRMED_ID_KEY);
+  if (!confirmationCleared) {
+    prefs.end();
+    delete parsed;
+    message = "prior confirmation fence failed";
+    return false;
+  }
   bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
   if (ok) {
     // Keep the old key as a downgrade fallback, but only after the canonical
@@ -1034,13 +1056,10 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
   if (state == WIRING_CANDIDATE_NONE &&
       activationId.length() > 0 &&
       prefs.getString(NVS_CONFIRMED_ID_KEY, "") == activationId) {
-    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
-    prefs.remove(NVS_CANDIDATE_ID_KEY);
-    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
-    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
+    bool cleaned = finalizeCommittedPromotion(prefs);
     prefs.end();
-    message = "candidate already confirmed as known-good";
-    return true;
+    message = cleaned ? "candidate already confirmed as known-good" : "candidate confirmed; cleanup failed";
+    return cleaned;
   }
   if (state != WIRING_CANDIDATE_AWAITING_CONFIRMATION || !candidate.length() ||
       !candidateIdMatches(prefs, activationId)) {
@@ -1058,10 +1077,7 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
   promoted = confirmed && writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (promoted) {
     prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate);
-    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
-    prefs.remove(NVS_CANDIDATE_ID_KEY);
-    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
-    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
+    finalizeCommittedPromotion(prefs);
   } else {
     restorePreviousKnownGood(prefs);
     prefs.remove(NVS_CONFIRMED_ID_KEY);
@@ -1118,6 +1134,7 @@ WiringSafetyStatus getRuntimeWiringSafetyStatus() {
 String runtimeWiringSafetyStatusJson() {
   WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
   JsonDocument doc;
+  doc["app"] = "Lightweaver";
   doc["ok"] = true;
   doc["candidateState"] = candidateStateLabel(status.candidateState);
   doc["state"] = candidateStateLabel(status.candidateState);

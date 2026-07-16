@@ -192,6 +192,8 @@ for (const invalidIdentity of [
   { productionJobId: 'x'.repeat(97) },
   { productionJobDigest: 'b'.repeat(63) },
   { productionJobDigest: 'B'.repeat(64) },
+  { productionJobId: 'job-42' },
+  { productionJobDigest: 'b'.repeat(64) },
 ]) {
   assert.throws(() => makeCardRuntimePackage(invalidIdentity), /revision|fingerprint|production job/i);
 }

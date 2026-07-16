@@ -84,6 +84,7 @@ export function normalizeCardWiringStatus(response = {}) {
     0,
   );
   return {
+    ...(response.app ? { app: String(response.app) } : {}),
     ok: response.ok !== false,
     state: normalizeState(response.state),
     activationId: String(response.activationId || ''),
@@ -215,6 +216,9 @@ export async function getCardWiringStatus(options = {}) {
 export async function readCardWiringCandidateEvidence(activationId, options = {}) {
   const id = requireActivationId(activationId);
   const status = await getCardWiringStatus(options);
+  if (status.app !== 'Lightweaver') {
+    throw wiringError('wrong-product', 'Candidate evidence did not come from a Lightweaver card.', { response: status.raw });
+  }
   if (status.state !== 'staged' || status.activationId !== id) throw wiringError('activation-mismatch', 'Card candidate status belongs to a different wiring transaction.', { response: status.raw });
   if (!status.cardId || !status.firmwareVersion || !status.buildId || !Number.isSafeInteger(status.projectRevision) || !status.projectFingerprint) {
     throw wiringError('invalid-response', 'Card candidate status is waiting for exact candidate identity evidence.', { response: status.raw });
@@ -224,6 +228,9 @@ export async function readCardWiringCandidateEvidence(activationId, options = {}
       (status.productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(status.productionJobId)) ||
       (status.productionJobDigest && !/^[a-f0-9]{64}$/.test(status.productionJobDigest))) {
     throw wiringError('invalid-response', 'Card candidate status returned malformed project identity.', { response: status.raw });
+  }
+  if (Boolean(status.productionJobId) !== Boolean(status.productionJobDigest)) {
+    throw wiringError('invalid-response', 'Card candidate status returned a partial production job identity.', { response: status.raw });
   }
   return status;
 }

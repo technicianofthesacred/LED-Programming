@@ -62,7 +62,7 @@ npx playwright test tests/universal-install.spec.ts tests/connection-center-qual
 
 ```bash
 node firmware/lightweaver-controller/tests/project-identity-contract.mjs
-cd firmware/lightweaver-controller && pio run -e esp32s3
+cd firmware/lightweaver-controller && pio run -e esp32-s3-n16r8
 cd ../../lightweaver && node tests/card-runtime-contract.mjs
 ```
 
@@ -173,7 +173,7 @@ cd lightweaver
 npm run launch:check
 npm run firmware:check-bin
 cd ../firmware/lightweaver-controller
-pio run -e esp32s3
+pio run -e esp32-s3-n16r8
 ```
 
 - [ ] Deploy the root Studio with the existing Cloudflare workflow and verify `https://led.mandalacodes.com/#screen=production` plus immutable job/firmware assets.

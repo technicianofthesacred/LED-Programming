@@ -265,6 +265,9 @@ export function normalizeCardProjectIdentity(config = {}) {
   if (productionJobDigest && !/^[a-f0-9]{64}$/.test(productionJobDigest)) {
     throw new RangeError('Production job digest must be 64 lowercase hex characters.');
   }
+  if (Boolean(productionJobId) !== Boolean(productionJobDigest)) {
+    throw new RangeError('Production job id and digest must be provided together.');
+  }
 
   return {
     ...(revisionProvided ? { projectRevision, projectFingerprint: fingerprint } : {}),

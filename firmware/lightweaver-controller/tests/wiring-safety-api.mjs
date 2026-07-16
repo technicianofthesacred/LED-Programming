@@ -8,7 +8,6 @@ const runtime = fs.readFileSync(new URL('../src/main.cpp', import.meta.url), 'ut
 
 for (const [path, method] of [
   ['/api/wiring/status', 'HTTP_GET'],
-  ['/api/wiring/candidate', 'HTTP_POST'],
   ['/api/wiring/activate', 'HTTP_POST'],
   ['/api/wiring/confirm', 'HTTP_POST'],
   ['/api/wiring/rollback', 'HTTP_POST'],
@@ -16,6 +15,8 @@ for (const [path, method] of [
 ]) {
   assert.match(web, new RegExp(`server\\.on\\("${path.replaceAll('/', '\\/')}"\\s*,\\s*${method}`), `${method} ${path} must be registered`);
 }
+assert.match(web, /class BoundedRuntimeRequestHandler[\s\S]*\/api\/wiring\/candidate/,
+  'POST /api/wiring/candidate must use the bounded raw request handler');
 
 for (const type of ['wiring-status', 'wiring-candidate', 'wiring-activate', 'wiring-confirm', 'wiring-rollback', 'wiring-discover']) {
   assert.ok(web.includes(`m.type==='${type}'`), `card bridge must relay ${type}`);
@@ -31,7 +32,7 @@ const statusJson = storageImplementation.slice(
   storageImplementation.indexOf('String runtimeWiringSafetyStatusJson()'),
   storageImplementation.indexOf('bool runtimeConfigJsonChangesWiring('),
 );
-for (const field of ['state', 'activationId', 'cardId', 'firmwareVersion', 'buildId', 'projectRevision', 'projectFingerprint', 'productionJobId', 'productionJobDigest']) {
+for (const field of ['app', 'state', 'activationId', 'cardId', 'firmwareVersion', 'buildId', 'projectRevision', 'projectFingerprint', 'productionJobId', 'productionJobDigest']) {
   assert.match(statusJson, new RegExp(`doc\\["${field}"\\]`), `candidate status must expose exact ${field}`);
 }
 assert.match(statusJson, /NVS_CANDIDATE_CONFIG_KEY/, 'candidate identity must come from the staged package, not active runtime guesses');
