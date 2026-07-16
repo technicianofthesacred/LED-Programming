@@ -52,6 +52,50 @@ export function normalizeCardIdentity(payload = {}, host = '') {
       .map(output => `GPIO ${output.gpio} · ${output.count}`)
       .join(', '),
     limits: source.limits && typeof source.limits === 'object' ? { ...source.limits } : {},
+    ...(Number.isSafeInteger(Number(source.projectRevision)) && Number(source.projectRevision) >= 0
+      ? { projectRevision: Number(source.projectRevision) } : {}),
+    ...(cleanText(source.projectFingerprint, 64) ? { projectFingerprint: cleanText(source.projectFingerprint, 64) } : {}),
+    ...(cleanText(source.productionJobId, 96) ? { productionJobId: cleanText(source.productionJobId, 96) } : {}),
+    ...(cleanText(source.productionJobDigest, 64) ? { productionJobDigest: cleanText(source.productionJobDigest, 64).toLowerCase() } : {}),
+  };
+}
+
+export function normalizeCardProjectEvidence(payload = {}) {
+  const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  if (source.app !== undefined && cleanText(source.app, 32) !== 'Lightweaver') {
+    throw cardIdentityError('wrong-product', 'The endpoint did not return Lightweaver card identity.');
+  }
+  const identity = normalizeCardIdentity(source);
+  if (!identity.id || !identity.firmwareVersion || !identity.buildId) {
+    throw cardIdentityError('identity-missing', 'The Lightweaver card read-back is missing exact card or firmware identity.');
+  }
+  const hasRevision = source.projectRevision !== undefined && source.projectRevision !== null && source.projectRevision !== '';
+  const fingerprint = cleanText(source.projectFingerprint, 65);
+  if (hasRevision || fingerprint) {
+    if (!Number.isSafeInteger(source.projectRevision) || source.projectRevision < 0 || source.projectRevision > 0xffffffff) {
+      throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid project revision.');
+    }
+    if (!/^[a-f0-9]{16,64}$/.test(fingerprint)) {
+      throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid project fingerprint.');
+    }
+  }
+  const productionJobId = cleanText(source.productionJobId, 97);
+  if (productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(productionJobId)) {
+    throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid production job id.');
+  }
+  const productionJobDigest = cleanText(source.productionJobDigest, 65);
+  if (productionJobDigest && !/^[a-f0-9]{64}$/.test(productionJobDigest)) {
+    throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid production job digest.');
+  }
+  return {
+    ...(source.app !== undefined ? { app: 'Lightweaver' } : {}),
+    cardId: identity.id,
+    firmwareVersion: identity.firmwareVersion,
+    buildId: identity.buildId,
+    ...(identity.projectRevision !== undefined ? { projectRevision: identity.projectRevision } : {}),
+    ...(identity.projectFingerprint ? { projectFingerprint: identity.projectFingerprint } : {}),
+    ...(identity.productionJobId ? { productionJobId: identity.productionJobId } : {}),
+    ...(identity.productionJobDigest ? { productionJobDigest: identity.productionJobDigest } : {}),
   };
 }
 

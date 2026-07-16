@@ -136,6 +136,9 @@ for (const badRange of [
 
 const fallback = buildCardRuntimeConfig({ projectName: 'Bench Piece' });
 assert.equal(fallback.mode, 'factory-flash');
+for (const field of ['projectRevision', 'projectFingerprint', 'productionJobId', 'productionJobDigest']) {
+  assert.equal(field in fallback, false, `ordinary Studio packages should omit absent ${field}`);
+}
 assert.equal(fallback.piece.id, 'bench-piece');
 assert.equal(fallback.piece.name, 'Bench Piece');
 assert.equal(fallback.controls.encoder.brightnessStep, 18);
@@ -158,6 +161,10 @@ assert.deepEqual(cleanStudioController.controls.encoder.patternCycleIds, []);
 const pkg = makeCardRuntimePackage({
   projectId: 'lwproj-bench-123',
   projectName: 'Bench Piece',
+  projectRevision: 7,
+  projectFingerprint: 'a'.repeat(16),
+  productionJobId: 'batch-2026.07:artwork_42',
+  productionJobDigest: 'b'.repeat(64),
   mode: 'website-flash',
   led: { pixels: 44, colorOrder: 'RGB' },
   controls: normalized.controls,
@@ -169,8 +176,25 @@ assert.equal(pkg.version, 1);
 assert.equal(pkg.config.mode, 'website-flash');
 assert.equal(pkg.config.piece.id, 'lwproj-bench-123');
 assert.equal(pkg.config.piece.name, 'Bench Piece');
+assert.equal(pkg.config.projectRevision, 7);
+assert.equal(pkg.config.projectFingerprint, 'a'.repeat(16));
+assert.equal(pkg.config.productionJobId, 'batch-2026.07:artwork_42');
+assert.equal(pkg.config.productionJobDigest, 'b'.repeat(64));
 assert.equal(pkg.config.led.pixels, 44);
 assert.deepEqual(pkg.config.controls.encoder.patternCycleIds, ['scanner', 'aurora', 'ember']);
+
+for (const invalidIdentity of [
+  { projectRevision: -1, projectFingerprint: 'a'.repeat(16) },
+  { projectRevision: 1.5, projectFingerprint: 'a'.repeat(16) },
+  { projectRevision: 1, projectFingerprint: 'A'.repeat(16) },
+  { projectRevision: 1, projectFingerprint: 'a'.repeat(65) },
+  { productionJobId: 'job id with spaces' },
+  { productionJobId: 'x'.repeat(97) },
+  { productionJobDigest: 'b'.repeat(63) },
+  { productionJobDigest: 'B'.repeat(64) },
+]) {
+  assert.throws(() => makeCardRuntimePackage(invalidIdentity), /revision|fingerprint|production job/i);
+}
 
 const zoned = makeCardRuntimePackage({
   projectName: 'Zoned Piece',
@@ -211,6 +235,8 @@ assert.deepEqual(tenZonePackage.config.zones.map(zone => zone.id).slice(-2), ['z
 const projectPkg = buildCardRuntimePackageFromProject({
   projectId: 'lwproj-customer-v3',
   projectName: 'Customer V3',
+  projectRevision: 11,
+  projectFingerprint: 'c'.repeat(16),
   strips: [
     { id: 'inner', name: 'Inner', pixelCount: 8 },
     { id: 'outer', name: 'Outer', pixelCount: 12 },
@@ -234,6 +260,8 @@ const projectPkg = buildCardRuntimePackageFromProject({
 });
 assert.equal(projectPkg.config.piece.id, 'lwproj-customer-v3');
 assert.equal(projectPkg.config.piece.name, 'Customer V3');
+assert.equal(projectPkg.config.projectRevision, 11);
+assert.equal(projectPkg.config.projectFingerprint, 'c'.repeat(16));
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);

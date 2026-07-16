@@ -1386,6 +1386,7 @@ String runtimeCardId() {
 
 String runtimeFirmwareInfo() {
   JsonDocument doc;
+  doc["app"] = "Lightweaver";
   doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
@@ -1395,6 +1396,10 @@ String runtimeFirmwareInfo() {
   doc["pixels"] = totalPixels;
   doc["piece"]["id"] = runtimeConfig.pieceId;
   doc["piece"]["name"] = runtimeConfig.pieceName;
+  doc["projectRevision"] = runtimeConfig.projectRevision;
+  doc["projectFingerprint"] = runtimeConfig.projectFingerprint;
+  doc["productionJobId"] = runtimeConfig.productionJobId;
+  doc["productionJobDigest"] = runtimeConfig.productionJobDigest;
   doc["lookCount"] = lookCount;
   doc["runtimeSource"] = runtimeConfig.source == SOURCE_SD ? "sd" : runtimeConfig.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());

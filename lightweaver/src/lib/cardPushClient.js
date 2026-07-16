@@ -16,7 +16,7 @@ import {
   writeStoredCardHost,
 } from './cardConnection.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
-import { guardDirectCardMutation } from './cardIdentity.js';
+import { guardDirectCardMutation, normalizeCardProjectEvidence } from './cardIdentity.js';
 import {
   CardConfigCapacityError,
   prepareCardStoragePayload,
@@ -200,11 +200,12 @@ async function readFirmwareInfoToHost(host, timeoutMs = 1200, fetchImpl = fetch)
 
 export async function readCardProjectEvidence({ host, timeoutMs = 3000, transport, fetchImpl = fetch } = {}) {
   if (transport === 'bridge' || (transport !== 'direct' && isMixedContentBlocked())) {
-    return sendCardBridgeRequest('firmware-info', { cache: 'no-store', nonce: Date.now() }, { host, timeoutMs, retryOnTimeout: true });
+    const response = await sendCardBridgeRequest('firmware-info', { cache: 'no-store', nonce: Date.now() }, { host, timeoutMs, retryOnTimeout: true });
+    return normalizeCardProjectEvidence(response);
   }
   const result = await readFirmwareInfoToHost(host, timeoutMs, fetchImpl);
   if (!result) throw new CardPushError('readback', 'The card did not return independent firmware and project evidence.');
-  return result;
+  return normalizeCardProjectEvidence(result);
 }
 
 async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {

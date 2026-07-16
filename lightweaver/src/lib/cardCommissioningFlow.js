@@ -102,8 +102,9 @@ export function beginCardCommissioning({
   projectRecord,
   projectRevision,
   installTarget = null,
+  productionJobId = '',
   productionJobDigest = '',
-  flowType = productionJobDigest ? 'production-job' : 'studio-project',
+  flowType = productionJobId || productionJobDigest ? 'production-job' : 'studio-project',
   flowId = makeFlowId(),
   now = Date.now(),
 } = {}) {
@@ -111,7 +112,9 @@ export function beginCardCommissioning({
   if (!OPERATIONS.has(operation)) throw new Error('A supported card operation is required');
   if (!validProjectRecord(projectRecord)) throw new Error('Save the Studio project before changing card firmware');
   const normalizedJobDigest = text(productionJobDigest, 64).toLowerCase();
-  if (normalizedJobDigest && flowType !== 'production-job') throw new Error('A production job digest requires the production-job flow type');
+  const normalizedJobId = text(productionJobId, 96);
+  if ((normalizedJobId || normalizedJobDigest) && flowType !== 'production-job') throw new Error('Production job identity requires the production-job flow type');
+  if (flowType === 'production-job' && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(normalizedJobId)) throw new Error('A production-job flow requires a valid production job id');
   if (flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(normalizedJobDigest)) throw new Error('A production-job flow requires a valid production job digest');
   const snapshot = cardRestoreSnapshot(projectRecord.project);
   const preserve = strategy === 'preserve-in-place' && compatibilityVerified === true && routineUpdate === true && operation === 'install-current-release';
@@ -141,6 +144,7 @@ export function beginCardCommissioning({
       recordUpdatedAt: Number(projectRecord.updatedAt) || Number(now),
       revision: Math.max(0, Number(projectRevision) || 0),
       fingerprint: fingerprintCommissioningProject(snapshot),
+      productionJobId: normalizedJobId,
       productionJobDigest: normalizedJobDigest,
       snapshot,
       savedInBrowser: true,
@@ -233,6 +237,7 @@ export function adaptCardRestorationReadback({ method, endpoint, response } = {}
     buildId: text(response.buildId || response.firmwareBuild || response.build, 96),
     projectRevision: Number(response.projectRevision),
     projectFingerprint: text(response.projectFingerprint, 64),
+    productionJobId: text(response.productionJobId, 96),
     productionJobDigest: text(response.productionJobDigest, 64).toLowerCase(),
   });
   CARD_RESTORATION_READBACKS.add(evidence);
@@ -257,6 +262,7 @@ export function bindCardWiringActivationEvidence(status = {}, readback = {}) {
     buildId: readback.buildId,
     projectRevision: readback.projectRevision,
     projectFingerprint: readback.projectFingerprint,
+    productionJobId: readback.productionJobId,
     productionJobDigest: readback.productionJobDigest,
   });
   CARD_WIRING_ACTIVATION_EVIDENCE.add(evidence);
@@ -274,9 +280,11 @@ export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date
   if (text(acknowledgement.buildId, 96) !== flow.expectedCard.buildId) throw new Error('Project restoration read-back has the wrong firmware build');
   if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The card did not acknowledge the saved Studio project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The card did not acknowledge the saved Studio project revision');
-  if (flow.flowType === 'production-job' && (!/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest || '')
+  if (flow.flowType === 'production-job' && (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(flow.project.productionJobId || '')
+    || text(acknowledgement.productionJobId, 96) !== flow.project.productionJobId
+    || !/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest || '')
     || text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest)) {
-    throw new Error('The card did not acknowledge the production job digest');
+    throw new Error('The card did not acknowledge the exact production job identity');
   }
   return {
     ...clone(flow),
@@ -300,8 +308,9 @@ export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { n
   if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The staged project read-back has the wrong project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The staged project is not the saved Studio revision');
   if (flow.flowType === 'production-job'
-    && text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest) {
-    throw new Error('The staged project read-back has the wrong production job digest');
+    && (text(acknowledgement.productionJobId, 96) !== flow.project.productionJobId
+      || text(acknowledgement.productionJobDigest, 64).toLowerCase() !== flow.project.productionJobDigest)) {
+    throw new Error('The staged project read-back has the wrong production job identity');
   }
   const activationId = text(acknowledgement.activationId, 128);
   if (!activationId) throw new Error('The card did not return a wiring activation identifier');
@@ -319,8 +328,9 @@ function requireFlow(flow) {
   }
   if (flow.flowType !== undefined && !['studio-project', 'production-job'].includes(flow.flowType)) throw new Error('Invalid card commissioning type');
   if (!Number.isSafeInteger(flow.registryGeneration ?? 0) || (flow.registryGeneration ?? 0) < 0) throw new Error('Invalid card commissioning generation');
-  if (flow.flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(flow.project?.productionJobDigest || '')) throw new Error('Invalid card commissioning production job');
-  if (flow.flowType !== 'production-job' && (flow.project?.productionJobDigest || '') !== '') {
+  if (flow.flowType === 'production-job' && (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(flow.project?.productionJobId || '')
+    || !/^[a-f0-9]{64}$/.test(flow.project?.productionJobDigest || ''))) throw new Error('Invalid card commissioning production job');
+  if (flow.flowType !== 'production-job' && ((flow.project?.productionJobId || '') !== '' || (flow.project?.productionJobDigest || '') !== '')) {
     throw new Error('Invalid card commissioning production type invariant');
   }
   if (!/^[A-Za-z0-9_-]{16,96}$/.test(flow.flowId || '') || !SOURCES.has(flow.source) || !OPERATIONS.has(flow.operation)
@@ -336,6 +346,8 @@ function requireFlow(flow) {
   }
   if (flow.project.productionJobDigest !== undefined && flow.project.productionJobDigest !== ''
     && !/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest)) throw new Error('Invalid card commissioning production job');
+  if (flow.project.productionJobId !== undefined && flow.project.productionJobId !== ''
+    && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(flow.project.productionJobId)) throw new Error('Invalid card commissioning production job');
   if (!flow.project?.snapshot || fingerprintCommissioningProject(flow.project.snapshot) !== flow.project.fingerprint) {
     throw new Error('The saved commissioning project revision is invalid');
   }

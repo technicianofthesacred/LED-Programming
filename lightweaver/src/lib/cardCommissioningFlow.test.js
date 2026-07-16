@@ -60,6 +60,7 @@ const installed = {
   firmwareVersion: '1.2.3',
   buildId: 'a'.repeat(40),
 };
+const productionJobId = 'lotus-gate-batch-42';
 
 function acceptedBridgeResult(flow, overrides = {}) {
   return {
@@ -120,8 +121,9 @@ test('does not call browser persistence card restoration', () => {
 });
 
 test('a production digest always requires an explicit matching production flow type', () => {
-  assert.throws(() => beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-digest-123456789', now: 1, productionJobDigest: 'b'.repeat(64), flowType: 'studio-project' }), /production.*type|digest/i);
-  assert.throws(() => beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-digest-223456789', now: 1, flowType: 'production-job' }), /production.*digest/i);
+  assert.throws(() => beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-digest-123456789', now: 1, productionJobId, productionJobDigest: 'b'.repeat(64), flowType: 'studio-project' }), /production.*type|digest/i);
+  assert.throws(() => beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-digest-223456789', now: 1, productionJobId, flowType: 'production-job' }), /production.*digest/i);
+  assert.throws(() => beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-id-223456789', now: 1, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' }), /production.*id/i);
 });
 
 test('direct Web Serial and Bridge results converge on setup with the same exact expectations', () => {
@@ -223,6 +225,7 @@ test('a POST success or echoed expected values cannot mark a project restored', 
     source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
     productionJobDigest: 'b'.repeat(64),
+    productionJobId,
   }), installed, { now: 20 });
   const acknowledgement = acknowledgeCommissionedCard(ready, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
@@ -237,6 +240,7 @@ test('a POST success or echoed expected values cannot mark a project restored', 
     projectRevision: acknowledgement.flow.project.revision,
     projectFingerprint: acknowledgement.flow.project.fingerprint,
     productionJobDigest: acknowledgement.flow.project.productionJobDigest,
+    productionJobId: acknowledgement.flow.project.productionJobId,
   }), /independent|read-back/i);
 });
 
@@ -245,6 +249,7 @@ test('only exact independent card read-back unlocks canonical project restoratio
     source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-1234567890abcdef', now: 10,
     productionJobDigest: 'b'.repeat(64),
+    productionJobId,
   }), installed, { now: 20 });
   const acknowledged = acknowledgeCommissionedCard(ready, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
@@ -260,6 +265,7 @@ test('only exact independent card read-back unlocks canonical project restoratio
       projectRevision: acknowledged.project.revision,
       projectFingerprint: acknowledged.project.fingerprint,
       productionJobDigest: acknowledged.project.productionJobDigest,
+      productionJobId: acknowledged.project.productionJobId,
     },
   });
   const restored = markCardProjectRestored(acknowledged, evidence, { now: 40 });
@@ -268,26 +274,26 @@ test('only exact independent card read-back unlocks canonical project restoratio
   assert.equal(restored.project.restoredFingerprint, restored.project.fingerprint);
 });
 
-test('canonical and staged production restoration reject the wrong job digest', async () => {
-  const initial = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-prod-digest-12345', now: 10, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
+test('canonical and staged production restoration reject the wrong exact job identity', async () => {
+  const initial = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-prod-digest-12345', now: 10, productionJobId, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
   const ready = completeCardInstall(initial, installed, { now: 20 });
   const acknowledged = acknowledgeCommissionedCard(ready, { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 30 }).flow;
-  const wrongFirmwareEvidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobDigest: 'c'.repeat(64) } });
-  assert.throws(() => markCardProjectRestored(acknowledged, wrongFirmwareEvidence), /job digest/i);
+  const wrongFirmwareEvidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) } });
+  assert.throws(() => markCardProjectRestored(acknowledged, wrongFirmwareEvidence), /job identity/i);
   const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [] });
-  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobDigest: 'c'.repeat(64) }) });
+  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
   const stagedEvidence = bindCardWiringActivationEvidence(status, candidate);
-  assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, stagedEvidence), /job digest/i);
+  assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, stagedEvidence), /job identity/i);
 });
 
 test('a production flow cannot be relabeled in memory to bypass canonical or staged digest checks', async () => {
-  const initial = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-prod-tamper-12345', now: 10, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
+  const initial = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-prod-tamper-12345', now: 10, productionJobId, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
   const acknowledged = acknowledgeCommissionedCard(completeCardInstall(initial, installed, { now: 20 }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 30 }).flow;
   const relabeled = { ...acknowledged, flowType: 'studio-project' };
-  const wrongReadback = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobDigest: 'c'.repeat(64) } });
+  const wrongReadback = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) } });
   assert.throws(() => markCardProjectRestored(relabeled, wrongReadback), /production|invalid/i);
   const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [] });
-  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobDigest: 'c'.repeat(64) }) });
+  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
   assert.throws(() => stageCardProjectForPhysicalCheck(relabeled, bindCardWiringActivationEvidence(status, candidate)), /production|invalid/i);
 });
 
@@ -442,7 +448,7 @@ test('corrupt registry reports a stable recovery state', () => {
 test('persisted production flow relabeling is reported as corruption', async () => {
   const storage = memoryStorage();
   const sessionStorage = memoryStorage();
-  const flow = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-persist-tamper-123', now: 10, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
+  const flow = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-persist-tamper-123', now: 10, productionJobId, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
   await writeCardCommissioning(flow, { storage, sessionStorage, locks: null });
   const registry = JSON.parse(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY));
   registry.flows[flow.flowId].flow.flowType = 'studio-project';

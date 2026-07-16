@@ -24,6 +24,10 @@ export function totalPhysicalAddresses(patchBoard, strips = []) {
 export function buildCardRuntimePackageFromProject({
   projectId = '',
   projectName = 'Lightweaver Piece',
+  projectRevision,
+  projectFingerprint,
+  productionJobId,
+  productionJobDigest,
   strips = [],
   patchBoard = null,
   wiring = null,
@@ -95,6 +99,10 @@ export function buildCardRuntimePackageFromProject({
   return makeCardRuntimePackage({
     projectId,
     projectName,
+    projectRevision,
+    projectFingerprint,
+    productionJobId,
+    productionJobDigest,
     mode: 'website-flash',
     led: {
       pixels: resolvedPixels,

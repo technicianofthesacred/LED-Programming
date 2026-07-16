@@ -2,9 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readCardProjectEvidence } from './cardPushClient.js';
 
-test('project evidence reader performs an uncached independent firmware-info GET', async () => {
+test('project evidence reader performs an uncached independent branded firmware-info GET', async () => {
   let call;
-  const body = { cardId: 'lw-aabbccddeeff', projectRevision: 7 };
+  const body = {
+    app: 'Lightweaver',
+    cardId: 'lw-aabbccddeeff',
+    firmwareVersion: '1.2.3',
+    buildId: 'build-123',
+    projectRevision: 7,
+    projectFingerprint: 'a'.repeat(16),
+    productionJobId: 'job-42',
+    productionJobDigest: 'b'.repeat(64),
+  };
   const result = await readCardProjectEvidence({
     host: '192.168.4.1',
     transport: 'direct',
@@ -13,8 +22,31 @@ test('project evidence reader performs an uncached independent firmware-info GET
       return { ok: true, json: async () => body };
     },
   });
-  assert.equal(result, body);
+  assert.deepEqual(result, body);
   assert.match(call.url, /\/api\/firmware-info$/);
   assert.equal(call.init.method, 'GET');
   assert.equal(call.init.cache, 'no-store');
+});
+
+test('project evidence reader rejects a response branded as another product', async () => {
+  await assert.rejects(readCardProjectEvidence({
+    host: '192.168.4.1',
+    transport: 'direct',
+    fetchImpl: async () => ({ ok: true, json: async () => ({ app: 'Other', cardId: 'lw-aabbccddeeff' }) }),
+  }), /Lightweaver/i);
+});
+
+test('project evidence reader rejects malformed card-owned identity fields', async () => {
+  await assert.rejects(readCardProjectEvidence({
+    host: '192.168.4.1',
+    transport: 'direct',
+    fetchImpl: async () => ({ ok: true, json: async () => ({
+      app: 'Lightweaver',
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'build-123',
+      projectRevision: 7,
+      projectFingerprint: 'ABCDEF0123456789',
+    }) }),
+  }), /project fingerprint/i);
 });

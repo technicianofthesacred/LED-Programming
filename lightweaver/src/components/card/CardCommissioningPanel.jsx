@@ -31,10 +31,14 @@ const STAGE_LABELS = {
   'check-lights': 'Check lights',
 };
 
-function runtimePackageFromSnapshot(snapshot = {}) {
+function runtimePackageFromSnapshot(snapshot = {}, identity = {}) {
   return buildCardRuntimePackageFromProject({
     projectId: snapshot.id,
     projectName: snapshot.name,
+    projectRevision: identity.revision,
+    projectFingerprint: identity.fingerprint,
+    productionJobId: identity.productionJobId,
+    productionJobDigest: identity.productionJobDigest,
     strips: snapshot.layout?.strips || [],
     patchBoard: snapshot.layout?.patchBoard || null,
     wiring: snapshot.layout?.wiring || null,
@@ -178,7 +182,7 @@ export function CardCommissioningPanel({
       const claim = await claimCardRestoration(flow);
       if (!claim.ok) throw new Error(claim.reason === 'restore-in-progress' ? 'This exact project restore is already running in another tab. Wait for it to finish or retry after the recovery window.' : claim.reason === 'recovery-required' ? 'A previous restore requires inspection and will not be sent again automatically.' : 'The saved setup is unavailable. Nothing was sent.');
       lease = claim.lease;
-      const runtimePackage = runtimePackageFromSnapshot(flow.project.snapshot);
+      const runtimePackage = runtimePackageFromSnapshot(flow.project.snapshot, flow.project);
       const selectedPush = typeof window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ === 'function'
         ? window.__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__
         : pushProject;
@@ -194,6 +198,15 @@ export function CardCommissioningPanel({
         allowLayoutChange: true,
       });
       await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
+      if (response?.state === 'staged') {
+        const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
+        const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
+        const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
+        await writeCardCommissioning(next);
+        setFlow(next);
+        setRestoreState('complete');
+        return;
+      }
       if (typeof selectedReadback !== 'function') {
         throw new Error('The project was sent, but this firmware does not yet provide independent restoration read-back. Studio has not marked it restored.');
       }
@@ -205,15 +218,6 @@ export function CardCommissioningPanel({
       const evidence = adaptCardRestorationReadback({
         method: 'GET', endpoint: '/api/firmware-info', response: responseReadback,
       });
-      if (response?.state === 'staged') {
-        const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
-        const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
-        const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
-        await writeCardCommissioning(next);
-        setFlow(next);
-        setRestoreState('complete');
-        return;
-      }
       const next = markCardProjectRestored(flow, evidence);
       await writeCardCommissioning(next);
       markProjectInstalled(flow.project.revision);

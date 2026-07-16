@@ -95,6 +95,7 @@ export function normalizeCardWiringStatus(response = {}) {
     ...(response.buildId || response.firmwareBuild || response.build ? { buildId: String(response.buildId || response.firmwareBuild || response.build) } : {}),
     ...(response.projectRevision !== undefined ? { projectRevision: Number(response.projectRevision) } : {}),
     ...(response.projectFingerprint ? { projectFingerprint: String(response.projectFingerprint) } : {}),
+    ...(response.productionJobId ? { productionJobId: String(response.productionJobId) } : {}),
     ...(response.productionJobDigest ? { productionJobDigest: String(response.productionJobDigest).toLowerCase() } : {}),
     raw: response,
   };
@@ -217,6 +218,12 @@ export async function readCardWiringCandidateEvidence(activationId, options = {}
   if (status.state !== 'staged' || status.activationId !== id) throw wiringError('activation-mismatch', 'Card candidate status belongs to a different wiring transaction.', { response: status.raw });
   if (!status.cardId || !status.firmwareVersion || !status.buildId || !Number.isSafeInteger(status.projectRevision) || !status.projectFingerprint) {
     throw wiringError('invalid-response', 'Card candidate status is waiting for exact candidate identity evidence.', { response: status.raw });
+  }
+  if (status.projectRevision < 0 || status.projectRevision > 0xffffffff ||
+      !/^[a-f0-9]{16,64}$/.test(status.projectFingerprint) ||
+      (status.productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(status.productionJobId)) ||
+      (status.productionJobDigest && !/^[a-f0-9]{64}$/.test(status.productionJobDigest))) {
+    throw wiringError('invalid-response', 'Card candidate status returned malformed project identity.', { response: status.raw });
   }
   return status;
 }

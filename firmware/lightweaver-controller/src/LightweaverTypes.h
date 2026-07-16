@@ -14,6 +14,9 @@ constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
 constexpr uint8_t LW_MAX_ZONES = 10;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
 constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
+constexpr size_t LW_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
+constexpr size_t LW_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
+constexpr size_t LW_PRODUCTION_JOB_DIGEST_LENGTH = 64;
 
 // Upper clamp for the FastLED power limiter ceiling (5V rail, milliamps). A
 // single ESP32-S3 LED card runs off a modest PSU; 20A / 100W is a generous
@@ -171,6 +174,10 @@ struct RuntimeConfig {
   RuntimeSource source = SOURCE_DEFAULTS;
   String pieceId;
   String pieceName = "Lightweaver";
+  uint32_t projectRevision = 0;
+  String projectFingerprint;
+  String productionJobId;
+  String productionJobDigest;
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;

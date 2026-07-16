@@ -3,6 +3,9 @@ import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = 10;
+export const CARD_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
+export const CARD_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
+export const CARD_PRODUCTION_JOB_DIGEST_LENGTH = 64;
 
 export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
   maxPixels: 1024,
@@ -113,6 +116,7 @@ export function normalizeCardRuntimeConfig(config = {}) {
   const looks = normalizeLooks(config.looks, patterns);
   const lookIds = looks.map(look => look.id);
   const patternIds = requestedCycleIds.length ? requestedCycleIds : lookIds;
+  const projectIdentity = normalizeCardProjectIdentity(config);
   return {
     version: 1,
     mode,
@@ -120,6 +124,7 @@ export function normalizeCardRuntimeConfig(config = {}) {
       id: sanitizeId(config.piece?.id || config.projectId || config.projectName || 'lightweaver-piece'),
       name: String(config.piece?.name || config.projectName || 'Lightweaver Piece'),
     },
+    ...projectIdentity,
     led,
     controls: normalizeControls({
       ...controls,
@@ -203,6 +208,10 @@ function clampSpeed(value) {
 export function buildCardRuntimeConfig({
   projectId = '',
   projectName = 'Lightweaver Piece',
+  projectRevision,
+  projectFingerprint,
+  productionJobId,
+  productionJobDigest,
   mode = 'factory-flash',
   led = {},
   controls = {},
@@ -216,6 +225,10 @@ export function buildCardRuntimeConfig({
     projectId,
     mode,
     projectName,
+    projectRevision,
+    projectFingerprint,
+    productionJobId,
+    productionJobDigest,
     led,
     controls,
     patterns,
@@ -224,6 +237,40 @@ export function buildCardRuntimeConfig({
     zones,
     syncZones,
   });
+}
+
+export function normalizeCardProjectIdentity(config = {}) {
+  const revisionProvided = config.projectRevision !== undefined && config.projectRevision !== null && config.projectRevision !== '';
+  const fingerprint = String(config.projectFingerprint || '').trim();
+  let projectRevision = 0;
+  if (revisionProvided) {
+    const revision = Number(config.projectRevision);
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > 0xffffffff) {
+      throw new RangeError('Project revision must be a non-negative integer no greater than 4294967295.');
+    }
+    projectRevision = revision;
+  }
+  if ((revisionProvided || fingerprint) && !/^[a-f0-9]{16,64}$/.test(fingerprint)) {
+    throw new RangeError('Project fingerprint must be 16 to 64 lowercase hex characters.');
+  }
+  if (fingerprint && !revisionProvided) {
+    throw new RangeError('Project fingerprint requires a project revision.');
+  }
+
+  const productionJobId = String(config.productionJobId || '').trim();
+  if (productionJobId && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(productionJobId)) {
+    throw new RangeError('Production job id must use 1 to 96 safe characters.');
+  }
+  const productionJobDigest = String(config.productionJobDigest || '').trim();
+  if (productionJobDigest && !/^[a-f0-9]{64}$/.test(productionJobDigest)) {
+    throw new RangeError('Production job digest must be 64 lowercase hex characters.');
+  }
+
+  return {
+    ...(revisionProvided ? { projectRevision, projectFingerprint: fingerprint } : {}),
+    ...(productionJobId ? { productionJobId } : {}),
+    ...(productionJobDigest ? { productionJobDigest } : {}),
+  };
 }
 
 export function makeCardRuntimePackage(options = {}) {

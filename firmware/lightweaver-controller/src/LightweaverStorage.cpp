@@ -24,6 +24,8 @@ constexpr const char* NVS_CANDIDATE_CONFIG_KEY = "candidateConfig";
 constexpr const char* NVS_CANDIDATE_STATE_KEY = "candidateState";
 constexpr const char* NVS_CANDIDATE_ID_KEY = "candidateId";
 constexpr const char* NVS_CONFIRMED_ID_KEY = "confirmedId";
+constexpr const char* NVS_PREVIOUS_KNOWN_GOOD_KEY = "previousKnown";
+constexpr const char* NVS_PROMOTION_ARMED_KEY = "promotionArmed";
 constexpr const char* NVS_DISCOVERY_ACTIVE_KEY = "discoveryActive";
 constexpr const char* NVS_DISCOVERY_BATCH_KEY = "discoveryBatch";
 constexpr const char* NVS_RECOVERY_PENDING_KEY = "recoveryPending";
@@ -173,6 +175,10 @@ void resetConfig(RuntimeConfig& config) {
   config.source = SOURCE_DEFAULTS;
   config.pieceId = "";
   config.pieceName = "Lightweaver";
+  config.projectRevision = 0;
+  config.projectFingerprint = "";
+  config.productionJobId = "";
+  config.productionJobDigest = "";
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
   config.brightnessLimit = 0.65f;
@@ -196,6 +202,10 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.mode = String(doc["mode"] | (source == SOURCE_SD ? "sd-sequence" : "website-flash"));
   config.pieceId = String(doc["piece"]["id"] | "");
   config.pieceName = String(doc["piece"]["name"] | "Lightweaver");
+  config.projectRevision = doc["projectRevision"] | 0U;
+  config.projectFingerprint = String(doc["projectFingerprint"] | "");
+  config.productionJobId = String(doc["productionJobId"] | "");
+  config.productionJobDigest = String(doc["productionJobDigest"] | "");
   config.startupLookId = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
 
   JsonObject led = doc["led"].as<JsonObject>();
@@ -343,11 +353,60 @@ bool supportedOutputPin(int pin) {
          pin == 38 || pin == 39 || pin == 40 || pin == 48;
 }
 
+bool isLowerHex(const String& value) {
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  return true;
+}
+
+bool isSafeProductionJobId(const String& value) {
+  if (!value.length() || value.length() > LW_PRODUCTION_JOB_ID_MAX_LENGTH) return false;
+  for (size_t i = 0; i < value.length(); i++) {
+    char c = value[i];
+    bool alphanumeric = (c >= '0' && c <= '9') ||
+                        (c >= 'A' && c <= 'Z') ||
+                        (c >= 'a' && c <= 'z');
+    if (!alphanumeric && c != '.' && c != '_' && c != ':' && c != '-') return false;
+    if (i == 0 && !alphanumeric) return false;
+  }
+  return true;
+}
+
 bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, String& message) {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, json);
   if (error) {
     message = String("json parse failed: ") + error.c_str();
+    return false;
+  }
+
+  JsonVariant revision = doc["projectRevision"];
+  String fingerprint = String(doc["projectFingerprint"] | "");
+  if (!revision.isNull() && !revision.is<uint32_t>()) {
+    message = "project revision must be a non-negative integer";
+    return false;
+  }
+  if ((!revision.isNull() || fingerprint.length()) &&
+      (fingerprint.length() < 16 || fingerprint.length() > LW_PROJECT_FINGERPRINT_MAX_LENGTH ||
+       !isLowerHex(fingerprint))) {
+    message = "project fingerprint must be 16 to 64 lowercase hex characters";
+    return false;
+  }
+  if (fingerprint.length() && revision.isNull()) {
+    message = "project fingerprint requires a project revision";
+    return false;
+  }
+  String productionJobId = String(doc["productionJobId"] | "");
+  if (productionJobId.length() && !isSafeProductionJobId(productionJobId)) {
+    message = "production job id must use 1 to 96 safe characters";
+    return false;
+  }
+  String productionJobDigest = String(doc["productionJobDigest"] | "");
+  if (productionJobDigest.length() &&
+      (productionJobDigest.length() != LW_PRODUCTION_JOB_DIGEST_LENGTH || !isLowerHex(productionJobDigest))) {
+    message = "production job digest must be 64 lowercase hex characters";
     return false;
   }
 
@@ -588,6 +647,28 @@ bool candidateIdMatches(Preferences& prefs, const String& activationId) {
          prefs.getString(NVS_CANDIDATE_ID_KEY, "") == activationId;
 }
 
+bool restorePreviousKnownGood(Preferences& prefs) {
+  if (!prefs.getBool(NVS_PROMOTION_ARMED_KEY, false)) return true;
+  String previous = prefs.getString(NVS_PREVIOUS_KNOWN_GOOD_KEY, "");
+  bool restored = previous.length()
+    ? prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, previous) == previous.length()
+    : (!prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) || prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY));
+  if (restored) {
+    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
+  }
+  return restored;
+}
+
+bool finalizeCommittedPromotion(Preferences& prefs) {
+  if (readCandidateState(prefs) != WIRING_CANDIDATE_NONE) return false;
+  bool previousCleared = !prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) ||
+                         prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+  bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
+                  !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
+  return previousCleared && disarmed;
+}
+
 String makeActivationId() {
   char id[18];
   snprintf(id, sizeof(id), "%08lx%08lx",
@@ -749,12 +830,28 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     }
     String rollbackMessage;
     WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
-    rollbackCandidateRuntimeConfig(status.activationId, rollbackMessage);
+    if (!rollbackCandidateRuntimeConfig(status.activationId, rollbackMessage)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      result.message = "candidate rollback failed; safe defaults loaded: " + rollbackMessage;
+      return result;
+    }
   } else if (state == WIRING_CANDIDATE_AWAITING_CONFIRMATION) {
     // A reset during probation is itself a failed trial. Persist rollback
     // before loading so this candidate can never arm again in a reboot loop.
     WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
-    rollbackCandidateRuntimeConfig(status.activationId, message);
+    if (!rollbackCandidateRuntimeConfig(status.activationId, message)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      result.message = "candidate rollback failed; safe defaults loaded: " + message;
+      return result;
+    }
   }
 
   bool knownGoodPresent = nvsConfigKeyHasValue(NVS_KNOWN_GOOD_CONFIG_KEY);
@@ -828,6 +925,12 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "wiring transaction is active; confirm or roll back before saving";
     return false;
   }
+  if (!finalizeCommittedPromotion(prefs)) {
+    prefs.end();
+    delete parsed;
+    message = "prior promotion cleanup failed";
+    return false;
+  }
   bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
   if (ok) {
     // Keep the old key as a downgrade fallback, but only after the canonical
@@ -877,6 +980,11 @@ bool stageRuntimeConfigJson(const String& json, String& activationId, String& me
     message = "nvs write open failed";
     return false;
   }
+  if (!finalizeCommittedPromotion(prefs)) {
+    prefs.end();
+    message = "prior promotion cleanup failed";
+    return false;
+  }
   activationId = makeActivationId();
   bool stored = prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json) == json.length();
   bool idStored = stored && prefs.putString(NVS_CANDIDATE_ID_KEY, activationId) == activationId.length();
@@ -923,9 +1031,13 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
   }
   WiringCandidateState state = readCandidateState(prefs);
   String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
-  if (state == WIRING_CANDIDATE_NONE && !candidate.length() &&
+  if (state == WIRING_CANDIDATE_NONE &&
       activationId.length() > 0 &&
       prefs.getString(NVS_CONFIRMED_ID_KEY, "") == activationId) {
+    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
+    prefs.remove(NVS_CANDIDATE_ID_KEY);
+    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
     prefs.end();
     message = "candidate already confirmed as known-good";
     return true;
@@ -936,15 +1048,23 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
     message = "no candidate awaiting confirmation";
     return false;
   }
-  bool promoted = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length();
+  String previous = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  bool journaled = previous.length()
+    ? prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY, previous) == previous.length()
+    : (!prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) || prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY));
+  bool armed = journaled && prefs.putBool(NVS_PROMOTION_ARMED_KEY, true) > 0;
+  bool promoted = armed && prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length();
+  bool confirmed = promoted && prefs.putString(NVS_CONFIRMED_ID_KEY, activationId) == activationId.length();
+  promoted = confirmed && writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (promoted) {
     prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate);
-    promoted = prefs.putString(NVS_CONFIRMED_ID_KEY, activationId) == activationId.length() &&
-               writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
-  }
-  if (promoted) {
     prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
     prefs.remove(NVS_CANDIDATE_ID_KEY);
+    prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+    prefs.putBool(NVS_PROMOTION_ARMED_KEY, false);
+  } else {
+    restorePreviousKnownGood(prefs);
+    prefs.remove(NVS_CONFIRMED_ID_KEY);
   }
   prefs.end();
   message = promoted ? "candidate confirmed as known-good" : "candidate confirmation failed";
@@ -962,12 +1082,18 @@ bool rollbackCandidateRuntimeConfig(const String& activationId, String& message)
     message = "candidate activation id mismatch";
     return false;
   }
+  if (!restorePreviousKnownGood(prefs)) {
+    prefs.end();
+    message = "prior known-good restoration failed";
+    return false;
+  }
   // Clear the bootable marker first. A power loss after this write can leave
   // stale candidate bytes, but those bytes can no longer be selected at boot.
   bool safe = writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (safe) {
     prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
     prefs.remove(NVS_CANDIDATE_ID_KEY);
+    prefs.remove(NVS_CONFIRMED_ID_KEY);
   }
   prefs.end();
   message = safe ? "candidate rolled back" : "candidate rollback failed";
@@ -994,6 +1120,7 @@ String runtimeWiringSafetyStatusJson() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["candidateState"] = candidateStateLabel(status.candidateState);
+  doc["state"] = candidateStateLabel(status.candidateState);
   if (status.hasCandidate) doc["activationId"] = status.activationId;
   doc["hasKnownGood"] = status.hasKnownGood;
   doc["hasCandidate"] = status.hasCandidate;
@@ -1001,6 +1128,23 @@ String runtimeWiringSafetyStatusJson() {
   doc["discoveryActive"] = status.discoveryActive;
   if (status.discoveryActive) doc["discoveryBatchIndex"] = status.discoveryBatchIndex;
   doc["probationMs"] = LW_WIRING_PROBATION_MS;
+  if (status.hasCandidate && status.activationId.length()) {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, true)) {
+      String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
+      prefs.end();
+      JsonDocument candidateDoc;
+      if (candidate.length() && !deserializeJson(candidateDoc, candidate)) {
+        doc["cardId"] = runtimeCardId();
+        doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
+        doc["buildId"] = LW_BUILD_ID;
+        doc["projectRevision"] = candidateDoc["projectRevision"] | 0U;
+        doc["projectFingerprint"] = String(candidateDoc["projectFingerprint"] | "");
+        doc["productionJobId"] = String(candidateDoc["productionJobId"] | "");
+        doc["productionJobDigest"] = String(candidateDoc["productionJobDigest"] | "");
+      }
+    }
+  }
   String out;
   serializeJson(doc, out);
   return out;

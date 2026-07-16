@@ -334,6 +334,22 @@ test('Bridge return does not call a successful POST independent restoration proo
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText(/independent.*(?:read-back|firmware and project evidence)|not marked.*restored/i);
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(1);
+  const pushedIdentity = await page.evaluate(() => {
+    const config = (window as any).__commissioningPushes[0].runtimePackage.config;
+    return {
+      projectRevision: config.projectRevision,
+      projectFingerprint: config.projectFingerprint,
+      productionJobId: config.productionJobId,
+      productionJobDigest: config.productionJobDigest,
+    };
+  });
+  const active = await activeCommissioning(page);
+  expect(pushedIdentity).toEqual({
+    projectRevision: active?.project?.revision,
+    projectFingerprint: active?.project?.fingerprint,
+    productionJobId: undefined,
+    productionJobDigest: undefined,
+  });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
@@ -373,17 +389,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
       });
     };
     (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
-      const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
-      const flowId = sessionStorage.getItem('lw_card_commissioning_active_v2') || '';
-      const flow = registry.flows?.[flowId]?.flow || {};
-      return {
-        cardId: 'lw-441bf681feb0',
-        firmwareVersion: '1.2.3',
-        buildId: 'a'.repeat(40),
-        projectRevision: flow.project?.revision,
-        projectFingerprint: flow.project?.fingerprint,
-        productionJobDigest: '',
-      };
+      throw new Error('The fresh card returned an invalid project fingerprint');
     };
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
