@@ -172,7 +172,11 @@ function withStoredRegistryMutation(dependencies, callback) {
   let existing = null;
   try { existing = JSON.parse(localStorage.getItem(STORED_RESULT_LEASE_KEY) || 'null'); } catch { throw new Error('Durable Bridge result lease is invalid'); }
   if (existing && existing.owner !== ownerToken && Number.isSafeInteger(existing.expiresAt) && existing.expiresAt > timestamp) {
-    throw new Error('Durable Bridge result registry is busy');
+    const delay = dependencies.delay;
+    const deadline = dependencies.deadline ?? (timestamp + 1_800);
+    if (typeof delay !== 'function' || timestamp >= deadline) throw new Error('Durable Bridge result registry is busy');
+    const wait = Math.min(75, Math.max(20, existing.expiresAt - timestamp));
+    return Promise.resolve(delay(wait)).then(() => withStoredRegistryMutation({ ...dependencies, deadline }, callback));
   }
   const lease = JSON.stringify({ owner: ownerToken, expiresAt: timestamp + 2_000 });
   localStorage.setItem(STORED_RESULT_LEASE_KEY, lease);
@@ -294,6 +298,8 @@ export function createBridgeResultChannel(dependencies = {}) {
   const ownerBytes = new Uint8Array(16);
   const ownerToken = cryptoApi?.getRandomValues ? base64Url(cryptoApi.getRandomValues(ownerBytes)) : '';
   const now = dependencies.now ?? Date.now;
+  const registryDelay = dependencies.registryDelay ?? (typeof window === 'undefined'
+    ? null : (milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds))));
   const onResult = dependencies.onResult;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
   const claimReceipt = dependencies.claimReceipt ?? ((receipt, message) => claimBridgeResultReceipt(receipt, {
@@ -359,7 +365,14 @@ export function createBridgeResultChannel(dependencies = {}) {
       acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
       acknowledged.add(ackReceipt);
     };
-    return withStoredRegistryMutation({ localStorage, ownerToken, now, locks }, accept);
+    const mutation = withStoredRegistryMutation({ localStorage, ownerToken, now, locks, delay: registryDelay }, accept);
+    if (mutation?.catch) {
+      return mutation.catch(error => {
+        try { releaseReceipt(message.ackReceipt, message); } catch { /* Preserve correlation for retry. */ }
+        throw error;
+      });
+    }
+    return mutation;
   };
   const receive = raw => {
     if (!locks?.request) return receiveUnlocked(raw);
