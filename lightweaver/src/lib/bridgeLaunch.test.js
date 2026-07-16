@@ -452,24 +452,68 @@ test('fallback registry contention waits for release and times out without UI or
   const calls = [];
   const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
     eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
-    claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+    claimReceipt: () => { calls.push('claim'); return true; }, revalidateReceipt: () => true, confirmReceipt: () => true,
     releaseReceipt: () => calls.push('release'), onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
-    now: () => now, registryDelay: async () => { now = 51; localStorage.removeItem(leaseKey); } });
+    now: () => now, registryDelay: async () => { calls.push('wait'); now = 51; localStorage.removeItem(leaseKey); } });
   const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 11).toString('base64url'), targetTabId: tabId,
     operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
     verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 11).toString('base64url') };
   await channel.receive(message);
-  assert.deepEqual(calls, ['ui', 'ack']);
+  assert.deepEqual(calls, ['claim', 'wait', 'ui', 'ack']);
   calls.length = 0; now = 100;
   localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 12).toString('base64url'), expiresAt: 10_000 }));
   const blocked = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
     eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
-    claimReceipt: () => true, revalidateReceipt: () => true, releaseReceipt: () => calls.push('release'),
+    claimReceipt: () => { calls.push('claim'); return true; }, revalidateReceipt: () => true, releaseReceipt: () => calls.push('release'),
     onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'), now: () => now,
-    registryDelay: async () => { now += 900; } });
+    registryDelay: async () => { calls.push('wait'); now += 900; } });
   await assert.rejects(() => blocked.receive({ ...message, deliveryId: Buffer.alloc(12, 13).toString('base64url'), ackReceipt: Buffer.alloc(32, 13).toString('base64url') }), /busy/);
-  assert.deepEqual(calls, ['release']);
+  assert.deepEqual(calls, ['claim', 'wait', 'wait', 'release']);
   channel.close(); blocked.close();
+});
+
+test('fallback registry contention serializes distinct receipts without losing either result', async () => {
+  const { createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const leaseKey = 'lightweaver.bridge.accepted-result-registry.lease.v1';
+  localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 9).toString('base64url'), expiresAt: 50 }));
+  let now = 1;
+  let arrivals = 0;
+  let releaseWaiters;
+  const bothWaiting = new Promise(resolve => { releaseWaiters = resolve; });
+  const registryDelay = async () => {
+    arrivals += 1;
+    if (arrivals === 2) {
+      now = 51;
+      localStorage.removeItem(leaseKey);
+      releaseWaiters();
+    }
+    await bothWaiting;
+  };
+  const channels = [];
+  for (let index = 1; index <= 2; index += 1) {
+    const sessionStorage = memoryStorage();
+    const tabId = Buffer.alloc(16, index).toString('base64url');
+    sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+    const calls = [];
+    const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
+      eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+      claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+      onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'), now: () => now, registryDelay });
+    channels.push({ channel, sessionStorage, tabId, calls, index });
+  }
+  await Promise.all(channels.map(({ channel, tabId, index }) => channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, index).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+    ackReceipt: Buffer.alloc(32, index).toString('base64url'),
+  })));
+  assert.equal(arrivals, 2);
+  for (const item of channels) {
+    assert.deepEqual(item.calls, ['ui', 'ack']);
+    assert.equal(readStoredBridgeResult({ sessionStorage: item.sessionStorage, localStorage, now: () => 52 }).operation, 'restart-card');
+    item.channel.close();
+  }
 });
 
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {

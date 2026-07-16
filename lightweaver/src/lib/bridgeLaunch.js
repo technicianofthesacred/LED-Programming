@@ -343,8 +343,14 @@ export function createBridgeResultChannel(dependencies = {}) {
       return;
     }
     if (!onResult) return;
+    if (!claimReceipt(message.ackReceipt, message)) return;
+    let claimHeld = true;
+    const releaseClaim = () => {
+      if (!claimHeld) return;
+      claimHeld = false;
+      try { releaseReceipt(message.ackReceipt, message); } catch { /* Preserve the original failure. */ }
+    };
     const accept = () => {
-      if (!claimReceipt(message.ackReceipt, message)) return;
       const safeMessage = validateBridgeUiResult(uiResultFields(message));
       const { ackReceipt } = message;
       try {
@@ -356,8 +362,9 @@ export function createBridgeResultChannel(dependencies = {}) {
         onResult(safeMessage);
         if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
         if (!confirmReceipt(ackReceipt, message)) throw new Error('Bridge receipt finalization failed');
+        claimHeld = false;
       } catch (error) {
-        try { releaseReceipt(ackReceipt, message); } catch { /* Preserve the original failure. */ }
+        releaseClaim();
         throw error;
       }
       if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
@@ -365,14 +372,19 @@ export function createBridgeResultChannel(dependencies = {}) {
       acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
       acknowledged.add(ackReceipt);
     };
-    const mutation = withStoredRegistryMutation({ localStorage, ownerToken, now, locks, delay: registryDelay }, accept);
-    if (mutation?.catch) {
-      return mutation.catch(error => {
-        try { releaseReceipt(message.ackReceipt, message); } catch { /* Preserve correlation for retry. */ }
-        throw error;
-      });
+    try {
+      const mutation = withStoredRegistryMutation({ localStorage, ownerToken, now, locks, delay: registryDelay }, accept);
+      if (mutation?.catch) {
+        return mutation.catch(error => {
+          releaseClaim();
+          throw error;
+        });
+      }
+      return mutation;
+    } catch (error) {
+      releaseClaim();
+      throw error;
     }
-    return mutation;
   };
   const receive = raw => {
     if (!locks?.request) return receiveUnlocked(raw);
