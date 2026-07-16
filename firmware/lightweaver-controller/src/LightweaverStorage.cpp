@@ -671,9 +671,19 @@ bool restorePreviousKnownGood(Preferences& prefs) {
 
 bool finalizeCommittedPromotion(Preferences& prefs) {
   if (readCandidateState(prefs) != WIRING_CANDIDATE_NONE) return false;
+  String knownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
+  String candidateId = prefs.getString(NVS_CANDIDATE_ID_KEY, "");
+  String confirmedId = prefs.getString(NVS_CONFIRMED_ID_KEY, "");
+  bool rollbackResidue = (candidate.length() && knownGood != candidate) ||
+                         (!candidate.length() && candidateId.length() &&
+                          confirmedId.length() && confirmedId != candidateId);
   bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
                   !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
   if (!disarmed) return false;
+  bool confirmationCleared = !rollbackResidue || !prefs.isKey(NVS_CONFIRMED_ID_KEY) ||
+                             prefs.remove(NVS_CONFIRMED_ID_KEY);
+  if (!confirmationCleared) return false;
   bool previousCleared = !prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) ||
                          prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY);
   bool candidateCleared = !prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) ||
@@ -742,16 +752,9 @@ bool validateCandidateMetadataForBoot(Preferences& prefs, WiringCandidateState s
     }
     if (candidate.length() &&
         (!candidateId.length() ||
-         (knownGood == candidate && confirmedId != candidateId) ||
-         (knownGood != candidate && confirmedId.length()))) {
+         (knownGood == candidate && confirmedId != candidateId))) {
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
-    }
-    if (!candidate.length()) {
-      if (candidateId.length() && confirmedId.length() && confirmedId != candidateId) {
-        message = "candidate metadata corrupt: inconsistent committed cleanup";
-        return false;
-      }
     }
   }
   return true;
@@ -1107,6 +1110,11 @@ bool stageRuntimeConfigJson(const String& json, String& activationId, String& me
     message = "nvs write open failed";
     return false;
   }
+  WiringCandidateState priorState = readCandidateState(prefs);
+  if (!validateCandidateMetadataForBoot(prefs, priorState, message)) {
+    prefs.end();
+    return false;
+  }
   if (!finalizeCommittedPromotion(prefs)) {
     prefs.end();
     message = "prior promotion cleanup failed";
@@ -1115,8 +1123,9 @@ bool stageRuntimeConfigJson(const String& json, String& activationId, String& me
   activationId = makeActivationId();
   bool stored = prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json) == json.length();
   bool idStored = stored && prefs.putString(NVS_CANDIDATE_ID_KEY, activationId) == activationId.length();
-  bool marked = idStored && writeCandidateState(prefs, WIRING_CANDIDATE_STAGED);
-  if (marked) prefs.remove(NVS_CONFIRMED_ID_KEY);
+  bool confirmationCleared = idStored &&
+    (!prefs.isKey(NVS_CONFIRMED_ID_KEY) || prefs.remove(NVS_CONFIRMED_ID_KEY));
+  bool marked = confirmationCleared && writeCandidateState(prefs, WIRING_CANDIDATE_STAGED);
   if (!marked) {
     prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
     prefs.remove(NVS_CANDIDATE_ID_KEY);
@@ -1222,9 +1231,9 @@ bool rollbackCandidateRuntimeConfig(const String& activationId, String& message)
   // stale candidate bytes, but those bytes can no longer be selected at boot.
   bool safe = writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (safe) {
+    prefs.remove(NVS_CONFIRMED_ID_KEY);
     prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
     prefs.remove(NVS_CANDIDATE_ID_KEY);
-    prefs.remove(NVS_CONFIRMED_ID_KEY);
   }
   prefs.end();
   message = safe ? "candidate rolled back" : "candidate rollback failed";

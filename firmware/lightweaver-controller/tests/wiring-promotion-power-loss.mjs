@@ -157,16 +157,20 @@ function candidateMetadataValid(state) {
     if (state.knownGood === state.candidateConfig) {
       return state.confirmedId === state.candidateId;
     }
-    return !state.confirmedId;
+    return true;
   }
   if (state.candidateState === 0 && state.candidateId) {
-    return !state.confirmedId || state.confirmedId === state.candidateId;
+    return true;
   }
   return !state.armed;
 }
 
 function bootDisarmedNoneCleanup(state) {
   if (!candidateMetadataValid(state)) return false;
+  const rollbackResidue = (state.candidateConfig && state.knownGood !== state.candidateConfig) ||
+    (!state.candidateConfig && state.candidateId && state.confirmedId &&
+      state.confirmedId !== state.candidateId);
+  if (rollbackResidue) delete state.confirmedId;
   delete state.previousKnown;
   delete state.candidateConfig;
   delete state.candidateId;
@@ -237,26 +241,26 @@ assert.equal(candidateMetadataValid(staleBToA), false,
 assert.equal(candidateMetadataValid({ ...staleBToA, armed: false }), false,
   'stale confirmation B must never authorize cleanup of candidate A');
 
-const staleCleanupWithWrongKnownGood = {
+const rollbackResidueWithStaleConfirmation = {
   ...staleCleanupWithMismatchedIds,
   candidateConfig: 'candidate-a',
   candidateId: 'activation-a',
   confirmedId: 'activation-a',
   knownGood: 'candidate-b',
 };
-assert.equal(candidateMetadataValid(staleCleanupWithWrongKnownGood), false,
-  'stale cleanup must require exact candidate and known-good identity');
+assert.equal(candidateMetadataValid(rollbackResidueWithStaleConfirmation), true,
+  'an unpromoted candidate may discard any retained confirmation as rollback residue');
 
 const rollbackBody = functionBody('rollbackCandidateRuntimeConfig', 'getRuntimeWiringSafetyStatus');
 const rollbackCleanupActions = orderedActions(rollbackBody, [
   ['state-none', 'writeCandidateState(prefs, WIRING_CANDIDATE_NONE)'],
+  ['drop-confirmed', 'prefs.remove(NVS_CONFIRMED_ID_KEY)'],
   ['drop-candidate', 'prefs.remove(NVS_CANDIDATE_CONFIG_KEY)'],
   ['drop-candidate-id', 'prefs.remove(NVS_CANDIDATE_ID_KEY)'],
-  ['drop-confirmed', 'prefs.remove(NVS_CONFIRMED_ID_KEY)'],
 ]);
 assert.deepEqual(rollbackCleanupActions,
-  ['state-none', 'drop-candidate', 'drop-candidate-id', 'drop-confirmed'],
-  'rollback must make the candidate unbootable before removing transaction identity');
+  ['state-none', 'drop-confirmed', 'drop-candidate', 'drop-candidate-id'],
+  'rollback must become unbootable, then clear stale confirmation before candidate identity');
 for (let cut = 1; cut <= rollbackCleanupActions.length; cut += 1) {
   const state = {
     candidateState: 3,
@@ -282,6 +286,33 @@ for (let cut = 1; cut <= rollbackCleanupActions.length; cut += 1) {
   assert.equal(state.knownGood, 'known-good-v1');
 }
 
+for (let cut = 1; cut <= rollbackCleanupActions.length; cut += 1) {
+  const state = {
+    candidateState: 3,
+    armKeyPresent: true,
+    armed: false,
+    knownGood: 'candidate-b',
+    candidateConfig: 'candidate-a',
+    candidateId: 'activation-a',
+    confirmedId: 'activation-b',
+  };
+  for (const action of rollbackCleanupActions.slice(0, cut)) {
+    if (action === 'state-none') state.candidateState = 0;
+    if (action === 'drop-confirmed') delete state.confirmedId;
+    if (action === 'drop-candidate') delete state.candidateConfig;
+    if (action === 'drop-candidate-id') delete state.candidateId;
+  }
+  assert.equal(candidateMetadataValid(state), true,
+    `stale B / candidate A rollback cut ${cut} must be recognized as residue`);
+  assert.equal(bootDisarmedNoneCleanup(state), true);
+  assert.equal(state.knownGood, 'candidate-b');
+  assert.equal(state.confirmedId, undefined,
+    `stale confirmation B must be cleared after rollback cut ${cut}`);
+  assert.equal(bootDisarmedNoneCleanup(state), true,
+    `repeated boot after stale B / candidate A cut ${cut} must remain known-good B`);
+  assert.equal(state.knownGood, 'candidate-b');
+}
+
 assert.equal(candidateMetadataValid({
   candidateState: 0,
   armed: false,
@@ -300,9 +331,21 @@ assert.match(storage, /candidate metadata corrupt/);
 assert.match(storage, /NVS_NO_PREVIOUS_KNOWN_GOOD/);
 assert.match(storage, /confirmedId != candidateId/,
   'firmware must compare the committed confirmation and candidate ids exactly');
-assert.match(storage, /knownGood != candidate && confirmedId\.length\(\)/,
-  'rollback cleanup must be classified by different config identity and no confirmation');
+assert.match(storage, /knownGood != candidate/,
+  'rollback cleanup must be classified by different config identity');
 assert.doesNotMatch(storage, /candidate metadata corrupt: orphan confirmation/,
   'the retained confirmation replay fence must remain valid after committed cleanup');
+
+const stageBody = functionBody('stageRuntimeConfigJson', 'activateStagedRuntimeConfig');
+const stageValidateMetadata = stageBody.indexOf('validateCandidateMetadataForBoot');
+const stageCleanupPrior = stageBody.indexOf('finalizeCommittedPromotion');
+const stageClearConfirmation = stageBody.indexOf('prefs.remove(NVS_CONFIRMED_ID_KEY)');
+const stageMarkCandidate = stageBody.indexOf('writeCandidateState(prefs, WIRING_CANDIDATE_STAGED)');
+assert.ok(stageValidateMetadata >= 0 && stageCleanupPrior > stageValidateMetadata,
+  'staging must fail closed on corrupt promotion metadata before cleanup touches its journal');
+assert.ok(stageClearConfirmation >= 0 && stageMarkCandidate > stageClearConfirmation,
+  'staging must clear the prior confirmation fence before making candidate A bootable');
+assert.match(stageBody, /confirmationCleared/,
+  'staging must check confirmation-fence removal before committing candidate state');
 
 console.log('wiring-promotion-power-loss tests passed');
