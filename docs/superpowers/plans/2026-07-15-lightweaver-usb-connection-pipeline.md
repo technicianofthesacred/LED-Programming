@@ -298,6 +298,124 @@ lightweaver://run?operation=install-current-release&nonce=<random>&version=1
 
 ---
 
+## Phase B2 — Complete the customer-safe lifecycle
+
+The 2026-07-16 completion audit found that transport safety alone is not a
+complete product. The following tasks are release blockers and supersede any
+earlier four-second installed-app inference or callback-as-completion behavior.
+
+### Task 10A: Make native launch and return truthful across browsers
+
+**Files:**
+- Modify: `lightweaver/src/lib/bridgeLaunch.js`
+- Modify: `lightweaver/src/lib/bridgeLaunch.test.js`
+- Modify: `lightweaver/src/lib/bridgeProtocol.js`
+- Modify: `lightweaver/src/lib/bridgeProtocol.test.js`
+- Modify: `lightweaver/src/components/card/CardConnectionCenter.jsx`
+- Modify: `lightweaver/src/v3/lw-flash.jsx`
+- Modify: `lightweaver-bridge/src/deep-link-protocol.js`
+- Modify: `lightweaver-bridge/src/main.js`
+- Modify: focused Studio and Bridge tests
+
+- [ ] Write failing tests proving that absence of a final callback after four seconds never means the Bridge is missing.
+- [ ] Add distinct bounded states for opening, working, return pending, and installer unavailable.
+- [ ] Add a bounded launch acknowledgement that grants no hardware authority, or remove installed-app inference entirely when an acknowledgement cannot be delivered safely.
+- [ ] Persist the verified result until the originating Studio acknowledges it; retrying return must never rerun hardware.
+- [ ] Add a bounded manual return-code fallback for non-default-browser/profile callbacks. It may contain only the already-approved public result fields and one-time correlation material, never firmware URLs, hosts, paths, project data, or secrets.
+- [ ] Test Safari-to-Chrome-default, Firefox-to-Chrome-default, separate profiles, original tab closed, refresh, replay, expiry, and successful originating-tab resume.
+- [ ] Commit: `fix: make Bridge launch and return resumable`
+
+### Task 10B: Persist the native mutation and result journal
+
+**Files:**
+- Create: `lightweaver-bridge/src/operation-journal.js`
+- Create: `lightweaver-bridge/test/operation-journal.test.js`
+- Modify: `lightweaver-bridge/src/operation-runner.js`
+- Modify: `lightweaver-bridge/src/main.js`
+- Modify: `lightweaver-bridge/src/ipc-handlers.js`
+
+- [ ] Write failing tests for crashes before erase, during erase/write, after verified flash, after restart, during USB release, and before Studio acknowledgement.
+- [ ] Persist only bounded non-secret facts: operation, expected card/build, actual mutation boundary, flash verification, restart result, USB ownership, and pending bounded callback result.
+- [ ] On restart, inspect before classifying the outcome. Never reflash only because memory was lost.
+- [ ] Preserve a completed result across Bridge restart and clear it only after Studio acknowledgement or explicit safe dismissal.
+- [ ] Keep serial paths, USB serial numbers, nonces, Wi-Fi credentials, project data, and firmware bytes out of the journal.
+- [ ] Commit: `feat: resume interrupted Bridge operations safely`
+
+### Task 10C: Unify browser and Bridge completion after flashing
+
+**Files:**
+- Create: `lightweaver/src/lib/cardCommissioningFlow.js`
+- Create: `lightweaver/src/lib/cardCommissioningFlow.test.js`
+- Create: `lightweaver/src/components/card/CardCommissioningPanel.jsx`
+- Modify: `lightweaver/src/components/card/BridgeResumePanel.jsx`
+- Modify: `lightweaver/src/v3/lw-flash.jsx`
+- Modify: `lightweaver/src/v3/app.jsx`
+- Modify: `lightweaver/tests/universal-install.spec.ts`
+- Modify: `lightweaver/tests/connection-center-quality.spec.ts`
+
+- [ ] Write failing tests for one resumable four-stage flow: Connect card, Install safely, Set up card, Check lights.
+- [ ] Make direct Web Serial and native Bridge results enter the same commissioning coordinator.
+- [ ] Guide card setup-network and Wi-Fi configuration when factory flashing cleared network state, then reconnect the exact stable card ID.
+- [ ] Require the card to acknowledge the expected firmware version and build before restoration.
+- [ ] Restore the exact saved, acknowledged Studio project revision: GPIO/output configuration, LED map, zones, patterns, playlist, and supported controls. Project persistence alone must never be labeled card restoration.
+- [ ] Use preserve-in-place only for a verified compatible routine update; clean recovery restores canonical project state instead of blindly restoring unknown NVS data.
+- [ ] Persist commissioning progress across refresh, Wi-Fi switching, new tab return, Bridge restart, and recoverable connection loss.
+- [ ] Commit: `feat: restore a working card after firmware install`
+
+### Task 10D: Replace full-white verification with bounded physical diagnosis
+
+**Files:**
+- Create: `lightweaver/src/lib/cardPhysicalDiagnostic.js`
+- Create: `lightweaver/src/lib/cardPhysicalDiagnostic.test.js`
+- Create: `lightweaver/src/components/card/CardPhysicalDiagnostic.jsx`
+- Modify: `lightweaver/src/components/card/CardCommissioningPanel.jsx`
+- Reuse/modify: canonical Layout bench-verification helpers and firmware endpoints
+- Modify: focused Playwright and firmware contract tests
+
+- [ ] Write failing tests proving verification is current-limited, activates one output/boundary at a time, and never synchronizes full-brightness white across all zones.
+- [ ] Reuse the canonical wiring model: first included pixel blue, final included pixel red, all pixels outside the active boundary dark.
+- [ ] Provide in-place minus/plus pixel-count correction, direction, GPIO/output, and color-order correction through acknowledged candidate wiring transactions with rollback.
+- [ ] Classify physical answers: nothing lit, wrong color, wrong start/end, wrong count, wrong output, flashing/frozen, and correct.
+- [ ] Route failures to power, data, GPIO, direction, count, color order, stream release/restart, or firmware recovery based on evidence. Reflash must never be the default response to a failed light observation.
+- [ ] Require explicit human confirmation before completing commissioning.
+- [ ] Commit: `feat: diagnose physical LED output safely`
+
+### Task 10E: Expose evidence-based recovery and support
+
+**Files:**
+- Create: `lightweaver/src/components/card/CardRecoveryCenter.jsx`
+- Create: `lightweaver/src/lib/cardRecoveryDecision.js`
+- Create: `lightweaver/src/lib/cardRecoveryDecision.test.js`
+- Modify: `lightweaver/src/components/card/CardConnectionCenter.jsx`
+- Modify: `lightweaver-bridge/src/protocol.js`
+- Modify: `lightweaver-bridge/src/renderer/app.js`
+- Modify: focused tests
+
+- [ ] Expose the bounded operations already supported: inspect without changing, release USB, restart, reconnect exact card, run physical diagnosis, restore saved project, and recover signed firmware only when warranted.
+- [ ] Classify charge-only cable, port busy, Linux permissions/udev, missing driver, multiple cards, unsupported card, disconnect phase, signed-release failure, and USB-ownership uncertainty.
+- [ ] Every error states what happened, whether anything changed, whether USB is released, one safest next action, and a stable support code.
+- [ ] Add a user-triggered redacted diagnostic report containing app/version, OS/arch, support code, phase, target build, and VID/PID only. Exclude paths, serial numbers, credentials, project data, nonces, and firmware bytes.
+- [ ] Persist recovery state across application restart and callback failure.
+- [ ] Commit: `feat: guide safe card recovery`
+
+### Task 10F: Consolidate and accessibility-harden the setup experience
+
+**Files:**
+- Modify: `lightweaver/src/v3/app.jsx`
+- Modify: `lightweaver/src/components/card/CardConnectionCenter.jsx`
+- Modify: `lightweaver-bridge/src/renderer/index.html`
+- Modify: `lightweaver-bridge/src/renderer/app.js`
+- Modify: `lightweaver-bridge/src/renderer/styles.css`
+- Modify: `lightweaver-bridge/electron-builder.yml`
+- Modify: rendered-state and accessibility tests
+
+- [ ] Make Connect Lightweaver the only ordinary setup entry; move Flash and Installer under Advanced/Support while preserving their deep links.
+- [ ] Redesign Bridge as compact Studio continuation using the documented Geist/cool-neutral tokens, plain operation names, final icon, signed publisher/version facts, and no Mac-specific or transport-internal copy.
+- [ ] Show exact card and target release before destructive confirmation, including what is erased and what saved state will be restored.
+- [ ] Add semantic progress, visible focus, correct contrast, reduced motion, zoom/reflow, focus trapping/restoration, and non-duplicated live announcements.
+- [ ] Add rendered Electron/Playwright coverage plus VoiceOver/NVDA manual acceptance steps.
+- [ ] Commit: `fix: make card setup accessible and coherent`
+
 ## Phase C — Package, sign, and enable platforms independently
 
 ### Task 11: Add reproducible unprivileged package CI
