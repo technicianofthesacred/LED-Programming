@@ -24,7 +24,7 @@ function validRecoveredDismissal(value) {
 function createIpcHandlers({
   getActiveWindow, rendererPath, operation, runner, onBoundedResult = () => {},
   claimLaunchContext = () => null, retryCallback = async () => ({ state: 'callback-returned', message: 'Result returned to Studio.' }),
-  dismissExpiredLaunch = () => false,
+  dismissExpiredLaunch = () => false, revealRecoveryFolder = async () => {},
 }) {
   let pendingAuthority = null;
   let pendingLaunch = null;
@@ -88,6 +88,11 @@ function createIpcHandlers({
     return createRendererResult('launch-expired', 'This website request expired. Return to Studio and try again.', {
       code: 'launch-expired',
     });
+  }
+
+  function completedPayload(result) {
+    const remediation = result?.state === 'filesystem-remediation-required';
+    return createRendererResult(remediation ? 'filesystem-remediation-required' : 'awaiting-card-acknowledgement', result?.message, result);
   }
 
   async function inspectCard() {
@@ -186,7 +191,7 @@ function createIpcHandlers({
       })).then(async result => {
         if (operation.current === 'installing') operation.advanceVerification();
         operation.finishFlashVerified();
-        const payload = createRendererResult('awaiting-card-acknowledgement', result.message, result);
+        const payload = completedPayload(result);
         await onBoundedResult(payload, authority.operation, authority.launchContext);
         sendIfStillTrusted(event, 'bridge:result', payload);
       }).catch(error => {
@@ -225,6 +230,20 @@ function createIpcHandlers({
       return dismissed
         ? Object.freeze({ dismissed: true, state: operation.current })
         : Object.freeze({ dismissed: false, state: 'recovered-result-pending', message: 'The saved result could not be cleared. Retry dismissal.' });
+    },
+    'bridge:reveal-recovery-folder': async (event) => {
+      assertTrusted(event);
+      await revealRecoveryFolder();
+      return createRendererResult('filesystem-remediation-required', 'Remove or empty the exact reserved path shown, then retry cleanup.', {
+        nextAction: 'retry-recovery-cleanup',
+      });
+    },
+    'bridge:retry-recovery-cleanup': async (event) => {
+      assertTrusted(event);
+      const result = runner.retryRecoveryCleanup?.();
+      if (!result) return createRendererResult('recovery-required', 'No verified recovery cleanup is available.');
+      if (result.state === 'filesystem-remediation-required') return completedPayload(result);
+      return createRendererResult('recovered-result-pending', 'Reserved recovery cleanup succeeded. The verified result remains saved until explicit dismissal.', result);
     },
   };
 

@@ -26,12 +26,14 @@ const views = Object.freeze({
   'launch-expired': ['Expired', 'Website request expired', 'This website request expired. Return to Studio and try again.', 'Dismiss'],
   complete: ['Complete', 'Card acknowledged', 'Studio confirmed the stable card identity.', 'Inspect another card'],
   'recovery-required': ['Recovery required', 'Installation needs safe recovery', 'Reconnect the card, then recover the current signed release. The Bridge will not claim whether physical output is working.', 'Inspect for recovery'],
+  'filesystem-remediation-required': ['Cleanup required', 'Remove reserved recovery debris', 'Open the Lightweaver data folder, then empty or remove only the exact reserved path shown. Return here and retry cleanup.', 'Open recovery folder'],
 });
 
 let currentState = 'select-card';
 let confirmationToken = null;
 let selectedOperation = 'install-current-release';
 let recoveredDismissalContext = null;
+let currentNextAction = null;
 const recoveredResultFields = Object.freeze([
   'operation', 'cardId', 'firmwareVersion', 'buildId', 'target', 'verification', 'resultIdentityHash',
 ]);
@@ -55,6 +57,13 @@ function render(payload = {}) {
   returnCode.hidden = !payload.returnCode;
   primaryAction.textContent = button;
   confirmationToken = payload.confirmationToken || confirmationToken;
+  currentNextAction = payload.nextAction || null;
+  if (currentState === 'filesystem-remediation-required' && payload.remediationPath) {
+    stateMessage.textContent = `${payload.message || fallbackMessage} Exact path: ${payload.remediationPath}`;
+  }
+  if (currentState === 'filesystem-remediation-required' && currentNextAction === 'retry-recovery-cleanup') {
+    primaryAction.textContent = 'Retry cleanup';
+  }
   if (currentState === 'recovery-required') selectedOperation = 'recover-current-release';
   if (currentState === 'complete' || currentState === 'awaiting-card-acknowledgement') selectedOperation = 'install-current-release';
   const critical = currentState === 'installing' || currentState === 'verifying';
@@ -62,7 +71,8 @@ function render(payload = {}) {
     || currentState === 'callback-returned';
   cancelAction.disabled = critical;
   cancelAction.hidden = ['select-card', 'complete', 'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain',
-    'callback-delivery-failed', 'return-pending', 'recovered-result-pending', 'callback-returned', 'launch-expired'].includes(currentState);
+    'callback-delivery-failed', 'return-pending', 'recovered-result-pending', 'filesystem-remediation-required',
+    'callback-returned', 'launch-expired'].includes(currentState);
   progress.hidden = !critical;
   progressBar.style.width = `${Number.isFinite(payload.progress) ? payload.progress : 0}%`;
 }
@@ -71,6 +81,9 @@ primaryAction.addEventListener('click', async () => {
   try {
     if (currentState === 'launch-expired') {
       render(await bridge.dismissExpiredLaunch());
+    } else if (currentState === 'filesystem-remediation-required') {
+      render(currentNextAction === 'retry-recovery-cleanup'
+        ? await bridge.retryRecoveryCleanup() : await bridge.revealRecoveryFolder());
     } else if (currentState === 'recovered-result-pending') {
       render(await bridge.dismissRecoveredResult(recoveredDismissalContext));
     } else if (currentState === 'callback-delivery-failed' || currentState === 'return-pending') {

@@ -69,6 +69,49 @@ test('failed recovered-result dismissal stays in recovery UI for retry', async (
   assert.match(elements.get('#primary-action').textContent, /dismiss/i);
 });
 
+test('filesystem remediation visibly reveals the folder and retries cleanup without card hardware', async () => {
+  const elements = new Map();
+  for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {
+    elements.set(`#${id}`, { textContent: '', disabled: false, hidden: false, style: {}, listeners: new Map(), addEventListener(name, listener) { this.listeners.set(name, listener); } });
+  }
+  let onResult;
+  let reveals = 0;
+  let retries = 0;
+  let hardware = 0;
+  const bridge = {
+    revealRecoveryFolder: async () => {
+      reveals += 1;
+      return { state: 'filesystem-remediation-required', message: 'Remove the exact path, then retry.', nextAction: 'retry-recovery-cleanup' };
+    },
+    retryRecoveryCleanup: async () => {
+      retries += 1;
+      return { state: 'recovered-result-pending', message: 'Cleanup succeeded.' };
+    },
+    inspectCompatibleCard: async () => { hardware += 1; }, inspectForOperation: async () => { hardware += 1; },
+    startOperation: async () => { hardware += 1; }, confirmDestructiveAction: async () => { hardware += 1; },
+    runMaintenanceOperation: async () => { hardware += 1; }, cancelBeforeCriticalSection: async () => ({ cancelled: true }),
+    onResult(listener) { onResult = listener; }, onProgress() {}, onCallbackDelivery() {}, onLaunchRequest() {},
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/app.js'), 'utf8'), {
+    window: { lightweaverBridge: bridge }, document: { querySelector: selector => elements.get(selector) },
+  });
+  onResult({
+    state: 'filesystem-remediation-required',
+    message: 'Recovery is verified but cleanup is blocked.',
+    remediationPath: '/safe/app/operation-journal.quarantine.canonical',
+    nextAction: 'reveal-recovery-folder',
+  });
+  assert.match(elements.get('#state-title').textContent, /remove reserved/i);
+  assert.match(elements.get('#state-message').textContent, /exact path.*operation-journal\.quarantine\.canonical/i);
+  assert.match(elements.get('#primary-action').textContent, /open recovery folder/i);
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(reveals, 1);
+  assert.match(elements.get('#primary-action').textContent, /retry cleanup/i);
+  await elements.get('#primary-action').listeners.get('click')();
+  assert.equal(retries, 1);
+  assert.equal(hardware, 0);
+});
+
 test('unplug-replug guidance requires a deliberate acknowledgement before inspecting again', async () => {
   const elements = new Map();
   for (const id of ['state-marker', 'state-title', 'state-message', 'return-code', 'primary-action', 'cancel-action', 'progress', 'progress-bar']) {

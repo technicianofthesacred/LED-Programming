@@ -529,7 +529,7 @@ test('invalid quarantine stays presence-only and bounded through explicit recove
   assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] });
 });
 
-test('explicit completed recovery safely removes empty and nonempty reserved quarantine directories', () => {
+test('explicit completed recovery removes only empty reserved quarantine directories', () => {
   for (const kind of ['empty', 'nonempty']) {
     const directory = temporaryDirectory();
     const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
@@ -548,10 +548,52 @@ test('explicit completed recovery safely removes empty and nonempty reserved qua
     journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
     journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
     journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
-    assert.deepEqual(journal.completeCorruptRecovery(), { cleared: true, remaining: [] }, kind);
-    assert.equal(fs.existsSync(quarantine), false, kind);
+    const cleanup = journal.completeCorruptRecovery();
+    if (kind === 'empty') {
+      assert.deepEqual(cleanup, { cleared: true, remaining: [] }, kind);
+      assert.equal(fs.existsSync(quarantine), false, kind);
+    } else {
+      assert.equal(cleanup.cleared, false, kind);
+      assert.deepEqual(cleanup.remaining, ['operation-journal.quarantine.canonical'], kind);
+      assert.equal(cleanup.remediation.code, 'reserved-recovery-path-not-empty', kind);
+      assert.equal(cleanup.remediation.path, quarantine, kind);
+      assert.equal(cleanup.remediation.action, 'reveal-in-folder', kind);
+      assert.equal(fs.existsSync(path.join(quarantine, 'nested', 'debris.bin')), true, kind);
+    }
     assert.equal(fs.readFileSync(path.join(outside, 'preserved.txt'), 'utf8'), 'preserve', kind);
   }
+});
+
+test('lstat-to-rmdir swap never traverses a replacement symlink target', () => {
+  const directory = temporaryDirectory();
+  const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+  const displaced = path.join(directory, 'displaced-quarantine');
+  const outside = path.join(directory, 'outside-target');
+  fs.mkdirSync(quarantine);
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'preserved.txt'), 'preserve');
+  const swappingFs = Object.create(fs);
+  let armed = false;
+  let swapped = false;
+  swappingFs.lstatSync = candidate => {
+    const stat = fs.lstatSync(candidate);
+    if (armed && !swapped && candidate === quarantine) {
+      swapped = true;
+      fs.renameSync(quarantine, displaced);
+      fs.symlinkSync(outside, quarantine);
+    }
+    return stat;
+  };
+  const journal = createOperationJournal({ userDataPath: directory, fs: swappingFs, now: () => 1 });
+  journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'owned' });
+  journal.update({ flashVerification: 'flash-verified', pendingResult: pendingResult() });
+  journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
+  armed = true;
+  const cleanup = journal.completeCorruptRecovery();
+  assert.equal(cleanup.cleared, false);
+  assert.equal(cleanup.remediation.action, 'reveal-in-folder');
+  assert.equal(fs.readFileSync(path.join(outside, 'preserved.txt'), 'utf8'), 'preserve');
 });
 
 test('directory cleanup permission failure retains completed authority and succeeds on retry', () => {
@@ -561,9 +603,9 @@ test('directory cleanup permission failure retains completed authority and succe
   fs.mkdirSync(quarantine);
   fs.writeFileSync(debris, 'debris');
   const failingFs = Object.create(fs);
-  failingFs.unlinkSync = candidate => {
-    if (candidate === debris) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
-    return fs.unlinkSync(candidate);
+  failingFs.rmdirSync = candidate => {
+    if (candidate === quarantine) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    return fs.rmdirSync(candidate);
   };
   const journal = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 1 });
   journal.beginCorruptRecovery({ operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: buildId });
@@ -572,10 +614,14 @@ test('directory cleanup permission failure retains completed authority and succe
   journal.update({ restartResult: 'restarted', usbOwnership: 'released' });
   assert.deepEqual(journal.completeCorruptRecovery(), {
     cleared: false, remaining: ['operation-journal.quarantine.canonical'],
+    remediation: {
+      code: 'reserved-recovery-path-cleanup-required', path: quarantine, action: 'reveal-in-folder',
+    },
   });
   assert.equal(journal.load().flashVerification, 'flash-verified');
   assert.equal(journal.clear().cleared, false);
   assert.equal(fs.existsSync(path.join(directory, 'operation-journal.recovery.json')), true);
+  fs.unlinkSync(debris);
   const retry = createOperationJournal({ userDataPath: directory });
   assert.deepEqual(retry.completeCorruptRecovery(), { cleared: true, remaining: [] });
   assert.equal(retry.load().flashVerification, 'flash-verified');

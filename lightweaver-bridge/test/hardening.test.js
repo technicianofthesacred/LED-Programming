@@ -243,6 +243,33 @@ test('failed recovered-result clear remains visibly pending through IPC', async 
   });
 });
 
+test('filesystem remediation IPC reveals only the fixed folder and retries journal cleanup', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  let revealed = 0;
+  let retried = 0;
+  const result = {
+    state: 'recovered-result-pending', message: 'Cleanup succeeded.', operation: 'recover-current-release',
+    cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
+    target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', resultIdentityHash: 'b'.repeat(64),
+  };
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    revealRecoveryFolder: async () => { revealed += 1; },
+    runner: { retryRecoveryCleanup() { retried += 1; return result; } },
+  });
+  const revealedResult = await handlers['bridge:reveal-recovery-folder'](event);
+  assert.equal(revealed, 1);
+  assert.equal(revealedResult.state, 'filesystem-remediation-required');
+  assert.equal(revealedResult.nextAction, 'retry-recovery-cleanup');
+  const retriedResult = await handlers['bridge:retry-recovery-cleanup'](event);
+  assert.equal(retried, 1);
+  assert.equal(retriedResult.state, 'recovered-result-pending');
+  assert.equal(retriedResult.resultIdentityHash, 'b'.repeat(64));
+  assert.equal(retriedResult.operation, 'recover-current-release');
+});
+
 test('typed maintenance IPC executes each visible operation and emits a bounded callback result', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
@@ -580,7 +607,7 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.deepEqual(Object.keys(exposed).sort(), [
     'cancelBeforeCriticalSection', 'confirmDestructiveAction', 'dismissExpiredLaunch', 'dismissRecoveredResult', 'inspectCompatibleCard',
     'inspectForOperation', 'onCallbackDelivery', 'onLaunchRequest', 'onProgress', 'onResult',
-    'retryStudioCallback', 'runMaintenanceOperation', 'startOperation',
+    'retryRecoveryCleanup', 'retryStudioCallback', 'revealRecoveryFolder', 'runMaintenanceOperation', 'startOperation',
   ]);
   assert.equal('ipcRenderer' in exposed, false);
   const inspected = await exposed.inspectCompatibleCard();
@@ -613,6 +640,10 @@ test('actual sandbox preload exposes only typed API and sanitizes real subscript
   assert.equal('returnCode' in delivery, false);
   await exposed.retryStudioCallback();
   assert.deepEqual(invokes.at(-1), ['bridge:retry-callback', undefined]);
+  await exposed.revealRecoveryFolder();
+  assert.deepEqual(invokes.at(-1), ['bridge:reveal-recovery-folder', undefined]);
+  await exposed.retryRecoveryCleanup();
+  assert.deepEqual(invokes.at(-1), ['bridge:retry-recovery-cleanup', undefined]);
   const recoveredContext = {
     operation: 'install-current-release', cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3',
     buildId: 'a'.repeat(40), target: 'lightweaver-controller-esp32s3', verification: 'flash-verified',

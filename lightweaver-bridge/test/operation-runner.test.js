@@ -319,6 +319,29 @@ test('dual-corrupt startup recovers only through the confirmed card and cleans b
   assert.equal(restartedJournal.load().flashVerification, 'flash-verified');
 });
 
+test('verified recovery surfaces nonempty reserved-path remediation and retries without hardware', async () => {
+  const { createOperationJournal } = require('../src/operation-journal');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-runner-remediation-'));
+  const quarantine = path.join(directory, 'operation-journal.quarantine.canonical');
+  fs.mkdirSync(quarantine);
+  fs.writeFileSync(path.join(quarantine, 'remove-me.txt'), 'debris');
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  const h = harness({ journal });
+  const auth = await authorize(h, 'recover-current-release');
+  const result = await h.runner.execute({
+    operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  });
+  assert.equal(result.state, 'filesystem-remediation-required');
+  assert.equal(result.remediationPath, quarantine);
+  assert.equal(result.nextAction, 'reveal-recovery-folder');
+  const writes = h.calls.filter(value => Array.isArray(value) && value[0] === 'write').length;
+  fs.unlinkSync(path.join(quarantine, 'remove-me.txt'));
+  const retried = h.runner.retryRecoveryCleanup();
+  assert.equal(retried.state, 'awaiting-card-acknowledgement');
+  assert.match(retried.resultIdentityHash, /^[a-f0-9]{64}$/);
+  assert.equal(h.calls.filter(value => Array.isArray(value) && value[0] === 'write').length, writes);
+});
+
 test('restart recovery inspects the exact card before classifying unverified mutation', async () => {
   const journal = memoryJournal({
     operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,

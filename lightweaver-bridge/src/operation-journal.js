@@ -6,8 +6,6 @@ const path = require('node:path');
 
 const JOURNAL_VERSION = 1;
 const JOURNAL_MAX_BYTES = 4096;
-const CLEANUP_MAX_DEPTH = 16;
-const CLEANUP_MAX_ENTRIES = 256;
 const OPERATIONS = new Set(['install-current-release', 'recover-current-release']);
 const BOUNDARIES = new Set(['before-mutation', 'erase-or-write-started']);
 const VERIFICATIONS = new Set(['not-verified', 'flash-verified']);
@@ -304,31 +302,10 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
   }
 
   function removeOwnedPath(candidate) {
-    const budget = { entries: 0 };
-    function removeEntry(entry, depth) {
-      let stat;
-      try { stat = fs.lstatSync(entry); } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
-      budget.entries += 1;
-      if (budget.entries > CLEANUP_MAX_ENTRIES || depth > CLEANUP_MAX_DEPTH) {
-        throw new Error('Reserved recovery cleanup exceeds its safe bound');
-      }
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        fs.unlinkSync(entry);
-        return;
-      }
-      const names = fs.readdirSync(entry);
-      if (budget.entries + names.length > CLEANUP_MAX_ENTRIES) {
-        throw new Error('Reserved recovery cleanup exceeds its safe bound');
-      }
-      for (const name of names) {
-        if (name === '.' || name === '..' || path.basename(name) !== name) {
-          throw new Error('Reserved recovery cleanup entry is invalid');
-        }
-        removeEntry(path.join(entry, name), depth + 1);
-      }
-      fs.rmdirSync(entry);
-    }
-    removeEntry(candidate, 0);
+    let stat;
+    try { stat = fs.lstatSync(candidate); } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) fs.unlinkSync(candidate);
+    else fs.rmdirSync(candidate);
   }
 
   function clear() {
@@ -442,10 +419,22 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       const current = activeFile ? readRecord(activeFile) : selection().record;
       if (!current || current.flashVerification !== 'flash-verified' || current.restartResult !== 'restarted') return false;
       const remaining = [];
+      let firstFailure = null;
       for (const candidate of [corruptRecoveryFile, ...quarantineFiles]) {
-        try { removeOwnedPath(candidate); } catch { remaining.push(path.basename(candidate)); }
+        try { removeOwnedPath(candidate); } catch (error) {
+          remaining.push(path.basename(candidate));
+          if (!firstFailure) firstFailure = { candidate, error };
+        }
       }
-      return Object.freeze({ cleared: remaining.length === 0, remaining: Object.freeze(remaining) });
+      if (!remaining.length) return Object.freeze({ cleared: true, remaining: Object.freeze([]) });
+      return Object.freeze({
+        cleared: false, remaining: Object.freeze(remaining),
+        remediation: Object.freeze({
+          code: ['ENOTEMPTY', 'EEXIST'].includes(firstFailure.error?.code)
+            ? 'reserved-recovery-path-not-empty' : 'reserved-recovery-path-cleanup-required',
+          path: firstFailure.candidate, action: 'reveal-in-folder',
+        }),
+      });
     },
     restoreCompletedAuthority(value = {}) {
       if (load()) return false;

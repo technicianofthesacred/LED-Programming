@@ -10,6 +10,7 @@ const OPERATIONS = new Set([
 const STATES = new Set([
   'select-card', 'inspect', 'confirm', 'installing', 'verifying', 'complete', 'recovery-required',
   'awaiting-card-acknowledgement', 'operation-failed', 'usb-ownership-uncertain', 'launch-expired',
+  'filesystem-remediation-required', 'recovered-result-pending',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 
@@ -60,6 +61,13 @@ function createRendererResult(state, message, fields = {}) {
   if (['recoverable-failure', 'needs-safe-recovery', 'usb-ownership-uncertain'].includes(fields.classification)) result.classification = fields.classification;
   if (typeof fields.phase === 'string' && /^[a-z0-9-]{1,48}$/.test(fields.phase)) result.phase = fields.phase;
   if (typeof fields.nextAction === 'string' && /^[a-z0-9-]{1,64}$/.test(fields.nextAction)) result.nextAction = fields.nextAction;
+  if (typeof fields.operation === 'string' && OPERATIONS.has(fields.operation)) result.operation = fields.operation;
+  if (typeof fields.resultIdentityHash === 'string' && /^[a-f0-9]{64}$/.test(fields.resultIdentityHash)) {
+    result.resultIdentityHash = fields.resultIdentityHash;
+  }
+  if (typeof fields.remediationPath === 'string' && fields.remediationPath.length <= 512 && !/[\0\r\n]/.test(fields.remediationPath)) {
+    result.remediationPath = fields.remediationPath;
+  }
   return Object.freeze(result);
 }
 

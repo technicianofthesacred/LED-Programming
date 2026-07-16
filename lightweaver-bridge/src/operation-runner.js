@@ -433,7 +433,7 @@ function createOperationRunner({
         verifiedRelease = null;
       }
       if (!primaryError && corruptRecovery && flashVerified && cardRestarted) {
-        try { journal?.completeCorruptRecovery?.(); } catch {}
+        try { result = withFilesystemRemediation(result, journal?.completeCorruptRecovery?.()); } catch {}
       }
       if (primaryError) throw primaryError;
       return result;
@@ -465,6 +465,24 @@ function createOperationRunner({
     throw new BridgeOperationError('unsupported-operation', 'Unsupported maintenance bridge operation');
   }
 
+  function withFilesystemRemediation(value, cleanup) {
+    if (cleanup?.cleared !== false || !cleanup.remediation) return Object.freeze({ ...value });
+    return Object.freeze({
+      ...value,
+      state: 'filesystem-remediation-required',
+      message: `Recovery is verified, but Lightweaver cannot remove its reserved path: ${cleanup.remediation.path}. Open the folder, empty or remove that exact path, then retry cleanup.`,
+      code: cleanup.remediation.code,
+      classification: 'needs-safe-recovery',
+      nextAction: 'reveal-recovery-folder',
+      remediationPath: cleanup.remediation.path,
+    });
+  }
+
+  function completedRecoveryResult(saved) {
+    const value = Object.freeze({ ...saved.pendingResult, ...recoveredContextFrom(saved) });
+    try { return withFilesystemRemediation(value, journal?.completeCorruptRecovery?.()); } catch { return value; }
+  }
+
   async function recoverInterrupted() {
     return exclusive(async () => {
       const saved = journal?.load?.();
@@ -475,7 +493,7 @@ function createOperationRunner({
         core.validateInstallHardware(identity);
       } catch (error) {
         try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
-        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return Object.freeze({ ...saved.pendingResult, ...recoveredContextFrom(saved) });
+        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return completedRecoveryResult(saved);
         throw new BridgeOperationError('recovery-inspection-failed', 'The interrupted operation could not inspect and release its expected card.', {
           mutation: saved.mutationBoundary === 'before-mutation' ? 'none' : 'uncertain',
           outcome: saved.mutationBoundary === 'before-mutation' ? 'recoverable-failure' : 'needs-safe-recovery',
@@ -485,7 +503,7 @@ function createOperationRunner({
       }
       if (identity?.cardId !== saved.expectedCardId) {
         try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
-        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return Object.freeze({ ...saved.pendingResult, ...recoveredContextFrom(saved) });
+        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return completedRecoveryResult(saved);
         throw new BridgeOperationError('recovery-card-mismatch', 'The connected card does not match the interrupted operation.', {
           mutation: saved.mutationBoundary === 'before-mutation' ? 'none' : 'uncertain',
           outcome: saved.mutationBoundary === 'before-mutation' ? 'recoverable-failure' : 'needs-safe-recovery',
@@ -497,7 +515,7 @@ function createOperationRunner({
         ? { restartResult: 'restarted', usbOwnership: 'released' }
         : { usbOwnership: 'released' });
       if (saved.flashVerification === 'flash-verified' && saved.pendingResult) {
-        return Object.freeze({ ...saved.pendingResult, ...recoveredContextFrom(journal.load()) });
+        return completedRecoveryResult(journal.load());
       }
       if (saved.mutationBoundary === 'before-mutation') {
         journal.clear();
@@ -533,6 +551,12 @@ function createOperationRunner({
 
   function recoveredResultContext() {
     return recoveredContextFrom(journal?.load?.());
+  }
+
+  function retryRecoveryCleanup() {
+    const saved = journal?.load?.();
+    if (!saved?.pendingResult || saved.flashVerification !== 'flash-verified' || saved.restartResult !== 'restarted') return null;
+    return completedRecoveryResult(saved);
   }
 
   function bindCompletedResult(value) {
@@ -575,6 +599,7 @@ function createOperationRunner({
   return Object.freeze({
     inspect, prepare, execute, runMaintenance, recoverInterrupted,
     bindCompletedResult, acknowledgeResult, reconcilePendingResult, dismissCompletedResult, recoveredResultContext,
+    retryRecoveryCleanup,
     hasInterruptedOperation: () => Boolean(journal?.load?.()),
     hasInspection: () => Boolean(inspection && inspection.expiresAt > now()),
     isActive: () => active,

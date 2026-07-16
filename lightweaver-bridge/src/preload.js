@@ -11,6 +11,7 @@ const STATES = new Set([
   'callback-delivery-failed', 'callback-returned', 'launch-expired',
   'return-pending',
   'recovered-result-pending',
+  'filesystem-remediation-required',
 ]);
 const TOKEN_PATTERN = /^[a-f0-9]{32,128}$/i;
 const RETURN_CODE_PATTERN = /^LW1-[A-Za-z0-9_-]{1,900}$/;
@@ -84,6 +85,9 @@ function sanitizePayload(value) {
   if (['recoverable-failure', 'needs-safe-recovery', 'usb-ownership-uncertain'].includes(source.classification)) result.classification = source.classification;
   if (typeof source.phase === 'string' && /^[a-z0-9-]{1,48}$/.test(source.phase)) result.phase = source.phase;
   if (typeof source.nextAction === 'string' && /^[a-z0-9-]{1,64}$/.test(source.nextAction)) result.nextAction = source.nextAction;
+  if (typeof source.remediationPath === 'string' && source.remediationPath.length <= 512 && !/[\0\r\n]/.test(source.remediationPath)) {
+    result.remediationPath = source.remediationPath;
+  }
   return Object.freeze(result);
 }
 
@@ -139,6 +143,8 @@ contextBridge.exposeInMainWorld('lightweaverBridge', Object.freeze({
       return Promise.reject(error);
     }
   },
+  revealRecoveryFolder: () => ipcRenderer.invoke('bridge:reveal-recovery-folder').then(sanitizePayload),
+  retryRecoveryCleanup: () => ipcRenderer.invoke('bridge:retry-recovery-cleanup').then(sanitizePayload),
 }));
 
 ipcRenderer.send('bridge:preload-ready');

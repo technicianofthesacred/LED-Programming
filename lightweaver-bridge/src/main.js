@@ -178,6 +178,7 @@ function registerIpcHandlers(runner) {
     claimLaunchContext: requestedOperation => launchRouter.active ? launchRouter.claim(requestedOperation) : null,
     retryCallback: retryBoundedResult,
     dismissExpiredLaunch: () => launchRouter.dismissExpired(),
+    revealRecoveryFolder: () => shell.openPath(app.getPath('userData')),
   });
   for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);
 }
@@ -214,7 +215,11 @@ async function createMainWindow() {
   if (resultCoordinator.returnCode) {
     sendCallbackDelivery('return-pending', 'A saved return is pending. Paste the code into the original Studio tab.', resultCoordinator.returnCode);
   } else if (recoveredOperationResult) {
-    window.webContents.send('bridge:result', Object.freeze({ ...recoveredOperationResult, state: 'recovered-result-pending' }));
+    window.webContents.send('bridge:result', Object.freeze({
+      ...recoveredOperationResult,
+      state: recoveredOperationResult.state === 'filesystem-remediation-required'
+        ? recoveredOperationResult.state : 'recovered-result-pending',
+    }));
   }
   return window;
 }
