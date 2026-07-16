@@ -140,4 +140,56 @@ replayModel.knownGood = 'config-b';
 assert.equal(replayModel.confirmedId === 'activation-a', false,
   'confirm A must be rejected after a same-wiring save B replaces the acknowledged config');
 
+function candidateMetadataValid(state) {
+  if (![0, 1, 2, 3].includes(state.candidateState)) return false;
+  if (state.candidateState === 3) {
+    if (!state.armKeyPresent || !state.candidateConfig || !state.candidateId) return false;
+    if (state.armed) return state.previousKnown !== undefined;
+    return state.knownGood !== state.candidateConfig;
+  }
+  if (state.candidateState === 0 && state.armed) {
+    return Boolean(state.confirmedId && state.candidateConfig && state.candidateId &&
+      state.previousKnown !== undefined && state.knownGood === state.candidateConfig);
+  }
+  if (state.candidateState === 0 && state.candidateConfig &&
+      state.knownGood === state.candidateConfig && !state.confirmedId) return false;
+  return !state.armed;
+}
+
+const interruptedPromotion = {
+  candidateState: 3,
+  armKeyPresent: true,
+  armed: true,
+  knownGood: 'candidate-v2',
+  previousKnown: 'known-good-v1',
+  candidateConfig: 'candidate-v2',
+  candidateId: 'activation-2',
+};
+assert.equal(candidateMetadataValid(interruptedPromotion), true);
+for (const missing of ['armKeyPresent', 'previousKnown', 'candidateConfig', 'candidateId']) {
+  const corrupt = { ...interruptedPromotion };
+  if (missing === 'armKeyPresent') corrupt.armKeyPresent = false;
+  else delete corrupt[missing];
+  assert.equal(candidateMetadataValid(corrupt), false, `missing ${missing} must fail closed`);
+  assert.equal(candidateMetadataValid(corrupt), false, `repeated boot with missing ${missing} must remain safe-mode`);
+}
+for (const corrupt of [
+  { ...interruptedPromotion, candidateState: 255 },
+  { ...interruptedPromotion, armed: false },
+]) {
+  assert.equal(candidateMetadataValid(corrupt), false);
+  assert.equal(candidateMetadataValid(corrupt), false, 'corrupt metadata must not heal into known-good on repeated boot');
+}
+const committedWithoutConfirmation = {
+  ...interruptedPromotion,
+  candidateState: 0,
+  armed: false,
+};
+assert.equal(candidateMetadataValid(committedWithoutConfirmation), false,
+  'a committed candidate without its confirmation fence must fail closed');
+
+assert.match(storage, /validateCandidateMetadataForBoot/);
+assert.match(storage, /candidate metadata corrupt/);
+assert.match(storage, /NVS_NO_PREVIOUS_KNOWN_GOOD/);
+
 console.log('wiring-promotion-power-loss tests passed');

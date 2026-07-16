@@ -26,6 +26,7 @@ constexpr const char* NVS_CANDIDATE_ID_KEY = "candidateId";
 constexpr const char* NVS_CONFIRMED_ID_KEY = "confirmedId";
 constexpr const char* NVS_PREVIOUS_KNOWN_GOOD_KEY = "previousKnown";
 constexpr const char* NVS_PROMOTION_ARMED_KEY = "promotionArmed";
+constexpr const char* NVS_NO_PREVIOUS_KNOWN_GOOD = "__lightweaver_none__";
 constexpr const char* NVS_DISCOVERY_ACTIVE_KEY = "discoveryActive";
 constexpr const char* NVS_DISCOVERY_BATCH_KEY = "discoveryBatch";
 constexpr const char* NVS_RECOVERY_PENDING_KEY = "recoveryPending";
@@ -639,7 +640,6 @@ bool nvsConfigKeyHasValue(const char* key) {
 
 WiringCandidateState readCandidateState(Preferences& prefs) {
   uint8_t raw = prefs.getUChar(NVS_CANDIDATE_STATE_KEY, WIRING_CANDIDATE_NONE);
-  if (raw > WIRING_CANDIDATE_AWAITING_CONFIRMATION) return WIRING_CANDIDATE_NONE;
   return static_cast<WiringCandidateState>(raw);
 }
 
@@ -654,10 +654,13 @@ bool candidateIdMatches(Preferences& prefs, const String& activationId) {
 
 bool restorePreviousKnownGood(Preferences& prefs) {
   if (!prefs.getBool(NVS_PROMOTION_ARMED_KEY, false)) return true;
+  if (!prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY)) return false;
   String previous = prefs.getString(NVS_PREVIOUS_KNOWN_GOOD_KEY, "");
-  bool restored = previous.length()
+  bool restored = previous == NVS_NO_PREVIOUS_KNOWN_GOOD
+    ? (!prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) || prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY))
+    : previous.length()
     ? prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, previous) == previous.length()
-    : (!prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) || prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY));
+    : false;
   if (!restored) return false;
   bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
                   !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
@@ -678,6 +681,63 @@ bool finalizeCommittedPromotion(Preferences& prefs) {
   bool candidateIdCleared = !prefs.isKey(NVS_CANDIDATE_ID_KEY) ||
                             prefs.remove(NVS_CANDIDATE_ID_KEY);
   return previousCleared && candidateCleared && candidateIdCleared;
+}
+
+bool validateCandidateMetadataForBoot(Preferences& prefs, WiringCandidateState state,
+                                      String& message) {
+  for (const char* key : {NVS_CANDIDATE_CONFIG_KEY, NVS_CANDIDATE_ID_KEY,
+                          NVS_CONFIRMED_ID_KEY, NVS_PREVIOUS_KNOWN_GOOD_KEY}) {
+    if (prefs.isKey(key) && prefs.getType(key) != PT_STR) {
+      message = "candidate metadata corrupt: invalid string metadata type";
+      return false;
+    }
+  }
+  if ((prefs.isKey(NVS_CANDIDATE_STATE_KEY) && prefs.getType(NVS_CANDIDATE_STATE_KEY) != PT_U8) ||
+      (prefs.isKey(NVS_PROMOTION_ARMED_KEY) && prefs.getType(NVS_PROMOTION_ARMED_KEY) != PT_U8)) {
+    message = "candidate metadata corrupt: invalid state metadata type";
+    return false;
+  }
+  if (static_cast<uint8_t>(state) > WIRING_CANDIDATE_AWAITING_CONFIRMATION) {
+    message = "candidate metadata corrupt: invalid state";
+    return false;
+  }
+  bool armedKeyPresent = prefs.isKey(NVS_PROMOTION_ARMED_KEY);
+  bool armed = prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
+  bool journalPresent = prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY);
+  String knownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
+  String candidateId = prefs.getString(NVS_CANDIDATE_ID_KEY, "");
+  String confirmedId = prefs.getString(NVS_CONFIRMED_ID_KEY, "");
+
+  if (state == WIRING_CANDIDATE_AWAITING_CONFIRMATION) {
+    if (!armedKeyPresent || !candidate.length() || !candidateId.length() ||
+        (armed && !journalPresent) || (!armed && knownGood == candidate)) {
+      message = "candidate metadata corrupt: unsafe awaiting-confirmation tuple";
+      return false;
+    }
+    return true;
+  }
+  if (state == WIRING_CANDIDATE_STAGED || state == WIRING_CANDIDATE_BOOTING) {
+    if (!armedKeyPresent || armed || !candidate.length() || !candidateId.length()) {
+      message = "candidate metadata corrupt: incomplete staged tuple";
+      return false;
+    }
+    return true;
+  }
+  if (armed) {
+    if (!journalPresent || !candidate.length() || !candidateId.length() ||
+        !confirmedId.length() || knownGood != candidate) {
+      message = "candidate metadata corrupt: incomplete committed promotion";
+      return false;
+    }
+  } else if (state == WIRING_CANDIDATE_NONE) {
+    if ((candidate.length() && !candidateId.length()) ||
+        (candidate.length() && knownGood == candidate && !confirmedId.length())) {
+      message = "candidate metadata corrupt: inconsistent committed cleanup";
+      return false;
+    }
+  }
+  return true;
 }
 
 String makeActivationId() {
@@ -716,7 +776,8 @@ const char* candidateStateLabel(WiringCandidateState state) {
     case WIRING_CANDIDATE_BOOTING: return "booting";
     case WIRING_CANDIDATE_AWAITING_CONFIRMATION: return "awaiting-confirmation";
     case WIRING_CANDIDATE_NONE:
-    default: return "none";
+      return "none";
+    default: return "invalid";
   }
 }
 
@@ -818,7 +879,34 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     Preferences prefs;
     if (prefs.begin(NVS_NAMESPACE, true)) {
       state = readCandidateState(prefs);
+      if (!validateCandidateMetadataForBoot(prefs, state, message)) {
+        prefs.end();
+        applyDefaultRuntimeConfig(config);
+        ensureDefaultZone(config);
+        result.ok = true;
+        result.safeMode = true;
+        result.source = SOURCE_DEFAULTS;
+        result.message = message + "; safe defaults loaded";
+        return result;
+      }
       prefs.end();
+    }
+  }
+
+  if (state == WIRING_CANDIDATE_NONE) {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, false)) {
+      bool cleaned = finalizeCommittedPromotion(prefs);
+      prefs.end();
+      if (!cleaned) {
+        applyDefaultRuntimeConfig(config);
+        ensureDefaultZone(config);
+        result.ok = true;
+        result.safeMode = true;
+        result.source = SOURCE_DEFAULTS;
+        result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
+        return result;
+      }
     }
   }
 
@@ -1052,6 +1140,10 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
     return false;
   }
   WiringCandidateState state = readCandidateState(prefs);
+  if (!validateCandidateMetadataForBoot(prefs, state, message)) {
+    prefs.end();
+    return false;
+  }
   String candidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "");
   if (state == WIRING_CANDIDATE_NONE &&
       activationId.length() > 0 &&
@@ -1070,7 +1162,8 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
   String previous = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
   bool journaled = previous.length()
     ? prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY, previous) == previous.length()
-    : (!prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY) || prefs.remove(NVS_PREVIOUS_KNOWN_GOOD_KEY));
+    : prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY, NVS_NO_PREVIOUS_KNOWN_GOOD) ==
+        strlen(NVS_NO_PREVIOUS_KNOWN_GOOD);
   bool armed = journaled && prefs.putBool(NVS_PROMOTION_ARMED_KEY, true) > 0;
   bool promoted = armed && prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length();
   bool confirmed = promoted && prefs.putString(NVS_CONFIRMED_ID_KEY, activationId) == activationId.length();
@@ -1096,6 +1189,11 @@ bool rollbackCandidateRuntimeConfig(const String& activationId, String& message)
   if (!candidateIdMatches(prefs, activationId)) {
     prefs.end();
     message = "candidate activation id mismatch";
+    return false;
+  }
+  WiringCandidateState state = readCandidateState(prefs);
+  if (!validateCandidateMetadataForBoot(prefs, state, message)) {
+    prefs.end();
     return false;
   }
   if (!restorePreviousKnownGood(prefs)) {

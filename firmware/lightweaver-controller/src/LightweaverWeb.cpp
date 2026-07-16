@@ -20,9 +20,13 @@ size_t controlRequestBodyLength = 0;
 bool controlRequestBodyReady = false;
 bool controlRequestBodyRejected = false;
 constexpr size_t LW_MAX_RUNTIME_REQUEST_BODY_BYTES = 3968;
-uint8_t runtimeRequestBody[LW_MAX_RUNTIME_REQUEST_BODY_BYTES + 1] = {};
+constexpr size_t LW_CANDIDATE_ENVELOPE_BYTES = 14;
+constexpr size_t LW_MAX_CANDIDATE_REQUEST_BODY_BYTES =
+  LW_MAX_RUNTIME_REQUEST_BODY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES;
+uint8_t runtimeRequestBody[LW_MAX_CANDIDATE_REQUEST_BODY_BYTES + 1] = {};
 size_t runtimeRequestBodyLength = 0;
 size_t runtimeRequestExpectedLength = 0;
+size_t runtimeRequestBodyLimit = 0;
 bool runtimeRequestBodyReady = false;
 bool runtimeRequestBodyRejected = false;
 
@@ -1034,12 +1038,20 @@ void handleWiringCandidate() {
     return;
   }
   JsonVariant candidate = doc["candidate"];
-  if (candidate.isNull()) {
+  if (doc.size() != 1 || candidate.isNull() || !candidate.is<JsonObject>()) {
     sendWiringOperation(false, "known-good", "", "candidate config missing");
     return;
   }
   String candidateJson;
   serializeJson(candidate, candidateJson);
+  String canonicalEnvelope = String("{\"candidate\":") + candidateJson + "}";
+  if (candidateJson.length() > LW_MAX_RUNTIME_REQUEST_BODY_BYTES ||
+      runtimeRequestExpectedLength != candidateJson.length() + LW_CANDIDATE_ENVELOPE_BYTES ||
+      canonicalEnvelope.length() != runtimeRequestExpectedLength ||
+      memcmp(canonicalEnvelope.c_str(), runtimeRequestBody, runtimeRequestExpectedLength) != 0) {
+    sendWiringOperation(false, "known-good", "", "candidate envelope must be canonical and within config capacity");
+    return;
+  }
   String activationId;
   bool ok = stageRuntimeConfigJson(candidateJson, activationId, message);
   sendWiringOperation(ok, ok ? "staged" : "known-good", activationId, message);
@@ -1187,14 +1199,17 @@ void handleReboot() {
 
 void handleControlPost();
 
-void handleRuntimeRequestRaw(HTTPRaw& raw) {
+void handleRuntimeRequestRaw(const String& uri, HTTPRaw& raw) {
   if (raw.status == RAW_START) {
     runtimeRequestBodyLength = 0;
     runtimeRequestBodyReady = false;
     runtimeRequestBodyRejected = false;
     runtimeRequestExpectedLength = server.clientContentLength();
+    runtimeRequestBodyLimit = uri == "/api/wiring/candidate"
+      ? LW_MAX_CANDIDATE_REQUEST_BODY_BYTES
+      : LW_MAX_RUNTIME_REQUEST_BODY_BYTES;
     if (runtimeRequestExpectedLength == 0 ||
-        runtimeRequestExpectedLength > LW_MAX_RUNTIME_REQUEST_BODY_BYTES) {
+        runtimeRequestExpectedLength > runtimeRequestBodyLimit) {
       runtimeRequestBodyRejected = true;
       sendCors();
       int status = runtimeRequestExpectedLength == 0 ? 411 : 413;
@@ -1207,7 +1222,7 @@ void handleRuntimeRequestRaw(HTTPRaw& raw) {
   if (raw.status == RAW_WRITE) {
     if (runtimeRequestBodyRejected) return;
     if (runtimeRequestBodyLength + raw.currentSize > runtimeRequestExpectedLength ||
-        runtimeRequestBodyLength + raw.currentSize > LW_MAX_RUNTIME_REQUEST_BODY_BYTES) {
+        runtimeRequestBodyLength + raw.currentSize > runtimeRequestBodyLimit) {
       runtimeRequestBodyRejected = true;
       sendCors();
       server.send(413, "application/json", "{\"ok\":false,\"error\":\"runtime request too large\"}");
@@ -1255,7 +1270,7 @@ class BoundedRuntimeRequestHandler final : public RequestHandler {
   }
   void raw(WebServer& webServer, String uri, HTTPRaw& rawBody) override {
     (void)webServer;
-    if (canRaw(uri)) handleRuntimeRequestRaw(rawBody);
+    if (canRaw(uri)) handleRuntimeRequestRaw(uri, rawBody);
   }
 };
 
