@@ -78,6 +78,18 @@ test('keeps installed-card control available when Web Serial is absent', () => {
   assert.equal(result.canControlInstalledCard, true);
 });
 
+test('production USB is limited to secure top-level desktop Chrome or Edge', () => {
+  for (const userAgent of [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36 Edg/126.0',
+  ]) {
+    assert.equal(detectPlatformCapabilities({ secureContext: true, topLevel: true, serial: {}, userAgent }).canProductionWebSerial, true);
+  }
+  assert.equal(detectPlatformCapabilities({ secureContext: true, topLevel: true, serial: {}, userAgent: 'Mozilla/5.0 Firefox/128.0' }).canProductionWebSerial, false);
+  assert.equal(detectPlatformCapabilities({ secureContext: true, topLevel: true, serial: {}, userAgent: 'Mozilla/5.0 (Linux; Android 14) Mobile Chrome/126.0' }).canProductionWebSerial, false);
+  assert.equal(detectPlatformCapabilities({ secureContext: true, topLevel: false, serial: {}, userAgent: 'Mozilla/5.0 Chrome/126.0' }).canProductionWebSerial, false);
+});
+
 test('detects mobile environments from user agent and iPad touch capability', () => {
   assert.equal(detectPlatformCapabilities({ userAgent: 'Mozilla/5.0 (Linux; Android 14) Mobile' }).isMobile, true);
   assert.equal(detectPlatformCapabilities({

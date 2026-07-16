@@ -31,12 +31,17 @@ export function detectPlatformCapabilities({
     || /Mobile/i.test(normalizedUserAgent);
   const observedSecureContext = secureContext === true;
   const observedTopLevel = topLevel === true;
+  const isChrome = /(?:Chrome|CriOS)\//i.test(normalizedUserAgent) && !/(?:EdgA?|OPR)\//i.test(normalizedUserAgent);
+  const isEdge = /Edg\//i.test(normalizedUserAgent);
+  const productionBrowserSupported = !isMobile && (isChrome || isEdge);
 
   return {
     topLevel: observedTopLevel,
     embedded: !observedTopLevel,
     secureContext: observedSecureContext,
     canWebSerialInstall: observedSecureContext && observedTopLevel && Boolean(serial),
+    canProductionWebSerial: observedSecureContext && observedTopLevel && productionBrowserSupported && Boolean(serial),
+    productionBrowserSupported,
     mustEscapeToSecureInstaller: !observedSecureContext || !observedTopLevel,
     canControlInstalledCard: true,
     isMobile,

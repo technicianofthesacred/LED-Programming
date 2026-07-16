@@ -37,8 +37,9 @@ const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default:
 const FlashScreen = lazy(() => import('./lw-flash.jsx').then(module => ({ default: module.FlashScreen })));
 const SettingsScreen = lazy(() => import('./lw-settings.jsx').then(module => ({ default: module.SettingsScreen })));
 const InstallerScreen = lazy(() => import('./lw-installer.jsx').then(module => ({ default: module.InstallerScreen })));
+const ProductionScreen = lazy(() => import('./lw-production.jsx').then(module => ({ default: module.ProductionScreen })));
 
-const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer'];
+const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer', 'production'];
 function normalizeView(v) {
   const s = String(v || '').trim().toLowerCase();
   if (s === 'patterns') return 'pattern';
@@ -59,6 +60,7 @@ const I = {
   settings: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>,
   playlist: <svg viewBox="0 0 24 24"><path d="M4 7h11M4 12h11M4 17h7"/><circle cx="18" cy="16" r="2.4"/><path d="M20.4 16V9l-3 1"/></svg>,
   installer: <svg viewBox="0 0 24 24"><path d="M3 13l2.5-7.5A1 1 0 0 1 6.5 5h11a1 1 0 0 1 1 .7L21 13v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 13h5l1.5 2.2h5L16 13h5"/></svg>,
+  production: <svg viewBox="0 0 24 24"><path d="M4 7h16v12H4zM8 7V4h8v3"/><path d="M8 12h8M12 10v4"/></svg>,
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
@@ -84,9 +86,9 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
 /* ---------- Left rail ---------- */
 function Rail({ view, setView }) {
   const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
-  const foot = [["settings", "Settings"]];
-  const item = ([id, label]) => (
-    <button key={id} className={"rail-item" + (view === id ? " active" : "")} onClick={() => setView(id)}>
+  const foot = [["production", "Setup", "Production setup"], ["settings", "Settings"]];
+  const item = ([id, label, accessibleLabel]) => (
+    <button key={id} aria-label={accessibleLabel || label} className={"rail-item" + (view === id ? " active" : "")} onClick={() => setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
@@ -395,7 +397,7 @@ function Shell() {
     e.target.value = '';
   }, [replaceProject]);
 
-  const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, flash: FlashScreen, settings: SettingsScreen, installer: InstallerScreen }[view];
+  const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, flash: FlashScreen, settings: SettingsScreen, installer: InstallerScreen, production: ProductionScreen }[view];
 
   return (
     <div className="app">
