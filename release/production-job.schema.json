@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://led.mandalacodes.com/production/production-job.schema.json",
+  "title": "Immutable Lightweaver production job",
+  "$comment": "Maximum artifact size is 262144 UTF-8 bytes. The SHA-256 job digest is computed over canonical key-sorted compact JSON after omitting top-level digest and replacing configuration.config.productionJobDigest with 64 ASCII zeroes. External imports require a signature from the versioned production trust set. ECDSA-P256-SHA256 signatures use domain Lightweaver production job signature\\0v1\\0<keyId>\\0 over the exact raw artifact bytes. Replaying the identical immutable artifact is harmless and allowed; any byte or digest change requires a new signature. The raw artifact SHA-256 is stored separately in the same-origin index.",
+  "type": "object",
+  "$defs": {
+    "strip": {
+      "type": "object", "additionalProperties": false, "required": ["id", "name", "pixelCount"],
+      "properties": {
+        "id": { "type": "string" }, "name": { "type": "string" }, "pixelCount": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "angle": { "type": "number" }, "brightness": { "type": "number" }, "closed": { "type": "boolean" }, "color": { "type": "string" }, "emit": { "type": "string" },
+        "generatedLayout": { "type": "string" }, "hueShift": { "type": "number" }, "layoutRole": { "type": "string" }, "pathData": { "type": "string" }, "patternId": { "type": ["string", "null"] },
+        "pixels": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["x", "y", "index"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "index": { "type": "integer", "minimum": 0 } } } },
+        "reversed": { "type": "boolean" }, "sourceLayerId": { "type": "string" }, "sourcePathId": { "type": "string" }, "speed": { "type": "number" }, "svgLength": { "type": "number" }, "visible": { "type": "boolean" }, "x": { "type": "number" }, "y": { "type": "number" }
+      }
+    },
+    "wiringOutput": { "type": "object", "additionalProperties": false, "required": ["id", "pin", "runIds"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "pin": { "type": "integer", "minimum": 0, "maximum": 48 }, "runIds": { "type": "array", "items": { "type": "string" } } } },
+    "wiringRun": { "oneOf": [
+      { "type": "object", "additionalProperties": false, "required": ["id", "type", "verified", "source", "directionPolicy", "physicalDirection", "seamLed"], "properties": { "id": { "type": "string" }, "type": { "const": "strip" }, "verified": { "type": "boolean" }, "source": { "type": "object", "additionalProperties": false, "required": ["stripId", "from", "to"], "properties": { "stripId": { "type": "string" }, "from": { "type": "integer", "minimum": 0 }, "to": { "type": "integer", "minimum": 0 } } }, "directionPolicy": { "enum": ["flexible", "fixed"] }, "physicalDirection": { "enum": ["source-forward", "source-reverse"] }, "seamLed": { "type": ["integer", "null"] }, "nextRunIds": { "type": "array", "items": { "type": "string" } } } },
+      { "type": "object", "additionalProperties": false, "required": ["id", "type", "verified", "count"], "properties": { "id": { "type": "string" }, "type": { "const": "inactive" }, "verified": { "type": "boolean" }, "count": { "type": "integer", "minimum": 0 }, "nextRunIds": { "type": "array", "items": { "type": "string" } } } },
+      { "type": "object", "additionalProperties": false, "required": ["id", "type", "verified"], "properties": { "id": { "type": "string" }, "type": { "const": "cable" }, "verified": { "type": "boolean" }, "nextRunIds": { "type": "array", "items": { "type": "string" } } } }
+    ] },
+    "wiring": {
+      "type": "object", "additionalProperties": false, "required": ["version", "locked", "verified", "controllerAnchor", "migrationWarnings", "outputs", "runs"],
+      "properties": { "version": { "const": 1 }, "locked": { "type": "boolean" }, "verified": { "type": "boolean" }, "controllerAnchor": { "oneOf": [{ "const": null }, { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } }] }, "migrationWarnings": { "type": "array", "maxItems": 0, "items": false }, "outputs": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/wiringOutput" } }, "runs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/wiringRun" } } }
+    },
+    "visualLook": { "type": "object", "additionalProperties": false, "required": ["patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "patternId": { "type": "string" }, "brightness": { "type": "number", "minimum": 0, "maximum": 1 }, "speed": { "type": "number" }, "hueShift": { "type": "number" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" } } },
+    "playlistPattern": { "type": "object", "additionalProperties": false, "required": ["id", "type", "patternId", "label", "enabled", "createdAt"], "properties": { "id": { "type": "string" }, "type": { "const": "pattern" }, "patternId": { "type": "string" }, "label": { "type": "string" }, "enabled": { "type": "boolean" }, "createdAt": { "type": "number" } } },
+    "playlistCombo": { "type": "object", "additionalProperties": false, "required": ["id", "type", "lookId", "label", "enabled", "createdAt"], "properties": { "id": { "type": "string" }, "type": { "const": "combo" }, "lookId": { "type": "string" }, "label": { "type": "string" }, "enabled": { "type": "boolean" }, "createdAt": { "type": "number" } } },
+    "standaloneController": {
+      "type": "object", "additionalProperties": false, "required": ["outputs", "controls", "led", "defaultLook", "playlist"],
+      "properties": {
+        "runtimeMode": { "enum": ["sequence", "procedural", "preset"] }, "activeLookId": { "type": "string" },
+        "outputs": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/runtimeOutput" } },
+        "controls": { "$ref": "#/$defs/controls" }, "led": { "type": "object", "additionalProperties": false, "required": ["type", "colorOrder", "brightnessLimit"], "properties": { "type": { "type": "string" }, "colorOrder": { "enum": ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"] }, "brightnessLimit": { "type": "number", "minimum": 0, "maximum": 1 } } },
+        "defaultLook": { "$ref": "#/$defs/visualLook" },
+        "looks": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "type", "label", "defaultLook", "sectionLooks", "updatedAt"], "properties": { "id": { "type": "string" }, "type": { "const": "compound-pattern" }, "label": { "type": "string" }, "defaultLook": { "$ref": "#/$defs/visualLook" }, "sectionLooks": { "type": "object", "additionalProperties": { "$ref": "#/$defs/visualLook" } }, "updatedAt": { "type": "number" } } } },
+        "playlist": { "type": "array", "minItems": 1, "items": { "oneOf": [{ "$ref": "#/$defs/playlistPattern" }, { "$ref": "#/$defs/playlistCombo" }] } }
+      }
+    },
+    "runtimeOutput": { "type": "object", "additionalProperties": false, "required": ["id", "name", "pin", "pixels"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "pin": { "type": "integer", "minimum": 0, "maximum": 48 }, "pixels": { "type": "integer", "minimum": 1, "maximum": 1024 } } },
+    "controls": { "type": "object", "additionalProperties": false, "required": ["encoder", "previous", "next", "blackout", "brightness", "statusLed"], "properties": { "encoder": { "type": "object", "additionalProperties": false, "required": ["a", "b", "press", "alternatePress", "rotateDirection", "brightnessStep"], "properties": { "a": { "type": "integer" }, "b": { "type": "integer" }, "press": { "type": "integer" }, "alternatePress": { "type": "integer" }, "rotateDirection": { "enum": ["clockwise-brighter", "clockwise-dimmer"] }, "brightnessStep": { "type": "integer", "minimum": 1, "maximum": 64 }, "patternCycleIds": { "type": "array", "items": { "type": "string" } } } }, "previous": { "type": "integer" }, "next": { "type": "integer" }, "blackout": { "type": "integer" }, "brightness": { "type": "integer" }, "statusLed": { "type": "integer" } } },
+    "range": { "type": "object", "additionalProperties": false, "required": ["start", "count"], "properties": { "start": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 1 } } },
+    "zoneLook": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" } } },
+    "zone": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift", "ranges"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" }, "ranges": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/range" } } } },
+    "runtimeLook": { "type": "object", "additionalProperties": false, "required": ["id", "label", "mode", "preset", "fps", "loop", "fadeOutMs", "fadeInMs", "brightness"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "mode": { "enum": ["procedural", "preset", "sequence", "combo"] }, "preset": { "type": "string" }, "fps": { "type": "integer" }, "loop": { "type": "boolean" }, "fadeOutMs": { "type": "integer" }, "fadeInMs": { "type": "integer" }, "brightness": { "type": "number" }, "file": { "type": "string" }, "zones": { "type": "array", "items": { "$ref": "#/$defs/zoneLook" } } } }
+  },
+  "additionalProperties": false,
+  "required": ["schemaVersion", "format", "jobId", "label", "artwork", "batch", "digest", "firmware", "project", "configuration", "expectedOutputs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "format": { "const": "lightweaver-production-job" },
+    "jobId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "artwork": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "batch": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "firmware": {
+      "type": "object", "additionalProperties": false,
+      "required": ["target", "version", "buildId", "minimumVersion"],
+      "properties": {
+        "target": { "const": "esp32-s3-n16r8" },
+        "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+        "buildId": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "minimumVersion": { "const": "1.0.0" }
+      }
+    },
+    "project": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "revision", "fingerprint", "restoreSnapshot"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "revision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{16,64}$" },
+        "restoreSnapshot": {
+          "type": "object", "additionalProperties": false,
+          "required": ["version", "id", "name", "layout", "devices"],
+          "properties": {
+            "version": { "type": "integer", "minimum": 1 },
+            "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "layout": {
+              "type": "object", "additionalProperties": false,
+              "required": ["strips", "patchBoard", "wiring"],
+              "properties": { "strips": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/strip" } }, "patchBoard": { "const": null }, "wiring": { "$ref": "#/$defs/wiring" } }
+            },
+            "devices": {
+              "type": "object", "additionalProperties": false,
+              "required": ["standaloneController"],
+              "properties": { "standaloneController": { "$ref": "#/$defs/standaloneController" } }
+            }
+          }
+        }
+      }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["app", "format", "version", "config"],
+      "properties": {
+        "app": { "const": "Lightweaver" },
+        "format": { "const": "lightweaver-card-runtime-package" },
+        "version": { "const": 1 },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "mode", "piece", "projectRevision", "projectFingerprint", "productionJobId", "productionJobDigest", "led", "controls", "patterns", "looks", "startupPatternId", "zones", "syncZones"],
+          "properties": {
+            "version": { "const": 1 },
+            "mode": { "enum": ["factory-flash", "website-flash", "sd-sequence", "live-host"] },
+            "piece": { "type": "object", "additionalProperties": false, "required": ["id", "name"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
+            "projectRevision": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "projectFingerprint": { "type": "string", "pattern": "^[a-f0-9]{16,64}$" },
+            "productionJobId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$" },
+            "productionJobDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "led": {
+              "type": "object", "additionalProperties": false, "required": ["pixels", "outputs", "colorOrder", "brightnessLimit"],
+              "properties": { "pixels": { "type": "integer", "minimum": 1, "maximum": 1024 }, "outputs": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/runtimeOutput" } }, "colorOrder": { "enum": ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"] }, "brightnessLimit": { "type": "number", "minimum": 0, "maximum": 1 } }
+            },
+            "controls": { "$ref": "#/$defs/controls" },
+            "patterns": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["id", "label", "mode"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "mode": { "enum": ["procedural", "preset"] }, "preset": { "type": "string" } } } },
+            "looks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/runtimeLook" } },
+            "startupPatternId": { "type": "string" },
+            "zones": { "type": "array", "items": { "$ref": "#/$defs/zone" } },
+            "syncZones": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "expectedOutputs": {
+      "type": "array", "minItems": 1, "maxItems": 4,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "label", "pin", "pixels", "direction", "colorOrder"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "label": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "pin": { "type": "integer", "minimum": 0, "maximum": 48 },
+          "pixels": { "type": "integer", "minimum": 1, "maximum": 1024 },
+          "direction": { "enum": ["forward", "reverse"] },
+          "colorOrder": { "enum": ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"] }
+        }
+      }
+    }
+  }
+}
