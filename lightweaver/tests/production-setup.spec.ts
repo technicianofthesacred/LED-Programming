@@ -310,6 +310,7 @@ test('exact-card firmware mismatch returns to same-card USB evidence before inst
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   const recovery = page.getByRole('region', { name: 'Safe recovery' });
   await expect(recovery).toContainText('LW-FW-502');
+  await expect(recovery.locator('dl div').filter({ hasText: 'Card changed?' }).getByText('Yes', { exact: true })).toBeVisible();
   await expect(recovery.getByRole('button', { name: 'Reconnect same card by USB' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Install verified firmware' })).toHaveCount(0);
   await recovery.getByRole('button', { name: 'Reconnect same card by USB' }).click();
@@ -331,8 +332,16 @@ test('physical failures use stable structured recovery before bounded correction
   await expect(recovery).toContainText('Card changed?No');
   await expect(recovery).toContainText('USB released?Yes');
   await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Red end is off' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Test color order', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
   await recovery.getByRole('button', { name: 'Test color order safely' }).click();
+  await expect(recovery).toHaveCount(0);
   await expect(page.getByLabel('Color order')).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Red end is off' })).toHaveCount(0);
 });
 
 test('worker completes one verified job, retains its pass, and Next artwork resets transient state', async ({ page }) => {
@@ -394,6 +403,7 @@ test('physical diagnosis is bounded, requires worker observation, and reverse is
   await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.getByRole('button', { name: 'Blue / red swapped' }).click();
+  await page.getByRole('button', { name: 'Test the opposite direction' }).click();
   await page.getByRole('button', { name: 'Try opposite direction' }).click();
   await expect(page.getByText(/Temporary boundary test/)).toBeVisible();
   await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
@@ -423,10 +433,12 @@ test('sequential boundary corrections preserve the previously confirmed count', 
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
 
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
   await page.getByRole('tab', { name: /Inner ring/ }).click();
   await page.getByRole('button', { name: 'Blue / red swapped' }).click();
+  await page.getByRole('button', { name: 'Test the opposite direction' }).click();
   await page.getByRole('button', { name: 'Try opposite direction' }).click();
 
   const history = JSON.parse(await page.evaluate(() => localStorage.getItem('lw_test_candidate_history') || '[]'));
@@ -445,6 +457,7 @@ test('confirmed count correction is saved with final boundary hardware facts', a
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
   await page.getByRole('tab', { name: /Inner ring/ }).click();
@@ -500,6 +513,7 @@ test('reload during a temporary correction waits through rollback reboot before 
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await expect(page.getByText(/Temporary boundary test/)).toBeVisible();
   await page.evaluate(() => localStorage.removeItem('lw_test_physical_frame'));
@@ -520,6 +534,7 @@ test('reload after a confirmed count correction restores exact progress and wiri
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
   await expect(page.getByText('You physically confirmed this boundary.')).toBeVisible();
@@ -557,6 +572,7 @@ test('count correction invalidates a previously checked downstream boundary befo
   await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
   await page.getByRole('tab', { name: /Outer ring/ }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
   await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
@@ -573,6 +589,7 @@ test('candidate evidence mismatch is rejected before activation', async ({ page 
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await expect(page.getByRole('alert')).toContainText('Staged candidate evidence did not match');
   await expect(page.getByText(/Temporary boundary test/)).toHaveCount(0);
@@ -588,6 +605,7 @@ test('candidate activation failure rolls back the exact staged activation and pr
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await expect(page.getByRole('alert')).toContainText('Candidate activation failed');
   expect(await page.evaluate(() => ({ rollback: localStorage.getItem('lw_test_rollback_count'), status: localStorage.getItem('lw_test_wiring_status_count') }))).toEqual({ rollback: '1', status: '2' });
@@ -603,6 +621,7 @@ test('failed candidate rollback stays visibly locked with an actionable retry', 
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
   await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
   await page.getByRole('button', { name: '+ 1 pixel' }).click();
   await expect(page.getByText('Temporary candidate cleanup required')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Restore last confirmed wiring' })).toBeVisible();

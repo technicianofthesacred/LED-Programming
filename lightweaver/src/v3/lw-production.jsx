@@ -326,7 +326,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: cardHost });
       if (evidence.cardId !== run.expectedCardId) throw new Error(`Wrong card. Reconnect ${run.expectedCardId}; the online card is ${evidence.cardId}.`);
       if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) {
-        showRecovery('firmware-mismatch', { firmwareEvidence: {
+        showRecovery('firmware-mismatch', { cardChanged: run?.cardChanged ? 'yes' : 'no', firmwareEvidence: {
           exactCard: true, installedVersion: evidence.firmwareVersion, installedBuildId: evidence.buildId,
           targetVersion: release.value.manifest.firmwareVersion, targetBuildId: release.value.manifest.buildId,
         } });

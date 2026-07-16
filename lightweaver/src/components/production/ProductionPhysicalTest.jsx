@@ -36,6 +36,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   const [colorOrder, setColorOrder] = useState(knownGood.config.led.colorOrder);
   const [ready, setReady] = useState(false);
   const [failedObservation, setFailedObservation] = useState('');
+  const [recoveryEntered, setRecoveryEntered] = useState(false);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const generationRef = useRef(0);
@@ -45,7 +46,8 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   const result = state.results[state.activeBoundaryId];
   const physicalRecovery = failedObservation && route ? classifyProductionPhysicalFailure(failedObservation) : null;
 
-  useEffect(() => { setFailedObservation(''); }, [state.activeBoundaryId]);
+  useEffect(() => { setFailedObservation(''); setRecoveryEntered(false); }, [state.activeBoundaryId]);
+  useEffect(() => { if (failedObservation) setRecoveryEntered(false); }, [failedObservation]);
 
 
   useEffect(() => { onResultsChange?.(state.results); }, [onResultsChange, state.results]);
@@ -142,7 +144,10 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   }
   async function handleStructuredRecovery(action) {
     if (action === 'retry-physical-stream') { await releaseAndRetry(); return; }
-    if (action === 'open-physical-correction') document.querySelector('.prod-diagnosis button, .prod-diagnosis select, .prod-diagnosis input')?.focus();
+    if (action === 'open-physical-correction') {
+      setRecoveryEntered(true);
+      requestAnimationFrame(() => document.querySelector('.prod-diagnosis select, .prod-diagnosis input, .prod-diagnosis button')?.focus());
+    }
   }
   async function readIdentity() { const driver = productionDriver(); return driver?.readEvidence ? driver.readEvidence('physical') : readCardProjectEvidence({ host: cardHost }); }
   async function verifyIdentity() {
@@ -265,6 +270,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
       setRoute({ action: 'confirm-output', title: 'Temporary change is active', guidance: 'Only this boundary can be confirmed until the timer ends.' });
       const delivered = await startStream(candidate.snapshot, candidate.snapshot.boundaries.find(boundary => boundary.id === state.activeBoundaryId));
       if (!delivered) throw new Error('The candidate light frame did not reach this exact boundary.');
+      setFailedObservation(''); setRecoveryEntered(false);
     } catch (reason) {
       if (stagedCandidate) {
         try {
@@ -295,7 +301,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   const locked = Boolean(state.candidate);
   const deliveryConfirmed = ready && state.delivery === 'acknowledged' && state.deliveryBoundaryId === active.id;
   function handleTabKey(event, index) {
-    if (locked || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (locked || physicalRecovery || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     event.preventDefault();
     const last = knownGood.boundaries.length - 1;
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? last : event.key === 'ArrowRight' ? (index + 1) % knownGood.boundaries.length : (index - 1 + knownGood.boundaries.length) % knownGood.boundaries.length;
@@ -307,9 +313,9 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
   return <section className="prod-physical" aria-labelledby="prod-physical-title">
     <div className="prod-section-head"><div><span className="prod-kicker">Physical boundary · {currentIndex + 1} of {knownGood.boundaries.length}</span><h3 id="prod-physical-title">{active.label}</h3><small>{active.outputLabel} · capped at {currentEstimate.maxMilliamps} mA aggregate</small></div><span className="prod-card-id">GPIO {active.pin}</span></div>
     <p className="prod-physical-instruction"><span className="prod-marker blue" /> First pixel blue <span aria-hidden="true">·</span> <span className="prod-marker red" /> Pixel {active.count} red. Every other boundary stays dark.</p>
-    <div className="prod-output-tabs" role="tablist" aria-label="Boundaries to test">{knownGood.boundaries.map((boundary, index) => <button ref={node => { tabRefs.current[index] = node; }} key={boundary.id} disabled={locked || !ready} type="button" role="tab" tabIndex={boundary.id === active.id ? 0 : -1} aria-selected={boundary.id === active.id} className={boundary.id === active.id ? 'selected' : ''} onKeyDown={event => handleTabKey(event, index)} onClick={() => dispatch({ type: 'select', boundaryId: boundary.id })}><span>{state.results[boundary.id]?.observation === 'correct' ? '✓' : index + 1}</span>{boundary.label}</button>)}</div>
+    <div className="prod-output-tabs" role="tablist" aria-label="Boundaries to test">{knownGood.boundaries.map((boundary, index) => <button ref={node => { tabRefs.current[index] = node; }} key={boundary.id} disabled={locked || !ready || Boolean(physicalRecovery)} type="button" role="tab" tabIndex={boundary.id === active.id ? 0 : -1} aria-selected={boundary.id === active.id} className={boundary.id === active.id ? 'selected' : ''} onKeyDown={event => handleTabKey(event, index)} onClick={() => dispatch({ type: 'select', boundaryId: boundary.id })}><span>{state.results[boundary.id]?.observation === 'correct' ? '✓' : index + 1}</span>{boundary.label}</button>)}</div>
     <div className={`prod-test-state ${state.delivery === 'failed' ? 'failed' : ''}`} role="status">{!ready ? 'Checking persistent wiring before starting any lights…' : state.delivery === 'acknowledged' ? 'Test delivered to this exact boundary. Look at the real LEDs — this is not a pass.' : state.delivery === 'failed' ? 'The test did not reach the LEDs.' : 'Starting a low-brightness test…'}</div>
-    {physicalRecovery && <ProductionRecovery
+    {physicalRecovery && !recoveryEntered && <ProductionRecovery
       recovery={physicalRecovery}
       phase="physical"
       firmwareTarget={`${job.firmware.target || 'esp32-s3-n16r8'}@${job.firmware.version}+${job.firmware.buildId.slice(0, 8)}`}
@@ -317,8 +323,8 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
       onAction={action => void handleStructuredRecovery(action)}
     />}
     {route?.action === 'restore-project' || route?.action === 'signed-firmware-recovery' ? <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p><button type="button" onClick={() => void handOffRecovery(route.action)}>Stop test and continue safely</button></div> : <>
-      {!result || result.observation !== 'correct' ? <><button className="btn primary prod-looks-right" type="button" disabled={busy || !deliveryConfirmed} onClick={() => void observe('correct')}>Yes, this boundary is correct</button><fieldset className="prod-observation"><legend>What do you see instead?</legend><div>{FAILURES.map(([id, label]) => <button type="button" key={id} disabled={busy || locked || !deliveryConfirmed} onClick={() => void observe(id)}>{label}</button>)}</div></fieldset></> : <p className="prod-output-pass" role="status">✓ You physically confirmed this boundary.</p>}
-      {route && !['confirm-output', 'restore-project', 'signed-firmware-recovery', 'inspect-power-data', 'release-restart-stream'].includes(route.action) && <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p>
+      {!physicalRecovery && (!result || result.observation !== 'correct') ? <><button className="btn primary prod-looks-right" type="button" disabled={busy || !deliveryConfirmed} onClick={() => void observe('correct')}>Yes, this boundary is correct</button><fieldset className="prod-observation"><legend>What do you see instead?</legend><div>{FAILURES.map(([id, label]) => <button type="button" key={id} disabled={busy || locked || !deliveryConfirmed} onClick={() => void observe(id)}>{label}</button>)}</div></fieldset></> : !physicalRecovery && <p className="prod-output-pass" role="status">✓ You physically confirmed this boundary.</p>}
+      {physicalRecovery && recoveryEntered && route && !['confirm-output', 'restore-project', 'signed-firmware-recovery', 'inspect-power-data', 'release-restart-stream'].includes(route.action) && <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p>
         {route.action === 'adjust-count' && <div className="prod-inline-actions"><button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'pixel-count', delta: -1 })}>− 1 pixel</button><button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'pixel-count', delta: 1 })}>+ 1 pixel</button></div>}
         {route.action === 'test-direction' && <button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'direction', direction: active.direction === 'reverse' ? 'forward' : 'reverse' })}>Try opposite direction</button>}
         {route.action === 'test-color-order' && <div className="prod-inline-actions"><label>Color order<select value={colorOrder} onChange={event => setColorOrder(event.target.value)}>{COLOR_ORDERS.map(order => <option key={order}>{order}</option>)}</select></label><button type="button" disabled={busy || locked || !deliveryConfirmed || colorOrder === knownGood.config.led.colorOrder} onClick={() => void applyCorrection({ kind: 'color-order', colorOrder })}>Test color order</button></div>}
@@ -327,6 +333,6 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
     </>}
     {state.candidate && <div className="prod-candidate" role="status"><strong>{state.candidate.phase === 'testing' ? `Temporary boundary test · ${countdown}s` : 'Temporary candidate cleanup required'}</strong><p>{active.label} is locked to activation {state.candidate.activationId}. It cannot be bypassed or confirmed from another boundary.</p><button type="button" disabled={busy} onClick={() => void rollback()}>Restore last confirmed wiring</button></div>}
     {error && <p className="prod-error" role="alert">{error}</p>}
-    {state.canComplete && <button className="btn primary" type="button" disabled={!deliveryConfirmed} onClick={() => onComplete?.(buildProductionPhysicalResults(knownGood, state.results))}>Continue to pass record</button>}
+    {state.canComplete && !physicalRecovery && <button className="btn primary" type="button" disabled={!deliveryConfirmed} onClick={() => onComplete?.(buildProductionPhysicalResults(knownGood, state.results))}>Continue to pass record</button>}
   </section>;
 }
