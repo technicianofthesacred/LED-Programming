@@ -1,4 +1,5 @@
 #include "LightweaverStorage.h"
+#include "LightweaverOutputColorParser.h"
 #include <new>
 
 namespace {
@@ -62,6 +63,10 @@ uint32_t clampMilliamps(long value) {
   if (value < 0) return 0;
   if (value > static_cast<long>(LW_MAX_MILLIAMPS)) return LW_MAX_MILLIAMPS;
   return static_cast<uint32_t>(value);
+}
+
+void resetOutputColor(OutputColorConfig& outputColor) {
+  outputColor = OutputColorConfig{};
 }
 
 void resetOutput(OutputConfig& output) {
@@ -152,6 +157,7 @@ void resetConfig(RuntimeConfig& config) {
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
   config.brightnessLimit = 0.65f;
+  resetOutputColor(config.outputColor);
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
   config.outputCount = 0;
   for (uint8_t i = 0; i < LW_MAX_LOOKS; i++) resetLook(config.looks[i]);
@@ -305,7 +311,19 @@ bool loadJsonString(const String& json, RuntimeConfig& config, RuntimeSource sou
     message = String("json parse failed: ") + error.c_str();
     return false;
   }
+  OutputColorConfig parsedOutputColor;
+  const char* outputColorErrorPath = nullptr;
+  const char* outputColorErrorReason = nullptr;
+  if (!parseOutputColorConfig(
+          doc["led"],
+          parsedOutputColor,
+          outputColorErrorPath,
+          outputColorErrorReason)) {
+    message = String(outputColorErrorPath) + " " + outputColorErrorReason;
+    return false;
+  }
   applyJsonToConfig(doc, config, source);
+  config.outputColor = parsedOutputColor;
   if (config.outputCount == 0 || config.lookCount == 0) {
     message = "config missing outputs or looks";
     return false;
@@ -549,6 +567,11 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["piece"]["name"] = config.pieceName;
   doc["led"]["pixels"] = totalPixels;
   doc["led"]["colorOrder"] = config.ledColorOrder;
+  doc["led"]["outputGammaEnabled"] = config.outputColor.gammaEnabled;
+  doc["led"]["outputGammaValue"] = config.outputColor.gammaValue;
+  doc["led"]["calibration"]["red"] = config.outputColor.red;
+  doc["led"]["calibration"]["green"] = config.outputColor.green;
+  doc["led"]["calibration"]["blue"] = config.outputColor.blue;
   doc["led"]["maxMilliamps"] = config.maxMilliamps;
   doc["currentLookIndex"] = currentLookIndex;
   doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";

@@ -4,6 +4,8 @@
 #include <FastLED.h>
 #include <SD.h>
 
+#include "LightweaverOutputColorConfig.h"
+
 #ifndef LW_MAX_PIXELS
 #define LW_MAX_PIXELS 1024
 #endif
@@ -155,6 +157,7 @@ struct RuntimeConfig {
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;
+  OutputColorConfig outputColor;
   // Optional total current ceiling (5V rail, milliamps) for FastLED's automatic
   // power limiter. 0 = disabled (no cap). Set to the PSU rating to prevent
   // full-white brownout resets.
