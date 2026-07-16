@@ -149,10 +149,16 @@ function candidateMetadataValid(state) {
   }
   if (state.candidateState === 0 && state.armed) {
     return Boolean(state.confirmedId && state.candidateConfig && state.candidateId &&
-      state.previousKnown !== undefined && state.knownGood === state.candidateConfig);
+      state.confirmedId === state.candidateId && state.previousKnown !== undefined &&
+      state.knownGood === state.candidateConfig);
   }
-  if (state.candidateState === 0 && state.candidateConfig &&
-      state.knownGood === state.candidateConfig && !state.confirmedId) return false;
+  if (state.candidateState === 0 && state.candidateConfig) {
+    return Boolean(state.candidateId && state.confirmedId === state.candidateId &&
+      state.knownGood === state.candidateConfig);
+  }
+  if (state.candidateState === 0 && state.candidateId) {
+    return state.confirmedId === state.candidateId;
+  }
   return !state.armed;
 }
 
@@ -188,8 +194,52 @@ const committedWithoutConfirmation = {
 assert.equal(candidateMetadataValid(committedWithoutConfirmation), false,
   'a committed candidate without its confirmation fence must fail closed');
 
+const mismatchedCommittedIds = {
+  ...interruptedPromotion,
+  candidateState: 0,
+  confirmedId: 'activation-b',
+};
+assert.equal(candidateMetadataValid(mismatchedCommittedIds), false,
+  'a committed candidate must not accept another activation confirmation');
+assert.equal(candidateMetadataValid(mismatchedCommittedIds), false,
+  'repeated boot must not heal mismatched committed activation ids');
+
+const staleCleanupWithMismatchedIds = {
+  ...mismatchedCommittedIds,
+  armed: false,
+};
+assert.equal(candidateMetadataValid(staleCleanupWithMismatchedIds), false,
+  'stale committed cleanup must retain mismatched metadata for safe recovery');
+assert.equal(candidateMetadataValid(staleCleanupWithMismatchedIds), false,
+  'repeated stale cleanup must not erase evidence with mismatched activation ids');
+
+const staleBToA = {
+  ...interruptedPromotion,
+  candidateState: 0,
+  knownGood: 'candidate-a',
+  candidateConfig: 'candidate-a',
+  candidateId: 'activation-a',
+  confirmedId: 'activation-b',
+};
+assert.equal(candidateMetadataValid(staleBToA), false,
+  'stale confirmation B must never authorize committed candidate A');
+assert.equal(candidateMetadataValid({ ...staleBToA, armed: false }), false,
+  'stale confirmation B must never authorize cleanup of candidate A');
+
+const staleCleanupWithWrongKnownGood = {
+  ...staleCleanupWithMismatchedIds,
+  candidateConfig: 'candidate-a',
+  candidateId: 'activation-a',
+  confirmedId: 'activation-a',
+  knownGood: 'candidate-b',
+};
+assert.equal(candidateMetadataValid(staleCleanupWithWrongKnownGood), false,
+  'stale cleanup must require exact candidate and known-good identity');
+
 assert.match(storage, /validateCandidateMetadataForBoot/);
 assert.match(storage, /candidate metadata corrupt/);
 assert.match(storage, /NVS_NO_PREVIOUS_KNOWN_GOOD/);
+assert.match(storage, /confirmedId != candidateId/,
+  'firmware must compare the committed confirmation and candidate ids exactly');
 
 console.log('wiring-promotion-power-loss tests passed');

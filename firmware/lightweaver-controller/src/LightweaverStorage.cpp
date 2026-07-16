@@ -726,13 +726,18 @@ bool validateCandidateMetadataForBoot(Preferences& prefs, WiringCandidateState s
   }
   if (armed) {
     if (!journalPresent || !candidate.length() || !candidateId.length() ||
-        !confirmedId.length() || knownGood != candidate) {
+        confirmedId != candidateId || knownGood != candidate) {
       message = "candidate metadata corrupt: incomplete committed promotion";
       return false;
     }
   } else if (state == WIRING_CANDIDATE_NONE) {
-    if ((candidate.length() && !candidateId.length()) ||
-        (candidate.length() && knownGood == candidate && !confirmedId.length())) {
+    if ((journalPresent || candidate.length()) &&
+        (!candidate.length() || !candidateId.length() ||
+         confirmedId != candidateId || knownGood != candidate)) {
+      message = "candidate metadata corrupt: inconsistent committed cleanup";
+      return false;
+    }
+    if (!candidate.length() && candidateId.length() && confirmedId != candidateId) {
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
     }
