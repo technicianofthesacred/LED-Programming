@@ -56,6 +56,7 @@ export const DEFAULT_SYM_SETTINGS = {
   phase: 0,
   twist: 0,
   seam: 0.1,
+  center: { x: 0.5, y: 0.5 },
   guide: {
     mode: 'fold',
     axis: { x1: 0.5, y1: 0.08, x2: 0.5, y2: 0.92 },
