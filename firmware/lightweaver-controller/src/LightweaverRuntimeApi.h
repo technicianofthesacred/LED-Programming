@@ -64,8 +64,10 @@ void runtimeCancelStream();
 
 // Cached state from the physical LED output boundary. These values describe
 // frames that actually reached FastLED.show(), not incoming packet rates.
+uint8_t runtimeOutputRequestedBrightnessByte();
 uint8_t runtimeOutputBrightnessByte();
 float runtimeOutputBrightnessScale();
+bool runtimeOutputPowerLimited();
 const char* runtimeOutputSourceClass();
 bool runtimeOutputGammaEnabled();
 float runtimeOutputGammaValue();

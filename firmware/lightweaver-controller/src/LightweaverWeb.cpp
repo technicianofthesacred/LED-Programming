@@ -94,8 +94,10 @@ String outputStatusJson() {
   JsonDocument doc;
   doc["contract"] = 1;
   doc["sourceClass"] = runtimeOutputSourceClass();
+  doc["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
   doc["brightnessByte"] = runtimeOutputBrightnessByte();
   doc["brightnessScale"] = runtimeOutputBrightnessScale();
+  doc["powerLimited"] = runtimeOutputPowerLimited();
   doc["gammaEnabled"] = runtimeOutputGammaEnabled();
   doc["gammaValue"] = runtimeOutputGammaValue();
   doc["calibration"]["red"] = runtimeOutputCalibrationRed();

@@ -71,7 +71,9 @@ uint32_t ledMaxMilliamps = 0;
 // 1=GRB, 2=BRG, 3=BGR, 4=RBG, 5=GBR).
 uint8_t ledColorOrderCode = 1;
 float fadeScale = 1.0f;
+uint8_t lastRequestedOutputBrightnessByte = 0;
 uint8_t lastOutputBrightnessByte = 0;
+bool outputPowerLimited = false;
 OutputSourceClass lastOutputSourceClass = OUTPUT_LOCAL;
 uint32_t outputShowCount = 0;
 uint32_t outputFpsWindowStartedAt = 0;
@@ -434,7 +436,6 @@ bool loadProfile() {
 }
 
 bool setupLedOutputs() {
-  FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   // Automatic brightness limiter: when a current ceiling is configured, FastLED
   // scales all pixels down uniformly to keep total draw under budget, which
@@ -503,6 +504,9 @@ bool setupLedOutputs() {
                    "every strip drives and that show() timing stays stable.");
   }
 
+  // CFastLED::setDither() walks the registered controller list, so this must
+  // happen after every output (including mirrors) has been added.
+  FastLED.setDither(false);
   clearPhysicalLeds();
   return true;
 }
@@ -916,8 +920,23 @@ void pushPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass) {
 
 void transmitPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass) {
   FastLED.setBrightness(brightnessByte);
+  lastRequestedOutputBrightnessByte = brightnessByte;
   lastOutputBrightnessByte = brightnessByte;
+  if (ledMaxMilliamps > 0) {
+    // FastLED.show() applies this same controller-wide power callback. Mirror
+    // controllers are deliberately included so diagnostics match the byte that
+    // FastLED passes to every physical controller exactly.
+    lastOutputBrightnessByte = calculate_max_brightness_for_power_mW(
+      brightnessByte, 5UL * ledMaxMilliamps);
+  }
+  outputPowerLimited = lastOutputBrightnessByte < lastRequestedOutputBrightnessByte;
   lastOutputSourceClass = sourceClass;
+
+  // FastLED 3.10 disables controller dithering inside show() below 100 FPS.
+  // Apply that same threshold immediately before transmission so this cached
+  // value describes the state used by the last physical frame.
+  outputDithering = FastLED.getFPS() >= 100;
+  FastLED.setDither(outputDithering);
   FastLED.show();
   recordPhysicalShow();
 }
@@ -946,13 +965,6 @@ void updateOutputTelemetry(uint32_t now) {
   outputShowCount = 0;
   outputFpsWindowStartedAt = now;
 
-  bool nextDithering = outputDithering;
-  if (!outputDithering && measuredOutputFps >= 50) nextDithering = true;
-  if (outputDithering && measuredOutputFps < 40) nextDithering = false;
-  if (nextDithering != outputDithering) {
-    outputDithering = nextDithering;
-    FastLED.setDither(outputDithering);
-  }
 }
 
 void copyLogicalToPhysicalLeds() {
@@ -1278,8 +1290,10 @@ String runtimeFirmwareInfo() {
   JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
   lwOutput["contract"] = 1;
   lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
   lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
   lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["powerLimited"] = runtimeOutputPowerLimited();
   lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
   lwOutput["gammaValue"] = runtimeOutputGammaValue();
   lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();
@@ -1406,8 +1420,10 @@ uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
 bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
+uint8_t runtimeOutputRequestedBrightnessByte() { return lastRequestedOutputBrightnessByte; }
 uint8_t runtimeOutputBrightnessByte() { return lastOutputBrightnessByte; }
 float runtimeOutputBrightnessScale() { return float(lastOutputBrightnessByte) / 255.0f; }
+bool runtimeOutputPowerLimited() { return outputPowerLimited; }
 const char* runtimeOutputSourceClass() {
   return lastOutputSourceClass == OUTPUT_EXTERNAL ? "external" : "local";
 }

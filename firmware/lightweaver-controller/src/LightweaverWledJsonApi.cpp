@@ -96,8 +96,10 @@ String buildInfoJson() {
   JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
   lwOutput["contract"] = 1;
   lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
   lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
   lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["powerLimited"] = runtimeOutputPowerLimited();
   lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
   lwOutput["gammaValue"] = runtimeOutputGammaValue();
   lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();

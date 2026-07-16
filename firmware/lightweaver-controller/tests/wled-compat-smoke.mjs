@@ -20,11 +20,18 @@ const jsonSource = readFileSync(resolve(firmwareDir, 'LightweaverWledJsonApi.cpp
 const runtimeHeader = readFileSync(resolve(firmwareDir, 'LightweaverRuntimeApi.h'), 'utf8');
 
 for (const field of [
-  'contract', 'sourceClass', 'brightnessByte', 'brightnessScale', 'gammaEnabled',
-  'gammaValue', 'calibration', 'measuredFps', 'dithering',
+  'contract', 'sourceClass', 'requestedBrightnessByte', 'brightnessByte',
+  'brightnessScale', 'powerLimited', 'gammaEnabled', 'gammaValue', 'calibration',
+  'measuredFps', 'dithering',
 ]) {
-  assertStrict.match(mainSource + webSource + jsonSource, new RegExp(`\\[\"${field}\\"\\]`),
-    `output diagnostics should expose ${field}`);
+  for (const [endpoint, source] of [
+    ['/api/firmware-info', mainSource],
+    ['/api/status', webSource],
+    ['/json/info', jsonSource],
+  ]) {
+    assertStrict.match(source, new RegExp(`\\[\"${field}\\"\\]`),
+      `${endpoint} output diagnostics should expose ${field}`);
+  }
 }
 assertStrict.match(mainSource, /doc\["outputColor"\]\["contract"\]\s*=\s*1/,
   'firmware-info should advertise outputColor contract 1');
@@ -39,7 +46,8 @@ assertStrict.match(jsonSource, /doc\["leds"\]\["fps"\]\s*=\s*runtimeOutputMeasur
 assertStrict.doesNotMatch(jsonSource, /doc\["leds"\]\["fps"\]\s*=\s*30/,
   '/json/info must not report a hardcoded FPS');
 for (const getter of [
-  'runtimeOutputBrightnessByte', 'runtimeOutputBrightnessScale', 'runtimeOutputSourceClass',
+  'runtimeOutputRequestedBrightnessByte', 'runtimeOutputBrightnessByte',
+  'runtimeOutputBrightnessScale', 'runtimeOutputPowerLimited', 'runtimeOutputSourceClass',
   'runtimeOutputGammaEnabled', 'runtimeOutputGammaValue', 'runtimeOutputCalibrationRed',
   'runtimeOutputCalibrationGreen', 'runtimeOutputCalibrationBlue',
   'runtimeOutputMeasuredFps', 'runtimeOutputDithering',
@@ -131,8 +139,20 @@ await run('GET /json/info', async () => {
   assert(info.product === 'Lightweaver', `product not "Lightweaver": ${info.product}`);
   assert(info.lwOutput && info.lwOutput.contract === 1, `lwOutput contract missing: ${JSON.stringify(info.lwOutput)}`);
   assert(['local', 'external'].includes(info.lwOutput.sourceClass), `lwOutput sourceClass invalid: ${info.lwOutput.sourceClass}`);
-  assert(typeof info.lwOutput.brightnessByte === 'number', 'lwOutput.brightnessByte missing');
-  assert(typeof info.lwOutput.brightnessScale === 'number', 'lwOutput.brightnessScale missing');
+  assert(Number.isInteger(info.lwOutput.requestedBrightnessByte)
+    && info.lwOutput.requestedBrightnessByte >= 0
+    && info.lwOutput.requestedBrightnessByte <= 255,
+  `lwOutput.requestedBrightnessByte invalid: ${info.lwOutput.requestedBrightnessByte}`);
+  assert(Number.isInteger(info.lwOutput.brightnessByte)
+    && info.lwOutput.brightnessByte >= 0
+    && info.lwOutput.brightnessByte <= info.lwOutput.requestedBrightnessByte,
+  `lwOutput.brightnessByte invalid: ${info.lwOutput.brightnessByte}`);
+  assert(typeof info.lwOutput.brightnessScale === 'number'
+    && Math.abs(info.lwOutput.brightnessScale - (info.lwOutput.brightnessByte / 255)) < 0.0001,
+  `lwOutput.brightnessScale does not describe the applied byte: ${info.lwOutput.brightnessScale}`);
+  assert(typeof info.lwOutput.powerLimited === 'boolean'
+    && info.lwOutput.powerLimited === (info.lwOutput.brightnessByte < info.lwOutput.requestedBrightnessByte),
+  `lwOutput.powerLimited inconsistent: ${info.lwOutput.powerLimited}`);
   assert(typeof info.lwOutput.measuredFps === 'number', 'lwOutput.measuredFps missing');
   assert(typeof info.lwOutput.dithering === 'boolean', 'lwOutput.dithering missing');
   return `count=${info.leds.count} mac=${info.mac} ver=${info.ver}`;
