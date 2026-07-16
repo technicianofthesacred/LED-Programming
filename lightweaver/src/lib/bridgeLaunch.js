@@ -164,23 +164,37 @@ function writeStoredRegistry(localStorage, registry) {
 
 function withStoredRegistryMutation(dependencies, callback) {
   const locks = dependencies.locks;
-  if (locks?.request) return locks.request(STORED_RESULT_LOCK, { mode: 'exclusive' }, callback);
+  if (locks?.request) return locks.request(STORED_RESULT_LOCK, { mode: 'exclusive' }, () => {
+    if (dependencies.isActive && !dependencies.isActive()) throw new Error('Bridge result channel is closed');
+    return callback();
+  });
   const localStorage = dependencies.localStorage;
   const ownerToken = dependencies.ownerToken;
   const now = dependencies.now ?? Date.now;
   const timestamp = now();
+  if (dependencies.isActive && !dependencies.isActive()) throw new Error('Bridge result channel is closed');
+  const deadline = dependencies.deadline ?? (timestamp + 1_800);
+  const retry = existing => {
+    const delay = dependencies.delay;
+    if (typeof delay !== 'function' || timestamp >= deadline) throw new Error('Durable Bridge result registry is busy');
+    const wait = existing && Number.isSafeInteger(existing.expiresAt)
+      ? Math.min(75, Math.max(20, existing.expiresAt - timestamp)) : 20;
+    return Promise.resolve(delay(wait)).then(() => {
+      if (dependencies.isActive && !dependencies.isActive()) throw new Error('Bridge result channel is closed');
+      return withStoredRegistryMutation({ ...dependencies, deadline }, callback);
+    });
+  };
   let existing = null;
   try { existing = JSON.parse(localStorage.getItem(STORED_RESULT_LEASE_KEY) || 'null'); } catch { throw new Error('Durable Bridge result lease is invalid'); }
   if (existing && existing.owner !== ownerToken && Number.isSafeInteger(existing.expiresAt) && existing.expiresAt > timestamp) {
-    const delay = dependencies.delay;
-    const deadline = dependencies.deadline ?? (timestamp + 1_800);
-    if (typeof delay !== 'function' || timestamp >= deadline) throw new Error('Durable Bridge result registry is busy');
-    const wait = Math.min(75, Math.max(20, existing.expiresAt - timestamp));
-    return Promise.resolve(delay(wait)).then(() => withStoredRegistryMutation({ ...dependencies, deadline }, callback));
+    return retry(existing);
   }
   const lease = JSON.stringify({ owner: ownerToken, expiresAt: timestamp + 2_000 });
   localStorage.setItem(STORED_RESULT_LEASE_KEY, lease);
-  if (localStorage.getItem(STORED_RESULT_LEASE_KEY) !== lease) throw new Error('Durable Bridge result lease was not acquired');
+  if (localStorage.getItem(STORED_RESULT_LEASE_KEY) !== lease) {
+    try { existing = JSON.parse(localStorage.getItem(STORED_RESULT_LEASE_KEY) || 'null'); } catch { throw new Error('Durable Bridge result lease is invalid'); }
+    return retry(existing);
+  }
   try { return callback(); } finally {
     if (localStorage.getItem(STORED_RESULT_LEASE_KEY) === lease) localStorage.removeItem(STORED_RESULT_LEASE_KEY);
   }
@@ -298,8 +312,23 @@ export function createBridgeResultChannel(dependencies = {}) {
   const ownerBytes = new Uint8Array(16);
   const ownerToken = cryptoApi?.getRandomValues ? base64Url(cryptoApi.getRandomValues(ownerBytes)) : '';
   const now = dependencies.now ?? Date.now;
-  const registryDelay = dependencies.registryDelay ?? (typeof window === 'undefined'
-    ? null : (milliseconds => new Promise(resolve => window.setTimeout(resolve, milliseconds))));
+  const pendingRegistryWaits = new Set();
+  const registryDelay = dependencies.registryDelay ?? (typeof window === 'undefined' ? null : (milliseconds => new Promise((resolve, reject) => {
+    let timer = null;
+    const cancel = () => {
+      if (timer === null) return;
+      window.clearTimeout(timer);
+      timer = null;
+      pendingRegistryWaits.delete(cancel);
+      reject(new Error('Bridge result channel is closed'));
+    };
+    timer = window.setTimeout(() => {
+      timer = null;
+      pendingRegistryWaits.delete(cancel);
+      resolve();
+    }, milliseconds);
+    pendingRegistryWaits.add(cancel);
+  })));
   const onResult = dependencies.onResult;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
   const claimReceipt = dependencies.claimReceipt ?? ((receipt, message) => claimBridgeResultReceipt(receipt, {
@@ -324,9 +353,14 @@ export function createBridgeResultChannel(dependencies = {}) {
     : ((result, message) => verifyStoredBridgeResult(result, { localStorage, targetTabId: message.targetTabId, now })));
   const delivered = new Set();
   const acknowledged = new Set();
+  const activeClaims = new Set();
+  let generation = 0;
+  let closed = false;
   let channel = null;
 
-  const receiveUnlocked = raw => {
+  const isActive = receiveGeneration => !closed && receiveGeneration === generation;
+  const receiveUnlocked = (raw, receiveGeneration) => {
+    if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
     let candidate = raw;
     if (typeof raw === 'string') {
       if (raw.length > MAX_MESSAGE_BYTES) return;
@@ -348,32 +382,42 @@ export function createBridgeResultChannel(dependencies = {}) {
     const releaseClaim = () => {
       if (!claimHeld) return;
       claimHeld = false;
+      activeClaims.delete(releaseClaim);
       try { releaseReceipt(message.ackReceipt, message); } catch { /* Preserve the original failure. */ }
     };
+    activeClaims.add(releaseClaim);
     const accept = () => {
       const safeMessage = validateBridgeUiResult(uiResultFields(message));
       const { ackReceipt } = message;
       try {
         if (!safeMessage) throw new Error('Bridge UI result is invalid');
         if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
+        if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
         persistResult(safeMessage, message);
+        if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
         if (!verifyResult(safeMessage, message)) throw new Error('Durable Bridge result verification failed');
         if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
+        if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
         onResult(safeMessage);
         if (!revalidateReceipt(ackReceipt, message)) throw new Error('Bridge receipt claim was lost');
+        if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
         if (!confirmReceipt(ackReceipt, message)) throw new Error('Bridge receipt finalization failed');
         claimHeld = false;
+        activeClaims.delete(releaseClaim);
       } catch (error) {
         releaseClaim();
         throw error;
       }
       if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
       delivered.add(ackReceipt);
+      if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
       acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
       acknowledged.add(ackReceipt);
     };
     try {
-      const mutation = withStoredRegistryMutation({ localStorage, ownerToken, now, locks, delay: registryDelay }, accept);
+      const mutation = withStoredRegistryMutation({
+        localStorage, ownerToken, now, locks, delay: registryDelay, isActive: () => isActive(receiveGeneration),
+      }, accept);
       if (mutation?.catch) {
         return mutation.catch(error => {
           releaseClaim();
@@ -387,12 +431,14 @@ export function createBridgeResultChannel(dependencies = {}) {
     }
   };
   const receive = raw => {
-    if (!locks?.request) return receiveUnlocked(raw);
+    const receiveGeneration = generation;
+    if (!isActive(receiveGeneration)) return undefined;
+    if (!locks?.request) return receiveUnlocked(raw, receiveGeneration);
     let receipt = '';
     const candidate = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
     receipt = candidate?.ackReceipt || '';
     if (!ACK_RECEIPT_PATTERN.test(receipt)) return undefined;
-    return locks.request(`lightweaver.bridge.result-claim.v1.${receipt}`, { mode: 'exclusive' }, () => receiveUnlocked(raw));
+    return locks.request(`lightweaver.bridge.result-claim.v1.${receipt}`, { mode: 'exclusive' }, () => receiveUnlocked(raw, receiveGeneration));
   };
   const onStorage = event => {
     if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receive(event.newValue);
@@ -429,6 +475,11 @@ export function createBridgeResultChannel(dependencies = {}) {
     },
     receive,
     close() {
+      if (closed) return;
+      closed = true;
+      generation += 1;
+      for (const cancel of [...pendingRegistryWaits]) cancel();
+      for (const releaseClaim of [...activeClaims]) releaseClaim();
       eventTarget?.removeEventListener?.('storage', onStorage);
       eventTarget?.removeEventListener?.('lightweaver-bridge-result', onLocalResult);
       channel?.close?.();

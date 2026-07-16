@@ -516,6 +516,96 @@ test('fallback registry contention serializes distinct receipts without losing e
   }
 });
 
+test('fallback registry acquisition retries an empty-read write collision and preserves both distinct results', async () => {
+  const { createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
+  const baseStorage = memoryStorage();
+  const leaseKey = 'lightweaver.bridge.accepted-result-registry.lease.v1';
+  let leaseReads = 0;
+  let startSecond = null;
+  const localStorage = {
+    get length() { return baseStorage.length; },
+    key: index => baseStorage.key(index),
+    getItem(key) {
+      if (key === leaseKey && leaseReads < 2) {
+        leaseReads += 1;
+        return null;
+      }
+      return baseStorage.getItem(key);
+    },
+    setItem(key, value) {
+      baseStorage.setItem(key, value);
+      if (key === leaseKey && startSecond) {
+        const run = startSecond;
+        startSecond = null;
+        run();
+      }
+    },
+    removeItem: key => baseStorage.removeItem(key),
+  };
+  const channels = [];
+  for (let index = 1; index <= 2; index += 1) {
+    const sessionStorage = memoryStorage();
+    const tabId = Buffer.alloc(16, index + 20).toString('base64url');
+    sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+    const calls = [];
+    const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
+      eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+      claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+      onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'), now: () => 1,
+      registryDelay: async () => {} });
+    const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, index + 20).toString('base64url'), targetTabId: tabId,
+      operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+      target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+      ackReceipt: Buffer.alloc(32, index + 20).toString('base64url') };
+    channels.push({ channel, sessionStorage, calls, message });
+  }
+  let secondResult;
+  startSecond = () => { secondResult = channels[1].channel.receive(channels[1].message); };
+  await channels[0].channel.receive(channels[0].message);
+  await secondResult;
+  assert.equal(leaseReads, 2);
+  for (const item of channels) {
+    assert.deepEqual(item.calls, ['ui', 'ack']);
+    assert.equal(readStoredBridgeResult({ sessionStorage: item.sessionStorage, localStorage, now: () => 2 }).operation, 'restart-card');
+    item.channel.close();
+  }
+});
+
+test('closing a channel cancels a pending fallback receive and a new channel can retry it', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 31).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  const leaseKey = 'lightweaver.bridge.accepted-result-registry.lease.v1';
+  localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 30).toString('base64url'), expiresAt: 50 }));
+  let releaseWait;
+  const wait = new Promise(resolve => { releaseWait = resolve; });
+  const calls = [];
+  const options = { sessionStorage, localStorage, locks: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+    claimReceipt: () => { calls.push('claim'); return true; }, revalidateReceipt: () => true,
+    releaseReceipt: () => calls.push('release'), confirmReceipt: () => { calls.push('finalize'); return true; },
+    persistResult: () => calls.push('persist'), onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
+    now: () => 1, registryDelay: () => wait };
+  const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 31).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 31).toString('base64url') };
+  const channel = createBridgeResultChannel(options);
+  const pending = channel.receive(message);
+  channel.close();
+  assert.deepEqual(calls, ['claim', 'release']);
+  localStorage.removeItem(leaseKey);
+  releaseWait();
+  await assert.rejects(() => pending, /closed/);
+  assert.deepEqual(calls, ['claim', 'release']);
+
+  const retry = createBridgeResultChannel({ ...options, registryDelay: async () => {} });
+  await retry.receive(message);
+  assert.deepEqual(calls, ['claim', 'release', 'claim', 'persist', 'ui', 'finalize', 'ack']);
+  retry.close();
+});
+
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
   const { bootstrapBridgeCallback, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
   const calls = [];
