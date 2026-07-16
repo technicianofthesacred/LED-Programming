@@ -279,13 +279,22 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
     (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async () => {
+      const { normalizeCardWiringStatus } = await import('/src/lib/cardWiringSafety.js');
+      return normalizeCardWiringStatus({
+        state: 'staged',
+        activationId: 'candidate-safe-7',
+        currentOutputs: [{ pin: 18, pixels: 44 }],
+      });
+    };
+    (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
       const flow = JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}');
       return {
-        state: 'staged',
-        source: 'card-activation-response',
         cardId: 'lw-441bf681feb0',
+        firmwareVersion: '1.2.3',
+        buildId: 'a'.repeat(40),
+        projectRevision: flow.project?.revision,
         projectFingerprint: flow.project?.fingerprint,
-        activationId: 'candidate-safe-7',
+        productionJobDigest: '',
       };
     };
   });

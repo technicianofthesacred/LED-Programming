@@ -13,6 +13,7 @@ const VERSION = 1;
 const SOURCES = new Set(['web-serial', 'native-bridge']);
 const OPERATIONS = new Set(['inspect-card', 'install-current-release', 'recover-current-release', 'release-usb', 'restart-card']);
 const CARD_RESTORATION_READBACKS = new WeakSet();
+const CARD_WIRING_ACTIVATION_EVIDENCE = new WeakSet();
 
 function text(value, max = 128) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -217,6 +218,29 @@ export function adaptCardRestorationReadback({ method, endpoint, response } = {}
   return evidence;
 }
 
+export function bindCardWiringActivationEvidence(status = {}, readback = {}) {
+  if (!status || status.state !== 'staged' || status.ok !== true || !status.raw
+    || text(status.raw.activationId, 128) !== text(status.activationId, 128)
+    || !text(status.activationId, 128)) {
+    throw new Error('The wiring candidate requires the normalized card-issued activation response');
+  }
+  if (!CARD_RESTORATION_READBACKS.has(readback)) {
+    throw new Error('The wiring candidate requires an independent card read-back');
+  }
+  const evidence = Object.freeze({
+    source: 'card-activation-with-readback',
+    activationId: text(status.activationId, 128),
+    cardId: readback.cardId,
+    firmwareVersion: readback.firmwareVersion,
+    buildId: readback.buildId,
+    projectRevision: readback.projectRevision,
+    projectFingerprint: readback.projectFingerprint,
+    productionJobDigest: readback.productionJobDigest,
+  });
+  CARD_WIRING_ACTIVATION_EVIDENCE.add(evidence);
+  return evidence;
+}
+
 export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card' || !flow.cardAcknowledgedAt) throw new Error('The exact installed card must acknowledge its firmware before restoration');
@@ -247,8 +271,11 @@ export function markCardProjectRestored(flow, acknowledgement = {}, { now = Date
 export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card' || !flow.cardAcknowledgedAt) throw new Error('The exact installed card must acknowledge its firmware before restoration');
-  if (acknowledgement.source !== 'card-activation-response') throw new Error('The wiring candidate requires a card-issued activation response');
+  if (!CARD_WIRING_ACTIVATION_EVIDENCE.has(acknowledgement)) throw new Error('The wiring candidate requires card-issued activation evidence with independent read-back');
   if (text(acknowledgement.cardId, 64) !== flow.expectedCard.id) throw new Error('Project restoration was not staged on the expected card');
+  if (text(acknowledgement.firmwareVersion, 48) !== flow.expectedCard.firmwareVersion) throw new Error('The staged project read-back has the wrong firmware version');
+  if (text(acknowledgement.buildId, 96) !== flow.expectedCard.buildId) throw new Error('The staged project read-back has the wrong firmware build');
+  if (Number(acknowledgement.projectRevision) !== flow.project.revision) throw new Error('The staged project read-back has the wrong project revision');
   if (text(acknowledgement.projectFingerprint, 32) !== flow.project.fingerprint) throw new Error('The staged project is not the saved Studio revision');
   const activationId = text(acknowledgement.activationId, 128);
   if (!activationId) throw new Error('The card did not return a wiring activation identifier');

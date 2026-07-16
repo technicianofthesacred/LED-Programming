@@ -9,6 +9,7 @@ import {
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
   beginCardCommissioning,
+  bindCardWiringActivationEvidence,
   completeCardInstall,
   markCardProjectRestored,
   readCardCommissioning,
@@ -146,13 +147,6 @@ export function CardCommissioningPanel({
         allowProjectChange: true,
         allowLayoutChange: true,
       });
-      if (response?.state === 'staged') {
-        const next = stageCardProjectForPhysicalCheck(flow, response);
-        writeCardCommissioning(next);
-        setFlow(next);
-        setRestoreState('complete');
-        return;
-      }
       const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
         ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
         : readProjectEvidence;
@@ -167,6 +161,14 @@ export function CardCommissioningPanel({
       const evidence = adaptCardRestorationReadback({
         method: 'GET', endpoint: '/api/firmware-info', response: responseReadback,
       });
+      if (response?.state === 'staged') {
+        const activationEvidence = bindCardWiringActivationEvidence(response, evidence);
+        const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
+        writeCardCommissioning(next);
+        setFlow(next);
+        setRestoreState('complete');
+        return;
+      }
       const next = markCardProjectRestored(flow, evidence);
       writeCardCommissioning(next);
       markProjectInstalled(flow.project.revision);

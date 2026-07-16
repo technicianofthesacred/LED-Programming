@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { normalizeCardWiringStatus } from './cardWiringSafety.js';
 
 import {
   CARD_COMMISSIONING_STAGES,
@@ -7,6 +8,7 @@ import {
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
   beginCardCommissioning,
+  bindCardWiringActivationEvidence,
   cardIdFromEspMac,
   completeCardInstall,
   markCardProjectRestored,
@@ -265,12 +267,40 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
   const acknowledged = acknowledgeCommissionedCard(ready, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
   }, { now: 30 }).flow;
-  const staged = stageCardProjectForPhysicalCheck(acknowledged, {
-    source: 'card-activation-response',
-    cardId: installed.cardId,
-    projectFingerprint: acknowledged.project.fingerprint,
+  const status = normalizeCardWiringStatus({
+    ok: true,
+    state: 'staged',
     activationId: 'wiring-activation-7',
-  }, { now: 40 });
+    outputs: [{ pin: 18, pixels: 88 }],
+  });
+  const readback = adaptCardRestorationReadback({
+    method: 'GET',
+    endpoint: '/api/firmware-info',
+    response: {
+      cardId: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: installed.buildId,
+      projectRevision: acknowledged.project.revision,
+      projectFingerprint: acknowledged.project.fingerprint,
+      productionJobDigest: '',
+    },
+  });
+  const staleReadback = adaptCardRestorationReadback({
+    method: 'GET',
+    endpoint: '/api/firmware-info',
+    response: {
+      cardId: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: 'b'.repeat(40),
+      projectRevision: acknowledged.project.revision - 1,
+      projectFingerprint: acknowledged.project.fingerprint,
+      productionJobDigest: '',
+    },
+  });
+  const staleEvidence = bindCardWiringActivationEvidence(status, staleReadback);
+  assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, staleEvidence), /firmware build|project revision/i);
+  const evidence = bindCardWiringActivationEvidence(status, readback);
+  const staged = stageCardProjectForPhysicalCheck(acknowledged, evidence, { now: 40 });
   assert.equal(staged.stage, 'check-lights');
   assert.equal(staged.project.restoredAt, null);
   assert.equal(staged.project.pendingActivationId, 'wiring-activation-7');
