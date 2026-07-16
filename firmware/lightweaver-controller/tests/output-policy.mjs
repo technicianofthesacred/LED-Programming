@@ -191,6 +191,8 @@ function verifyOutputFunnelContracts() {
   const physicalPush = extractFunction(main, 'pushPhysicalLeds');
   const physicalTransmit = extractFunction(main, 'transmitPhysicalLeds');
   const physicalClear = extractFunction(main, 'clearPhysicalLeds');
+  const outputSetup = extractFunction(main, 'setupLedOutputs');
+  const telemetry = extractFunction(main, 'updateOutputTelemetry');
   const runtimeLoop = extractFunction(main, 'loop');
 
   assert.match(brightness, /OutputBrightnessInputs\s+input\s*\{\s*\}/,
@@ -224,15 +226,32 @@ function verifyOutputFunnelContracts() {
     'normal output should delegate to the sole physical transmitter after copying');
   assert.match(physicalTransmit, /FastLED\.setBrightness\s*\(\s*brightnessByte\s*\)/,
     'the sole physical transmitter should own FastLED brightness');
+  assert.match(physicalTransmit, /lastRequestedOutputBrightnessByte\s*=\s*brightnessByte/,
+    'the physical transmitter should preserve the requested brightness');
   assert.match(physicalTransmit, /lastOutputBrightnessByte\s*=\s*brightnessByte/,
-    'the sole physical transmitter should update brightness diagnostics');
+    'applied brightness should start from the requested byte when power limiting is disabled');
+  assert.match(
+    physicalTransmit,
+    /if\s*\(\s*ledMaxMilliamps\s*>\s*0\s*\)[\s\S]*?lastOutputBrightnessByte\s*=\s*calculate_max_brightness_for_power_mW\s*\(\s*brightnessByte\s*,\s*5UL\s*\*\s*ledMaxMilliamps\s*\)/,
+    'power-limited diagnostics should use the same global FastLED power calculation as show()',
+  );
+  assert.match(physicalTransmit, /outputPowerLimited\s*=\s*lastOutputBrightnessByte\s*<\s*lastRequestedOutputBrightnessByte/,
+    'power limiting should be reported from the exact applied/requested byte comparison');
   assert.match(physicalTransmit, /lastOutputSourceClass\s*=\s*sourceClass/,
     'the sole physical transmitter should update source diagnostics');
+  assert.match(physicalTransmit, /outputDithering\s*=\s*FastLED\.getFPS\s*\(\s*\)\s*>=\s*100/,
+    'dithering should use FastLED\'s actual 100 FPS threshold');
+  assert.match(physicalTransmit, /FastLED\.setDither\s*\(\s*outputDithering\s*\)/,
+    'the physical transmitter should apply the recorded dithering state before showing');
+  assert.ok(
+    physicalTransmit.indexOf('FastLED.setDither(outputDithering)') < physicalTransmit.indexOf('FastLED.show()'),
+    'dithering must be configured before the frame is transmitted',
+  );
   assert.match(physicalTransmit, /FastLED\.show\s*\(\s*\)/,
     'the sole physical transmitter should own the physical show call');
   assert.match(physicalTransmit, /recordPhysicalShow\s*\(\s*\)/,
     'the sole physical transmitter should count successful physical shows');
-  assert.equal((main.match(/FastLED\.show\s*\(\s*\)/g) || []).length, 1,
+  assert.equal((maskCommentsAndStrings(main).match(/FastLED\.show\s*\(\s*\)/g) || []).length, 1,
     'firmware should contain exactly one FastLED.show() site');
 
   assert.doesNotMatch(main, /FastLED\.clear\s*\(\s*true\s*\)/,
@@ -253,14 +272,18 @@ function verifyOutputFunnelContracts() {
 
   assert.match(main, /outputColorPipeline\.configure\s*\(\s*config\.outputColor\s*\)/,
     'runtime config should configure the shared output color pipeline');
-  assert.match(main, /FastLED\.setDither\s*\(\s*false\s*\)/,
+  assert.match(outputSetup, /FastLED\.setDither\s*\(\s*false\s*\)/,
     'temporal dithering should start disabled');
-  assert.match(main, /measuredOutputFps\s*>=\s*50/,
-    'temporal dithering should enable only at 50 measured physical shows per second');
-  assert.match(main, /measuredOutputFps\s*<\s*40/,
-    'temporal dithering should disable below 40 measured physical shows per second');
+  assert.ok(
+    outputSetup.indexOf('FastLED.setDither(false)') > outputSetup.lastIndexOf('addLedsForPin'),
+    'initial dithering must be disabled after the FastLED controllers are registered',
+  );
+  assert.doesNotMatch(telemetry, /setDither|outputDithering/,
+    'measured-output telemetry must not claim a dithering state that was not transmitted');
+  assert.doesNotMatch(main, /measuredOutputFps\s*(?:>=\s*50|<\s*40)/,
+    'the misleading 50/40 dithering hysteresis should be removed');
   assert.match(runtimeLoop, /updateOutputTelemetry\s*\(\s*now\s*\)/,
-    'the existing runtime loop should publish zero FPS and disable dithering when physical shows stop');
+    'the existing runtime loop should publish zero FPS when physical shows stop');
 }
 
 try {
