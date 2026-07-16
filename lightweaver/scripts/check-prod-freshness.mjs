@@ -23,7 +23,9 @@ import { fileURLToPath } from 'node:url';
 // HTML/SPA-fallback detection live in one place instead of being re-implemented.
 import { ESP_IMAGE_MAGIC, validateFirmwareImage } from '../src/lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../src/lib/firmwareRelease.js';
+import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../src/lib/productionJobPackage.js';
 import {
+  assertReleaseProvenance,
   assertLegacyRouteRemoved,
   assertStudioRoot,
   resolveProductionUrls,
@@ -37,6 +39,9 @@ const {
   firmwareUrl: legacyAliasUrl,
   manifestUrl,
   signatureUrl,
+  provenanceUrl,
+  productionJobIndexUrl,
+  productionSetupUrl,
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
 
@@ -67,6 +72,9 @@ try {
     signal: AbortSignal.timeout(20_000),
   });
 } catch (err) {
+  if (process.env.PROD_CHECK_REQUIRED === '1') {
+    fail(`Production is required but could not be reached at\n  ${studioUrl}\n  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`);
+  }
   console.log(`check-prod-freshness SKIPPED (could not reach ${studioUrl}: ${err?.cause?.code ?? err?.name ?? err?.message ?? err})`);
   process.exit(0);
 }
@@ -94,19 +102,27 @@ try {
 }
 
 let release;
+let productionJobCount = 0;
 try {
   const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
     ...init,
     signal: AbortSignal.timeout(20_000),
   });
-  release = await loadProductionFirmwareRelease(productionFetch, webcrypto, {
-    manifestUrl,
-    signatureUrl,
-  });
+  // The verifier owns the relative manifest/signature paths. productionFetch
+  // binds those trusted paths to the one origin selected above.
+  release = await loadProductionFirmwareRelease(productionFetch, webcrypto);
+  const provenanceResponse = await productionFetch(provenanceUrl, { cache: 'no-store', redirect: 'error' });
+  await assertReleaseProvenance(provenanceResponse, release.manifest, provenanceUrl);
+
+  const jobIndex = await loadProductionJobIndex(productionFetch);
+  for (const entry of jobIndex.jobs) {
+    await loadProductionJobFromIndexEntry(entry, { fetchImpl: productionFetch, cryptoImpl: webcrypto });
+  }
+  productionJobCount = jobIndex.jobs.length;
 } catch (err) {
   fail(
-    `Production's signed firmware release is unavailable or invalid. The website installer will refuse to flash it.\n` +
-      `  manifest: ${manifestUrl}\n  signature: ${signatureUrl}\n  ${err?.message ?? err}`,
+    `Production's signed firmware/job release set is unavailable or invalid. The website must not flash or load it.\n` +
+      `  manifest: ${manifestUrl}\n  signature: ${signatureUrl}\n  provenance: ${provenanceUrl}\n  jobs: ${productionJobIndexUrl}\n  ${err?.message ?? err}`,
   );
 }
 
@@ -125,4 +141,5 @@ if (remoteHash !== localHash) {
 
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
+  `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
 );

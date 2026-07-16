@@ -391,7 +391,8 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
     packageJson.scripts['test:installer-core'],
     'node --test ../packages/installer-core/test/*.test.js',
   );
-  assert.match(packageJson.scripts['launch:check'], /^npm run test:core:source && npm run test:core/);
+  assert.match(packageJson.scripts['launch:source'], /^npm run test:core:source/);
+  assert.equal(packageJson.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
   assert.equal(
     packageJson.scripts['firmware:check-bin'],
     'node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs',

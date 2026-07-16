@@ -4,7 +4,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
 > **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
 > serves its own branded page (the visitor UI) and the WLED API; the public
@@ -60,7 +60,13 @@ Last updated: 2026-07-13
 - [x] Add the acknowledged low-brightness bench chase, explicit output/run/jumper/reserved confirmations, correction invalidation, lock gating, prior-look restoration, and phone/print assembly map.
 - [x] Ship Layout Send to card and canonical `ledmap.json` export from the verified compiler result.
 - [x] Harden Patterns, Settings, Show, installer, and the card visitor UI against optimistic success, stale async acknowledgement, inaccessible modal/navigation behavior, and visitor-control rollback.
-- [x] Rebuild the public ESP32-S3 factory binary from the hardened firmware and enforce source/binary freshness in the launch gate.
+- [x] Rebuild the 2026-07-13 public ESP32-S3 factory binary from that hardened firmware and enforce source/binary freshness in the launch gate. Later production identity/recovery source changes now require a new protected signed release before the next deploy.
+
+### Browser workshop production flow (source complete; release acceptance pending)
+- [x] Add the root `#screen=production` worker flow for desktop Chrome/Edge Web Serial: verified immutable job, exact signed firmware, one-card identity binding, independent artwork read-back, physical checks, local pass record, and Next artwork.
+- [x] Add current-limited one-boundary-at-a-time blue-first/red-last/dark-outside checks with explicit human confirmation and reboot-safe 90-second candidate rollback for count, direction, GPIO, and color order corrections.
+- [x] Add safe recovery classifications, one-action guidance, stable support codes, and bounded redacted diagnostic export.
+- [x] Add the no-code worker procedure in `docs/worker-flash-runbook.md` and separate the feature-branch source gate from the protected signed-firmware production gate.
 
 ## Open — user/hardware actions
 
@@ -73,11 +79,16 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 - [ ] Define WLED segments matching laser-cut zones — fill in zone IDs in `docs/segments.md`
 - [ ] Capture per-device record: MAC, post-STA IP, segment JSON dump
 - [ ] Run the real-artwork physical wiring acceptance gate: output identity, first pixel, direction/order, jumper routing, reserved addresses, color order, brightness cap, and archived locked wiring/assembly map
+- [ ] Rehearse the complete Production Setup runbook with a workshop worker who did not build the software; retain the exported CSV and JSON pass records.
+- [ ] On a real card/strip, capture Production Setup evidence for firmware install/update, exact card/job read-back, all blue/red/dark boundaries, candidate confirm, timed rollback, reboot recovery, support export, and Next artwork.
 
 ## Open — deployment
 
 - [x] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
 - [x] Keep actual card control local to the ESP32 page unless a local bridge is intentionally added
+- [ ] Run the protected `firmware-release` signer for the latest merged firmware source; the currently committed public factory artifact is stale and the strict deploy gate must remain red until CI publishes the new signed release.
+- [ ] Deploy the root Studio only after `npm run launch:check` passes on that signed release commit, then require `PROD_CHECK_REQUIRED=1 npm run check:prod` and verify the live `#screen=production` route.
+- [ ] Publish at least one immutable signed production job (or deliberately document signed-file-only operation); the current public production job index is empty.
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
 - [ ] AP mode SSID convention: `Lightweaver-XXXX` (MAC-suffix, set by firmware automatically; see ESP32 card smoke test in `docs/deployment-checklist.md`)
 - [ ] Captive portal end-to-end test from a phone on the AP
@@ -86,7 +97,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 
 ## Open — software follow-ups
 
-- [ ] Add direct USB controller mode: Web Serial/local bridge transport in the app, using the verified `LWUSB` bench protocol as the first hardware handshake
+- [x] Add the free desktop Chrome/Edge Web Serial production lane for one-card flashing and loading. Native Bridge packaging remains deferred and is not part of Production Setup.
 - [ ] Flash current no-relay firmware to any existing cards that were built with the old relay polling module.
 - [ ] **Refactor**: split 4,713-line `led-art-mapper/app/src/main.js` into modules (state, ui, render, export) — *deferred from this round; best done in a focused session because it touches everything*
 - [ ] Extend runtime target badges to Pattern, Timeline, and Export screens
