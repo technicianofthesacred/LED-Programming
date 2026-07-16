@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ProductionJobPicker } from '../components/production/ProductionJobPicker.jsx';
 import { ProductionPassRecord } from '../components/production/ProductionPassRecord.jsx';
 import { ProductionPhysicalTest } from '../components/production/ProductionPhysicalTest.jsx';
+import { ProductionRecovery } from '../components/production/ProductionRecovery.jsx';
 import { clearCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readCardProjectEvidence, pushConfigToCard } from '../lib/cardPushClient.js';
 import { getCardWiringStatus } from '../lib/cardWiringSafety.js';
@@ -11,6 +12,7 @@ import { validateInstallHardware, validateProductionInstallRelease } from '../li
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { appendProductionRecord, readProductionRecords } from '../lib/productionRecords.js';
+import { classifyProductionFailure, inferProductionFailure } from '../lib/productionRecovery.js';
 import { assertProductionFinalWiringStatus } from '../lib/productionPhysicalTest.js';
 import {
   PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY,
@@ -34,6 +36,16 @@ function capabilities() {
     platform: navigator.platform,
     maxTouchPoints: navigator.maxTouchPoints,
   });
+}
+
+function diagnosticPlatform(cap) {
+  const architecture = String(navigator.userAgentData?.architecture || '').toLowerCase();
+  const userAgent = String(navigator.userAgent || '').toLowerCase();
+  const arch = /arm64|aarch64/.test(`${architecture} ${userAgent}`) ? 'arm64'
+    : /\barm\b/.test(`${architecture} ${userAgent}`) ? 'arm'
+      : /x86_64|x64|win64|amd64/.test(`${architecture} ${userAgent}`) ? 'x86_64'
+        : /x86|win32/.test(`${architecture} ${userAgent}`) ? 'x86' : 'unknown';
+  return { os: cap.platform === 'chromeos' ? 'chromeos' : cap.platform, arch };
 }
 
 function correlation(run) {
@@ -65,6 +77,7 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
   const [firmwareDecision, setFirmwareDecision] = useState('uninspected');
   const [status, setStatus] = useState('Choose a verified artwork job to begin.');
   const [error, setError] = useState('');
+  const [recovery, setRecovery] = useState(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [workerId, setWorkerId] = useState('');
@@ -84,6 +97,15 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     setRun(updated);
     return updated;
   }, []);
+
+  const showRecovery = useCallback((kind, context = {}) => {
+    const next = typeof kind === 'string'
+      ? classifyProductionFailure(kind, context)
+      : inferProductionFailure(kind, { os: cap.platform, ...context });
+    setError('');
+    setRecovery(next);
+    return next;
+  }, [cap.platform]);
 
   useEffect(() => () => { void disconnectESP(loaderRef.current, transportRef.current); }, []);
   useEffect(() => { primaryRef.current?.focus(); }, []);
@@ -109,14 +131,16 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
         throw new Error(`This job requires official firmware ${selected.firmware.version} (${selected.firmware.buildId.slice(0, 8)}), but the published release is different.`);
       }
       setRelease({ state: 'ready', value, error: '' });
+      setRecovery(null);
       setStatus('Job and official firmware are verified and held on this computer. You can connect the USB card.');
-    } catch (reason) {
-      setRelease({ state: 'error', value: null, error: reason?.message || String(reason) });
+    } catch {
+      setRelease({ state: 'error', value: null, error: '' });
+      showRecovery('signed-release-failure');
     }
   }
 
   async function selectJob(selected) {
-    setError('');
+    setError(''); setRecovery(null);
     let preparedRun;
     let preparedStatus;
     try {
@@ -124,8 +148,8 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       if (saved && saved.jobDigest === selected.digest && saved.state !== 'complete') {
         if (saved.state === 'install') {
           preparedRun = await updateProductionRunAtomically(current => {
-            const recovery = transitionProductionRun(current, 'recovery', { correlation: correlation(current), recoveryAction: 'release-usb', usbReleased: true });
-            return transitionProductionRun(recovery, 'connect-card', { correlation: correlation(recovery), usbReleased: true });
+            const recovery = transitionProductionRun(current, 'recovery', { correlation: correlation(current), recoveryAction: 'release-usb', usbReleased: false });
+            return transitionProductionRun(recovery, 'connect-card', { correlation: correlation(recovery), usbReleased: false });
           });
           preparedStatus = 'A previous installation was interrupted. USB is not reused automatically; reconnect and inspect the same card before deciding what it needs.';
         } else {
@@ -155,9 +179,29 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     return import.meta.env.DEV ? window.__LW_PRODUCTION_DRIVER_FOR_TEST__ : null;
   }
 
+  async function releaseUsbConnection(connection = { loader: loaderRef.current, transport: transportRef.current }) {
+    if (!connection?.loader && !connection?.transport && !testDriver()) return true;
+    try {
+      const result = testDriver()?.disconnect
+        ? await testDriver().disconnect(connection)
+        : await disconnectESP(connection?.loader, connection?.transport);
+      return result !== false;
+    } catch { return false; }
+  }
+
+  async function persistUnreleasedUsb() {
+    try {
+      const updated = await updateProductionRunAtomically(currentRun => {
+        const typed = transitionProductionRun(currentRun, 'recovery', { correlation: correlation(currentRun), recoveryAction: 'release-usb', usbReleased: false });
+        return transitionProductionRun(typed, 'connect-card', { correlation: correlation(typed), usbReleased: false });
+      });
+      setRun(updated);
+    } catch { /* the visible recovery remains conservative even if persistence is unavailable */ }
+  }
+
   async function connectCard() {
     if (busy || release.state !== 'ready') return;
-    setBusy(true); setError(''); setStatus('Select the one Lightweaver card connected by USB.');
+    setBusy(true); setError(''); setRecovery(null); setStatus('Select the one Lightweaver card connected by USB.');
     let connection = null;
     try {
       const driver = testDriver();
@@ -171,14 +215,17 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       transportRef.current = connection.transport;
       setUsbConnected(true);
       setHardware(inspected);
+      setRecovery(null);
       if (run.state === 'connect-card') await advance('inspect', { expectedCardId: inspected.cardId });
       setStatus(`Card ${inspected.cardId} inspected. Nothing has been changed.`);
     } catch (reason) {
-      const driver = testDriver();
-      await (driver?.disconnect ? driver.disconnect(connection) : disconnectESP(connection?.loader, connection?.transport)).catch(() => {});
-      loaderRef.current = null; transportRef.current = null;
-      setUsbConnected(false); setHardware(null);
-      setError(`${reason?.message || 'The card could not be inspected.'} USB was released; nothing was changed.`);
+      const acquired = Boolean(connection);
+      const released = acquired ? await releaseUsbConnection(connection) : true;
+      loaderRef.current = released ? null : connection?.loader || null;
+      transportRef.current = released ? null : connection?.transport || null;
+      setUsbConnected(!released); setHardware(null);
+      if (!released) await persistUnreleasedUsb();
+      showRecovery(reason, { phase: run?.state || 'connect-card', cardChanged: 'no', usbReleased: released ? 'yes' : 'unknown' });
     }
     finally { setBusy(false); }
   }
@@ -187,14 +234,14 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     if (busy || !hardware || !usbConnected || run.state !== 'inspect') return;
     setBusy(true); setError('');
     try {
-      const driver = testDriver();
       const connection = { loader: loaderRef.current, transport: transportRef.current };
-      try { await (driver?.disconnect ? driver.disconnect(connection) : disconnectESP(connection.loader, connection.transport)); }
-      finally { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
+      const released = await releaseUsbConnection(connection);
+      if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
+      if (!released) throw new Error('USB ownership could not be released.');
       await readInstalledFirmwareEvidence();
     } catch (reason) {
       setFirmwareDecision('unproven');
-      setError(`${reason?.message || 'USB release could not be confirmed.'} Nothing was changed. Reconnect the card page to inspect again.`);
+      showRecovery('usb-ownership-uncertain');
     } finally { setBusy(false); }
   }
 
@@ -207,11 +254,13 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       else await onConnectCard?.(cardHost);
       driver?.noteLanHandoff?.();
       const evidence = driver?.readEvidence ? await driver.readEvidence('preflight') : await readCardProjectEvidence({ host: cardHost });
+      if (!evidence?.cardId) throw new Error('The card page did not return card identity.');
       if (evidence.cardId !== run.expectedCardId) {
         throw new Error(`Wrong online card. USB identified ${run.expectedCardId}, but the card page reports ${evidence.cardId}. Nothing was changed.`);
       }
       const exact = evidence.firmwareVersion === release.value.manifest.firmwareVersion && evidence.buildId === release.value.manifest.buildId;
       if (exact) {
+        setRecovery(null);
         setFirmwareDecision('exact');
         await advance('restore', { usbReleased: true });
         setStatus('The online card is the same USB card and already has the exact official firmware. Ready to load the artwork.');
@@ -222,7 +271,8 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       }
     } catch (reason) {
       setFirmwareDecision('unproven');
-      setError(reason?.message || 'Installed firmware could not be proven. Nothing was changed; do not reflash from this screen without exact card evidence.');
+      if (/wrong online card/i.test(String(reason?.message || ''))) showRecovery('wrong-card-reconnect');
+      else showRecovery('card-page-unavailable');
     }
   }
 
@@ -243,22 +293,27 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
         if (driver?.install) await driver.install({ release: release.value, hardware, onProgress: setProgress });
         else {
           const file = new File([release.value.bytes], `lightweaver-${release.value.manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
-          await flashFirmwareAndRelease({ loader: loaderRef.current, transport: transportRef.current, file, address: 0, eraseAll: true, flashFirmware, onProgress: setProgress });
+          await flashFirmwareAndRelease({
+            loader: loaderRef.current, transport: transportRef.current, file, address: 0, eraseAll: true, flashFirmware, onProgress: setProgress,
+            disconnectESP: async (loader, transport) => {
+              if (!await disconnectESP(loader, transport)) throw new Error('USB release could not be confirmed after firmware installation.');
+            },
+          });
         }
         loaderRef.current = null; transportRef.current = null;
         setUsbConnected(false);
         await advance('reconnect', { cardChanged: true, usbReleased: true });
         setStatus('Official firmware installed and USB released. Reconnect the same card after it restarts; Studio will not install it again.');
     } catch (reason) {
-      await disconnectESP(loaderRef.current, transportRef.current).catch(() => {});
-      loaderRef.current = null; transportRef.current = null;
-      setUsbConnected(false);
+      const released = await releaseUsbConnection();
+      if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
+      else setUsbConnected(true);
       setHardware(null);
       try {
-        await advance('recovery', { recoveryAction: 'release-usb', cardChanged: true, usbReleased: true });
-        await advance('connect-card', { cardChanged: true, usbReleased: true });
+        await advance('recovery', { recoveryAction: 'release-usb', cardChanged: true, usbReleased: released });
+        await advance('connect-card', { cardChanged: true, usbReleased: released });
       } catch {}
-      setError(`Installation stopped. USB was released; reconnect and inspect the same card before retrying. ${reason?.message || reason}`);
+      showRecovery(released ? 'disconnect-phase' : 'usb-ownership-uncertain', { cardChanged: 'unknown', usbReleased: released ? 'yes' : 'unknown' });
     }
     finally { setBusy(false); }
   }
@@ -270,10 +325,16 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       if (!driver) await onConnectCard?.(cardHost);
       const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: cardHost });
       if (evidence.cardId !== run.expectedCardId) throw new Error(`Wrong card. Reconnect ${run.expectedCardId}; the online card is ${evidence.cardId}.`);
-      if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) throw new Error('The card did not report the exact installed firmware.');
+      if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) {
+        showRecovery('firmware-mismatch', { firmwareEvidence: {
+          exactCard: true, installedVersion: evidence.firmwareVersion, installedBuildId: evidence.buildId,
+          targetVersion: release.value.manifest.firmwareVersion, targetBuildId: release.value.manifest.buildId,
+        } });
+        return;
+      }
       await advance('restore', { usbReleased: true });
       setStatus('The same card is online with the exact firmware. Ready to load the artwork once.');
-    } catch (reason) { setError(reason?.message || 'The same card could not be verified after restart.'); }
+    } catch (reason) { showRecovery(reason, { phase: 'reconnect', usbReleased: 'yes' }); }
     finally { setBusy(false); }
   }
 
@@ -299,9 +360,8 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       setStatus('Artwork was sent once. Now Studio will read the card back independently.');
     } catch (reason) {
       if (!mutationIntentPersisted) restoreStartedRef.current = false;
-      setError(mutationIntentPersisted
-        ? `${reason?.message || 'The artwork response was interrupted.'} Studio will verify the card before it offers any retry; the restore will not repeat automatically.`
-        : (reason?.message || 'The card identity could not be rebound. Nothing was restored.'));
+      if (mutationIntentPersisted) showRecovery('restore-failure', { cardChanged: 'unknown', usbReleased: 'yes' });
+      else showRecovery(/exact USB-inspected card/i.test(String(reason?.message || '')) ? 'wrong-card-reconnect' : 'restore-failure', { cardChanged: 'no', usbReleased: 'yes' });
     }
     finally { setBusy(false); }
   }
@@ -319,7 +379,11 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       }
       await advance('check-lights');
       setStatus('Card identity and artwork match exactly. Check every physical output before recording a pass.');
-    } catch (reason) { setError(reason?.message || 'The card did not return exact independent evidence.'); }
+    } catch (reason) {
+      if (/does not match this job|no second restore/i.test(String(reason?.message || ''))) showRecovery('restore-readback-mismatch');
+      else if (/wrong card/i.test(String(reason?.message || ''))) showRecovery('wrong-card-reconnect');
+      else showRecovery('restore-failure', { cardChanged: 'unknown', usbReleased: 'yes' });
+    }
     finally { setBusy(false); }
   }
 
@@ -368,18 +432,21 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
   }
 
   async function resetTransient(nextStatus) {
-    const driver = testDriver();
-    await (driver?.disconnect
-      ? driver.disconnect({ loader: loaderRef.current, transport: transportRef.current })
-      : disconnectESP(loaderRef.current, transportRef.current)).catch(() => {});
+    const released = await releaseUsbConnection();
+    if (!released) {
+      await persistUnreleasedUsb();
+      showRecovery('usb-ownership-uncertain', { usbReleased: 'unknown' });
+      return false;
+    }
     loaderRef.current = null; transportRef.current = null;
     await clearCardCommissioning().catch(() => {});
     for (const key of [PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY, PRODUCTION_RUN_SLOT_A_KEY, PRODUCTION_RUN_SLOT_B_KEY]) localStorage.removeItem(key);
     const hash = new URLSearchParams(window.location.hash.slice(1)); hash.delete('job'); hash.set('screen', 'production');
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${hash}`);
-    setJob(null); setRun(null); setRelease({ state: 'idle', value: null, error: '' }); setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected');
+    setJob(null); setRun(null); setRelease({ state: 'idle', value: null, error: '' }); setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected'); setRecovery(null);
     setObservations({}); setWorkerId(''); setProgress(0); setError(''); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
     setStatus(nextStatus);
+    return true;
   }
 
   async function changeJob() {
@@ -398,6 +465,11 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     setBusy(true); setError('');
     try {
       const target = action === 'restore-project' ? 'restore' : action === 'rerun-lights' ? 'check-lights' : 'connect-card';
+      if (target === 'connect-card' && !await releaseUsbConnection()) {
+        await persistUnreleasedUsb();
+        showRecovery('usb-ownership-uncertain', { usbReleased: 'unknown' });
+        return;
+      }
       const updated = await updateProductionRunAtomically(current => {
         const recovery = transitionProductionRun(current, 'recovery', { correlation: correlation(current), recoveryAction: action, usbReleased: true });
         return transitionProductionRun(recovery, target, { correlation: correlation(recovery), usbReleased: true });
@@ -408,10 +480,6 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
       } else if (target === 'check-lights') {
         setStatus('Final card wiring changed. Re-check every physical boundary before saving a pass.');
       } else {
-        const driver = testDriver();
-        await (driver?.disconnect
-          ? driver.disconnect({ loader: loaderRef.current, transport: transportRef.current })
-          : disconnectESP(loaderRef.current, transportRef.current)).catch(() => {});
         loaderRef.current = null; transportRef.current = null;
         setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected');
         setStatus('Firmware evidence changed. Reconnect the same USB card and inspect it before any firmware decision.');
@@ -419,6 +487,64 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
     } catch (reason) {
       setError(`Safe recovery could not be saved. The light test remains stopped. ${reason?.message || reason}`);
     } finally { setBusy(false); }
+  }
+
+  async function handleRecoveryAction(action) {
+    const current = recovery;
+    if (!current || busy) return;
+    if (action === 'retry-signed-release') { setRecovery(null); await preloadFirmware(job); return; }
+    if (action === 'retry-usb') { setRecovery(null); await connectCard(); return; }
+    if (action === 'reconnect-expected-card') {
+      setRecovery(null);
+      if (run?.state === 'reconnect') await reconnectAfterInstall();
+      else if (run?.state === 'inspect' && firmwareDecision === 'install-required') await connectCard();
+      else if (run?.state === 'inspect') await retryInstalledFirmwareEvidence();
+      else {
+        setBusy(true);
+        try { if (!testDriver()) await onConnectCard?.(cardHost); setStatus('Expected card page opened. Continue only after checking that the correct card is connected.'); }
+        catch { setRecovery(classifyProductionFailure('card-page-unavailable')); }
+        finally { setBusy(false); }
+      }
+      return;
+    }
+    if (action === 'verify-restore') { setRecovery(null); await verifyCard(); return; }
+    if (action === 'retry-restore') { setRecovery(null); await restoreArtwork(); return; }
+    if (action === 'reinspect-firmware-mismatch') {
+      setBusy(true);
+      try {
+        const updated = await updateProductionRunAtomically(currentRun => {
+          const typed = transitionProductionRun(currentRun, 'recovery', { correlation: correlation(currentRun), recoveryAction: 'signed-firmware-recovery', supportCode: current.supportCode, usbReleased: true });
+          return transitionProductionRun(typed, 'connect-card', { correlation: correlation(typed), usbReleased: true });
+        });
+        setRun(updated); setRecovery(null); setHardware(null); setUsbConnected(false); setFirmwareDecision('install-required');
+        setStatus('Reconnect the same USB card. Studio will inspect its stable identity again before offering the signed firmware install.');
+      } catch { setRecovery(classifyProductionFailure('usb-ownership-uncertain')); }
+      finally { setBusy(false); }
+      return;
+    }
+    if (action === 'rerun-physical') { setRecovery(null); await handlePhysicalRecovery('rerun-lights'); return; }
+    if (action === 'install-firmware') { setRecovery(null); await installOrContinue(); return; }
+    if (action === 'release-usb') {
+      setBusy(true);
+      try {
+        const driver = testDriver();
+        const released = await releaseUsbConnection();
+        if (!released) throw new Error('USB release remains unconfirmed.');
+        loaderRef.current = null; transportRef.current = null;
+        if (run?.state === 'complete') {
+          setUsbConnected(false); setHardware(null); setRecovery(null);
+          setStatus('USB released. Choose Next artwork again when you are ready.');
+          return;
+        }
+        setUsbConnected(false); setHardware(null); setFirmwareDecision('uninspected');
+        const updated = await updateProductionRunAtomically(currentRun => {
+          const typed = transitionProductionRun(currentRun, 'recovery', { correlation: correlation(currentRun), recoveryAction: 'release-usb', supportCode: current.supportCode, cardChanged: currentRun.cardChanged, usbReleased: true });
+          return transitionProductionRun(typed, 'connect-card', { correlation: correlation(typed), usbReleased: true });
+        });
+        setRun(updated); setRecovery(null); setStatus('USB released. Reconnect and inspect the same card before continuing.');
+      } catch { setRecovery(classifyProductionFailure('usb-ownership-uncertain')); }
+      finally { setBusy(false); }
+    }
   }
 
   if (!cap.canProductionWebSerial) {
@@ -447,8 +573,8 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
                 <div className="prod-section-head"><div><span className="prod-kicker">Current action</span><h2>{run?.state?.replaceAll('-', ' ') || 'Preparing'}</h2></div>{hardware && <span className="prod-card-id">{hardware.cardId}</span>}</div>
                 <p className="prod-status" role="status">{status}</p>
                 {release.state === 'loading' && <p>Verifying and preloading official firmware…</p>}
-                {release.state === 'error' && <><p className="prod-error" role="alert">Official firmware could not be preloaded. USB stays locked. {release.error}</p><button className="btn" type="button" disabled={busy} onClick={() => void preloadFirmware(job)}>Retry verified firmware</button></>}
-                {run?.state === 'connect-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={connectCard}>{busy ? 'Inspecting card…' : 'Connect one USB card'}</button>}
+                {release.state === 'error' && !recovery && <p className="prod-error" role="alert">Official firmware could not be preloaded. USB stays locked.</p>}
+                {!recovery && <>{run?.state === 'connect-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={connectCard}>{busy ? 'Inspecting card…' : 'Connect one USB card'}</button>}
                 {run?.state === 'inspect' && hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || !usbConnected} onClick={inspectInstalledFirmware}>{busy ? 'Releasing USB…' : 'Release USB and inspect firmware'}</button>}
                 {run?.state === 'inspect' && firmwareDecision === 'unproven' && <button className="btn primary" type="button" disabled={busy} onClick={retryInstalledFirmwareEvidence}>{busy ? 'Connecting to card page…' : 'Reconnect card page and retry'}</button>}
                 {run?.state === 'inspect' && firmwareDecision === 'install-required' && !usbConnected && <button className="btn primary" type="button" disabled={busy} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
@@ -457,11 +583,19 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
                 {run?.state === 'reconnect' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={reconnectAfterInstall}>{busy ? 'Checking same card…' : 'Reconnect same card'}</button>}
                 {run?.state === 'restore' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || restoreStartedRef.current} onClick={restoreArtwork}>{busy ? 'Loading artwork once…' : 'Load verified artwork'}</button>}
                 {run?.state === 'verify-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={verifyCard}>{busy ? 'Reading card…' : 'Verify card read-back'}</button>}
-                {run?.state === 'check-lights' && <ProductionPhysicalTest job={job} runId={run.runId} cardHost={cardHost} expectedCardId={run.expectedCardId} onResultsChange={setObservations} onComplete={continueAfterLights} onRecovery={handlePhysicalRecovery} />}
+                {run?.state === 'check-lights' && <ProductionPhysicalTest job={job} runId={run.runId} cardHost={cardHost} expectedCardId={run.expectedCardId} platform={diagnosticPlatform(cap)} onResultsChange={setObservations} onComplete={continueAfterLights} onRecovery={handlePhysicalRecovery} />}
                 {run?.state === 'record' && <><form className="prod-record-form" onSubmit={event => { event.preventDefault(); void savePass(); }}><label htmlFor="prod-worker">Worker initials or ID</label><input id="prod-worker" value={workerId} maxLength={80} onChange={event => setWorkerId(event.target.value)} /><button className="btn primary" disabled={!workerId.trim() || busy}>{busy ? 'Saving pass…' : 'Save pass record'}</button></form>{recordRecoveryNeeded && <button className="btn" type="button" disabled={busy} onClick={() => void handlePhysicalRecovery('rerun-lights')}>Re-run physical checks</button>}</>}
-                {run?.state === 'complete' && <div className="prod-complete"><strong>Artwork passed</strong><p>The card, exact job, and physical outputs were recorded.</p><button className="btn primary" onClick={nextArtwork}>Next artwork</button></div>}
-                {canChangeJob && <button className="btn prod-change-job" type="button" disabled={busy} onClick={changeJob}>Change job</button>}
+                {run?.state === 'complete' && <div className="prod-complete"><strong>Artwork passed</strong><p>The card, exact job, and physical outputs were recorded.</p><button className="btn primary" onClick={nextArtwork}>Next artwork</button></div>}</>}
+                {canChangeJob && !recovery && <button className="btn prod-change-job" type="button" disabled={busy} onClick={changeJob}>Change job</button>}
                 {error && <p className="prod-error" role="alert">{error}</p>}
+                {recovery && <ProductionRecovery
+                  recovery={recovery}
+                  phase={run?.state || 'unknown'}
+                  firmwareTarget={job && release.value ? `${job.firmware.target}@${job.firmware.version}+${job.firmware.buildId.slice(0, 8)}` : job ? `${job.firmware.target}@${job.firmware.version}` : 'unknown'}
+                  hardware={hardware}
+                  platform={diagnosticPlatform(cap)}
+                  onAction={action => void handleRecoveryAction(action)}
+                />}
               </section>}
             </div>
             <aside><ProductionPassRecord refreshKey={recordRefresh} /></aside>

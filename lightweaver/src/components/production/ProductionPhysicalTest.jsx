@@ -1,4 +1,5 @@
 import React, { useEffect, useReducer, useRef, useState } from 'react';
+import { ProductionRecovery } from './ProductionRecovery.jsx';
 import { createCardFrameStream } from '../../lib/cardFrameStream.js';
 import { readCardProjectEvidence } from '../../lib/cardPushClient.js';
 import {
@@ -12,6 +13,7 @@ import {
   createProductionPhysicalState, productionCorrectionAffectedBoundaryIds, productionPhysicalReducer,
   productionDiagnosticCurrentEstimate,
 } from '../../lib/productionPhysicalTest.js';
+import { classifyProductionPhysicalFailure } from '../../lib/productionRecovery.js';
 import { readProductionPhysicalState, saveProductionPhysicalState } from '../../lib/productionPhysicalPersistence.js';
 import { assignProductionWiringIdentity, productionWiringDigest } from '../../lib/productionWiringIdentity.js';
 
@@ -23,7 +25,7 @@ function sameOutputs(actual = [], expected = []) { return actual.length === expe
 function exactIdentity(value, job, cardId) { return value?.cardId === cardId && value?.firmwareVersion === job.firmware.version && value?.buildId === job.firmware.buildId && value?.projectRevision === job.project.revision && value?.projectFingerprint === job.project.fingerprint && value?.productionJobId === job.jobId && value?.productionJobDigest === job.digest; }
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, onComplete, onResultsChange, onRecovery }) {
+export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, platform, onComplete, onResultsChange, onRecovery }) {
   const [knownGood, setKnownGood] = useState(() => createProductionKnownGood(job));
   const [state, dispatch] = useReducer(productionPhysicalReducer, knownGood, createProductionPhysicalState);
   const [route, setRoute] = useState(null);
@@ -33,6 +35,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, o
   const [gpio, setGpio] = useState('');
   const [colorOrder, setColorOrder] = useState(knownGood.config.led.colorOrder);
   const [ready, setReady] = useState(false);
+  const [failedObservation, setFailedObservation] = useState('');
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const generationRef = useRef(0);
@@ -40,6 +43,10 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, o
   const tabRefs = useRef([]);
   const active = knownGood.boundaries.find(boundary => boundary.id === state.activeBoundaryId);
   const result = state.results[state.activeBoundaryId];
+  const physicalRecovery = failedObservation && route ? classifyProductionPhysicalFailure(failedObservation) : null;
+
+  useEffect(() => { setFailedObservation(''); }, [state.activeBoundaryId]);
+
 
   useEffect(() => { onResultsChange?.(state.results); }, [onResultsChange, state.results]);
   useEffect(() => {
@@ -133,6 +140,10 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, o
     setCountdown(0);
     await onRecovery?.(action);
   }
+  async function handleStructuredRecovery(action) {
+    if (action === 'retry-physical-stream') { await releaseAndRetry(); return; }
+    if (action === 'open-physical-correction') document.querySelector('.prod-diagnosis button, .prod-diagnosis select, .prod-diagnosis input')?.focus();
+  }
   async function readIdentity() { const driver = productionDriver(); return driver?.readEvidence ? driver.readEvidence('physical') : readCardProjectEvidence({ host: cardHost }); }
   async function verifyIdentity() {
     const evidence = await readIdentity();
@@ -195,6 +206,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, o
 
   async function observe(observation) {
     if (busy) return;
+    setFailedObservation(observation === 'correct' ? '' : observation);
     setError(''); setRoute(classifyProductionPhysicalObservation(observation));
     if (observation !== 'correct') return;
     const candidate = state.candidate;
@@ -297,14 +309,20 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, o
     <p className="prod-physical-instruction"><span className="prod-marker blue" /> First pixel blue <span aria-hidden="true">·</span> <span className="prod-marker red" /> Pixel {active.count} red. Every other boundary stays dark.</p>
     <div className="prod-output-tabs" role="tablist" aria-label="Boundaries to test">{knownGood.boundaries.map((boundary, index) => <button ref={node => { tabRefs.current[index] = node; }} key={boundary.id} disabled={locked || !ready} type="button" role="tab" tabIndex={boundary.id === active.id ? 0 : -1} aria-selected={boundary.id === active.id} className={boundary.id === active.id ? 'selected' : ''} onKeyDown={event => handleTabKey(event, index)} onClick={() => dispatch({ type: 'select', boundaryId: boundary.id })}><span>{state.results[boundary.id]?.observation === 'correct' ? '✓' : index + 1}</span>{boundary.label}</button>)}</div>
     <div className={`prod-test-state ${state.delivery === 'failed' ? 'failed' : ''}`} role="status">{!ready ? 'Checking persistent wiring before starting any lights…' : state.delivery === 'acknowledged' ? 'Test delivered to this exact boundary. Look at the real LEDs — this is not a pass.' : state.delivery === 'failed' ? 'The test did not reach the LEDs.' : 'Starting a low-brightness test…'}</div>
+    {physicalRecovery && <ProductionRecovery
+      recovery={physicalRecovery}
+      phase="physical"
+      firmwareTarget={`${job.firmware.target || 'esp32-s3-n16r8'}@${job.firmware.version}+${job.firmware.buildId.slice(0, 8)}`}
+      platform={platform}
+      onAction={action => void handleStructuredRecovery(action)}
+    />}
     {route?.action === 'restore-project' || route?.action === 'signed-firmware-recovery' ? <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p><button type="button" onClick={() => void handOffRecovery(route.action)}>Stop test and continue safely</button></div> : <>
       {!result || result.observation !== 'correct' ? <><button className="btn primary prod-looks-right" type="button" disabled={busy || !deliveryConfirmed} onClick={() => void observe('correct')}>Yes, this boundary is correct</button><fieldset className="prod-observation"><legend>What do you see instead?</legend><div>{FAILURES.map(([id, label]) => <button type="button" key={id} disabled={busy || locked || !deliveryConfirmed} onClick={() => void observe(id)}>{label}</button>)}</div></fieldset></> : <p className="prod-output-pass" role="status">✓ You physically confirmed this boundary.</p>}
-      {route && !['confirm-output', 'restore-project', 'signed-firmware-recovery'].includes(route.action) && <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p>
+      {route && !['confirm-output', 'restore-project', 'signed-firmware-recovery', 'inspect-power-data', 'release-restart-stream'].includes(route.action) && <div className="prod-diagnosis"><strong>{route.title}</strong><p>{route.guidance}</p>
         {route.action === 'adjust-count' && <div className="prod-inline-actions"><button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'pixel-count', delta: -1 })}>− 1 pixel</button><button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'pixel-count', delta: 1 })}>+ 1 pixel</button></div>}
         {route.action === 'test-direction' && <button type="button" disabled={busy || locked || !deliveryConfirmed} onClick={() => void applyCorrection({ kind: 'direction', direction: active.direction === 'reverse' ? 'forward' : 'reverse' })}>Try opposite direction</button>}
         {route.action === 'test-color-order' && <div className="prod-inline-actions"><label>Color order<select value={colorOrder} onChange={event => setColorOrder(event.target.value)}>{COLOR_ORDERS.map(order => <option key={order}>{order}</option>)}</select></label><button type="button" disabled={busy || locked || !deliveryConfirmed || colorOrder === knownGood.config.led.colorOrder} onClick={() => void applyCorrection({ kind: 'color-order', colorOrder })}>Test color order</button></div>}
         {route.action === 'test-gpio-output' && <div className="prod-inline-actions"><label>GPIO<input inputMode="numeric" value={gpio} onChange={event => setGpio(event.target.value)} /></label><button type="button" disabled={busy || locked || !deliveryConfirmed || Number(gpio) === active.pin} onClick={() => void applyCorrection({ kind: 'gpio', pin: Number(gpio) })}>Test GPIO</button></div>}
-        {route.action === 'release-restart-stream' && <button type="button" disabled={busy} onClick={() => void releaseAndRetry()}>Release and restart test</button>}
       </div>}
     </>}
     {state.candidate && <div className="prod-candidate" role="status"><strong>{state.candidate.phase === 'testing' ? `Temporary boundary test · ${countdown}s` : 'Temporary candidate cleanup required'}</strong><p>{active.label} is locked to activation {state.candidate.activationId}. It cannot be bypassed or confirmed from another boundary.</p><button type="button" disabled={busy} onClick={() => void rollback()}>Restore last confirmed wiring</button></div>}

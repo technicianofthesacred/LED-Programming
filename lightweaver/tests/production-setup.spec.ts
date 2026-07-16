@@ -79,8 +79,10 @@ async function installDriver(page, {
   restoreThrows = false, invalidInspection = false, recordThrowsOnce = false, recordDelayMs = 0,
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryDelayMs = 0,
+  connectErrorOnce = '',
+  disconnectFailureAt = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
 } = {}) {
-  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs }) => {
+  await page.addInitScript(({ wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion: '1.0.0',
@@ -88,12 +90,29 @@ async function installDriver(page, {
       projectFingerprint: '', productionJobId: 'moon-batch-7', productionJobDigest: '',
     };
     window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
-      connectCard: async () => ({}),
+      connectCard: async () => {
+        const attempts = Number(localStorage.getItem('lw_test_connect_attempts') || 0) + 1;
+        localStorage.setItem('lw_test_connect_attempts', String(attempts));
+        if (attempts === 1 && connectErrorOnce) throw new Error(connectErrorOnce);
+        return {};
+      },
       connectLan: async () => {},
-      disconnect: async () => localStorage.setItem('lw_test_disconnect_count', String(Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1)),
+      disconnect: async () => {
+        const count = Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1;
+        localStorage.setItem('lw_test_disconnect_count', String(count));
+        if (count === disconnectFailureAt) throw new Error('USB port did not release');
+      },
       noteLanHandoff: () => localStorage.setItem('lw_test_lan_handoff_count', String(Number(localStorage.getItem('lw_test_lan_handoff_count') || 0) + 1)),
-      inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: invalidInspection ? '4MB' : '16MB' }),
-      install: async ({ onProgress }) => { localStorage.setItem('lw_test_install_count', String(Number(localStorage.getItem('lw_test_install_count') || 0) + 1)); onProgress(1); },
+      inspectCard: async () => {
+        const count = Number(localStorage.getItem('lw_test_inspect_count') || 0) + 1;
+        localStorage.setItem('lw_test_inspect_count', String(count));
+        return { cardId: secondUsbWrong && count === 2 ? 'lw-different-usb' : 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: invalidInspection ? '4MB' : '16MB' };
+      },
+      install: async ({ onProgress }) => {
+        localStorage.setItem('lw_test_install_count', String(Number(localStorage.getItem('lw_test_install_count') || 0) + 1));
+        if (installThrows) throw new Error('Install transport stopped');
+        onProgress(1);
+      },
       startPhysical: async ({ frame, output, generation }) => {
         if (physicalDeliveryDelayMs) await new Promise(resolve => setTimeout(resolve, physicalDeliveryDelayMs));
         if (physicalDeliveryFailure) return { ok: false, generation };
@@ -188,7 +207,7 @@ async function installDriver(page, {
             projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
           };
         }
-        if (phase === 'reconnect') return { ...evidence, cardId: wrongReconnect ? 'lw-wrong-card' : evidence.cardId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
+        if (phase === 'reconnect') return { ...evidence, cardId: wrongReconnect ? 'lw-wrong-card' : evidence.cardId, firmwareVersion: reconnectFirmwareMismatch ? '0.8.0' : evidence.firmwareVersion, buildId: reconnectFirmwareMismatch ? '0'.repeat(40) : evidence.buildId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
         if (phase === 'before-restore') return { ...evidence, cardId: wrongBeforeRestore ? 'lw-wrong-before-restore' : evidence.cardId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
         if (phase === 'physical') {
           const current = JSON.parse(localStorage.getItem('lw_test_current_config') || '{}');
@@ -204,8 +223,117 @@ async function installDriver(page, {
         return evidence;
       },
     };
-  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs });
+  }, { wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, invalidInspection, recordThrowsOnce, recordDelayMs, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryDelayMs, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
 }
+
+test('USB failure shows one safe action and exports only bounded redacted diagnostics', async ({ page }) => {
+  await serveJob(page);
+  await installDriver(page, { connectErrorOnce: 'No device found. This may be a charge-only data cable. card lw-secret job moon-batch-7' });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('The computer did not find a data connection');
+  await expect(recovery.getByText('Card changed?')).toBeVisible();
+  await expect(recovery.getByText('No', { exact: true })).toBeVisible();
+  await expect(recovery.getByText('USB released?')).toBeVisible();
+  await expect(recovery.getByText('Yes', { exact: true })).toBeVisible();
+  await expect(recovery).toContainText('LW-USB-101');
+  await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await expect(recovery.getByRole('button', { name: 'Reconnect with a data cable' })).toBeFocused();
+
+  const downloadPromise = page.waitForEvent('download');
+  await recovery.getByRole('button', { name: 'Export support details' }).click();
+  const download = await downloadPromise;
+  const stream = await download.createReadStream();
+  let body = '';
+  for await (const chunk of stream) body += chunk.toString();
+  const diagnostic = JSON.parse(body);
+  expect(Object.keys(diagnostic)).toEqual(['app', 'version', 'os', 'arch', 'supportCode', 'phase', 'firmwareTarget', 'vid', 'pid']);
+  expect(JSON.stringify(diagnostic)).not.toMatch(/lw-secret|moon-batch|charge-only|raw|error/i);
+
+  await recovery.getByRole('button', { name: 'Reconnect with a data cable' }).click();
+  await expect(page.getByRole('button', { name: 'Release USB and inspect firmware' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('lw_test_connect_attempts'))).toBe('2');
+});
+
+test('failed USB cleanup stays unknown, persists conservative ownership, and retries release', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { invalidInspection: true, disconnectFailureAt: 1 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('USB released?Not confirmed');
+  await expect(recovery.getByRole('button', { name: 'Release USB safely' })).toBeVisible();
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().usbReleased)).toBe(false);
+  await recovery.getByRole('button', { name: 'Release USB safely' }).click();
+  await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeVisible();
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().usbReleased)).toBe(true);
+});
+
+test('install failure never claims USB release when cleanup fails', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { installThrows: true, disconnectFailureAt: 2 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
+  await page.getByRole('button', { name: 'Install verified firmware' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('USB released?Not confirmed');
+  await expect(recovery.getByRole('button', { name: 'Release USB safely' })).toBeVisible();
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().usbReleased)).toBe(false);
+});
+
+test('different USB card is a wrong-card recovery in every phase', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { secondUsbWrong: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-CARD-201');
+  await expect(recovery.getByRole('button', { name: 'Reconnect the expected card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install verified firmware' })).toHaveCount(0);
+});
+
+test('exact-card firmware mismatch returns to same-card USB evidence before install', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { reconnectFirmwareMismatch: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
+  await page.getByRole('button', { name: 'Install verified firmware' }).click();
+  await page.getByRole('button', { name: 'Reconnect same card' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-FW-502');
+  await expect(recovery.getByRole('button', { name: 'Reconnect same card by USB' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install verified firmware' })).toHaveCount(0);
+  await recovery.getByRole('button', { name: 'Reconnect same card by USB' }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await expect(page.getByRole('button', { name: 'Install verified firmware' })).toBeVisible();
+});
+
+test('physical failures use stable structured recovery before bounded correction', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Colors wrong' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-LIGHT-412');
+  await expect(recovery).toContainText('Card changed?No');
+  await expect(recovery).toContainText('USB released?Yes');
+  await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await recovery.getByRole('button', { name: 'Test color order safely' }).click();
+  await expect(page.getByLabel('Color order')).toBeFocused();
+});
 
 test('worker completes one verified job, retains its pass, and Next artwork resets transient state', async ({ page }) => {
   const job = await serveJob(page);
@@ -526,7 +654,8 @@ test('wrong card after installation is stopped without restoring', async ({ page
   await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
   await page.getByRole('button', { name: 'Install verified firmware' }).click();
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
-  await expect(page.getByRole('alert')).toContainText('Wrong card');
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('not the card bound to this production run');
+  await expect(page.getByRole('button', { name: 'Reconnect the expected card' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Load verified artwork' })).toHaveCount(0);
 });
 
@@ -547,7 +676,7 @@ test('wrong LAN card after USB inspection cannot install or restore', async ({ p
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
-  await expect(page.getByRole('alert')).toContainText('Wrong online card');
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('not the card bound to this production run');
   await expect(page.getByRole('button', { name: /Install verified firmware|Load verified artwork/ })).toHaveCount(0);
   expect(await page.evaluate(() => ({ installs: localStorage.getItem('lw_test_install_count'), restores: localStorage.getItem('lw_test_restore_count') }))).toEqual({ installs: null, restores: null });
 });
@@ -559,9 +688,9 @@ test('LAN identity is rebound immediately before restore and a changed host cann
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
-  await expect(page.getByRole('alert')).toContainText('no longer the exact USB-inspected card');
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('not the card bound to this production run');
   expect(await page.evaluate(() => localStorage.getItem('lw_test_restore_count'))).toBeNull();
-  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reconnect the expected card' })).toBeVisible();
 });
 
 test('throwing LAN evidence has a clear handoff retry and never unlocks mutation early', async ({ page }) => {
@@ -570,10 +699,10 @@ test('throwing LAN evidence has a clear handoff retry and never unlocks mutation
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
-  await expect(page.getByRole('alert')).toContainText('Card page bridge is not ready');
-  await expect(page.getByRole('button', { name: 'Reconnect card page and retry' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('could not read the local card page');
+  await expect(page.getByRole('button', { name: 'Reconnect the expected card page' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Install verified firmware|Load verified artwork/ })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Reconnect card page and retry' }).click();
+  await page.getByRole('button', { name: 'Reconnect the expected card page' }).click();
   await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_lan_handoff_count'))).toBe('2');
   expect(await page.evaluate(() => localStorage.getItem('lw_test_install_count'))).toBeNull();
@@ -585,8 +714,8 @@ test('missing LAN identity can retry the card-page handoff and exact evidence sa
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
-  await expect(page.getByRole('button', { name: 'Reconnect card page and retry' })).toBeVisible();
-  await page.getByRole('button', { name: 'Reconnect card page and retry' }).click();
+  await expect(page.getByRole('button', { name: 'Reconnect the expected card page' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reconnect the expected card page' }).click();
   await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_install_count'))).toBeNull();
 });
@@ -601,7 +730,7 @@ test('accepted restore with a lost response resumes verify-only and retry unlock
   await page.getByRole('button', { name: 'Install verified firmware' }).click();
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
-  await expect(page.getByRole('alert')).toContainText('Response lost after card accepted restore');
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('artwork load response was interrupted');
   expect(await page.evaluate(() => localStorage.getItem('lw_test_restore_count'))).toBe('1');
   await expect(page.getByRole('button', { name: 'Verify card read-back' })).toBeVisible();
 
@@ -611,8 +740,8 @@ test('accepted restore with a lost response resumes verify-only and retry unlock
   const verify = page.getByRole('button', { name: 'Verify card read-back' });
   await expect(verify).toBeEnabled();
   await verify.click();
-  await expect(page.getByRole('alert')).toContainText('No second restore ran');
-  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('did not load the artwork a second time');
+  await expect(page.getByRole('button', { name: 'Retry verified artwork load' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_restore_count'))).toBe('1');
 });
 
@@ -671,9 +800,11 @@ test('failed USB validation always releases the local connection and remains ret
   await page.goto('/#screen=production');
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
-  await expect(page.getByRole('alert')).toContainText('USB was released');
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('not a supported Lightweaver ESP32-S3 card');
+  await expect(recovery.getByText('Yes', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_disconnect_count'))).toBe('1');
-  await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect a supported card' })).toBeVisible();
 });
 
 test('job selection is single-flight, awaits verification, and ignores overlapping clicks', async ({ page }) => {

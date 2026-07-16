@@ -38,8 +38,11 @@ export async function inspectConnectedESP(loader, chipDescription = '') {
 
 export async function disconnectESP(loader, transport) {
   try {
-    if (transport) await transport.disconnect().catch(() => {});
-  } catch (_) {}
+    if (transport) await transport.disconnect();
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 export async function flashFirmware(loader, file, address, eraseAll, onProgress) {
