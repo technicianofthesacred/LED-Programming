@@ -142,6 +142,11 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
     setCountdown(0);
     await onRecovery?.(action);
   }
+  function requireBoundaryRestart(title, guidance) {
+    setFailedObservation('flashing-or-frozen');
+    setRecoveryEntered(false);
+    setRoute({ action: 'release-restart-stream', title, guidance });
+  }
   async function handleStructuredRecovery(action) {
     if (action === 'retry-physical-stream') { await releaseAndRetry(); return; }
     if (action === 'open-physical-correction') {
@@ -262,7 +267,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
           clearInterval(timerRef.current);
           void stopStream();
           dispatch({ type: 'candidate-clear' });
-          setRoute({ action: 'release-restart-stream', title: 'Temporary change rolled back', guidance: 'The card restored the last confirmed wiring. Reconnect, then retry this boundary.' });
+          requireBoundaryRestart('Temporary change rolled back', 'The card restored the last confirmed wiring. Restart this boundary before making another observation.');
           return 0;
         }
         return value - 1;
@@ -276,7 +281,7 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
         try {
           await rollbackExactCandidate(stagedCandidate, knownGood);
           dispatch({ type: 'candidate-clear' });
-          setRoute({ action: 'release-restart-stream', title: 'Temporary change was removed', guidance: 'The card independently proved the last confirmed wiring. Retry this boundary when ready.' });
+          requireBoundaryRestart('Temporary change was removed', 'The card independently proved the last confirmed wiring. Restart this boundary before making another observation.');
           setError(`${reason?.message || reason} The exact staged candidate was rolled back and the last confirmed wiring was read back.`);
         } catch (rollbackReason) {
           dispatch({ type: 'candidate', candidate: stagedCandidate });
@@ -293,10 +298,18 @@ export function ProductionPhysicalTest({ job, runId, cardHost, expectedCardId, p
     setBusy(true); setError('');
     try {
       await rollbackExactCandidate(candidate, knownGood);
-      dispatch({ type: 'candidate-clear' }); clearInterval(timerRef.current); setCountdown(0); setRoute({ action: 'release-restart-stream', title: 'Last confirmed wiring restored', guidance: 'Reconnect if needed, then retry this boundary.' });
+      dispatch({ type: 'candidate-clear' }); clearInterval(timerRef.current); setCountdown(0);
+      requireBoundaryRestart('Last confirmed wiring restored', 'Restart this boundary to obtain a fresh exact frame acknowledgement before continuing.');
     } catch (reason) { setError(reason?.message || String(reason)); } finally { setBusy(false); }
   }
-  async function releaseAndRetry() { setBusy(true); try { await startStream(); setRoute(null); } finally { setBusy(false); } }
+  async function releaseAndRetry() {
+    setBusy(true);
+    try {
+      const delivered = await startStream();
+      if (delivered) { setFailedObservation(''); setRecoveryEntered(false); setRoute(null); }
+      else requireBoundaryRestart('Boundary restart did not complete', 'The new exact frame was not acknowledged. Keep this boundary locked and restart it again.');
+    } finally { setBusy(false); }
+  }
   const currentIndex = knownGood.boundaries.findIndex(boundary => boundary.id === active.id);
   const locked = Boolean(state.candidate);
   const deliveryConfirmed = ready && state.delivery === 'acknowledged' && state.deliveryBoundaryId === active.id;

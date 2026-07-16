@@ -610,6 +610,33 @@ test('candidate activation failure rolls back the exact staged activation and pr
   await expect(page.getByRole('alert')).toContainText('Candidate activation failed');
   expect(await page.evaluate(() => ({ rollback: localStorage.getItem('lw_test_rollback_count'), status: localStorage.getItem('lw_test_wiring_status_count') }))).toEqual({ rollback: '1', status: '2' });
   await expect(page.getByText('Temporary candidate cleanup required')).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Release and restart the light test' }).click();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeEnabled();
+});
+
+test('explicit candidate rollback exposes one restart and requires a fresh boundary acknowledgement', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { preflightCurrent: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await page.getByRole('button', { name: 'Red end is off' }).click();
+  await page.getByRole('button', { name: 'Adjust pixel count safely' }).click();
+  await page.getByRole('button', { name: '+ 1 pixel' }).click();
+  await expect(page.getByText(/Temporary boundary test/)).toBeVisible();
+  await page.getByRole('button', { name: 'Restore last confirmed wiring' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('LW-LIGHT-416');
+  await expect(recovery.locator('.prod-recovery-primary')).toHaveCount(1);
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
+  await recovery.getByRole('button', { name: 'Release and restart the light test' }).click();
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toBeEnabled();
+  await expect(page.getByRole('tab', { name: /Inner ring/ })).toBeEnabled();
 });
 
 test('failed candidate rollback stays visibly locked with an actionable retry', async ({ page }) => {
