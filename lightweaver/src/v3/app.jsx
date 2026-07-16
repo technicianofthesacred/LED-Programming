@@ -27,6 +27,7 @@ import {
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
+import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
 
@@ -179,7 +180,7 @@ function Shell() {
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, replaceProject, replaceWithNewProject,
-    projectLifecycleLabel, markProjectPersisted,
+    projectLifecycle, projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
   const [saveLabel, setSaveLabel] = useState('');
@@ -344,8 +345,17 @@ function Shell() {
   const onLaunchBridge = useCallback(async operation => {
     await launchBridgeOperation(operation, {
       persistProject: async () => {
-        saveCurrentProjectToLibrary(serializeProject());
+        const record = saveCurrentProjectToLibrary(serializeProject());
         markProjectPersisted('browser');
+        if (operation === 'install-current-release' || operation === 'recover-current-release') {
+          writeCardCommissioning(beginCardCommissioning({
+            source: 'native-bridge',
+            operation,
+            strategy: 'clean-recovery',
+            projectRecord: record,
+            projectRevision: projectLifecycle.editedRevision,
+          }));
+        }
       },
       navigate: url => {
         const testNavigate = window.__LW_BRIDGE_NAVIGATE_FOR_TEST__;
@@ -353,7 +363,7 @@ function Shell() {
         else window.location.assign(url);
       },
     });
-  }, [markProjectPersisted, serializeProject]);
+  }, [markProjectPersisted, projectLifecycle.editedRevision, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
       `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`,
@@ -397,7 +407,7 @@ function Shell() {
       <Rail view={view} setView={navigateStudio} />
 
       <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} go={navigateStudio} /> : null}
+        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} /> : null}
       </Suspense>
 
       <StatusBar

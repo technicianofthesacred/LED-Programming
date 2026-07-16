@@ -22,6 +22,13 @@ import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
 import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCode } from '../lib/bridgeLaunch.js';
 import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
 import { useProject } from '../state/ProjectContext.jsx';
+import { CardCommissioningPanel, CardCommissioningSteps } from '../components/card/CardCommissioningPanel.jsx';
+import {
+  beginCardCommissioning,
+  completeCardInstall,
+  readCardCommissioning,
+  writeCardCommissioning,
+} from '../lib/cardCommissioningFlow.js';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -374,8 +381,8 @@ import { useProject } from '../state/ProjectContext.jsx';
     );
   }
 
-  function AutomaticInstallScreen() {
-    const { serializeProject, markProjectPersisted } = useProject();
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard }) {
+    const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
     const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
@@ -384,6 +391,7 @@ import { useProject } from '../state/ProjectContext.jsx';
     const [progress, setProgress] = useState(0);
     const [installState, setInstallState] = useState('idle');
     const [releaseAttempt, setReleaseAttempt] = useState(0);
+    const [commissioning, setCommissioning] = useState(readCardCommissioning);
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const mountedRef = useRef(true);
@@ -487,6 +495,22 @@ import { useProject } from '../state/ProjectContext.jsx';
       setInstallState('installing');
       setProgress(0);
       try {
+        const record = saveCurrentProjectToLibrary(serializeProject());
+        markProjectPersisted('browser');
+        const started = beginCardCommissioning({
+          source: 'web-serial',
+          operation: 'install-current-release',
+          strategy: 'clean-recovery',
+          projectRecord: record,
+          projectRevision: projectLifecycle.editedRevision,
+          installTarget: {
+            id: cardState.hardware.cardId,
+            firmwareVersion: releaseState.release.manifest.firmwareVersion,
+            buildId: releaseState.release.manifest.buildId,
+          },
+        });
+        writeCardCommissioning(started);
+        setCommissioning(started);
         await flashFirmwareAndRelease({
           loader: loaderRef.current,
           transport: transportRef.current,
@@ -500,6 +524,14 @@ import { useProject } from '../state/ProjectContext.jsx';
         transportRef.current = null;
         installingRef.current = false;
         setProgress(1);
+        const completed = completeCardInstall(started, {
+          operation: 'install-current-release',
+          cardId: cardState.hardware.cardId,
+          firmwareVersion: releaseState.release.manifest.firmwareVersion,
+          buildId: releaseState.release.manifest.buildId,
+        });
+        writeCardCommissioning(completed);
+        setCommissioning(completed);
         setInstallState('complete');
       } catch (error) {
         loaderRef.current = null;
@@ -510,14 +542,14 @@ import { useProject } from '../state/ProjectContext.jsx';
       }
     };
 
-    if (installState === 'complete') {
+    if (installState === 'complete' || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
       return (
         <div className="install-flow" aria-live="polite">
-          <div className="install-step-mark complete">Installation complete</div>
-          <h1>Connect your card to Wi-Fi</h1>
-          <p>USB has been released. Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network. Setup should open automatically.</p>
-          <p>If setup does not open, use the button below after joining the card network.</p>
-          <a className="btn-lg" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open card setup</a>
+          <CardCommissioningPanel
+            result={null}
+            link={cardLink}
+            onReconnect={() => onConnectCard?.()}
+          />
         </div>
       );
     }
@@ -525,6 +557,7 @@ import { useProject } from '../state/ProjectContext.jsx';
     const releaseReady = releaseState.state === 'ready';
     return (
       <div className="install-flow" aria-live="polite">
+        <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
           <h1>Install Lightweaver</h1>
@@ -577,9 +610,9 @@ import { useProject } from '../state/ProjectContext.jsx';
     );
   }
 
-  function FlashScreen() {
+  function FlashScreen(props) {
     const installMode = typeof window !== 'undefined' && new URLSearchParams(window.location.hash.slice(1)).get('mode') === 'install';
-    return installMode ? <AutomaticInstallScreen /> : <TechnicianFlashScreen />;
+    return installMode ? <AutomaticInstallScreen {...props} /> : <TechnicianFlashScreen />;
   }
 
 export { FlashScreen };

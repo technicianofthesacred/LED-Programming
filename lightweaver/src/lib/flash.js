@@ -4,6 +4,7 @@ import {
   makeEspConnectTerminal,
 } from './flashConnection.js';
 import { writeVerifiedFlash } from './flashPlan.js';
+import { cardIdFromEspMac } from './cardCommissioningFlow.js';
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
@@ -25,10 +26,13 @@ export async function connectESP({ onAttempt, onLog } = {}) {
 export async function inspectConnectedESP(loader, chipDescription = '') {
   if (!loader) throw new Error('The connected card could not be inspected');
   const flashSize = await loader.detectFlashSize();
+  const mac = await loader.chip?.readMac?.(loader);
   return {
     chipDescription: String(chipDescription || loader.chip?.CHIP_NAME || 'Unknown chip'),
     chipName: String(loader.chip?.CHIP_NAME || ''),
     flashSize,
+    mac: String(mac || ''),
+    cardId: cardIdFromEspMac(mac),
   };
 }
 

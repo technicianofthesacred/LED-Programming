@@ -575,6 +575,36 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 }
 .card-acknowledged-facts dt { color: var(--text-mid); }
 .card-acknowledged-facts dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
+
+.card-commissioning { display: grid; gap: 16px; min-width: 0; }
+.card-commissioning h3 { margin: 0; }
+.card-commissioning p { margin: 0; line-height: 1.55; }
+.card-commissioning-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.card-commissioning-steps li {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text-mid);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.card-commissioning-steps li span { font-family: var(--font-mono); }
+.card-commissioning-steps li.complete { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.card-commissioning-steps li.active { color: var(--text-hi); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.card-commissioning-network { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+@media (max-width: 640px) {
+  .card-commissioning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .card-connection-details { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border-hair); }
 .card-connection-details summary { width: fit-content; cursor: pointer; color: var(--text-mid); font-size: 11.5px; }
 .card-connection-details form { display: grid; gap: 7px; margin-top: 11px; }

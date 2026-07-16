@@ -41,13 +41,11 @@ function actionRegion(page) {
 
 async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}) {
   await page.evaluate(extra => {
-    const targetTabId = sessionStorage.getItem('lightweaver.bridge.origin-tab.v1');
-    const message = {
-      version: 1,
-      type: 'bridge-result',
-      deliveryId: 'AQEBAQEBAQEBAQEB',
-      targetTabId,
-      operation: 'install-current-release',
+    return (async () => {
+      const pendingKey = Object.keys(localStorage).find(key => key.startsWith('lightweaver.bridge.pending.v1.'));
+      if (!pendingKey) throw new Error('No pending Bridge launch');
+      const pending = JSON.parse(localStorage.getItem(pendingKey) || '{}');
+      const values = {
       status: 'awaiting-card-acknowledgement',
       code: 'flash-verified',
       cardId: 'lw-441bf681feb0',
@@ -57,11 +55,25 @@ async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}
       verification: 'flash-verified',
       physicalOutput: 'unconfirmed',
       ...extra,
-    };
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: 'lightweaver.bridge.result.v1',
-      newValue: JSON.stringify(message),
-    }));
+      };
+      const receipt = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
+      const params = new URLSearchParams([
+        ['status', String(values.status)], ['code', String(values.code)],
+        ['cardId', String(values.cardId)], ['firmwareVersion', String(values.firmwareVersion)],
+        ['buildId', String(values.buildId)], ['target', String(values.target)],
+        ['verification', String(values.verification)], ['physicalOutput', String(values.physicalOutput)],
+        ['nonce', pending.nonce], ['receipt', receipt], ['version', '1'],
+      ]);
+      const { consumeBridgeCallback } = await import('/src/lib/bridgeProtocol.js');
+      const { createBridgeResultChannel } = await import('/src/lib/bridgeLaunch.js');
+      const result = await consumeBridgeCallback(`https://led.mandalacodes.com/#bridge-result?${params.toString()}`, {
+        currentOrigin: 'https://led.mandalacodes.com',
+        history: { replaceState() {} },
+      });
+      const producer = createBridgeResultChannel();
+      try { await producer.publish(result); }
+      finally { producer.close(); }
+    })();
   }, overrides);
 }
 
@@ -157,7 +169,7 @@ test('secure iframe escapes to the fixed canonical installer in a new top-level 
   await installer.close();
 });
 
-test('desktop Bridge launch persists the project, launches once, then shows a truthful signed-installer gap', async ({ page }) => {
+test('desktop Bridge launch persists the project and commissioning flow without inferring failure from elapsed time', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__lwBridgeUrls = [];
@@ -171,14 +183,13 @@ test('desktop Bridge launch persists the project, launches once, then shows a tr
   await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
   await expect(actionRegion(page)).toContainText('Waiting for Lightweaver Bridge');
   await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}').stage)).toBe('install-safely');
   const urls = await page.evaluate(() => (window as any).__lwBridgeUrls);
   expect(urls).toHaveLength(1);
   expect(urls[0]).toMatch(/^lightweaver:\/\/run\?operation=install-current-release&nonce=[A-Za-z0-9_-]{43}&version=1$/);
   await page.waitForTimeout(4100);
-  await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'install-native-bridge');
-  await expect(actionRegion(page)).toContainText(/may not be installed/i);
-  await expect(actionRegion(page)).toContainText(/signed installer is not yet available/i);
-  await expect(actionRegion(page).getByRole('link')).toHaveCount(0);
+  await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'launch-native-bridge');
+  await expect(actionRegion(page)).toContainText('Waiting for Lightweaver Bridge');
 });
 
 test('mobile handoff stays passive', async ({ page }) => {
@@ -206,14 +217,14 @@ test('missing native Bridge does not expose an unsigned download', async ({ page
   await expect(actionRegion(page).getByRole('link')).toHaveCount(0);
 });
 
-test('originating tab resumes once, verifies exact card build, and requires human-visible warm white', async ({ page }) => {
+test('Bridge return resumes one four-stage flow, restores the exact saved project, then hands off to Check lights', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
-    (window as any).__lightChecks = 0;
-    (window as any).__LW_RECOVER_LIGHTS_FOR_TEST__ = async () => {
-      (window as any).__lightChecks += 1;
-      return { ok: true, accepted: true };
+    (window as any).__commissioningPushes = [];
+    (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async (runtimePackage: unknown, options: unknown) => {
+      (window as any).__commissioningPushes.push({ runtimePackage, options });
+      return { ok: true, saved: true };
     };
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -222,9 +233,12 @@ test('originating tab resumes once, verifies exact card build, and requires huma
   await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
 
   await deliverBridgeResult(page);
-  await expect(page.getByRole('heading', { name: 'Firmware installed — verify the card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  for (const label of ['Connect card', 'Install safely', 'Set up card', 'Check lights']) {
+    await expect(page.getByRole('listitem').filter({ hasText: label })).toBeVisible();
+  }
   await page.waitForTimeout(4100);
-  await expect(page.getByRole('heading', { name: 'Firmware installed — verify the card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
 
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -248,22 +262,23 @@ test('originating tab resumes once, verifies exact card build, and requires huma
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
   });
-  await page.getByRole('button', { name: 'Run light check' }).click();
-  await expect(page.getByText('Are the lights warm white?')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as any).__lightChecks)).toBe(1);
+  await expect(page.getByRole('button', { name: 'Restore saved project' })).toBeVisible();
+  await page.getByRole('button', { name: 'Restore saved project' }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
+  await expect(page.getByText(/saved Studio project revision is installed on this exact card/i)).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(1);
 
-  await deliverBridgeResult(page);
-  await expect.poll(() => page.evaluate(() => (window as any).__lightChecks)).toBe(1);
-  await page.getByRole('button', { name: 'Yes, they are warm white' }).click();
-  await expect(page.getByRole('heading', { name: 'Lightweaver is ready' })).toBeVisible();
-  await expect(page.getByRole('dialog')).toContainText('visible warm-white lights are confirmed');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
+  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
 });
 
-test('a negative physical check offers real recovery and reconnect actions', async ({ page }) => {
+test('a staged GPIO restoration stops at the Check lights handoff without legacy full-white output', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = () => {};
-    (window as any).__LW_RECOVER_LIGHTS_FOR_TEST__ = async () => ({ ok: true, accepted: true });
+    (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async () => ({ state: 'staged', activationId: 'candidate-safe-7' });
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
@@ -274,10 +289,12 @@ test('a negative physical check offers real recovery and reconnect actions', asy
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
   });
-  await page.getByRole('button', { name: 'Run light check' }).click();
-  await page.getByRole('button', { name: 'No', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Recover current release' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Reconnect', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Restore saved project' }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
+  await expect(page.getByText(/staged on this exact card/i)).toBeVisible();
+  await expect(page.getByText(/test its GPIO wiring before making it permanent/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /Run light check|warm white/i })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_commissioning_v1') || '{}').project?.pendingActivationId)).toBe('candidate-safe-7');
 });
 
 test('wrong-card and recoverable failures retry the existing connection step', async ({ page }) => {
