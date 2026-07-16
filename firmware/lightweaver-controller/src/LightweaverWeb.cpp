@@ -1435,7 +1435,7 @@ void handleControlPost() {
     confirmedLook["zone"] = zoneTarget;
     confirmedLook["syncZones"] = runtimeGetSyncZones();
   }
-  out["brightness"] = runtimeGetBrightnessZ(zoneTarget);
+  out["brightness"] = runtimeGetBrightness();
   out["speed"] = runtimeGetSpeed();
   out["hueShift"] = runtimeGetHueShift();
   out["blackout"] = runtimeIsBlackedOut();

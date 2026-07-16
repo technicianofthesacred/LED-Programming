@@ -179,6 +179,90 @@ function verifyBrightnessSetterContracts() {
   assert.doesNotMatch(physicalControls, /runtimeSetBrightnessZ\s*\(/, 'physical rotary brightness must not route through zone brightness');
 }
 
+function verifyOutputFunnelContracts() {
+  const main = readFileSync(resolve(import.meta.dirname, '../src/main.cpp'), 'utf8');
+  assert.match(main, /void\s+transmitPhysicalLeds\s*\(/,
+    'firmware should define a sole low-level physical transmitter');
+  assert.match(main, /void\s+clearPhysicalLeds\s*\(/,
+    'firmware should define a diagnostics-aware physical safety clear');
+  const brightness = extractFunction(main, 'computeBrightnessByte');
+  const copy = extractFunction(main, 'copyLogicalToPhysicalLeds');
+  const normalShow = extractFunction(main, 'showLeds');
+  const physicalPush = extractFunction(main, 'pushPhysicalLeds');
+  const physicalTransmit = extractFunction(main, 'transmitPhysicalLeds');
+  const physicalClear = extractFunction(main, 'clearPhysicalLeds');
+  const runtimeLoop = extractFunction(main, 'loop');
+
+  assert.match(brightness, /OutputBrightnessInputs\s+input\s*\{\s*\}/,
+    'runtime brightness should be composed through OutputBrightnessInputs');
+  for (const assignment of [
+    /input\.brightnessLimit\s*=\s*brightnessLimit/,
+    /input\.lookBrightness\s*=/,
+    /input\.fadeScale\s*=\s*fadeScale/,
+    /input\.knob\s*=/,
+    /input\.manualBrightness\s*=\s*manualBrightness/,
+    /input\.blackedOut\s*=\s*blackedOut/,
+  ]) {
+    assert.match(brightness, assignment, 'runtime brightness should populate every policy input');
+  }
+  assert.match(
+    brightness,
+    /composeOutputBrightness\s*\(\s*input\s*,\s*frameSourceIsStreaming\s*\(\s*\)\s*\?\s*OUTPUT_EXTERNAL\s*:\s*OUTPUT_LOCAL\s*\)/,
+    'streaming frames should use the external output class and local frames the local class',
+  );
+
+  assert.match(copy, /outputColorPipeline\.transform\s*\(\s*leds\s*\[\s*i\s*\]\s*,\s*ledColorOrderCode\s*\)/,
+    'logical pixels should pass through the configured output color pipeline');
+  assert.doesNotMatch(copy, /leds\s*\[\s*i\s*\]\s*=/,
+    'the physical copy seam must not mutate the logical canvas');
+
+  assert.match(normalShow, /pushPhysicalLeds\s*\(\s*computeBrightnessByte\s*\(\s*\)/,
+    'normal showLeds should compose brightness before entering the physical funnel');
+  assert.match(physicalPush, /copyLogicalToPhysicalLeds\s*\(\s*\)/,
+    'the shared physical funnel should own the logical-to-physical copy');
+  assert.match(physicalPush, /transmitPhysicalLeds\s*\(\s*brightnessByte\s*,\s*sourceClass\s*\)/,
+    'normal output should delegate to the sole physical transmitter after copying');
+  assert.match(physicalTransmit, /FastLED\.setBrightness\s*\(\s*brightnessByte\s*\)/,
+    'the sole physical transmitter should own FastLED brightness');
+  assert.match(physicalTransmit, /lastOutputBrightnessByte\s*=\s*brightnessByte/,
+    'the sole physical transmitter should update brightness diagnostics');
+  assert.match(physicalTransmit, /lastOutputSourceClass\s*=\s*sourceClass/,
+    'the sole physical transmitter should update source diagnostics');
+  assert.match(physicalTransmit, /FastLED\.show\s*\(\s*\)/,
+    'the sole physical transmitter should own the physical show call');
+  assert.match(physicalTransmit, /recordPhysicalShow\s*\(\s*\)/,
+    'the sole physical transmitter should count successful physical shows');
+  assert.equal((main.match(/FastLED\.show\s*\(\s*\)/g) || []).length, 1,
+    'firmware should contain exactly one FastLED.show() site');
+
+  assert.doesNotMatch(main, /FastLED\.clear\s*\(\s*true\s*\)/,
+    'safety clears must not transmit outside the physical output funnel');
+  assert.match(physicalClear, /fill_solid\s*\(\s*physicalLeds\s*,[^,]+,\s*CRGB::Black\s*\)/,
+    'safety clears should black only the physical buffer');
+  assert.doesNotMatch(physicalClear, /\bleds\s*\[/,
+    'safety clears must preserve the logical canvas');
+  assert.match(physicalClear, /transmitPhysicalLeds\s*\(\s*0\s*,\s*OUTPUT_LOCAL\s*\)/,
+    'safety clears should transmit black at zero brightness through the diagnostics funnel');
+
+  assert.match(main, /void\s+showLeds\s*\(\s*uint8_t\s+brightnessByte\s*\)/,
+    'special output modes should use an explicit-brightness show overload');
+  assert.match(main, /showLeds\s*\(\s*220\s*\)/,
+    'identify should preserve its explicit brightness through the shared funnel');
+  assert.match(main, /showLeds\s*\(\s*uint8_t\s*\(\s*clampUnit\s*\(\s*brightnessLimit\s*\)\s*\*\s*255\.0f\s*\)\s*\)/,
+    'AP recovery should preserve its brightness-limit output through the shared funnel');
+
+  assert.match(main, /outputColorPipeline\.configure\s*\(\s*config\.outputColor\s*\)/,
+    'runtime config should configure the shared output color pipeline');
+  assert.match(main, /FastLED\.setDither\s*\(\s*false\s*\)/,
+    'temporal dithering should start disabled');
+  assert.match(main, /measuredOutputFps\s*>=\s*50/,
+    'temporal dithering should enable only at 50 measured physical shows per second');
+  assert.match(main, /measuredOutputFps\s*<\s*40/,
+    'temporal dithering should disable below 40 measured physical shows per second');
+  assert.match(runtimeLoop, /updateOutputTelemetry\s*\(\s*now\s*\)/,
+    'the existing runtime loop should publish zero FPS and disable dithering when physical shows stop');
+}
+
 try {
   execFileSync('c++', ['-std=c++17', testSource, '-o', testBinary], {
     stdio: 'inherit',
@@ -186,6 +270,7 @@ try {
   execFileSync(testBinary, { stdio: 'inherit' });
   verifyBrightnessSetterContracts();
   verifyRawLiveSourceContracts();
+  verifyOutputFunnelContracts();
   console.log('output-policy tests passed');
 } finally {
   rmSync(tempDir, { force: true, recursive: true });

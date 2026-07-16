@@ -51,7 +51,6 @@ void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi);
 uint8_t runtimeGetDriftHueMin();
 uint8_t runtimeGetDriftHueMax();
 float runtimeGetBrightness();
-float runtimeGetBrightnessZ(const String& targetId);
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
