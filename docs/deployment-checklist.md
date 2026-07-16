@@ -201,7 +201,7 @@ Record `GET /api/status` before and after each source change. Its `lwOutput` obj
 - [ ] **Source transitions:** move local → Studio → local → Art-Net → local. Each accepted source must take ownership cleanly, and local playback must resume after the stream watchdog expires without a stuck or stale frame.
 - [ ] **Blackout and recovery:** trigger blackout, confirm all physical LEDs are off, then run **Recover lights**. Confirm frame producers stop before recovery, the recovery output is low brightness, and ordinary local playback can resume.
 - [ ] **Current-limit stress:** show full white at the installation brightness cap for the planned dwell time. Confirm stable voltage, temperature, frame rate, and no resets, flicker, or visible color shift.
-- [ ] **Dithering threshold:** hold an external stream above `50 FPS`, then below `40 FPS`, long enough for measurement. Confirm `lwOutput.dithering` enables and disables at those thresholds without changing the source contract.
+- [ ] **Dithering threshold:** hold an external stream at or above `100 FPS`, then below `100 FPS`, long enough for FastLED's internal measurement to settle. Confirm `lwOutput.dithering` matches the state used by the last transmitted frame without changing the source contract. FastLED 3.10 forcibly disables controller dithering below `100 FPS`; Lightweaver deliberately reports and follows that effective library boundary.
 
 Do not mark the output phase visually accepted from software tests alone. Save the card identity, package hash/commit, fixture settings, diagnostic snapshots, and pass/fail notes with the controller record.
 
