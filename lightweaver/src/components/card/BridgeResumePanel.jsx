@@ -69,6 +69,15 @@ export function BridgeResumePanel({
       </div>
     );
   }
+  if (result.kind === 'handoff') {
+    return (
+      <div className="bridge-resume" role="status">
+        <h3>Bridge return pending</h3>
+        <p>{result.message}</p>
+        <div className="card-connection-actions"><button type="button" className="btn" onClick={onDismiss}>Dismiss</button></div>
+      </div>
+    );
+  }
   if (result.status !== 'awaiting-card-acknowledgement') {
     const copy = FAILURE_COPY[result.status] || FAILURE_COPY['recoverable-failure'];
     return (

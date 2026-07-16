@@ -1,10 +1,12 @@
 import {
   BRIDGE_OPERATIONS,
   BRIDGE_RESULT_STATUSES,
+  claimBridgeResultReceipt,
   consumeBridgeCallback,
   consumeBridgeReturnCode,
   confirmBridgeResultReceipt,
   createBridgeLaunch,
+  releaseBridgeResultReceipt,
   validateOperationResult,
 } from './bridgeProtocol.js';
 
@@ -20,6 +22,8 @@ const BUILD_PATTERN = /^[a-f0-9]{40}$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const ACK_RECEIPT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_MESSAGE_BYTES = 1024;
+const STORED_RESULT_PREFIX = 'lightweaver.bridge.accepted-result.v1.';
+const MAX_STORED_RESULT_BYTES = 768;
 
 function defaultNavigate(url) {
   globalThis.location.href = url;
@@ -73,6 +77,92 @@ function resultFields(result) {
   return fields;
 }
 
+function uiResultFields(result) {
+  const fields = {
+    operation: result.operation,
+    status: result.status,
+    code: result.code,
+    target: result.target,
+    verification: result.verification,
+    physicalOutput: result.physicalOutput,
+    physicalProof: false,
+  };
+  if (result.cardId !== undefined) fields.cardId = result.cardId;
+  if (result.firmwareVersion !== undefined) fields.firmwareVersion = result.firmwareVersion;
+  if (result.buildId !== undefined) fields.buildId = result.buildId;
+  return fields;
+}
+
+function validateBridgeUiResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const result = uiResultFields(value);
+  const expectedKeys = [
+    'code', 'operation', 'physicalOutput', 'physicalProof', 'status', 'target', 'verification',
+    ...(result.cardId === undefined ? [] : ['cardId']),
+    ...(result.firmwareVersion === undefined ? [] : ['firmwareVersion']),
+    ...(result.buildId === undefined ? [] : ['buildId']),
+  ].sort();
+  if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')
+    || !BRIDGE_OPERATIONS.includes(result.operation) || !BRIDGE_RESULT_STATUSES.includes(result.status)
+    || !CODE_PATTERN.test(result.code || '') || result.target !== 'lightweaver-controller-esp32s3'
+    || !['flash-verified', 'not-verified'].includes(result.verification)
+    || result.physicalOutput !== 'unconfirmed' || result.physicalProof !== false
+    || !validateOperationResult(result.operation, result)) return null;
+  const destructive = result.operation === 'install-current-release' || result.operation === 'recover-current-release';
+  if (result.status === 'awaiting-card-acknowledgement' && destructive) {
+    if (!CARD_PATTERN.test(result.cardId || '') || !SEMVER_PATTERN.test(result.firmwareVersion || '') || !BUILD_PATTERN.test(result.buildId || '')) return null;
+  } else if (result.firmwareVersion !== undefined || result.buildId !== undefined
+    || (result.cardId !== undefined && !CARD_PATTERN.test(result.cardId))) return null;
+  if (JSON.stringify(result).length > MAX_STORED_RESULT_BYTES) return null;
+  return Object.freeze(result);
+}
+
+function storedResultKey(sessionStorage, expectedTabId) {
+  const tabId = sessionStorage?.getItem?.(BRIDGE_ORIGIN_TAB_KEY) || '';
+  if (!TAB_PATTERN.test(tabId) || (expectedTabId && tabId !== expectedTabId)) return null;
+  return `${STORED_RESULT_PREFIX}${tabId}`;
+}
+
+function persistStoredBridgeResult(result, dependencies = {}) {
+  const localStorage = dependencies.localStorage ?? globalThis.localStorage;
+  const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
+  const safeResult = validateBridgeUiResult(result);
+  const key = storedResultKey(sessionStorage, dependencies.targetTabId);
+  if (!localStorage || !key || !safeResult) throw new Error('Durable Bridge result storage is unavailable');
+  const raw = JSON.stringify(safeResult);
+  const original = localStorage.getItem(key);
+  try {
+    localStorage.setItem(key, raw);
+    if (localStorage.getItem(key) !== raw) throw new Error('Durable Bridge result storage failed');
+  } catch (error) {
+    try {
+      if (original === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, original);
+    } catch { /* Native and browser correlation remain pending. */ }
+    throw error;
+  }
+  return safeResult;
+}
+
+export function readStoredBridgeResult(dependencies = {}) {
+  const localStorage = dependencies.localStorage ?? globalThis.localStorage;
+  const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
+  const key = storedResultKey(sessionStorage);
+  if (!localStorage || !key) return null;
+  const raw = localStorage.getItem(key);
+  if (typeof raw !== 'string' || raw.length > MAX_STORED_RESULT_BYTES) return null;
+  try { return validateBridgeUiResult(JSON.parse(raw)); } catch { return null; }
+}
+
+export function clearStoredBridgeResult(dependencies = {}) {
+  const localStorage = dependencies.localStorage ?? globalThis.localStorage;
+  const sessionStorage = dependencies.sessionStorage ?? globalThis.sessionStorage;
+  const key = storedResultKey(sessionStorage);
+  if (!localStorage || !key || localStorage.getItem(key) === null) return false;
+  localStorage.removeItem(key);
+  return localStorage.getItem(key) === null;
+}
+
 export function validateBridgeResultNotification(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const message = resultFields(value);
@@ -109,8 +199,17 @@ export function createBridgeResultChannel(dependencies = {}) {
   const cryptoApi = dependencies.crypto ?? globalThis.crypto;
   const onResult = dependencies.onResult;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
+  const claimReceipt = dependencies.claimReceipt ?? ((receipt, message) => claimBridgeResultReceipt(receipt, {
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+  }));
   const confirmReceipt = dependencies.confirmReceipt ?? ((receipt, message) => confirmBridgeResultReceipt(receipt, {
-    localStorage, operation: message.operation, targetTabId: message.targetTabId,
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+  }));
+  const releaseReceipt = dependencies.releaseReceipt ?? ((receipt, message) => releaseBridgeResultReceipt(receipt, {
+    localStorage, operation: message.operation, targetTabId: message.targetTabId, deliveryId: message.deliveryId,
+  }));
+  const persistResult = dependencies.persistResult ?? ((result, message) => persistStoredBridgeResult(result, {
+    localStorage, sessionStorage, targetTabId: message.targetTabId,
   }));
   const delivered = new Set();
   const acknowledged = new Set();
@@ -133,9 +232,21 @@ export function createBridgeResultChannel(dependencies = {}) {
       return;
     }
     if (!onResult) return;
-    const { ackReceipt, ...safeMessage } = message;
-    onResult(Object.freeze(safeMessage));
-    if (!confirmReceipt(ackReceipt, message)) return;
+    if (!claimReceipt(message.ackReceipt, message)) return;
+    const safeMessage = validateBridgeUiResult(uiResultFields(message));
+    const { ackReceipt } = message;
+    try {
+      if (!safeMessage) throw new Error('Bridge UI result is invalid');
+      persistResult(safeMessage, message);
+      onResult(safeMessage);
+    } catch (error) {
+      releaseReceipt(ackReceipt, message);
+      throw error;
+    }
+    if (!confirmReceipt(ackReceipt, message)) {
+      releaseReceipt(ackReceipt, message);
+      return;
+    }
     if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
     delivered.add(ackReceipt);
     acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);
@@ -190,20 +301,25 @@ export function isBridgeCallbackLocation(href = globalThis.location?.href || '')
 export async function bootstrapBridgeCallback(dependencies = {}) {
   const href = dependencies.href ?? globalThis.location?.href ?? '';
   if (!isBridgeCallbackLocation(href)) return { kind: 'none' };
-  try {
-    const result = await (dependencies.consume ?? consumeBridgeCallback)(href);
-    dependencies.publish?.(result);
-    return { kind: 'result', result };
-  } catch {
+  let result;
+  try { result = await (dependencies.consume ?? consumeBridgeCallback)(href); } catch {
     return {
       kind: 'failure',
       message: 'Studio could not match this Bridge return. Paste the one-time return code from Bridge into the original Studio tab.',
     };
   }
+  try { dependencies.publish?.(result); } catch { /* The authoritative result remains pending for retry. */ }
+  return {
+    kind: 'handoff',
+    message: 'Bridge return is pending in the Studio tab that started this action.',
+  };
 }
 
 export async function resumeBridgeReturnCode(value, dependencies = {}) {
   const result = await (dependencies.consume ?? consumeBridgeReturnCode)(value, dependencies.protocolDependencies);
-  dependencies.publish?.(result);
-  return result;
+  try { dependencies.publish?.(result); } catch { /* The authoritative result remains pending for retry. */ }
+  return {
+    kind: 'handoff',
+    message: 'Bridge return is pending in this Studio tab.',
+  };
 }

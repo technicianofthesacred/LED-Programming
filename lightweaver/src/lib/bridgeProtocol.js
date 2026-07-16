@@ -18,6 +18,7 @@ const MAX_CLAIMS = 16;
 const MAX_CLAIM_BYTES = 4_096;
 const TARGET = 'lightweaver-controller-esp32s3';
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const DELIVERY_ID_PATTERN = /^[A-Za-z0-9_-]{16}$/;
 const RETURN_CODE_PATTERN = /^LW1-([A-Za-z0-9_-]{1,900})$/;
 const CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CARD_PATTERN = /^lw-[a-f0-9]{12}$/;
@@ -54,12 +55,15 @@ function registryKeys(storage) {
 
 function validateRegistryRecords(records, totalBytes) {
   for (const record of records) {
-    const expectedKeys = record?.receipt === undefined
-      ? 'createdAt,expiresAt,nonce,operation,tabId'
-      : 'createdAt,expiresAt,nonce,operation,receipt,tabId';
+    const expectedKeys = [
+      'createdAt', 'expiresAt', 'nonce', 'operation', 'tabId',
+      ...(record?.receipt === undefined ? [] : ['receipt']),
+      ...(record?.claimId === undefined ? [] : ['claimId']),
+    ].sort().join(',');
     if (!record || Object.keys(record).sort().join(',') !== expectedKeys
       || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
       || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
+      || (record.claimId !== undefined && (record.receipt === undefined || !DELIVERY_ID_PATTERN.test(record.claimId)))
       || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
       || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
       || record.expiresAt - record.createdAt > TTL_MS) {
@@ -342,11 +346,48 @@ export function confirmBridgeResultReceipt(receipt, dependencies = {}) {
   const records = readRegistry(localStorage);
   const targetTabId = dependencies.targetTabId;
   const operation = dependencies.operation;
-  if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)) return false;
+  const deliveryId = dependencies.deliveryId;
+  if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
+    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
+  const pending = records.find(record => record.receipt === receipt
+    && record.tabId === targetTabId && record.operation === operation && record.claimId === deliveryId);
+  if (!pending) return false;
+  removeRecord(localStorage, pending.nonce);
+  return true;
+}
+
+export function claimBridgeResultReceipt(receipt, dependencies = {}) {
+  if (!isCanonicalNonce(receipt)) return false;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
+  if (!localStorage) return false;
+  const records = readRegistry(localStorage);
+  const targetTabId = dependencies.targetTabId;
+  const operation = dependencies.operation;
+  const deliveryId = dependencies.deliveryId;
+  if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
+    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
   const pending = records.find(record => record.receipt === receipt
     && record.tabId === targetTabId && record.operation === operation);
   if (!pending) return false;
-  removeRecord(localStorage, pending.nonce);
+  replaceRecord(localStorage, records, pending, { ...pending, claimId: deliveryId });
+  return true;
+}
+
+export function releaseBridgeResultReceipt(receipt, dependencies = {}) {
+  if (!isCanonicalNonce(receipt)) return false;
+  const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
+  if (!localStorage) return false;
+  const records = readRegistry(localStorage);
+  const targetTabId = dependencies.targetTabId;
+  const operation = dependencies.operation;
+  const deliveryId = dependencies.deliveryId;
+  if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)
+    || !DELIVERY_ID_PATTERN.test(deliveryId || '')) return false;
+  const pending = records.find(record => record.receipt === receipt && record.tabId === targetTabId
+    && record.operation === operation && record.claimId === deliveryId);
+  if (!pending) return false;
+  const { claimId: _claimId, ...replacement } = pending;
+  replaceRecord(localStorage, records, pending, replacement);
   return true;
 }
 

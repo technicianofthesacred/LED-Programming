@@ -79,7 +79,7 @@ test('launch never discards an unacknowledged pending correlation before creatin
   assert.deepEqual(calls, ['persist', 'create', 'navigate']);
 });
 
-test('target tab accepts a bounded result once before issuing its receipt acknowledgement', async () => {
+test('target claims authority and durably saves a sanitized result before UI and acknowledgement', async () => {
   const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
   const storage = memoryStorage();
   const listeners = new Set();
@@ -90,11 +90,15 @@ test('target tab accepts a bounded result once before issuing its receipt acknow
   const originSession = memoryStorage();
   originSession.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
   const received = [];
-  const acknowledged = [];
+  const order = [];
   const origin = createBridgeResultChannel({
     sessionStorage: originSession, localStorage: storage, eventTarget,
-    BroadcastChannel: null, onResult: result => received.push(result), acknowledge: url => acknowledged.push(url),
-    confirmReceipt: () => true,
+    BroadcastChannel: null,
+    claimReceipt: (_receipt, message) => { order.push(`claim:${message.operation}`); return true; },
+    persistResult: result => { order.push(`save:${result.operation}`); assert.equal('ackReceipt' in result, false); },
+    onResult: result => { order.push(`ui:${result.operation}`); received.push(result); },
+    confirmReceipt: () => { order.push('finalize'); return true; },
+    acknowledge: () => order.push('ack'),
   });
   const callback = createBridgeResultChannel({
     sessionStorage: memoryStorage(), localStorage: storage, eventTarget,
@@ -115,7 +119,7 @@ test('target tab accepts a bounded result once before issuing its receipt acknow
   assert.equal(received.length, 1);
   assert.equal(received[0].cardId, result.cardId);
   assert.equal('ackReceipt' in received[0], false);
-  assert.deepEqual(acknowledged, ['lightweaver://ack?receipt=BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ&version=1']);
+  assert.deepEqual(order, ['claim:install-current-release', 'save:install-current-release', 'ui:install-current-release', 'finalize', 'ack']);
   assert.throws(() => callback.publish({ ...result, operation: 'restart-card' }), /semantic|result/i);
   origin.close();
   callback.close();
@@ -137,7 +141,7 @@ test('callback publish cannot acknowledge when the target tab closes before rece
   callback.close();
 });
 
-test('adversarial duplicate persisted receipts cannot acknowledge either result', async () => {
+test('adversarial duplicate persisted receipts cannot reach UI or acknowledge either result', async () => {
   const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
   const localStorage = memoryStorage();
   const receipt = 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk';
@@ -169,7 +173,7 @@ test('adversarial duplicate persisted receipts cannot acknowledge either result'
   };
 
   assert.throws(() => channel.receive(notification), /registry|invalid|receipt/i);
-  assert.equal(received.length, 1);
+  assert.equal(received.length, 0);
   assert.deepEqual(acknowledged, []);
   assert.equal(localStorage.length, 2);
   channel.close();
@@ -194,11 +198,12 @@ test('a receipt from another pending result cannot clear or acknowledge the wron
   }));
   const sessionStorage = memoryStorage();
   sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', firstTab);
+  const received = [];
   const acknowledged = [];
   const channel = createBridgeResultChannel({
     sessionStorage, localStorage, BroadcastChannel: null,
     eventTarget: { addEventListener() {}, removeEventListener() {} },
-    onResult() {}, acknowledge: url => acknowledged.push(url),
+    onResult: result => received.push(result), acknowledge: url => acknowledged.push(url),
   });
 
   channel.receive({
@@ -207,20 +212,26 @@ test('a receipt from another pending result cannot clear or acknowledge the wron
     target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
     physicalOutput: 'unconfirmed', ackReceipt: secondReceipt,
   });
+  assert.deepEqual(received, []);
   assert.deepEqual(acknowledged, []);
   assert.equal(localStorage.length, 2);
   channel.close();
 });
 
-test('callback bootstrap consumes before sanitizing and returns bounded guidance on failure', async () => {
+test('callback bootstrap publishes as a receipt-free producer handoff without returning result data', async () => {
   const { bootstrapBridgeCallback } = await import('./bridgeLaunch.js');
   const order = [];
+  const receipt = 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ';
   const success = await bootstrapBridgeCallback({
     href: 'https://led.mandalacodes.com/#bridge-result?x=1',
-    consume: async href => { order.push(`consume:${href}`); return { operation: 'restart-card' }; },
+    consume: async href => { order.push(`consume:${href}`); return { operation: 'restart-card', ackReceipt: receipt }; },
     publish: result => order.push(`publish:${result.operation}`),
   });
-  assert.equal(success.kind, 'result');
+  assert.deepEqual(success, {
+    kind: 'handoff',
+    message: 'Bridge return is pending in the Studio tab that started this action.',
+  });
+  assert.equal(JSON.stringify(success).includes(receipt), false);
   assert.deepEqual(order, [
     'consume:https://led.mandalacodes.com/#bridge-result?x=1',
     'publish:restart-card',
@@ -233,6 +244,86 @@ test('callback bootstrap consumes before sanitizing and returns bounded guidance
     kind: 'failure',
     message: 'Studio could not match this Bridge return. Paste the one-time return code from Bridge into the original Studio tab.',
   });
+});
+
+test('storage failure keeps receipt authority pending and exposes no UI or acknowledgement', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
+  const calls = [];
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage: memoryStorage(), BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} },
+    claimReceipt: () => { calls.push('claim'); return true; },
+    persistResult: () => { calls.push('save'); throw new Error('quota'); },
+    onResult: () => calls.push('ui'),
+    confirmReceipt: () => { calls.push('finalize'); return true; },
+    releaseReceipt: () => calls.push('release'),
+    acknowledge: () => calls.push('ack'),
+  });
+  assert.throws(() => channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB',
+    targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', operation: 'restart-card',
+    status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
+    physicalOutput: 'unconfirmed', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ',
+  }), /quota/);
+  assert.deepEqual(calls, ['claim', 'save', 'release']);
+  channel.close();
+});
+
+test('UI delivery failure releases the claim and leaves the durable result available for refresh retry', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
+  const calls = [];
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage: memoryStorage(), BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} },
+    claimReceipt: () => { calls.push('claim'); return true; },
+    persistResult: () => calls.push('save'),
+    onResult: () => { calls.push('ui'); throw new Error('renderer stopped'); },
+    confirmReceipt: () => { calls.push('finalize'); return true; },
+    releaseReceipt: () => calls.push('release'),
+    acknowledge: () => calls.push('ack'),
+  });
+  assert.throws(() => channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB',
+    targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', operation: 'restart-card',
+    status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
+    physicalOutput: 'unconfirmed', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ',
+  }), /renderer stopped/);
+  assert.deepEqual(calls, ['claim', 'save', 'ui', 'release']);
+  channel.close();
+});
+
+test('accepted sanitized result survives refresh and explicit completion or dismissal clears it', async () => {
+  const { clearStoredBridgeResult, createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage, BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} },
+    claimReceipt: () => true, confirmReceipt: () => true, acknowledge() {}, onResult() {},
+  });
+  channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB',
+    targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', operation: 'restart-card',
+    status: 'awaiting-card-acknowledgement', code: 'operation-complete', cardId: 'lw-441bf681feb0',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
+    physicalOutput: 'unconfirmed', ackReceipt: 'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ',
+  });
+  const restored = readStoredBridgeResult({ sessionStorage, localStorage });
+  assert.equal(restored.operation, 'restart-card');
+  assert.equal(restored.cardId, 'lw-441bf681feb0');
+  assert.equal('ackReceipt' in restored, false);
+  assert.equal('deliveryId' in restored, false);
+  assert.equal(clearStoredBridgeResult({ sessionStorage, localStorage }), true);
+  assert.equal(readStoredBridgeResult({ sessionStorage, localStorage }), null);
+  assert.equal(clearStoredBridgeResult({ sessionStorage, localStorage }), false);
+  channel.close();
 });
 
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
@@ -332,4 +423,8 @@ test('Studio lifecycle source has no four-second missing inference and exposes a
     assert.doesNotMatch(source, /setBridge(?:State|LaunchState)\('working'\)|Working in Lightweaver Bridge|Bridge is working/);
     assert.match(source, /installer-unavailable/);
   }
+  const appSource = fs.readFileSync(path.join(import.meta.dirname, '../v3/app.jsx'), 'utf8');
+  assert.doesNotMatch(appSource, /setBridgeResult\(outcome\.result\)/);
+  assert.match(appSource, /readStoredBridgeResult/);
+  assert.match(appSource, /clearStoredBridgeResult/);
 });

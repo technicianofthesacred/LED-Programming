@@ -9,9 +9,11 @@ import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import {
   bootstrapBridgeCallback,
+  clearStoredBridgeResult,
   createBridgeResultChannel,
   isBridgeCallbackLocation,
   launchBridgeOperation,
+  readStoredBridgeResult,
 } from '../lib/bridgeLaunch.js';
 import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
 import {
@@ -169,7 +171,8 @@ function applyStoredStudioTheme() {
 
 function Shell() {
   const [bridgeBooting, setBridgeBooting] = useState(() => isBridgeCallbackLocation());
-  const [bridgeResult, setBridgeResult] = useState(null);
+  const [bridgeResult, setBridgeResult] = useState(readStoredBridgeResult);
+  const bridgeResultAcceptedRef = useRef(Boolean(bridgeResult));
   const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
   const [installActive, setInstallActive] = useState(false);
   const installActiveRef = useRef(false);
@@ -184,6 +187,7 @@ function Shell() {
   useEffect(() => {
     const channel = createBridgeResultChannel({
       onResult: result => {
+        bridgeResultAcceptedRef.current = true;
         setBridgeResult(result);
         setView('layout');
         setConnectionCenterOpen(true);
@@ -192,14 +196,18 @@ function Shell() {
     let active = true;
     void bootstrapBridgeCallback({ publish: result => channel.publish(result) }).then(outcome => {
       if (!active) return;
-      if (outcome.kind === 'result') setBridgeResult(outcome.result);
       if (outcome.kind === 'failure') setBridgeResult(outcome);
+      if (outcome.kind === 'handoff' && !bridgeResultAcceptedRef.current) setBridgeResult(outcome);
       if (outcome.kind !== 'none') {
         setView('layout');
         setConnectionCenterOpen(true);
       }
       setBridgeBooting(false);
     });
+    if (bridgeResultAcceptedRef.current) {
+      setView('layout');
+      setConnectionCenterOpen(true);
+    }
     return () => { active = false; channel.close(); };
   }, []);
   useEffect(() => {
@@ -289,6 +297,11 @@ function Shell() {
   const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const clearBridgeResult = useCallback(outcome => {
+    clearStoredBridgeResult();
+    bridgeResultAcceptedRef.current = false;
+    setBridgeResult(outcome === 'complete' ? { kind: 'complete' } : null);
+  }, []);
   const onConnectCard = useCallback((host = '') => {
     if (directCardControl) return cardStatus.connect?.();
     return connectCardLink(host);
@@ -406,7 +419,7 @@ function Shell() {
         onConnectCard={onConnectCard}
         onLaunchBridge={onLaunchBridge}
         bridgeResult={bridgeResult}
-        onClearBridgeResult={outcome => setBridgeResult(outcome === 'complete' ? { kind: 'complete' } : null)}
+        onClearBridgeResult={clearBridgeResult}
         recoverLights={typeof window.__LW_RECOVER_LIGHTS_FOR_TEST__ === 'function' ? window.__LW_RECOVER_LIGHTS_FOR_TEST__ : undefined}
         setupEvidence={{
           host: cardLink.host || cardStatus.host,
