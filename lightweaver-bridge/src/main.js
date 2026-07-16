@@ -11,6 +11,7 @@ const {
 const { createIpcHandlers } = require('./ipc-handlers');
 const { createProductionDependencies } = require('./esptool-runtime');
 const { createOperationRunner } = require('./operation-runner');
+const { createOperationJournal } = require('./operation-journal');
 const { createOperationState } = require('./operation-state');
 const { redactSensitiveText } = require('./protocol');
 const { createWindowOptions, installWebContentsGuards, isTrustedIpcEvent } = require('./security');
@@ -22,9 +23,11 @@ const inspectCardSmoke = process.argv.includes('--inspect-card');
 const operationState = createOperationState();
 let mainWindow = null;
 let productionRunner = null;
+let recoveredOperationResult = null;
 const callbackOpener = createSafeCallbackOpener({ openExternal: url => shell.openExternal(url) });
 const nonceStore = createNonceStore({ userDataPath: app.getPath('userData') });
 const pendingResultStore = createPendingResultStore({ userDataPath: app.getPath('userData') });
+const operationJournal = createOperationJournal({ userDataPath: app.getPath('userData') });
 
 function publicCallbackResult(payload) {
   const status = payload.state === 'awaiting-card-acknowledgement'
@@ -47,7 +50,8 @@ function publicCallbackResult(payload) {
 
 const launchRouter = createLaunchRouter({
   consumeNonce: request => nonceStore.consume(request),
-  canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.() && !resultCoordinator?.hasPendingResult,
+  canAccept: () => operationState.current === 'select-card' && !productionRunner?.isActive?.()
+    && !productionRunner?.hasInterruptedOperation?.() && !resultCoordinator?.hasPendingResult,
   deliver: request => {
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Bridge window is unavailable');
     mainWindow.show();
@@ -65,7 +69,10 @@ function routeProtocol(value) {
   try {
     if (value.startsWith('lightweaver://ack?')) {
       const acknowledged = resultCoordinator.acknowledge(parseAcknowledgementUrl(value).receipt);
-      if (acknowledged) sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
+      if (acknowledged) {
+        productionRunner?.acknowledgeResult?.();
+        sendCallbackDelivery('callback-returned', 'The originating Studio acknowledged the saved result. No card operation was rerun.');
+      }
       return acknowledged;
     }
     launchRouter.route(value);
@@ -127,6 +134,7 @@ async function createProductionRunner() {
   const dependencies = await createProductionDependencies();
   return createOperationRunner({
     ...dependencies,
+    journal: operationJournal,
     randomBytes: size => crypto.randomBytes(size),
   });
 }
@@ -176,6 +184,8 @@ async function createMainWindow() {
   launchRouter.setReady();
   if (resultCoordinator.returnCode) {
     sendCallbackDelivery('return-pending', 'A saved return is pending. Paste the code into the original Studio tab.', resultCoordinator.returnCode);
+  } else if (recoveredOperationResult) {
+    window.webContents.send('bridge:result', recoveredOperationResult);
   }
   return window;
 }
@@ -216,6 +226,20 @@ function verifyNavigationIsDenied(window) {
 async function run() {
   const runner = await createProductionRunner();
   productionRunner = runner;
+  try {
+    recoveredOperationResult = await runner.recoverInterrupted();
+  } catch (error) {
+    recoveredOperationResult = Object.freeze({
+      state: error?.classification === 'needs-safe-recovery' ? 'recovery-required' : 'operation-failed',
+      message: error?.classification === 'needs-safe-recovery'
+        ? 'An interrupted installation needs safe recovery. Inspect the same card and recover the current release.'
+        : 'An interrupted pre-mutation operation was not resumed. Inspect the card again.',
+      classification: error?.classification,
+      code: error?.code,
+      phase: error?.phase,
+      nextAction: error?.nextAction,
+    });
+  }
   if (inspectCardSmoke) {
     const inspection = await runner.inspect();
     process.stdout.write(`Compatible card inspected and USB released: ${inspection.cardId}\n`);

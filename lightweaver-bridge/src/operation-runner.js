@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { redactSensitiveText, validateOperation } = require('./protocol');
 
 const CARD_ID_PATTERN = /^lw-[a-f0-9]{12}$/;
@@ -92,12 +93,34 @@ function restoreFlashMethods(loader, originals) {
   }
 }
 
+function trackFlashVerification(loader, expectedHash, onVerified) {
+  if (typeof loader?.flashMd5sum !== 'function') return () => {};
+  const descriptor = Object.getOwnPropertyDescriptor(loader, 'flashMd5sum');
+  const method = loader.flashMd5sum;
+  const wrapped = async function trackedFlashVerification(...args) {
+    const actual = await method.apply(this, args);
+    if (typeof actual === 'string' && actual.toLowerCase() === expectedHash) onVerified();
+    return actual;
+  };
+  Object.defineProperty(loader, 'flashMd5sum', {
+    configurable: descriptor?.configurable ?? true,
+    enumerable: descriptor?.enumerable ?? false,
+    writable: descriptor?.writable ?? true,
+    value: wrapped,
+  });
+  return () => {
+    if (descriptor) Object.defineProperty(loader, 'flashMd5sum', descriptor);
+    else delete loader.flashMd5sum;
+  };
+}
+
 function createOperationRunner({
   runtime,
   core,
   loadRelease,
   now = Date.now,
   randomBytes,
+  journal = null,
   inspectionTtlMs = 60_000,
   confirmationTtlMs = 120_000,
 } = {}) {
@@ -109,6 +132,10 @@ function createOperationRunner({
   let verifiedRelease = null;
   let authority = null;
   let active = false;
+
+  function journalUpdate(fields) {
+    return journal?.update?.(fields);
+  }
 
   function emit(onEvent, checkpoint, fields = {}) {
     try { onEvent?.(Object.freeze({ checkpoint, ...fields })); } catch {}
@@ -160,6 +187,20 @@ function createOperationRunner({
     if (!DESTRUCTIVE_OPERATIONS.has(operation)) throw new BridgeOperationError('unsupported-operation', 'Unsupported destructive bridge operation');
     return exclusive(async () => {
       const selected = assertFreshInspection();
+      const interrupted = journal?.load?.();
+      if (interrupted) {
+        if (interrupted.flashVerification === 'flash-verified') {
+          throw new BridgeOperationError('operation-result-pending', 'The verified operation result must be acknowledged or explicitly dismissed before another operation.', {
+            phase: 'result-pending', nextAction: 'return-to-studio',
+          });
+        }
+        if (operation !== 'recover-current-release' || interrupted.mutationBoundary !== 'erase-or-write-started'
+          || interrupted.expectedCardId !== selected.cardId) {
+          throw new BridgeOperationError('interrupted-operation-pending', 'The interrupted operation must be safely recovered on its expected card.', {
+            outcome: 'needs-safe-recovery', phase: 'restart-recovery', nextAction: 'recover-current-release',
+          });
+        }
+      }
       let release;
       try {
         release = await loadRelease();
@@ -211,9 +252,20 @@ function createOperationRunner({
       let eraseStarted = false;
       let flashVerified = false;
       let cardRestarted = false;
+      let journalArmed = false;
       let primaryError = null;
       let result;
       try {
+        const journalStart = {
+          operation,
+          expectedCardId: selected.cardId,
+          expectedBuildId: verifiedRelease.manifest.buildId,
+        };
+        const interrupted = journal?.load?.();
+        if (!interrupted) {
+          journal?.begin?.(journalStart);
+          journalArmed = Boolean(journal);
+        }
         connection = await runtime.connectForWrite();
         const current = connection.identity;
         core.validateInstallHardware(current);
@@ -223,6 +275,11 @@ function createOperationRunner({
         if (typeof connection.loader?.writeFlash !== 'function') {
           throw new BridgeOperationError('write-capability-missing', 'The connected card cannot be written. Nothing was erased.');
         }
+        if (interrupted) {
+          journal.replaceForRecovery(journalStart);
+          journalArmed = true;
+        }
+        journalUpdate({ usbOwnership: 'owned' });
         const writeOptions = {
           fileArray: [{ data: verifiedRelease.bytes, address: 0 }],
           flashSize: 'keep',
@@ -239,29 +296,6 @@ function createOperationRunner({
             } catch {}
           },
         };
-        const restoreMutationMethods = trackFlashMutation(connection.loader, () => {
-          if (eraseStarted) return;
-          eraseStarted = true;
-          emit(onEvent, 'erase-started', { progress: 0 });
-        });
-        try {
-          await core.writeVerifiedFlash(connection.loader, writeOptions);
-        } finally {
-          restoreMutationMethods();
-        }
-        if (!eraseStarted) {
-          throw new BridgeOperationError('write-not-started', 'The verified flash operation ended before writing began. Nothing was erased.');
-        }
-        flashVerified = true;
-        emit(onEvent, 'write-completed', { progress: 100 });
-        emit(onEvent, 'flash-verification-completed', { verification: 'flash-verified' });
-        try {
-          await runtime.reset(connection);
-        } catch (error) {
-          throw new BridgeOperationError('restart-failed', error?.message || 'Card restart failed', { mutation: 'written', outcome: 'needs-safe-recovery' });
-        }
-        cardRestarted = true;
-        emit(onEvent, 'card-restarted');
         result = Object.freeze({
           state: 'awaiting-card-acknowledgement',
           pipelineComplete: false,
@@ -275,12 +309,52 @@ function createOperationRunner({
           nextCheckpoint: 'stable-card-identity-acknowledged',
           message: 'Flash verified. Reconnect in Studio and confirm the physical lights.',
         });
+        const markFlashVerified = () => {
+          if (flashVerified) return;
+          journalUpdate({ flashVerification: 'flash-verified', pendingResult: result });
+          flashVerified = true;
+        };
+        const restoreMutationMethods = trackFlashMutation(connection.loader, () => {
+          if (eraseStarted) return;
+          journalUpdate({ mutationBoundary: 'erase-or-write-started' });
+          eraseStarted = true;
+          emit(onEvent, 'erase-started', { progress: 0 });
+        });
+        const expectedHash = crypto.createHash('md5').update(verifiedRelease.bytes).digest('hex');
+        let restoreVerificationMethod = () => {};
+        try {
+          restoreVerificationMethod = trackFlashVerification(connection.loader, expectedHash, markFlashVerified);
+          await core.writeVerifiedFlash(connection.loader, writeOptions);
+        } finally {
+          restoreVerificationMethod();
+          restoreMutationMethods();
+        }
+        if (!eraseStarted) {
+          throw new BridgeOperationError('write-not-started', 'The verified flash operation ended before writing began. Nothing was erased.');
+        }
+        markFlashVerified();
+        emit(onEvent, 'write-completed', { progress: 100 });
+        emit(onEvent, 'flash-verification-completed', { verification: 'flash-verified' });
+        try {
+          await runtime.reset(connection);
+        } catch (error) {
+          throw new BridgeOperationError('restart-failed', error?.message || 'Card restart failed', { mutation: 'written', outcome: 'needs-safe-recovery' });
+        }
+        cardRestarted = true;
+        journalUpdate({ restartResult: 'restarted' });
+        emit(onEvent, 'card-restarted');
       } catch (error) {
         primaryError = classifyExecutionError(error, eraseStarted);
+        if (eraseStarted && !flashVerified) {
+          try { journalUpdate({ restartResult: 'unknown' }); } catch (journalError) { primaryError = classifyExecutionError(journalError, true); }
+        } else if (flashVerified && !cardRestarted) {
+          try { journalUpdate({ restartResult: 'failed' }); } catch (journalError) { primaryError = classifyExecutionError(journalError, true); }
+        }
       } finally {
         if (connection?.transport) {
           try {
             await connection.transport.disconnect();
+            journalUpdate({ usbOwnership: 'released' });
             emit(onEvent, 'usb-released');
           } catch (error) {
             const verifiedAndRestarted = flashVerified && cardRestarted;
@@ -302,7 +376,11 @@ function createOperationRunner({
                 nextCheckpoint: 'stable-card-identity-acknowledged',
               });
             }
+            try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
           }
+        }
+        if (journalArmed && !eraseStarted && primaryError?.classification !== 'usb-ownership-uncertain') {
+          try { journal?.clear?.(); } catch (error) { if (!primaryError) primaryError = classifyExecutionError(error, false); }
         }
         inspection = null;
         verifiedRelease = null;
@@ -337,8 +415,59 @@ function createOperationRunner({
     throw new BridgeOperationError('unsupported-operation', 'Unsupported maintenance bridge operation');
   }
 
+  async function recoverInterrupted() {
+    return exclusive(async () => {
+      const saved = journal?.load?.();
+      if (!saved) return null;
+      let identity;
+      try {
+        identity = await runtime.inspectOne();
+        core.validateInstallHardware(identity);
+      } catch (error) {
+        try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
+        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return saved.pendingResult;
+        throw new BridgeOperationError('recovery-inspection-failed', 'The interrupted operation could not inspect and release its expected card.', {
+          mutation: saved.mutationBoundary === 'before-mutation' ? 'none' : 'uncertain',
+          outcome: saved.mutationBoundary === 'before-mutation' ? 'recoverable-failure' : 'needs-safe-recovery',
+          phase: 'restart-recovery',
+          nextAction: saved.mutationBoundary === 'before-mutation' ? 'inspect-again' : 'recover-current-release',
+        });
+      }
+      if (identity?.cardId !== saved.expectedCardId) {
+        try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
+        if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return saved.pendingResult;
+        throw new BridgeOperationError('recovery-card-mismatch', 'The connected card does not match the interrupted operation.', {
+          mutation: saved.mutationBoundary === 'before-mutation' ? 'none' : 'uncertain',
+          outcome: saved.mutationBoundary === 'before-mutation' ? 'recoverable-failure' : 'needs-safe-recovery',
+          phase: 'restart-recovery',
+          nextAction: saved.mutationBoundary === 'before-mutation' ? 'inspect-again' : 'recover-current-release',
+        });
+      }
+      journalUpdate(saved.flashVerification === 'flash-verified'
+        ? { restartResult: 'restarted', usbOwnership: 'released' }
+        : { usbOwnership: 'released' });
+      if (saved.flashVerification === 'flash-verified' && saved.pendingResult) return saved.pendingResult;
+      if (saved.mutationBoundary === 'before-mutation') {
+        journal.clear();
+        return null;
+      }
+      throw new BridgeOperationError('installation-interrupted', 'Installation was interrupted after mutation began.', {
+        mutation: 'uncertain', outcome: 'needs-safe-recovery', phase: 'restart-recovery', nextAction: 'recover-current-release',
+      });
+    });
+  }
+
+  function clearCompletedJournal() {
+    const saved = journal?.load?.();
+    if (!saved || saved.flashVerification !== 'flash-verified' || saved.restartResult !== 'restarted' || !saved.pendingResult) return false;
+    return journal.clear();
+  }
+
   return Object.freeze({
-    inspect, prepare, execute, runMaintenance,
+    inspect, prepare, execute, runMaintenance, recoverInterrupted,
+    acknowledgeResult: clearCompletedJournal,
+    dismissCompletedResult: clearCompletedJournal,
+    hasInterruptedOperation: () => Boolean(journal?.load?.()),
     hasInspection: () => Boolean(inspection && inspection.expiresAt > now()),
     isActive: () => active,
   });

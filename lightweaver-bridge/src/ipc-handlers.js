@@ -201,6 +201,11 @@ function createIpcHandlers({
       dismissExpiredLaunch();
       return createRendererResult('select-card', 'Connect a Lightweaver card to continue.');
     },
+    'bridge:dismiss-recovered-result': async (event) => {
+      assertTrusted(event);
+      const dismissed = runner.dismissCompletedResult?.() === true;
+      return Object.freeze({ dismissed, state: operation.current });
+    },
   };
 
   return Object.freeze(Object.fromEntries(Object.entries(handlers).map(([channel, handler]) => [channel, async (...args) => {

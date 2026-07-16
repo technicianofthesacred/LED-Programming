@@ -72,6 +72,7 @@ function harness(overrides = {}) {
   const runner = createOperationRunner({
     runtime,
     core,
+    journal: overrides.journal,
     now: () => now,
     randomBytes: () => Buffer.alloc(24, 0xab),
     loadRelease: overrides.loadRelease || (async () => { calls.push('load-release'); return release(); }),
@@ -79,6 +80,24 @@ function harness(overrides = {}) {
     confirmationTtlMs: 120_000,
   });
   return { runner, calls, transports, loaders, setNow(value) { now = value; } };
+}
+
+function memoryJournal(initial = null) {
+  let record = initial;
+  const calls = [];
+  return {
+    calls,
+    load() { calls.push('journal-load'); return record; },
+    begin(value) {
+      calls.push(['journal-begin', value]);
+      if (record) throw new Error('active journal');
+      record = { ...value, mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null };
+      return record;
+    },
+    update(value) { calls.push(['journal-update', value]); record = { ...record, ...value }; return record; },
+    clear() { calls.push('journal-clear'); const present = Boolean(record); record = null; return present; },
+    current() { return record; },
+  };
 }
 
 async function authorize(h, operation = 'install-current-release') {
@@ -143,6 +162,164 @@ test('successful install writes exactly one verified factory image and never con
     'flash-verification-completed', 'card-restarted', 'usb-released',
   ]);
 });
+
+test('durable journal advances before mutation and preserves the completed bounded result', async () => {
+  const journal = memoryJournal();
+  const h = harness({ journal });
+  const auth = await authorize(h);
+  const result = await h.runner.execute({ operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken });
+  const beginIndex = journal.calls.findIndex(value => Array.isArray(value) && value[0] === 'journal-begin');
+  const mutationIndex = journal.calls.findIndex(value => Array.isArray(value) && value[1]?.mutationBoundary === 'erase-or-write-started');
+  assert.ok(beginIndex >= 0 && mutationIndex > beginIndex);
+  assert.equal(journal.current().flashVerification, 'flash-verified');
+  assert.equal(journal.current().restartResult, 'restarted');
+  assert.equal(journal.current().usbOwnership, 'released');
+  assert.deepEqual(journal.current().pendingResult, result);
+  assert.equal(journal.calls.includes('journal-clear'), false);
+});
+
+test('journal exists before USB write connection is acquired', async () => {
+  const journal = memoryJournal();
+  let observed;
+  const h = harness({
+    journal,
+    runtime: { async connectForWrite() {
+      observed = journal.current();
+      const transport = { async disconnect() { h.calls.push('disconnect'); } };
+      return {
+        transport,
+        loader: { IS_STUB: false, writeFlash() {}, async flashDeflBegin() { h.calls.push('flash-defl-begin'); } },
+        identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' },
+      };
+    } },
+  });
+  const auth = await authorize(h);
+  await h.runner.execute({ operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken });
+  assert.equal(observed?.mutationBoundary, 'before-mutation');
+  assert.equal(observed?.usbOwnership, 'not-acquired');
+});
+
+test('production MD5 boundary journals verified truth before writeFlash returns', async () => {
+  const crypto = require('node:crypto');
+  const journal = memoryJournal();
+  let stateAtMd5Return;
+  const h = harness({
+    journal,
+    createLoader: calls => ({
+      IS_STUB: false, writeFlash() {}, async flashDeflBegin() { calls.push('flash-defl-begin'); },
+      async flashMd5sum() { return crypto.createHash('md5').update(release().bytes).digest('hex'); },
+    }),
+    core: { async writeVerifiedFlash(loader) {
+      await loader.flashDeflBegin();
+      await loader.flashMd5sum(0, IMAGE_SIZE);
+      stateAtMd5Return = journal.current().flashVerification;
+    } },
+  });
+  const auth = await authorize(h);
+  await h.runner.execute({ operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken });
+  assert.equal(stateAtMd5Return, 'flash-verified');
+});
+
+test('journal persistence failure before mutation prevents erase and retains prior evidence', async () => {
+  const journal = memoryJournal();
+  journal.update = value => {
+    journal.calls.push(['journal-update', value]);
+    if (value.mutationBoundary) throw new Error('journal fsync failed');
+  };
+  const h = harness({ journal });
+  const auth = await authorize(h);
+  await assert.rejects(() => h.runner.execute({ operation: 'install-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken }), /journal fsync failed/i);
+  assert.equal(h.calls.includes('flash-defl-begin'), false);
+});
+
+test('restart recovery never reflashes, preserves verified truth, and is idempotent', async () => {
+  const saved = {
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'not-attempted',
+    usbOwnership: 'uncertain', pendingResult: { ...pendingResultForRunner() },
+  };
+  const journal = memoryJournal(saved);
+  const h = harness({ journal });
+  const first = await h.runner.recoverInterrupted();
+  const second = await h.runner.recoverInterrupted();
+  assert.deepEqual(first, saved.pendingResult);
+  assert.deepEqual(second, saved.pendingResult);
+  assert.equal(h.calls.filter(value => value === 'inspect').length, 2);
+  assert.equal(h.calls.includes('connect-write'), false);
+  assert.equal(h.calls.some(value => Array.isArray(value) && value[0] === 'write'), false);
+  assert.equal(journal.current().flashVerification, 'flash-verified');
+  assert.equal(journal.current().restartResult, 'restarted');
+  assert.equal(journal.current().usbOwnership, 'released');
+});
+
+test('restart recovery inspects the exact card before classifying unverified mutation', async () => {
+  const journal = memoryJournal({
+    operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'not-verified', restartResult: 'unknown',
+    usbOwnership: 'uncertain', pendingResult: null,
+  });
+  const wrong = harness({ journal, inspections: [{ cardId: 'lw-aaaaaaaaaaaa', fingerprint: 'other', chipName: 'ESP32-S3', flashSize: '16MB' }] });
+  await assert.rejects(() => wrong.runner.recoverInterrupted(), error => error.code === 'recovery-card-mismatch' && error.classification === 'needs-safe-recovery');
+  assert.equal(journal.current().usbOwnership, 'uncertain');
+  assert.equal(journal.calls.includes('journal-clear'), false);
+});
+
+test('pre-mutation restart cancellation clears the journal after safe inspection without writing', async () => {
+  const journal = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted',
+    usbOwnership: 'not-acquired', pendingResult: null,
+  });
+  const h = harness({ journal });
+  assert.equal(await h.runner.recoverInterrupted(), null);
+  assert.equal(journal.current(), null);
+  assert.equal(h.calls.includes('connect-write'), false);
+});
+
+test('journal clears only after acknowledgement or explicit safe dismissal of a completed result', () => {
+  const incomplete = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'not-verified', restartResult: 'unknown',
+    usbOwnership: 'uncertain', pendingResult: null,
+  });
+  const incompleteRunner = harness({ journal: incomplete }).runner;
+  assert.equal(incompleteRunner.acknowledgeResult(), false);
+  assert.equal(incomplete.current().flashVerification, 'not-verified');
+
+  for (const method of ['acknowledgeResult', 'dismissCompletedResult']) {
+    const complete = memoryJournal({
+      operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+      mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+      usbOwnership: 'uncertain', pendingResult: pendingResultForRunner(),
+    });
+    const runner = harness({ journal: complete }).runner;
+    assert.equal(runner[method](), true);
+    assert.equal(complete.current(), null);
+  }
+});
+
+test('a pending verified result blocks new preparation and cannot be cleared by another operation', async () => {
+  const saved = {
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
+    usbOwnership: 'released', pendingResult: pendingResultForRunner(),
+  };
+  const journal = memoryJournal(saved);
+  const h = harness({ journal });
+  await h.runner.inspect();
+  await assert.rejects(() => h.runner.prepare('install-current-release'), error => error.code === 'operation-result-pending');
+  assert.deepEqual(journal.current(), saved);
+  assert.equal(h.calls.includes('connect-write'), false);
+});
+
+function pendingResultForRunner() {
+  return {
+    state: 'awaiting-card-acknowledgement', pipelineComplete: false,
+    cardId: 'lw-441bf681feb0', expectedCardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId,
+    target: 'lightweaver-controller-esp32s3', verification: 'flash-verified', physicalOutput: 'unconfirmed',
+    nextCheckpoint: 'stable-card-identity-acknowledged', message: 'Flash verified. Reconnect in Studio and confirm the physical lights.',
+  };
+}
 
 test('missing write capability fails pre-mutation without erase checkpoint', async () => {
   const h = harness({ runtime: { async connectForWrite() {

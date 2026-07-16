@@ -193,6 +193,21 @@ test('confirmation returns installing promptly while async runner drives verifie
   assert.equal(bounded[0][1], 'install-current-release');
 });
 
+test('completed recovered result can be explicitly dismissed through trusted IPC only', async () => {
+  const { createIpcHandlers } = require('../src/ipc-handlers');
+  const { createOperationState } = require('../src/operation-state');
+  const { window, event } = trustedWindowAndEvent();
+  let dismissed = 0;
+  const handlers = createIpcHandlers({
+    getActiveWindow: () => window, rendererPath, operation: createOperationState(),
+    runner: { dismissCompletedResult() { dismissed += 1; return true; } },
+  });
+  assert.deepEqual(await handlers['bridge:dismiss-recovered-result'](event), { dismissed: true, state: 'select-card' });
+  assert.equal(dismissed, 1);
+  await assert.rejects(() => handlers['bridge:dismiss-recovered-result']({ sender: window.webContents, senderFrame: { url: rendererUrl } }), /untrusted/i);
+  assert.equal(dismissed, 1);
+});
+
 test('typed maintenance IPC executes each visible operation and emits a bounded callback result', async () => {
   const { createIpcHandlers } = require('../src/ipc-handlers');
   const { createOperationState } = require('../src/operation-state');
