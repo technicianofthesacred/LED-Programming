@@ -318,6 +318,9 @@ function requireFlow(flow) {
   }
   if (flow.flowType !== undefined && !['studio-project', 'production-job'].includes(flow.flowType)) throw new Error('Invalid card commissioning type');
   if (flow.flowType === 'production-job' && !/^[a-f0-9]{64}$/.test(flow.project?.productionJobDigest || '')) throw new Error('Invalid card commissioning production job');
+  if (flow.flowType !== 'production-job' && (flow.project?.productionJobDigest || '') !== '') {
+    throw new Error('Invalid card commissioning production type invariant');
+  }
   if (!/^[A-Za-z0-9_-]{16,96}$/.test(flow.flowId || '') || !SOURCES.has(flow.source) || !OPERATIONS.has(flow.operation)
     || !['clean-recovery', 'preserve-in-place'].includes(flow.strategy)
     || !Number.isSafeInteger(flow.createdAt) || !Number.isSafeInteger(flow.updatedAt)

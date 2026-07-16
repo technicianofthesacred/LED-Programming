@@ -279,6 +279,17 @@ test('canonical and staged production restoration reject the wrong job digest', 
   assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, stagedEvidence), /job digest/i);
 });
 
+test('a production flow cannot be relabeled in memory to bypass canonical or staged digest checks', async () => {
+  const initial = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-prod-tamper-12345', now: 10, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
+  const acknowledged = acknowledgeCommissionedCard(completeCardInstall(initial, installed, { now: 20 }), { id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId }, { now: 30 }).flow;
+  const relabeled = { ...acknowledged, flowType: 'studio-project' };
+  const wrongReadback = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobDigest: 'c'.repeat(64) } });
+  assert.throws(() => markCardProjectRestored(relabeled, wrongReadback), /production|invalid/i);
+  const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [] });
+  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobDigest: 'c'.repeat(64) }) });
+  assert.throws(() => stageCardProjectForPhysicalCheck(relabeled, bindCardWiringActivationEvidence(status, candidate)), /production|invalid/i);
+});
+
 test('a safety-staged GPIO restore stays in the same flow and is not falsely called restored', async () => {
   const initial = beginCardCommissioning({
     source: 'native-bridge', operation: installed.operation, strategy: 'clean-recovery',
@@ -399,6 +410,18 @@ test('corrupt registry reports a stable recovery state', () => {
   sessionStorage.setItem('lw_card_commissioning_active_v2', 'flow-missing-123456789');
   storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, '{bad json');
   assert.deepEqual(inspectCardCommissioning({ storage, sessionStorage }), { flow: null, error: 'corrupt' });
+});
+
+test('persisted production flow relabeling is reported as corruption', async () => {
+  const storage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const flow = beginCardCommissioning({ source: 'web-serial', operation: installed.operation, projectRecord, projectRevision: 7, flowId: 'flow-persist-tamper-123', now: 10, productionJobDigest: 'b'.repeat(64), flowType: 'production-job' });
+  await writeCardCommissioning(flow, { storage, sessionStorage, locks: null });
+  const registry = JSON.parse(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY));
+  registry.flows[flow.flowId].flow.flowType = 'studio-project';
+  storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(registry));
+  assert.equal(readCardCommissioning({ storage, sessionStorage }), null);
+  assert.equal(inspectCardCommissioning({ storage, sessionStorage }).error, 'corrupt');
 });
 
 test('storage quota failure is explicit and does not silently advance the primary registry', async () => {
