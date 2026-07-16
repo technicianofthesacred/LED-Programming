@@ -164,7 +164,9 @@ function writeStoredRegistry(localStorage, registry) {
 
 function withStoredRegistryMutation(dependencies, callback) {
   const locks = dependencies.locks;
-  if (locks?.request) return locks.request(STORED_RESULT_LOCK, { mode: 'exclusive' }, () => {
+  if (locks?.request) return locks.request(STORED_RESULT_LOCK, {
+    mode: 'exclusive', ...(dependencies.signal ? { signal: dependencies.signal } : {}),
+  }, () => {
     if (dependencies.isActive && !dependencies.isActive()) throw new Error('Bridge result channel is closed');
     return callback();
   });
@@ -312,6 +314,7 @@ export function createBridgeResultChannel(dependencies = {}) {
   const ownerBytes = new Uint8Array(16);
   const ownerToken = cryptoApi?.getRandomValues ? base64Url(cryptoApi.getRandomValues(ownerBytes)) : '';
   const now = dependencies.now ?? Date.now;
+  const lockAbortController = typeof AbortController === 'function' ? new AbortController() : null;
   const pendingRegistryWaits = new Set();
   const registryDelay = dependencies.registryDelay ?? (typeof window === 'undefined' ? null : (milliseconds => new Promise((resolve, reject) => {
     let timer = null;
@@ -330,6 +333,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     pendingRegistryWaits.add(cancel);
   })));
   const onResult = dependencies.onResult;
+  const onError = dependencies.onError;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
   const claimReceipt = dependencies.claimReceipt ?? ((receipt, message) => claimBridgeResultReceipt(receipt, {
     localStorage, operation: message.operation, targetTabId: message.targetTabId, ownerToken, now,
@@ -371,6 +375,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     if (!message || !tabId || message.targetTabId !== tabId) return;
     if (delivered.has(message.ackReceipt)) {
       if (onResult && !acknowledged.has(message.ackReceipt)) {
+        if (!isActive(receiveGeneration)) throw new Error('Bridge result channel is closed');
         acknowledge(`lightweaver://ack?receipt=${message.ackReceipt}&version=1`);
         acknowledged.add(message.ackReceipt);
       }
@@ -417,6 +422,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     try {
       const mutation = withStoredRegistryMutation({
         localStorage, ownerToken, now, locks, delay: registryDelay, isActive: () => isActive(receiveGeneration),
+        signal: lockAbortController?.signal,
       }, accept);
       if (mutation?.catch) {
         return mutation.catch(error => {
@@ -438,17 +444,36 @@ export function createBridgeResultChannel(dependencies = {}) {
     const candidate = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : raw;
     receipt = candidate?.ackReceipt || '';
     if (!ACK_RECEIPT_PATTERN.test(receipt)) return undefined;
-    return locks.request(`lightweaver.bridge.result-claim.v1.${receipt}`, { mode: 'exclusive' }, () => receiveUnlocked(raw, receiveGeneration));
+    return locks.request(`lightweaver.bridge.result-claim.v1.${receipt}`, {
+      mode: 'exclusive', ...(lockAbortController ? { signal: lockAbortController.signal } : {}),
+    }, () => receiveUnlocked(raw, receiveGeneration));
+  };
+  const handleEventFailure = error => {
+    const expected = error?.name === 'AbortError'
+      || error?.message === 'Bridge result channel is closed'
+      || error?.message === 'Durable Bridge result registry is busy';
+    if (expected || typeof onError !== 'function') return;
+    try {
+      onError(Object.freeze({ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }));
+    } catch { /* Event delivery failures never escape the event boundary. */ }
+  };
+  const receiveFromEvent = raw => {
+    try {
+      const result = receive(raw);
+      if (result?.then) Promise.resolve(result).catch(handleEventFailure);
+    } catch (error) {
+      handleEventFailure(error);
+    }
   };
   const onStorage = event => {
-    if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receive(event.newValue);
+    if (event.key === BRIDGE_RESULT_STORAGE_KEY && event.newValue) receiveFromEvent(event.newValue);
   };
-  const onLocalResult = event => receive(event.detail);
+  const onLocalResult = event => receiveFromEvent(event.detail);
   if (BroadcastChannelApi) {
     try {
       channel = new BroadcastChannelApi(BRIDGE_RESULT_CHANNEL);
-      channel.addEventListener?.('message', event => receive(event.data));
-      if (!channel.addEventListener) channel.onmessage = event => receive(event.data);
+      channel.addEventListener?.('message', event => receiveFromEvent(event.data));
+      if (!channel.addEventListener) channel.onmessage = event => receiveFromEvent(event.data);
     } catch {
       channel = null;
     }
@@ -478,6 +503,7 @@ export function createBridgeResultChannel(dependencies = {}) {
       if (closed) return;
       closed = true;
       generation += 1;
+      lockAbortController?.abort();
       for (const cancel of [...pendingRegistryWaits]) cancel();
       for (const releaseClaim of [...activeClaims]) releaseClaim();
       eventTarget?.removeEventListener?.('storage', onStorage);

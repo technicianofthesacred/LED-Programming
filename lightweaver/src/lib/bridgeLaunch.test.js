@@ -606,6 +606,147 @@ test('closing a channel cancels a pending fallback receive and a new channel can
   retry.close();
 });
 
+test('closing fallback event delivery consumes storage, local, and broadcast cancellation rejections', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 41).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  const leaseKey = 'lightweaver.bridge.accepted-result-registry.lease.v1';
+  localStorage.setItem(leaseKey, JSON.stringify({ owner: Buffer.alloc(16, 40).toString('base64url'), expiresAt: 50 }));
+  const listeners = new Map();
+  const eventTarget = {
+    addEventListener(name, listener) { listeners.set(name, listener); },
+    removeEventListener(name) { listeners.delete(name); },
+  };
+  const Broadcast = broadcastBus();
+  const publisher = new Broadcast();
+  let releaseWait;
+  const wait = new Promise(resolve => { releaseWait = resolve; });
+  const calls = [];
+  const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks: null, eventTarget, BroadcastChannel: Broadcast,
+    claimReceipt: () => { calls.push('claim'); return true; }, revalidateReceipt: () => true,
+    releaseReceipt: () => calls.push('release'), confirmReceipt: () => { calls.push('finalize'); return true; },
+    persistResult: () => calls.push('persist'), onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
+    now: () => 1, registryDelay: () => wait });
+  const message = index => ({ version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, index).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, index).toString('base64url') });
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    listeners.get('storage')({ key: 'lightweaver.bridge.result.v1', newValue: JSON.stringify(message(41)) });
+    listeners.get('lightweaver-bridge-result')({ detail: message(42) });
+    publisher.postMessage(message(43));
+    assert.deepEqual(calls, ['claim', 'claim', 'claim']);
+    channel.close();
+    assert.deepEqual(calls, ['claim', 'claim', 'claim', 'release', 'release', 'release']);
+    localStorage.removeItem(leaseKey);
+    releaseWait();
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+    assert.equal(calls.some(call => ['persist', 'ui', 'finalize', 'ack'].includes(call)), false);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    publisher.close();
+    channel.close();
+  }
+
+  const retry = createBridgeResultChannel({ sessionStorage, localStorage, locks: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+    claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+    persistResult: () => calls.push('retry-persist'), onResult: () => calls.push('retry-ui'), acknowledge: () => calls.push('retry-ack'),
+    now: () => 2, registryDelay: async () => {} });
+  await retry.receive(message(41));
+  assert.deepEqual(calls.slice(-3), ['retry-persist', 'retry-ui', 'retry-ack']);
+  retry.close();
+});
+
+test('closing event delivery aborts queued receipt and shared Web Locks without stale work', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 51).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  const listeners = new Map();
+  const eventTarget = { addEventListener(name, listener) { listeners.set(name, listener); }, removeEventListener(name) { listeners.delete(name); } };
+  const lockRequests = [];
+  let queuedCallback = null;
+  let abortedWaits = 0;
+  const locks = { request(name, options, callback) {
+    lockRequests.push({ name, signal: options.signal });
+    if (name.includes('result-claim')) return Promise.resolve().then(callback);
+    return new Promise((resolve, reject) => {
+      queuedCallback = () => resolve(callback());
+      options.signal?.addEventListener('abort', () => {
+        abortedWaits += 1;
+        queuedCallback = null;
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+  } };
+  const calls = [];
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks, eventTarget, BroadcastChannel: null,
+    claimReceipt: () => { calls.push('claim'); return true; }, releaseReceipt: () => calls.push('release'),
+    revalidateReceipt: () => true, confirmReceipt: () => { calls.push('finalize'); return true; }, persistResult: () => calls.push('persist'),
+    onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack') });
+  const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 51).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 51).toString('base64url') };
+  try {
+    listeners.get('lightweaver-bridge-result')({ detail: message });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(lockRequests.length, 2);
+    channel.close();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(lockRequests.every(request => request.signal?.aborted), true);
+    assert.equal(abortedWaits, 1);
+    assert.equal(queuedCallback, null);
+    assert.deepEqual(unhandled, []);
+    assert.deepEqual(calls, ['claim', 'release']);
+    assert.equal(calls.some(call => ['persist', 'ui', 'finalize', 'ack'].includes(call)), false);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    channel.close();
+  }
+
+  const retryCalls = [];
+  const retry = createBridgeResultChannel({ sessionStorage, localStorage, locks: recordingLocks([]),
+    eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+    claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true, persistResult() {},
+    onResult: () => retryCalls.push('ui'), acknowledge: () => retryCalls.push('ack') });
+  await retry.receive(message);
+  assert.deepEqual(retryCalls, ['ui', 'ack']);
+  retry.close();
+});
+
+test('unexpected event delivery failures use one bounded diagnostic without escaping the event boundary', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const sessionStorage = memoryStorage();
+  const tabId = Buffer.alloc(16, 61).toString('base64url');
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+  let localListener;
+  const calls = [];
+  const channel = createBridgeResultChannel({ sessionStorage, localStorage: memoryStorage(), BroadcastChannel: null,
+    eventTarget: { addEventListener(name, listener) { if (name === 'lightweaver-bridge-result') localListener = listener; }, removeEventListener() {} },
+    claimReceipt: () => true, revalidateReceipt: () => true, releaseReceipt() {}, persistResult: () => { throw new Error('secret raw failure'); },
+    onResult: () => calls.push('ui'), acknowledge: () => calls.push('ack'),
+    onError: diagnostic => calls.push(diagnostic) });
+  const message = { version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, 61).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete', target: 'lightweaver-controller-esp32s3',
+    verification: 'not-verified', physicalOutput: 'unconfirmed', ackReceipt: Buffer.alloc(32, 61).toString('base64url') };
+  assert.doesNotThrow(() => localListener({ detail: message }));
+  await Promise.resolve();
+  assert.deepEqual(calls, [{ code: 'bridge-result-delivery-failed', message: 'Bridge result delivery failed.' }]);
+  channel.close();
+});
+
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
   const { bootstrapBridgeCallback, resumeBridgeReturnCode } = await import('./bridgeLaunch.js');
   const calls = [];
