@@ -26,6 +26,17 @@ function broadcastBus() {
   };
 }
 
+function recordingLocks(calls) {
+  const tails = new Map();
+  return { request(name, _options, callback) {
+    calls.push(name);
+    const prior = tails.get(name) ?? Promise.resolve();
+    const result = prior.then(callback);
+    tails.set(name, result.catch(() => {}));
+    return result;
+  } };
+}
+
 function maintenanceReturnCode(nonce, receipt = Buffer.alloc(32, 4).toString('base64url')) {
   const payload = new URLSearchParams([
     ['status', 'awaiting-card-acknowledgement'], ['code', 'operation-complete'],
@@ -396,6 +407,37 @@ test('durable result registry prunes expiry and fails closed on corrupt or overs
   assert.equal(readStoredBridgeResult({ sessionStorage, localStorage }), null);
   assert.equal(localStorage.length, 1);
   channel.close();
+});
+
+test('distinct receipt accepts share one registry mutation lock and both restore', async () => {
+  const { createBridgeResultChannel, readStoredBridgeResult } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const calls = [];
+  const locks = recordingLocks(calls);
+  const channels = [];
+  for (let index = 1; index <= 2; index += 1) {
+    const sessionStorage = memoryStorage();
+    const tabId = Buffer.alloc(16, index).toString('base64url');
+    sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', tabId);
+    const received = [];
+    const channel = createBridgeResultChannel({ sessionStorage, localStorage, locks,
+      eventTarget: { addEventListener() {}, removeEventListener() {} }, BroadcastChannel: null,
+      claimReceipt: () => true, revalidateReceipt: () => true, confirmReceipt: () => true,
+      onResult: result => received.push(result), acknowledge() {}, now: () => index });
+    channels.push({ channel, sessionStorage, received, index, tabId });
+  }
+  await Promise.all(channels.map(({ channel, index, tabId }) => channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: Buffer.alloc(12, index).toString('base64url'), targetTabId: tabId,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified', physicalOutput: 'unconfirmed',
+    ackReceipt: Buffer.alloc(32, index).toString('base64url'),
+  })));
+  assert.equal(calls.filter(name => name === 'lightweaver.bridge.accepted-result-registry.lock.v1').length, 2);
+  for (const item of channels) {
+    assert.equal(item.received.length, 1);
+    assert.equal(readStoredBridgeResult({ sessionStorage: item.sessionStorage, localStorage, now: () => 3 }).operation, 'restart-card');
+    item.channel.close();
+  }
 });
 
 test('callback and pasted return code publish without acknowledging from the producer tab', async () => {
