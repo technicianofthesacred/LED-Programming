@@ -137,6 +137,81 @@ test('callback publish cannot acknowledge when the target tab closes before rece
   callback.close();
 });
 
+test('adversarial duplicate persisted receipts cannot acknowledge either result', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const receipt = 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk';
+  const firstNonce = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
+  const secondNonce = 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI';
+  localStorage.setItem(`lightweaver.bridge.pending.v1.${firstNonce}`, JSON.stringify({
+    operation: 'restart-card', nonce: firstNonce, tabId: 'AQEBAQEBAQEBAQEBAQEBAQ',
+    createdAt: 0, expiresAt: 300_000, receipt,
+  }));
+  localStorage.setItem(`lightweaver.bridge.pending.v1.${secondNonce}`, JSON.stringify({
+    operation: 'release-usb', nonce: secondNonce, tabId: 'AgICAgICAgICAgICAgICAg',
+    createdAt: 0, expiresAt: 300_000, receipt,
+  }));
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', 'AQEBAQEBAQEBAQEBAQEBAQ');
+  const received = [];
+  const acknowledged = [];
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage, BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} },
+    onResult: result => received.push(result), acknowledge: url => acknowledged.push(url),
+  });
+  const notification = {
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB',
+    targetTabId: 'AQEBAQEBAQEBAQEBAQEBAQ', operation: 'restart-card',
+    status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
+    physicalOutput: 'unconfirmed', ackReceipt: receipt,
+  };
+
+  assert.throws(() => channel.receive(notification), /registry|invalid|receipt/i);
+  assert.equal(received.length, 1);
+  assert.deepEqual(acknowledged, []);
+  assert.equal(localStorage.length, 2);
+  channel.close();
+});
+
+test('a receipt from another pending result cannot clear or acknowledge the wrong correlation', async () => {
+  const { createBridgeResultChannel } = await import('./bridgeLaunch.js');
+  const localStorage = memoryStorage();
+  const firstReceipt = Buffer.alloc(32, 8).toString('base64url');
+  const secondReceipt = Buffer.alloc(32, 9).toString('base64url');
+  const firstNonce = Buffer.alloc(32, 1).toString('base64url');
+  const secondNonce = Buffer.alloc(32, 2).toString('base64url');
+  const firstTab = Buffer.alloc(16, 1).toString('base64url');
+  const secondTab = Buffer.alloc(16, 2).toString('base64url');
+  localStorage.setItem(`lightweaver.bridge.pending.v1.${firstNonce}`, JSON.stringify({
+    operation: 'restart-card', nonce: firstNonce, tabId: firstTab,
+    createdAt: 0, expiresAt: 300_000, receipt: firstReceipt,
+  }));
+  localStorage.setItem(`lightweaver.bridge.pending.v1.${secondNonce}`, JSON.stringify({
+    operation: 'release-usb', nonce: secondNonce, tabId: secondTab,
+    createdAt: 0, expiresAt: 300_000, receipt: secondReceipt,
+  }));
+  const sessionStorage = memoryStorage();
+  sessionStorage.setItem('lightweaver.bridge.origin-tab.v1', firstTab);
+  const acknowledged = [];
+  const channel = createBridgeResultChannel({
+    sessionStorage, localStorage, BroadcastChannel: null,
+    eventTarget: { addEventListener() {}, removeEventListener() {} },
+    onResult() {}, acknowledge: url => acknowledged.push(url),
+  });
+
+  channel.receive({
+    version: 1, type: 'bridge-result', deliveryId: 'AQEBAQEBAQEBAQEB', targetTabId: firstTab,
+    operation: 'restart-card', status: 'awaiting-card-acknowledgement', code: 'operation-complete',
+    target: 'lightweaver-controller-esp32s3', verification: 'not-verified',
+    physicalOutput: 'unconfirmed', ackReceipt: secondReceipt,
+  });
+  assert.deepEqual(acknowledged, []);
+  assert.equal(localStorage.length, 2);
+  channel.close();
+});
+
 test('callback bootstrap consumes before sanitizing and returns bounded guidance on failure', async () => {
   const { bootstrapBridgeCallback } = await import('./bridgeLaunch.js');
   const order = [];

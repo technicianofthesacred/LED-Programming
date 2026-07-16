@@ -52,6 +52,33 @@ function registryKeys(storage) {
   return keys;
 }
 
+function validateRegistryRecords(records, totalBytes) {
+  for (const record of records) {
+    const expectedKeys = record?.receipt === undefined
+      ? 'createdAt,expiresAt,nonce,operation,tabId'
+      : 'createdAt,expiresAt,nonce,operation,receipt,tabId';
+    if (!record || Object.keys(record).sort().join(',') !== expectedKeys
+      || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
+      || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
+      || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
+      || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
+      || record.expiresAt - record.createdAt > TTL_MS) {
+      throw new Error('Pending Bridge registry is invalid');
+    }
+  }
+  const size = totalBytes ?? records.reduce((sum, record) => {
+    const key = `${REGISTRY_PREFIX}${record.nonce}`;
+    return sum + key.length + JSON.stringify(record).length;
+  }, 0);
+  const receipts = records.filter(record => record.receipt !== undefined).map(record => record.receipt);
+  if (records.length > MAX_RECORDS || size > MAX_REGISTRY_BYTES
+    || new Set(records.map(record => record.tabId)).size !== records.length
+    || new Set(receipts).size !== receipts.length) {
+    throw new Error('Pending Bridge registry is invalid');
+  }
+  return records;
+}
+
 function readRegistry(storage) {
   const keys = registryKeys(storage);
   if (keys.length > MAX_RECORDS) throw new Error('Too many pending Bridge operations');
@@ -62,23 +89,12 @@ function readRegistry(storage) {
     if (typeof raw !== 'string') throw new Error('Pending Bridge registry is invalid');
     let record;
     try { record = JSON.parse(raw); } catch { throw new Error('Pending Bridge registry is invalid'); }
-    const expectedKeys = record?.receipt === undefined
-      ? 'createdAt,expiresAt,nonce,operation,tabId'
-      : 'createdAt,expiresAt,nonce,operation,receipt,tabId';
-    if (!record || Object.keys(record).sort().join(',') !== expectedKeys
-      || !BRIDGE_OPERATIONS.includes(record.operation) || !isCanonicalNonce(record.nonce)
-      || (record.receipt !== undefined && !isCanonicalNonce(record.receipt))
-      || !/^[A-Za-z0-9_-]{22}$/.test(record.tabId) || !Number.isSafeInteger(record.createdAt)
-      || !Number.isSafeInteger(record.expiresAt) || record.expiresAt <= record.createdAt
-      || record.expiresAt - record.createdAt > TTL_MS || key !== `${REGISTRY_PREFIX}${record.nonce}`) {
+    if (!record || key !== `${REGISTRY_PREFIX}${record.nonce}`) {
       throw new Error('Pending Bridge registry is invalid');
     }
     return record;
   });
-  if (totalBytes > MAX_REGISTRY_BYTES || new Set(records.map(record => record.tabId)).size !== records.length) {
-    throw new Error('Pending Bridge registry is invalid');
-  }
-  return records;
+  return validateRegistryRecords(records, totalBytes);
 }
 
 function removeRecord(storage, nonce) {
@@ -90,6 +106,21 @@ function writeRecord(storage, record) {
   const raw = JSON.stringify(record);
   if (key.length + raw.length > MAX_REGISTRY_BYTES) throw new Error('Pending Bridge registry is too large');
   storage.setItem(key, raw);
+}
+
+function replaceRecord(storage, records, pending, replacement) {
+  const proposed = records.map(record => record.nonce === pending.nonce ? replacement : record);
+  validateRegistryRecords(proposed);
+  const key = `${REGISTRY_PREFIX}${pending.nonce}`;
+  const original = storage.getItem(key);
+  try {
+    writeRecord(storage, replacement);
+    readRegistry(storage);
+  } catch (error) {
+    if (original === null) storage.removeItem(key);
+    else storage.setItem(key, original);
+    throw error;
+  }
 }
 
 function readClaim(storage, key) {
@@ -286,7 +317,7 @@ export async function consumeBridgeCallback(value, dependencies = {}) {
       assertOwner?.();
       if (result.receipt) {
         if (pending.receipt && pending.receipt !== result.receipt) throw new Error('Bridge callback receipt does not match');
-        writeRecord(localStorage, { ...pending, tabId: targetTabId, receipt: result.receipt });
+        replaceRecord(localStorage, records, pending, { ...pending, tabId: targetTabId, receipt: result.receipt });
       } else removeRecord(localStorage, result.nonce);
       const { nonce: _consumedNonce, receipt, ...safeResult } = result;
       return Object.freeze({
@@ -309,7 +340,11 @@ export function confirmBridgeResultReceipt(receipt, dependencies = {}) {
   const localStorage = dependencies.localStorage ?? dependencies.storage ?? globalThis.localStorage;
   if (!localStorage) return false;
   const records = readRegistry(localStorage);
-  const pending = records.find(record => record.receipt === receipt);
+  const targetTabId = dependencies.targetTabId;
+  const operation = dependencies.operation;
+  if (!/^[A-Za-z0-9_-]{22}$/.test(targetTabId || '') || !BRIDGE_OPERATIONS.includes(operation)) return false;
+  const pending = records.find(record => record.receipt === receipt
+    && record.tabId === targetTabId && record.operation === operation);
   if (!pending) return false;
   removeRecord(localStorage, pending.nonce);
   return true;

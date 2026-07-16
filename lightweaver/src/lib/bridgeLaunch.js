@@ -109,7 +109,9 @@ export function createBridgeResultChannel(dependencies = {}) {
   const cryptoApi = dependencies.crypto ?? globalThis.crypto;
   const onResult = dependencies.onResult;
   const acknowledge = dependencies.acknowledge ?? defaultAcknowledge;
-  const confirmReceipt = dependencies.confirmReceipt ?? (receipt => confirmBridgeResultReceipt(receipt, { localStorage }));
+  const confirmReceipt = dependencies.confirmReceipt ?? ((receipt, message) => confirmBridgeResultReceipt(receipt, {
+    localStorage, operation: message.operation, targetTabId: message.targetTabId,
+  }));
   const delivered = new Set();
   const acknowledged = new Set();
   let channel = null;
@@ -133,7 +135,7 @@ export function createBridgeResultChannel(dependencies = {}) {
     if (!onResult) return;
     const { ackReceipt, ...safeMessage } = message;
     onResult(Object.freeze(safeMessage));
-    if (!confirmReceipt(ackReceipt)) return;
+    if (!confirmReceipt(ackReceipt, message)) return;
     if (delivered.size >= 32) delivered.delete(delivered.values().next().value);
     delivered.add(ackReceipt);
     acknowledge(`lightweaver://ack?receipt=${ackReceipt}&version=1`);

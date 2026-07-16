@@ -255,7 +255,9 @@ test('Safari launch with Chrome default, a separate profile, and refresh resume 
   const result = await consumeBridgeReturnCode(code, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: originalSession, localStorage: originalLocal, now: () => 1 });
   assert.equal(result.operation, 'restart-card');
   assert.equal(result.ackReceipt, receipt);
-  assert.equal(confirmBridgeResultReceipt(receipt, { localStorage: originalLocal }), true);
+  assert.equal(confirmBridgeResultReceipt(receipt, {
+    localStorage: originalLocal, operation: result.operation, targetTabId: result.originTabId,
+  }), true);
   await assert.rejects(() => consumeBridgeReturnCode(code, { currentOrigin: 'https://led.mandalacodes.com', sessionStorage: originalSession, localStorage: originalLocal, now: () => 1 }), /pending|used/i);
 });
 
@@ -274,9 +276,10 @@ test('automatic callback keeps Studio correlation until the actual target tab co
   });
   assert.equal(result.originTabId, originSession.getItem('lightweaver.bridge.origin-tab.v1'));
   assert.equal(result.ackReceipt, receipt);
-  assert.equal(confirmBridgeResultReceipt(Buffer.alloc(32, 5).toString('base64url'), { localStorage }), false);
-  assert.equal(confirmBridgeResultReceipt(receipt, { localStorage }), true);
-  assert.equal(confirmBridgeResultReceipt(receipt, { localStorage }), false);
+  const confirmation = { localStorage, operation: result.operation, targetTabId: result.originTabId };
+  assert.equal(confirmBridgeResultReceipt(Buffer.alloc(32, 5).toString('base64url'), confirmation), false);
+  assert.equal(confirmBridgeResultReceipt(receipt, confirmation), true);
+  assert.equal(confirmBridgeResultReceipt(receipt, confirmation), false);
 });
 
 test('a new same-profile tab atomically takes over manual delivery when the original Studio tab was closed', async () => {
@@ -302,6 +305,109 @@ test('a new same-profile tab atomically takes over manual delivery when the orig
   assert.equal(result.originTabId, replacementSession.getItem('lightweaver.bridge.origin-tab.v1'));
   assert.notEqual(result.originTabId, closedTabSession.getItem('lightweaver.bridge.origin-tab.v1'));
   assert.equal(result.ackReceipt, Buffer.alloc(32, 4).toString('base64url'));
+});
+
+test('manual takeover rejects unchanged when the replacement tab already owns another pending launch', async () => {
+  const { confirmBridgeResultReceipt, consumeBridgeCallback, consumeBridgeReturnCode, createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const sharedProfile = memoryStorage();
+  const closedRestartSession = memoryStorage();
+  const replacementReleaseSession = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  const restartLaunch = createBridgeLaunch('restart-card', {
+    crypto, sessionStorage: closedRestartSession, localStorage: sharedProfile, now: () => 0,
+  });
+  const releaseLaunch = createBridgeLaunch('release-usb', {
+    crypto, sessionStorage: replacementReleaseSession, localStorage: sharedProfile, now: () => 0,
+  });
+  const restartNonce = new URL(restartLaunch).searchParams.get('nonce');
+  const releaseNonce = new URL(releaseLaunch).searchParams.get('nonce');
+  const restartReceipt = Buffer.alloc(32, 7).toString('base64url');
+  const restartPayload = new URLSearchParams([
+    ['status', 'awaiting-card-acknowledgement'], ['code', 'operation-complete'],
+    ['target', 'lightweaver-controller-esp32s3'], ['verification', 'not-verified'],
+    ['physicalOutput', 'unconfirmed'], ['nonce', restartNonce], ['receipt', restartReceipt], ['version', '1'],
+  ]).toString();
+  const before = [...Array(sharedProfile.length).keys()]
+    .map(index => [sharedProfile.key(index), sharedProfile.getItem(sharedProfile.key(index))])
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  await assert.rejects(() => consumeBridgeReturnCode(`LW1-${Buffer.from(restartPayload).toString('base64url')}`, {
+    currentOrigin: 'https://led.mandalacodes.com', sessionStorage: replacementReleaseSession,
+    localStorage: sharedProfile, crypto, now: () => 1,
+  }), /pending|takeover|tab/i);
+  const after = [...Array(sharedProfile.length).keys()]
+    .map(index => [sharedProfile.key(index), sharedProfile.getItem(sharedProfile.key(index))])
+    .sort(([left], [right]) => left.localeCompare(right));
+  assert.deepEqual(after, before);
+
+  const restartCallback = `https://led.mandalacodes.com/#bridge-result?${restartPayload}`;
+  const restartResult = await consumeBridgeCallback(restartCallback, {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage: sharedProfile, now: () => 1,
+  });
+  assert.equal(restartResult.originTabId, closedRestartSession.getItem('lightweaver.bridge.origin-tab.v1'));
+  assert.equal(confirmBridgeResultReceipt(restartReceipt, {
+    localStorage: sharedProfile, operation: restartResult.operation, targetTabId: restartResult.originTabId,
+  }), true);
+  const releaseCallback = `https://led.mandalacodes.com/#bridge-result?status=awaiting-card-acknowledgement&code=operation-complete&target=lightweaver-controller-esp32s3&verification=not-verified&physicalOutput=unconfirmed&nonce=${releaseNonce}&version=1`;
+  assert.equal((await consumeBridgeCallback(releaseCallback, {
+    currentOrigin: 'https://led.mandalacodes.com', localStorage: sharedProfile, now: () => 1,
+  })).operation, 'release-usb');
+});
+
+test('duplicate persisted receipts fail closed without clearing either pending authority', async () => {
+  const { confirmBridgeResultReceipt, createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const localStorage = memoryStorage();
+  let fill = 1;
+  const crypto = { getRandomValues(bytes) { bytes.fill(fill++); return bytes; } };
+  createBridgeLaunch('restart-card', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  createBridgeLaunch('release-usb', { crypto, sessionStorage: memoryStorage(), localStorage, now: () => 0 });
+  const receipt = Buffer.alloc(32, 9).toString('base64url');
+  const keys = [...Array(localStorage.length).keys()].map(index => localStorage.key(index));
+  for (const key of keys) localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)), receipt }));
+  const before = keys.map(key => [key, localStorage.getItem(key)]);
+
+  assert.throws(() => confirmBridgeResultReceipt(receipt, { localStorage }), /registry|invalid|receipt/i);
+  assert.deepEqual(keys.map(key => [key, localStorage.getItem(key)]), before);
+});
+
+test('replacement write validation rolls back the original pending authority on storage corruption', async () => {
+  const { consumeBridgeReturnCode, createBridgeLaunch } = await import('./bridgeProtocol.js');
+  const underlying = memoryStorage();
+  const originalSession = memoryStorage();
+  const launch = createBridgeLaunch('restart-card', {
+    crypto: { getRandomValues(bytes) { bytes.fill(1); return bytes; } },
+    sessionStorage: originalSession, localStorage: underlying, now: () => 0,
+  });
+  const nonce = new URL(launch).searchParams.get('nonce');
+  const key = `lightweaver.bridge.pending.v1.${nonce}`;
+  const original = underlying.getItem(key);
+  let corruptReplacement = true;
+  const corruptingStorage = {
+    get length() { return underlying.length; },
+    key: index => underlying.key(index),
+    getItem: itemKey => underlying.getItem(itemKey),
+    removeItem: itemKey => underlying.removeItem(itemKey),
+    setItem(itemKey, value) {
+      const record = itemKey === key ? JSON.parse(value) : null;
+      if (record?.receipt && corruptReplacement) {
+        corruptReplacement = false;
+        underlying.setItem(itemKey, JSON.stringify({ ...record, tabId: 'invalid' }));
+      } else underlying.setItem(itemKey, value);
+    },
+  };
+  const receipt = Buffer.alloc(32, 6).toString('base64url');
+  const payload = new URLSearchParams([
+    ['status', 'awaiting-card-acknowledgement'], ['code', 'operation-complete'],
+    ['target', 'lightweaver-controller-esp32s3'], ['verification', 'not-verified'],
+    ['physicalOutput', 'unconfirmed'], ['nonce', nonce], ['receipt', receipt], ['version', '1'],
+  ]).toString();
+
+  await assert.rejects(() => consumeBridgeReturnCode(`LW1-${Buffer.from(payload).toString('base64url')}`, {
+    currentOrigin: 'https://led.mandalacodes.com', sessionStorage: memoryStorage(),
+    localStorage: corruptingStorage, crypto: { getRandomValues(bytes) { bytes.fill(7); return bytes; } }, now: () => 1,
+  }), /registry|invalid/i);
+  assert.equal(underlying.getItem(key), original);
 });
 
 test('manual return code expires with the original launch and cannot smuggle URL or project fields', async () => {
