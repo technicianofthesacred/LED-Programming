@@ -275,7 +275,7 @@ Require this backward-compatible config shape:
 }
 ```
 
-Tests must assert clamping to gamma `1.0..3.0`, calibration `0.0..1.0`, neutral defaults for missing fields, and this physical transformation order: RGB balance, optional cached gamma lookup, then configured channel order.
+Tests must assert that present values outside gamma `1.0..3.0` or calibration `0.0..1.0` are rejected before the active config changes, that missing fields retain neutral defaults, and that the physical transformation order is RGB balance, optional cached gamma lookup, then configured channel order.
 
 - [ ] **Step 2: Run the contracts and verify RED**
 
@@ -304,7 +304,7 @@ struct OutputColorConfig {
 OutputColorConfig outputColor;
 ```
 
-Parse the fields with finite clamps, emit them from runtime configuration JSON, and preserve neutral defaults when loading old packages.
+Validate present fields as finite in-range values before applying the parsed configuration, emit them from runtime status JSON, and preserve neutral defaults when loading old packages. Invalid present fields must make the config load/save fail without replacing the active runtime config.
 
 - [ ] **Step 4: Implement the color pipeline using FastLED primitives**
 
