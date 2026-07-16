@@ -270,6 +270,8 @@ function createOperationRunner({
           journalArmed = Boolean(journal);
           journalCreatedFresh = journalArmed;
           journalUpdate({ usbOwnership: 'acquiring-or-owned' });
+        } else {
+          journal?.markRecoveryAcquiring?.({ expectedCardId: selected.cardId });
         }
         connection = await runtime.connectForWrite();
         const current = connection.identity;
@@ -281,7 +283,14 @@ function createOperationRunner({
           throw new BridgeOperationError('write-capability-missing', 'The connected card cannot be written. Nothing was erased.');
         }
         if (interrupted) {
-          journal.replaceForRecovery(journalStart);
+          try {
+            journal.replaceForRecovery(journalStart);
+          } catch (error) {
+            throw new BridgeOperationError('recovery-journal-activation-uncertain', error?.message || 'Recovery journal activation failed', {
+              mutation: 'uncertain', outcome: 'needs-safe-recovery', phase: 'recovery-journal-activation',
+              nextAction: 'recover-current-release',
+            });
+          }
           journalArmed = true;
         }
         journalUpdate({ usbOwnership: 'owned' });
@@ -351,7 +360,7 @@ function createOperationRunner({
       } catch (error) {
         primaryError = classifyExecutionError(error, eraseStarted);
         if ((journalArmed || preexistingJournal) && !connection) {
-          try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
+          if (journalArmed) try { journalUpdate({ usbOwnership: 'uncertain' }); } catch {}
           primaryError = new BridgeOperationError('usb-acquisition-uncertain', 'USB acquisition did not return a confirmed release state.', {
             outcome: 'usb-ownership-uncertain', phase: 'usb-acquire', nextAction: 'restart-bridge-before-retrying',
           });
@@ -366,6 +375,7 @@ function createOperationRunner({
           try {
             await connection.transport.disconnect();
             if (journalArmed) journalUpdate({ usbOwnership: 'released' });
+            else if (preexistingJournal) journal?.clearRecoveryAcquisition?.();
             emit(onEvent, 'usb-released');
           } catch (error) {
             const verifiedAndRestarted = flashVerified && cardRestarted;
@@ -487,7 +497,7 @@ function createOperationRunner({
       verification: saved.pendingResult.verification,
     };
     const identity = crypto.createHash('sha256').update(JSON.stringify({
-      ...tuple, receiptHash: saved.completionCorrelation?.receiptHash || 'local-recovery',
+      ...tuple, generationId: saved.generationId, receiptHash: saved.completionCorrelation?.receiptHash || 'local-recovery',
     })).digest('hex');
     return Object.freeze({ ...tuple, resultIdentityHash: identity });
   }

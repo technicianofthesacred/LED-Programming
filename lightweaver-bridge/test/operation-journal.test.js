@@ -42,8 +42,10 @@ test('journal atomically persists one strict versioned operation and survives re
   journal.update({ completionCorrelation });
 
   const loaded = createOperationJournal({ userDataPath: directory, now: () => 999 }).load();
+  assert.match(loaded.generationId, /^[a-f0-9]{32}$/);
+  const generationId = loaded.generationId;
   assert.deepEqual(loaded, {
-    version: 1, operation: 'install-current-release', expectedCardId: cardId,
+    version: 1, generationId, operation: 'install-current-release', expectedCardId: cardId,
     expectedBuildId: buildId, mutationBoundary: 'erase-or-write-started',
     flashVerification: 'flash-verified', restartResult: 'restarted', usbOwnership: 'released',
     pendingResult: pendingResult(), completionCorrelation, timestamps: { createdAt: 100, updatedAt: 103 },
@@ -156,12 +158,71 @@ test('recovery replacement failure retains prior journal bytes even after rename
   const failingFs = Object.create(fs);
   failingFs.fsyncSync = descriptor => {
     fsyncCalls += 1;
-    if (fsyncCalls === 2) throw new Error('directory fsync failed');
+    if (fsyncCalls >= 2) throw new Error('directory fsync failed persistently');
     return fs.fsyncSync(descriptor);
   };
   const journal = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 2 });
   assert.throws(() => journal.replaceForRecovery({
     operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: 'b'.repeat(40),
-  }), /directory fsync failed/);
+  }), /directory fsync failed persistently/);
   assert.deepEqual(fs.readFileSync(file), before);
+  const restarted = createOperationJournal({ userDataPath: directory }).load();
+  assert.equal(restarted.operation, 'install-current-release');
+  assert.equal(restarted.mutationBoundary, 'erase-or-write-started');
+  assert.equal(restarted.usbOwnership, 'uncertain');
+});
+
+test('every recovery generation persistence boundary leaves restart on old conservative evidence', () => {
+  for (const boundary of ['write', 'file-fsync', 'rename', 'directory-fsync']) {
+    const directory = temporaryDirectory();
+    const original = createOperationJournal({ userDataPath: directory, now: () => 1 });
+    original.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+    original.update({ mutationBoundary: 'erase-or-write-started', restartResult: 'unknown', usbOwnership: 'uncertain' });
+    const canonical = path.join(directory, 'operation-journal.json');
+    const before = fs.readFileSync(canonical);
+    const failingFs = Object.create(fs);
+    let fsyncCalls = 0;
+    if (boundary === 'write') failingFs.writeFileSync = () => { throw new Error('recovery write failed'); };
+    if (boundary === 'file-fsync' || boundary === 'directory-fsync') {
+      failingFs.fsyncSync = descriptor => {
+        fsyncCalls += 1;
+        if (boundary === 'file-fsync' || fsyncCalls >= 2) throw new Error(`recovery ${boundary} failed persistently`);
+        return fs.fsyncSync(descriptor);
+      };
+    }
+    if (boundary === 'rename') failingFs.renameSync = () => { throw new Error('recovery rename failed'); };
+    const journal = createOperationJournal({ userDataPath: directory, fs: failingFs, now: () => 2 });
+    assert.throws(() => journal.replaceForRecovery({
+      operation: 'recover-current-release', expectedCardId: cardId, expectedBuildId: 'b'.repeat(40),
+    }), /failed/);
+    assert.deepEqual(fs.readFileSync(canonical), before);
+    const restarted = createOperationJournal({ userDataPath: directory }).load();
+    assert.equal(restarted.operation, 'install-current-release', boundary);
+    assert.equal(restarted.mutationBoundary, 'erase-or-write-started', boundary);
+  }
+});
+
+test('recovery acquisition sidecar preserves mutation evidence and makes restart ownership uncertain', () => {
+  const directory = temporaryDirectory();
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'released', restartResult: 'unknown' });
+  const canonical = path.join(directory, 'operation-journal.json');
+  const before = fs.readFileSync(canonical);
+  journal.markRecoveryAcquiring({ expectedCardId: cardId });
+  assert.deepEqual(fs.readFileSync(canonical), before);
+  const restarted = createOperationJournal({ userDataPath: directory }).load();
+  assert.equal(restarted.mutationBoundary, 'erase-or-write-started');
+  assert.equal(restarted.usbOwnership, 'uncertain');
+});
+
+test('identical new journals receive distinct bounded generation identities', () => {
+  const directory = temporaryDirectory();
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  const first = journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId }).generationId;
+  journal.clear();
+  const second = journal.begin({ operation: 'install-current-release', expectedCardId: cardId, expectedBuildId: buildId }).generationId;
+  assert.match(first, /^[a-f0-9]{32}$/);
+  assert.match(second, /^[a-f0-9]{32}$/);
+  assert.notEqual(first, second);
 });

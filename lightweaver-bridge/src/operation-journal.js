@@ -11,12 +11,13 @@ const BOUNDARIES = new Set(['before-mutation', 'erase-or-write-started']);
 const VERIFICATIONS = new Set(['not-verified', 'flash-verified']);
 const RESTART_RESULTS = new Set(['not-attempted', 'restarted', 'failed', 'unknown']);
 const USB_STATES = new Set(['not-acquired', 'acquiring-or-owned', 'owned', 'released', 'uncertain']);
-const RECORD_KEYS = ['completionCorrelation', 'expectedBuildId', 'expectedCardId', 'flashVerification', 'mutationBoundary', 'operation', 'pendingResult', 'restartResult', 'timestamps', 'usbOwnership', 'version'];
+const RECORD_KEYS = ['completionCorrelation', 'expectedBuildId', 'expectedCardId', 'flashVerification', 'generationId', 'mutationBoundary', 'operation', 'pendingResult', 'restartResult', 'timestamps', 'usbOwnership', 'version'];
 const UPDATE_KEYS = new Set(['completionCorrelation', 'flashVerification', 'mutationBoundary', 'pendingResult', 'restartResult', 'usbOwnership']);
 const RESULT_KEYS = ['buildId', 'cardId', 'expectedCardId', 'firmwareVersion', 'message', 'nextCheckpoint', 'physicalOutput', 'pipelineComplete', 'state', 'target', 'verification'];
 const CORRELATION_KEYS = ['buildId', 'cardId', 'firmwareVersion', 'operation', 'receiptHash', 'target', 'verification'];
 const CARD_ID = /^lw-[a-f0-9]{12}$/;
 const BUILD_ID = /^[a-f0-9]{40}$/;
+const GENERATION_ID = /^[a-f0-9]{32}$/;
 
 function exactKeys(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -42,7 +43,7 @@ function validatePendingResult(result, record) {
 function validateRecord(record) {
   if (!exactKeys(record, RECORD_KEYS)) throw new Error('Operation journal is invalid');
   if (record.version !== JOURNAL_VERSION) throw new Error('Operation journal version is incompatible');
-  if (!OPERATIONS.has(record.operation) || !CARD_ID.test(record.expectedCardId) || !BUILD_ID.test(record.expectedBuildId)
+  if (!GENERATION_ID.test(record.generationId) || !OPERATIONS.has(record.operation) || !CARD_ID.test(record.expectedCardId) || !BUILD_ID.test(record.expectedBuildId)
     || !BOUNDARIES.has(record.mutationBoundary) || !VERIFICATIONS.has(record.flashVerification)
     || !RESTART_RESULTS.has(record.restartResult) || !USB_STATES.has(record.usbOwnership)
     || !exactKeys(record.timestamps, ['createdAt', 'updatedAt'])
@@ -83,12 +84,15 @@ function deepFreeze(record) {
 function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, randomBytes = crypto.randomBytes } = {}) {
   if (typeof userDataPath !== 'string' || !userDataPath) throw new TypeError('A userData path is required');
   const file = path.join(userDataPath, 'operation-journal.json');
+  const recoveryFile = path.join(userDataPath, 'operation-journal.recovery.json');
+  const acquisitionFile = path.join(userDataPath, 'operation-journal.acquisition.json');
+  let activeFile = null;
 
-  function load() {
+  function readRecord(candidate) {
     try {
-      const stat = fs.statSync(file);
+      const stat = fs.statSync(candidate);
       if (!stat.isFile() || stat.size > JOURNAL_MAX_BYTES) throw new Error('Operation journal is too large');
-      const data = fs.readFileSync(file, 'utf8');
+      const data = fs.readFileSync(candidate, 'utf8');
       if (Buffer.byteLength(data) > JOURNAL_MAX_BYTES) throw new Error('Operation journal is too large');
       return deepFreeze(validateRecord(JSON.parse(data)));
     } catch (error) {
@@ -98,12 +102,62 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     }
   }
 
-  function persist(record) {
+  function readAcquisition() {
+    try {
+      const stat = fs.statSync(acquisitionFile);
+      if (!stat.isFile() || stat.size > JOURNAL_MAX_BYTES) throw new Error('Operation journal acquisition marker is invalid');
+      const value = JSON.parse(fs.readFileSync(acquisitionFile, 'utf8'));
+      if (!exactKeys(value, ['attemptId', 'createdAt', 'expectedCardId', 'state', 'version'])
+        || value.version !== JOURNAL_VERSION || !GENERATION_ID.test(value.attemptId)
+        || !CARD_ID.test(value.expectedCardId) || value.state !== 'acquiring-or-owned'
+        || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) {
+        throw new Error('Operation journal acquisition marker is invalid');
+      }
+      return value;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      if (error instanceof SyntaxError) throw new Error('Operation journal acquisition marker is invalid');
+      throw error;
+    }
+  }
+
+  function selection() {
+    const canonical = readRecord(file);
+    const recovery = readRecord(recoveryFile);
+    let selected;
+    let source;
+    if (recovery && (!canonical || recovery.mutationBoundary === 'erase-or-write-started')) {
+      selected = recovery;
+      source = recoveryFile;
+    } else {
+      selected = canonical;
+      source = canonical ? file : null;
+    }
+    const acquisition = readAcquisition();
+    if (selected && acquisition?.expectedCardId === selected.expectedCardId && selected.usbOwnership !== 'uncertain') {
+      selected = deepFreeze({ ...selected, usbOwnership: 'uncertain' });
+    }
+    return { record: selected, source };
+  }
+
+  function load() {
+    if (activeFile) {
+      let record = readRecord(activeFile);
+      const acquisition = readAcquisition();
+      if (record && acquisition?.expectedCardId === record.expectedCardId && record.usbOwnership !== 'uncertain') {
+        record = deepFreeze({ ...record, usbOwnership: 'uncertain' });
+      }
+      return record;
+    }
+    return selection().record;
+  }
+
+  function persist(record, destination = file) {
     validateRecord(record);
     const data = JSON.stringify(record);
     if (Buffer.byteLength(data) > JOURNAL_MAX_BYTES) throw new Error('Operation journal is too large');
     fs.mkdirSync(userDataPath, { recursive: true, mode: 0o700 });
-    const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+    const temporary = `${destination}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
     let descriptor;
     try {
       fs.writeFileSync(temporary, data, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
@@ -111,8 +165,8 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       fs.fsyncSync(descriptor);
       fs.closeSync(descriptor);
       descriptor = undefined;
-      fs.renameSync(temporary, file);
-      try { fs.chmodSync(file, 0o600); } catch (error) { if (process.platform !== 'win32') throw error; }
+      fs.renameSync(temporary, destination);
+      try { fs.chmodSync(destination, 0o600); } catch (error) { if (process.platform !== 'win32') throw error; }
       const directoryDescriptor = fs.openSync(userDataPath, 'r');
       try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
     } catch (error) {
@@ -123,8 +177,37 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     return deepFreeze(JSON.parse(data));
   }
 
+  function persistAcquisition(value) {
+    const data = JSON.stringify(value);
+    fs.mkdirSync(userDataPath, { recursive: true, mode: 0o700 });
+    const temporary = `${acquisitionFile}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+    let descriptor;
+    try {
+      fs.writeFileSync(temporary, data, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      descriptor = fs.openSync(temporary, 'r');
+      fs.fsyncSync(descriptor);
+      fs.closeSync(descriptor);
+      descriptor = undefined;
+      fs.renameSync(temporary, acquisitionFile);
+      try { fs.chmodSync(acquisitionFile, 0o600); } catch (error) { if (process.platform !== 'win32') throw error; }
+      const directoryDescriptor = fs.openSync(userDataPath, 'r');
+      try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
+    } catch (error) {
+      if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {}
+      try { fs.unlinkSync(temporary); } catch {}
+      throw error;
+    }
+    return Object.freeze({ ...value });
+  }
+
+  function clearOne(candidate) {
+    try { fs.unlinkSync(candidate); return true; } catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+  }
+
   function clear() {
-    try { fs.unlinkSync(file); return true; } catch (error) { if (error?.code === 'ENOENT') return false; throw error; }
+    const removed = [file, recoveryFile, acquisitionFile].map(clearOne).some(Boolean);
+    activeFile = null;
+    return removed;
   }
 
   return Object.freeze({
@@ -132,12 +215,14 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     begin({ operation, expectedCardId, expectedBuildId } = {}) {
       if (load()) throw new Error('An operation journal is already active');
       const timestamp = now();
-      return persist({
-        version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
+      const record = persist({
+        version: JOURNAL_VERSION, generationId: randomBytes(16).toString('hex'), operation, expectedCardId, expectedBuildId,
         mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
         restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
         timestamps: { createdAt: timestamp, updatedAt: timestamp },
       });
+      activeFile = file;
+      return record;
     },
     replaceForRecovery({ operation, expectedCardId, expectedBuildId } = {}) {
       const current = load();
@@ -145,45 +230,37 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
         || operation !== 'recover-current-release' || expectedCardId !== current.expectedCardId) {
         throw new Error('Operation journal cannot be replaced for recovery');
       }
-      const previousBytes = fs.readFileSync(file);
       const timestamp = now();
-      try {
-        return persist({
-          version: JOURNAL_VERSION, operation, expectedCardId, expectedBuildId,
-          mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
-          restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
-          timestamps: { createdAt: timestamp, updatedAt: timestamp },
-        });
-      } catch (error) {
-        let temporary;
-        let descriptor;
-        try {
-          if (!fs.existsSync(file) || !fs.readFileSync(file).equals(previousBytes)) {
-            temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.restore.tmp`;
-            fs.writeFileSync(temporary, previousBytes, { mode: 0o600, flag: 'wx' });
-            descriptor = fs.openSync(temporary, 'r');
-            fs.fsyncSync(descriptor);
-            fs.closeSync(descriptor);
-            descriptor = undefined;
-            fs.renameSync(temporary, file);
-            try { fs.chmodSync(file, 0o600); } catch (chmodError) { if (process.platform !== 'win32') throw chmodError; }
-            const directoryDescriptor = fs.openSync(userDataPath, 'r');
-            try { fs.fsyncSync(directoryDescriptor); } finally { fs.closeSync(directoryDescriptor); }
-          }
-        } catch {}
-        finally {
-          if (descriptor !== undefined) try { fs.closeSync(descriptor); } catch {}
-          if (temporary) try { fs.unlinkSync(temporary); } catch {}
-        }
-        throw error;
-      }
+      const record = persist({
+        version: JOURNAL_VERSION, generationId: randomBytes(16).toString('hex'), operation, expectedCardId, expectedBuildId,
+        mutationBoundary: 'before-mutation', flashVerification: 'not-verified',
+        restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null,
+        timestamps: { createdAt: timestamp, updatedAt: timestamp },
+      }, recoveryFile);
+      activeFile = recoveryFile;
+      return record;
     },
+    markRecoveryAcquiring({ expectedCardId } = {}) {
+      const current = load();
+      if (!current || current.expectedCardId !== expectedCardId || current.mutationBoundary !== 'erase-or-write-started') {
+        throw new Error('Recovery acquisition marker does not match active mutation evidence');
+      }
+      return persistAcquisition({
+        version: JOURNAL_VERSION, attemptId: randomBytes(16).toString('hex'), expectedCardId,
+        state: 'acquiring-or-owned', createdAt: now(),
+      });
+    },
+    clearRecoveryAcquisition() { return clearOne(acquisitionFile); },
     update(fields = {}) {
       if (!fields || typeof fields !== 'object' || Array.isArray(fields)
         || Object.keys(fields).some(key => !UPDATE_KEYS.has(key))) throw new Error('Operation journal update contains an invalid field');
-      const current = load();
+      const selected = activeFile ? { record: readRecord(activeFile), source: activeFile } : selection();
+      const current = selected.record;
       if (!current) throw new Error('No active operation journal');
-      return persist({ ...current, ...fields, timestamps: { ...current.timestamps, updatedAt: now() } });
+      const record = persist({ ...current, ...fields, timestamps: { ...current.timestamps, updatedAt: now() } }, selected.source);
+      activeFile = selected.source;
+      if (fields.usbOwnership === 'released' && activeFile === recoveryFile) clearOne(acquisitionFile);
+      return record;
     },
     clear,
     get file() { return file; },

@@ -99,6 +99,8 @@ function memoryJournal(initial = null) {
       record = { ...value, mutationBoundary: 'before-mutation', flashVerification: 'not-verified', restartResult: 'not-attempted', usbOwnership: 'not-acquired', pendingResult: null, completionCorrelation: null };
       return record;
     },
+    markRecoveryAcquiring(value) { calls.push(['journal-recovery-acquiring', value]); record = { ...record, usbOwnership: 'uncertain' }; return true; },
+    clearRecoveryAcquisition() { calls.push('journal-recovery-acquisition-clear'); return true; },
     update(value) { calls.push(['journal-update', value]); record = { ...record, ...value }; return record; },
     clear() { calls.push('journal-clear'); const present = Boolean(record); record = null; return present; },
     current() { return record; },
@@ -367,6 +369,7 @@ test('recovery operation also retains uncertain ownership when reacquisition fai
     operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
   }), error => error.classification === 'usb-ownership-uncertain');
   assert.equal(journal.current().usbOwnership, 'uncertain');
+  assert.ok(journal.calls.find(call => Array.isArray(call) && call[0] === 'journal-recovery-acquiring'));
   assert.equal(journal.calls.includes('journal-clear'), false);
 });
 
@@ -380,13 +383,38 @@ test('failed recovery journal replacement retains prior post-mutation evidence a
   journal.replaceForRecovery = value => { journal.calls.push(['journal-replace', value]); throw new Error('rename failed'); };
   const h = harness({ journal });
   const auth = await authorize(h, 'recover-current-release');
-  await assert.rejects(() => h.runner.execute({ operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken }), /rename failed/i);
+  await assert.rejects(() => h.runner.execute({
+    operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  }), error => /rename failed/i.test(error.message) && error.classification === 'needs-safe-recovery'
+    && error.phase === 'recovery-journal-activation');
   assert.deepEqual(journal.current(), prior);
   assert.equal(journal.calls.includes('journal-clear'), false);
 });
 
+test('recovery close failure retains the acquisition marker as uncertain evidence', async () => {
+  const journal = memoryJournal({
+    operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
+    mutationBoundary: 'erase-or-write-started', flashVerification: 'not-verified', restartResult: 'unknown',
+    usbOwnership: 'uncertain', pendingResult: null, completionCorrelation: null,
+  });
+  const h = harness({ journal, runtime: { async connectForWrite() {
+    return {
+      loader: { IS_STUB: false, writeFlash() {}, async flashDeflBegin() {} },
+      identity: { cardId: 'lw-441bf681feb0', fingerprint: 'fp-one', chipName: 'ESP32-S3', flashSize: '16MB' },
+      transport: { async disconnect() { throw new Error('recovery close failed'); } },
+    };
+  } } });
+  const auth = await authorize(h, 'recover-current-release');
+  await assert.rejects(() => h.runner.execute({
+    operation: 'recover-current-release', cardId: auth.inspected.cardId, token: auth.confirmation.confirmationToken,
+  }), error => error.classification === 'usb-ownership-uncertain');
+  assert.equal(journal.current().usbOwnership, 'uncertain');
+  assert.equal(journal.calls.includes('journal-recovery-acquisition-clear'), false);
+});
+
 test('explicit dismissal requires the exact displayed recovered-result identity and is one-shot', async () => {
   const journalA = memoryJournal({
+    generationId: '1'.repeat(32),
     operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId,
     mutationBoundary: 'erase-or-write-started', flashVerification: 'flash-verified', restartResult: 'restarted',
     usbOwnership: 'released', pendingResult: pendingResultForRunner(), completionCorrelation: null,
@@ -396,7 +424,7 @@ test('explicit dismissal requires the exact displayed recovered-result identity 
   assert.equal(runnerA.dismissCompletedResult({ ...displayedA, resultIdentityHash: 'f'.repeat(64), confirmed: true }), false);
   assert.notEqual(journalA.current(), null);
 
-  const journalB = memoryJournal({ ...journalA.current(), expectedBuildId: 'b'.repeat(40), pendingResult: { ...pendingResultForRunner(), buildId: 'b'.repeat(40) } });
+  const journalB = memoryJournal({ ...journalA.current(), generationId: '2'.repeat(32) });
   const runnerB = harness({ journal: journalB }).runner;
   const displayedB = runnerB.recoveredResultContext();
   assert.equal(runnerB.dismissCompletedResult({ ...displayedA, confirmed: true }), false);
