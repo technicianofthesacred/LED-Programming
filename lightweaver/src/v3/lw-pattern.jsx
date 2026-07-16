@@ -68,6 +68,8 @@ import {
   readLocalChipDefault,
   writeLocalChipDefault,
 } from '../lib/cardBridge.js';
+import { computeSymmetryFit } from '../lib/symmetry.js';
+import { PatternPreview } from './PatternPreview.jsx';
 
   // Mockup geometry id -> live symSettings.
   const GEOMETRY_SETTINGS = {
@@ -301,6 +303,10 @@ import {
       markCardLookConfirmed,
       symSettings,
       setSymSettings,
+      bpm,
+      patternParams,
+      gammaEnabled,
+      gammaValue,
     } = useProject();
     const projectPreviewStrip = useMemo(
       () => createProjectPreviewStrip({ compiledWiring, strips, hidden }),
@@ -1076,6 +1082,14 @@ import {
     const spd = look.speed;
     const geo = geometryIdFromSettings(symSettings);
     const updateGeo = (id) => setSymSettings(prev => ({ ...(prev || {}), ...(GEOMETRY_SETTINGS[id] || GEOMETRY_SETTINGS.none) }));
+    const patchGeo = (patch) => setSymSettings(prev => ({ ...(prev || {}), enabled: true, ...patch }));
+    const fitGeo = () => {
+      const points = (strips || []).flatMap(s => s.pixels || []);
+      const fit = computeSymmetryFit(points, (strips || []).length);
+      if (geo === 'kaleido') patchGeo({ center: fit.center, slices: fit.count });
+      else if (geo === 'mandala') patchGeo({ center: fit.center, count: fit.count });
+      else patchGeo({ center: fit.center });
+    };
 
     const targetTotal = Math.max(0, sectionTargets.length - 1) || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
@@ -1326,6 +1340,58 @@ import {
                   <div className="geo-seg">
                     {GEOMETRY.map((g) => <button key={g.id} className={geo === g.id ? "on" : ""} onClick={() => updateGeo(g.id)}>{g.id === "mirror" && I.mirror}{g.label}</button>)}
                   </div>
+                  {geo !== "none" && (
+                    <>
+                      <div className="pm-geo-stage">
+                        <PatternPreview
+                          strips={strips}
+                          hidden={hidden}
+                          viewBox={viewBox}
+                          svgText={svgText}
+                          patternId={selId}
+                          playing={true}
+                          palette={sel.pal}
+                          params={patternParams?.[selId] || {}}
+                          patternParamsById={patternParams}
+                          bpm={bpm}
+                          masterSpeed={look.speed}
+                          masterBrightness={look.brightness}
+                          masterSaturation={look.customSaturation / 255}
+                          masterHueShift={look.hueShift / 255}
+                          gammaEnabled={gammaEnabled}
+                          gammaValue={gammaValue}
+                          symSettings={symSettings?.enabled ? symSettings : null}
+                          symOverlay={geo !== "none" && Boolean(symSettings?.enabled)}
+                          onSymChange={patchGeo}
+                          glow={1.1}
+                          dotSize={3}
+                          motionSmoothing="soft"
+                          targetFps={30}
+                        />
+                      </div>
+                      {geo === "mandala" && (
+                        <>
+                          <div className="geo-lab">Petals</div>
+                          <div className="geo-seg geo-counts" aria-label="Mandala petals">
+                            {[3, 4, 5, 6, 8, 12].map((c) => (
+                              <button key={c} className={(symSettings.count || 8) === c ? "on" : ""} data-testid={`geo-petals-${c}`} onClick={() => patchGeo({ type: "radial", count: c })}>{c}</button>
+                            ))}
+                          </div>
+                          <Slider k="Rotate" v={`${Math.round((symSettings.phase || 0) * 100)}%`} value={Math.round((symSettings.phase || 0) * 100)} min={0} max={100} step={1} testId="geo-rotate" onChange={(pct) => patchGeo({ type: "radial", phase: pct / 100 })} />
+                        </>
+                      )}
+                      {geo === "kaleido" && (
+                        <>
+                          <Slider k="Petals" v={String(symSettings.slices || 6)} value={symSettings.slices || 6} min={2} max={16} step={1} testId="geo-slices" onChange={(s) => patchGeo({ type: "kaleido", slices: Math.round(s) })} />
+                          <Slider k="Rotate" v={`${Math.round((symSettings.phase || 0) * 100)}%`} value={Math.round((symSettings.phase || 0) * 100)} min={0} max={100} step={1} testId="geo-rotate" onChange={(pct) => patchGeo({ type: "kaleido", phase: pct / 100 })} />
+                        </>
+                      )}
+                      <div className="geo-fit">
+                        <button type="button" className="geo-fit-btn" data-testid="geo-fit" onClick={fitGeo}>Fit to my piece</button>
+                        <span className="geo-fit-hint">Drag the dot on the preview to move the center.</span>
+                      </div>
+                    </>
+                  )}
                   {/* swatch grid retained as the round color picks (mockup SWATCHES) */}
                   <div className="pm-swatches" aria-label="Color swatches" style={{ marginTop: 8 }}>
                     {SWATCHES.map((sw, i) => {
