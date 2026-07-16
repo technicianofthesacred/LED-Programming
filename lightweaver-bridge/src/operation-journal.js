@@ -86,6 +86,12 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
   const file = path.join(userDataPath, 'operation-journal.json');
   const recoveryFile = path.join(userDataPath, 'operation-journal.recovery.json');
   const acquisitionFile = path.join(userDataPath, 'operation-journal.acquisition.json');
+  const corruptRecoveryFile = path.join(userDataPath, 'operation-journal.corrupt-recovery.json');
+  const quarantineFiles = Object.freeze([
+    path.join(userDataPath, 'operation-journal.quarantine.canonical'),
+    path.join(userDataPath, 'operation-journal.quarantine.recovery'),
+    path.join(userDataPath, 'operation-journal.quarantine.acquisition'),
+  ]);
   let activeFile = null;
   let warning = '';
 
@@ -135,6 +141,25 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     }
   }
 
+  function readCorruptRecovery() {
+    try {
+      const stat = fs.statSync(corruptRecoveryFile);
+      if (!stat.isFile() || stat.size > JOURNAL_MAX_BYTES) throw new Error('Corrupt recovery marker is invalid');
+      const value = JSON.parse(fs.readFileSync(corruptRecoveryFile, 'utf8'));
+      if (!exactKeys(value, ['createdAt', 'expectedBuildId', 'expectedCardId', 'operation', 'state', 'transactionId', 'version'])
+        || value.version !== JOURNAL_VERSION || !GENERATION_ID.test(value.transactionId)
+        || value.operation !== 'recover-current-release' || !CARD_ID.test(value.expectedCardId)
+        || !BUILD_ID.test(value.expectedBuildId) || value.state !== 'corrupt-recovery-active'
+        || !Number.isSafeInteger(value.createdAt) || value.createdAt < 0) {
+        throw new Error('Corrupt recovery marker is invalid');
+      }
+      return value;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
   function safely(read, label) {
     try {
       const value = read();
@@ -158,9 +183,22 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
     const canonicalRead = safely(() => readRecord(file), 'canonical');
     const recoveryRead = safely(() => readRecord(recoveryFile), 'recovery');
     const acquisitionRead = safely(readAcquisition, 'acquisition');
+    const transactionRead = safely(readCorruptRecovery, 'corrupt-recovery-marker');
     const canonical = canonicalRead.value;
     const recovery = recoveryRead.value;
     const corruptLabels = [canonicalRead, recoveryRead].filter(value => value.corrupt).map(value => value.label);
+    if (transactionRead.corrupt) {
+      setWarning(['corrupt-recovery-marker']);
+      throw corruptionFailure();
+    }
+    if (transactionRead.value && (!recovery || recovery.mutationBoundary === 'before-mutation')) {
+      setWarning(corruptLabels);
+      throw corruptionFailure();
+    }
+    if (!canonical && recovery && recovery.mutationBoundary === 'before-mutation' && !transactionRead.value) {
+      setWarning(['missing canonical']);
+      throw corruptionFailure();
+    }
     if (canonicalRead.corrupt && recovery && recovery.mutationBoundary === 'before-mutation') {
       setWarning(['canonical']);
       throw corruptionFailure();
@@ -240,7 +278,7 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
   }
 
   function clear() {
-    const candidates = [file, recoveryFile, acquisitionFile];
+    const candidates = [file, recoveryFile, acquisitionFile, corruptRecoveryFile, ...quarantineFiles];
     let authority = activeFile;
     if (!authority) {
       try { authority = selection().source; } catch {}
@@ -321,9 +359,22 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       if (!confirmedCorrupt || operation !== 'recover-current-release' || !CARD_ID.test(expectedCardId) || !BUILD_ID.test(expectedBuildId)) {
         throw new Error('Corrupt operation journal cannot enter recovery');
       }
-      for (const source of [file, recoveryFile, acquisitionFile]) {
-        if (!fs.existsSync(source)) continue;
-        fs.renameSync(source, `${source}.corrupt-${randomBytes(8).toString('hex')}`);
+      let transaction = readCorruptRecovery();
+      if (transaction && (transaction.expectedCardId !== expectedCardId || transaction.expectedBuildId !== expectedBuildId)) {
+        throw new Error('Corrupt recovery transaction does not match the inspected card and release');
+      }
+      if (!transaction) {
+        transaction = Object.freeze({
+          version: JOURNAL_VERSION, transactionId: randomBytes(16).toString('hex'), operation,
+          expectedCardId, expectedBuildId, state: 'corrupt-recovery-active', createdAt: logicalTime(),
+        });
+        atomicWrite(corruptRecoveryFile, JSON.stringify(transaction));
+      }
+      for (const [index, source] of [file, recoveryFile, acquisitionFile].entries()) {
+        if (!fs.existsSync(source) || fs.existsSync(quarantineFiles[index])) continue;
+        const stat = fs.statSync(source);
+        if (!stat.isFile() || stat.size > JOURNAL_MAX_BYTES) throw new Error('Corrupt operation journal evidence exceeds its bounded quarantine');
+        fs.renameSync(source, quarantineFiles[index]);
       }
       syncDirectory();
       const timestamp = logicalTime();
@@ -335,6 +386,15 @@ function createOperationJournal({ userDataPath, now = Date.now, fs = nodeFs, ran
       }, recoveryFile);
       activeFile = recoveryFile;
       return record;
+    },
+    completeCorruptRecovery() {
+      const current = activeFile ? readRecord(activeFile) : selection().record;
+      if (!current || current.flashVerification !== 'flash-verified' || current.restartResult !== 'restarted') return false;
+      const remaining = [];
+      for (const candidate of [corruptRecoveryFile, ...quarantineFiles]) {
+        try { fs.unlinkSync(candidate); } catch (error) { if (error?.code !== 'ENOENT') remaining.push(path.basename(candidate)); }
+      }
+      return Object.freeze({ cleared: remaining.length === 0, remaining: Object.freeze(remaining) });
     },
     restoreCompletedAuthority(value = {}) {
       if (load()) return false;

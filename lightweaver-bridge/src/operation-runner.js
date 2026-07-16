@@ -432,6 +432,9 @@ function createOperationRunner({
         inspection = null;
         verifiedRelease = null;
       }
+      if (!primaryError && corruptRecovery && flashVerified && cardRestarted) {
+        try { journal?.completeCorruptRecovery?.(); } catch {}
+      }
       if (primaryError) throw primaryError;
       return result;
     });

@@ -280,7 +280,23 @@ test('corrupt canonical predecessor with only pre-mutation recovery fails closed
   assert.equal(h.calls.includes('inspect'), false);
 });
 
-test('dual-corrupt startup can recover only through inspected confirmed card and preserves quarantined evidence', async () => {
+test('missing canonical predecessor with sole pre-mutation recovery fails closed and preserves evidence', async () => {
+  const { createOperationJournal } = require('../src/operation-journal');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-runner-missing-canonical-'));
+  const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
+  journal.begin({ operation: 'install-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  journal.update({ mutationBoundary: 'erase-or-write-started', usbOwnership: 'uncertain', restartResult: 'unknown' });
+  journal.replaceForRecovery({ operation: 'recover-current-release', expectedCardId: 'lw-441bf681feb0', expectedBuildId: buildId });
+  fs.unlinkSync(path.join(directory, 'operation-journal.json'));
+  const restartedJournal = createOperationJournal({ userDataPath: directory, now: () => 2 });
+  const h = harness({ journal: restartedJournal });
+  await assert.rejects(() => h.runner.recoverInterrupted(), error => error.classification === 'needs-safe-recovery'
+    && error.code === 'operation-journal-corrupt');
+  assert.equal(fs.existsSync(path.join(directory, 'operation-journal.recovery.json')), true);
+  assert.equal(h.calls.includes('inspect'), false);
+});
+
+test('dual-corrupt startup recovers only through the confirmed card and cleans bounded quarantine after success', async () => {
   const { createOperationJournal } = require('../src/operation-journal');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-runner-dual-corrupt-'));
   const journal = createOperationJournal({ userDataPath: directory, now: () => 1 });
@@ -298,7 +314,9 @@ test('dual-corrupt startup can recover only through inspected confirmed card and
   });
   assert.equal(result.verification, 'flash-verified');
   assert.ok(h.calls.find(value => Array.isArray(value) && value[0] === 'write'));
-  assert.ok(fs.readdirSync(directory).some(name => name.includes('.corrupt-')));
+  assert.equal(fs.readdirSync(directory).some(name => name.includes('.quarantine.')), false);
+  assert.equal(fs.existsSync(path.join(directory, 'operation-journal.corrupt-recovery.json')), false);
+  assert.equal(restartedJournal.load().flashVerification, 'flash-verified');
 });
 
 test('restart recovery inspects the exact card before classifying unverified mutation', async () => {
