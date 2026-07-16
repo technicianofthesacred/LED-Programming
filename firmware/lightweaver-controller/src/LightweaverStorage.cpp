@@ -731,15 +731,27 @@ bool validateCandidateMetadataForBoot(Preferences& prefs, WiringCandidateState s
       return false;
     }
   } else if (state == WIRING_CANDIDATE_NONE) {
-    if ((journalPresent || candidate.length()) &&
+    // A journal can remain after committed cleanup disarms, but rollback
+    // removes its journal before marking NONE. Therefore a disarmed journal is
+    // valid only with the complete, identity-bound committed tuple.
+    if (journalPresent &&
         (!candidate.length() || !candidateId.length() ||
          confirmedId != candidateId || knownGood != candidate)) {
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
     }
-    if (!candidate.length() && candidateId.length() && confirmedId != candidateId) {
+    if (candidate.length() &&
+        (!candidateId.length() ||
+         (knownGood == candidate && confirmedId != candidateId) ||
+         (knownGood != candidate && confirmedId.length()))) {
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
+    }
+    if (!candidate.length()) {
+      if (candidateId.length() && confirmedId.length() && confirmedId != candidateId) {
+        message = "candidate metadata corrupt: inconsistent committed cleanup";
+        return false;
+      }
     }
   }
   return true;
