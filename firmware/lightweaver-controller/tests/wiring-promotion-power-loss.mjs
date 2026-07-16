@@ -153,9 +153,8 @@ function candidateMetadataValid(state) {
       state.knownGood === state.candidateConfig);
   }
   if (state.candidateState === 0 && state.candidateConfig) {
-    if (!state.candidateId) return false;
     if (state.knownGood === state.candidateConfig) {
-      return state.confirmedId === state.candidateId;
+      return Boolean(state.candidateId && state.confirmedId === state.candidateId);
     }
     return true;
   }
@@ -174,6 +173,12 @@ function bootDisarmedNoneCleanup(state) {
   delete state.previousKnown;
   delete state.candidateConfig;
   delete state.candidateId;
+  return true;
+}
+
+function bootAfterStageCut(state) {
+  if (!candidateMetadataValid(state)) return false;
+  if (state.candidateState === 0) return bootDisarmedNoneCleanup(state);
   return true;
 }
 
@@ -347,5 +352,41 @@ assert.ok(stageClearConfirmation >= 0 && stageMarkCandidate > stageClearConfirma
   'staging must clear the prior confirmation fence before making candidate A bootable');
 assert.match(stageBody, /confirmationCleared/,
   'staging must check confirmation-fence removal before committing candidate state');
+
+const stageActions = orderedActions(stageBody, [
+  ['store-candidate', 'prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json)'],
+  ['store-candidate-id', 'prefs.putString(NVS_CANDIDATE_ID_KEY, activationId)'],
+  ['drop-confirmed', 'prefs.remove(NVS_CONFIRMED_ID_KEY)'],
+  ['mark-staged', 'writeCandidateState(prefs, WIRING_CANDIDATE_STAGED)'],
+]);
+assert.deepEqual(stageActions,
+  ['store-candidate', 'store-candidate-id', 'drop-confirmed', 'mark-staged'],
+  'staging must store identity and clear the old fence before becoming bootable');
+for (let cut = 1; cut <= stageActions.length; cut += 1) {
+  const state = {
+    candidateState: 0,
+    armKeyPresent: true,
+    armed: false,
+    knownGood: 'candidate-b',
+    confirmedId: 'activation-b',
+  };
+  for (const action of stageActions.slice(0, cut)) {
+    if (action === 'store-candidate') state.candidateConfig = 'candidate-a';
+    if (action === 'store-candidate-id') state.candidateId = 'activation-a';
+    if (action === 'drop-confirmed') delete state.confirmedId;
+    if (action === 'mark-staged') state.candidateState = 1;
+  }
+  assert.equal(candidateMetadataValid(state), true,
+    `stage cut ${cut} must remain recoverable`);
+  assert.equal(bootAfterStageCut(state), true,
+    `stage cut ${cut} must boot the old known-good config`);
+  assert.equal(state.knownGood, 'candidate-b');
+  assert.equal(bootAfterStageCut(state), true,
+    `repeated boot after stage cut ${cut} must retain old known-good`);
+  assert.equal(state.knownGood, 'candidate-b');
+}
+
+assert.match(storage, /knownGood == candidate &&\s*\(!candidateId\.length\(\)/,
+  'only candidate bytes already equal to known-good require committed candidate identity');
 
 console.log('wiring-promotion-power-loss tests passed');

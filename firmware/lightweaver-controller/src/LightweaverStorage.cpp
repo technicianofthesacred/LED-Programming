@@ -750,9 +750,8 @@ bool validateCandidateMetadataForBoot(Preferences& prefs, WiringCandidateState s
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
     }
-    if (candidate.length() &&
-        (!candidateId.length() ||
-         (knownGood == candidate && confirmedId != candidateId))) {
+    if (candidate.length() && knownGood == candidate &&
+        (!candidateId.length() || confirmedId != candidateId)) {
       message = "candidate metadata corrupt: inconsistent committed cleanup";
       return false;
     }
