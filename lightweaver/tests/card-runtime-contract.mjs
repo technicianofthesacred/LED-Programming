@@ -112,6 +112,27 @@ assert.equal(invalidOutput.led.outputGammaEnabled, false);
 assert.equal(invalidOutput.led.outputGammaValue, 2.2);
 assert.deepEqual(invalidOutput.led.calibration, { red: 1, green: 1, blue: 1 });
 
+for (const malformed of [null, '', '   ', false, true]) {
+  const malformedOutput = normalizeCardRuntimeConfig({
+    led: {
+      outputGammaValue: malformed,
+      calibration: { red: malformed, green: malformed, blue: malformed },
+    },
+  });
+  assert.equal(malformedOutput.led.outputGammaValue, 2.2);
+  assert.deepEqual(malformedOutput.led.calibration, { red: 1, green: 1, blue: 1 });
+
+  const malformedStandalone = buildStandaloneProfile({
+    outputs: [{ id: 'main', pin: 16, pixels: 44 }],
+    led: {
+      outputGammaValue: malformed,
+      calibration: { red: malformed, green: malformed, blue: malformed },
+    },
+  });
+  assert.equal(malformedStandalone.led.outputGammaValue, 2.2);
+  assert.deepEqual(malformedStandalone.led.calibration, { red: 1, green: 1, blue: 1 });
+}
+
 const standaloneProfile = buildStandaloneProfile({
   outputs: [{ id: 'main', pin: 16, pixels: 44 }],
   led: {

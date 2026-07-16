@@ -40,11 +40,11 @@ export function normalizeCardOutputSettings(led = {}) {
     : {};
   return {
     outputGammaEnabled: source.outputGammaEnabled === true,
-    outputGammaValue: clampNumber(source.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
+    outputGammaValue: clampOutputNumber(source.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
     calibration: {
-      red: clampUnit(calibration.red, DEFAULT_CARD_LED.calibration.red),
-      green: clampUnit(calibration.green, DEFAULT_CARD_LED.calibration.green),
-      blue: clampUnit(calibration.blue, DEFAULT_CARD_LED.calibration.blue),
+      red: clampOutputUnit(calibration.red, DEFAULT_CARD_LED.calibration.red),
+      green: clampOutputUnit(calibration.green, DEFAULT_CARD_LED.calibration.green),
+      blue: clampOutputUnit(calibration.blue, DEFAULT_CARD_LED.calibration.blue),
     },
   };
 }
@@ -319,10 +319,13 @@ function clampUnit(value, fallback = DEFAULT_CARD_LED.brightnessLimit) {
   return Math.max(0, Math.min(1, number));
 }
 
-function clampNumber(value, fallback, min, max) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(min, Math.min(max, number));
+function clampOutputUnit(value, fallback) {
+  return clampOutputNumber(value, fallback, 0, 1);
+}
+
+function clampOutputNumber(value, fallback, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
 }
 
 function clampInt(value, fallback, min, max) {

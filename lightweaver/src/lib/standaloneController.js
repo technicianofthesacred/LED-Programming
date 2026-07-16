@@ -39,11 +39,11 @@ export function normalizeStandaloneLed(led = {}) {
     ...source,
     brightnessLimit: clamp01(source.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
     outputGammaEnabled: source.outputGammaEnabled === true,
-    outputGammaValue: clampNumber(source.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
+    outputGammaValue: clampOutputNumber(source.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
     calibration: {
-      red: clamp01(calibration.red, DEFAULT_STANDALONE_LED.calibration.red),
-      green: clamp01(calibration.green, DEFAULT_STANDALONE_LED.calibration.green),
-      blue: clamp01(calibration.blue, DEFAULT_STANDALONE_LED.calibration.blue),
+      red: clampOutputNumber(calibration.red, DEFAULT_STANDALONE_LED.calibration.red, 0, 1),
+      green: clampOutputNumber(calibration.green, DEFAULT_STANDALONE_LED.calibration.green, 0, 1),
+      blue: clampOutputNumber(calibration.blue, DEFAULT_STANDALONE_LED.calibration.blue, 0, 1),
     },
   };
 }
@@ -309,10 +309,9 @@ function clamp01(value, fallback = 0) {
   return Math.max(0, Math.min(1, n));
 }
 
-function clampNumber(value, fallback, min, max) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
+function clampOutputNumber(value, fallback, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
 }
 
 function clampByte(value) {
