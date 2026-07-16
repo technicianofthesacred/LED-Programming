@@ -7,6 +7,55 @@ const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 const platformio = readFileSync(resolve(here, '../platformio.ini'), 'utf8');
 const parserGuard = readFileSync(resolve(here, '../scripts/guard-webserver-control-body.py'), 'utf8');
+
+function extractFunction(sourceText, functionName) {
+  const signature = new RegExp(`\\b${functionName}\\s*\\(`);
+  const match = signature.exec(sourceText);
+  assert.ok(match, `${functionName} should exist`);
+  const openBrace = sourceText.indexOf('{', match.index + match[0].length);
+  assert.notEqual(openBrace, -1, `${functionName} should have a body`);
+
+  let depth = 0;
+  let state = 'code';
+  for (let i = openBrace; i < sourceText.length; i += 1) {
+    const char = sourceText[i];
+    const next = sourceText[i + 1];
+    if (state === 'line-comment') {
+      if (char === '\n') state = 'code';
+      continue;
+    }
+    if (state === 'block-comment') {
+      if (char === '*' && next === '/') {
+        state = 'code';
+        i += 1;
+      }
+      continue;
+    }
+    if (state === 'string' || state === 'char') {
+      if (char === '\\') i += 1;
+      else if ((state === 'string' && char === '"') || (state === 'char' && char === "'")) state = 'code';
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      state = 'line-comment';
+      i += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      state = 'block-comment';
+      i += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      state = char === '"' ? 'string' : 'char';
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+    if (depth === 0) return sourceText.slice(openBrace + 1, i);
+  }
+  assert.fail(`${functionName} should have a complete body`);
+}
 const start = source.indexOf('void handleControlPost()');
 assert.notEqual(start, -1, 'handleControlPost should exist');
 
@@ -118,5 +167,37 @@ for (const proof of [
 }
 assert.match(responseBody, /out\["ok"\]\s*=\s*!patternRequested\s*\|\|\s*patternApplied/, 'failed pattern application must not return ok:true');
 assert.match(responseBody, /server\.send\([^;]*patternApplied[^;]*\?\s*200\s*:\s*422/, 'unapplied pattern intent must return a failing HTTP status');
+assert.match(
+  body,
+  /runtimeSetBrightnessZ\s*\(\s*zoneTarget\s*,/,
+  'card controls should route brightness to the selected zone or zone broadcast',
+);
+const controlHandler = extractFunction(source, 'handleControlPost');
+assert.match(
+  controlHandler,
+  /out\s*\[\s*"brightness"\s*\]\s*=\s*runtimeGetBrightnessZ\s*\(\s*zoneTarget\s*\)/,
+  'card controls should echo the addressed zone brightness after applying a zone write',
+);
+
+const jsonApi = readFileSync(resolve(here, '../src/LightweaverWledJsonApi.cpp'), 'utf8');
+const jsonStatePost = extractFunction(jsonApi, 'handleStatePost');
+assert.match(
+  jsonStatePost,
+  /runtimeSetBrightnessZ\s*\(\s*runtimeConfig\.zones\s*\[\s*segId\s*\]\.id\s*,\s*br\s*\)/,
+  'WLED segment brightness should route to zone brightness',
+);
+assert.match(
+  jsonStatePost,
+  /runtimeSetBrightness\s*\(\s*float\s*\(\s*doc\s*\[\s*"bri"\s*\]\.as<int>\s*\(\s*\)\s*\)\s*\/\s*255\.0f\s*\)/,
+  'top-level WLED JSON brightness should route to master brightness',
+);
+
+const webSocket = readFileSync(resolve(here, '../src/LightweaverWledWebSocket.cpp'), 'utf8');
+const applyState = extractFunction(webSocket, 'applyState');
+assert.match(
+  applyState,
+  /runtimeSetBrightness\s*\(\s*float\s*\(\s*doc\s*\[\s*"bri"\s*\]\.as<int>\s*\(\s*\)\s*\)\s*\/\s*255\.0f\s*\)/,
+  'top-level WLED WebSocket brightness should route to master brightness',
+);
 
 console.log('control-sync-order tests passed');
