@@ -143,6 +143,9 @@ const repairPackage = buildMirroredLedRepairPackage({
       pixels: 44,
       colorOrder: 'RGB',
       brightnessLimit: 0.65,
+      outputGammaEnabled: true,
+      outputGammaValue: 2.4,
+      calibration: { red: 0.84, green: 0.92, blue: 0.73 },
       outputs: [
         { id: 'outer', name: 'Outer', pin: 16, pixels: 22 },
         { id: 'inner', name: 'Inner', pin: 17, pixels: 22 },
@@ -163,8 +166,23 @@ assert.deepEqual(repairPackage.config.led.outputs, [
   { id: 'out1', name: 'Output 1 mirrored', pin: 16, pixels: 44 },
 ]);
 assert.equal(repairPackage.config.led.pixels, 44);
+assert.equal(repairPackage.config.led.outputGammaEnabled, true);
+assert.equal(repairPackage.config.led.outputGammaValue, 2.4);
+assert.deepEqual(repairPackage.config.led.calibration, { red: 0.84, green: 0.92, blue: 0.73 });
 assert.equal(repairPackage.config.syncZones, true);
 assert.equal(repairPackage.config.startupPatternId, 'fire');
+
+const legacyRepairPackage = buildMirroredLedRepairPackage({
+  config: {
+    led: { pixels: 44 },
+    gammaEnabled: true,
+    gammaValue: 3,
+    pattern: { gammaEnabled: true, gammaValue: 3 },
+  },
+});
+assert.equal(legacyRepairPackage.config.led.outputGammaEnabled, false);
+assert.equal(legacyRepairPackage.config.led.outputGammaValue, 2.2);
+assert.deepEqual(legacyRepairPackage.config.led.calibration, { red: 1, green: 1, blue: 1 });
 
 const repairRequests = [];
 globalThis.fetch = async (url, options = {}) => {

@@ -20,6 +20,9 @@ export const DEFAULT_STANDALONE_LED = {
   type: 'WS2815',
   colorOrder: 'RGB',
   brightnessLimit: 0.45,
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: { red: 1, green: 1, blue: 1 },
 };
 
 export const STANDALONE_RUNTIME_MODES = ['sequence', 'procedural', 'preset'];
@@ -68,6 +71,13 @@ export function buildStandaloneProfile({
       ...DEFAULT_STANDALONE_LED,
       ...led,
       brightnessLimit: clamp01(led.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
+      outputGammaEnabled: led.outputGammaEnabled === true,
+      outputGammaValue: clampNumber(led.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
+      calibration: {
+        red: clamp01(led.calibration?.red, DEFAULT_STANDALONE_LED.calibration.red),
+        green: clamp01(led.calibration?.green, DEFAULT_STANDALONE_LED.calibration.green),
+        blue: clamp01(led.calibration?.blue, DEFAULT_STANDALONE_LED.calibration.blue),
+      },
     },
     outputs: normalizedOutputs,
     controls: normalizeControls(controls),
@@ -285,10 +295,16 @@ function titleFromId(id) {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function clamp01(value) {
+function clamp01(value, fallback = 0) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
+  if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.min(1, n));
+}
+
+function clampNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 function clampByte(value) {

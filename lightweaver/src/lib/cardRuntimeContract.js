@@ -28,7 +28,23 @@ export const DEFAULT_CARD_LED = Object.freeze({
   outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 44 }],
   colorOrder: 'RGB',
   brightnessLimit: 0.65,
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: Object.freeze({ red: 1, green: 1, blue: 1 }),
 });
+
+export function normalizeCardOutputSettings(led = {}) {
+  const calibration = led.calibration || {};
+  return {
+    outputGammaEnabled: led.outputGammaEnabled === true,
+    outputGammaValue: clampNumber(led.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
+    calibration: {
+      red: clampUnit(calibration.red, DEFAULT_CARD_LED.calibration.red),
+      green: clampUnit(calibration.green, DEFAULT_CARD_LED.calibration.green),
+      blue: clampUnit(calibration.blue, DEFAULT_CARD_LED.calibration.blue),
+    },
+  };
+}
 
 export function normalizeCardRuntimeConfig(config = {}) {
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
@@ -188,6 +204,7 @@ function normalizeLed(led = {}) {
     outputs: normalizedOutputs,
     colorOrder: normalizeColorOrder(led.colorOrder),
     brightnessLimit: clampUnit(led.brightnessLimit ?? DEFAULT_CARD_LED.brightnessLimit),
+    ...normalizeCardOutputSettings(led),
   };
 }
 
@@ -293,10 +310,16 @@ function normalizeColorOrder(value = 'RGB') {
   return ['RGB', 'GRB', 'BRG', 'BGR', 'RBG', 'GBR'].includes(upper) ? upper : 'RGB';
 }
 
-function clampUnit(value) {
+function clampUnit(value, fallback = DEFAULT_CARD_LED.brightnessLimit) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return DEFAULT_CARD_LED.brightnessLimit;
+  if (!Number.isFinite(number)) return fallback;
   return Math.max(0, Math.min(1, number));
+}
+
+function clampNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
 }
 
 function clampInt(value, fallback, min, max) {
