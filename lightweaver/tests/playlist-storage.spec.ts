@@ -475,11 +475,12 @@ test('Playlist keeps the failure visible while dedicated light recovery runs and
   await expect(page.getByTestId('playlist-card-status')).toHaveAttribute('role', 'status');
 });
 
-test('Playlist ignores stale light recovery after a newer live preview succeeds', async ({ page }) => {
+test('Playlist serializes card mutations behind recovery so the final physical command matches the live row', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   let releaseRecovery: (() => void) | null = null;
   let recoveryCount = 0;
   let controlCount = 0;
+  const physicalCommands: string[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-playlist-stale-recovery' }));
   });
@@ -491,6 +492,7 @@ test('Playlist ignores stale light recovery after a newer live preview succeeds'
   await page.route('**/api/control', route => {
     controlCount += 1;
     const request = JSON.parse(route.request().postData() || '{}');
+    physicalCommands.push(`control:${request.patternId}`);
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -511,6 +513,7 @@ test('Playlist ignores stale light recovery after a newer live preview succeeds'
   }));
   await page.route('**/api/recover-lights', async route => {
     recoveryCount += 1;
+    physicalCommands.push(`recover:${recoveryCount}`);
     if (recoveryCount === 1) await new Promise<void>(resolve => { releaseRecovery = resolve; });
     await route.fulfill({
       status: 200,
@@ -522,11 +525,14 @@ test('Playlist ignores stale light recovery after a newer live preview succeeds'
       }),
     });
   });
-  await page.route('**/api/reboot', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ ok: true }),
-  }));
+  await page.route('**/api/reboot', route => {
+    physicalCommands.push('reboot');
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    });
+  });
   await gotoPlaylist(page, project);
 
   const rows = page.locator('.pl-row');
@@ -536,17 +542,24 @@ test('Playlist ignores stale light recovery after a newer live preview succeeds'
   await failure.getByRole('button', { name: 'Recover lights' }).click();
   await expect.poll(() => Boolean(releaseRecovery)).toBe(true);
 
+  await expect(rows.nth(1).getByRole('button', { name: 'Live' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Reset live' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Load playlist to card' })).toBeDisabled();
+  await expect(page.getByRole('textbox', { name: 'Card address' })).toBeDisabled();
+  await expect(page.locator('.pl-chip').first()).toBeDisabled();
+  expect(controlCount).toBe(1);
+
+  releaseRecovery?.();
+  await expect.poll(() => recoveryCount).toBe(2);
+  await expect(page.getByTestId('playlist-card-status')).toContainText('Recovery frame sent. Confirm warm white is visible on the physical lights.');
+  expect(physicalCommands.slice(-3)).toEqual(['recover:1', 'reboot', 'recover:2']);
+
   await rows.nth(1).getByRole('button', { name: 'Live' }).click();
   await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
   await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
-
-  releaseRecovery?.();
-  await expect.poll(() => recoveryCount).toBe(2);
-  await waitForUiCommit(page);
-  await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
-  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
-  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  expect(physicalCommands.at(-1)).toMatch(/^control:/);
+  expect(physicalCommands.lastIndexOf('recover:2')).toBeLessThan(physicalCommands.length - 1);
 });
 
 test('Playlist reports a bounded failure when dedicated light recovery is rejected', async ({ page }) => {

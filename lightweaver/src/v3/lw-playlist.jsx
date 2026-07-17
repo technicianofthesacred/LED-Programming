@@ -114,6 +114,8 @@ function realPatternShape(patternId) {
     const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [playlistSyncing, setPlaylistSyncing] = useState(false);
     const [recoveryPending, setRecoveryPending] = useState(false);
+    const recoveryPendingRef = useRef(false);
+    const recoveryOperationGeneration = useRef(0);
     const previewSequence = React.useRef(0);
     const cardActionGeneration = useRef(0);
     const playlistRevision = useRef(0);
@@ -153,11 +155,12 @@ function realPatternShape(patternId) {
     const writePlaylist = (nextItems) => {
       const normalized = normalizeCardPlaylist(nextItems, { savedLooks, allowEmpty: true });
       playlistRevision.current += 1;
-      cardActionGeneration.current += 1;
-      previewSequence.current += 1;
-      setPlaylistSyncing(false);
-      setRecoveryPending(false);
-      setPlaylistStatus(null);
+      if (!recoveryPendingRef.current) {
+        cardActionGeneration.current += 1;
+        previewSequence.current += 1;
+        setPlaylistSyncing(false);
+        setPlaylistStatus(null);
+      }
       setStandaloneController((prev) => {
         const current = prev || {};
         return {
@@ -205,10 +208,10 @@ function realPatternShape(patternId) {
 
     // ── live preview / card control ───────────────────────────────────────
     const previewPatternOnCard = async (patternId) => {
+      if (recoveryPendingRef.current) return false;
       const sequence = ++previewSequence.current;
       const actionGeneration = ++cardActionGeneration.current;
       setPlaylistSyncing(false);
-      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -236,11 +239,10 @@ function realPatternShape(patternId) {
     };
 
     const previewSavedLookOnCard = async (savedLook) => {
-      if (!savedLook) return;
+      if (!savedLook || recoveryPendingRef.current) return false;
       const sequence = ++previewSequence.current;
       const actionGeneration = ++cardActionGeneration.current;
       setPlaylistSyncing(false);
-      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -296,7 +298,7 @@ function realPatternShape(patternId) {
     };
 
     const setLiveItem = async (item) => {
-      if (!item) return;
+      if (!item || recoveryPendingRef.current) return;
       latestLiveItem.current = item;
       const confirmed = item.type === 'combo'
         ? await previewSavedLookOnCard(savedLookById.get(item.lookId))
@@ -323,10 +325,10 @@ function realPatternShape(patternId) {
     };
 
     const resetLiveOutput = async () => {
+      if (recoveryPendingRef.current) return;
       const actionGeneration = ++cardActionGeneration.current;
       previewSequence.current += 1;
       setPlaylistSyncing(false);
-      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'reset' });
       setHandoffUrl('');
       setPlaylistStatus({ kind: 'pending', message: 'Resetting live output on card…' });
@@ -351,11 +353,13 @@ function realPatternShape(patternId) {
     };
 
     const recoverPhysicalOutput = async () => {
-      if (recoveryPending) return;
+      if (recoveryPendingRef.current) return;
       const actionGeneration = ++cardActionGeneration.current;
+      const recoveryOperation = ++recoveryOperationGeneration.current;
       const recoveryIsCurrent = () => actionGeneration === cardActionGeneration.current;
       previewSequence.current += 1;
       setHandoffUrl('');
+      recoveryPendingRef.current = true;
       setRecoveryPending(true);
       try {
         await recoverCardLights(
@@ -380,7 +384,10 @@ function realPatternShape(patternId) {
           failure,
         });
       } finally {
-        if (recoveryIsCurrent()) setRecoveryPending(false);
+        if (recoveryOperation === recoveryOperationGeneration.current) {
+          recoveryPendingRef.current = false;
+          setRecoveryPending(false);
+        }
       }
     };
 
@@ -400,6 +407,7 @@ function realPatternShape(patternId) {
     })();
 
     const loadPlaylistToCard = async ({ allowLayoutChange = false, allowProjectChange = false } = {}) => {
+      if (recoveryPendingRef.current) return;
       const actionGeneration = ++cardActionGeneration.current;
       const installRevision = playlistRevision.current;
       const installIsCurrent = () => (
@@ -407,7 +415,6 @@ function realPatternShape(patternId) {
         installRevision === playlistRevision.current
       );
       previewSequence.current += 1;
-      setRecoveryPending(false);
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
       setPlaylistSyncing(true);
@@ -469,10 +476,10 @@ function realPatternShape(patternId) {
     const adjustLedCounts = () => { window.location.hash = 'screen=layout&mode=size'; };
 
     const persistHost = (value) => {
+      if (recoveryPendingRef.current) return;
       cardActionGeneration.current += 1;
       previewSequence.current += 1;
       setPlaylistSyncing(false);
-      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'reset' });
       setLive(null);
       setHandoffUrl('');
@@ -483,6 +490,7 @@ function realPatternShape(patternId) {
 
     // ── add from the real banks ───────────────────────────────────────────
     const addPattern = (patternId) => {
+      if (recoveryPendingRef.current) return;
       if (playlistContainsPattern(playlist, patternId)) { void previewPatternOnCard(patternId); return; }
       const item = makePatternPlaylistItem(patternId);
       if (!item) return;
@@ -491,6 +499,7 @@ function realPatternShape(patternId) {
     };
 
     const addCombo = (savedLook) => {
+      if (recoveryPendingRef.current) return;
       if (playlistContainsCombo(playlist, savedLook.id)) { void previewSavedLookOnCard(savedLook); return; }
       const item = makeComboPlaylistItem(savedLook);
       if (!item) return;
@@ -537,8 +546,8 @@ function realPatternShape(patternId) {
                 <p>The order the dial press cycles through on the card. The first look starts on boot.</p>
               </div>
               <div className="pm-actions">
-                <button className="btn" onClick={resetLiveOutput}>{I.refresh}Reset live</button>
-                <button className="btn primary" disabled={!connected || playlistSyncing || Boolean(hardwareConfigurationIssue)} onClick={() => loadPlaylistToCard()}>
+                <button className="btn" disabled={recoveryPending} onClick={resetLiveOutput}>{I.refresh}Reset live</button>
+                <button className="btn primary" disabled={!connected || playlistSyncing || recoveryPending || Boolean(hardwareConfigurationIssue)} onClick={() => loadPlaylistToCard()}>
                   {I.bolt}{playlistSyncing ? 'Loading…' : 'Load playlist to card'}
                 </button>
                 <div className="pm-menu">
@@ -576,7 +585,7 @@ function realPatternShape(patternId) {
                   {playlistStatus.action &&
                     <button
                       className="btn primary"
-                      disabled={playlistSyncing}
+                      disabled={playlistSyncing || recoveryPending}
                       onClick={() => loadPlaylistToCard({
                         allowLayoutChange: playlistStatus.action.kind === 'allow-layout-change',
                         allowProjectChange: playlistStatus.action.kind === 'allow-project-change',
@@ -586,10 +595,10 @@ function realPatternShape(patternId) {
                     </button>
                   }
                   {playlistStatus.action?.kind === 'allow-layout-change' &&
-                    <button className="btn" disabled={playlistSyncing} onClick={adjustLedCounts}>Adjust LED count</button>
+                    <button className="btn" disabled={playlistSyncing || recoveryPending} onClick={adjustLedCounts}>Adjust LED count</button>
                   }
                   {playlistStatus.retry === 'playlist' &&
-                    <button className="btn primary" disabled={playlistSyncing} onClick={() => loadPlaylistToCard()}>Retry</button>
+                    <button className="btn primary" disabled={playlistSyncing || recoveryPending} onClick={() => loadPlaylistToCard()}>Retry</button>
                   }
                   {!playlistStatus.physicalPreview && <button className="btn" onClick={openCard}>{I.open}Open card page</button>}
                   {handoffUrl &&
@@ -603,7 +612,7 @@ function realPatternShape(patternId) {
               <section className="pm-main">
                 <div className="pl-hostrow">
                   <span className="sf-l">Card address</span>
-                  <input className="pm-input" value={host} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} aria-label="Card address" />
+                  <input className="pm-input" value={host} disabled={recoveryPending} onChange={(e) => persistHost(e.target.value)} style={{ maxWidth: 260 }} aria-label="Card address" />
                   <span className="pl-count">{playlist.length} looks · dial press to advance</span>
                   <span className="pl-count" data-testid="playlist-physical-preview-status">{cardActionStatusLabel(previewAction)}</span>
                 </div>
@@ -638,7 +647,7 @@ function realPatternShape(patternId) {
                           <span>{item.type === 'combo' ? "section mix" : `${p.label} across the piece`}</span>
                         </div>
                         <div className="pl-actions">
-                          <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} onClick={() => setLiveItem(item)}>Live</button>
+                          <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} disabled={recoveryPending} onClick={() => setLiveItem(item)}>Live</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
                           <button className="plbtn" disabled={i === playlist.length - 1} onClick={() => move(i, 1)}>Down</button>
                           <button className="plbtn" disabled={i === 0} onClick={() => first(i)}>Make first</button>
@@ -657,7 +666,7 @@ function realPatternShape(patternId) {
                   {mixShapes.map((m) => {
                     const added = playlistContainsCombo(playlist, m.id);
                     return (
-                      <button key={m.id} className="pl-source" onClick={() => addCombo(savedLookById.get(m.id))} disabled={added}>
+                      <button key={m.id} className="pl-source" onClick={() => addCombo(savedLookById.get(m.id))} disabled={added || recoveryPending}>
                         <span className="pl-src-art" style={{ background: m.grad }} />
                         <span className="pl-src-nm">{m.label}<span className="mixtag">mix</span></span>
                         <span className="pl-src-add">{added ? I.check : I.plus}</span>
@@ -672,7 +681,7 @@ function realPatternShape(patternId) {
                   <div className="sec-h"><span className="t">Pattern pool</span><span className="m">{pool.length} available</span></div>
                   <div className="pl-pool">
                     {pool.map((p) => (
-                      <button key={p.id} className="pl-chip" onClick={() => addPattern(p.id)} title={`Add ${p.label}`}>
+                      <button key={p.id} className="pl-chip" disabled={recoveryPending} onClick={() => addPattern(p.id)} title={`Add ${p.label}`}>
                         <span className="pl-chip-art" style={{ background: p.grad }} />
                         <span className="pl-chip-nm">{p.label}</span>
                         <span className="pl-chip-add">{I.plus}</span>
