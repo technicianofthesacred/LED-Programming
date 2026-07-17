@@ -40,10 +40,11 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
 
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await page.getByRole('region', { name: 'Step 5: Review and install' }).getByRole('button', { name: 'Open install review' }).click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
 });
 
-test('switching mode mid-draw suspends the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
+test('switching modes and activating Wire tools suspend the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
   await gotoLayout(page);
 
   const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
@@ -72,6 +73,18 @@ test('switching mode mid-draw suspends the in-progress strip until Draw resumes 
   await expect(drawBtn).toHaveClass(/active/);
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
+  await page.getByTestId('layout-mode-wire').click();
+  await page.getByTitle('Split one physical strip where the wire jumps to a new spot.').click();
+  await page.getByTestId('layout-mode-draw').click();
+  await drawBtn.click();
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
+  await page.getByTestId('layout-mode-wire').click();
+  await page.getByTitle('Join two strips into one continuous run.').click();
+  await page.getByTestId('layout-mode-draw').click();
+  await drawBtn.click();
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
   await page.getByRole('button', { name: /Cancel \(Esc\)/ }).click();
   await expect(page.locator('.la-draw-hint')).toHaveCount(0);
   await expect(drawBtn).not.toHaveClass(/active/);
@@ -89,10 +102,9 @@ test('clicking the segments switches mode; other screens are unaffected', async 
   await expect(page).toHaveURL(/mode=draw/);
   await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 
-  // Toolbar and canvas render identically across modes this step — the
-  // Import SVG button and canvas stage are present regardless of mode.
+  // The canvas persists across modes, while Draw-only import stays out of Wire.
   await page.getByTestId('layout-mode-wire').click();
-  await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Import SVG' })).toHaveCount(0);
   await expect(page.locator('.lw-viewport svg')).toBeVisible();
 
   // A totally different screen still loads fine — the mode hash-merge never

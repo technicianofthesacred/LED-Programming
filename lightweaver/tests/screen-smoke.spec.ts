@@ -91,7 +91,7 @@ test('connection center starts with the two physical card choices', async ({ pag
   await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
 });
 
-test('an unreachable previously paired card opens directly on reconnect', async ({ page }) => {
+test('an unreachable previously paired card opens directly on retry guidance', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();
@@ -106,7 +106,7 @@ test('an unreachable previously paired card opens directly on reconnect', async 
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
   await expect(dialog).not.toContainText('lw-remembered-card');
 });
@@ -120,7 +120,8 @@ test('opening while connecting renders the busy flow action directly', async ({ 
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog).toContainText('Studio is reconnecting to your Lightweaver now.');
+  await expect(dialog.getByRole('heading', { name: 'Connecting to the Lightweaver card' })).toBeVisible();
+  await expect(dialog).toContainText('Keep the card powered and leave its page open while Studio checks it.');
   await expect(dialog.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
@@ -137,7 +138,7 @@ test('opening after a blocked popup renders the retry action directly', async ({
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 
-test('opening with old firmware renders installation recovery directly', async ({ page }) => {
+test('opening with old firmware renders the card update directly', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
   });
@@ -148,7 +149,8 @@ test('opening with old firmware renders installation recovery directly', async (
   await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'firmware-too-old', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await expect(page.getByRole('button', { name: 'Start installation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Update this Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update card' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 
@@ -495,6 +497,63 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   await expect(page.locator('.set-json')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show JSON' }).click();
   await expect(page.locator('.set-json')).toBeVisible();
+});
+
+test('settings rows stack readable labels above controls at 390px without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+
+  const row = page.locator('.set-row', { hasText: "The card's name on your WiFi" }).first();
+  await expect(row).toBeVisible();
+
+  const metrics = await row.evaluate((element) => {
+    const label = element.querySelector('.set-k');
+    const helper = element.querySelector('.hh');
+    const value = element.querySelector('.set-v');
+    const control = element.querySelector('input');
+    if (!label || !helper || !value || !control) throw new Error('Expected a complete Settings row');
+
+    const rowRect = element.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const helperRect = helper.getBoundingClientRect();
+    const valueRect = value.getBoundingClientRect();
+    const controlRect = control.getBoundingClientRect();
+    return {
+      row: { left: rowRect.left, right: rowRect.right },
+      label: { left: labelRect.left, right: labelRect.right, bottom: labelRect.bottom },
+      helper: { width: helperRect.width, height: helperRect.height, lineHeight: parseFloat(getComputedStyle(helper).lineHeight) },
+      value: { left: valueRect.left, top: valueRect.top },
+      control: { left: controlRect.left, right: controlRect.right },
+      pageScrollWidth: document.documentElement.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+    };
+  });
+
+  expect(metrics.value.top).toBeGreaterThanOrEqual(metrics.label.bottom);
+  expect(metrics.value.left).toBeCloseTo(metrics.label.left, 0);
+  expect(metrics.helper.width).toBeGreaterThanOrEqual((metrics.row.right - metrics.row.left) * 0.9);
+  expect(metrics.helper.height).toBeLessThanOrEqual(metrics.helper.lineHeight * 2.1);
+  expect(metrics.control.left).toBeGreaterThanOrEqual(metrics.row.left);
+  expect(metrics.control.right).toBeLessThanOrEqual(metrics.row.right);
+  expect(metrics.pageScrollWidth).toBe(metrics.pageClientWidth);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const desktopMetrics = await row.evaluate((element) => {
+    const labelRect = element.querySelector('.set-k')?.getBoundingClientRect();
+    const valueRect = element.querySelector('.set-v')?.getBoundingClientRect();
+    if (!labelRect || !valueRect) throw new Error('Expected Settings label and value columns');
+    return {
+      labelRight: labelRect.right,
+      valueLeft: valueRect.left,
+      labelTop: labelRect.top,
+      labelBottom: labelRect.bottom,
+      valueTop: valueRect.top,
+      valueBottom: valueRect.bottom,
+    };
+  });
+  expect(desktopMetrics.valueLeft).toBeGreaterThan(desktopMetrics.labelRight);
+  expect(desktopMetrics.valueTop).toBeLessThan(desktopMetrics.labelBottom);
+  expect(desktopMetrics.labelTop).toBeLessThan(desktopMetrics.valueBottom);
 });
 
 test('number keys do not navigate away from LED count fields', async ({ page }) => {

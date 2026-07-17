@@ -3,6 +3,7 @@
    Only the wrapper changed; the component body below is byte-identical. */
 import React, { useEffect, useState } from 'react';
 import { I } from './lw-shared.jsx';
+import { useProject } from '../state/ProjectContext.jsx';
 
 
   const WIRING = [
@@ -48,18 +49,74 @@ import { I } from './lw-shared.jsx';
     "Dial press changes looks.",
     "Reboot keeps the saved project.",
   ];
-  const INSTALLER_CHECKS_KEY = 'lw_installer_signoff_v1';
+  const INSTALLER_SIGNOFF_KEY = 'lw_installer_signoff_v2';
 
-  function InstallerScreen({ go }) {
-    const [checks, setChecks] = useState(() => {
-      try { return new Set(JSON.parse(localStorage.getItem(INSTALLER_CHECKS_KEY) || '[]')); }
-      catch { return new Set(); }
-    });
-    const toggle = (i) => setChecks((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  function signoffState(identity) {
+    return { version: 2, identity, identityKey: JSON.stringify(identity), checks: [], ready: false };
+  }
+
+  function readSignoffState(identity) {
+    const empty = signoffState(identity);
+    try {
+      const saved = JSON.parse(localStorage.getItem(INSTALLER_SIGNOFF_KEY) || 'null');
+      if (saved?.version !== 2 || saved.identityKey !== empty.identityKey) return empty;
+      return {
+        ...empty,
+        checks: Array.isArray(saved.checks) ? saved.checks.filter(index => Number.isInteger(index) && index >= 0 && index < SIGNOFF.length) : [],
+        ready: saved.ready === true,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  function InstallerScreen({ go, cardLink }) {
+    const { projectId, projectName, projectLifecycle } = useProject();
+    const cardIdentity = cardLink?.card?.id || 'Not recorded';
+    const identity = {
+      projectId,
+      editedRevision: projectLifecycle.editedRevision,
+      installedRevision: projectLifecycle.installedRevision,
+      cardId: cardIdentity,
+    };
+    const identityKey = JSON.stringify(identity);
+    const [signoff, setSignoff] = useState(() => readSignoffState(identity));
+    const currentSignoff = signoff.identityKey === identityKey ? signoff : signoffState(identity);
+    const checks = new Set(currentSignoff.checks);
+    const ready = currentSignoff.ready;
+    const [firmwareVersion, setFirmwareVersion] = useState('Not available');
+    const toggle = (i) => {
+      setSignoff(previous => {
+        const active = previous.identityKey === identityKey ? previous : signoffState(identity);
+        const nextChecks = new Set(active.checks);
+        nextChecks.has(i) ? nextChecks.delete(i) : nextChecks.add(i);
+        return { ...active, checks: [...nextChecks], ready: false };
+      });
+    };
     useEffect(() => {
-      try { localStorage.setItem(INSTALLER_CHECKS_KEY, JSON.stringify([...checks])); } catch {}
-    }, [checks]);
+      if (signoff.identityKey !== identityKey) setSignoff(signoffState(identity));
+    }, [identityKey, signoff.identityKey]);
+    useEffect(() => {
+      if (signoff.identityKey !== identityKey) return;
+      try { localStorage.setItem(INSTALLER_SIGNOFF_KEY, JSON.stringify(signoff)); } catch {}
+    }, [identityKey, signoff]);
+    useEffect(() => {
+      let active = true;
+      fetch('/firmware/release-manifest.json', { cache: 'no-store' })
+        .then(response => response.ok ? response.json() : null)
+        .then(manifest => {
+          if (active && manifest?.firmwareVersion) setFirmwareVersion(String(manifest.firmwareVersion));
+        })
+        .catch(() => {});
+      return () => { active = false; };
+    }, []);
     const goTo = (v) => go && go(v);
+    const resetSignoff = () => setSignoff(signoffState(identity));
+    const markReady = () => setSignoff({ ...currentSignoff, ready: true });
+    const nextPhysicalCheck = SIGNOFF.find((_, index) => !checks.has(index)) || 'All physical checks complete';
+    const installedRevision = projectLifecycle.installedRevision == null
+      ? 'Not installed from this Studio session'
+      : `Revision ${projectLifecycle.installedRevision}`;
 
     return (
       <div className="screen">
@@ -129,7 +186,7 @@ import { I } from './lw-shared.jsx';
                 </section>
 
                 <section className="card inst-sec">
-                  <div className="sec-h"><span className="t">Final signoff</span><span className="m" aria-live="polite">{checks.size === SIGNOFF.length ? 'Ready to ship' : `${checks.size}/${SIGNOFF.length} bench test`}</span></div>
+                  <div className="sec-h"><span className="t">Final signoff</span><span className="m" aria-live="polite">{ready ? 'Ready to ship' : `${checks.size}/${SIGNOFF.length} bench test`}</span></div>
                   <div className="inst-signoff">
                     {SIGNOFF.map((s, i) => (
                       <label key={i} className="inst-check">
@@ -139,6 +196,16 @@ import { I } from './lw-shared.jsx';
                       </label>
                     ))}
                   </div>
+                  <div className="inst-signoff-actions">
+                    <button className="btn primary" type="button" disabled={checks.size !== SIGNOFF.length} onClick={markReady}>Mark ready</button>
+                    <button className="btn" type="button" onClick={resetSignoff}>Reset bench signoff</button>
+                  </div>
+                  <dl className="inst-ready-summary" data-testid="installer-ready-summary">
+                    <div><dt>Firmware available</dt><dd>{firmwareVersion}</dd></div>
+                    <div><dt>Project</dt><dd>{projectName || 'Untitled Project'} · {installedRevision}</dd></div>
+                    <div><dt>Card identity</dt><dd>{cardIdentity}</dd></div>
+                    <div><dt>Next physical check</dt><dd>{ready ? 'Complete — ready to ship' : nextPhysicalCheck}</dd></div>
+                  </dl>
                 </section>
               </aside>
             </div>

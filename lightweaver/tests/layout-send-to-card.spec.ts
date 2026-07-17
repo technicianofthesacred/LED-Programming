@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const TEST_CARD_ID = 'lw-layout-tests';
+const TEST_BUILD_ID = 'a'.repeat(40);
+
 // Phase 2 step 9 (docs/layout-redesign-plan.md) — the Wire-mode finish line:
 // Send to card + Export ledmap.json. Reuses the `mockLocalCard` route pattern
 // from workflow.spec.ts. The default project boots the two-circle hardware
@@ -22,13 +25,17 @@ async function mockLocalCard(page: any, options: any = {}) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === '/api/status') {
-      await route.fulfill({ json: { ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
+      await route.fulfill({ json: { app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: TEST_BUILD_ID, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
       return;
     }
     if (pathname === '/api/firmware-info') {
       await route.fulfill({
         json: {
           ok: true,
+          app: 'Lightweaver',
+          cardId: TEST_CARD_ID,
+          firmwareVersion: '1.0.0',
+          buildId: TEST_BUILD_ID,
           pixels: 44,
           outputs: options.currentOutputs || [{ id: 'out1', pin: 16, pixels: 44 }],
         },
@@ -98,10 +105,16 @@ async function mockLocalCard(page: any, options: any = {}) {
   return card;
 }
 
-async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void) } = {}) {
-  await page.addInitScript(() => localStorage.clear());
-  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void), url = '/#screen=layout&mode=wire' } = {}) {
+  await page.addInitScript(cardId => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
+  }, TEST_CARD_ID);
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
+  const installToggle = installStep.locator('.lw-step-toggle');
+  if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
   if (!verified) return;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
@@ -114,12 +127,45 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   project.layout.wiring.verified = true;
   project.layout.wiring.locked = true;
   project.layout.wiring.runs.forEach((run: any) => { run.verified = true; });
+  const led = project.devices.standaloneController.led;
+  led.colorOrder = led.colorOrder || 'RGB';
+  led.colorOrderConfirmed = true;
+  led.confirmedColorOrder = led.colorOrder;
   transformProject?.(project);
   const ready = path.join(tmp, 'ready.json');
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  const reloadedInstallToggle = page.getByRole('region', { name: 'Step 5: Review and install' }).locator('.lw-step-toggle');
+  if (await reloadedInstallToggle.getAttribute('aria-expanded') !== 'true') await reloadedInstallToggle.click();
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
+}
+
+async function proxyStudioOverHttps(page: any) {
+  const port = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async (route: any) => {
+    const requested = new URL(route.request().url());
+    const localUrl = `http://localhost:${port}${requested.pathname}${requested.search}`;
+    const response = await route.fetch({ url: localUrl });
+    await route.fulfill({ response });
+  });
+  await page.addInitScript(() => {
+    (window as any).__copiedPayload = '';
+    (window as any).__openedInstaller = null;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText(value: string) {
+          (window as any).__copiedPayload = value;
+          return Promise.resolve();
+        },
+      },
+    });
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
+      (window as any).__openedInstaller = { url: String(url), target, features };
+      return null;
+    }) as typeof window.open;
+  });
 }
 
 test('Send to card stays disabled for default unverified wiring and makes no request', async ({ page }) => {
@@ -131,7 +177,7 @@ test('Send to card stays disabled for default unverified wiring and makes no req
   await expect(send).toContainText('Install on card');
   await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
   await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'File only — does not change the card');
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup — does not change the Lightweaver card');
   expect(card.operations).toEqual([]);
 });
 
@@ -210,8 +256,6 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   await expect(banner.getByRole('button', { name: 'Retry' })).toBeVisible();
 
   const failedPayload = card.attemptedConfigs.at(-1);
-  page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: 'New project' }).click();
   options.failConfig = false;
   await banner.getByRole('button', { name: 'Retry' }).click();
   await expect(banner).toHaveClass(/is-ok/);
@@ -240,9 +284,36 @@ test('Download WLED map exports a valid { n, map } file', async ({ page }) => {
   expect(json.map[0]).toHaveLength(2);
 });
 
-// Mixed-content fail (browser blocks HTTP push from an HTTPS designer) surfaces
-// the read-only JSON fallback textarea. Not reproducible here: Playwright serves
-// the app over plain HTTP, so `canPushDirectlyToCard('http:')` is always true
-// and the mixed-content branch never triggers. Skipped until an HTTPS harness
-// exists.
-test.skip('mixed-content push shows the JSON fallback textarea', async () => {});
+test('mixed-content recovery copies JSON, opens the installer, and retries the same bounded attempt', async ({ page }) => {
+  await proxyStudioOverHttps(page);
+  await gotoWire(page, {
+    verified: true,
+    url: 'https://led.mandalacodes.com/#screen=layout&mode=wire',
+  });
+
+  await page.getByTestId('layout-send-to-card').click();
+  const recovery = page.getByRole('group', { name: 'Mixed-content recovery' });
+  await expect(recovery).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Copy payload' })).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Open installer' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+
+  await recovery.getByRole('button', { name: 'Copy payload' }).click();
+  const firstPayload = await page.evaluate(() => (window as any).__copiedPayload);
+  expect(() => JSON.parse(firstPayload)).not.toThrow();
+
+  await recovery.getByRole('button', { name: 'Open installer' }).click();
+  const opened = await page.evaluate(() => (window as any).__openedInstaller);
+  expect(opened.target).toBe('_blank');
+  expect(opened.features).toBe('noopener');
+  const handoff = new URL(opened.url);
+  expect(handoff.origin).toBe('http://lightweaver.local');
+  expect(new URLSearchParams(handoff.hash.slice(1)).get('lwconfig')).toBeTruthy();
+  expect(new URLSearchParams(handoff.hash.slice(1)).get('reboot')).toBe('1');
+
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(recovery).toBeVisible();
+  await page.evaluate(() => { (window as any).__copiedPayload = ''; });
+  await recovery.getByRole('button', { name: 'Copy payload' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copiedPayload)).toBe(firstPayload);
+});

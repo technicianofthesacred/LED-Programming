@@ -3,6 +3,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const TEST_CARD_ID = 'lw-wiring-tests';
+
+async function installStableCardIdentity(page: any) {
+  await page.addInitScript(cardId => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
+  }, TEST_CARD_ID);
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+  } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+  } }));
+}
+
 async function openCommissioningStep(page: any, regionName: string, toggleName: string, target: (step: any) => any) {
   const step = page.getByRole('region', { name: regionName });
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -79,7 +93,8 @@ async function seedFourRunClosedFixture(page: any) {
 
 async function installFrameCard(page: any) {
   const controls: any[] = [];
-  await page.addInitScript(() => {
+  await page.addInitScript(cardId => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
     (window as any).__wiringFrames = [];
     class FrameSocket {
       readyState = 0;
@@ -92,10 +107,14 @@ async function installFrameCard(page: any) {
       close() { this.readyState = 3; }
     }
     (window as any).WebSocket = FrameSocket;
-  });
+  }, TEST_CARD_ID);
   await page.route('http://lightweaver.local/**', route => {
     const body = route.request().postData();
     if (body) controls.push(JSON.parse(body));
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/firmware-info' || pathname === '/api/status') {
+      return route.fulfill({ json: { app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40) } });
+    }
     const recovery = route.request().url().includes('/api/recover-lights');
     return route.fulfill({ json: recovery
       ? { ok: true, accepted: true, diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 } }
@@ -211,6 +230,7 @@ test('legacy wire-count review opens only the actual current commissioning step'
 });
 
 test('closing wire discovery stops the persistent card test before hiding it', async ({ page }) => {
+  await installStableCardIdentity(page);
   const discoveryBodies: any[] = [];
   await page.route('**/api/wiring/discover', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
@@ -257,6 +277,7 @@ test('optional Auto Wire precedes the physical check and installation', async ({
 });
 
 test('LED color order check lives beside the physical check and sends real card tests', async ({ page }) => {
+  await installStableCardIdentity(page);
   const controlRequests: Record<string, unknown>[] = [];
   const testRequests: Record<string, unknown>[] = [];
   await page.route('**/api/control', async route => {
@@ -299,6 +320,7 @@ test('LED color order check lives beside the physical check and sends real card 
 });
 
 test('color confirmation persists, unlocks install with verified wiring, and expires when the order changes', async ({ page }) => {
+  await installStableCardIdentity(page);
   await page.route('**/api/control', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
     await route.fulfill({ json: { ok: true, colorOrder: body.colorOrder || 'RGB' } });
@@ -358,6 +380,7 @@ test('color confirmation persists, unlocks install with verified wiring, and exp
 });
 
 test('color confirmation requires a successful live test for the current order', async ({ page }) => {
+  await installStableCardIdentity(page);
   let cardReachable = false;
   await page.route('**/api/recover-lights', route => cardReachable
     ? route.fulfill({ json: {
@@ -489,6 +512,7 @@ test('changing logical sections never changes the explicit physical data-wire co
 });
 
 test('Find my LED wire maps a visible discovery color to the selected GPIO', async ({ page }) => {
+  await installStableCardIdentity(page);
   await page.route('**/api/wiring/discover', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -869,7 +893,7 @@ test('guided chase acknowledges full low-brightness frames, verifies every fact,
       await expect.poll(() => page.evaluate(() => {
         const frame = (window as any).__wiringFrames.at(-1);
         return `${frame?.[0]}:${frame?.[26]}`;
-      })).toBe('1A0000:00001A');
+      })).toBe('00001A:1A0000');
       await expect(bench).toContainText('Live');
     }
     await bench.getByRole('button', { name: 'Boundary is correct' }).click();

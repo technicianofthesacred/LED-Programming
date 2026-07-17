@@ -1,9 +1,52 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   DENSITY_OPTIONS,
   clampLedCount,
   parsedVb,
 } from '../../../lib/layoutGeometry.js';
 import { LED_COUNT_MAX } from '../../../lib/controlScale.js';
+
+function BufferedStripCountInput({ strip, overridden, setStripCount }) {
+  const [draft, setDraft] = useState(String(strip.pixelCount));
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(String(strip.pixelCount));
+  }, [strip.pixelCount]);
+
+  const commit = () => {
+    const next = clampLedCount(draft);
+    setDraft(String(next));
+    if (next !== strip.pixelCount) setStripCount(strip.id, next);
+  };
+
+  return (
+    <input
+      className="num-input la-size-count"
+      type="number" min="1" max={LED_COUNT_MAX} step="1"
+      value={draft}
+      aria-label={`${strip.name} LED count`}
+      inputMode="numeric"
+      onFocus={event => {
+        focusedRef.current = true;
+        setDraft(String(strip.pixelCount));
+        event.target.select();
+      }}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={() => {
+        focusedRef.current = false;
+        commit();
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setDraft(String(strip.pixelCount));
+        }
+      }}
+      style={{ borderColor: overridden ? 'var(--accent)' : undefined }}/>
+  );
+}
 
 // ── Size-mode side panel ─────────────────────────────────────────────────────
 // The top-to-bottom derivation chain (docs/layout-redesign-plan.md, Phase 2
@@ -98,15 +141,7 @@ export function SizeModePanel({ state }) {
                   <span className="n">{String(i + 1).padStart(2, '0')}</span>
                   <span className="layer-swatch" style={{ background: s.color, borderRadius: '50%' }}/>
                   <span className="nm" title={s.name}>{s.name}</span>
-                  <input
-                    className="num-input la-size-count"
-                    type="number" min="1" max={LED_COUNT_MAX} step="1"
-                    value={s.pixelCount}
-                    aria-label={`${s.name} LED count`}
-                    inputMode="numeric"
-                    onFocus={e => e.target.select()}
-                    onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
-                    style={{ borderColor: overridden ? 'var(--accent)' : undefined }}/>
+                  <BufferedStripCountInput strip={s} overridden={overridden} setStripCount={setStripCount}/>
                   <span className="la-size-pitch">{pitch}<span className="u">mm/LED</span></span>
                   {overridden && (
                     <span className="la-size-override" data-testid="layout-size-count-override-badge"

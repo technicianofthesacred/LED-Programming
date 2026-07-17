@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
 import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
@@ -18,6 +19,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 
 export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -30,6 +32,7 @@ export function LayoutScreen({ connected, cardHost }) {
     selLayer, existingStrip,
     selStripId,
     pathSel,
+    selectedPathDecorations,
     totalLeds,
     svgRef, artworkRef, vpRef,
     // strips
@@ -46,7 +49,7 @@ export function LayoutScreen({ connected, cardHost }) {
     glowMode, setGlowMode, directedGlow, setDirectedGlow,
     showHeat, setShowHeat, lightMenuOpen, setLightMenuOpen,
     enableLightPreview, effectiveGlowMode, effectiveShowLight, glowStdDev,
-    drawMode, setDrawMode, waypoints, setWaypoints, ghostPt, setGhostPt,
+    drawMode, setDrawMode, waypoints, ghostPt, setGhostPt,
     ghostD,
     zoom, setZoom, isPanning, spaceRef, resetView,
     computedViewBox, vbScale, rubberBand, cursorSvgPt,
@@ -66,7 +69,7 @@ export function LayoutScreen({ connected, cardHost }) {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
     strips, layers, hidden,
     viewBox, computedViewBox, vbScale, svgText, artworkHTML, totalLeds,
-    selection: { selStripId, selLayer, pathSel, existingStrip },
+    selection: { selStripId, selLayer, pathSel, selectedPathDecorations, existingStrip },
     lightPreview: {
       effectiveShowLight, effectiveGlowMode, glowStdDev, directedGlow,
       showHeat, showLeds, layoutPatternFrame, stripSamples, stripArrows,
@@ -112,7 +115,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
   return (
     <div className="screen">
-      <div className="la">
+      <div className={`la mode-${mode}${inspectorCollapsed ? ' inspector-collapsed' : ''}`}>
 
       {/* ── Hidden file inputs ─────────────────────────────────────── */}
       <input ref={fileRef} type="file" accept=".svg"  style={{ display: 'none' }} onChange={handleFile}/>
@@ -126,27 +129,32 @@ export function LayoutScreen({ connected, cardHost }) {
 
           <div className="tb-div"/>
 
-          <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
-                  title="Import an SVG to map LED strips">
-            {TbIcon.import}Import SVG
-          </button>
+          {mode === 'draw' && (
+            <>
+              <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
+                      title="Import an SVG to map LED strips">
+                {TbIcon.import}Import SVG
+              </button>
 
-          {layers.length > 0 && (
-            <button className="tb-btn" onClick={addAllStrips}
-                    title={`Add all ${layers.length} layers as strips (A)`}>
-              + All ({layers.length})
-            </button>
+              {layers.length > 0 && (
+                <button className="tb-btn" onClick={addAllStrips}
+                        title={`Add all ${layers.length} layers as strips (A)`}>
+                  + All ({layers.length})
+                </button>
+              )}
+
+              <div className="tb-div"/>
+
+              <button
+                className={`tb-btn${drawMode ? ' active' : ''}`}
+                title="Draw a new LED strip path on the artwork."
+                onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setGhostPt(null); }}>
+                {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
+              </button>
+            </>
           )}
 
-          <div className="tb-div"/>
-
           {/* Draw / Chop / Link tools */}
-          <button
-            className={`tb-btn${drawMode ? ' active' : ''}`}
-            title="Draw a new LED strip path on the artwork."
-            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setGhostPt(null); }}>
-            {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
-          </button>
           {/* Split / Link are wire concerns — surfaced only in Wire mode
               (plan's canvas behavior matrix: chop/link overlays are Wire only). */}
           {mode === 'wire' && (
@@ -156,7 +164,6 @@ export function LayoutScreen({ connected, cardHost }) {
                 title="Split one physical strip where the wire jumps to a new spot."
                 onClick={() => {
                   setDrawMode(false);
-                  setWaypoints([]);
                   setGhostPt(null);
                   setWireOverlayMode(m => m === 'chop' ? 'idle' : 'chop');
                 }}>
@@ -167,7 +174,6 @@ export function LayoutScreen({ connected, cardHost }) {
                 title="Join two strips into one continuous run."
                 onClick={() => {
                   setDrawMode(false);
-                  setWaypoints([]);
                   setGhostPt(null);
                   setSelectedWirePatchId(null);
                   setWireOverlayMode(m => {
@@ -205,7 +211,7 @@ export function LayoutScreen({ connected, cardHost }) {
           <div className="tb-spring"/>
 
           {/* Zoom cluster */}
-          <div className="la-zoom" role="group" aria-label="Card calibration">
+          <div className="la-zoom" role="group" aria-label="View">
             <button onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
             <button className="zv" onClick={resetView} title="Reset view (F)">{Math.round(zoom * 100)}%</button>
             <button onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
@@ -270,11 +276,17 @@ export function LayoutScreen({ connected, cardHost }) {
         <LayoutCanvas {...canvasProps}/>
 
       {/* ── Right panel (mockup .side) ─────────────────────────────── */}
-      <aside className="side">
-        <div className="la-sheet-handle" data-testid="layout-sheet-handle" aria-label="Inspector panel">
+      <aside className={`side${inspectorCollapsed ? ' is-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="la-sheet-handle"
+          data-testid="layout-sheet-handle"
+          aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}
+          aria-expanded={!inspectorCollapsed}
+          onClick={() => setInspectorCollapsed(collapsed => !collapsed)}>
           <span aria-hidden="true"/>
           <strong>Inspector</strong>
-        </div>
+        </button>
         {mode === 'draw' && <DrawModePanel state={state}/>}
         {mode === 'size' && <SizeModePanel state={state}/>}
         {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>}

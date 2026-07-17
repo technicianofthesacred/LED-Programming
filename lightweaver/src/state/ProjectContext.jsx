@@ -240,6 +240,79 @@ export function resolveTimelineTargets(playhead, clips, strips = []) {
 export function ProjectProvider({ children }) {
   const defaults = createDefaultProject();
   const projectSnapshotContributorsRef = useRef(new Set());
+  const replacementFocusRef = useRef(null);
+  const replacementResolutionRef = useRef(null);
+  const keepEditingRef = useRef(null);
+  const replacementDialogRef = useRef(null);
+  const replacementBackdropRef = useRef(null);
+  const [pendingReplacement, setPendingReplacement] = useState(null);
+
+  const dismissReplacement = useCallback((replace) => {
+    const resolve = replacementResolutionRef.current;
+    replacementResolutionRef.current = null;
+    setPendingReplacement(null);
+    resolve?.(replace === true);
+    window.requestAnimationFrame(() => replacementFocusRef.current?.focus?.());
+  }, []);
+
+  const requestReplacementConfirmation = useCallback(({ currentName, incomingName }) => {
+    replacementResolutionRef.current?.(false);
+    replacementFocusRef.current = document.activeElement;
+    setPendingReplacement({
+      currentName: String(currentName || 'Untitled Project'),
+      incomingName: String(incomingName || 'Untitled Project'),
+    });
+    return new Promise(resolve => { replacementResolutionRef.current = resolve; });
+  }, []);
+
+  useEffect(() => {
+    if (!pendingReplacement) return undefined;
+    keepEditingRef.current?.focus();
+    const backdrop = replacementBackdropRef.current;
+    const background = [...(backdrop?.parentElement?.children || [])]
+      .filter(element => element !== backdrop)
+      .map(element => ({
+        element,
+        inert: element.inert,
+        ariaHidden: element.getAttribute('aria-hidden'),
+      }));
+    for (const { element } of background) {
+      element.inert = true;
+      element.setAttribute('aria-hidden', 'true');
+    }
+    const onKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismissReplacement(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = [...(replacementDialogRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [])].filter(element => !element.hidden);
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !replacementDialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !replacementDialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      for (const { element, inert, ariaHidden } of background) {
+        element.inert = inert;
+        if (ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', ariaHidden);
+      }
+    };
+  }, [dismissReplacement, pendingReplacement]);
+
+  useEffect(() => () => replacementResolutionRef.current?.(false), []);
 
   // ── Layout (single reducer over the whole slice; undo/redo is one shared
   //    snapshot stack across strip + patch-board edits) ────────────────────
@@ -756,14 +829,17 @@ export function ProjectProvider({ children }) {
       candidate,
       validate: value => migrateProject(value),
       dirty: hasUnsavedChanges(projectLifecycle),
-      confirmDiscard: options.confirmDiscard || (() => window.confirm('Replace this project? Unsaved changes will be lost.')),
+      confirmDiscard: options.confirmDiscard || (validated => requestReplacementConfirmation({
+        currentName: projectName,
+        incomingName: validated?.name,
+      })),
       apply: validated => {
         suppressNextLifecycleEditRef.current = true;
         applyProject(validated);
         dispatchProjectLifecycle({ type: 'replaced' });
       },
     });
-  }, [applyProject, projectLifecycle]);
+  }, [applyProject, projectLifecycle, projectName, requestReplacementConfirmation]);
 
   const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
@@ -866,6 +942,7 @@ export function ProjectProvider({ children }) {
       loadProject: replaceProject,
       replaceProject,
       replaceWithNewProject,
+      requestReplacementConfirmation,
       markProjectPersisted,
       markProjectEdited,
       markProjectInstalled,
@@ -875,6 +952,25 @@ export function ProjectProvider({ children }) {
       lastSaved,
     }}>
       {children}
+      {pendingReplacement &&
+        <div ref={replacementBackdropRef} className="project-replacement-backdrop">
+          <section
+            ref={replacementDialogRef}
+            className="project-replacement-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-replacement-title"
+          >
+            <h2 id="project-replacement-title">Replace current project?</h2>
+            <p><strong>{pendingReplacement.currentName}</strong> has changes that are not saved in the browser or a file.</p>
+            <p>Replace it with <strong>{pendingReplacement.incomingName}</strong>?</p>
+            <div className="project-replacement-actions">
+              <button ref={keepEditingRef} type="button" className="btn" onClick={() => dismissReplacement(false)}>Keep editing</button>
+              <button type="button" className="btn primary" onClick={() => dismissReplacement(true)}>Replace project</button>
+            </div>
+          </section>
+        </div>
+      }
     </ProjectContext.Provider>
   );
 }
