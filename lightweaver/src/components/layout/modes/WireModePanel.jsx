@@ -569,6 +569,11 @@ export function WireModePanel({ state, connected, cardHost }) {
 
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
+      <section className="lw-wire-scaffold" aria-label="Wire setup guide">
+        <strong>Connect each physical run from the card to its final LED.</strong>
+        <span>Match the run order to the real data wire.</span>
+        <span>Validate the route on the LEDs before installation.</span>
+      </section>
       <section className="lw-data-wire-count" aria-labelledby="data-wire-question">
         <div>
           <span className="lw-bench-kicker">Start here</span>

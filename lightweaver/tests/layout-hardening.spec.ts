@@ -182,7 +182,9 @@ test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ pa
 
 test('wire scaffold is concise and recovery actions stay hidden without a mixed-content failure', async ({ page }) => {
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByText(/Connect each physical run/)).toBeVisible();
+  const guide = page.getByRole('region', { name: 'Wire setup guide' });
+  await expect(guide).toBeVisible();
+  await expect(guide).toContainText(/Connect each physical run[\s\S]*order[\s\S]*Validate/);
   await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);

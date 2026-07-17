@@ -348,7 +348,8 @@
 .lw-wire-discovery-colors small { color: var(--text-faint); font: 8px var(--font-mono); }
 .lw-wire-discovery-status { color: var(--text-faint) !important; }
 .lw-wire-discovery ul { margin: 0; padding-left: 18px; color: var(--text-mid); font-size: 10.5px; }
-.lw-wire-scaffold { margin: 0 0 10px; color: var(--text-faint); font-size: 11px; line-height: 1.45; }
+.lw-wire-scaffold { display: grid; gap: 3px; margin: 0 0 12px; color: var(--text-faint); font-size: 11px; line-height: 1.45; }
+.lw-wire-scaffold strong { color: var(--text-hi); font-size: 12px; }
 .lw-wiring-lanes { display: flex; flex-direction: column; gap: 10px; max-width: none; margin-inline: -14px; }
 .lw-wiring-output { position: relative; min-width: 0; border-block: 1px solid var(--border-soft); background: transparent; }
 .lw-wiring-output.is-drop-target::after { content: ""; position: absolute; z-index: 1; right: 6px; bottom: -1px; left: 6px; height: 2px; border-radius: 2px; background: var(--accent); }

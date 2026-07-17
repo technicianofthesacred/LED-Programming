@@ -169,7 +169,7 @@ export function CardPushControl({
           {pushStatus}
           {action.status === 'failed' && action.confirmedRevision != null && <p>Installed revision {action.confirmedRevision} remains on the card.</p>}
           {pushFallbackJson && (
-            <div className="lw-wire-recovery" aria-label="Mixed-content recovery">
+            <div className="lw-wire-recovery" role="group" aria-label="Mixed-content recovery">
               <textarea readOnly value={pushFallbackJson} onClick={e => e.target.select()} className="la-card-push-fallback"/>
               <button className="btn" onClick={() => navigator.clipboard?.writeText(pushFallbackJson)}>Copy payload</button>
               <button className="btn" onClick={() => window.open(buildCardConfigHandoffUrl(failedAttemptRef.current?.host || getCardHostname(), pushFallbackPackage), '_blank', 'noopener')}>Open installer</button>
