@@ -91,6 +91,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   const restoreStartedRef = useRef(false);
   const savingPassRef = useRef(false);
   const previousStateRef = useRef(run?.state);
+  const ProductionHeading = embedded ? 'h2' : 'h1';
 
   const advance = useCallback(async (next, options = {}) => {
     const updated = await updateProductionRunAtomically(current => transitionProductionRun(current, next, { correlation: correlation(current), ...options }));
@@ -108,7 +109,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   }, [cap.platform]);
 
   useEffect(() => () => { void disconnectESP(loaderRef.current, transportRef.current); }, []);
-  useEffect(() => { primaryRef.current?.focus(); }, []);
+  useEffect(() => { if (!embedded) primaryRef.current?.focus(); }, [embedded]);
   useEffect(() => {
     const previous = previousStateRef.current;
     previousStateRef.current = run?.state;
@@ -170,7 +171,8 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     setJob(selected); setRun(preparedRun); setStatus(preparedStatus);
     setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected'); setObservations({}); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
     const hash = new URLSearchParams(window.location.hash.slice(1));
-    hash.set('screen', 'production'); hash.set('job', selected.jobId);
+    if (!(hash.get('screen') === 'card' && hash.get('section') === 'workshop')) hash.set('screen', 'production');
+    hash.set('job', selected.jobId);
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${hash}`);
     await preloadFirmware(selected);
   }
@@ -441,7 +443,8 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     loaderRef.current = null; transportRef.current = null;
     await clearCardCommissioning().catch(() => {});
     for (const key of [PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY, PRODUCTION_RUN_SLOT_A_KEY, PRODUCTION_RUN_SLOT_B_KEY]) localStorage.removeItem(key);
-    const hash = new URLSearchParams(window.location.hash.slice(1)); hash.delete('job'); hash.set('screen', 'production');
+    const hash = new URLSearchParams(window.location.hash.slice(1)); hash.delete('job');
+    if (!(hash.get('screen') === 'card' && hash.get('section') === 'workshop')) hash.set('screen', 'production');
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${hash}`);
     setJob(null); setRun(null); setRelease({ state: 'idle', value: null, error: '' }); setHardware(null); setUsbConnected(false); setFirmwareDecision('uninspected'); setRecovery(null);
     setObservations({}); setWorkerId(''); setProgress(0); setError(''); setRecordRecoveryNeeded(false); restoreStartedRef.current = false;
@@ -550,7 +553,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   if (!cap.canProductionWebSerial) {
     const mobile = cap.isMobile;
     const retainedCode = new URLSearchParams(window.location.hash.slice(1)).get('job');
-    const handoff = <main className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><h1>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</h1><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</main>;
+    const handoff = <main className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</main>;
     return embedded ? <div className="prod-screen prod-embedded">{handoff}</div> : <div className="screen prod-screen">{handoff}</div>;
   }
 
@@ -562,7 +565,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
       <div className={embedded ? 'prod-embedded-scroll' : 'screen-scroll'}>
         <main className="prod-shell">
           <header className="prod-hero">
-            <div><span className="prod-kicker">Workshop · browser USB</span><h1 ref={primaryRef} tabIndex={-1}>Production setup</h1><p>One card, one verified artwork, one physical pass. No firmware files or GPIO tables.</p></div>
+            <div><span className="prod-kicker">Workshop · browser USB</span><ProductionHeading ref={primaryRef} tabIndex={-1}>Production setup</ProductionHeading><p>One card, one verified artwork, one physical pass. No firmware files or GPIO tables.</p></div>
             <div className="prod-safety"><span aria-hidden="true">●</span> Chrome/Edge · secure USB · no Bridge</div>
           </header>
           <ol className="prod-steps" aria-label="Production progress">{STEPS.map(([id, label], index) => <li key={id} className={index < currentStage ? 'done' : index === currentStage ? 'current' : ''} aria-current={index === currentStage ? 'step' : undefined}><span>{index < currentStage ? '✓' : index + 1}</span>{label}</li>)}</ol>

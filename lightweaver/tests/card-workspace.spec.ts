@@ -49,7 +49,8 @@ test('connected Card overview identifies the card and makes Load changes primary
   });
 
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
-  await expect(page.getByTestId('card-detected-state')).toContainText('has not changed anything');
+  await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
+  await expect(page.getByTestId('card-detected-state')).not.toContainText(/has not changed|nothing changed/i);
   await expect(page.getByRole('button', { name: 'Load changes', exact: true })).toHaveClass(/primary/);
 });
 
@@ -86,6 +87,22 @@ test('new section navigation emits canonical Card hashes and moves focus to the 
   await expect(page).toHaveURL(/#screen=card&section=settings$/);
   await expect(page.getByRole('heading', { name: 'Card settings', level: 1 })).toBeFocused();
   await expect(page.getByText('Card connection', { exact: true })).toBeVisible();
+});
+
+test('embedded install uses the Card heading as the only h1', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Install or update', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Install Lightweaver', level: 2 })).toBeVisible();
+});
+
+test('embedded workshop uses the Card heading as the only h1', async ({ page }) => {
+  await page.goto('/#screen=card&section=workshop', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Workshop setup', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible();
 });
 
 test('Advanced & Support exposes its tools without a collapsed disclosure', async ({ page }) => {

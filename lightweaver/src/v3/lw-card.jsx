@@ -47,7 +47,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
           <span className="card-workspace-kicker">Detected state</span>
           <p data-testid="card-detected-state">
             {connected
-              ? `${identity || 'A Lightweaver card'} is connected. Studio has not changed anything on it yet.`
+              ? `${identity || 'A Lightweaver card'} is connected and available to inspect.`
               : 'A Lightweaver card is not connected. Connect one to inspect it before installing or loading a project.'}
           </p>
         </div>

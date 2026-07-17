@@ -431,6 +431,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     const mountedRef = useRef(true);
     const findingRef = useRef(false);
     const installingRef = useRef(false);
+    const InstallHeading = embedded ? 'h2' : 'h1';
 
     useEffect(() => {
       if (!capabilities.canWebSerialInstall) return undefined;
@@ -596,7 +597,7 @@ import { openInChrome } from '../lib/openInChrome.js';
         <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
-          <h1>Install Lightweaver</h1>
+          <InstallHeading>Install Lightweaver</InstallHeading>
           <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
         </div>
 

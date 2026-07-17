@@ -902,7 +902,8 @@ test('production setup is keyboard operable, restores heading focus, and announc
   await workshop.focus();
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#screen=card&section=workshop/);
-  await expect(page.getByRole('heading', { name: 'Production setup' })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Workshop setup', level: 1 })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Production setup', level: 2 })).toBeVisible();
   await page.getByLabel('Job code').focus();
   await page.keyboard.type('moon-batch-7');
   await expect(page.getByLabel('Job code')).toHaveValue('moon-batch-7');
@@ -932,6 +933,15 @@ test('job selection is single-flight, awaits verification, and ignores overlappi
   await expect(page.getByRole('heading', { name: 'Moon · batch 7' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeFocused();
   expect(artifacts).toBe(1);
+});
+
+test('canonical workshop route stays canonical while selecting and clearing a job', async ({ page }) => {
+  await serveJob(page); await installDriver(page);
+  await page.goto('/#screen=card&section=workshop');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await expect(page).toHaveURL(/#screen=card&section=workshop&job=moon-batch-7$/);
+  await page.getByRole('button', { name: 'Change job' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=workshop$/);
 });
 
 test('a run storage failure leaves job selection recoverable and commits no visible job or URL', async ({ page }) => {

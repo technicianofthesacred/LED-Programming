@@ -424,8 +424,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .technician-disclosure > .fl { margin: 0; padding: 20px; }
 
 .flash-screen-title,
-.install-flow h1,
-.install-handoff h1 { margin: 5px 0 8px; font-size: clamp(24px, 3vw, 34px); line-height: 1.08; letter-spacing: -.025em; }
+.install-flow h1, .install-flow h2,
+.install-handoff h1, .install-handoff h2 { margin: 5px 0 8px; font-size: clamp(24px, 3vw, 34px); line-height: 1.08; letter-spacing: -.025em; }
 .flash-screen-intro,
 .install-flow > div > p,
 .install-handoff p,

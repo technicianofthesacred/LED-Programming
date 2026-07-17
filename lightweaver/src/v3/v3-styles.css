@@ -719,8 +719,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .rail-item[aria-label="Production setup"].active .lbl { color: var(--text-hi); }
 .prod-shell { width: min(1120px, 100%); margin: 0 auto; padding: 20px clamp(12px, 2.5vw, 28px) 36px; overflow-wrap: anywhere; }
 .prod-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
-.prod-hero h1, .prod-handoff h1 { margin: 3px 0 4px; font-size: clamp(21px, 2.4vw, 28px); font-weight: 620; letter-spacing: -.02em; }
-.prod-hero h1:focus, .prod-handoff h1:focus { outline: none; }
+.prod-hero h1, .prod-hero h2, .prod-handoff h1, .prod-handoff h2 { margin: 3px 0 4px; font-size: clamp(21px, 2.4vw, 28px); font-weight: 620; letter-spacing: -.02em; }
+.prod-hero h1:focus, .prod-hero h2:focus, .prod-handoff h1:focus, .prod-handoff h2:focus { outline: none; }
 .prod-hero p, .prod-handoff p { max-width: 680px; color: var(--text-mid); }
 .prod-kicker { color: var(--prod-secondary); font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .prod-safety { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--text-mid); font-size: 11px; }
