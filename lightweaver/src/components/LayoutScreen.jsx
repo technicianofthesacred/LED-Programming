@@ -49,7 +49,7 @@ export function LayoutScreen({ connected, cardHost }) {
     glowMode, setGlowMode, directedGlow, setDirectedGlow,
     showHeat, setShowHeat, lightMenuOpen, setLightMenuOpen,
     enableLightPreview, effectiveGlowMode, effectiveShowLight, glowStdDev,
-    drawMode, setDrawMode, waypoints, setWaypoints, ghostPt, setGhostPt,
+    drawMode, setDrawMode, waypoints, ghostPt, setGhostPt,
     ghostD,
     zoom, setZoom, isPanning, spaceRef, resetView,
     computedViewBox, vbScale, rubberBand, cursorSvgPt,
@@ -164,7 +164,6 @@ export function LayoutScreen({ connected, cardHost }) {
                 title="Split one physical strip where the wire jumps to a new spot."
                 onClick={() => {
                   setDrawMode(false);
-                  setWaypoints([]);
                   setGhostPt(null);
                   setWireOverlayMode(m => m === 'chop' ? 'idle' : 'chop');
                 }}>
@@ -175,7 +174,6 @@ export function LayoutScreen({ connected, cardHost }) {
                 title="Join two strips into one continuous run."
                 onClick={() => {
                   setDrawMode(false);
-                  setWaypoints([]);
                   setGhostPt(null);
                   setSelectedWirePatchId(null);
                   setWireOverlayMode(m => {
@@ -213,7 +211,7 @@ export function LayoutScreen({ connected, cardHost }) {
           <div className="tb-spring"/>
 
           {/* Zoom cluster */}
-          <div className="la-zoom" role="group" aria-label="Card calibration">
+          <div className="la-zoom" role="group" aria-label="View">
             <button onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
             <button className="zv" onClick={resetView} title="Reset view (F)">{Math.round(zoom * 100)}%</button>
             <button onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>

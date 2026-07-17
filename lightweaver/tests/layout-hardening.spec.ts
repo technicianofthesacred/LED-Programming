@@ -214,7 +214,7 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
   const toolbar = page.locator('.la .toolbar');
   await expect(toolbar.getByRole('group', { name: 'Mode actions' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Project' })).toBeVisible();
-  await expect(toolbar.getByRole('group', { name: 'Card calibration' })).toBeVisible();
+  await expect(toolbar.getByRole('group', { name: 'View' })).toBeVisible();
   await expect(page.getByTitle('Import an SVG to map LED strips')).toBeVisible();
   await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toBeVisible();
   await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toHaveCount(0);
