@@ -60,8 +60,9 @@ class ScreenErrorBoundary extends Component {
     return (
       <div className="screen route-loading" role="alert" data-testid="screen-error-fallback">
         <h1>This screen could not open</h1>
-        <p>Your project is still saved. Return to Layout to check the wiring, then try again.</p>
-        <button type="button" className="btn primary" onClick={this.props.onRecover}>Return to Layout</button>
+        <p>An unexpected screen error occurred. Your project was not deleted.</p>
+        <button type="button" className="btn primary" onClick={() => window.location.reload()}>Reload Studio</button>
+        <button type="button" className="btn" onClick={this.props.onRecover}>Return to Layout</button>
       </div>
     );
   }
