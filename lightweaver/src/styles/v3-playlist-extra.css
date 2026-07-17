@@ -49,14 +49,14 @@
 }
 .pl-index {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
   grid-template-rows: auto auto;
   column-gap: 7px;
   row-gap: 1px;
 }
 .pl-grip {
   grid-row: 1 / span 2;
-  width: 32px;
+  width: 36px;
   height: 36px;
   padding: 0;
   border: 1px solid var(--border-soft);
@@ -92,6 +92,7 @@
   font-size: 18px;
   line-height: 1;
 }
+.pl-reorder-instructions,
 .pl-reorder-status {
   position: absolute;
   width: 1px;
@@ -110,4 +111,11 @@
   .pl-row { grid-template-columns: 76px 48px minmax(0, 1fr); gap: 10px; }
   .pl-actions { grid-column: 1 / -1; width: 100%; }
   .pl-copy span { display: block; overflow: hidden; text-overflow: ellipsis; }
+}
+
+@media (pointer: coarse) {
+  .pl-row { grid-template-columns: 88px 48px minmax(0, 1fr); }
+  .pl-index { grid-template-columns: 44px minmax(0, 1fr); }
+  .pl-grip,
+  .pl-remove { width: 44px; min-width: 44px; height: 44px; }
 }

@@ -72,7 +72,15 @@ test('Playlist rows expose only compact item-specific controls', async ({ page }
 
   const auroraRow = page.getByTestId('playlist-row-aurora');
   await expect(auroraRow.getByRole('button')).toHaveCount(4);
-  await expect(auroraRow.getByRole('button', { name: 'Reorder Aurora', exact: true })).toBeVisible();
+  const reorderAurora = auroraRow.getByRole('button', { name: 'Reorder Aurora', exact: true });
+  await expect(reorderAurora).toBeVisible();
+  await expect(reorderAurora).toHaveAttribute('aria-describedby', 'playlist-reorder-instructions');
+  await expect(page.locator('#playlist-reorder-instructions')).toContainText('Arrow Up or Arrow Down');
+  await expect(page.locator('#playlist-reorder-instructions')).toContainText('Home or End');
+  await expect(page.locator('#playlist-reorder-instructions')).toContainText('pointer or touch');
+  const reorderBox = await reorderAurora.boundingBox();
+  expect(reorderBox?.width).toBeGreaterThanOrEqual(36);
+  expect(reorderBox?.height).toBeGreaterThanOrEqual(36);
   await expect(auroraRow.getByRole('button', { name: 'Live', exact: true })).toBeVisible();
   await expect(auroraRow.getByRole('button', { name: 'Copy', exact: true })).toBeVisible();
 
@@ -85,6 +93,69 @@ test('Playlist rows expose only compact item-specific controls', async ({ page }
 
   for (const name of ['Up', 'Down', 'Make first', 'Remove']) {
     await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+});
+
+test('Playlist touch handle reorders on a coarse pointer', async ({ browser }) => {
+  const context = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 320, height: 800 },
+  });
+  const page = await context.newPage();
+  try {
+    await gotoPlaylist(page, makePlaylistProject({ count: 3 }));
+
+    const reorderAurora = page.getByRole('button', { name: 'Reorder Aurora', exact: true });
+    await reorderAurora.scrollIntoViewIfNeeded();
+    const handleBox = await reorderAurora.boundingBox();
+    const plasmaBox = await page.getByTestId('playlist-row-plasma').boundingBox();
+    expect(handleBox).not.toBeNull();
+    expect(plasmaBox).not.toBeNull();
+    const session = await context.newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{
+        id: 0,
+        x: handleBox!.x + handleBox!.width / 2,
+        y: handleBox!.y + handleBox!.height / 2,
+      }],
+    });
+    await session.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{
+        id: 0,
+        x: plasmaBox!.x + plasmaBox!.width / 2,
+        y: plasmaBox!.y + plasmaBox!.height / 2,
+      }],
+    });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+    await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Aurora', 'Fire']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Playlist coarse-pointer reorder and remove targets are at least 44px', async ({ browser }) => {
+  const context = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 320, height: 800 },
+  });
+  const page = await context.newPage();
+  try {
+    await gotoPlaylist(page, makePlaylistProject({ count: 3 }));
+    for (const control of [
+      page.getByRole('button', { name: 'Reorder Aurora', exact: true }),
+      page.getByRole('button', { name: 'Remove Aurora', exact: true }),
+    ]) {
+      const box = await control.boundingBox();
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+    }
+  } finally {
+    await context.close();
   }
 });
 
