@@ -213,6 +213,20 @@ import { PatternPreview } from './PatternPreview.jsx';
     return { id: 'preview', pts, brightness: 1, speed: 1 };
   }
 
+  // The wiring compiler keeps source LEDs in canonical order and records the
+  // physical direction on each compiled run. Apply that metadata only for the
+  // visual preview so its bead order matches the real wire without changing
+  // the runtime package consumed by the card.
+  function wiringInPhysicalPreviewOrder(compiledWiring) {
+    if (!compiledWiring?.pixels?.length || !compiledWiring?.runs?.length) return compiledWiring;
+    const pixels = [...compiledWiring.pixels];
+    for (const run of compiledWiring.runs) {
+      if (!run.reversed || !Number.isInteger(run.start) || !Number.isInteger(run.count) || run.count < 2) continue;
+      pixels.splice(run.start, run.count, ...pixels.slice(run.start, run.start + run.count).reverse());
+    }
+    return { ...compiledWiring, pixels };
+  }
+
   // Runs the REAL compiled pattern through the frame engine on a rAF loop, applies
   // the card's exact color post-pass (hue/saturation/breathe/drift), and paints
   // each bead per frame — so Sparkle sparkles, Fire flickers, and every slider
@@ -309,7 +323,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       gammaValue,
     } = useProject();
     const projectPreviewStrip = useMemo(
-      () => createProjectPreviewStrip({ compiledWiring, strips, hidden }),
+      () => createProjectPreviewStrip({ compiledWiring: wiringInPhysicalPreviewOrder(compiledWiring), strips, hidden }),
       [projectRevision, compiledWiring, strips, hidden],
     );
 
