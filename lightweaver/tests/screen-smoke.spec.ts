@@ -497,6 +497,63 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   await expect(page.locator('.set-json')).toBeVisible();
 });
 
+test('settings rows stack readable labels above controls at 390px without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+
+  const row = page.locator('.set-row', { hasText: "The card's name on your WiFi" }).first();
+  await expect(row).toBeVisible();
+
+  const metrics = await row.evaluate((element) => {
+    const label = element.querySelector('.set-k');
+    const helper = element.querySelector('.hh');
+    const value = element.querySelector('.set-v');
+    const control = element.querySelector('input');
+    if (!label || !helper || !value || !control) throw new Error('Expected a complete Settings row');
+
+    const rowRect = element.getBoundingClientRect();
+    const labelRect = label.getBoundingClientRect();
+    const helperRect = helper.getBoundingClientRect();
+    const valueRect = value.getBoundingClientRect();
+    const controlRect = control.getBoundingClientRect();
+    return {
+      row: { left: rowRect.left, right: rowRect.right },
+      label: { left: labelRect.left, right: labelRect.right, bottom: labelRect.bottom },
+      helper: { width: helperRect.width, height: helperRect.height, lineHeight: parseFloat(getComputedStyle(helper).lineHeight) },
+      value: { left: valueRect.left, top: valueRect.top },
+      control: { left: controlRect.left, right: controlRect.right },
+      pageScrollWidth: document.documentElement.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+    };
+  });
+
+  expect(metrics.value.top).toBeGreaterThanOrEqual(metrics.label.bottom);
+  expect(metrics.value.left).toBeCloseTo(metrics.label.left, 0);
+  expect(metrics.helper.width).toBeGreaterThanOrEqual((metrics.row.right - metrics.row.left) * 0.9);
+  expect(metrics.helper.height).toBeLessThanOrEqual(metrics.helper.lineHeight * 2.1);
+  expect(metrics.control.left).toBeGreaterThanOrEqual(metrics.row.left);
+  expect(metrics.control.right).toBeLessThanOrEqual(metrics.row.right);
+  expect(metrics.pageScrollWidth).toBe(metrics.pageClientWidth);
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const desktopMetrics = await row.evaluate((element) => {
+    const labelRect = element.querySelector('.set-k')?.getBoundingClientRect();
+    const valueRect = element.querySelector('.set-v')?.getBoundingClientRect();
+    if (!labelRect || !valueRect) throw new Error('Expected Settings label and value columns');
+    return {
+      labelRight: labelRect.right,
+      valueLeft: valueRect.left,
+      labelTop: labelRect.top,
+      labelBottom: labelRect.bottom,
+      valueTop: valueRect.top,
+      valueBottom: valueRect.bottom,
+    };
+  });
+  expect(desktopMetrics.valueLeft).toBeGreaterThan(desktopMetrics.labelRight);
+  expect(desktopMetrics.valueTop).toBeLessThan(desktopMetrics.labelBottom);
+  expect(desktopMetrics.labelTop).toBeLessThan(desktopMetrics.valueBottom);
+});
+
 test('number keys do not navigate away from LED count fields', async ({ page }) => {
   await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());

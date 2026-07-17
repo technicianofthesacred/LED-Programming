@@ -664,6 +664,10 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .set-outfield { display: flex; align-items: center; gap: 6px; }
 .set-outfield span { font-size: 10px; font-family: var(--font-mono); color: var(--text-faint); }
 @media (max-width: 1000px) { .set-cols { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .set-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 10px; }
+  .set-v { min-width: 0; justify-content: flex-start; }
+}
 
 /* ============================================================
    INSTALLER screen
