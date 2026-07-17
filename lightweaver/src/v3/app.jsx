@@ -30,6 +30,7 @@ import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
+import { cardRouteFromHash, isCardSection } from './cardWorkspaceRoute.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
@@ -38,7 +39,6 @@ const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default:
 
 const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'card'];
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
-const CARD_SECTIONS = new Set(['overview', 'install', 'settings', 'workshop', 'support', 'preferences']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
 function readScreenRecoveryAttempt() {
@@ -297,6 +297,7 @@ function Shell() {
   const [bridgeResult, setBridgeResult] = useState(readStoredBridgeResult);
   const bridgeResultAcceptedRef = useRef(Boolean(bridgeResult));
   const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
+  const [cardRoute, setCardRoute] = useState(() => cardRouteFromHash());
   const [installActive, setInstallActive] = useState(false);
   const installActiveRef = useRef(false);
   const installRouteRef = useRef('#screen=card&section=install');
@@ -348,6 +349,7 @@ function Shell() {
         const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';
         const canonicalInstall = params.get('screen') === 'card' && params.get('section') === 'install';
         installRouteRef.current = legacyInstall || canonicalInstall ? window.location.hash : '#screen=card&section=install';
+        setCardRoute(cardRouteFromHash(installRouteRef.current));
         if (!legacyInstall && !canonicalInstall) {
           window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
           setView('card');
@@ -363,8 +365,9 @@ function Shell() {
     flushProjectAutosave();
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', 'card');
-    params.set('section', CARD_SECTIONS.has(section) ? section : 'overview');
+    params.set('section', isCardSection(section) ? section : 'overview');
     params.delete('mode');
+    setCardRoute(cardRouteFromHash(`#${params.toString()}`));
     setView('card');
     window.location.hash = params.toString();
   }, [flushProjectAutosave]);
@@ -389,7 +392,7 @@ function Shell() {
     if (view === 'card' && LEGACY_CARD_SCREENS.has(String(params.get('screen') || '').toLowerCase())) return;
     params.set('screen', view);
     if (view === 'card') {
-      if (!CARD_SECTIONS.has(params.get('section'))) params.set('section', 'overview');
+      if (!isCardSection(params.get('section'))) params.set('section', 'overview');
       params.delete('mode');
     } else {
       params.delete('section');
@@ -399,6 +402,7 @@ function Shell() {
     const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
+      if (view === 'card') setCardRoute(cardRouteFromHash(next));
     }
   }, [view, bridgeBooting]);
   useEffect(() => {
@@ -406,9 +410,12 @@ function Shell() {
       if (installActiveRef.current) {
         window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
         setView('card');
+        setCardRoute(cardRouteFromHash(installRouteRef.current));
         return;
       }
-      setView(viewFromHash());
+      const nextView = viewFromHash();
+      setView(nextView);
+      if (nextView === 'card') setCardRoute(cardRouteFromHash());
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -568,7 +575,7 @@ function Shell() {
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
-            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} onOpenSection={openCardSection} />
+            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} onOpenSection={openCardSection} route={cardRoute} />
             <ScreenReady />
           </> : null}
         </Suspense>

@@ -92,6 +92,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   const savingPassRef = useRef(false);
   const previousStateRef = useRef(run?.state);
   const ProductionHeading = embedded ? 'h2' : 'h1';
+  const ProductionLandmark = embedded ? 'section' : 'main';
 
   const advance = useCallback(async (next, options = {}) => {
     const updated = await updateProductionRunAtomically(current => transitionProductionRun(current, next, { correlation: correlation(current), ...options }));
@@ -553,7 +554,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   if (!cap.canProductionWebSerial) {
     const mobile = cap.isMobile;
     const retainedCode = new URLSearchParams(window.location.hash.slice(1)).get('job');
-    const handoff = <main className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</main>;
+    const handoff = <ProductionLandmark className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</ProductionLandmark>;
     return embedded ? <div className="prod-screen prod-embedded">{handoff}</div> : <div className="screen prod-screen">{handoff}</div>;
   }
 
@@ -563,7 +564,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   return (
     <div className={embedded ? 'prod-screen prod-embedded' : 'screen prod-screen'}>
       <div className={embedded ? 'prod-embedded-scroll' : 'screen-scroll'}>
-        <main className="prod-shell">
+        <ProductionLandmark className="prod-shell">
           <header className="prod-hero">
             <div><span className="prod-kicker">Workshop · browser USB</span><ProductionHeading ref={primaryRef} tabIndex={-1}>Production setup</ProductionHeading><p>One card, one verified artwork, one physical pass. No firmware files or GPIO tables.</p></div>
             <div className="prod-safety"><span aria-hidden="true">●</span> Chrome/Edge · secure USB · no Bridge</div>
@@ -604,7 +605,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
             </div>
             <aside><ProductionPassRecord refreshKey={recordRefresh} /></aside>
           </div>
-        </main>
+        </ProductionLandmark>
       </div>
     </div>
   );

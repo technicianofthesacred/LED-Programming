@@ -45,7 +45,8 @@
   font-weight: 650; letter-spacing: .1em; text-transform: uppercase;
 }
 .card-workspace-header h1 { margin: 5px 0 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.025em; }
-.card-workspace-header h1:focus { outline: none; }
+.card-workspace-header h1:focus,
+.card-workspace-header h1:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--r-sm); }
 .card-overview { display: grid; gap: 18px; }
 .card-overview-state {
   display: flex; align-items: flex-start; gap: 12px; padding: 18px;
@@ -54,6 +55,8 @@
 .card-overview-state p { margin: 5px 0 0; color: var(--text-mid); line-height: 1.55; }
 .card-overview-signal { width: 10px; height: 10px; flex: 0 0 auto; margin-top: 4px; border-radius: 50%; background: var(--idle); }
 .card-overview-signal.connected { background: var(--ok); box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 60%, transparent); }
+.card-overview-signal.connecting { background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent); }
+.card-overview-signal.failure { background: var(--danger); }
 .card-setup-steps {
   display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0;
   margin: 0; padding: 0; overflow: hidden; list-style: none;

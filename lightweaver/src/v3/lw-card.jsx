@@ -3,6 +3,7 @@ import { AutomaticInstallScreen, TechnicianFlashScreen } from './lw-flash.jsx';
 import { InstallerScreen } from './lw-installer.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
+import { cardLinkReasonText, isCardLinkConnected } from '../lib/cardLink.js';
 
 const SECTION_LABELS = Object.freeze({
   overview: 'Card',
@@ -13,23 +14,6 @@ const SECTION_LABELS = Object.freeze({
   preferences: 'Preferences',
 });
 
-const SECTION_KEYS = new Set(Object.keys(SECTION_LABELS));
-
-function readCardRoute() {
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  const screen = String(params.get('screen') || '').toLowerCase();
-  if (screen === 'flash') {
-    return params.get('mode') === 'install'
-      ? { section: 'install', supportTool: '' }
-      : { section: 'support', supportTool: 'technician' };
-  }
-  if (screen === 'installer') return { section: 'support', supportTool: 'guide' };
-  if (screen === 'production') return { section: 'workshop', supportTool: '' };
-  if (screen === 'settings') return { section: 'preferences', supportTool: '' };
-  const section = params.get('section');
-  return { section: SECTION_KEYS.has(section) ? section : 'overview', supportTool: '' };
-}
-
 function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSection }) {
   const identity = cardLink?.identity?.name
     || cardLink?.identity?.id
@@ -39,17 +23,87 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
     || cardLink?.cardId
     || cardLink?.host
     || cardHost;
+  const ready = cardLink ? isCardLinkConnected(cardLink) : connected;
+  const state = cardLink?.state || (ready ? 'connected-direct' : 'disconnected');
+  const reason = cardLink?.reason || '';
+  const activity = cardLink?.activity || 'idle';
+
+  let presentation;
+  if (activity === 'failed') {
+    presentation = {
+      tone: 'failure',
+      message: 'The last card operation failed. Reconnect and inspect the card before retrying it.',
+      primary: { label: 'Reconnect card', action: 'connect' },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (state === 'reconnecting-bridge' || reason === 'card-restarting') {
+    presentation = {
+      tone: 'connecting',
+      message: `${identity || 'The Lightweaver card'} is restarting. Studio is waiting for it to answer again.`,
+      primary: { label: 'Card restarting…', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (activity === 'recovering') {
+    presentation = {
+      tone: 'connecting',
+      message: 'Studio is recovering the last card operation. Keep this page open until the result is confirmed.',
+      primary: { label: 'Recovery in progress…', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (state === 'connecting' || activity === 'pending') {
+    presentation = {
+      tone: 'connecting',
+      message: activity === 'pending'
+        ? 'A card operation is in progress. Keep this page open until Studio confirms the result.'
+        : 'Studio is looking for the card. Keep the card page open while its identity is verified.',
+      primary: { label: activity === 'pending' ? 'Card operation in progress…' : 'Connecting…', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (ready) {
+    presentation = {
+      tone: 'connected',
+      message: `${identity || 'A Lightweaver card'} is connected and available to inspect.`,
+      primary: { label: 'Load changes', section: 'settings' },
+    };
+  } else if (reason && reason !== 'never-connected') {
+    const updateNeeded = reason === 'firmware-too-old' || reason === 'identity-missing';
+    presentation = {
+      tone: 'failure',
+      message: updateNeeded
+        ? `${cardLinkReasonText(reason)} Update it before loading changes.`
+        : `${cardLinkReasonText(reason)} Reconnect and inspect the card before loading changes.`,
+      primary: updateNeeded
+        ? { label: 'Update card', section: 'install' }
+        : { label: reason === 'wrong-card' ? 'Connect expected card' : 'Reconnect card', action: 'connect' },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else {
+    presentation = {
+      tone: 'disconnected',
+      message: 'A Lightweaver card is not connected. Connect one to inspect it before installing or loading a project.',
+      primary: { label: 'Connect card', action: 'connect' },
+      secondary: { label: 'Install Lightweaver', section: 'install' },
+    };
+  }
+
+  const renderAction = (action, primary = false) => action && (
+    <button
+      type="button"
+      className={`btn${primary ? ' primary' : ''}`}
+      disabled={action.disabled}
+      onClick={() => action.action === 'connect' ? onConnectCard?.() : onOpenSection(action.section)}
+    >
+      {action.label}
+    </button>
+  );
+
   return (
     <div className="card-overview">
       <div className="card-overview-state">
-        <span className={`card-overview-signal${connected ? ' connected' : ''}`} aria-hidden="true" />
+        <span className={`card-overview-signal ${presentation.tone}`} aria-hidden="true" />
         <div>
           <span className="card-workspace-kicker">Detected state</span>
-          <p data-testid="card-detected-state">
-            {connected
-              ? `${identity || 'A Lightweaver card'} is connected and available to inspect.`
-              : 'A Lightweaver card is not connected. Connect one to inspect it before installing or loading a project.'}
-          </p>
+          <p data-testid="card-detected-state">{presentation.message}</p>
         </div>
       </div>
 
@@ -60,16 +114,16 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
       </ol>
 
       <div className="card-overview-actions">
-        {connected ? (
+        {ready && activity === 'idle' ? (
           <>
-            <button type="button" className="btn primary" onClick={() => onOpenSection('settings')}>Load changes</button>
+            {renderAction(presentation.primary, true)}
             <button type="button" className="btn" onClick={() => onOpenSection('install')}>Check for update</button>
             <button type="button" className="btn" onClick={() => onOpenSection('workshop')}>Verify in workshop</button>
           </>
         ) : (
           <>
-            <button type="button" className="btn primary" onClick={() => onConnectCard?.()}>Connect card</button>
-            <button type="button" className="btn" onClick={() => onOpenSection('install')}>Install Lightweaver</button>
+            {renderAction(presentation.primary, true)}
+            {renderAction(presentation.secondary)}
           </>
         )}
       </div>
@@ -125,15 +179,8 @@ function CardSupport({ initialTool, cardProps, onOpenSection }) {
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenSection }) {
-  const [route, setRoute] = useState(readCardRoute);
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenSection, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
-
-  useEffect(() => {
-    const sync = () => setRoute(readCardRoute());
-    window.addEventListener('hashchange', sync);
-    return () => window.removeEventListener('hashchange', sync);
-  }, []);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => headingRef.current?.focus());
