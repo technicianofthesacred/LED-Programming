@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
 import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
@@ -18,6 +19,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 
 export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -112,7 +114,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
   return (
     <div className="screen">
-      <div className="la">
+      <div className={`la${inspectorCollapsed ? ' inspector-collapsed' : ''}`}>
 
       {/* ── Hidden file inputs ─────────────────────────────────────── */}
       <input ref={fileRef} type="file" accept=".svg"  style={{ display: 'none' }} onChange={handleFile}/>
@@ -126,27 +128,32 @@ export function LayoutScreen({ connected, cardHost }) {
 
           <div className="tb-div"/>
 
-          <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
-                  title="Import an SVG to map LED strips">
-            {TbIcon.import}Import SVG
-          </button>
+          {mode === 'draw' && (
+            <>
+              <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
+                      title="Import an SVG to map LED strips">
+                {TbIcon.import}Import SVG
+              </button>
 
-          {layers.length > 0 && (
-            <button className="tb-btn" onClick={addAllStrips}
-                    title={`Add all ${layers.length} layers as strips (A)`}>
-              + All ({layers.length})
-            </button>
+              {layers.length > 0 && (
+                <button className="tb-btn" onClick={addAllStrips}
+                        title={`Add all ${layers.length} layers as strips (A)`}>
+                  + All ({layers.length})
+                </button>
+              )}
+
+              <div className="tb-div"/>
+
+              <button
+                className={`tb-btn${drawMode ? ' active' : ''}`}
+                title="Draw a new LED strip path on the artwork."
+                onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setGhostPt(null); }}>
+                {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
+              </button>
+            </>
           )}
 
-          <div className="tb-div"/>
-
           {/* Draw / Chop / Link tools */}
-          <button
-            className={`tb-btn${drawMode ? ' active' : ''}`}
-            title="Draw a new LED strip path on the artwork."
-            onClick={() => { setDrawMode(m => !m); setWireOverlayMode('idle'); setGhostPt(null); }}>
-            {TbIcon.draw}{drawMode ? 'Drawing…' : 'Draw'}
-          </button>
           {/* Split / Link are wire concerns — surfaced only in Wire mode
               (plan's canvas behavior matrix: chop/link overlays are Wire only). */}
           {mode === 'wire' && (
@@ -270,11 +277,17 @@ export function LayoutScreen({ connected, cardHost }) {
         <LayoutCanvas {...canvasProps}/>
 
       {/* ── Right panel (mockup .side) ─────────────────────────────── */}
-      <aside className="side">
-        <div className="la-sheet-handle" data-testid="layout-sheet-handle" aria-label="Inspector panel">
+      <aside className={`side${inspectorCollapsed ? ' is-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="la-sheet-handle"
+          data-testid="layout-sheet-handle"
+          aria-label={inspectorCollapsed ? 'Expand inspector' : 'Collapse inspector'}
+          aria-expanded={!inspectorCollapsed}
+          onClick={() => setInspectorCollapsed(collapsed => !collapsed)}>
           <span aria-hidden="true"/>
           <strong>Inspector</strong>
-        </div>
+        </button>
         {mode === 'draw' && <DrawModePanel state={state}/>}
         {mode === 'size' && <SizeModePanel state={state}/>}
         {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>}

@@ -127,21 +127,43 @@ test('mobile Layout keeps a useful canvas and presents the inspector as a bottom
   const canvas = page.locator('.lw-viewport');
   const sheet = page.locator('.la .side');
   await expect(canvas).toBeVisible();
-  await expect(sheet).toHaveCSS('position', 'fixed');
-  await expect(page.getByTestId('layout-sheet-handle')).toBeVisible();
+  await expect(sheet).toHaveCSS('position', 'absolute');
+  const collapse = page.getByRole('button', { name: 'Collapse inspector' });
+  await expect(collapse).toBeVisible();
+  const collapseBox = await collapse.boundingBox();
+  expect(collapseBox?.height).toBeGreaterThanOrEqual(44);
+  await collapse.click();
+  await expect(page.getByRole('button', { name: 'Expand inspector' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Expand inspector' })).toHaveAttribute('aria-expanded', 'false');
   const canvasBox = await canvas.boundingBox();
   const sheetBox = await sheet.boundingBox();
   if (!canvasBox || !sheetBox) throw new Error('mobile canvas or inspector unavailable');
   const nonOverlappedCanvasHeight = Math.min(canvasBox.y + canvasBox.height, sheetBox.y) - canvasBox.y;
-  expect(nonOverlappedCanvasHeight).toBeGreaterThan(240);
+  expect(nonOverlappedCanvasHeight).toBeGreaterThan(300);
+  await page.getByRole('button', { name: 'Expand inspector' }).click();
+  await expect(page.getByRole('button', { name: 'Collapse inspector' })).toHaveAttribute('aria-expanded', 'true');
 });
 
-test('toolbar names mode actions before Project and Card calibration groups', async ({ page }) => {
+test('mode toolbar only presents tools that apply while keeping secondary groups named', async ({ page }) => {
   await gotoLayout(page);
   const toolbar = page.locator('.la .toolbar');
   await expect(toolbar.getByRole('group', { name: 'Mode actions' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Project' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Card calibration' })).toBeVisible();
+  await expect(page.getByTitle('Import an SVG to map LED strips')).toBeVisible();
+  await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toBeVisible();
+  await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toHaveCount(0);
+  await expect(page.getByTitle('Join two strips into one continuous run.')).toHaveCount(0);
+
+  await page.getByTestId('layout-mode-size').click();
+  await expect(page.getByTitle('Import an SVG to map LED strips')).toHaveCount(0);
+  await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toHaveCount(0);
+
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toBeVisible();
+  await expect(page.getByTitle('Join two strips into one continuous run.')).toBeVisible();
+  await expect(page.getByTitle('Import an SVG to map LED strips')).toHaveCount(0);
+  await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toHaveCount(0);
 });
 
 test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ page }) => {
