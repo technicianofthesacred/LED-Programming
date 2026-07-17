@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { WiringRunRow } from './WiringRunRow.jsx';
 
 export function WiringOutputLane({
@@ -8,6 +9,7 @@ export function WiringOutputLane({
   supportedPins = [], unavailablePins = [], onPinChange,
   onOutputPointerDown, onMoveOutput, onRemoveOutput, outputDragging, outputDropPlacement,
 }) {
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const compiledById = new Map(compiledRuns.map(run => [run.id, run]));
   return (
     <section className={`lw-wiring-output${dropTarget && !dropTargetRunId ? ' is-drop-target' : ''}${outputDragging ? ' is-output-dragging' : ''}${outputDropPlacement ? ` is-output-drop-${outputDropPlacement}` : ''}`} data-testid="wiring-output-lane" data-output-id={output.id}>
@@ -24,7 +26,8 @@ export function WiringOutputLane({
           onPointerDown={event => onCordPointerDown(`output:${output.id}`, event)}
           onPointerUp={event => onCordPointerUp(`output:${output.id}`, event)}
           onClick={() => onPort(`output:${output.id}`, 'out')}
-        >OUT</button>
+          title="LED data leaves the card here"
+        >DATA</button>
         <h3>{output.name || output.id}</h3>
         <span>{runs.reduce((sum, run) => sum + (compiledById.get(run.id)?.count || 0), 0)} px</span>
         {advanced ? (
@@ -32,7 +35,14 @@ export function WiringOutputLane({
             {supportedPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePins.includes(pin)}>GPIO {pin}</option>)}
           </select>
         ) : <span className="lw-output-gpio-label">GPIO {output.pin}</span>}
-        <button className="lw-wire-remove" aria-label={`Remove ${output.name}`} title={runs.length ? `Remove all runs before removing ${output.name}` : `Remove ${output.name}`} disabled={locked || runs.length > 0} onClick={() => onRemoveOutput()}>×</button>
+        <button
+          className={`lw-wire-remove${confirmRemove ? ' is-confirming' : ''}`}
+          aria-label={confirmRemove ? `Confirm remove ${output.name}` : `Remove ${output.name}`}
+          title={runs.length ? `Move every LED strip before removing ${output.name}` : `Remove ${output.name}`}
+          disabled={locked || runs.length > 0}
+          onBlur={() => setConfirmRemove(false)}
+          onClick={() => { if (confirmRemove) onRemoveOutput(); else setConfirmRemove(true); }}
+        >{confirmRemove ? 'Remove?' : 'Remove'}</button>
       </header>
       <div role="listbox" aria-label={`${output.name || output.id} runs`}>
         {runs.length === 0 && <p className="la-wire-chain-empty">Connect a run to this output.</p>}

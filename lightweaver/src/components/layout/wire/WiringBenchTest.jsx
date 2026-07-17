@@ -142,12 +142,18 @@ export function WiringBenchTest({
 
   if (!state || state.status === 'cancelled' || state.status === 'complete') return (
     <section className="lw-bench-test" data-testid="wiring-bench-test">
-      <div className="lw-bench-idle-row">
-        <div><span className="lw-bench-kicker">Physical check</span><strong>Verify the real LEDs</strong></div>
-        <button className="btn primary" disabled={!acknowledged || !compiled.ok} onClick={begin}>Start wiring test</button>
+      <div className="lw-bench-idle-heading">
+        <span className="lw-bench-kicker">Required before installation</span>
+        <strong>Verify the real LEDs</strong>
+        <p>The card will mark the first LED blue and the final LED red on each strip.</p>
       </div>
-      <label className="lw-bench-ack"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/> I can see the strip</label>
-      {state?.status === 'complete' && <p>Bench verification complete. Wiring can now be locked.</p>}
+      <label className="lw-bench-ack"><input type="checkbox" aria-label="The LED strips are visible from here" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/><span><strong>The LED strips are visible from here</strong><small>I can watch the real LEDs while running the check.</small></span></label>
+      <div className="lw-bench-start-row">
+        {!acknowledged && <span>Confirm that you can see the LEDs to start the check.</span>}
+        {acknowledged && !compiled.ok && <span>Fix the LED output mapping errors to start the check.</span>}
+        <button aria-label="Start physical LED check (Start wiring test)" className={`btn${acknowledged && compiled.ok ? ' primary' : ''}`} disabled={!acknowledged || !compiled.ok} onClick={begin}>Start physical LED check</button>
+      </div>
+      {state?.status === 'complete' && <p>Physical LED check complete. Review and lock the wiring before installation.</p>}
       {featureGap && <div className="lw-wiring-error"><p>{featureGap.message}</p><button className="btn" onClick={() => { openCardBridge(); window.location.hash = '#screen=flash'; }}>Open Flash</button></div>}
     </section>
   );
