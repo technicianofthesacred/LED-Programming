@@ -5,6 +5,7 @@
 #include <SPI.h>
 
 #include "LightweaverTypes.h"
+#include "LightweaverColorPipeline.h"
 #include "LightweaverStorage.h"
 #include "LightweaverPatterns.h"
 #include "LightweaverControls.h"
@@ -68,6 +69,7 @@ ControlsConfig controls;
 LookConfig looks[LW_MAX_LOOKS];
 
 RuntimeConfig runtimeConfig;
+LightweaverColorPipeline outputColorPipeline;
 
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
@@ -151,7 +153,6 @@ void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone
 CRGB colorForPreset(const String& preset);
 void showLeds();
 void copyLogicalToPhysicalLeds();
-CRGB mapLogicalToPhysicalColor(const CRGB& color);
 bool isValidLedColorOrder(const String& order);
 uint8_t computeColorOrderCode(const String& order);
 void fadeTo(float target, uint16_t durationMs);
@@ -384,6 +385,7 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   runtimeMode = config.mode;
   startupLookId = config.startupLookId;
   ledColorOrder = config.ledColorOrder;
+  outputColorPipeline.configure(config.outputColor);
   brightnessLimit = config.brightnessLimit;
   ledMaxMilliamps = config.maxMilliamps;
   outputCount = config.outputCount;
@@ -586,7 +588,7 @@ void showSafeDiscoveryFrame() {
   for (uint8_t i = start; i < end; i++) {
     if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
     uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
-    CRGB physicalColor = mapLogicalToPhysicalColor(colors[i - start]);
+    CRGB physicalColor = outputColorPipeline.transform(colors[i - start], computeColorOrderCode(ledColorOrder));
     fill_solid(physicalLeds + bufferStart, LW_DISCOVERY_PIXELS_PER_OUTPUT, physicalColor);
   }
   FastLED.setBrightness(LW_DISCOVERY_BRIGHTNESS);
@@ -1081,7 +1083,7 @@ void copyLogicalToPhysicalLeds() {
         const uint16_t physicalIndex = segment.reversed
           ? segmentStart + segment.count - 1 - offset
           : logicalIndex;
-        physicalLeds[physicalIndex] = mapLogicalToPhysicalColor(leds[logicalIndex]);
+        physicalLeds[physicalIndex] = outputColorPipeline.transform(leds[logicalIndex], ledColorOrderCode);
       }
       segmentStart += segment.count;
     }
@@ -1095,17 +1097,6 @@ uint8_t computeColorOrderCode(const String& order) {
   if (order == "RBG") return 4;
   if (order == "GBR") return 5;
   return 0;  // RGB / unknown → passthrough
-}
-
-CRGB mapLogicalToPhysicalColor(const CRGB& color) {
-  switch (ledColorOrderCode) {
-    case 1: return CRGB(color.g, color.r, color.b);  // GRB
-    case 2: return CRGB(color.b, color.r, color.g);  // BRG
-    case 3: return CRGB(color.b, color.g, color.r);  // BGR
-    case 4: return CRGB(color.r, color.b, color.g);  // RBG
-    case 5: return CRGB(color.g, color.b, color.r);  // GBR
-    default: return color;                           // RGB
-  }
 }
 
 bool isValidLedColorOrder(const String& order) {
@@ -1485,6 +1476,14 @@ String runtimeFirmwareInfo() {
   counts["blackout"] = controlEventCounts[CONTROL_BLACKOUT];
   counts["brighter"] = controlEventCounts[CONTROL_BRIGHTER];
   counts["dimmer"] = controlEventCounts[CONTROL_DIMMER];
+  doc["capabilities"]["outputColor"] = 1;
+  doc["outputColor"]["contract"] = 1;
+  doc["outputColor"]["colorOrder"] = ledColorOrder;
+  doc["outputColor"]["gammaEnabled"] = outputColorPipeline.gammaEnabled();
+  doc["outputColor"]["gammaValue"] = outputColorPipeline.gammaValue();
+  doc["outputColor"]["calibration"]["red"] = outputColorPipeline.redBalance();
+  doc["outputColor"]["calibration"]["green"] = outputColorPipeline.greenBalance();
+  doc["outputColor"]["calibration"]["blue"] = outputColorPipeline.blueBalance();
   String out;
   serializeJson(doc, out);
   return out;
@@ -1604,6 +1603,11 @@ uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
 bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
+bool runtimeOutputGammaEnabled() { return outputColorPipeline.gammaEnabled(); }
+float runtimeOutputGammaValue() { return outputColorPipeline.gammaValue(); }
+float runtimeOutputCalibrationRed() { return outputColorPipeline.redBalance(); }
+float runtimeOutputCalibrationGreen() { return outputColorPipeline.greenBalance(); }
+float runtimeOutputCalibrationBlue() { return outputColorPipeline.blueBalance(); }
 
 String runtimeWiringSafetyStatus() {
   String stored = runtimeWiringSafetyStatusJson();

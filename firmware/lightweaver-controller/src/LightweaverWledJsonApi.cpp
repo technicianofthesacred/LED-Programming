@@ -94,6 +94,12 @@ String buildInfoJson() {
   doc["lwLive"]["streaming"] = frameSourceIsStreaming();
   doc["lwLive"]["source"] = src == 1 ? "wled-realtime"
                           : src == 2 ? "artnet" : "self";
+  doc["lwOutput"]["contract"] = 1;
+  doc["lwOutput"]["gammaEnabled"] = runtimeOutputGammaEnabled();
+  doc["lwOutput"]["gammaValue"] = runtimeOutputGammaValue();
+  doc["lwOutput"]["calibration"]["red"] = runtimeOutputCalibrationRed();
+  doc["lwOutput"]["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  doc["lwOutput"]["calibration"]["blue"] = runtimeOutputCalibrationBlue();
   String out;
   serializeJson(doc, out);
   return out;
