@@ -115,7 +115,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
   return (
     <div className="screen">
-      <div className={`la${inspectorCollapsed ? ' inspector-collapsed' : ''}`}>
+      <div className={`la mode-${mode}${inspectorCollapsed ? ' inspector-collapsed' : ''}`}>
 
       {/* ── Hidden file inputs ─────────────────────────────────────── */}
       <input ref={fileRef} type="file" accept=".svg"  style={{ display: 'none' }} onChange={handleFile}/>

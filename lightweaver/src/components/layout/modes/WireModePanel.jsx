@@ -643,7 +643,7 @@ export function WireModePanel({ state, connected, cardHost }) {
         <span className="lw-bench-kicker">Commission the installation</span>
         <strong>Wire the physical LEDs</strong>
         <p><b>Connect each physical run from the card to its final LED.</b></p>
-        <p>Match the run order to the real data wire, then validate the route on the LEDs before installation.</p>
+        <p>Match the run order to the real data wire. Validate the route on the LEDs before installation.</p>
       </section>
       <CommissioningStep
         number={1}

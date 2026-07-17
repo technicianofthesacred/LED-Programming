@@ -192,6 +192,7 @@
 .lw-commissioning-intro { display: grid; gap: 3px; padding: 2px 0 12px; }
 .lw-commissioning-intro > strong { color: var(--text-hi); font-size: 16px; font-weight: 650; }
 .lw-commissioning-intro > p { margin: 0; color: var(--text-mid); font-size: 12px; line-height: 1.45; }
+.lw-commissioning-intro > p b { color: var(--text-hi); font-weight: 650; }
 .lw-commissioning-step { min-width: 0; border-top: 1px solid var(--border-soft); }
 .lw-commissioning-step:last-child { border-bottom: 1px solid var(--border-soft); }
 .lw-step-header { display: grid; grid-template-columns: 24px minmax(0,1fr) auto auto; align-items: center; gap: 8px; min-height: 52px; padding: 7px 0; }
@@ -506,12 +507,13 @@
 @media (max-width: 600px) {
   .screen:has(> .la) { position: relative; }
   .la {
-    --mobile-sheet-height: clamp(300px, 44dvh, 480px);
+    --mobile-sheet-height: clamp(180px, 28dvh, 240px);
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
     grid-template-areas: "tool" "body";
     padding-bottom: var(--mobile-sheet-height);
   }
+  .la.mode-wire { --mobile-sheet-height: clamp(300px, 44dvh, 480px); }
   .la.inspector-collapsed { --mobile-sheet-height: 44px; }
   .la .side {
     position: absolute;

@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const TEST_CARD_ID = 'lw-layout-tests';
+const TEST_BUILD_ID = 'a'.repeat(40);
+
 // Phase 2 step 9 (docs/layout-redesign-plan.md) — the Wire-mode finish line:
 // Send to card + Export ledmap.json. Reuses the `mockLocalCard` route pattern
 // from workflow.spec.ts. The default project boots the two-circle hardware
@@ -22,13 +25,17 @@ async function mockLocalCard(page: any, options: any = {}) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === '/api/status') {
-      await route.fulfill({ json: { ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
+      await route.fulfill({ json: { app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: TEST_BUILD_ID, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
       return;
     }
     if (pathname === '/api/firmware-info') {
       await route.fulfill({
         json: {
           ok: true,
+          app: 'Lightweaver',
+          cardId: TEST_CARD_ID,
+          firmwareVersion: '1.0.0',
+          buildId: TEST_BUILD_ID,
           pixels: 44,
           outputs: options.currentOutputs || [{ id: 'out1', pin: 16, pixels: 44 }],
         },
@@ -99,9 +106,15 @@ async function mockLocalCard(page: any, options: any = {}) {
 }
 
 async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void), url = '/#screen=layout&mode=wire' } = {}) {
-  await page.addInitScript(() => localStorage.clear());
+  await page.addInitScript(cardId => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
+  }, TEST_CARD_ID);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
+  const installToggle = installStep.locator('.lw-step-toggle');
+  if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
   if (!verified) return;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
@@ -114,11 +127,17 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   project.layout.wiring.verified = true;
   project.layout.wiring.locked = true;
   project.layout.wiring.runs.forEach((run: any) => { run.verified = true; });
+  const led = project.devices.standaloneController.led;
+  led.colorOrder = led.colorOrder || 'RGB';
+  led.colorOrderConfirmed = true;
+  led.confirmedColorOrder = led.colorOrder;
   transformProject?.(project);
   const ready = path.join(tmp, 'ready.json');
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  const reloadedInstallToggle = page.getByRole('region', { name: 'Step 5: Review and install' }).locator('.lw-step-toggle');
+  if (await reloadedInstallToggle.getAttribute('aria-expanded') !== 'true') await reloadedInstallToggle.click();
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
@@ -158,7 +177,7 @@ test('Send to card stays disabled for default unverified wiring and makes no req
   await expect(send).toContainText('Install on card');
   await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
   await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'File only — does not change the card');
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup — does not change the Lightweaver card');
   expect(card.operations).toEqual([]);
 });
 
@@ -237,8 +256,6 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   await expect(banner.getByRole('button', { name: 'Retry' })).toBeVisible();
 
   const failedPayload = card.attemptedConfigs.at(-1);
-  page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: 'New project' }).click();
   options.failConfig = false;
   await banner.getByRole('button', { name: 'Retry' }).click();
   await expect(banner).toHaveClass(/is-ok/);

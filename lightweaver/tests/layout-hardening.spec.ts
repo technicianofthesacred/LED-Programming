@@ -5,6 +5,14 @@ async function gotoLayout(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 }
 
+async function openWireStep(page: any, regionName: string, toggleName: string, target: (step: any) => any) {
+  const step = page.getByRole('region', { name: regionName });
+  if (!await target(step).isVisible().catch(() => false)) {
+    await step.getByRole('button', { name: toggleName }).click();
+  }
+  await expect(target(step)).toBeVisible();
+}
+
 test('pending drawing survives a mode visit until explicitly cancelled', async ({ page }) => {
   await gotoLayout(page);
   await page.getByTitle('Draw a new LED strip path on the artwork.').click();
@@ -176,9 +184,13 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
+  await openWireStep(page, 'Step 1: Choose data wires', 'Edit data wire count', step => step.getByRole('group', { name: 'LED data wire count' }));
+  await openWireStep(page, 'Step 2: Map LED outputs', 'Edit LED output mapping', step => step.getByRole('button', { name: /Outer circle IN port/ }));
+  await openWireStep(page, 'Step 5: Review and install', 'Open install review', step => step.getByTestId('layout-send-to-card'));
   for (const control of [
     page.getByRole('group', { name: 'LED data wire count' }).getByRole('button').first(),
     page.getByRole('button', { name: /Outer circle IN port/ }),
+    page.getByTestId('layout-send-to-card'),
   ]) {
     const box = await control.boundingBox();
     expect(box?.height).toBeGreaterThanOrEqual(44);
@@ -197,6 +209,8 @@ test('mobile Layout keeps a useful canvas and presents the inspector as a bottom
   await expect(collapse).toBeVisible();
   const collapseBox = await collapse.boundingBox();
   expect(collapseBox?.height).toBeGreaterThanOrEqual(44);
+  const compactSheetBox = await sheet.boundingBox();
+  expect(compactSheetBox?.height).toBeLessThanOrEqual(240);
   await collapse.click();
   await expect(page.getByRole('button', { name: 'Expand inspector' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Expand inspector' })).toHaveAttribute('aria-expanded', 'false');
@@ -207,6 +221,10 @@ test('mobile Layout keeps a useful canvas and presents the inspector as a bottom
   expect(nonOverlappedCanvasHeight).toBeGreaterThan(300);
   await page.getByRole('button', { name: 'Expand inspector' }).click();
   await expect(page.getByRole('button', { name: 'Collapse inspector' })).toHaveAttribute('aria-expanded', 'true');
+  await page.getByTestId('layout-mode-wire').click();
+  const wireSheetBox = await sheet.boundingBox();
+  expect(wireSheetBox?.height).toBeGreaterThanOrEqual(300);
+  expect(wireSheetBox?.height).toBeLessThanOrEqual(480);
 });
 
 test('mode toolbar only presents tools that apply while keeping secondary groups named', async ({ page }) => {
