@@ -767,7 +767,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .inst { max-width: 1240px; margin: 0 auto; padding: 28px 32px 48px; }
 .inst-hero { display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; }
 .inst-kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); font-weight: 600; margin-bottom: 6px; }
-.inst-hero h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+.inst-hero h1, .inst-hero h2 { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
 .inst-hero p { font-size: 13px; color: var(--text-lo); margin-top: 7px; max-width: 560px; line-height: 1.5; }
 .inst-actions { margin-left: auto; display: flex; gap: 8px; }
 .inst-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; align-items: start; }

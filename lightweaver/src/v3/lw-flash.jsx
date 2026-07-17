@@ -214,6 +214,8 @@ import { openInChrome } from '../lib/openInChrome.js';
     const canFlash = connected && fw && !flashing && (!erase || eraseConfirmed);
     const canConnect = hasWebSerial && !connecting && !flashing;
 
+    const TechnicianHeading = embedded ? 'h2' : 'h1';
+
     return (
       <div className={embedded ? 'technician-embedded' : 'screen'}>
         <div className={embedded ? 'technician-embedded-scroll' : 'screen-scroll'}>
@@ -222,7 +224,7 @@ import { openInChrome } from '../lib/openInChrome.js';
             <div className="fl">
             <div>
               <div className="eyebrow">Advanced tools</div>
-              <h1 className="flash-screen-title">Manual firmware tools</h1>
+              <TechnicianHeading className="flash-screen-title">Manual firmware tools</TechnicianHeading>
               <p className="flash-screen-intro">Manual firmware files, offsets, erase controls, and the serial log are kept here for trained repair work.</p>
             </div>
             <div className={"fl-warn " + (hasWebSerial ? "ok" : "warn")}>
@@ -323,7 +325,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     });
   }
 
-  function UnsupportedInstall({ action, onLaunchBridge }) {
+  function UnsupportedInstall({ action, onLaunchBridge, embedded = false }) {
     const [bridgeState, setBridgeState] = useState('idle');
     const [returnCode, setReturnCode] = useState('');
     const [returnError, setReturnError] = useState('');
@@ -358,10 +360,12 @@ import { openInChrome } from '../lib/openInChrome.js';
         break;
     }
 
+    const UnsupportedHeading = embedded ? 'h2' : 'h1';
+
     return (
       <div className="card install-handoff" role="status">
         <div className="eyebrow">Your project is safe in Studio</div>
-        <h1>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h1>
+        <UnsupportedHeading>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</UnsupportedHeading>
         <p>{action.explanation}</p>
         <ol>
           <li>{firstStep}</li>
@@ -484,7 +488,7 @@ import { openInChrome } from '../lib/openInChrome.js';
       },
     });
 
-    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} />;
+    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} embedded={embedded} />;
 
     const findCard = async () => {
       if (findingRef.current || installingRef.current) return;

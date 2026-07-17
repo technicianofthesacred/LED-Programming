@@ -97,6 +97,33 @@ test('embedded install uses the Card heading as the only h1', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Install Lightweaver', level: 2 })).toBeVisible();
 });
 
+test('embedded unsupported install uses the Card heading as the only h1', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+  });
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Install or update', level: 1 })).toBeVisible();
+  await expect(page.locator('.install-handoff').getByRole('heading', { level: 2 })).toBeVisible();
+});
+
+test('legacy technician path uses the Card heading as the only h1', async ({ page }) => {
+  await page.goto('/#screen=flash', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Advanced & Support', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Manual firmware tools', level: 2 })).toBeVisible();
+});
+
+test('legacy installer guide path uses the Card heading as the only h1', async ({ page }) => {
+  await page.goto('/#screen=installer', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Advanced & Support', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Worker install', level: 2 })).toBeVisible();
+});
+
 test('embedded workshop uses the Card heading as the only h1', async ({ page }) => {
   await page.goto('/#screen=card&section=workshop', { waitUntil: 'domcontentloaded' });
 
