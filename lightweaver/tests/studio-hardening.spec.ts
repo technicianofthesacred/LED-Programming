@@ -1,4 +1,38 @@
 import { test, expect } from '@playwright/test';
+import { createDefaultProject, migrateProject } from '../src/lib/projectModel.js';
+import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+
+const DEFAULT_PROJECT = migrateProject(createDefaultProject());
+const DEFAULT_RUNTIME = buildCardRuntimePackageFromProject({
+  projectId: DEFAULT_PROJECT.id,
+  projectName: DEFAULT_PROJECT.name,
+  strips: DEFAULT_PROJECT.layout.strips,
+  patchBoard: DEFAULT_PROJECT.layout.patchBoard,
+  standaloneController: DEFAULT_PROJECT.devices.standaloneController,
+}).config;
+
+async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening') {
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    json: { cardId, firmwareVersion: '1.0.0', outputs: DEFAULT_RUNTIME.led.outputs },
+  }));
+  await page.route('**/api/status', route => route.fulfill({
+    json: { ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: DEFAULT_RUNTIME.led.pixels } },
+  }));
+  await page.route('**/api/zones', route => route.fulfill({
+    json: { ok: true, zones: DEFAULT_RUNTIME.zones },
+  }));
+  await page.route('**/api/config', route => route.fulfill({
+    json: { ok: true, requiresReboot: false },
+  }));
+  await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
+  });
+  await page.evaluate((id) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
+  }, cardId);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
@@ -61,6 +95,7 @@ test('pattern preview follows canonical reordered and reversed physical addresse
 });
 
 test('Settings installs the exact requested revision when an edit happens during the write', async ({ page }) => {
+  await mockConnectedCard(page);
   await page.route('**/api/config', async route => {
     await new Promise(resolve => setTimeout(resolve, 1500));
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
@@ -78,7 +113,7 @@ test('Settings installs the exact requested revision when an edit happens during
 });
 
 test('Pattern card write is pending, disables conflicts, and exposes retry after failure', async ({ page }) => {
-  await page.route('**/api/status', route => route.fulfill({ json: { ok: true, led: { pixels: 44 } } }));
+  await mockConnectedCard(page);
   await page.route('**/api/config', async route => {
     await new Promise(resolve => setTimeout(resolve, 1500));
     await route.fulfill({ status: 503, json: { ok: false } });
@@ -92,7 +127,7 @@ test('Pattern card write is pending, disables conflicts, and exposes retry after
 });
 
 test('Pattern confirms the exact draft revision installed on the card', async ({ page }) => {
-  await page.route('**/api/status', route => route.fulfill({ json: { ok: true, led: { pixels: 44 } } }));
+  await mockConnectedCard(page);
   await page.route('**/api/config', route => route.fulfill({ json: { ok: true, requiresReboot: false } }));
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
@@ -102,7 +137,7 @@ test('Pattern confirms the exact draft revision installed on the card', async ({
 });
 
 test('Pattern acknowledgement does not install an unrelated edit made while pending', async ({ page }) => {
-  await page.route('**/api/status', route => route.fulfill({ json: { ok: true, led: { pixels: 44 } } }));
+  await mockConnectedCard(page);
   await page.route('**/api/config', async route => {
     await new Promise(resolve => setTimeout(resolve, 1200));
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
@@ -120,11 +155,13 @@ test('Pattern acknowledgement does not install an unrelated edit made while pend
 
 test('bench chase restores the last Studio-confirmed look after transport failure', async ({ page }) => {
   const controls: any[] = [];
-  await page.route('**/api/status', route => route.fulfill({ json: { ok: true, led: { pixels: 44 } } }));
+  const cardId = 'lw-bench-hardening';
+  await mockConnectedCard(page, cardId);
   await page.route('**/api/config', route => route.fulfill({ json: { ok: true, requiresReboot: false } }));
   await page.route('**/api/control', async route => {
-    controls.push(JSON.parse(route.request().postData() || '{}'));
-    await route.fulfill({ json: { ok: true } });
+    const body = JSON.parse(route.request().postData() || '{}');
+    controls.push(body);
+    await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
   });
 
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
@@ -153,14 +190,17 @@ test('bench chase restores the last Studio-confirmed look after transport failur
   await expect(bench).toBeVisible();
   await bench.getByRole('checkbox').check();
   await bench.getByRole('button', { name: 'Start wiring test' }).click();
-  await expect(bench).toContainText('Delivery failed');
+  await expect(bench).toContainText(/Frame delivery failed/i);
   await expect.poll(() => controls.some(body => body.cancelStream === true && body.patternId === 'ocean')).toBe(true);
 });
 
 test('Playlist marks a row live only after the card acknowledges it', async ({ page }) => {
+  const cardId = 'lw-playlist-hardening';
+  await mockConnectedCard(page, cardId);
   await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
     await new Promise(resolve => setTimeout(resolve, 300));
-    await route.fulfill({ json: { ok: true } });
+    await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
   });
   await page.locator('.rail-item', { hasText: 'Playlist' }).click();
   await page.locator('.pl-chip').first().click();
@@ -171,6 +211,7 @@ test('Playlist marks a row live only after the card acknowledges it', async ({ p
 });
 
 test('Show reports live only after the first frame acknowledgement', async ({ page }) => {
+  await mockConnectedCard(page, 'lw-show-hardening');
   await page.addInitScript(() => {
     (window as any).__showFrames = [];
     class DelayedWebSocket {
@@ -216,7 +257,7 @@ test('lazy route shows its fallback while the screen module loads', async ({ pag
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.locator('.rail-item', { hasText: 'Show' }).click();
-  await expect(page.getByRole('status')).toHaveText('Loading Studio screen…');
+  await expect(page.locator('.route-loading')).toHaveText('Loading Studio screen…');
   await expect(page.getByTestId('show-stage')).toBeVisible();
 });
 
@@ -395,5 +436,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
   await page.locator('.rail-item', { hasText: 'Flash' }).click();
+  await page.getByText('Technician diagnostics', { exact: true }).click();
+  await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();
   await expect(page.getByText(/final confirmation/i)).toBeVisible();
 });
