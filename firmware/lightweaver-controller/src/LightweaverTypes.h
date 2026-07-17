@@ -4,6 +4,8 @@
 #include <FastLED.h>
 #include <SD.h>
 
+#include "LightweaverOutputColorConfig.h"
+
 #ifndef LW_MAX_PIXELS
 #define LW_MAX_PIXELS 1024
 #endif
@@ -210,6 +212,7 @@ struct RuntimeConfig {
   String startupLookId = "aurora";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;
+  OutputColorConfig outputColor;
   // Aggregate total current ceiling (5V rail, milliamps) for FastLED's
   // automatic power limiter. Production configs must explicitly provide a
   // value; legacy/non-production configs retain this conservative fallback.

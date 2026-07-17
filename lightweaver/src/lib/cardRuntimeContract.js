@@ -106,7 +106,26 @@ export const DEFAULT_CARD_LED = Object.freeze({
   colorOrder: 'RGB',
   brightnessLimit: 0.65,
   maxMilliamps: DEFAULT_PRODUCTION_MAX_MILLIAMPS,
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: Object.freeze({ red: 1, green: 1, blue: 1 }),
 });
+
+export function normalizeCardOutputSettings(led = {}) {
+  const source = led && typeof led === 'object' ? led : {};
+  const calibration = source.calibration && typeof source.calibration === 'object'
+    ? source.calibration
+    : {};
+  return {
+    outputGammaEnabled: source.outputGammaEnabled === true,
+    outputGammaValue: clampOutputNumber(source.outputGammaValue, DEFAULT_CARD_LED.outputGammaValue, 1, 3),
+    calibration: {
+      red: clampOutputNumber(calibration.red, DEFAULT_CARD_LED.calibration.red, 0, 1),
+      green: clampOutputNumber(calibration.green, DEFAULT_CARD_LED.calibration.green, 0, 1),
+      blue: clampOutputNumber(calibration.blue, DEFAULT_CARD_LED.calibration.blue, 0, 1),
+    },
+  };
+}
 
 export function normalizeCardRuntimeConfig(config = {}) {
   const mode = CARD_RUNTIME_MODES.includes(config.mode) ? config.mode : 'factory-flash';
@@ -325,6 +344,7 @@ function normalizeLed(led = {}) {
     colorOrder: normalizeColorOrder(led.colorOrder),
     brightnessLimit: clampUnit(led.brightnessLimit ?? DEFAULT_CARD_LED.brightnessLimit),
     maxMilliamps: clampInt(led.maxMilliamps, DEFAULT_CARD_LED.maxMilliamps, MIN_PRODUCTION_MAX_MILLIAMPS, MAX_PRODUCTION_MAX_MILLIAMPS),
+    ...normalizeCardOutputSettings(led),
   };
 }
 
@@ -437,6 +457,11 @@ function clampUnit(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return DEFAULT_CARD_LED.brightnessLimit;
   return Math.max(0, Math.min(1, number));
+}
+
+function clampOutputNumber(value, fallback, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
 }
 
 function clampInt(value, fallback, min, max) {

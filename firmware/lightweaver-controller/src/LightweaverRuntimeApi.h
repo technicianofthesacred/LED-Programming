@@ -69,3 +69,11 @@ bool runtimeRename(const String& pieceName, const String& hostname, String& mess
 bool runtimeIsStreaming();
 uint8_t runtimeFrameSource();
 void runtimeCancelStream();
+
+// Read back the output-color settings configured in the physical output
+// pipeline, rather than merely echoing request JSON.
+bool runtimeOutputGammaEnabled();
+float runtimeOutputGammaValue();
+float runtimeOutputCalibrationRed();
+float runtimeOutputCalibrationGreen();
+float runtimeOutputCalibrationBlue();
