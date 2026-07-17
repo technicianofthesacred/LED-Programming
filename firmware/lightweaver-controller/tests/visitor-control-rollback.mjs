@@ -67,6 +67,57 @@ const makeHarness = (initial, description = 'change scene') => {
   return { control, rendered, disabled, requests };
 };
 
+const makeSceneHarness = () => {
+  const events = [];
+  const sceneTiles = [{ 'aria-disabled': 'false' }, { 'aria-disabled': 'false' }];
+  let pending = false;
+  const requests = [];
+  const control = context.makeConfirmedControl({
+    initial: 'previous-confirmed',
+    description: 'change scene',
+    render: value => {
+      for (const tile of sceneTiles) tile['aria-disabled'] = String(pending);
+      events.push(`render:${value}`);
+    },
+    setDisabled: value => {
+      pending = value;
+      events.push(value ? 'disabled' : 'enabled');
+    },
+    send: value => {
+      const request = deferred();
+      requests.push({ value, ...request });
+      return request.promise;
+    },
+  });
+  return { control, events, sceneTiles, requests };
+};
+
+{
+  const h = makeSceneHarness();
+  const operation = h.control.request('confirmed');
+  h.requests[0].resolve({ ok: true });
+  await operation;
+  const successEvents = h.events;
+  assert.deepEqual(successEvents.slice(-2), ['enabled', 'render:confirmed']);
+  assert.deepEqual(h.sceneTiles.map(tile => tile['aria-disabled']), ['false', 'false'], 'scene tiles should be enabled after confirmation');
+}
+
+{
+  const h = makeSceneHarness();
+  const operation = h.control.request('failed-intent');
+  h.requests[0].reject(new Error('offline'));
+  await operation;
+  const failureEvents = h.events;
+  assert.deepEqual(failureEvents.slice(-2), ['enabled', 'render:previous-confirmed']);
+  assert.deepEqual(h.sceneTiles.map(tile => tile['aria-disabled']), ['false', 'false'], 'scene tiles should be enabled after rollback');
+
+  const retry = errors.at(-1).retry;
+  const retryOperation = retry();
+  h.requests[1].resolve({ ok: true });
+  await retryOperation;
+  assert.deepEqual(h.sceneTiles.map(tile => tile['aria-disabled']), ['false', 'false'], 'scene tiles should be enabled after Retry succeeds');
+}
+
 for (const [name, initial, next] of [
   ['scene', 'aurora', 'ocean'],
   ['brightness', 0.8, 0.35],
