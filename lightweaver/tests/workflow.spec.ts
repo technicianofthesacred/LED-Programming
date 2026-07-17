@@ -97,15 +97,22 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
   expect(projectData.version).toBe(3);
   expect(projectData.layout.strips).toHaveLength(3);
   expect(projectData.layout.strips[0].pixels.length).toBeGreaterThan(0);
+  projectData.name = 'Imported Workflow Project';
+  fs.writeFileSync(projectPath, JSON.stringify(projectData));
 
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   // A cleared project reboots into the default two-circle hardware layout
-  // (2 strips already present), so loading a project file now triggers the
-  // "replace your current strips" confirm() the app didn't need to show
-  // before strips.length could ever be > 0 at this point.
-  page.once('dialog', dialog => dialog.accept());
+  // (2 strips already present), so loading a project file now requires an
+  // explicit choice in the accessible project-replacement modal.
   await page.setInputFiles('input[accept=".json"]', projectPath);
+  const replacement = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(replacement).toContainText('Untitled Project');
+  await expect(replacement).toContainText('Imported Workflow Project');
+  await expect(replacement.getByRole('button', { name: 'Replace project' })).toBeVisible();
+  await expect(page.locator('.la-strip-row')).toHaveCount(2);
+  await replacement.getByRole('button', { name: 'Replace project' }).click();
+  await expect(replacement).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   // Note: the old "Export" rail screen (ledmap.json download) no longer
