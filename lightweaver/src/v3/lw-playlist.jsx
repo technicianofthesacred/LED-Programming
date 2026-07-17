@@ -127,10 +127,24 @@ function realPatternShape(patternId) {
       : standaloneController?.playlist;
     const playlist = normalizeCardPlaylist(rawPlaylist, { savedLooks, allowEmpty: true });
 
-    const runtimePackage = useMemo(
-      () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
-      [projectId, projectName, strips, board, standaloneController],
-    );
+    const runtimeBuild = useMemo(() => {
+      try {
+        return {
+          runtimePackage: buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+          error: null,
+        };
+      } catch (error) {
+        return { runtimePackage: null, error };
+      }
+    }, [projectId, projectName, strips, board, standaloneController]);
+    const runtimePackage = runtimeBuild.runtimePackage;
+    const hardwareConfigurationIssue = runtimeBuild.error
+      ? String(runtimeBuild.error.message || runtimeBuild.error).replace('is already owned by an LED output or another control', 'is already used by an LED output or another control')
+      : '';
+    const requireRuntimePackage = () => {
+      if (!runtimePackage) throw runtimeBuild.error;
+      return runtimePackage;
+    };
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     // ── live playlist write-back to the standalone controller ─────────────
@@ -190,7 +204,7 @@ function realPatternShape(patternId) {
       try {
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
-          await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
+          await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
           if (sequence !== previewSequence.current) return;
         }
         const confirmedLook = buildPatternPlaylistPreview(patternId);
@@ -222,7 +236,7 @@ function realPatternShape(patternId) {
           // A saved mix is normally several section targets across the real
           // design's zones; a bench strip is one zone, so just play the
           // mix's own default look across the whole (collapsed) strip.
-          await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
+          await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
           if (sequence !== previewSequence.current) return;
           const confirmedLook = { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true };
           await pushLivePreviewToCard(
@@ -245,7 +259,7 @@ function realPatternShape(patternId) {
         await ensureCardSectionsForPreview({
           host,
           requiredZoneIds,
-          runtimePackage,
+          runtimePackage: requireRuntimePackage(),
         });
         if (sequence !== previewSequence.current) return;
         await pushSectionPreviewToCard(
@@ -301,7 +315,7 @@ function realPatternShape(patternId) {
       setPlaylistStatus(null);
       try {
         const testStrip = readTestStrip();
-        if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, runtimePackage, testStrip.length);
+        if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
         await resetLiveOutputOnCard(fallbackLiveLook(), { host, timeoutMs: 3000 });
         setLive(null);
       } catch { /* best-effort */ }
@@ -359,10 +373,12 @@ function realPatternShape(patternId) {
       // a bench strip). The saved project (playlist/zones/patchBoard) is
       // never touched — only what's sent to the card.
       const testStrip = readTestStrip();
-      const packageForCard = testStrip.enabled
-        ? applyTestStripToRuntimePackage(runtimePackage, testStrip.length)
-        : runtimePackage;
+      let packageForCard = runtimePackage;
       try {
+        const validRuntimePackage = requireRuntimePackage();
+        packageForCard = testStrip.enabled
+          ? applyTestStripToRuntimePackage(validRuntimePackage, testStrip.length)
+          : validRuntimePackage;
         const response = await syncRuntimePackageToCard({
           host,
           runtimePackage: packageForCard,
@@ -381,7 +397,7 @@ function realPatternShape(patternId) {
 
     const copyConfig = async () => {
       try {
-        await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
+        await navigator.clipboard.writeText(cardStorageJson(requireRuntimePackage()));
         setPlaylistStatus(null);
       } catch (error) {
         setPlaylistStatus(makePlaylistPushErrorState(error, { host, runtimePackage }));
@@ -392,7 +408,7 @@ function realPatternShape(patternId) {
       try {
         downloadJson(
           `${safeProjectName || 'lightweaver'}-playlist-config.json`,
-          cardStorageJson(runtimePackage),
+          cardStorageJson(requireRuntimePackage()),
         );
         setPlaylistStatus(null);
       } catch (error) {
@@ -465,16 +481,25 @@ function realPatternShape(patternId) {
               </div>
               <div className="pm-actions">
                 <button className="btn" onClick={resetLiveOutput}>{I.refresh}Reset live</button>
-                <button className="btn primary" disabled={!connected || playlistSyncing} onClick={() => loadPlaylistToCard()}>
+                <button className="btn primary" disabled={!connected || playlistSyncing || Boolean(hardwareConfigurationIssue)} onClick={() => loadPlaylistToCard()}>
                   {I.bolt}{playlistSyncing ? 'Loading…' : 'Load playlist to card'}
                 </button>
                 <div className="pm-menu">
-                  <button className="btn" onClick={copyConfig}>{I.copy}Copy chip config</button>
+                  <button className="btn" disabled={Boolean(hardwareConfigurationIssue)} onClick={copyConfig}>{I.copy}Copy chip config</button>
                 </div>
-                <button className="btn" onClick={downloadConfig}>{I.download}Download</button>
+                <button className="btn" disabled={Boolean(hardwareConfigurationIssue)} onClick={downloadConfig}>{I.download}Download</button>
                 <button className="btn" onClick={openCard}>{I.open}Open card page</button>
               </div>
             </header>
+
+            {hardwareConfigurationIssue &&
+              <div className="pmx-status is-err" role="alert" data-testid="playlist-hardware-warning">
+                <strong>Hardware setup needs attention.</strong> {hardwareConfigurationIssue} You can still add, remove, copy, and reorder every look. Only card setup actions are paused.
+                <div className="pmx-status-actions">
+                  <button type="button" className="btn" onClick={() => { window.location.hash = '#screen=layout&mode=wire'; }}>Fix wiring</button>
+                </div>
+              </div>
+            }
 
             {playlistStatus &&
               <div
