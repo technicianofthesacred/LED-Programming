@@ -107,6 +107,30 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
 
+.project-replacement-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: oklch(0.08 0.006 70 / 0.72);
+}
+.project-replacement-dialog {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+  box-shadow: 0 20px 60px oklch(0.08 0.006 70 / 0.45);
+}
+.project-replacement-dialog h2 { font-size: 18px; }
+.project-replacement-dialog p { color: var(--text-mid); }
+.project-replacement-dialog strong { color: var(--text-hi); }
+.project-replacement-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
 .pm-target > .chips { max-width: 480px; }
 .pmcard-wrap { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .pmcard-wrap > .pmcard { flex: 1; width: 100%; }

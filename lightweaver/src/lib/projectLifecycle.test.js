@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createProjectLifecycle,
+  hasUnsavedChanges,
   lifecycleLabel,
   markEdited,
   markInstalled,
@@ -58,6 +59,12 @@ test('card acknowledgement installs the requested revision, not a newer edit', (
   assert.equal(state.installedRevision, 1);
   assert.equal(state.editedRevision, 2);
   assert.equal(lifecycleLabel(state), 'Unsaved changes');
+});
+
+test('installing the current revision does not count as saving the project', () => {
+  const installedOnly = markInstalled(markEdited(createProjectLifecycle()));
+  assert.equal(hasUnsavedChanges(installedOnly), true);
+  assert.equal(lifecycleLabel(installedOnly), 'Installed on card');
 });
 
 test('unsaved cancel preserves state and successful replace applies only after validation', async () => {

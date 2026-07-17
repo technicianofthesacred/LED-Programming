@@ -240,6 +240,42 @@ export function resolveTimelineTargets(playhead, clips, strips = []) {
 export function ProjectProvider({ children }) {
   const defaults = createDefaultProject();
   const projectSnapshotContributorsRef = useRef(new Set());
+  const replacementFocusRef = useRef(null);
+  const replacementResolutionRef = useRef(null);
+  const keepEditingRef = useRef(null);
+  const [pendingReplacement, setPendingReplacement] = useState(null);
+
+  const dismissReplacement = useCallback((replace) => {
+    const resolve = replacementResolutionRef.current;
+    replacementResolutionRef.current = null;
+    setPendingReplacement(null);
+    resolve?.(replace === true);
+    window.requestAnimationFrame(() => replacementFocusRef.current?.focus?.());
+  }, []);
+
+  const requestReplacementConfirmation = useCallback(({ currentName, incomingName }) => {
+    replacementResolutionRef.current?.(false);
+    replacementFocusRef.current = document.activeElement;
+    setPendingReplacement({
+      currentName: String(currentName || 'Untitled Project'),
+      incomingName: String(incomingName || 'Untitled Project'),
+    });
+    return new Promise(resolve => { replacementResolutionRef.current = resolve; });
+  }, []);
+
+  useEffect(() => {
+    if (!pendingReplacement) return undefined;
+    keepEditingRef.current?.focus();
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      dismissReplacement(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dismissReplacement, pendingReplacement]);
+
+  useEffect(() => () => replacementResolutionRef.current?.(false), []);
 
   // ── Layout (single reducer over the whole slice; undo/redo is one shared
   //    snapshot stack across strip + patch-board edits) ────────────────────
@@ -756,14 +792,17 @@ export function ProjectProvider({ children }) {
       candidate,
       validate: value => migrateProject(value),
       dirty: hasUnsavedChanges(projectLifecycle),
-      confirmDiscard: options.confirmDiscard || (() => window.confirm('Replace this project? Unsaved changes will be lost.')),
+      confirmDiscard: options.confirmDiscard || (validated => requestReplacementConfirmation({
+        currentName: projectName,
+        incomingName: validated?.name,
+      })),
       apply: validated => {
         suppressNextLifecycleEditRef.current = true;
         applyProject(validated);
         dispatchProjectLifecycle({ type: 'replaced' });
       },
     });
-  }, [applyProject, projectLifecycle]);
+  }, [applyProject, projectLifecycle, projectName, requestReplacementConfirmation]);
 
   const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
@@ -866,6 +905,7 @@ export function ProjectProvider({ children }) {
       loadProject: replaceProject,
       replaceProject,
       replaceWithNewProject,
+      requestReplacementConfirmation,
       markProjectPersisted,
       markProjectEdited,
       markProjectInstalled,
@@ -875,6 +915,24 @@ export function ProjectProvider({ children }) {
       lastSaved,
     }}>
       {children}
+      {pendingReplacement &&
+        <div className="project-replacement-backdrop">
+          <section
+            className="project-replacement-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-replacement-title"
+          >
+            <h2 id="project-replacement-title">Replace current project?</h2>
+            <p><strong>{pendingReplacement.currentName}</strong> has changes that are not saved in the browser or a file.</p>
+            <p>Replace it with <strong>{pendingReplacement.incomingName}</strong>?</p>
+            <div className="project-replacement-actions">
+              <button ref={keepEditingRef} type="button" className="btn" onClick={() => dismissReplacement(false)}>Keep editing</button>
+              <button type="button" className="btn primary" onClick={() => dismissReplacement(true)}>Replace project</button>
+            </div>
+          </section>
+        </div>
+      }
     </ProjectContext.Provider>
   );
 }

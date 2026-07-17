@@ -259,6 +259,41 @@ test('Daylight is a complete supported theme', async ({ page }) => {
   expect(colors.every(Boolean)).toBe(true);
 });
 
+test('replacement guard names both projects and keeps editing until explicitly replaced', async ({ page }) => {
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  const projectName = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
+  await projectName.fill('Current Mandala');
+
+  const incoming = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  incoming.name = 'Incoming Lotus';
+  const projectFile = {
+    name: 'incoming-lotus.lw.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(incoming)),
+  };
+
+  const fileInput = page.locator('input[type="file"]').first();
+  await fileInput.setInputFiles(projectFile);
+  const dialog = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(dialog).toContainText('Current Mandala');
+  await expect(dialog).toContainText('Incoming Lotus');
+  await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(projectName).toHaveValue('Current Mandala');
+
+  await fileInput.setInputFiles(projectFile);
+  await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(projectName).toHaveValue('Current Mandala');
+
+  await fileInput.setInputFiles(projectFile);
+  await dialog.getByRole('button', { name: 'Replace project' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(projectName).toHaveValue('Incoming Lotus');
+});
+
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
   await page.locator('.rail-item', { hasText: 'Flash' }).click();
   await expect(page.getByText(/final confirmation/i)).toBeVisible();

@@ -31,7 +31,7 @@ export function lifecycleLabel(state) {
 
 export function hasUnsavedChanges(state) {
   const revision = state.editedRevision;
-  return revision > 0 && state.persistence?.revision !== revision && state.installedRevision !== revision;
+  return revision > 0 && state.persistence?.revision !== revision;
 }
 
 export async function replaceProjectSafely({
@@ -43,7 +43,7 @@ export async function replaceProjectSafely({
 }) {
   const validated = await validate(candidate);
   if (!validated) return { ok: false, reason: 'invalid' };
-  if (dirty && !(await confirmDiscard())) return { ok: false, reason: 'cancelled' };
+  if (dirty && !(await confirmDiscard(validated))) return { ok: false, reason: 'cancelled' };
   await apply(validated);
   return { ok: true, project: validated };
 }
