@@ -895,10 +895,13 @@ test('production screen reflows at 200% equivalent width and honors reduced moti
 test('production setup is keyboard operable, restores heading focus, and announces state', async ({ page }) => {
   await installDriver(page);
   await page.goto('/#screen=layout');
-  const entry = page.getByRole('button', { name: 'Production setup' });
+  const entry = page.getByRole('button', { name: 'Card', exact: true });
   await entry.focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/#screen=production/);
+  const workshop = page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Workshop setup' });
+  await workshop.focus();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/#screen=card&section=workshop/);
   await expect(page.getByRole('heading', { name: 'Production setup' })).toBeFocused();
   await page.getByLabel('Job code').focus();
   await page.keyboard.type('moon-batch-7');

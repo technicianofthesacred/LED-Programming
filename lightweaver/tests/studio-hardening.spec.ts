@@ -134,14 +134,17 @@ test('Settings installs the exact requested revision when an edit happens during
     await new Promise(resolve => setTimeout(resolve, 1500));
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
   });
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Revision one');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
   const save = page.locator('.set-row', { hasText: 'Write to card' }).getByRole('button').first();
   await save.click();
   await expect(save).toBeDisabled();
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Preferences' }).click();
   await name.fill('Revision two');
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
   await expect(page.getByTestId('settings-card-status')).toContainText('Saved on card');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
 });
@@ -345,7 +348,9 @@ test('reduced motion disables status and preview animation names', async ({ page
 });
 
 test('installer signoff persists and exposes a ready state', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  await page.getByRole('button', { name: 'Advanced & Support' }).click();
+  await page.getByRole('button', { name: 'GPIO & install guide' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
   await expect(checks).toHaveCount(6);
   await expect(page.getByRole('button', { name: 'Reset bench signoff' })).toBeVisible();
@@ -357,6 +362,7 @@ test('installer signoff persists and exposes a ready state', async ({ page }) =>
   await expect(page.getByTestId('installer-ready-summary')).toContainText(/card/i);
   await expect(page.getByTestId('installer-ready-summary')).toContainText(/physical/i);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'GPIO & install guide' }).click();
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(6);
   await expect(page.getByText('Ready to ship', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Reset bench signoff' }).click();
@@ -433,7 +439,7 @@ test('Settings controls expose stable accessible names', async ({ page }) => {
 });
 
 test('Daylight is a complete supported theme', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   await page.getByRole('button', { name: 'Daylight', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'daylight');
   const oklch = (value: string) => {
@@ -565,8 +571,9 @@ test('replacement dialog traps keyboard focus and restores its trigger', async (
 });
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Flash' }).click();
-  await page.getByText('Technician diagnostics', { exact: true }).click();
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  await page.getByRole('button', { name: 'Advanced & Support' }).click();
+  await page.getByRole('button', { name: 'Technician firmware & logs' }).click();
   await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();
   await expect(page.getByText(/final confirmation/i)).toBeVisible();
 });

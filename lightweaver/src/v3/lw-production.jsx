@@ -67,7 +67,7 @@ function exactEvidence(evidence, job, cardId, release) {
     && evidence?.productionJobDigest === job.digest;
 }
 
-export function ProductionScreen({ cardHost, onConnectCard }) {
+export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) {
   const cap = useMemo(capabilities, []);
   const [job, setJob] = useState(null);
   const [run, setRun] = useState(() => readProductionRun());
@@ -550,15 +550,16 @@ export function ProductionScreen({ cardHost, onConnectCard }) {
   if (!cap.canProductionWebSerial) {
     const mobile = cap.isMobile;
     const retainedCode = new URLSearchParams(window.location.hash.slice(1)).get('job');
-    return <div className="screen prod-screen"><main className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><h1>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</h1><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</main></div>;
+    const handoff = <main className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><h1>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</h1><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</main>;
+    return embedded ? <div className="prod-screen prod-embedded">{handoff}</div> : <div className="screen prod-screen">{handoff}</div>;
   }
 
   const currentStage = stageIndex(run?.state);
   const requestedJobCode = new URLSearchParams(window.location.hash.slice(1)).get('job') || '';
   const canChangeJob = Boolean(job && ['connect-card', 'inspect', 'restore'].includes(run?.state) && !run?.cardChanged && !restoreStartedRef.current);
   return (
-    <div className="screen prod-screen">
-      <div className="screen-scroll">
+    <div className={embedded ? 'prod-screen prod-embedded' : 'screen prod-screen'}>
+      <div className={embedded ? 'prod-embedded-scroll' : 'screen-scroll'}>
         <main className="prod-shell">
           <header className="prod-hero">
             <div><span className="prod-kicker">Workshop · browser USB</span><h1 ref={primaryRef} tabIndex={-1}>Production setup</h1><p>One card, one verified artwork, one physical pass. No firmware files or GPIO tables.</p></div>

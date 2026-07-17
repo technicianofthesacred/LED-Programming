@@ -51,7 +51,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
   }
 
-  function TechnicianFlashScreen() {
+  function TechnicianFlashScreen({ embedded = false } = {}) {
     const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
     const [connected, setConnected] = useState(false);
@@ -215,10 +215,10 @@ import { openInChrome } from '../lib/openInChrome.js';
     const canConnect = hasWebSerial && !connecting && !flashing;
 
     return (
-      <div className="screen">
-        <div className="screen-scroll">
-          <details className="technician-disclosure">
-            <summary>Technician diagnostics</summary>
+      <div className={embedded ? 'technician-embedded' : 'screen'}>
+        <div className={embedded ? 'technician-embedded-scroll' : 'screen-scroll'}>
+          <div className="technician-disclosure">
+            <div className="technician-disclosure-label">Technician diagnostics</div>
             <div className="fl">
             <div>
               <div className="eyebrow">Advanced tools</div>
@@ -305,7 +305,7 @@ import { openInChrome } from '../lib/openInChrome.js';
               <textarea ref={logRef} className="fl-log" readOnly value={log} placeholder="Connect the card to begin…" />
             </div>
             </div>
-          </details>
+          </div>
         </div>
       </div>
     );
@@ -415,7 +415,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     );
   }
 
-  function AutomaticInstallScreen({ cardLink = {}, onConnectCard }) {
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, embedded = false }) {
     const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
@@ -578,7 +578,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     if (installState === 'complete' || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
       return (
-        <div className="install-flow" aria-live="polite">
+        <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
           <CardCommissioningPanel
             result={null}
             link={cardLink}
@@ -592,7 +592,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     const releaseReady = releaseState.state === 'ready';
     return (
-      <div className="install-flow" aria-live="polite">
+      <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
         <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
@@ -651,4 +651,4 @@ import { openInChrome } from '../lib/openInChrome.js';
     return installMode ? <AutomaticInstallScreen {...props} /> : <TechnicianFlashScreen />;
   }
 
-export { FlashScreen };
+export { AutomaticInstallScreen, FlashScreen, TechnicianFlashScreen };
