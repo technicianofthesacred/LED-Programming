@@ -10,7 +10,7 @@
    advanced JSON, autosave, and the relocated encoder controls) is appended as
    additional .card.set-card sections in the same mockup idiom so it reads as
    native, not bolted on. */
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { I, SWATCHES } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useTweaks } from '../components/Tweaks.jsx';
@@ -57,29 +57,50 @@ import {
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 
 const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
+const SettingsFieldContext = createContext(null);
 
   function Row({ label, hint, stack, children }) {
+    const reactId = useId();
+    const field = { controlId: `${reactId}-control`, labelId: `${reactId}-label`, label };
     return (
       <div className={"set-row" + (stack ? " stack" : "")}>
-        <div className="set-k"><span className="kk">{label}</span>{hint && <span className="hh">{hint}</span>}</div>
-        <div className="set-v">{children}</div>
+        <div className="set-k"><span className="kk" id={field.labelId}>{label}</span>{hint && <span className="hh">{hint}</span>}</div>
+        <div className="set-v"><SettingsFieldContext.Provider value={field}>{children}</SettingsFieldContext.Provider></div>
       </div>
     );
   }
   function Seg({ opts, val, set }) {
+    const field = useContext(SettingsFieldContext);
     return (
-      <div className="mini-seg">
+      <div className="mini-seg" role="group" aria-labelledby={field?.labelId}>
         {opts.map((o) => <button type="button" key={o} className={val === o ? "on" : ""} aria-pressed={val === o} onClick={() => set(o)}>{o}</button>)}
       </div>
     );
   }
   function Range({ value, set, min, max, step, fmt }) {
+    const field = useContext(SettingsFieldContext);
     return (
       <div className="set-range">
-        <input className="lw" type="range" min={min} max={max} step={step} value={value} onChange={(e) => set(parseFloat(e.target.value))} />
+        <input id={field?.controlId} aria-labelledby={field?.labelId} className="lw" type="range" min={min} max={max} step={step} value={value} onChange={(e) => set(parseFloat(e.target.value))} />
         <span className="set-rv">{fmt(value)}</span>
       </div>
     );
+  }
+  const FieldInput = React.forwardRef(function FieldInput(props, ref) {
+    const field = useContext(SettingsFieldContext);
+    const named = props['aria-label'] || props['aria-labelledby'];
+    const accessibility = !named && field
+      ? { id: props.id || field.controlId, 'aria-labelledby': field.labelId }
+      : {};
+    return <input ref={ref} {...accessibility} {...props} />;
+  });
+  function FieldTextarea(props) {
+    const field = useContext(SettingsFieldContext);
+    const named = props['aria-label'] || props['aria-labelledby'];
+    const accessibility = !named && field
+      ? { id: props.id || field.controlId, 'aria-labelledby': field.labelId }
+      : {};
+    return <textarea {...accessibility} {...props} />;
   }
 
   // ── Live wiring helpers ───────────────────────────────────────────────
@@ -564,7 +585,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Card connection</span><span className="m">{directPushAvailable ? 'local card write' : 'copy or download'}</span></div>
                   <Row label="Card address" hint="The card's name on your WiFi">
-                    <input className="pm-input" value={cardHost} onChange={(e) => persistHost(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" />
+                    <FieldInput className="pm-input" value={cardHost} onChange={(e) => persistHost(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" />
                   </Row>
                   <Row label="Write to card" hint="Save this setup onto the chip" stack>
                     <div className="set-actions">
@@ -587,9 +608,9 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
               <div className="set-col">
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Project</span></div>
-                  <Row label="Project name"><input className="pm-input" value={projectName} onChange={(e) => setProjectName(e.target.value)} /></Row>
-                  <Row label="Default BPM" hint="Used for beat-quantized clip recording"><input className="num-input" type="number" value={bpm} onChange={(e) => setBpm(+e.target.value)} /></Row>
-                  <Row label="Show duration" hint="Total timeline length"><div className="set-v-inline"><input className="num-input" type="number" value={showDuration} onChange={(e) => setShowDuration(+e.target.value)} /><span className="set-u">sec</span></div></Row>
+                  <Row label="Project name"><FieldInput className="pm-input" value={projectName} onChange={(e) => setProjectName(e.target.value)} /></Row>
+                  <Row label="Default BPM" hint="Used for beat-quantized clip recording"><FieldInput className="num-input" type="number" value={bpm} onChange={(e) => setBpm(+e.target.value)} /></Row>
+                  <Row label="Show duration" hint="Total timeline length"><div className="set-v-inline"><FieldInput className="num-input" type="number" value={showDuration} onChange={(e) => setShowDuration(+e.target.value)} /><span className="set-u">sec</span></div></Row>
                 </section>
 
                 <section className="card set-card">
@@ -597,10 +618,10 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   <div className="set-pal">
                     {palette.map((s, i) => (
                       <span key={i} className="set-palsw" style={{ background: s }}>
-                        <button className="set-palx" onClick={() => setPalette(palette.filter((_, k) => k !== i))}>{I.x}</button>
+                        <button className="set-palx" aria-label={`Remove palette color ${i + 1} ${s}`} onClick={() => setPalette(palette.filter((_, k) => k !== i))}>{I.x}</button>
                       </span>
                     ))}
-                    <button className="set-paladd" onClick={addPaletteColor}>{I.plus}</button>
+                    <button className="set-paladd" aria-label="Add palette color" onClick={addPaletteColor}>{I.plus}</button>
                   </div>
                 </section>
 
@@ -620,7 +641,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
               <div className="set-col">
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Rendering</span></div>
-                  <Row label="Gamma correction" hint="Corrects LED brightness curve"><button className={"ex-toggle" + (gammaEnabled ? " on" : "")} onClick={() => setGammaEnabled(!gammaEnabled)} /></Row>
+                  <Row label="Gamma correction" hint="Corrects LED brightness curve"><button type="button" aria-label="Gamma correction" aria-pressed={gammaEnabled} className={"ex-toggle" + (gammaEnabled ? " on" : "")} onClick={() => setGammaEnabled(!gammaEnabled)} /></Row>
                   <Row label="Canvas resolution" hint="Lower = faster rendering"><Seg opts={RES_LABELS} val={resLabel} set={(o) => setTweak('dpr', RES_VALUE[o])} /></Row>
                   <Row label="Card push fps" hint="Max frames per second sent to the card"><Seg opts={FPS_LABELS} val={fpsLabel} set={(o) => setTweak('wledFps', +o)} /></Row>
                 </section>
@@ -632,9 +653,9 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   <Row label="Brightness limit" hint="Max firmware output for sellable pieces"><Range value={brightnessLimit255} set={(v) => updateController({ led: { brightnessLimit: Math.max(0.05, Math.min(1, v / 255)) } })} min={32} max={255} step={1} fmt={(v) => `${v}`} /></Row>
                   <Row label="LED output" hint="Firmware uses fixed connector pins" stack>
                     <div className="set-output">
-                      <input className="pm-input" value={controllerOutputs[0]?.name || 'Output 1'} onChange={(e) => updateOutput(0, { name: e.target.value })} style={{ flex: 2 }} />
-                      <div className="set-outfield"><input className="num-input" type="number" min="0" max="48" value={controllerOutputs[0]?.pin ?? 16} onChange={(e) => updateOutput(0, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
-                      <div className="set-outfield"><input className="num-input" type="number" min="0" max="2048" value={controllerOutputs[0]?.pixels || 0} onChange={(e) => updateOutput(0, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
+                      <FieldInput aria-label="LED output name" className="pm-input" value={controllerOutputs[0]?.name || 'Output 1'} onChange={(e) => updateOutput(0, { name: e.target.value })} style={{ flex: 2 }} />
+                      <div className="set-outfield"><FieldInput aria-label="LED output GPIO" className="num-input" type="number" min="0" max="48" value={controllerOutputs[0]?.pin ?? 16} onChange={(e) => updateOutput(0, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
+                      <div className="set-outfield"><FieldInput aria-label="LED output pixels" className="num-input" type="number" min="0" max="2048" value={controllerOutputs[0]?.pixels || 0} onChange={(e) => updateOutput(0, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
                     </div>
                   </Row>
                   <RingSummary sections={hardwareSections} targets={sectionTargets} activeLookLabel={activeSavedLook?.label || 'Current look'} />
@@ -645,7 +666,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                   <Row label="Save project" hint="Download a .lwproj.json file you can reload"><button className="btn" onClick={saveProjectFile}>{I.download}Download .lwproj.json</button></Row>
                   <Row label="Load project" hint="Import a .lwproj.json file">
                     <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Choose file…</button>
-                    <input ref={importRef} type="file" accept=".json,.lwproj.json,.lw.json" className="set-file-input" onChange={importProjectFile} />
+                    <FieldInput ref={importRef} type="file" accept=".json,.lwproj.json,.lw.json" className="set-file-input" onChange={importProjectFile} />
                   </Row>
                 </section>
               </div>
@@ -696,10 +717,10 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Hardware layout</span><span className="m">{config.led.pixels} pixels · {hardwareSections.length || hardwareSectionCount} sections</span></div>
                   <Row label="Total LEDs" hint={editableDefaultLayout ? 'used by the default circles' : 'from the imported layout'}>
-                    <input className="num-input" type="number" min="1" max="2048" value={config.led.pixels} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ totalPixels: e.target.value })} />
+                    <FieldInput className="num-input" type="number" min="1" max="2048" value={config.led.pixels} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ totalPixels: e.target.value })} />
                   </Row>
                   <Row label="Sections" hint={editableDefaultLayout ? 'zones on the chip' : 'from strips and patches'}>
-                    <input className="num-input" type="number" min="1" max={DEFAULT_CIRCLE_SECTION_LIMIT} value={hardwareSections.length || hardwareSectionCount} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ sectionCount: e.target.value })} />
+                    <FieldInput className="num-input" type="number" min="1" max={DEFAULT_CIRCLE_SECTION_LIMIT} value={hardwareSections.length || hardwareSectionCount} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ sectionCount: e.target.value })} />
                   </Row>
                   <Row label="Section LEDs" hint={editableDefaultLayout ? 'inner and outer counts' : 'read from layout'} stack>
                     <div className="set-seccounts">
@@ -726,9 +747,9 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                       <div className="set-outputs-list">
                         {controllerOutputs.map((output, index) => (
                           <div key={output.id || index} className="set-output-row">
-                            <input className="pm-input" value={output.name || `Output ${index + 1}`} onChange={(e) => updateOutput(index, { name: e.target.value })} aria-label={`Output ${index + 1} name`} />
-                            <div className="set-outfield"><input className="num-input" type="number" min="0" max="48" value={output.pin ?? 0} onChange={(e) => updateOutput(index, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
-                            <div className="set-outfield"><input className="num-input" type="number" min="0" max="2048" value={output.pixels || 0} onChange={(e) => updateOutput(index, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
+                            <FieldInput className="pm-input" value={output.name || `Output ${index + 1}`} onChange={(e) => updateOutput(index, { name: e.target.value })} aria-label={`Output ${index + 1} name`} />
+                            <div className="set-outfield"><FieldInput aria-label={`Output ${index + 1} GPIO`} className="num-input" type="number" min="0" max="48" value={output.pin ?? 0} onChange={(e) => updateOutput(index, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
+                            <div className="set-outfield"><FieldInput aria-label={`Output ${index + 1} pixels`} className="num-input" type="number" min="0" max="2048" value={output.pixels || 0} onChange={(e) => updateOutput(index, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
                           </div>
                         ))}
                       </div>
@@ -743,7 +764,7 @@ const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
                     <button className="btn ghost-sm" onClick={() => setAdvancedOpen(o => !o)}>{advancedOpen ? 'Hide' : 'Show'} JSON</button>
                   </Row>
                   {advancedOpen && (
-                    <div className="set-advanced"><textarea readOnly value={configJson} className="set-json" /></div>
+                    <div className="set-advanced"><FieldTextarea readOnly value={configJson} className="set-json" /></div>
                   )}
                 </section>
               </div>
