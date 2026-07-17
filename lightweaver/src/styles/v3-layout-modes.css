@@ -465,12 +465,17 @@
 .lw-seam-handle > circle:last-child { fill: currentColor; }
 
 @media (max-width: 600px) {
+  .screen:has(> .la) { position: relative; }
   .la {
     --mobile-sheet-height: clamp(180px, 28vh, 240px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
+    grid-template-areas: "tool" "body";
     padding-bottom: var(--mobile-sheet-height);
   }
+  .la.inspector-collapsed { --mobile-sheet-height: 44px; }
   .la .side {
-    position: fixed;
+    position: absolute;
     z-index: 35;
     left: 0;
     right: 0;
@@ -486,7 +491,9 @@
     z-index: 2;
     top: 0;
     display: flex;
-    min-height: 28px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0;
     align-items: center;
     justify-content: center;
     gap: 8px;
@@ -497,6 +504,7 @@
     letter-spacing: .08em;
     text-transform: uppercase;
   }
+  .la .side.is-collapsed > :not(.la-sheet-handle) { display: none; }
   .la-sheet-handle > span {
     width: 32px;
     height: 3px;
