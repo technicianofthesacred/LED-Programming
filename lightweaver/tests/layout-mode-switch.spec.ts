@@ -43,7 +43,7 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
 });
 
-test('switching mode mid-draw suspends the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
+test('switching modes and activating Wire tools suspend the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
   await gotoLayout(page);
 
   const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
@@ -70,6 +70,18 @@ test('switching mode mid-draw suspends the in-progress strip until Draw resumes 
   await expect(drawBtn).not.toHaveClass(/active/);
   await drawBtn.click();
   await expect(drawBtn).toHaveClass(/active/);
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
+  await page.getByTestId('layout-mode-wire').click();
+  await page.getByTitle('Split one physical strip where the wire jumps to a new spot.').click();
+  await page.getByTestId('layout-mode-draw').click();
+  await drawBtn.click();
+  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+
+  await page.getByTestId('layout-mode-wire').click();
+  await page.getByTitle('Join two strips into one continuous run.').click();
+  await page.getByTestId('layout-mode-draw').click();
+  await drawBtn.click();
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
   await page.getByRole('button', { name: /Cancel \(Esc\)/ }).click();
