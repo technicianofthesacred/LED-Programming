@@ -40,11 +40,62 @@ const InstallerScreen = lazy(() => import('./lw-installer.jsx').then(module => (
 const ProductionScreen = lazy(() => import('./lw-production.jsx').then(module => ({ default: module.ProductionScreen })));
 
 const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer', 'production'];
+const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
+
+function readScreenRecoveryAttempt() {
+  try {
+    const value = JSON.parse(window.sessionStorage.getItem(SCREEN_RECOVERY_KEY) || 'null');
+    if (value && typeof value.route === 'string' && Number.isFinite(value.at)) return value;
+  } catch {
+    // Fall through to navigation state when browser storage is unavailable.
+  }
+  const value = window.history.state?.[SCREEN_RECOVERY_KEY];
+  return value && typeof value.route === 'string' && Number.isFinite(value.at) ? value : null;
+}
+
+function rememberScreenRecoveryAttempt() {
+  const value = { route: window.location.hash, at: Date.now() };
+  try {
+    window.sessionStorage.setItem(SCREEN_RECOVERY_KEY, JSON.stringify(value));
+  } catch {
+    // Navigation state below still prevents a reload loop.
+  }
+  try {
+    window.history.replaceState({ ...(window.history.state || {}), [SCREEN_RECOVERY_KEY]: value }, '');
+  } catch {
+    // The normal session storage path above is enough in supported browsers.
+  }
+}
+
+function clearScreenRecoveryAttempt() {
+  try {
+    window.sessionStorage.removeItem(SCREEN_RECOVERY_KEY);
+  } catch {
+    // Nothing else is required when storage is unavailable.
+  }
+  try {
+    const nextState = { ...(window.history.state || {}) };
+    delete nextState[SCREEN_RECOVERY_KEY];
+    window.history.replaceState(nextState, '');
+  } catch {
+    // Nothing else is required when navigation state is unavailable.
+  }
+}
+
+function shouldRecoverScreenAutomatically() {
+  const previous = readScreenRecoveryAttempt();
+  return !previous || previous.route !== window.location.hash;
+}
+
+function ScreenReady() {
+  useEffect(clearScreenRecoveryAttempt, []);
+  return null;
+}
 
 class ScreenErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, recovering: false, saveBlocked: false };
   }
 
   static getDerivedStateFromError(error) {
@@ -53,16 +104,57 @@ class ScreenErrorBoundary extends Component {
 
   componentDidCatch(error, info) {
     console.error('Lightweaver screen failed safely', error, info);
+    if (shouldRecoverScreenAutomatically()) {
+      if (this.props.onBeforeReload?.() === false) {
+        this.setState({ saveBlocked: true });
+        return;
+      }
+      rememberScreenRecoveryAttempt();
+      this.setState({ recovering: true }, () => window.location.reload());
+    }
   }
+
+  retryScreen = () => {
+    if (this.props.onBeforeReload?.() === false) {
+      this.setState({ saveBlocked: true });
+      return;
+    }
+    rememberScreenRecoveryAttempt();
+    window.location.reload();
+  };
+
+  openLayout = () => {
+    clearScreenRecoveryAttempt();
+    this.props.onRecover();
+  };
 
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.state.recovering) {
+      return (
+        <div className="screen screen-recovery" role="status" aria-live="polite">
+          <div className="screen-recovery-card">
+            <span className="screen-recovery-kicker">Lightweaver recovery</span>
+            <h1>Restoring your workspace…</h1>
+            <p>Lightweaver is reopening this part of your project automatically.</p>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="screen route-loading" role="alert" data-testid="screen-error-fallback">
-        <h1>This screen could not open</h1>
-        <p>An unexpected screen error occurred. Your project was not deleted.</p>
-        <button type="button" className="btn primary" onClick={() => window.location.reload()}>Reload Studio</button>
-        <button type="button" className="btn" onClick={this.props.onRecover}>Return to Layout</button>
+      <div className="screen screen-recovery" role="status" aria-live="polite" data-testid="screen-error-fallback">
+        <div className="screen-recovery-card">
+          <span className="screen-recovery-kicker">Workspace recovery</span>
+          <h1>Let’s get you back to your work</h1>
+          <p>{this.state.saveBlocked
+            ? 'Your project is still open here. Lightweaver did not reload because it could not make a safety copy.'
+            : 'Your project is safe. Lightweaver tried reopening this section and needs you to choose what happens next.'}</p>
+          <div className="screen-recovery-actions">
+            <button type="button" className="btn primary" onClick={this.retryScreen}>Try this screen again</button>
+            <button type="button" className="btn" onClick={this.openLayout}>Open Layout</button>
+          </div>
+          <p className="screen-recovery-help">If this keeps happening, open Layout first and review the item you last changed.</p>
+        </div>
       </div>
     );
   }
@@ -209,7 +301,7 @@ function Shell() {
   const installActiveRef = useRef(false);
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
-    projectName, serializeProject, replaceProject, replaceWithNewProject,
+    projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
@@ -256,8 +348,11 @@ function Shell() {
     return () => window.removeEventListener('lw-install-active', onInstallActive);
   }, []);
   const navigateStudio = useCallback((nextView) => {
-    if (!installActiveRef.current) setView(nextView);
-  }, []);
+    if (!installActiveRef.current) {
+      flushProjectAutosave();
+      setView(nextView);
+    }
+  }, [flushProjectAutosave]);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
@@ -436,9 +531,12 @@ function Shell() {
       />
       <Rail view={view} setView={navigateStudio} />
 
-      <ScreenErrorBoundary key={view} onRecover={() => navigateStudio('layout')}>
+      <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-          {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} /> : null}
+          {Screen ? <>
+            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} />
+            <ScreenReady />
+          </> : null}
         </Suspense>
       </ScreenErrorBoundary>
 

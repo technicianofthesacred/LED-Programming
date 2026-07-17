@@ -14,6 +14,53 @@
 }
 .screen-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 
+.screen-recovery {
+  align-items: center;
+  justify-content: center;
+  padding: clamp(20px, 4vw, 48px);
+}
+.screen-recovery-card {
+  width: min(100%, 560px);
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  background: var(--bg-panel);
+}
+.screen-recovery-kicker {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.screen-recovery h1 {
+  margin: 0 0 10px;
+  color: var(--text-hi);
+  font-size: clamp(22px, 3vw, 30px);
+  line-height: 1.12;
+}
+.screen-recovery p {
+  max-width: 46ch;
+  margin: 0;
+  color: var(--text-mid);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.screen-recovery-actions {
+  display: flex;
+  gap: 9px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+.screen-recovery-help {
+  margin-top: 16px !important;
+  color: var(--text-lo) !important;
+  font-size: 11px !important;
+}
+
 /* shared button icon sizing for .btn used inside screens */
 .btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; flex-shrink: 0; }
 @keyframes ptdrift { from { background-position: 0% 0; } to { background-position: 200% 0; } }

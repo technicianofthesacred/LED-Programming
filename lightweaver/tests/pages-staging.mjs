@@ -37,8 +37,9 @@ assert.equal(lock.packages[''].devDependencies.wrangler, pkg.devDependencies.wra
 assert.doesNotMatch(JSON.stringify(pkg.scripts), /npx --yes wrangler/);
 assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-staging\.mjs/);
 assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js');
+assert.equal(pkg.scripts['test:screen-recovery'], 'playwright test tests/screen-recovery.spec.ts');
 assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts --project=chromium --workers=1');
-assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:show && npm run test:production/);
+assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:show && npm run test:screen-recovery && npm run test:production/);
 assert.match(pkg.scripts['launch:source'], /^npm run test:core:source/);
 assert.equal(pkg.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
 assert.match(testWorkflow, /packages\/installer-core\/\*\*/);
