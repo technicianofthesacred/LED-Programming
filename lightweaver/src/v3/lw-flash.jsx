@@ -31,6 +31,7 @@ import {
   readCardCommissioning,
   writeCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
+import { openInChrome } from '../lib/openInChrome.js';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -65,6 +66,7 @@ import {
     const [kind, setKind] = useState("");
     const [log, setLog] = useState("");
     const [loadingBundled, setLoadingBundled] = useState(false);
+    const [chromeFallback, setChromeFallback] = useState("");
 
     const logRef = useRef(null);
     const loaderRef = useRef(null);
@@ -73,6 +75,32 @@ import {
 
     const append = (line) => setLog((p) => p + line + "\n");
     useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
+
+    const copyCurrentUrl = async (url) => {
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        textarea.remove();
+      }
+    };
+
+    const launchInChrome = () => {
+      setChromeFallback("");
+      openInChrome({
+        currentUrl: window.location.href,
+        copyText: copyCurrentUrl,
+        launch: (url) => { window.location.href = url; },
+        isPageVisible: () => document.visibilityState === 'visible',
+        onFallback: setChromeFallback,
+      });
+    };
 
     const connect = async () => {
       if (connected) {
@@ -199,11 +227,15 @@ import {
             </div>
             <div className={"fl-warn " + (hasWebSerial ? "ok" : "warn")}>
               <span style={ICON16}>{I.info}</span>
-              <div>
-                {hasWebSerial
-                  ? "The card ships pre-flashed with Lightweaver firmware. Use this only for blank ESP32-S3 boards or a firmware replacement."
-                  : "Web Serial requires Chrome or Edge. In-browser flashing is not available in your current browser."}
-              </div>
+              {hasWebSerial ? (
+                <div>The card ships pre-flashed with Lightweaver firmware. Use this only for blank ESP32-S3 boards or a firmware replacement.</div>
+              ) : (
+                <div className="fl-warn-copy">
+                  <span>Open this page in Chrome to flash your card.</span>
+                  <button className="btn primary" type="button" onClick={launchInChrome}>Open in Chrome</button>
+                  {chromeFallback && <span className="fl-warn-feedback" role="status">{chromeFallback}</span>}
+                </div>
+              )}
             </div>
 
             <div>

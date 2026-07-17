@@ -287,6 +287,9 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .fl-warn.ok { background: var(--ok-dim); color: var(--ok); }
 .fl-warn.warn { background: oklch(0.30 0.05 60 / 0.4); color: var(--warn); border: 1px solid oklch(0.5 0.1 60 / 0.4); }
 .fl-warn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.7; flex-shrink: 0; margin-top: 1px; }
+.fl-warn-copy { flex: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fl-warn-copy .btn { margin-left: auto; }
+.fl-warn-feedback { flex-basis: 100%; color: var(--text-mid); }
 
 .boot-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .boot-step { padding: 14px; border-radius: var(--r-md); background: var(--bg-panel); border: 1px solid var(--border-soft); }
