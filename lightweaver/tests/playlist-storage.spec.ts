@@ -39,6 +39,12 @@ async function gotoPlaylist(page, project) {
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
 }
 
+async function waitForUiCommit(page) {
+  await page.evaluate(() => new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
+
 async function mockConnectedPlaylistCard(page, project, cardId = 'lw-playlist-install') {
   const runtime = preparedForProject(project).config;
   await page.addInitScript((identity) => {
@@ -187,6 +193,66 @@ test('Playlist install stays pending, fails with Retry, then remains confirmed u
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
 });
 
+test('Playlist ignores a stale install success after the playlist is edited', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await mockConnectedPlaylistCard(page, project, 'lw-playlist-stale-install-success');
+  let releaseInstall: (() => void) | null = null;
+  await page.route('**/api/config', async route => {
+    await new Promise<void>(resolve => { releaseInstall = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await gotoPlaylist(page, project);
+
+  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await expect.poll(() => Boolean(releaseInstall)).toBe(true);
+  await page.locator('.pl-row').first().getByRole('button', { name: 'Copy', exact: true }).click();
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+
+  const installResponse = page.waitForResponse(response => response.url().endsWith('/api/config'));
+  releaseInstall?.();
+  await installResponse;
+  await waitForUiCommit(page);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  await expect(page.locator('.pl-row')).toHaveCount(3);
+});
+
+test('Playlist ignores a stale install failure after a newer live preview succeeds', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await mockConnectedPlaylistCard(page, project, 'lw-playlist-stale-install-failure');
+  let releaseInstall: (() => void) | null = null;
+  await page.route('**/api/config', async route => {
+    await new Promise<void>(resolve => { releaseInstall = resolve; });
+    await route.fulfill({ status: 503, body: 'stale install failed' });
+  });
+  await page.route('**/api/control', route => {
+    const request = JSON.parse(route.request().postData() || '{}');
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        cardId: 'lw-playlist-stale-install-failure',
+        patternId: request.patternId,
+        revision: request.revision,
+      }),
+    });
+  });
+  await gotoPlaylist(page, project);
+
+  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await expect.poll(() => Boolean(releaseInstall)).toBe(true);
+  const firstRow = page.locator('.pl-row').first();
+  await firstRow.getByRole('button', { name: 'Live' }).click();
+  await expect(firstRow).toHaveClass(/\bis-live\b/);
+
+  const installResponse = page.waitForResponse(response => response.url().endsWith('/api/config'));
+  releaseInstall?.();
+  await installResponse;
+  await waitForUiCommit(page);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  await expect(firstRow).toHaveClass(/\bis-live\b/);
+});
+
 test('Playlist Reset live failure remains visible and retries the same bounded action', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   await mockConnectedPlaylistCard(page, project, 'lw-playlist-reset');
@@ -204,6 +270,67 @@ test('Playlist Reset live failure remains visible and retries the same bounded a
   await failure.getByRole('button', { name: 'Retry' }).click();
   await expect.poll(() => controlAttempts).toBeGreaterThanOrEqual(2);
   await expect(failure).toBeVisible();
+});
+
+test('Playlist ignores a stale reset success after a newer live preview succeeds', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await mockConnectedPlaylistCard(page, project, 'lw-playlist-stale-reset-success');
+  let controlAttempt = 0;
+  let releaseReset: (() => void) | null = null;
+  await page.route('**/api/control', async route => {
+    controlAttempt += 1;
+    const request = JSON.parse(route.request().postData() || '{}');
+    if (controlAttempt === 2) await new Promise<void>(resolve => { releaseReset = resolve; });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        cardId: 'lw-playlist-stale-reset-success',
+        patternId: request.patternId,
+        revision: request.revision,
+      }),
+    });
+  });
+  await gotoPlaylist(page, project);
+
+  const rows = page.locator('.pl-row');
+  await rows.first().getByRole('button', { name: 'Live' }).click();
+  await expect(rows.first()).toHaveClass(/\bis-live\b/);
+  await page.getByRole('button', { name: 'Reset live' }).click();
+  await expect.poll(() => Boolean(releaseReset)).toBe(true);
+  await rows.nth(1).getByRole('button', { name: 'Live' }).click();
+  await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
+
+  const resetResponse = page.waitForResponse(response => response.url().endsWith('/api/control'));
+  releaseReset?.();
+  await resetResponse;
+  await waitForUiCommit(page);
+  await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+});
+
+test('Playlist ignores a stale reset failure after the playlist is edited', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await mockConnectedPlaylistCard(page, project, 'lw-playlist-stale-reset-failure');
+  let releaseReset: (() => void) | null = null;
+  await page.route('**/api/control', async route => {
+    await new Promise<void>(resolve => { releaseReset = resolve; });
+    await route.abort('timedout');
+  });
+  await gotoPlaylist(page, project);
+
+  await page.getByRole('button', { name: 'Reset live' }).click();
+  await expect.poll(() => Boolean(releaseReset)).toBe(true);
+  await page.locator('.pl-row').first().getByRole('button', { name: 'Copy', exact: true }).click();
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+
+  const resetFailure = page.waitForEvent('requestfailed', request => request.url().endsWith('/api/control'));
+  releaseReset?.();
+  await resetFailure;
+  await waitForUiCommit(page);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  await expect(page.locator('.pl-row')).toHaveCount(3);
 });
 
 test('Playlist marks a row physical only after the paired card acknowledges the latest intent', async ({ page }) => {
