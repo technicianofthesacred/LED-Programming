@@ -243,6 +243,8 @@ export function ProjectProvider({ children }) {
   const replacementFocusRef = useRef(null);
   const replacementResolutionRef = useRef(null);
   const keepEditingRef = useRef(null);
+  const replacementDialogRef = useRef(null);
+  const replacementBackdropRef = useRef(null);
   const [pendingReplacement, setPendingReplacement] = useState(null);
 
   const dismissReplacement = useCallback((replace) => {
@@ -266,13 +268,48 @@ export function ProjectProvider({ children }) {
   useEffect(() => {
     if (!pendingReplacement) return undefined;
     keepEditingRef.current?.focus();
+    const backdrop = replacementBackdropRef.current;
+    const background = [...(backdrop?.parentElement?.children || [])]
+      .filter(element => element !== backdrop)
+      .map(element => ({
+        element,
+        inert: element.inert,
+        ariaHidden: element.getAttribute('aria-hidden'),
+      }));
+    for (const { element } of background) {
+      element.inert = true;
+      element.setAttribute('aria-hidden', 'true');
+    }
     const onKeyDown = event => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      dismissReplacement(false);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismissReplacement(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = [...(replacementDialogRef.current?.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) || [])].filter(element => !element.hidden);
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !replacementDialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !replacementDialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      for (const { element, inert, ariaHidden } of background) {
+        element.inert = inert;
+        if (ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', ariaHidden);
+      }
+    };
   }, [dismissReplacement, pendingReplacement]);
 
   useEffect(() => () => replacementResolutionRef.current?.(false), []);
@@ -916,8 +953,9 @@ export function ProjectProvider({ children }) {
     }}>
       {children}
       {pendingReplacement &&
-        <div className="project-replacement-backdrop">
+        <div ref={replacementBackdropRef} className="project-replacement-backdrop">
           <section
+            ref={replacementDialogRef}
             className="project-replacement-dialog"
             role="dialog"
             aria-modal="true"

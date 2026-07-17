@@ -514,6 +514,7 @@ const SettingsFieldContext = createContext(null);
         setStatus('That saved project could not be opened.');
         return;
       }
+      if (!result.ok) return;
       writeActiveProjectLibraryRecordId(record.id);
       setActiveProjectRecordId(record.id);
       setStatusKind('ok');

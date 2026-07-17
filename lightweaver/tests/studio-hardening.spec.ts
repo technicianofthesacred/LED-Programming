@@ -34,6 +34,40 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening') {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
+async function seedBrowserProjectLibrary(page: any) {
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  await page.evaluate(() => {
+    const current = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    current.id = 'current-project';
+    current.name = 'Current Mandala';
+    const incoming = structuredClone(current);
+    incoming.id = 'incoming-project';
+    incoming.name = 'Incoming Lotus';
+    const records = [
+      { id: 'incoming-record', name: incoming.name, createdAt: 2, updatedAt: 2, projectVersion: incoming.version, project: incoming },
+      { id: 'current-record', name: current.name, createdAt: 1, updatedAt: 1, projectVersion: current.version, project: current },
+    ];
+    const envelope = JSON.stringify({ version: 1, records });
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(current));
+    localStorage.setItem('lw_project_library_v1', envelope);
+    localStorage.setItem('lw_project_library_v1_backup', envelope);
+    localStorage.setItem('lw_project_active_record_v1', 'current-record');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function markInstallerReady(page: any) {
+  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  const checks = page.locator('.inst-signoff input[type="checkbox"]');
+  for (let index = 0; index < 6; index += 1) await checks.nth(index).check();
+  await page.getByRole('button', { name: 'Mark ready' }).click();
+  await expect(page.getByText('Ready to ship', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    localStorage.getItem('lw_installer_ready_v1') === '1' ||
+    localStorage.getItem('lw_installer_signoff_v2') !== null
+  ))).toBe(true);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -330,6 +364,52 @@ test('installer signoff persists and exposes a ready state', async ({ page }) =>
   await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
 });
 
+test('installer invalidates signoff when the current project changes', async ({ page }) => {
+  await markInstallerReady(page);
+  await page.getByRole('button', { name: 'New project' }).click();
+  const replacement = page.getByRole('dialog', { name: 'Replace current project?' });
+  if (await replacement.count()) await replacement.getByRole('button', { name: 'Replace project' }).click();
+  await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText('Untitled Project');
+});
+
+test('installer invalidates signoff when the edited revision changes', async ({ page }) => {
+  await markInstallerReady(page);
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('textbox', { name: 'Project name' }).fill('Revised Mandala');
+  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText('Revised Mandala');
+});
+
+test('installer invalidates signoff when the installed revision changes', async ({ page }) => {
+  await mockConnectedCard(page, 'lw-signoff-installed');
+  await markInstallerReady(page);
+  await page.locator('.rail-item', { hasText: 'Patterns' }).click();
+  await page.getByTitle('Save the current look to the card').click();
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText(/Revision \d+/);
+});
+
+test('installer invalidates signoff when a different card is paired', async ({ page }) => {
+  await mockConnectedCard(page, 'lw-signoff-card-a');
+  await markInstallerReady(page);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText('lw-signoff-card-a');
+  await expect.poll(() => page.evaluate(() => {
+    try { return JSON.parse(localStorage.getItem('lw_installer_signoff_v2') || 'null')?.identity?.cardId || null; }
+    catch { return null; }
+  })).toBe('lw-signoff-card-a');
+  await mockConnectedCard(page, 'lw-signoff-card-b');
+  await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText('lw-signoff-card-b');
+});
+
 test('Settings controls expose stable accessible names', async ({ page }) => {
   await page.locator('.rail-item', { hasText: 'Settings' }).click();
   await expect(page.getByRole('slider', { name: 'Master brightness' })).toBeVisible();
@@ -434,6 +514,54 @@ test('replacement guard names both projects and keeps editing until explicitly r
   await dialog.getByRole('button', { name: 'Replace project' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(projectName).toHaveValue('Incoming Lotus');
+});
+
+test('browser library Keep editing leaves the current record active', async ({ page }) => {
+  await seedBrowserProjectLibrary(page);
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
+  await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
+  await page.getByRole('dialog', { name: 'Replace current project?' }).getByRole('button', { name: 'Keep editing' }).click();
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
+  await expect(page.locator('.set-lib-row.is-active')).toContainText('Current Mandala');
+  await expect(page.getByText('Opened Incoming Lotus.', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+});
+
+test('browser library Escape leaves the current record active', async ({ page }) => {
+  await seedBrowserProjectLibrary(page);
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
+  await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
+  await expect(page.locator('.set-lib-row.is-active')).toContainText('Current Mandala');
+  await expect(page.getByText('Opened Incoming Lotus.', { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+});
+
+test('replacement dialog traps keyboard focus and restores its trigger', async ({ page }) => {
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala');
+  const trigger = page.getByRole('button', { name: 'New project' });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Replace current project?' });
+  const keepEditing = dialog.getByRole('button', { name: 'Keep editing' });
+  const replaceProject = dialog.getByRole('button', { name: 'Replace project' });
+  await expect(keepEditing).toBeFocused();
+  await expect(page.locator('.app')).toHaveJSProperty('inert', true);
+  await page.keyboard.press('Shift+Tab');
+  await expect(replaceProject).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(keepEditing).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(replaceProject).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(keepEditing).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(page.locator('.app')).toHaveJSProperty('inert', false);
 });
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
