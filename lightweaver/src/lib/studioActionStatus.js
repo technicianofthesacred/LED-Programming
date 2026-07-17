@@ -5,12 +5,27 @@ export function formatBrowserProjectSaveLabel(record = {}) {
   return `${name || 'Project'} saved in browser library`;
 }
 
-export function makePlaylistPushPendingState() {
+export function actionStatus({ status = 'idle', rebooting = false } = {}) {
+  if (status === 'pending') return { kind: 'pending', text: 'Installing playlist on card…' };
+  if (status === 'confirmed') {
+    return {
+      kind: 'ok',
+      text: rebooting
+        ? 'Playlist installed on card. The card is restarting to use it.'
+        : 'Playlist installed on card.',
+    };
+  }
   return null;
 }
 
-export function makePlaylistPushSuccessState() {
-  return null;
+export function makePlaylistPushPendingState() {
+  const status = actionStatus({ status: 'pending' });
+  return { kind: status.kind, message: status.text, handoffUrl: '' };
+}
+
+export function makePlaylistPushSuccessState(response = {}) {
+  const status = actionStatus({ status: 'confirmed', rebooting: response?.rebooting === true });
+  return { kind: status.kind, message: status.text, handoffUrl: '' };
 }
 
 function shouldOfferHandoff(reason = '') {

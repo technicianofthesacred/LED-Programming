@@ -184,12 +184,21 @@ export function LayoutCanvas({
                   <path key={t.pathId} d={t.pathData}
                         data-vector-layer-id={l.layerId}
                         data-vector-path-id={t.pathId}
+                        tabIndex="0"
+                        role="button"
+                        aria-label={`Select artwork vector ${entry.name}`}
                         fill="none" stroke="#fff" strokeOpacity="0.001"
                         strokeWidth="16" strokeLinecap="round" pointerEvents="stroke"
                         style={{ cursor: 'pointer' }}
                         onPointerDown={e => e.stopPropagation()}
                         onMouseEnter={() => { setHoveredLayerId(l.layerId); setHoveredSubPathId(t.pathId); }}
                         onMouseLeave={() => { setHoveredLayerId(null); setHoveredSubPathId(null); }}
+                        onKeyDown={e => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          togglePathSelection(entry, e.shiftKey || e.metaKey || e.ctrlKey);
+                        }}
                         onClick={e => {
                           e.stopPropagation();
                           // Shift-click toggles this path in/out of the selection;

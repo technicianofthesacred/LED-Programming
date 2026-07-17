@@ -37,6 +37,90 @@ test('manual counts and reset are independently undoable', async ({ page }) => {
   await expect(count).toHaveValue('77');
 });
 
+test('multi-character count edit creates one undo entry', async ({ page }) => {
+  await gotoLayout(page);
+  await page.getByTestId('layout-mode-size').click();
+  const count = page.getByTestId('layout-size-strip-row').first().getByRole('spinbutton');
+  const original = await count.inputValue();
+
+  await count.click();
+  await page.keyboard.type('123');
+  await count.blur();
+
+  await expect(count).toHaveValue('123');
+  await expect(page.getByTitle(/Undo/)).toHaveAttribute('title', /1 step/);
+  await page.getByTitle(/Undo/).click();
+  await expect(count).toHaveValue(original);
+  await expect(page.getByTitle(/Undo/)).toBeDisabled();
+});
+
+test('Escape restores a count edit without adding history', async ({ page }) => {
+  await gotoLayout(page);
+  await page.getByTestId('layout-mode-size').click();
+  const count = page.getByTestId('layout-size-strip-row').first().getByRole('spinbutton');
+  const original = await count.inputValue();
+
+  await count.click();
+  await page.keyboard.type('999');
+  await page.keyboard.press('Escape');
+
+  await expect(count).toHaveValue(original);
+  await expect(page.getByTitle(/Undo/)).toBeDisabled();
+});
+
+test('Finish path is touch-visible and the completed pending path survives mode visits', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await gotoLayout(page);
+  await page.getByTitle('Draw a new LED strip path on the artwork.').click();
+  const svg = page.locator('.lw-viewport svg');
+  const box = await svg.boundingBox();
+  if (!box) throw new Error('canvas unavailable');
+  await page.mouse.click(box.x + 70, box.y + 70);
+  await page.mouse.click(box.x + 140, box.y + 110);
+
+  const finish = page.getByRole('button', { name: 'Finish path' });
+  await expect(finish).toBeVisible();
+  await finish.click();
+  await expect(page.getByText('Name your new strip')).toBeVisible();
+
+  await page.getByTestId('layout-mode-size').click();
+  await page.getByTestId('layout-mode-wire').click();
+  await page.getByTestId('layout-mode-draw').click();
+  await expect(page.getByText('Name your new strip')).toBeVisible();
+});
+
+test('artwork vector paths support named keyboard selection, additive selection, and Delete', async ({ page }) => {
+  await gotoLayout(page);
+  await page.setInputFiles('input[accept=".svg"]', {
+    name: 'keyboard-vectors.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200">
+        <g id="routes" data-name="Routes">
+          <path id="upper" d="M 20 40 H 280" fill="none" stroke="#fff"/>
+          <path id="lower" d="M 20 140 H 280" fill="none" stroke="#fff"/>
+        </g>
+      </svg>`),
+  });
+
+  const vectors = page.locator('path[data-vector-path-id]');
+  await expect(vectors).toHaveCount(2);
+  await expect(vectors.first()).toHaveAttribute('role', 'button');
+  await expect(vectors.first()).toHaveAttribute('tabindex', '0');
+  await expect(vectors.first()).toHaveAccessibleName(/Select artwork vector Routes/);
+
+  await vectors.first().focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('1 path selected')).toBeVisible();
+
+  await vectors.nth(1).focus();
+  await page.keyboard.press('Shift+Enter');
+  await expect(page.getByText('2 paths selected')).toBeVisible();
+
+  await page.keyboard.press('Delete');
+  await expect(vectors).toHaveCount(0);
+});
+
 test('mobile Layout keeps a useful canvas and presents the inspector as a bottom sheet', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoLayout(page);
