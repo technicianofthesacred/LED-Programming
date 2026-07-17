@@ -726,17 +726,22 @@ export function ProjectProvider({ children }) {
     }
   }, [serializeProject]);
 
+  const flushProjectAutosave = useCallback(() => {
+    clearTimeout(saveTimerRef.current);
+    try {
+      const saved = writeStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY, serializeProject());
+      if (saved) setLastSaved(Date.now());
+      return saved;
+    } catch {
+      return false;
+    }
+  }, [serializeProject]);
+
   useEffect(() => {
     clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      try {
-        if (writeStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY, serializeProject())) {
-          setLastSaved(Date.now());
-        }
-      } catch {}
-    }, 500);
+    saveTimerRef.current = setTimeout(flushProjectAutosave, 500);
     return () => clearTimeout(saveTimerRef.current);
-  }, [serializeProject]);
+  }, [flushProjectAutosave]);
 
   const loadProject = useCallback((data) => {
     return applyProject(data);
@@ -857,6 +862,7 @@ export function ProjectProvider({ children }) {
       standaloneController, setStandaloneController,
       // Project persistence
       serializeProject,
+      flushProjectAutosave,
       loadProject: replaceProject,
       replaceProject,
       replaceWithNewProject,
