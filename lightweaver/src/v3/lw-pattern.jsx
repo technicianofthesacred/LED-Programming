@@ -483,14 +483,30 @@ import { PatternPreview } from './PatternPreview.jsx';
     const playlistSize = playlist.length;
 
     // ── controller / preview helpers (ported from PatternsScreen) ───────
-    const runtimePackage = useMemo(
-      () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
-      [projectId, projectName, strips, board, standaloneController],
-    );
+    const runtimeBuild = useMemo(() => {
+      try {
+        return {
+          runtimePackage: buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+          error: null,
+        };
+      } catch (error) {
+        return { runtimePackage: null, error };
+      }
+    }, [projectId, projectName, strips, board, standaloneController]);
+    const runtimePackage = runtimeBuild.runtimePackage;
+    const hardwareConfigurationIssue = runtimeBuild.error
+      ? String(runtimeBuild.error.message || runtimeBuild.error).replace('is already owned by an LED output or another control', 'is already used by an LED output or another control')
+      : '';
+    const encoderPins = standaloneController?.controls?.encoder || {};
+    const canRemoveDuplicateAlternatePress = hardwareConfigurationIssue
+      && Number(encoderPins.press) >= 0
+      && Number(encoderPins.press) === Number(encoderPins.alternatePress);
+    const runtimePixelCount = runtimePackage?.config?.led?.pixels
+      ?? strips.reduce((sum, strip) => sum + (strip.pixelCount || strip.pixels?.length || 0), 0);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     const updateController = (patch) => {
-      setStandaloneController(prev => {
+      return setStandaloneController(prev => {
         const current = prev || {};
         return {
           ...current,
@@ -512,6 +528,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       });
     };
 
+    const removeDuplicateAlternatePress = () => {
+      const result = updateController({ controls: { encoder: { alternatePress: -1 } } });
+      if (result?.ok === false) {
+        setStatusKind('err');
+        setStatus(result.errors?.[0]?.message || 'Open wiring to change the duplicate GPIO assignment.');
+      }
+    };
+
     const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80) => {
       if (!livePreview) {
         setStatusKind('');
@@ -529,6 +553,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         setHandoffUrl('');
         try {
           if (zone) {
+            if (!runtimePackage) throw runtimeBuild.error;
             await ensureCardSectionsForPreview({
               host: cardHost,
               requiredZoneIds: [zone],
@@ -569,7 +594,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           }
         }
       }, delayMs);
-    }, [cardHost, livePreview, localCard, markCardLookConfirmed, runtimePackage, selectedTarget]);
+    }, [cardHost, livePreview, localCard, markCardLookConfirmed, runtimeBuild.error, runtimePackage, selectedTarget]);
 
     const retryLatestPreview = useCallback(() => {
       const latest = latestPreviewIntent.current;
@@ -963,6 +988,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const copyConfig = async () => {
       setHandoffUrl('');
       try {
+        if (!runtimePackage) throw runtimeBuild.error;
         await navigator.clipboard.writeText(cardStorageJson(runtimePackage));
         setStatusKind('ok');
         setStatus('Setup JSON copied. Paste it into the card page on the same WiFi.');
@@ -976,6 +1002,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const downloadConfig = () => {
       try {
+        if (!runtimePackage) throw runtimeBuild.error;
         const blob = new Blob([cardStorageJson(runtimePackage)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1128,7 +1155,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                 <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
+                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
                 {connected &&
                   <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }
@@ -1137,7 +1164,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                   <button className="btn" onClick={openCardPage}>{I.open}Open card page</button>
                 </div>
                 <div className="pm-menu">
-                  <button ref={menuButtonRef} className="btn" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((o) => !o)} disabled={cardSave.conflictsDisabled}>{I.dots}Card tools{I.chevronD}</button>
+                  <button ref={menuButtonRef} className="btn" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((o) => !o)} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.dots}Card tools{I.chevronD}</button>
                   {menuOpen &&
                   <>
                       <div className="pm-menu-backdrop" aria-hidden="true" onClick={() => setMenuOpen(false)} />
@@ -1191,6 +1218,18 @@ import { PatternPreview } from './PatternPreview.jsx';
                     <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=layout&mode=wire'; }}>Find my LED wire</button>
                   </div>
                 }
+              </div>
+            }
+
+            {hardwareConfigurationIssue &&
+              <div className="pmx-status is-err" role="alert" data-testid="hardware-configuration-warning">
+                <strong>Hardware setup needs attention.</strong> {hardwareConfigurationIssue} Patterns are still available, but Lightweaver will not send an unsafe setup to the card.
+                <div className="pmx-status-actions">
+                  {canRemoveDuplicateAlternatePress &&
+                    <button type="button" className="btn primary" onClick={removeDuplicateAlternatePress}>Fix automatically</button>
+                  }
+                  <button type="button" className="btn" onClick={() => { window.location.hash = '#screen=layout&mode=wire'; }}>Fix wiring</button>
+                </div>
               </div>
             }
 
@@ -1404,7 +1443,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                 </div>
 
                 <div className="card pm-pane">
-                  <div className="sec-h"><span className="t">Card</span><span className="m">{runtimePackage.config.led.pixels} pixels</span></div>
+                  <div className="sec-h"><span className="t">Card</span><span className="m">{runtimePixelCount} pixels</span></div>
                   <div className="pmx-cardsummary">
                     <span>Live preview</span><strong data-testid="card-live-preview-label">{sel.label}</strong>
                     <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>

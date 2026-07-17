@@ -48,6 +48,44 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
   await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
 });
 
+test('a GPIO conflict cannot blank Patterns and points back to wiring', async ({ page }) => {
+  const project = createDefaultProject();
+  project.devices.standaloneController.controls.encoder.press = 6;
+
+  await page.addInitScript((savedProject) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Patterns', exact: true }).click();
+
+  await expect(page.locator('.pm')).toBeVisible();
+  const warning = page.getByTestId('hardware-configuration-warning');
+  await expect(warning).toContainText('GPIO 6');
+  await expect(warning).toContainText('already used');
+
+  await warning.getByRole('button', { name: 'Fix automatically' }).click();
+  await expect(warning).toHaveCount(0);
+  await expect(page.locator('.pm')).toBeVisible();
+});
+
+test('a locked GPIO conflict explains why automatic repair is blocked', async ({ page }) => {
+  const project = createDefaultProject();
+  project.devices.standaloneController.controls.encoder.press = 6;
+  project.layout.wiring.locked = true;
+
+  await page.addInitScript((savedProject) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+
+  const lockedWarning = page.getByTestId('hardware-configuration-warning');
+  await lockedWarning.getByRole('button', { name: 'Fix automatically' }).click();
+  await expect(lockedWarning).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'Unlock verified wiring' })).toBeVisible();
+  await lockedWarning.getByRole('button', { name: 'Fix wiring' }).click();
+  await expect(page).toHaveURL(/#screen=layout&mode=wire$/);
+});
+
 test('first load reads warm (Lava Lamp) on a fresh, untitled project', async ({ page }) => {
   await gotoFreshPatterns(page);
 

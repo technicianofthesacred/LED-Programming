@@ -1,7 +1,7 @@
 /* Studio shell (app.jsx), converted from the v3 mockup to an ES module and
    wired to the real ProjectProvider. The shell chrome (TopBar/Rail/StatusBar)
    keeps the mockup markup; data/handlers are threaded in from project state. */
-import React, { lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
+import React, { Component, lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
@@ -40,6 +40,33 @@ const InstallerScreen = lazy(() => import('./lw-installer.jsx').then(module => (
 const ProductionScreen = lazy(() => import('./lw-production.jsx').then(module => ({ default: module.ProductionScreen })));
 
 const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer', 'production'];
+
+class ScreenErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('Lightweaver screen failed safely', error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="screen route-loading" role="alert" data-testid="screen-error-fallback">
+        <h1>This screen could not open</h1>
+        <p>Your project is still saved. Return to Layout to check the wiring, then try again.</p>
+        <button type="button" className="btn primary" onClick={this.props.onRecover}>Return to Layout</button>
+      </div>
+    );
+  }
+}
+
 function normalizeView(v) {
   const s = String(v || '').trim().toLowerCase();
   if (s === 'patterns') return 'pattern';
@@ -408,9 +435,11 @@ function Shell() {
       />
       <Rail view={view} setView={navigateStudio} />
 
-      <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
-        {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} /> : null}
-      </Suspense>
+      <ScreenErrorBoundary key={view} onRecover={() => navigateStudio('layout')}>
+        <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
+          {Screen ? <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} /> : null}
+        </Suspense>
+      </ScreenErrorBoundary>
 
       <StatusBar
         link={cardLink}
