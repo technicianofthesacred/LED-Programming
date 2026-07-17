@@ -150,6 +150,7 @@ function realPatternShape(patternId) {
     // ── live playlist write-back to the standalone controller ─────────────
     const writePlaylist = (nextItems) => {
       const normalized = normalizeCardPlaylist(nextItems, { savedLooks, allowEmpty: true });
+      setPlaylistStatus(null);
       setStandaloneController((prev) => {
         const current = prev || {};
         return {
@@ -312,13 +313,23 @@ function realPatternShape(patternId) {
       previewSequence.current += 1;
       dispatchPreviewAction({ type: 'reset' });
       setHandoffUrl('');
-      setPlaylistStatus(null);
+      setPlaylistStatus({ kind: 'pending', message: 'Resetting live output on card…' });
       try {
         const testStrip = readTestStrip();
         if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
         await resetLiveOutputOnCard(fallbackLiveLook(), { host, timeoutMs: 3000 });
         setLive(null);
-      } catch { /* best-effort */ }
+        setPlaylistStatus({ kind: 'ok', message: 'Live output reset on card.' });
+      } catch (error) {
+        const failure = classifyCardActionFailure(error);
+        setPlaylistStatus({
+          kind: 'err',
+          message: failure.message,
+          physicalPreview: true,
+          resetLive: true,
+          failure,
+        });
+      }
     };
 
     const recoverPhysicalOutput = async () => {
@@ -356,7 +367,11 @@ function realPatternShape(patternId) {
         case 'update-card': return () => { window.location.hash = '#screen=flash'; };
         case 'reconnect-card': return openConnectionCenter;
         case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
-        case 'retry': return playlistStatus?.recoveryFailure ? recoverPhysicalOutput : retryLatestPreview;
+        case 'retry': return playlistStatus?.recoveryFailure
+          ? recoverPhysicalOutput
+          : playlistStatus?.resetLive
+            ? resetLiveOutput
+            : retryLatestPreview;
         case 'recover-lights': return recoverPhysicalOutput;
         default: return null;
       }
@@ -388,7 +403,7 @@ function realPatternShape(patternId) {
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage: packageForCard });
-        setPlaylistStatus(nextStatus);
+        setPlaylistStatus({ ...nextStatus, retry: 'playlist' });
         setHandoffUrl(nextStatus.handoffUrl || '');
       } finally {
         setPlaylistSyncing(false);
@@ -530,6 +545,9 @@ function realPatternShape(patternId) {
                   }
                   {playlistStatus.action?.kind === 'allow-layout-change' &&
                     <button className="btn" disabled={playlistSyncing} onClick={adjustLedCounts}>Adjust LED count</button>
+                  }
+                  {playlistStatus.retry === 'playlist' &&
+                    <button className="btn primary" disabled={playlistSyncing} onClick={() => loadPlaylistToCard()}>Retry</button>
                   }
                   {!playlistStatus.physicalPreview && <button className="btn" onClick={openCard}>{I.open}Open card page</button>}
                   {handoffUrl &&

@@ -72,7 +72,7 @@ export function DrawModePanel({ state }) {
     drawMode, waypoints,
     pendingDraw, pendingDrawName, setPendingDrawName,
     pendingDrawCount, setPendingDrawCount, pendingDrawNameRef,
-    confirmDraw, cancelDraw, drawEstimatedLeds,
+    finishDraw, confirmDraw, cancelDraw, drawEstimatedLeds,
     setHoveredLayerId, setHoveredSubPathId,
     // import
     error, setError, fileRef,
@@ -103,6 +103,19 @@ export function DrawModePanel({ state }) {
               {waypoints.length >= 2 && ` · ~${drawEstimatedLeds} LEDs · double-click to finish`}
               {waypoints.length < 2 && ' · click to place, ⌫ undo, right-click cancel'}
             </span>
+            {waypoints.length >= 2 && (
+              <button
+                className="btn primary"
+                style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
+                onClick={() => {
+                  finishDraw(waypoints);
+                  setDrawMode(false);
+                  setWaypoints([]);
+                  setGhostPt(null);
+                }}>
+                Finish path
+              </button>
+            )}
           </div>
         )}
 

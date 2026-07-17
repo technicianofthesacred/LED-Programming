@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  actionStatus,
   formatBrowserProjectSaveLabel,
   makePlaylistPushErrorState,
   makePlaylistPushPendingState,
@@ -21,9 +22,23 @@ assert.equal(
   'Shanghai Mandala saved in browser library',
 );
 
-assert.equal(makePlaylistPushPendingState(), null);
-assert.equal(makePlaylistPushSuccessState(), null);
-assert.equal(makePlaylistPushSuccessState({ rebooting: true }), null);
+assert.deepEqual(actionStatus({ status: 'pending' }), { kind: 'pending', text: 'Installing playlist on card…' });
+assert.deepEqual(actionStatus({ status: 'confirmed' }), { kind: 'ok', text: 'Playlist installed on card.' });
+assert.deepEqual(makePlaylistPushPendingState(), {
+  kind: 'pending',
+  message: 'Installing playlist on card…',
+  handoffUrl: '',
+});
+assert.deepEqual(makePlaylistPushSuccessState(), {
+  kind: 'ok',
+  message: 'Playlist installed on card.',
+  handoffUrl: '',
+});
+assert.deepEqual(makePlaylistPushSuccessState({ rebooting: true }), {
+  kind: 'ok',
+  message: 'Playlist installed on card. The card is restarting to use it.',
+  handoffUrl: '',
+});
 assert.equal(makePlaylistPushSuccessStateV3().message, 'Playlist saved to the card.');
 
 const handoffBuilder = (host) => `http://${host}/#lwconfig=abc&reboot=1`;
