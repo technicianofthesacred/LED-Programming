@@ -337,6 +337,8 @@ test('Settings controls expose stable accessible names', async ({ page }) => {
   await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
+  await page.getByRole('button', { name: 'Show JSON' }).click();
+  await expect(page.getByRole('textbox', { name: 'Designer config JSON' })).toBeVisible();
 
   const unlabeledInputs = await page.locator('.set input, .set textarea').evaluateAll(elements => elements
     .filter(element => {

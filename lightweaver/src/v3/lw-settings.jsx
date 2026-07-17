@@ -764,7 +764,7 @@ const SettingsFieldContext = createContext(null);
                     <button className="btn ghost-sm" onClick={() => setAdvancedOpen(o => !o)}>{advancedOpen ? 'Hide' : 'Show'} JSON</button>
                   </Row>
                   {advancedOpen && (
-                    <div className="set-advanced"><FieldTextarea readOnly value={configJson} className="set-json" /></div>
+                    <div className="set-advanced"><FieldTextarea aria-label="Designer config JSON" readOnly value={configJson} className="set-json" /></div>
                   )}
                 </section>
               </div>
