@@ -98,9 +98,9 @@ async function mockLocalCard(page: any, options: any = {}) {
   return card;
 }
 
-async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void) } = {}) {
+async function gotoWire(page: any, { verified = false, transformProject = null as null | ((project: any) => void), url = '/#screen=layout&mode=wire' } = {}) {
   await page.addInitScript(() => localStorage.clear());
-  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
   if (!verified) return;
@@ -120,6 +120,33 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
+}
+
+async function proxyStudioOverHttps(page: any) {
+  const port = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async (route: any) => {
+    const requested = new URL(route.request().url());
+    const localUrl = `http://localhost:${port}${requested.pathname}${requested.search}`;
+    const response = await route.fetch({ url: localUrl });
+    await route.fulfill({ response });
+  });
+  await page.addInitScript(() => {
+    (window as any).__copiedPayload = '';
+    (window as any).__openedInstaller = null;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText(value: string) {
+          (window as any).__copiedPayload = value;
+          return Promise.resolve();
+        },
+      },
+    });
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
+      (window as any).__openedInstaller = { url: String(url), target, features };
+      return null;
+    }) as typeof window.open;
+  });
 }
 
 test('Send to card stays disabled for default unverified wiring and makes no request', async ({ page }) => {
@@ -240,9 +267,36 @@ test('Download WLED map exports a valid { n, map } file', async ({ page }) => {
   expect(json.map[0]).toHaveLength(2);
 });
 
-// Mixed-content fail (browser blocks HTTP push from an HTTPS designer) surfaces
-// the read-only JSON fallback textarea. Not reproducible here: Playwright serves
-// the app over plain HTTP, so `canPushDirectlyToCard('http:')` is always true
-// and the mixed-content branch never triggers. Skipped until an HTTPS harness
-// exists.
-test.skip('mixed-content push shows the JSON fallback textarea', async () => {});
+test('mixed-content recovery copies JSON, opens the installer, and retries the same bounded attempt', async ({ page }) => {
+  await proxyStudioOverHttps(page);
+  await gotoWire(page, {
+    verified: true,
+    url: 'https://led.mandalacodes.com/#screen=layout&mode=wire',
+  });
+
+  await page.getByTestId('layout-send-to-card').click();
+  const recovery = page.getByRole('group', { name: 'Mixed-content recovery' });
+  await expect(recovery).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Copy payload' })).toBeVisible();
+  await expect(recovery.getByRole('button', { name: 'Open installer' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+
+  await recovery.getByRole('button', { name: 'Copy payload' }).click();
+  const firstPayload = await page.evaluate(() => (window as any).__copiedPayload);
+  expect(() => JSON.parse(firstPayload)).not.toThrow();
+
+  await recovery.getByRole('button', { name: 'Open installer' }).click();
+  const opened = await page.evaluate(() => (window as any).__openedInstaller);
+  expect(opened.target).toBe('_blank');
+  expect(opened.features).toBe('noopener');
+  const handoff = new URL(opened.url);
+  expect(handoff.origin).toBe('http://lightweaver.local');
+  expect(new URLSearchParams(handoff.hash.slice(1)).get('lwconfig')).toBeTruthy();
+  expect(new URLSearchParams(handoff.hash.slice(1)).get('reboot')).toBe('1');
+
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(recovery).toBeVisible();
+  await page.evaluate(() => { (window as any).__copiedPayload = ''; });
+  await recovery.getByRole('button', { name: 'Copy payload' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__copiedPayload)).toBe(firstPayload);
+});
