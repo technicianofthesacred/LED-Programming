@@ -617,6 +617,25 @@
   .la-card-push-btn,.la-export-ledmap { min-height: 48px; width: 100%; }
 }
 
+@media (pointer: coarse) {
+  .la .tb-btn,
+  .la-mode-switch button,
+  .la .la-zoom button,
+  .la .btn,
+  .la .lw-wiring-run button,
+  .la .lw-wire-port,
+  .la .lw-bench-nudge {
+    min-height: 44px;
+  }
+  .la .tb-btn.icon,
+  .la .la-zoom button,
+  .la .lw-wiring-run button,
+  .la .lw-wire-port,
+  .la .lw-bench-nudge {
+    min-width: 44px;
+  }
+}
+
 .la-card-push-banner {
   padding: 10px 12px;
   border-radius: var(--r-md, 8px);

@@ -46,6 +46,14 @@ function mergeModeIntoHash(nextMode) {
   }
 }
 
+function measureSelectedPathDecoration(pathData) {
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', pathData);
+  const length = path.getTotalLength ? path.getTotalLength() : 100;
+  const midpoint = path.getPointAtLength ? path.getPointAtLength(length * 0.5) : { x: 0, y: 0 };
+  return { midpoint: { x: midpoint.x, y: midpoint.y } };
+}
+
 // Canvas: pan/zoom/wheel, lasso, strip move + nudge, draw mode + waypoints,
 // keyboard shortcuts, hover state, preview toggles, and every derived
 // visualisation memo the <svg> tree renders. Cross-hook mutators arrive via
@@ -159,6 +167,26 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const [cursorSvgPt, setCursorSvgPt] = useState(null);
   const [hoveredLayerId, setHoveredLayerId] = useState(null);
   const [hoveredSubPathId, setHoveredSubPathId] = useState(null);
+  const selectedPathDecorationCacheRef = useRef(new Map());
+
+  const selectedPathGeometryKey = JSON.stringify(pathSel.map(path => [path.pathId, path.pathData]));
+  const selectedPathDecorations = useMemo(() => {
+    const activeKeys = new Set();
+    const decorations = pathSel.map((path, index) => {
+      const cacheKey = JSON.stringify([path.pathId, path.pathData]);
+      activeKeys.add(cacheKey);
+      let geometry = selectedPathDecorationCacheRef.current.get(cacheKey);
+      if (!geometry) {
+        geometry = measureSelectedPathDecoration(path.pathData);
+        selectedPathDecorationCacheRef.current.set(cacheKey, geometry);
+      }
+      return { ...path, ...geometry, order: index + 1 };
+    });
+    for (const key of selectedPathDecorationCacheRef.current.keys()) {
+      if (!activeKeys.has(key)) selectedPathDecorationCacheRef.current.delete(key);
+    }
+    return decorations;
+  }, [selectedPathGeometryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Computed viewBox with pan/zoom ─────────────────────────────────────────
   const computedViewBox = useMemo(() => {
@@ -839,6 +867,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     pendingDrawNameRef,
     finishDraw, confirmDraw, cancelDraw,
     drawEstimatedLeds, ghostD,
+    selectedPathDecorations,
     // pan/zoom
     zoom, setZoom,
     panX, panY,

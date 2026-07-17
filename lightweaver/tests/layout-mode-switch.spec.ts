@@ -89,10 +89,9 @@ test('clicking the segments switches mode; other screens are unaffected', async 
   await expect(page).toHaveURL(/mode=draw/);
   await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 
-  // Toolbar and canvas render identically across modes this step — the
-  // Import SVG button and canvas stage are present regardless of mode.
+  // The canvas persists across modes, while Draw-only import stays out of Wire.
   await page.getByTestId('layout-mode-wire').click();
-  await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Import SVG' })).toHaveCount(0);
   await expect(page.locator('.lw-viewport svg')).toBeVisible();
 
   // A totally different screen still loads fine — the mode hash-merge never

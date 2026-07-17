@@ -121,6 +121,71 @@ test('artwork vector paths support named keyboard selection, additive selection,
   await expect(vectors).toHaveCount(0);
 });
 
+test('selected path measurement is cached across unrelated rerenders', async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = SVGPathElement.prototype.getTotalLength;
+    (window as any).__selectedPathMeasurements = 0;
+    SVGPathElement.prototype.getTotalLength = function getTotalLength() {
+      if (this.getAttribute('d') === 'M 20 100 H 280') (window as any).__selectedPathMeasurements += 1;
+      return original.call(this);
+    };
+  });
+  await gotoLayout(page);
+  await page.setInputFiles('input[accept=".svg"]', {
+    name: 'measured-vector.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200"><path id="route" d="M 20 100 H 280" fill="none" stroke="#fff"/></svg>'),
+  });
+  const vector = page.locator('path[data-vector-path-id]').first();
+  await vector.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('1 path selected')).toBeVisible();
+  const measured = await page.evaluate(() => (window as any).__selectedPathMeasurements);
+  expect(measured).toBeGreaterThan(0);
+
+  await page.getByTitle('Toggle LED dots').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__selectedPathMeasurements)).toBe(measured);
+});
+
+test('reduced motion disables the selected path marching animation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await gotoLayout(page);
+  await page.setInputFiles('input[accept=".svg"]', {
+    name: 'reduced-motion-vector.svg',
+    mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200"><path id="route" d="M 20 100 H 280" fill="none" stroke="#fff"/></svg>'),
+  });
+  const vector = page.locator('path[data-vector-path-id]').first();
+  await vector.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.lw-selected-path-march')).toHaveCSS('animation-name', 'none');
+});
+
+test('coarse targets keep primary Layout and wire controls at least 44 pixels', async ({ browser }) => {
+  const context = await browser.newContext({ hasTouch: true, viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  await gotoLayout(page);
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+
+  for (const control of [
+    page.getByTitle('Import an SVG to map LED strips'),
+    page.getByTitle('Draw a new LED strip path on the artwork.'),
+  ]) {
+    const box = await control.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+  }
+
+  await page.getByTestId('layout-mode-wire').click();
+  for (const control of [
+    page.getByRole('group', { name: 'LED data wire count' }).getByRole('button').first(),
+    page.getByRole('button', { name: /Outer circle IN port/ }),
+  ]) {
+    const box = await control.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+  }
+  await context.close();
+});
+
 test('mobile Layout keeps a useful canvas and presents the inspector as a bottom sheet', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoLayout(page);

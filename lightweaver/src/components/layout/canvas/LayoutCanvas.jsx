@@ -35,7 +35,7 @@ export function LayoutCanvas({
   interactionHandlers,
 }) {
   const { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef } = refs;
-  const { selStripId, selLayer, pathSel, existingStrip } = selection;
+  const { selStripId, selLayer, pathSel, selectedPathDecorations = [], existingStrip } = selection;
   const {
     effectiveShowLight, effectiveGlowMode, glowStdDev, directedGlow,
     showHeat, showLeds, layoutPatternFrame, stripSamples, stripArrows,
@@ -227,20 +227,17 @@ export function LayoutCanvas({
 
 
             {/* ── Path selection highlight (marching ants = canvas path-pick for strip assignment) ── */}
-            {pathSel.map((p, idx) => {
-              const midEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-              midEl.setAttribute('d', p.pathData);
-              const len = midEl.getTotalLength ? midEl.getTotalLength() : 100;
-              const midPt = midEl.getPointAtLength ? midEl.getPointAtLength(len * 0.5) : { x: 0, y: 0 };
+            {selectedPathDecorations.map(p => {
+              const midPt = p.midpoint;
               return (
                 <g key={'sel-' + p.pathId} style={{ pointerEvents: 'none' }}>
                   <path d={p.pathData} stroke="oklch(0.615 0.112 57)" strokeWidth="8" fill="none" opacity={0.16} strokeLinecap="round"/>
-                  <path d={p.pathData} stroke="oklch(0.615 0.112 57)" strokeWidth="2.5" fill="none" opacity={0.95}
+                  <path className="lw-selected-path-march" d={p.pathData} stroke="oklch(0.615 0.112 57)" strokeWidth="2.5" fill="none" opacity={0.95}
                         strokeDasharray="10 5" strokeLinecap="round"
                         style={{ animation: 'lw-march 0.5s linear infinite' }}/>
                   <circle cx={midPt.x} cy={midPt.y} r={vbScale * 9} fill="oklch(0.615 0.112 57)" opacity={0.95}/>
                   <text x={midPt.x} y={midPt.y + vbScale * 4} textAnchor="middle" fill="oklch(0.190 0.018 52)" fontSize={vbScale * 9}
-                        fontWeight="bold" style={{ userSelect: 'none' }}>{idx + 1}</text>
+                        fontWeight="bold" style={{ userSelect: 'none' }}>{p.order}</text>
                 </g>
               );
             })}
