@@ -253,6 +253,33 @@ test('Playlist ignores a stale install failure after a newer live preview succee
   await expect(firstRow).toHaveClass(/\bis-live\b/);
 });
 
+test('Playlist ignores a stale install completion after the card address changes', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  await mockConnectedPlaylistCard(page, project, 'lw-playlist-stale-install-host');
+  let releaseInstall: (() => void) | null = null;
+  await page.route('**/api/config', async route => {
+    await new Promise<void>(resolve => { releaseInstall = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+  });
+  await gotoPlaylist(page, project);
+
+  const install = page.getByRole('button', { name: 'Load playlist to card' });
+  await install.click();
+  await expect.poll(() => Boolean(releaseInstall)).toBe(true);
+  await expect(page.getByTestId('playlist-card-status')).toContainText('Installing playlist on card…');
+
+  await page.getByRole('textbox', { name: 'Card address' }).fill('new-playlist-card.local');
+  await expect(page.getByRole('textbox', { name: 'Card address' })).toHaveValue('new-playlist-card.local');
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+
+  const installResponse = page.waitForResponse(response => response.url().endsWith('/api/config'));
+  releaseInstall?.();
+  await installResponse;
+  await waitForUiCommit(page);
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  await expect(install).toContainText('Load playlist to card');
+});
+
 test('Playlist Reset live failure remains visible and retries the same bounded action', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   await mockConnectedPlaylistCard(page, project, 'lw-playlist-reset');
@@ -446,6 +473,80 @@ test('Playlist keeps the failure visible while dedicated light recovery runs and
   await expect.poll(() => recoveryCount).toBe(2);
   await expect(page.getByTestId('playlist-card-status')).toContainText('Recovery frame sent. Confirm warm white is visible on the physical lights.');
   await expect(page.getByTestId('playlist-card-status')).toHaveAttribute('role', 'status');
+});
+
+test('Playlist ignores stale light recovery after a newer live preview succeeds', async ({ page }) => {
+  const project = makePlaylistProject({ count: 2 });
+  let releaseRecovery: (() => void) | null = null;
+  let recoveryCount = 0;
+  let controlCount = 0;
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-playlist-stale-recovery' }));
+  });
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: 'lw-playlist-stale-recovery', firmwareVersion: '1.0.0' }),
+  }));
+  await page.route('**/api/control', route => {
+    controlCount += 1;
+    const request = JSON.parse(route.request().postData() || '{}');
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(controlCount === 1
+        ? { ok: true, cardId: 'lw-playlist-stale-recovery' }
+        : {
+            ok: true,
+            cardId: 'lw-playlist-stale-recovery',
+            patternId: request.patternId,
+            revision: request.revision,
+          }),
+    });
+  });
+  await page.route('**/api/wiring/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true, state: 'known-good', currentOutputs: [] }),
+  }));
+  await page.route('**/api/recover-lights', async route => {
+    recoveryCount += 1;
+    if (recoveryCount === 1) await new Promise<void>(resolve => { releaseRecovery = resolve; });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        accepted: true,
+        diagnostics: { nonBlackPixels: 44, brightnessByte: 180 },
+      }),
+    });
+  });
+  await page.route('**/api/reboot', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: true }),
+  }));
+  await gotoPlaylist(page, project);
+
+  const rows = page.locator('.pl-row');
+  await rows.first().getByRole('button', { name: 'Live' }).click();
+  const failure = page.getByTestId('playlist-card-status');
+  await expect(failure).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await failure.getByRole('button', { name: 'Recover lights' }).click();
+  await expect.poll(() => Boolean(releaseRecovery)).toBe(true);
+
+  await rows.nth(1).getByRole('button', { name: 'Live' }).click();
+  await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
+  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+
+  releaseRecovery?.();
+  await expect.poll(() => recoveryCount).toBe(2);
+  await waitForUiCommit(page);
+  await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
+  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
+  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
 });
 
 test('Playlist reports a bounded failure when dedicated light recovery is rejected', async ({ page }) => {

@@ -156,6 +156,7 @@ function realPatternShape(patternId) {
       cardActionGeneration.current += 1;
       previewSequence.current += 1;
       setPlaylistSyncing(false);
+      setRecoveryPending(false);
       setPlaylistStatus(null);
       setStandaloneController((prev) => {
         const current = prev || {};
@@ -207,6 +208,7 @@ function realPatternShape(patternId) {
       const sequence = ++previewSequence.current;
       const actionGeneration = ++cardActionGeneration.current;
       setPlaylistSyncing(false);
+      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -238,6 +240,7 @@ function realPatternShape(patternId) {
       const sequence = ++previewSequence.current;
       const actionGeneration = ++cardActionGeneration.current;
       setPlaylistSyncing(false);
+      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -323,6 +326,7 @@ function realPatternShape(patternId) {
       const actionGeneration = ++cardActionGeneration.current;
       previewSequence.current += 1;
       setPlaylistSyncing(false);
+      setRecoveryPending(false);
       dispatchPreviewAction({ type: 'reset' });
       setHandoffUrl('');
       setPlaylistStatus({ kind: 'pending', message: 'Resetting live output on card…' });
@@ -348,6 +352,8 @@ function realPatternShape(patternId) {
 
     const recoverPhysicalOutput = async () => {
       if (recoveryPending) return;
+      const actionGeneration = ++cardActionGeneration.current;
+      const recoveryIsCurrent = () => actionGeneration === cardActionGeneration.current;
       previewSequence.current += 1;
       setHandoffUrl('');
       setRecoveryPending(true);
@@ -356,6 +362,7 @@ function realPatternShape(patternId) {
           { patternId: 'warm-white', brightness: 1, syncZones: true },
           { host, timeoutMs: 3200, restartCard: true },
         );
+        if (!recoveryIsCurrent()) return;
         dispatchPreviewAction({ type: 'reset' });
         setLive(null);
         setPlaylistStatus({
@@ -363,6 +370,7 @@ function realPatternShape(patternId) {
           message: 'Recovery frame sent. Confirm warm white is visible on the physical lights.',
         });
       } catch (error) {
+        if (!recoveryIsCurrent()) return;
         const failure = classifyCardActionFailure(error);
         setPlaylistStatus({
           kind: 'err',
@@ -372,7 +380,7 @@ function realPatternShape(patternId) {
           failure,
         });
       } finally {
-        setRecoveryPending(false);
+        if (recoveryIsCurrent()) setRecoveryPending(false);
       }
     };
 
@@ -399,6 +407,7 @@ function realPatternShape(patternId) {
         installRevision === playlistRevision.current
       );
       previewSequence.current += 1;
+      setRecoveryPending(false);
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
       setPlaylistSyncing(true);
@@ -459,7 +468,18 @@ function realPatternShape(patternId) {
     // the layout screen already parses (#screen=layout&mode=size).
     const adjustLedCounts = () => { window.location.hash = 'screen=layout&mode=size'; };
 
-    const persistHost = (value) => { setHost(value); writeStoredCardHost(value); };
+    const persistHost = (value) => {
+      cardActionGeneration.current += 1;
+      previewSequence.current += 1;
+      setPlaylistSyncing(false);
+      setRecoveryPending(false);
+      dispatchPreviewAction({ type: 'reset' });
+      setLive(null);
+      setHandoffUrl('');
+      setPlaylistStatus(null);
+      setHost(value);
+      writeStoredCardHost(value);
+    };
 
     // ── add from the real banks ───────────────────────────────────────────
     const addPattern = (patternId) => {
