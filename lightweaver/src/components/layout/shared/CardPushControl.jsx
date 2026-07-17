@@ -159,7 +159,7 @@ export function CardPushControl({
           title={connected ? `Push zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
         >
           <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
-          {pushing ? `Installing on ${pushHost}…` : 'Install on card'}
+          <span className="la-card-push-label">{pushing ? `Installing on ${pushHost}…` : 'Install on card'}<small>{connected ? 'Card connected' : 'Card not connected'}</small></span>
         </button>
         {children}
       </div>

@@ -14,6 +14,7 @@ import { WireDiscovery } from '../wire/WireDiscovery.jsx';
 import { planAdjacentStripBoundary, planOutputPixelCountAdjustment, planStripPixelCountAdjustment } from '../../../lib/wiringChase.js';
 import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from '../../../lib/gpioAssignments.js';
 import { parsedVb } from '../../../lib/layoutGeometry.js';
+import { normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
 
 const PINS = [16, 17, 18, 21];
 const outputName = index => `Output ${String.fromCharCode(65 + index)}`;
@@ -41,6 +42,38 @@ function changeSummary(proposal) {
   return `Changes ${changes.join(' and ')}.`;
 }
 
+const STEP_STATUS = {
+  blocked: 'Waiting',
+  complete: 'Complete',
+  current: 'Next',
+  optional: 'Optional',
+};
+
+function CommissioningStep({ number, title, state, summary, expanded, onToggle, toggleLabel, children }) {
+  const headingId = `commissioning-step-${number}`;
+  const accessibleToggleLabel = expanded ? `Collapse ${title}` : toggleLabel;
+  return (
+    <section
+      className={`lw-commissioning-step is-${state}${expanded ? ' is-expanded' : ''}`}
+      data-testid="commissioning-step"
+      data-step-state={state}
+      role="region"
+      aria-labelledby={headingId}
+    >
+      <header className="lw-step-header">
+        <span className="lw-step-number" aria-hidden="true">{number}</span>
+        <div className="lw-step-heading">
+          <strong id={headingId}>Step {number}: {title}</strong>
+          <span>{summary}</span>
+        </div>
+        <span className="lw-step-state">{STEP_STATUS[state]}</span>
+        <button className="lw-step-toggle" aria-expanded={expanded} aria-label={accessibleToggleLabel} onClick={onToggle}>{expanded ? 'Collapse' : 'Edit'}</button>
+      </header>
+      {expanded && <div className="lw-step-body">{children}</div>}
+    </section>
+  );
+}
+
 export function WireModePanel({ state, connected, cardHost }) {
   const {
     strips, selectStrip, selStripId, pxPerMm, viewBox,
@@ -61,6 +94,8 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [rowDrag, setRowDrag] = useState(null);
   const [outputDrag, setOutputDrag] = useState(null);
   const [pinError, setPinError] = useState('');
+  const [expandedSteps, setExpandedSteps] = useState(() => new Set());
+  const autoExpandedStepRef = useRef(null);
   const connectedCordRef = useRef(null);
   const cordPointerRef = useRef(null);
   const suppressPortClickRef = useRef(null);
@@ -86,6 +121,12 @@ export function WireModePanel({ state, connected, cardHost }) {
   }, strips), [wiring, strips, stripsById, runsById]);
   const selectedFromCanvas = wiring.runs.find(item => item.type === 'strip' && item.source.stripId === selStripId)?.id;
   const effectiveSelectedRunId = selectedFromCanvas || selectedRunId;
+  const toggleStep = number => setExpandedSteps(current => {
+    const next = new Set(current);
+    if (next.has(number)) next.delete(number);
+    else next.add(number);
+    return next;
+  });
   useEffect(() => {
     const run = wiring.runs.find(item => item.type === 'strip' && item.source.stripId === selStripId);
     if (run) setSelectedRunId(run.id);
@@ -567,13 +608,55 @@ export function WireModePanel({ state, connected, cardHost }) {
     }
   };
 
+  const dataWireCountConfirmed = !patchBoard?.dataWireCountNeedsReview;
+  const mappingReady = compiledWiring.ok;
+  const physicallyVerified = Boolean(wiring.verified && wiring.runs.every(run => run.verified));
+  const stripRunCount = wiring.runs.filter(run => run.type === 'strip').length;
+  const colorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
+  const colorConfirmed = Boolean(
+    standaloneController?.led?.colorOrderConfirmed
+    && normalizeUsbLedColorOrder(standaloneController?.led?.confirmedColorOrder || '') === colorOrder
+  );
+  const commissioningVerified = physicallyVerified && colorConfirmed;
+  const stepStates = {
+    1: dataWireCountConfirmed ? 'complete' : 'current',
+    2: !dataWireCountConfirmed ? 'blocked' : mappingReady ? 'complete' : 'current',
+    3: mappingReady ? 'optional' : 'blocked',
+    4: !mappingReady ? 'blocked' : commissioningVerified ? 'complete' : 'current',
+    5: commissioningVerified ? 'current' : 'blocked',
+  };
+  useEffect(() => {
+    const activeStep = !dataWireCountConfirmed ? 1 : !mappingReady ? 2 : !commissioningVerified ? 4 : 5;
+    const priorAutomaticStep = autoExpandedStepRef.current;
+    autoExpandedStepRef.current = activeStep;
+    setExpandedSteps(current => {
+      const next = new Set(current);
+      if (priorAutomaticStep != null) next.delete(priorAutomaticStep);
+      next.add(activeStep);
+      return next;
+    });
+  }, [dataWireCountConfirmed, mappingReady, commissioningVerified]);
+
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
+      <div className="lw-commissioning-intro">
+        <span className="lw-bench-kicker">Commission the installation</span>
+        <strong>Wire the physical LEDs</strong>
+        <p>Work from the card to the real LED strips. Each step keeps the next action clear.</p>
+      </div>
+      <CommissioningStep
+        number={1}
+        title="Choose data wires"
+        state={stepStates[1]}
+        summary={`${wiring.outputs.length} data wire${wiring.outputs.length === 1 ? '' : 's'}`}
+        expanded={expandedSteps.has(1)}
+        onToggle={() => toggleStep(1)}
+        toggleLabel="Edit data wire count"
+      >
       <section className="lw-data-wire-count" aria-labelledby="data-wire-question">
         <div>
-          <span className="lw-bench-kicker">Start here</span>
           <strong id="data-wire-question">How many LED data wires leave the card?</strong>
-          <p>Count only the signal wires connected to LED outputs. Most pieces use one.</p>
+          <p>Count the signal wires connected from the card to the LED strips. Most pieces use one.</p>
           {patchBoard?.dataWireCountNeedsReview && (
             <p className="lw-inline-warning">This older project needs confirmation. Tap the correct number, even if it is already selected.</p>
           )}
@@ -584,10 +667,20 @@ export function WireModePanel({ state, connected, cardHost }) {
           ))}
         </div>
       </section>
+      </CommissioningStep>
+      <CommissioningStep
+        number={2}
+        title="Map LED outputs"
+        state={stepStates[2]}
+        summary={`${wiring.outputs.length} LED output${wiring.outputs.length === 1 ? '' : 's'} · ${stripRunCount} LED strip${stripRunCount === 1 ? '' : 's'} · ${compiledWiring.totalPixels} pixels`}
+        expanded={expandedSteps.has(2)}
+        onToggle={() => toggleStep(2)}
+        toggleLabel="Edit LED output mapping"
+      >
       <div className="lw-wiring-toolbar">
-        <strong>{wiring.outputs.length} physical output{wiring.outputs.length === 1 ? '' : 's'}</strong>
+        <strong>{wiring.outputs.length} LED output{wiring.outputs.length === 1 ? '' : 's'}</strong>
         <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
-        <button className="btn" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>{advanced ? 'Hide expert settings' : 'Expert settings'}</button>
+        <button className="btn btn-ghost lw-expert-toggle" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>{advanced ? 'Hide advanced settings' : 'Advanced settings'}</button>
       </div>
       <div className="lw-wiring-lanes">
         {wiring.outputs.map((output, outputIndex) => (
@@ -701,42 +794,28 @@ export function WireModePanel({ state, connected, cardHost }) {
           </div>
         )}
       </details>}
-      <WiringPreflight
-        compiled={compiledWiring}
-        locked={wiring.locked}
-        canLock={compiledWiring.ok && wiring.verified && wiring.runs.every(run => run.verified)}
-        onToggleLock={toggleLock}
-        mutationError={mutationError}
-      />
-      <WiringBenchTest
-        wiring={wiring}
-        compiled={compiledWiring}
-        updateWiring={updateWiring}
-        priorConfirmedLook={confirmedCardLook}
-        cardHost={cardHost}
-        strips={strips}
-        adjustableRunIds={adjustableRunIds}
-        onAdjustBoundary={adjustRunBoundary}
-        adjustableOutputIds={adjustableOutputIds}
-        onAdjustOutput={adjustOutputCount}
-      />
-      <StripColorOrderCheck
-        cardHost={cardHost}
-        controller={standaloneController}
-        setController={setStandaloneController}
-      />
+      </CommissioningStep>
+      <CommissioningStep
+        number={3}
+        title="Plan the physical route"
+        state={stepStates[3]}
+        summary={wiring.controllerAnchor ? 'Controller placed · Auto Wire available' : 'Place the controller or skip Auto Wire'}
+        expanded={expandedSteps.has(3)}
+        onToggle={() => toggleStep(3)}
+        toggleLabel="Open optional Auto Wire"
+      >
       <section className="lw-auto-wire-optional" aria-label="Optional Auto Wire">
         <div className="lw-auto-wire-heading">
           <strong>Auto Wire</strong>
           <span>Optional</span>
         </div>
-        <p className="lw-auto-wire-safety">Preview only. Applying this route resets the physical check.</p>
+        <p className="lw-auto-wire-safety">Use a proposed strip order before checking the real LEDs. Applying a route later clears the physical check.</p>
         <section className="lw-auto-wire-controls" aria-label="Auto Wire controls">
           <label>
-            <span>Outputs</span>
+            <span>LED outputs</span>
             <span className="lw-auto-wire-fixed-count">Uses your {wiring.outputs.length} data wire{wiring.outputs.length === 1 ? '' : 's'}</span>
           </label>
-          <button className="btn primary" title={wiring.controllerAnchor ? 'Preview a physical routing proposal' : 'Place the card at the artwork center, then drag it where it belongs'} disabled={wiring.locked} onClick={wiring.controllerAnchor ? runAutoWire : placeCard}>{wiring.controllerAnchor ? 'Preview route' : 'Place card'}</button>
+          <button className="btn" title={wiring.controllerAnchor ? 'Preview a physical routing proposal' : 'Place the card at the artwork center, then drag it where it belongs'} disabled={wiring.locked} onClick={wiring.controllerAnchor ? runAutoWire : placeCard}>{wiring.controllerAnchor ? 'Preview route' : 'Place card'}</button>
         </section>
         {activeProposal && (
           <section className="lw-auto-wire-preview" data-testid="auto-wire-preview" data-proposal-index={proposalIndex}>
@@ -777,6 +856,70 @@ export function WireModePanel({ state, connected, cardHost }) {
           </section>
         )}
       </section>
+      </CommissioningStep>
+      <CommissioningStep
+        number={4}
+        title="Check the real LEDs"
+        state={stepStates[4]}
+        summary={commissioningVerified
+          ? `Wiring and ${colorOrder} color order verified`
+          : physicallyVerified
+            ? `Wiring verified · Confirm ${colorOrder} color order`
+            : `Verify strip boundaries and direction · Confirm ${colorOrder} color order`}
+        expanded={expandedSteps.has(4)}
+        onToggle={() => toggleStep(4)}
+        toggleLabel="Open physical LED check"
+      >
+      <WiringBenchTest
+        wiring={wiring}
+        compiled={compiledWiring}
+        updateWiring={updateWiring}
+        priorConfirmedLook={confirmedCardLook}
+        cardHost={cardHost}
+        strips={strips}
+        adjustableRunIds={adjustableRunIds}
+        onAdjustBoundary={adjustRunBoundary}
+        adjustableOutputIds={adjustableOutputIds}
+        onAdjustOutput={adjustOutputCount}
+      />
+      <StripColorOrderCheck
+        cardHost={cardHost}
+        controller={standaloneController}
+        setController={setStandaloneController}
+      />
+      </CommissioningStep>
+      <CommissioningStep
+        number={5}
+        title="Review and install"
+        state={stepStates[5]}
+        summary={commissioningVerified
+          ? compiledWiring.sendReady ? 'Ready to install on the card' : 'Lock the verified wiring to continue'
+          : physicallyVerified ? 'Color confirmation required' : 'Physical LED check required'}
+        expanded={expandedSteps.has(5)}
+        onToggle={() => toggleStep(5)}
+        toggleLabel="Open install review"
+      >
+      <div className="lw-install-gate" role="status">
+        {commissioningVerified
+          ? compiledWiring.sendReady ? 'Review the configuration, then install it on the card.' : 'Lock the verified wiring before installation.'
+          : physicallyVerified ? 'Confirm the color order on the real LEDs before installation.' : 'Complete the physical LED check before installation.'}
+      </div>
+      <dl className="lw-install-review">
+        <div><dt>Data wires</dt><dd>{wiring.outputs.length}</dd></div>
+        <div><dt>LED outputs</dt><dd>{wiring.outputs.length}</dd></div>
+        <div><dt>LED strips</dt><dd>{stripRunCount}</dd></div>
+        <div><dt>Total pixels</dt><dd>{compiledWiring.totalPixels}</dd></div>
+        <div><dt>Configured color order</dt><dd>{colorOrder}</dd></div>
+        <div><dt>Color check</dt><dd>{colorConfirmed ? 'Confirmed' : 'Required'}</dd></div>
+        <div><dt>Physical check</dt><dd>{physicallyVerified ? 'Complete' : 'Required'}</dd></div>
+      </dl>
+      <WiringPreflight
+        compiled={compiledWiring}
+        locked={wiring.locked}
+        canLock={compiledWiring.ok && commissioningVerified}
+        onToggleLock={toggleLock}
+        mutationError={mutationError}
+      />
       {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
       {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}
       <section className="lw-wire-finish">
@@ -787,11 +930,12 @@ export function WireModePanel({ state, connected, cardHost }) {
             projectId={projectId}
             projectName={projectName}
             standaloneController={installController}
-            disabled={!compiledWiring.sendReady}
+            disabled={!compiledWiring.sendReady || !commissioningVerified}
           >
-            <button className="btn la-export-ledmap" data-testid="layout-export-ledmap" title="File only — does not change the card" onClick={exportLedmap}>Download WLED map</button>
+            <button className="btn btn-ghost la-export-ledmap" data-testid="layout-export-ledmap" title="Secondary export for a separate WLED setup — does not change the Lightweaver card" onClick={exportLedmap}>Download WLED map</button>
           </CardPushControl>
       </section>
+      </CommissioningStep>
     </div>
   );
 }
