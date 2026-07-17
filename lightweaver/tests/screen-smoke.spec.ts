@@ -91,7 +91,7 @@ test('connection center starts with the two physical card choices', async ({ pag
   await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
 });
 
-test('an unreachable previously paired card opens directly on reconnect', async ({ page }) => {
+test('an unreachable previously paired card opens directly on retry guidance', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();
@@ -106,7 +106,7 @@ test('an unreachable previously paired card opens directly on reconnect', async 
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog.getByRole('button', { name: 'Reconnect' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
   await expect(dialog).not.toContainText('lw-remembered-card');
 });
@@ -120,7 +120,8 @@ test('opening while connecting renders the busy flow action directly', async ({ 
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog).toContainText('Studio is reconnecting to your Lightweaver now.');
+  await expect(dialog.getByRole('heading', { name: 'Connecting to the Lightweaver card' })).toBeVisible();
+  await expect(dialog).toContainText('Keep the card powered and leave its page open while Studio checks it.');
   await expect(dialog.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
@@ -137,7 +138,7 @@ test('opening after a blocked popup renders the retry action directly', async ({
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 
-test('opening with old firmware renders installation recovery directly', async ({ page }) => {
+test('opening with old firmware renders the card update directly', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
   });
@@ -148,7 +149,8 @@ test('opening with old firmware renders installation recovery directly', async (
   await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'firmware-too-old', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await expect(page.getByRole('button', { name: 'Start installation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Update this Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update card' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 

@@ -4,21 +4,42 @@ import os from 'node:os';
 import path from 'node:path';
 
 async function mockLocalCard(page: any, options: any = {}) {
+  const cardId = options.cardId || 'lw-workflow-card';
+  const cardName = options.cardName || 'Workflow test card';
+  const firmwareVersion = '1.0.0';
+  const buildId = 'workflow-test-build';
   const card = {
     zones: options.zones || [
-      { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 22 }] },
-      { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 22, count: 22 }] },
+      { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 27 }] },
+      { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 27, count: 17 }] },
     ],
     savedConfig: null as any,
     operations: [] as string[],
     controls: [] as any[],
   };
 
+  await page.addInitScript(({ id, name, version, build }) => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id,
+      name,
+      hostname: '',
+      address: '',
+      firmwareVersion: version,
+      buildId: build,
+      acknowledgedAt: '2026-07-17T00:00:00.000Z',
+    }));
+  }, { id: cardId, name: cardName, version: firmwareVersion, build: buildId });
+
   await page.route('http://lightweaver.local/**', async (route: any) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === '/api/status') {
-      await route.fulfill({ json: { ok: true, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
+      await route.fulfill({ json: {
+        app: 'Lightweaver', ok: true, cardId, cardName, firmwareVersion, buildId,
+        led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' },
+      } });
       return;
     }
     if (pathname === '/api/zones') {
@@ -29,11 +50,16 @@ async function mockLocalCard(page: any, options: any = {}) {
     if (pathname === '/api/firmware-info') {
       await route.fulfill({
         json: {
+          app: 'Lightweaver',
+          cardId,
+          cardName,
+          firmwareVersion,
+          buildId,
           ok: true,
           pixels: 44,
           outputs: [
-            { id: 'out1', pin: 16, pixels: 22 },
-            { id: 'out2', pin: 17, pixels: 22 },
+            { id: 'out1', pin: 16, pixels: 27 },
+            { id: 'out2', pin: 17, pixels: 17 },
           ],
         },
       });
@@ -49,8 +75,15 @@ async function mockLocalCard(page: any, options: any = {}) {
     }
     if (pathname === '/api/control') {
       card.operations.push('control');
-      card.controls.push(JSON.parse(request.postData() || '{}'));
-      await route.fulfill({ json: { ok: true } });
+      const control = JSON.parse(request.postData() || '{}');
+      card.controls.push(control);
+      await route.fulfill({ json: {
+        ok: true,
+        cardId,
+        patternId: control.patternId,
+        revision: control.revision,
+        applied: control,
+      } });
       return;
     }
     await route.fulfill({ json: { ok: true } });
@@ -271,7 +304,6 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
 });
 
 test('quiet pattern preview does not render routine notifications', async ({ page }) => {
-  await page.addInitScript(() => localStorage.clear());
   await mockLocalCard(page);
   await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
@@ -282,8 +314,7 @@ test('quiet pattern preview does not render routine notifications', async ({ pag
   await expect(page.locator('.pmx-status')).toHaveCount(0);
 });
 
-test('quiet complete playlist sync writes and verifies all card sections', async ({ page }) => {
-  await page.addInitScript(() => localStorage.clear());
+test('complete playlist sync writes and verifies all card sections', async ({ page }) => {
   const card = await mockLocalCard(page);
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
@@ -298,11 +329,10 @@ test('quiet complete playlist sync writes and verifies all card sections', async
     'patch-default-inner-circle',
   ]);
   await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
-  await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
+  await expect(page.getByTestId('playlist-card-status')).toContainText('Playlist installed on card.');
 });
 
 test('latest section preview installs dependencies once and wins rapid taps', async ({ page }) => {
-  await page.addInitScript(() => localStorage.clear());
   const card = await mockLocalCard(page, {
     zones: [{ id: 'full-piece', label: 'Full piece', ranges: [{ start: 0, count: 44 }] }],
     configDelayMs: 1000,
