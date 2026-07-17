@@ -24,6 +24,14 @@ const aliasControls = normalizeCardRuntimeConfig({
 assert.deepEqual(aliasControls.encoder.a, 10);
 assert.equal('pinA' in aliasControls.encoder, false);
 assert.equal('previousPin' in aliasControls, false);
+
+const duplicateEncoderPressPackage = makeCardRuntimePackage({
+  led: { pixels: 44, outputs: [{ id: 'main', pin: 16, pixels: 44 }] },
+  controls: { encoder: { press: 6, alternatePress: 6 } },
+});
+assert.equal(duplicateEncoderPressPackage.config.controls.encoder.press, 6);
+assert.equal(duplicateEncoderPressPackage.config.controls.encoder.alternatePress, -1);
+
 assert.throws(() => normalizeCardRuntimeConfig({ led: { pixels: 44, outputs: [{ id: 'main', pin: 16, pixels: 44 }] }, controls: { encoder: { a: 10, b: 10, press: 12, alternatePress: -1 }, previous: -1, next: -1, blackout: -1, brightness: -1, statusLed: -1 } }), /already owned/i);
 
 assert.ok(DEFAULT_CARD_PATTERN_BANK.length >= 24);

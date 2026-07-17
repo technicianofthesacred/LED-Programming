@@ -39,21 +39,21 @@ async function gotoPlaylist(page, project) {
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
 }
 
-test('Playlist stays editable when hardware GPIO configuration is invalid', async ({ page }) => {
+test('Playlist resolves a duplicate encoder press without pausing card setup', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   project.devices.standaloneController.controls.encoder.press = 6;
   await gotoPlaylist(page, project);
 
   await expect(page.locator('.pm')).toBeVisible();
   await expect(page.getByTestId('screen-error-fallback')).toHaveCount(0);
-  await expect(page.getByTestId('playlist-hardware-warning')).toContainText('GPIO 6');
+  await expect(page.getByTestId('playlist-hardware-warning')).toHaveCount(0);
 
   await expect(page.locator('.pl-row')).toHaveCount(2);
   await page.locator('.pl-row').first().getByRole('button', { name: 'Copy', exact: true }).click();
   await expect(page.locator('.pl-row')).toHaveCount(3);
   await expect(page.getByRole('button', { name: 'Load playlist to card' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: /Copy chip config/ })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Copy chip config/ })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeEnabled();
 });
 
 test('Playlist copy and download equal the canonical compact 19-look payload', async ({ page }) => {

@@ -333,12 +333,14 @@ function normalizeControls(controls = {}) {
   const alias = (canonical, ...aliases) => canonical !== undefined
     ? canonical
     : aliases.find(value => value !== undefined);
+  const encoderPress = clampInt(alias(encoder.press, encoder.pressPin, encoder.pinPress), DEFAULT_CARD_CONTROLS.encoder.press, 0, 48);
+  const encoderAlternatePress = clampInt(alias(encoder.alternatePress, encoder.alternatePressPin, encoder.pinAlternatePress), DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48);
   return {
     encoder: {
       a: clampInt(alias(encoder.a, encoder.pinA), DEFAULT_CARD_CONTROLS.encoder.a, 0, 48),
       b: clampInt(alias(encoder.b, encoder.pinB), DEFAULT_CARD_CONTROLS.encoder.b, 0, 48),
-      press: clampInt(alias(encoder.press, encoder.pressPin, encoder.pinPress), DEFAULT_CARD_CONTROLS.encoder.press, 0, 48),
-      alternatePress: clampInt(alias(encoder.alternatePress, encoder.alternatePressPin, encoder.pinAlternatePress), DEFAULT_CARD_CONTROLS.encoder.alternatePress, -1, 48),
+      press: encoderPress,
+      alternatePress: encoderAlternatePress === encoderPress ? -1 : encoderAlternatePress,
       rotateDirection: encoder.rotateDirection === 'clockwise-dimmer'
         ? 'clockwise-dimmer'
         : 'clockwise-brighter',
