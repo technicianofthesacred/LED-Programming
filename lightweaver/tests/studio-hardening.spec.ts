@@ -242,10 +242,40 @@ test('installer signoff persists and exposes a ready state', async ({ page }) =>
   await page.locator('.rail-item', { hasText: 'Installer' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
   await expect(checks).toHaveCount(6);
+  await expect(page.getByRole('button', { name: 'Reset bench signoff' })).toBeVisible();
   for (let index = 0; index < 6; index += 1) await checks.nth(index).check();
-  await expect(page.getByText('Ready to ship')).toBeVisible();
+  await page.getByRole('button', { name: 'Mark ready' }).click();
+  await expect(page.getByText('Ready to ship', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('installer-ready-summary')).toContainText(/firmware/i);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText(/project/i);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText(/card/i);
+  await expect(page.getByTestId('installer-ready-summary')).toContainText(/physical/i);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(6);
+  await expect(page.getByText('Ready to ship', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Reset bench signoff' }).click();
+  await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
+  await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
+});
+
+test('Settings controls expose stable accessible names', async ({ page }) => {
+  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await expect(page.getByRole('slider', { name: 'Master brightness' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Gamma correction' })).toHaveAttribute('aria-pressed');
+  await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
+
+  const unlabeledInputs = await page.locator('.set input, .set textarea').evaluateAll(elements => elements
+    .filter(element => {
+      const control = element as HTMLInputElement | HTMLTextAreaElement;
+      return !control.getAttribute('aria-label') &&
+        !control.getAttribute('aria-labelledby') &&
+        !(control.id && document.querySelector(`label[for="${CSS.escape(control.id)}"]`)) &&
+        !control.closest('label');
+    })
+    .map(element => `${element.tagName.toLowerCase()}.${element.className}`));
+  expect(unlabeledInputs).toEqual([]);
 });
 
 test('Daylight is a complete supported theme', async ({ page }) => {

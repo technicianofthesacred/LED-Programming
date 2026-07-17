@@ -3,6 +3,7 @@
    Only the wrapper changed; the component body below is byte-identical. */
 import React, { useEffect, useState } from 'react';
 import { I } from './lw-shared.jsx';
+import { useProject } from '../state/ProjectContext.jsx';
 
 
   const WIRING = [
@@ -49,17 +50,46 @@ import { I } from './lw-shared.jsx';
     "Reboot keeps the saved project.",
   ];
   const INSTALLER_CHECKS_KEY = 'lw_installer_signoff_v1';
+  const INSTALLER_READY_KEY = 'lw_installer_ready_v1';
 
-  function InstallerScreen({ go }) {
+  function InstallerScreen({ go, cardLink }) {
+    const { projectName, projectLifecycle } = useProject();
     const [checks, setChecks] = useState(() => {
       try { return new Set(JSON.parse(localStorage.getItem(INSTALLER_CHECKS_KEY) || '[]')); }
       catch { return new Set(); }
     });
-    const toggle = (i) => setChecks((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+    const [ready, setReady] = useState(() => {
+      try { return localStorage.getItem(INSTALLER_READY_KEY) === '1'; }
+      catch { return false; }
+    });
+    const [firmwareVersion, setFirmwareVersion] = useState('Not available');
+    const toggle = (i) => {
+      setReady(false);
+      setChecks((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+    };
     useEffect(() => {
       try { localStorage.setItem(INSTALLER_CHECKS_KEY, JSON.stringify([...checks])); } catch {}
     }, [checks]);
+    useEffect(() => {
+      try { localStorage.setItem(INSTALLER_READY_KEY, ready ? '1' : '0'); } catch {}
+    }, [ready]);
+    useEffect(() => {
+      let active = true;
+      fetch('/firmware/release-manifest.json', { cache: 'no-store' })
+        .then(response => response.ok ? response.json() : null)
+        .then(manifest => {
+          if (active && manifest?.firmwareVersion) setFirmwareVersion(String(manifest.firmwareVersion));
+        })
+        .catch(() => {});
+      return () => { active = false; };
+    }, []);
     const goTo = (v) => go && go(v);
+    const resetSignoff = () => { setChecks(new Set()); setReady(false); };
+    const nextPhysicalCheck = SIGNOFF.find((_, index) => !checks.has(index)) || 'All physical checks complete';
+    const installedRevision = projectLifecycle.installedRevision == null
+      ? 'Not installed from this Studio session'
+      : `Revision ${projectLifecycle.installedRevision}`;
+    const cardIdentity = cardLink?.card?.id || 'Not recorded';
 
     return (
       <div className="screen">
@@ -129,7 +159,7 @@ import { I } from './lw-shared.jsx';
                 </section>
 
                 <section className="card inst-sec">
-                  <div className="sec-h"><span className="t">Final signoff</span><span className="m" aria-live="polite">{checks.size === SIGNOFF.length ? 'Ready to ship' : `${checks.size}/${SIGNOFF.length} bench test`}</span></div>
+                  <div className="sec-h"><span className="t">Final signoff</span><span className="m" aria-live="polite">{ready ? 'Ready to ship' : `${checks.size}/${SIGNOFF.length} bench test`}</span></div>
                   <div className="inst-signoff">
                     {SIGNOFF.map((s, i) => (
                       <label key={i} className="inst-check">
@@ -139,6 +169,16 @@ import { I } from './lw-shared.jsx';
                       </label>
                     ))}
                   </div>
+                  <div className="inst-signoff-actions">
+                    <button className="btn primary" type="button" disabled={checks.size !== SIGNOFF.length} onClick={() => setReady(true)}>Mark ready</button>
+                    <button className="btn" type="button" onClick={resetSignoff}>Reset bench signoff</button>
+                  </div>
+                  <dl className="inst-ready-summary" data-testid="installer-ready-summary">
+                    <div><dt>Firmware available</dt><dd>{firmwareVersion}</dd></div>
+                    <div><dt>Project</dt><dd>{projectName || 'Untitled Project'} · {installedRevision}</dd></div>
+                    <div><dt>Card identity</dt><dd>{cardIdentity}</dd></div>
+                    <div><dt>Next physical check</dt><dd>{ready ? 'Complete — ready to ship' : nextPhysicalCheck}</dd></div>
+                  </dl>
                 </section>
               </aside>
             </div>

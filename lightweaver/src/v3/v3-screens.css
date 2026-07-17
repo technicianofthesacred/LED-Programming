@@ -689,6 +689,11 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .inst-check { display: flex; align-items: center; gap: 11px; padding: 8px 6px; border-radius: var(--r-sm); font-size: 12.5px; color: var(--text-mid); cursor: pointer; transition: background .12s; }
 .inst-check:hover { background: var(--bg-elev); }
 .inst-check .done { color: var(--text-faint); text-decoration: line-through; }
+.inst-signoff-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.inst-ready-summary { display: grid; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-hair); }
+.inst-ready-summary div { display: grid; grid-template-columns: minmax(110px, .7fr) minmax(0, 1fr); gap: 10px; }
+.inst-ready-summary dt { color: var(--text-lo); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.inst-ready-summary dd { color: var(--text-hi); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
 @media (max-width: 1080px) { .inst-grid { grid-template-columns: 1fr; } }
 
 /* ============================================================
