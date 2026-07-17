@@ -330,3 +330,29 @@ test('pausing with lights active atomically pushes the displayed frame and freez
   expect(await page.evaluate(() => (window as any).__frames.length)).toBe(count);
   expect(await page.getByTestId('show-stage').getAttribute('data-frame-hash')).toBe(frozen);
 });
+
+test('mobile Show uses one document column with the inspector below the canvas', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openShow(page);
+
+  const layout = await page.evaluate(() => {
+    const body = document.querySelector('.sh-body');
+    const timeline = document.querySelector('.sh-body > :first-child');
+    const inspector = document.querySelector('.sh-insp');
+    if (!body || !timeline || !inspector) return null;
+    const timelineBox = timeline.getBoundingClientRect();
+    const inspectorBox = inspector.getBoundingClientRect();
+    return {
+      columns: getComputedStyle(body).gridTemplateColumns.split(' ').filter(Boolean).length,
+      timelineBottom: timelineBox.bottom,
+      inspectorTop: inspectorBox.top,
+      scrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+    };
+  });
+
+  expect(layout).not.toBeNull();
+  expect(layout?.columns).toBe(1);
+  expect(layout?.inspectorTop).toBeGreaterThanOrEqual((layout?.timelineBottom || 0) - 1);
+  expect(layout?.scrollWidth).toBeLessThanOrEqual(layout?.viewportWidth || 0);
+});

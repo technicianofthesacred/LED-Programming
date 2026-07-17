@@ -228,6 +228,16 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .lw-select { height: 30px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); color: var(--text-hi); font-family: var(--font-ui); font-size: 12.5px; padding: 0 8px; min-width: 130px; }
 .lw-select:focus { outline: none; border-color: var(--accent); }
 .insp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 14px; }
+
+@media (max-width: 640px) {
+  .sh { overflow-x: hidden; overflow-y: auto; }
+  .transport { height: auto; min-height: 52px; flex-wrap: wrap; gap: 8px 12px; padding: 8px 10px; }
+  .tp-spring { display: none; }
+  .sh-body { flex: 0 0 auto; grid-template-columns: minmax(0, 1fr); grid-auto-flow: row; min-height: 0; }
+  .tl-wrap { width: 100%; min-height: 360px; height: min(58vh, 480px); }
+  .sh-insp { width: 100%; min-height: 320px; border-top: 1px solid var(--border-hair); border-left: 0; }
+  .sh-insp-body { overflow: visible; }
+}
 .insp-act { height: 32px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--text-mid); background: var(--bg-elev); border: 1px solid var(--border-soft); transition: background .12s, color .12s; }
 .insp-act:hover { background: var(--bg-elev-2); color: var(--text-hi); }
 .insp-act svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.6; }

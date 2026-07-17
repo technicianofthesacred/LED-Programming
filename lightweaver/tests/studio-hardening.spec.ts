@@ -238,6 +238,37 @@ test('Studio stylesheet declares coarse targets and reduced motion', async ({ pa
   expect(css).toContain('@media (prefers-reduced-motion: reduce)');
 });
 
+test('reduced motion disables status and preview animation names', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const motion = await page.evaluate(() => {
+    const stream = document.createElement('span');
+    stream.className = 'sb-stream';
+    const pulse = document.createElement('span');
+    pulse.className = 'pulse';
+    stream.appendChild(pulse);
+    const wave = document.createElement('span');
+    wave.className = 'led wave';
+    const preview = document.createElement('span');
+    preview.className = 'pm-led-stage';
+    const sheen = document.createElement('span');
+    sheen.className = 'sheen';
+    preview.appendChild(sheen);
+    document.body.appendChild(stream);
+    document.body.appendChild(wave);
+    document.body.appendChild(preview);
+    const result = {
+      pulse: getComputedStyle(pulse).animationName,
+      wave: getComputedStyle(wave).animationName,
+      sheen: getComputedStyle(sheen).animationName,
+    };
+    stream.remove();
+    wave.remove();
+    preview.remove();
+    return result;
+  });
+  expect(motion).toEqual({ pulse: 'none', wave: 'none', sheen: 'none' });
+});
+
 test('installer signoff persists and exposes a ready state', async ({ page }) => {
   await page.locator('.rail-item', { hasText: 'Installer' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
@@ -282,11 +313,49 @@ test('Daylight is a complete supported theme', async ({ page }) => {
   await page.locator('.rail-item', { hasText: 'Settings' }).click();
   await page.getByRole('button', { name: 'Daylight', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'daylight');
-  const colors = await page.locator('.app').evaluate(node => {
-    const style = getComputedStyle(node);
-    return [style.getPropertyValue('--bg-app'), style.getPropertyValue('--bg-panel'), style.getPropertyValue('--text-hi')];
-  });
-  expect(colors.every(Boolean)).toBe(true);
+  const oklch = (value: string) => {
+    const match = value.match(/oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)/i);
+    if (!match) throw new Error(`Expected OKLCH token, received ${value}`);
+    return { lightness: Number(match[1]), chroma: Number(match[2]), hue: Number(match[3]) };
+  };
+  const luminance = (value: string) => {
+    const { lightness: l, chroma: c, hue } = oklch(value);
+    const angle = hue * Math.PI / 180;
+    const a = c * Math.cos(angle);
+    const b = c * Math.sin(angle);
+    const lPrime = l + 0.3963377774 * a + 0.2158037573 * b;
+    const mPrime = l - 0.1055613458 * a - 0.0638541728 * b;
+    const sPrime = l - 0.0894841775 * a - 1.291485548 * b;
+    const ll = lPrime ** 3;
+    const mm = mPrime ** 3;
+    const ss = sPrime ** 3;
+    const red = Math.max(0, Math.min(1, 4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss));
+    const green = Math.max(0, Math.min(1, -1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss));
+    const blue = Math.max(0, Math.min(1, -0.0041960863 * ll - 0.7034186147 * mm + 1.707614701 * ss));
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+
+  for (const screen of ['Layout', 'Patterns', 'Show', 'Settings', 'Installer']) {
+    await page.locator('.rail-item', { hasText: screen }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'daylight');
+    const tokens = await page.locator('.app').evaluate(node => {
+      const style = getComputedStyle(node);
+      return {
+        app: style.getPropertyValue('--bg-app').trim(),
+        canvas: style.getPropertyValue('--bg-canvas').trim(),
+        panel: style.getPropertyValue('--bg-panel').trim(),
+        text: style.getPropertyValue('--text-hi').trim(),
+      };
+    });
+    for (const surface of [tokens.app, tokens.canvas, tokens.panel]) {
+      expect(oklch(surface).hue, `${screen} ${surface}`).toBeGreaterThanOrEqual(55);
+      expect(oklch(surface).hue, `${screen} ${surface}`).toBeLessThanOrEqual(90);
+    }
+    const light = luminance(tokens.text);
+    const dark = luminance(tokens.panel);
+    const contrast = (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05);
+    expect(contrast, `${screen} text contrast`).toBeGreaterThanOrEqual(4.5);
+  }
 });
 
 test('replacement guard names both projects and keeps editing until explicitly replaced', async ({ page }) => {
