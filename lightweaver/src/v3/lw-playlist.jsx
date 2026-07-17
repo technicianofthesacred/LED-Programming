@@ -115,6 +115,8 @@ function realPatternShape(patternId) {
     const [playlistSyncing, setPlaylistSyncing] = useState(false);
     const [recoveryPending, setRecoveryPending] = useState(false);
     const previewSequence = React.useRef(0);
+    const cardActionGeneration = useRef(0);
+    const playlistRevision = useRef(0);
     const latestLiveItem = useRef(null);
     const [drag, setDrag] = useState({ from: null, over: null });
 
@@ -150,6 +152,10 @@ function realPatternShape(patternId) {
     // ── live playlist write-back to the standalone controller ─────────────
     const writePlaylist = (nextItems) => {
       const normalized = normalizeCardPlaylist(nextItems, { savedLooks, allowEmpty: true });
+      playlistRevision.current += 1;
+      cardActionGeneration.current += 1;
+      previewSequence.current += 1;
+      setPlaylistSyncing(false);
       setPlaylistStatus(null);
       setStandaloneController((prev) => {
         const current = prev || {};
@@ -199,6 +205,8 @@ function realPatternShape(patternId) {
     // ── live preview / card control ───────────────────────────────────────
     const previewPatternOnCard = async (patternId) => {
       const sequence = ++previewSequence.current;
+      const actionGeneration = ++cardActionGeneration.current;
+      setPlaylistSyncing(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -206,18 +214,18 @@ function realPatternShape(patternId) {
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
           await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
-          if (sequence !== previewSequence.current) return;
+          if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current) return;
         }
         const confirmedLook = buildPatternPlaylistPreview(patternId);
         await pushLivePreviewToCard(confirmedLook, { host, timeoutMs: 2200, revision: sequence });
-        if (sequence === previewSequence.current) {
+        if (sequence === previewSequence.current && actionGeneration === cardActionGeneration.current) {
           dispatchPreviewAction({ type: 'confirm', revision: sequence });
           markCardLookConfirmed(confirmedLook);
           setPlaylistStatus(null);
           return true;
         }
       } catch (error) {
-        if (sequence !== previewSequence.current || error?.reason === 'superseded') return false;
+        if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current || error?.reason === 'superseded') return false;
         const failure = classifyCardActionFailure(error);
         dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
         setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
@@ -228,6 +236,8 @@ function realPatternShape(patternId) {
     const previewSavedLookOnCard = async (savedLook) => {
       if (!savedLook) return;
       const sequence = ++previewSequence.current;
+      const actionGeneration = ++cardActionGeneration.current;
+      setPlaylistSyncing(false);
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setHandoffUrl('');
       setPlaylistStatus(null);
@@ -238,13 +248,13 @@ function realPatternShape(patternId) {
           // design's zones; a bench strip is one zone, so just play the
           // mix's own default look across the whole (collapsed) strip.
           await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
-          if (sequence !== previewSequence.current) return;
+          if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current) return;
           const confirmedLook = { ...normalizeCardVisualLook(savedLook.defaultLook || {}), syncZones: true };
           await pushLivePreviewToCard(
             confirmedLook,
             { host, timeoutMs: 2600, revision: sequence },
           );
-          if (sequence === previewSequence.current) {
+          if (sequence === previewSequence.current && actionGeneration === cardActionGeneration.current) {
             dispatchPreviewAction({ type: 'confirm', revision: sequence });
             markCardLookConfirmed(confirmedLook);
             setPlaylistStatus(null);
@@ -262,19 +272,19 @@ function realPatternShape(patternId) {
           requiredZoneIds,
           runtimePackage: requireRuntimePackage(),
         });
-        if (sequence !== previewSequence.current) return;
+        if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current) return;
         await pushSectionPreviewToCard(
           targets,
           { host, timeoutMs: 2600, revision: sequence },
         );
-        if (sequence === previewSequence.current) {
+        if (sequence === previewSequence.current && actionGeneration === cardActionGeneration.current) {
           dispatchPreviewAction({ type: 'confirm', revision: sequence });
           markCardLookConfirmed(normalizeCardVisualLook(savedLook.defaultLook || {}));
           setPlaylistStatus(null);
           return true;
         }
       } catch (error) {
-        if (sequence !== previewSequence.current || error?.reason === 'superseded') return;
+        if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current || error?.reason === 'superseded') return;
         const failure = classifyCardActionFailure(error);
         dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
         setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
@@ -310,7 +320,9 @@ function realPatternShape(patternId) {
     };
 
     const resetLiveOutput = async () => {
+      const actionGeneration = ++cardActionGeneration.current;
       previewSequence.current += 1;
+      setPlaylistSyncing(false);
       dispatchPreviewAction({ type: 'reset' });
       setHandoffUrl('');
       setPlaylistStatus({ kind: 'pending', message: 'Resetting live output on card…' });
@@ -318,9 +330,11 @@ function realPatternShape(patternId) {
         const testStrip = readTestStrip();
         if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
         await resetLiveOutputOnCard(fallbackLiveLook(), { host, timeoutMs: 3000 });
+        if (actionGeneration !== cardActionGeneration.current) return;
         setLive(null);
         setPlaylistStatus({ kind: 'ok', message: 'Live output reset on card.' });
       } catch (error) {
+        if (actionGeneration !== cardActionGeneration.current) return;
         const failure = classifyCardActionFailure(error);
         setPlaylistStatus({
           kind: 'err',
@@ -378,6 +392,12 @@ function realPatternShape(patternId) {
     })();
 
     const loadPlaylistToCard = async ({ allowLayoutChange = false, allowProjectChange = false } = {}) => {
+      const actionGeneration = ++cardActionGeneration.current;
+      const installRevision = playlistRevision.current;
+      const installIsCurrent = () => (
+        actionGeneration === cardActionGeneration.current &&
+        installRevision === playlistRevision.current
+      );
       previewSequence.current += 1;
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
@@ -400,13 +420,15 @@ function realPatternShape(patternId) {
           allowLayoutChange: testStrip.enabled ? true : allowLayoutChange,
           allowProjectChange: testStrip.enabled ? true : allowProjectChange,
         });
+        if (!installIsCurrent()) return;
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
+        if (!installIsCurrent()) return;
         const nextStatus = makePlaylistPushErrorState(error, { host, runtimePackage: packageForCard });
         setPlaylistStatus({ ...nextStatus, retry: 'playlist' });
         setHandoffUrl(nextStatus.handoffUrl || '');
       } finally {
-        setPlaylistSyncing(false);
+        if (installIsCurrent()) setPlaylistSyncing(false);
       }
     };
 
