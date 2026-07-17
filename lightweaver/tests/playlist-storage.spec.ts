@@ -67,6 +67,69 @@ async function mockConnectedPlaylistCard(page, project, cardId = 'lw-playlist-in
   }));
 }
 
+test('Playlist rows expose only compact item-specific controls', async ({ page }) => {
+  await gotoPlaylist(page, makePlaylistProject({ count: 3 }));
+
+  const auroraRow = page.getByTestId('playlist-row-aurora');
+  await expect(auroraRow.getByRole('button')).toHaveCount(4);
+  await expect(auroraRow.getByRole('button', { name: 'Reorder Aurora', exact: true })).toBeVisible();
+  await expect(auroraRow.getByRole('button', { name: 'Live', exact: true })).toBeVisible();
+  await expect(auroraRow.getByRole('button', { name: 'Copy', exact: true })).toBeVisible();
+
+  const removeAurora = auroraRow.getByRole('button', { name: 'Remove Aurora', exact: true });
+  await expect(removeAurora).toHaveText('×');
+  await expect(removeAurora).toHaveAttribute('title', 'Remove Aurora');
+  const removeBox = await removeAurora.boundingBox();
+  expect(removeBox?.width).toBeGreaterThanOrEqual(36);
+  expect(removeBox?.height).toBeGreaterThanOrEqual(36);
+
+  for (const name of ['Up', 'Down', 'Make first', 'Remove']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+});
+
+test('Playlist reorder handles support keyboard bounds, announce moves, and retain focus', async ({ page }) => {
+  await gotoPlaylist(page, makePlaylistProject({ count: 3 }));
+
+  const auroraHandle = page.getByRole('button', { name: 'Reorder Aurora', exact: true });
+  await auroraHandle.focus();
+  await auroraHandle.press('ArrowDown');
+  await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Aurora', 'Fire']);
+  await expect(page.getByTestId('playlist-reorder-status')).toHaveText('Aurora moved to position 2 of 3');
+  await expect(page.getByRole('button', { name: 'Reorder Aurora', exact: true })).toBeFocused();
+
+  await page.getByRole('button', { name: 'Reorder Aurora', exact: true }).press('Home');
+  await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Aurora', 'Plasma', 'Fire']);
+  await expect(page.getByTestId('playlist-reorder-status')).toHaveText('Aurora moved to position 1 of 3');
+  await expect(page.getByRole('button', { name: 'Reorder Aurora', exact: true })).toBeFocused();
+
+  await page.getByRole('button', { name: 'Reorder Aurora', exact: true }).press('End');
+  await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Fire', 'Aurora']);
+  await expect(page.getByTestId('playlist-reorder-status')).toHaveText('Aurora moved to position 3 of 3');
+  await expect(page.getByRole('button', { name: 'Reorder Aurora', exact: true })).toBeFocused();
+
+  await page.getByRole('button', { name: 'Reorder Aurora', exact: true }).press('End');
+  await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Fire', 'Aurora']);
+});
+
+test('Playlist remove and pointer reorder target the named compact controls', async ({ page }) => {
+  await gotoPlaylist(page, makePlaylistProject({ count: 3 }));
+
+  const auroraRow = page.getByTestId('playlist-row-aurora');
+  const reorderAurora = page.getByRole('button', { name: 'Reorder Aurora', exact: true });
+  await expect(auroraRow).not.toHaveAttribute('draggable', 'true');
+  await expect(reorderAurora).toHaveAttribute('draggable', 'true');
+  await expect(reorderAurora).toHaveAttribute('title', 'Reorder Aurora');
+
+  await reorderAurora.dragTo(page.getByTestId('playlist-row-fire'));
+  await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Fire', 'Aurora']);
+
+  await page.getByRole('button', { name: 'Remove Plasma', exact: true }).click();
+  await expect(page.getByTestId('playlist-row-plasma')).toHaveCount(0);
+  await expect(page.getByTestId('playlist-row-fire')).toHaveCount(1);
+  await expect(page.getByTestId('playlist-row-aurora')).toHaveCount(1);
+});
+
 test('Playlist resolves a duplicate encoder press without pausing card setup', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   project.devices.standaloneController.controls.encoder.press = 6;
