@@ -32,6 +32,7 @@ export function LayoutScreen({ connected, cardHost }) {
     selLayer, existingStrip,
     selStripId,
     pathSel,
+    selectedPathDecorations,
     totalLeds,
     svgRef, artworkRef, vpRef,
     // strips
@@ -68,7 +69,7 @@ export function LayoutScreen({ connected, cardHost }) {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
     strips, layers, hidden,
     viewBox, computedViewBox, vbScale, svgText, artworkHTML, totalLeds,
-    selection: { selStripId, selLayer, pathSel, existingStrip },
+    selection: { selStripId, selLayer, pathSel, selectedPathDecorations, existingStrip },
     lightPreview: {
       effectiveShowLight, effectiveGlowMode, glowStdDev, directedGlow,
       showHeat, showLeds, layoutPatternFrame, stripSamples, stripArrows,

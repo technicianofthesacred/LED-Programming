@@ -210,6 +210,10 @@
 /* marching-ants animation for canvas path-selection highlight */
 @keyframes lw-march { to { stroke-dashoffset: -24; } }
 
+@media (prefers-reduced-motion: reduce) {
+  .lw-selected-path-march { animation: none !important; }
+}
+
 /* canvas viewport — layout comes from inline style + .stage/.dotgrid (warm grid);
    here we only carry the drop-target highlight so dragging an SVG over reads clearly. */
 .lw-viewport { transition: box-shadow .16s ease-out; }
