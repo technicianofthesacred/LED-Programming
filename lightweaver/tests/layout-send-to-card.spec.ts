@@ -119,7 +119,7 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   if (!verified) return;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
   const pending = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
+  await page.getByTitle('Export a portable project file (.lw.json)').click();
   const download = await pending;
   const source = path.join(tmp, 'source.json');
   await download.saveAs(source);
@@ -188,7 +188,7 @@ test('a successful push is pending until acknowledgement and records the exact i
 
   await page.getByTestId('layout-send-to-card').click();
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
-  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Installing/);
+  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Saving/);
 
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 5000 });

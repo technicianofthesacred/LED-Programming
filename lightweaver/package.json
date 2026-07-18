@@ -31,7 +31,7 @@
     "test:standalone": "node tests/standalone-package-unpack.mjs",
     "standalone:unpack": "node scripts/unpack-standalone-package.mjs",
     "preview": "vite preview",
-    "test:release-ui": "playwright test tests/card-workspace.spec.ts tests/screen-smoke.spec.ts tests/playlist-storage.spec.ts tests/universal-install.spec.ts tests/patterns-v3.spec.ts tests/workflow.spec.ts tests/project-recovery-fixtures.spec.ts tests/connection-center-quality.spec.ts --project=chromium --workers=1"
+    "test:release-ui": "playwright test tests/card-workspace.spec.ts tests/screen-smoke.spec.ts tests/playlist-storage.spec.ts tests/universal-install.spec.ts tests/patterns-v3.spec.ts tests/workflow.spec.ts tests/project-recovery-fixtures.spec.ts tests/connection-center-quality.spec.ts tests/layout-primitives.spec.ts tests/patch-board.spec.ts tests/wiring-workspace.spec.ts tests/layout-hardening.spec.ts tests/layout-send-to-card.spec.ts --project=chromium --workers=1"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "^6.2.5",

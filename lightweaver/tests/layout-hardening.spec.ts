@@ -184,10 +184,12 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
-  await openWireStep(page, 'Step 1: Choose data wires', 'Edit data wire count', step => step.getByRole('group', { name: 'LED data wire count' }));
-  await openWireStep(page, 'Step 2: Map LED outputs', 'Edit LED output mapping', step => step.getByRole('button', { name: /Outer circle IN port/ }));
+  // Wire order is the primary surface now; the lane/port editors live in Advanced wiring.
+  await expect(page.getByTestId('wire-order')).toBeVisible();
+  await page.getByRole('button', { name: 'Advanced wiring' }).click();
   await openWireStep(page, 'Step 5: Review and install', 'Open install review', step => step.getByTestId('layout-send-to-card'));
   for (const control of [
+    page.getByTestId('wire-order-row').first().getByRole('button', { name: /Reverse direction/ }),
     page.getByRole('group', { name: 'LED data wire count' }).getByRole('button').first(),
     page.getByRole('button', { name: /Outer circle IN port/ }),
     page.getByTestId('layout-send-to-card'),
@@ -251,6 +253,10 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
 
 test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ page }) => {
   await gotoLayout(page);
+  // A fresh layout opens on the primitive starter with zero strips — create one.
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Line', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create line' }).click();
   const strip = page.locator('path[data-strip-path]').first();
   await strip.focus();
   await page.keyboard.press('Enter');

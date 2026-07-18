@@ -123,6 +123,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
       {/* ── Toolbar (mockup .toolbar) ──────────────────────────────── */}
         <div className="toolbar">
+          <div className="tb-group" role="group" aria-label="Mode actions">
           {mode === 'draw' && (
             <>
               <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
@@ -187,6 +188,7 @@ export function LayoutScreen({ connected, cardHost }) {
               </button>
             </>
           )}
+          </div>
 
           {/* Undo / Redo */}
           <button className="tb-btn icon" onClick={doUndo} disabled={layoutHistLen === 0}
