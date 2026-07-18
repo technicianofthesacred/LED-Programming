@@ -99,7 +99,7 @@
 .prod-embedded .prod-handoff { width: 100%; margin: 0; }
 
 @media (max-width: 720px) {
-  .card-section-nav { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .card-section-nav { flex-wrap: wrap; overflow-x: hidden; }
   .card-section-nav button { min-height: 44px; }
   .card-workspace-body { padding: 18px 12px 42px; }
   .card-setup-steps { grid-template-columns: minmax(0, 1fr); }

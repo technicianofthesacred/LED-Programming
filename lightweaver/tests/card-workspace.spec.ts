@@ -31,6 +31,30 @@ test('Card replaces the setup rail destinations and exposes ordinary section nav
   await expect(sections.locator('[aria-haspopup]')).toHaveCount(0);
 });
 
+test('Card section navigation wraps without page overflow on a 390px viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+
+  const sections = page.getByRole('navigation', { name: 'Card sections' });
+  const dimensions = await sections.evaluate(node => ({
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+  }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+
+  for (const label of ['Card', 'Install or update', 'Card settings', 'Workshop setup', 'Advanced & Support', 'Preferences']) {
+    const button = sections.getByRole('button', { name: label, exact: true });
+    await expect(button).toBeVisible();
+    await expect(button).toBeInViewport();
+  }
+
+  const pageWidth = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+  }));
+  expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.viewportWidth);
+});
+
 test('disconnected Card overview shows the ordered setup path and Connect as primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
