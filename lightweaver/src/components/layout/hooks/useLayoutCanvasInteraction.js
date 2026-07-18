@@ -820,8 +820,20 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   const handleWheel = (e) => {
     e.preventDefault();
+    if (!svgRef.current) return;
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    setZoom(z => Math.max(0.15, Math.min(40, z * factor)));
+    const nextZoom = Math.max(0.15, Math.min(40, zoom * factor));
+    if (nextZoom === zoom) return;
+
+    const point = svgPt(svgRef.current, e.clientX, e.clientY);
+    const vb = parsedVb(viewBox);
+    const currentCenterX = vb.x + vb.w / 2 + panX;
+    const currentCenterY = vb.y + vb.h / 2 + panY;
+    const anchorRatio = 1 - zoom / nextZoom;
+
+    setPanX(panX + (point.x - currentCenterX) * anchorRatio);
+    setPanY(panY + (point.y - currentCenterY) * anchorRatio);
+    setZoom(nextZoom);
   };
 
   // Ghost path for draw mode
