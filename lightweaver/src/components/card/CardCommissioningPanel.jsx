@@ -12,6 +12,7 @@ import {
   beginCardRestorationMutation,
   claimCardRestoration,
   completeCardInstall,
+  confirmCardSetupNetworkJoined,
   markCardProjectRestored,
   readCardCommissioning,
   readCardRestorationAttempt,
@@ -237,6 +238,17 @@ export function CardCommissioningPanel({
     ? identityMessage(cardAcknowledgement.reason, flow.expectedCard, currentCard)
     : '';
 
+  const confirmSetupNetwork = async () => {
+    setFailure('');
+    try {
+      const next = confirmCardSetupNetworkJoined(flow);
+      await writeCardCommissioning(next);
+      setFlow(next);
+    } catch (error) {
+      setFailure(error?.message || 'Studio could not save the Wi-Fi handoff. Try again before leaving this network.');
+    }
+  };
+
   return (
     <div className="card-commissioning" data-stage={flow.stage} aria-live="polite">
       <CardCommissioningSteps stage={flow.stage} />
@@ -255,8 +267,14 @@ export function CardCommissioningPanel({
           <h3>Set up card</h3>
           {flow.networkState === 'setup-required' && (
             <div className="card-commissioning-network">
-              <p>The clean installation reset Wi-Fi. Join <strong>Lightweaver-XXXX</strong>, finish Wi-Fi setup, then return here. This progress stays saved while networks change.</p>
-              <a className="btn" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open card Wi-Fi setup</a>
+              <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>Lightweaver-XXXX</strong>. The setup address only works while that network is joined.</p>
+              <button type="button" className="btn primary" onClick={confirmSetupNetwork}>I’ve joined Lightweaver-XXXX</button>
+            </div>
+          )}
+          {flow.networkState === 'setup-joined' && (
+            <div className="card-commissioning-network">
+              <p><strong>Lightweaver-XXXX joined.</strong> Now open the card at 192.168.4.1, choose its permanent Wi-Fi, and return here. This progress stays saved while networks change.</p>
+              <a className="btn primary" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open 192.168.4.1 Wi-Fi setup</a>
             </div>
           )}
           {!flow.cardAcknowledgedAt ? (

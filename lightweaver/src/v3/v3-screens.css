@@ -67,6 +67,17 @@
   border-right: 1px solid var(--border-soft); color: var(--text-mid); font-size: 12px;
 }
 .card-setup-steps li:last-child { border-right: 0; }
+.card-setup-steps li[data-step-state="complete"] { color: var(--text-lo); }
+.card-setup-steps li[data-step-state="complete"] .card-setup-number {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); color: var(--ok);
+}
+.card-setup-steps li[data-step-state="current"] {
+  color: var(--text-hi); background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.card-setup-steps li[data-step-state="current"] .card-setup-number {
+  border-color: var(--accent); background: var(--accent); color: var(--on-accent);
+}
+.card-setup-steps li[data-step-state="upcoming"] { color: var(--text-faint); }
 .card-setup-number {
   display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto;
   border: 1px solid var(--border); border-radius: 50%; color: var(--accent); font-family: var(--font-mono); font-size: 10px;

@@ -21,6 +21,7 @@ import {
   ledCountToSliderValue,
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
+import { PrimitiveStarter } from './PrimitiveStarter.jsx';
 
 function startedFromDragHandle(e) {
   return !!e.target?.closest?.('[data-drag-handle="true"]');
@@ -45,7 +46,7 @@ export function DrawModePanel({ state }) {
     selStripId, selLayerId, selectedStripIds,
     pathSel, pathSelName, stripSelectionName,
     orderedStrips, selectedStrips,
-    totalLeds, defaultCircleLayoutActive, usbLedMaxPixels,
+    totalLeds, defaultCircleLayoutActive, starterLayoutActive, usbLedMaxPixels,
     expandedStrips, setExpandedStrips,
     stripListRef,
     // size
@@ -76,10 +77,24 @@ export function DrawModePanel({ state }) {
     setHoveredLayerId, setHoveredSubPathId,
     // import
     error, setError, fileRef,
+    createStarterPrimitive, clearStarterLayout,
   } = state;
 
   return (
     <>
+
+        {starterLayoutActive && !drawMode && !pendingDraw && (
+          <PrimitiveStarter
+            currentPixelCount={totalLeds || 37}
+            onImport={() => fileRef.current?.click()}
+            onCreate={createStarterPrimitive}
+            onFreeDraw={() => {
+              clearStarterLayout();
+              setWaypoints([]);
+              setGhostPt(null);
+              setDrawMode(true);
+            }}/>
+        )}
 
         {error && (
           <div className="la-error-banner">
@@ -773,20 +788,11 @@ export function DrawModePanel({ state }) {
                 );
               })}
             </div>
-              {defaultCircleLayoutActive && (
-                <div
-                  data-testid="default-circle-layout-panel"
-                  style={{ margin: '2px 12px 8px', fontSize: 'var(--fs-xs)', color: 'var(--text-faint)', lineHeight: 1.45 }}
-                >
-                  <strong style={{ fontWeight: 500, color: 'var(--text-3)', letterSpacing: 0 }}>Default two-circle hardware</strong>
-                  {' '}— starter layout; import an SVG or open a project to replace it.
-                </div>
-              )}
           </>
         )}
 
         {/* ── Empty state ── */}
-        {!svgText && !error && !defaultCircleLayoutActive && (
+        {!svgText && !error && !starterLayoutActive && strips.length === 0 && (
           <div className="la-empty">
             <svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke="currentColor" strokeWidth="1.4">
               <rect x="6" y="4" width="32" height="36" rx="3"/>

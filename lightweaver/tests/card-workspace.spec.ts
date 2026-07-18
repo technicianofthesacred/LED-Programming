@@ -13,6 +13,140 @@ async function dispatchCardLink(page, events) {
   }, events);
 }
 
+async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test') {
+  await page.evaluate(async requestedProgress => {
+    const api = await import('/src/lib/cardCommissioningFlow.js');
+    const projectRecord = {
+      id: 'card-workspace-project',
+      updatedAt: 100,
+      project: {
+        version: 3,
+        id: 'gallery-project',
+        name: 'Gallery project',
+        layout: { strips: [{ id: 'strip-1', pixelCount: 44 }], wiring: null, patchBoard: null },
+        devices: { standaloneController: {} },
+      },
+    };
+    const installed = {
+      operation: 'install-current-release',
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'a'.repeat(40),
+    };
+    let flow = api.completeCardInstall(api.beginCardCommissioning({
+      source: 'web-serial',
+      operation: installed.operation,
+      strategy: 'clean-recovery',
+      projectRecord,
+      projectRevision: 7,
+      flowId: `flow-card-${requestedProgress}-123456789`,
+      now: 10,
+    }), installed, { now: 20 });
+    if (requestedProgress === 'load-project' || requestedProgress === 'test') {
+      flow = api.acknowledgeCommissionedCard(flow, {
+        id: installed.cardId,
+        firmwareVersion: installed.firmwareVersion,
+        buildId: installed.buildId,
+      }, { now: 30 }).flow;
+    }
+    if (requestedProgress === 'test') {
+      flow = {
+        ...flow,
+        stage: 'check-lights',
+        updatedAt: 40,
+        project: { ...flow.project, pendingActivationId: 'test-activation-7' },
+      };
+    }
+    await api.writeCardCommissioning(flow, { locks: null });
+  }, progress);
+}
+
+test('wide desktop footer keeps card identity, telemetry, and test controls in separate regions', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toBeVisible();
+  await dispatchCardLink(page, [{
+    type: 'card-verified',
+    via: 'bridge',
+    host: 'lightweaver.local',
+    card: {
+      id: 'lw-aabbccddeeff',
+      name: 'Lightweaver Gallery Installation Controller',
+      pixelCount: 44,
+      gpioSummary: 'GPIO 16 · 44',
+      firmwareVersion: '1.0.0',
+      buildId: 'gallery-release-build-with-a-long-identity',
+    },
+  }]);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+  await expect(page.locator('.card-status-summary')).toBeVisible();
+
+  const regions = await page.locator('.status-bar').evaluate(node => {
+    const rect = selector => node.querySelector(selector)?.getBoundingClientRect();
+    return {
+      card: rect('.sb-card'),
+      facts: rect('.sb-facts'),
+      test: rect('.sb-teststrip'),
+      control: rect('.card-status-control'),
+      copy: rect('.card-status-copy'),
+      name: rect('.card-status-name'),
+      state: rect('.card-status-state'),
+      summary: rect('.card-status-summary'),
+    };
+  });
+  expect(regions.card.right).toBeLessThanOrEqual(regions.facts.left);
+  expect(regions.facts.right).toBeLessThanOrEqual(regions.test.left);
+  expect(regions.control.right).toBeLessThanOrEqual(regions.card.right);
+  expect(regions.name.right).toBeLessThanOrEqual(regions.state.left);
+  expect(regions.state.right).toBeLessThanOrEqual(regions.summary.left);
+  expect(regions.copy.right).toBeLessThanOrEqual(regions.summary.left);
+});
+
+test('Card overview persists WiFi progress, gates the setup address, and resumes after reload', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const steps = page.getByTestId('card-setup-steps').locator('li');
+  await expect(steps.nth(0)).toHaveAttribute('data-step-state', 'complete');
+  await expect(steps.nth(1)).toHaveAttribute('data-step-state', 'complete');
+  await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'current');
+  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'upcoming');
+  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+  await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+test('Card overview keeps Load project and Test as resumable commissioning steps', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'load-project');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  let steps = page.getByTestId('card-setup-steps').locator('li');
+  await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'complete');
+  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'current');
+  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
+  await page.getByRole('button', { name: 'Load saved project', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
+
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  steps = page.getByTestId('card-setup-steps').locator('li');
+  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
+  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=workshop$/);
+});
+
 test('Card replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Card', exact: true }).click();

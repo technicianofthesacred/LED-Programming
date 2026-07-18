@@ -4,6 +4,10 @@ import { InstallerScreen } from './lw-installer.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
 import { cardLinkReasonText, isCardLinkConnected } from '../lib/cardLink.js';
+import {
+  CARD_COMMISSIONING_CHANGED_EVENT,
+  inspectCardCommissioning,
+} from '../lib/cardCommissioningFlow.js';
 
 const SECTION_LABELS = Object.freeze({
   overview: 'Card',
@@ -15,6 +19,17 @@ const SECTION_LABELS = Object.freeze({
 });
 
 function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSection }) {
+  const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
+  useEffect(() => {
+    const syncCommissioning = () => setCommissioningFlow(inspectCardCommissioning().flow);
+    window.addEventListener('storage', syncCommissioning);
+    window.addEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
+    return () => {
+      window.removeEventListener('storage', syncCommissioning);
+      window.removeEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
+    };
+  }, []);
+
   const identity = cardLink?.identity?.name
     || cardLink?.identity?.id
     || cardLink?.card?.name
@@ -27,6 +42,27 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
   const state = cardLink?.state || (ready ? 'connected-direct' : 'disconnected');
   const reason = cardLink?.reason || '';
   const activity = cardLink?.activity || 'idle';
+  const setupLabels = ['Connect', 'Install', 'WiFi', 'Load project', 'Test'];
+  let currentSetupIndex = ready ? 3 : 0;
+  if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
+  else if (commissioningFlow?.stage === 'set-up-card') {
+    currentSetupIndex = ['setup-required', 'setup-joined'].includes(commissioningFlow.networkState) ? 2 : 3;
+  } else if (commissioningFlow?.stage === 'check-lights') currentSetupIndex = 4;
+
+  let commissioningAction = null;
+  if (commissioningFlow?.stage === 'install-safely') {
+    commissioningAction = { label: 'Continue installation', section: 'install' };
+  } else if (commissioningFlow?.stage === 'set-up-card') {
+    if (['setup-required', 'setup-joined'].includes(commissioningFlow.networkState)) {
+      commissioningAction = { label: 'Continue WiFi setup', section: 'install' };
+    } else if (commissioningFlow.cardAcknowledgedAt) {
+      commissioningAction = { label: 'Load saved project', section: 'install' };
+    } else {
+      commissioningAction = { label: 'Reconnect installed card', section: 'install' };
+    }
+  } else if (commissioningFlow?.stage === 'check-lights') {
+    commissioningAction = { label: 'Test lights', section: 'workshop' };
+  }
 
   let presentation;
   if (activity === 'failed') {
@@ -108,13 +144,24 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
       </div>
 
       <ol className="card-setup-steps" data-testid="card-setup-steps" aria-label="Card setup order">
-        {['Connect', 'Install', 'WiFi', 'Load project', 'Test'].map((label, index) => (
-          <li key={label}><span className="card-setup-number">{index + 1}</span><span className="card-setup-label">{label}</span></li>
-        ))}
+        {setupLabels.map((label, index) => {
+          const stepState = index < currentSetupIndex ? 'complete' : index === currentSetupIndex ? 'current' : 'upcoming';
+          return (
+            <li key={label} data-step-state={stepState} aria-current={stepState === 'current' ? 'step' : undefined}>
+              <span className="card-setup-number" aria-hidden="true">{stepState === 'complete' ? '✓' : index + 1}</span>
+              <span className="card-setup-label">{label}</span>
+            </li>
+          );
+        })}
       </ol>
 
       <div className="card-overview-actions">
-        {ready && activity === 'idle' ? (
+        {commissioningAction ? (
+          <>
+            {renderAction(commissioningAction, true)}
+            <button type="button" className="btn" onClick={() => onOpenSection('support')}>Open support</button>
+          </>
+        ) : ready && activity === 'idle' ? (
           <>
             {renderAction(presentation.primary, true)}
             <button type="button" className="btn" onClick={() => onOpenSection('install')}>Check for update</button>

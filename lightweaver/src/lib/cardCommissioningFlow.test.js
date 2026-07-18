@@ -13,6 +13,7 @@ import {
   cardIdFromEspMac,
   completeCardInstall,
   markCardProjectRestored,
+  confirmCardSetupNetworkJoined,
   stageCardProjectForPhysicalCheck,
   readCardCommissioning,
   readCardRestorationAttempt,
@@ -142,6 +143,22 @@ test('direct Web Serial and Bridge results converge on setup with the same exact
     });
     assert.equal(next.networkState, 'setup-required');
   }
+});
+
+test('the WiFi handoff confirmation advances the persisted commissioning flow without skipping card verification', () => {
+  const initial = beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-wifi-gate-1234567', now: 10,
+  });
+  const setup = completeCardInstall(initial, installed, { now: 20 });
+
+  const joined = confirmCardSetupNetworkJoined(setup, { now: 30 });
+
+  assert.equal(joined.stage, 'set-up-card');
+  assert.equal(joined.networkState, 'setup-joined');
+  assert.equal(joined.cardAcknowledgedAt, null);
+  assert.equal(joined.updatedAt, 30);
+  assert.throws(() => confirmCardSetupNetworkJoined(initial), /setup network/i);
 });
 
 test('a result from another operation cannot replace the active commissioning flow', () => {

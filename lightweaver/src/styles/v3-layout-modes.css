@@ -3,11 +3,67 @@
    mode switch plus the Size and Wire mode panel styles (the Size/Wire stubs
    are gone now that both panels have landed — layout-redesign-plan.md). */
 
-.la-mode-switch {
-  margin-right: 4px;
+.la-mode-nav {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  flex: 0 0 auto;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-hair);
+  background: var(--bg-panel);
 }
+.la-mode-switch { width: 100%; box-sizing: border-box; }
+.la-mode-switch button { flex: 1 1 0; min-width: 0; }
+.la-mode-switch[data-mode="draw"] { --mode-accent: var(--accent); }
+.la-mode-switch[data-mode="size"] { --mode-accent: oklch(0.72 0.08 155); }
+.la-mode-switch[data-mode="wire"] { --mode-accent: oklch(0.72 0.08 225); }
+.la-mode-switch button.on { background: var(--mode-accent); }
+.la-mode-content {
+  --mode-tint: var(--accent);
+  flex: 1 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background-image: linear-gradient(180deg, color-mix(in oklab, var(--mode-tint) 7%, transparent), transparent 190px);
+}
+.la-mode-content.is-size { --mode-tint: oklch(0.72 0.08 155); }
+.la-mode-content.is-wire { --mode-tint: oklch(0.72 0.08 225); }
 .tb-group { display: inline-flex; align-items: center; gap: 4px; }
 .la-sheet-handle { display: none; }
+
+/* ── Fresh-layout primitive chooser ────────────────────────────────────── */
+.la-primitive-starter {
+  display: grid;
+  gap: 12px;
+  margin: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in oklab, var(--accent) 34%, var(--border-soft));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 5%, var(--bg-elev));
+}
+.la-primitive-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.la-primitive-heading > div { display: grid; gap: 3px; }
+.la-primitive-heading strong { color: var(--text-hi); font-size: 13px; }
+.la-primitive-heading span { color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+.la-primitive-import { flex: 0 0 auto; color: var(--accent); font-size: 11px; font-weight: 600; }
+.la-primitive-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.la-primitive-grid button {
+  min-width: 0;
+  padding: 7px 4px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  color: var(--text-lo);
+  font-size: 10.5px;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.la-primitive-grid button:hover { color: var(--text-hi); border-color: var(--border); }
+.la-primitive-grid button.is-selected { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.la-primitive-grid svg { display: block; width: 100%; height: 28px; margin-bottom: 4px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.la-primitive-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.la-primitive-action > span { color: var(--text-faint); font: 10px/1.4 var(--font-mono); }
+.la-primitive-action .btn { flex: 0 0 auto; justify-content: center; min-width: 98px; text-transform: capitalize; }
 
 /* ── Size mode — the artwork-size → density → per-strip-count chain ─────── */
 
@@ -546,6 +602,7 @@
     letter-spacing: .08em;
     text-transform: uppercase;
   }
+  .la-mode-nav { top: 44px; padding-block: 7px; }
   .la .side.is-collapsed > :not(.la-sheet-handle) { display: none; }
   .la-sheet-handle > span {
     width: 32px;
