@@ -1,0 +1,315 @@
+<title>Lightweaver — Wiring &amp; Sizing Redesign</title>
+<style>
+  :root{
+    --pg-bg:#faf9f5; --pg-ink:#1f1e1a; --pg-mid:#5f5d55; --pg-faint:#8a887e;
+    --pg-line:#e4e2d9; --pg-card:#ffffff; --pg-accent:#4d7ede;
+    --mk-bg:#262624; --mk-panel:#2d2d2b; --mk-tile:#34342f; --mk-line:#3f3f3a;
+    --mk-hair:#383833; --mk-hi:#f2f1ec; --mk-mid:#b4b2a9; --mk-faint:#84827a;
+    --mk-blue:#6c9ef8; --mk-blue-soft:#31456e; --mk-amber:#e0904e; --mk-ok:#84c48d; --mk-red:#e06a5f;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --pg-bg:#1e1e1c; --pg-ink:#f0efe9; --pg-mid:#b0aea4; --pg-faint:#82807a;
+      --pg-line:#373732; --pg-card:#272725; --pg-accent:#84a8f0; }
+  }
+  :root[data-theme="dark"]{ --pg-bg:#1e1e1c; --pg-ink:#f0efe9; --pg-mid:#b0aea4; --pg-faint:#82807a;
+    --pg-line:#373732; --pg-card:#272725; --pg-accent:#84a8f0; }
+  :root[data-theme="light"]{ --pg-bg:#faf9f5; --pg-ink:#1f1e1a; --pg-mid:#5f5d55; --pg-faint:#8a887e;
+    --pg-line:#e4e2d9; --pg-card:#ffffff; --pg-accent:#4d7ede; }
+
+  body{ background:var(--pg-bg); color:var(--pg-ink); font-family:var(--sans);
+    line-height:1.55; margin:0; }
+  .wrap{ max-width:1060px; margin:0 auto; padding:56px 24px 96px; }
+
+  .eyebrow{ font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--pg-faint); }
+  h1{ font-size:clamp(26px,4vw,36px); line-height:1.15; margin:10px 0 8px; text-wrap:balance; }
+  .lede{ color:var(--pg-mid); max-width:62ch; margin:0 0 8px; }
+  h2{ font-size:20px; margin:0 0 4px; text-wrap:balance; }
+
+  .section{ display:grid; grid-template-columns:minmax(260px,1fr) minmax(320px,440px);
+    gap:36px; align-items:start; margin-top:72px; padding-top:40px; border-top:1px solid var(--pg-line); }
+  @media (max-width:760px){ .section{ grid-template-columns:1fr; } }
+  .notes p{ color:var(--pg-mid); font-size:14.5px; max-width:52ch; }
+  .chg{ display:flex; gap:10px; margin:14px 0; font-size:14px; }
+  .chg b{ font-weight:600; }
+  .chg .n{ flex:none; font-family:var(--mono); font-size:11px; color:var(--pg-accent);
+    border:1px solid color-mix(in srgb, var(--pg-accent) 40%, transparent);
+    border-radius:999px; padding:1px 8px; height:fit-content; margin-top:2px; }
+  .chg span{ color:var(--pg-mid); }
+
+  /* ---- the mocked phone frame (always dark — it's the app) ---- */
+  .frame{ background:var(--mk-bg); border:1px solid var(--mk-line); border-radius:20px;
+    padding:20px 16px 24px; color:var(--mk-hi); box-shadow:0 24px 48px -32px rgba(0,0,0,.5); }
+  .frame *{ box-sizing:border-box; }
+  .mk-eyebrow{ font-family:var(--mono); font-size:10px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--mk-faint); }
+  .mk-h{ font-size:19px; font-weight:700; margin:6px 0 2px; }
+  .mk-sub{ font-size:13px; color:var(--mk-mid); margin:0 0 16px; }
+
+  .tiles{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:16px; }
+  @media (max-width:420px){ .tiles{ grid-template-columns:repeat(2,1fr); } }
+  .tile{ background:var(--mk-tile); border:1px solid var(--mk-hair); border-radius:12px;
+    padding:10px 12px; }
+  .tile .l{ font-size:11px; color:var(--mk-faint); margin-bottom:2px; }
+  .tile .v{ font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .tile .v small{ font-size:11px; font-weight:500; color:var(--mk-mid); }
+
+  .rail{ display:flex; gap:6px; align-items:center; margin:4px 0 6px; }
+  .rail .seg{ flex:1; height:4px; border-radius:2px; background:var(--mk-line); }
+  .rail .seg.done{ background:var(--mk-ok); }
+  .rail .seg.cur{ background:var(--mk-blue); }
+  .rail-labels{ display:flex; justify-content:space-between; font-size:10.5px;
+    color:var(--mk-faint); margin-bottom:14px; }
+  .rail-labels .cur{ color:var(--mk-blue); font-weight:600; }
+
+  .mkcard{ background:var(--mk-panel); border:1px solid var(--mk-hair); border-radius:14px;
+    padding:16px; margin-bottom:12px; }
+  .mkcard h4{ margin:0 0 4px; font-size:15px; }
+  .mkcard .d{ font-size:12.5px; color:var(--mk-mid); margin:0 0 12px; }
+
+  .diagram{ display:flex; align-items:center; gap:0; margin:4px 0 2px; }
+  .dg-card{ flex:none; width:44px; height:30px; border:1.5px solid var(--mk-mid);
+    border-radius:6px; display:grid; place-items:center; font-family:var(--mono);
+    font-size:8px; color:var(--mk-mid); }
+  .dg-wire{ flex:1; height:0; border-top:2px solid var(--mk-blue); position:relative; }
+  .dg-strip{ flex:none; display:flex; gap:2px; padding:4px 6px; border:1px solid var(--mk-hair);
+    border-radius:6px; background:var(--mk-tile); }
+  .dg-strip i{ width:5px; height:10px; border-radius:1.5px; background:var(--mk-line); }
+  .dg-strip i.b{ background:var(--mk-blue); } .dg-strip i.g{ background:var(--mk-ok); }
+  .dg-strip i.r{ background:var(--mk-red); }
+  .dg-cap{ font-size:10.5px; color:var(--mk-faint); margin-top:6px; }
+
+  .btn{ display:block; width:100%; border:0; border-radius:10px; padding:12px;
+    font:600 14px var(--sans); text-align:center; cursor:pointer; }
+  .btn.pri{ background:var(--mk-blue); color:#10151f; }
+  .btn.ghost{ background:transparent; border:1px solid var(--mk-line); color:var(--mk-hi); }
+  .btn.row2{ margin-top:8px; }
+  .btn:focus-visible{ outline:2px solid var(--mk-blue); outline-offset:2px; }
+
+  .banner{ display:flex; gap:10px; align-items:center; background:color-mix(in srgb, var(--mk-amber) 14%, var(--mk-panel));
+    border:1px solid color-mix(in srgb, var(--mk-amber) 40%, transparent); border-radius:12px;
+    padding:11px 14px; font-size:13px; }
+  .banner b{ color:var(--mk-amber); }
+  .banner a{ margin-left:auto; color:var(--mk-amber); font-weight:600; font-size:13px;
+    text-decoration:none; white-space:nowrap; }
+
+  .wiz-progress{ font-family:var(--mono); font-size:10.5px; color:var(--mk-faint);
+    text-align:center; margin-bottom:14px; }
+  .wiz-q{ font-size:20px; font-weight:700; text-align:center; margin:8px 0 4px; text-wrap:balance; }
+  .wiz-hint{ font-size:12.5px; color:var(--mk-mid); text-align:center; margin:0 0 18px; }
+  .led-illus{ display:flex; gap:3px; justify-content:center; margin:14px 0 20px; }
+  .led-illus i{ width:9px; height:20px; border-radius:2px; background:var(--mk-line); }
+  .led-illus i.b{ background:var(--mk-blue); box-shadow:0 0 10px var(--mk-blue); }
+  .led-illus i.r{ background:var(--mk-red); }
+
+  .swatch{ width:64px; height:64px; border-radius:14px; margin:6px auto 16px;
+    background:var(--mk-ok); box-shadow:0 0 24px color-mix(in srgb, var(--mk-ok) 55%, transparent); }
+  .quiz{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .quiz .btn{ padding:14px 0; }
+  .quiz .btn.r{ background:transparent; border:1px solid var(--mk-red); color:var(--mk-red); }
+  .quiz .btn.g{ background:transparent; border:1px solid var(--mk-ok); color:var(--mk-ok); }
+  .quiz .btn.b{ background:transparent; border:1px solid var(--mk-blue); color:var(--mk-blue); }
+
+  .density{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px; }
+  .dopt{ border:1px solid var(--mk-hair); border-radius:10px; background:var(--mk-tile);
+    padding:10px 8px; text-align:center; }
+  .dopt.sel{ border-color:var(--mk-blue); background:var(--mk-blue-soft); }
+  .dopt .dots{ display:flex; justify-content:center; gap:7px; margin-bottom:6px; }
+  .dopt.d2 .dots{ gap:4px; } .dopt.d3 .dots{ gap:1.5px; }
+  .dopt .dots i{ width:4px; height:4px; border-radius:50%; background:var(--mk-mid); }
+  .dopt .t{ font-size:11.5px; font-weight:600; }
+  .dopt .s{ font-size:10px; color:var(--mk-faint); }
+
+  .strip-row{ display:flex; align-items:center; gap:10px; padding:10px 2px;
+    border-top:1px solid var(--mk-hair); font-size:13px; }
+  .strip-row .name{ font-weight:600; }
+  .strip-row .len{ margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--mk-mid);
+    font-variant-numeric:tabular-nums; }
+  .strip-row .px{ font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
+    background:var(--mk-tile); border:1px solid var(--mk-hair); border-radius:8px; padding:4px 10px; }
+
+  .meter{ height:8px; border-radius:4px; background:var(--mk-tile); position:relative;
+    margin:10px 0 6px; overflow:hidden; }
+  .meter .fill{ position:absolute; inset:0 auto 0 0; width:26%; border-radius:4px;
+    background:var(--mk-blue); }
+  .meter .limit{ position:absolute; top:-2px; bottom:-2px; left:80%; width:2px;
+    background:var(--mk-red); border-radius:1px; }
+  .meter-cap{ display:flex; justify-content:space-between; font-size:10.5px; color:var(--mk-faint);
+    font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .advice{ font-size:12.5px; color:var(--mk-mid); border-left:2px solid var(--mk-ok);
+    padding-left:10px; margin-top:12px; }
+
+  .all20{ margin-top:72px; padding-top:40px; border-top:1px solid var(--pg-line); }
+  .grid20{ display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; margin-top:18px; }
+  .g-item{ background:var(--pg-card); border:1px solid var(--pg-line); border-radius:12px;
+    padding:12px 14px; font-size:13px; }
+  .g-item .n{ font-family:var(--mono); font-size:10.5px; color:var(--pg-accent); }
+  .g-item b{ display:block; margin:2px 0; font-size:13.5px; }
+  .g-item span{ color:var(--pg-mid); font-size:12.5px; }
+  .phases{ margin-top:28px; display:grid; gap:8px; }
+  .phase{ display:flex; gap:14px; align-items:baseline; font-size:14px; }
+  .phase .p{ flex:none; font-family:var(--mono); font-size:11px; color:var(--pg-faint); width:64px; }
+  .phase span{ color:var(--pg-mid); }
+  @media (prefers-reduced-motion: no-preference){
+    .frame{ transition:transform .2s ease; }
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Lightweaver Studio · Design proposal</p>
+  <h1>Wiring &amp; Sizing, redesigned</h1>
+  <p class="lede">The commissioning logic stays exactly as built — the state machines are good. This proposal replaces the presentation: one glanceable summary, one step at a time, questions in plain language, and power sizing finally in the same room as pixel sizing. Frames below are pixel mocks of the new panels; numbered chips map to the 20 changes in <code>docs/wiring-sizing-ui-redesign.md</code>.</p>
+
+  <!-- ================= SECTION 1 : the panel ================= -->
+  <div class="section">
+    <div class="notes">
+      <p class="eyebrow">01 · The panel at a glance</p>
+      <h2>Summary first, one step at a time</h2>
+      <div class="chg"><span class="n">1</span><div><b>Stat tiles</b> <span>— wires, outputs, pixels, and estimated draw in the Claude-dashboard tile grammar. The whole install reads in one glance.</span></div></div>
+      <div class="chg"><span class="n">2·3</span><div><b>Progress rail</b> <span>— five segments replace five open accordions. Green is done, blue is where you are. No more COMPLETE/WAITING pills.</span></div></div>
+      <div class="chg"><span class="n">7</span><div><b>Live wiring diagram</b> <span>— card → wire → strip, redrawn as you make choices. The picture is the state.</span></div></div>
+      <div class="chg"><span class="n">13</span><div><b>One blocking banner</b> <span>— the install gate says what's missing and hands you the button.</span></div></div>
+    </div>
+    <div class="frame">
+      <p class="mk-eyebrow">Commission</p>
+      <p class="mk-h">Wire the physical LEDs</p>
+      <p class="mk-sub">Match each run to its real data wire, then prove it on the LEDs.</p>
+      <div class="tiles">
+        <div class="tile"><div class="l">Data wires</div><div class="v">1</div></div>
+        <div class="tile"><div class="l">Outputs</div><div class="v">1</div></div>
+        <div class="tile"><div class="l">Pixels</div><div class="v">28</div></div>
+        <div class="tile"><div class="l">Est. draw</div><div class="v">0.9<small> A</small></div></div>
+      </div>
+      <div class="rail" role="progressbar" aria-valuenow="4" aria-valuemin="1" aria-valuemax="5">
+        <span class="seg done"></span><span class="seg done"></span><span class="seg done"></span>
+        <span class="seg cur"></span><span class="seg"></span>
+      </div>
+      <div class="rail-labels"><span>Wires ✓</span><span>Match ✓</span><span>Route ✓</span><span class="cur">Check</span><span>Install</span></div>
+      <div class="mkcard">
+        <div class="diagram">
+          <div class="dg-card">CARD</div>
+          <div class="dg-wire"></div>
+          <div class="dg-strip"><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i></div>
+        </div>
+        <p class="dg-cap">Output 1 → Strip A · 28 px · first LED blue, last LED red</p>
+      </div>
+      <div class="mkcard">
+        <h4>Light them up and check</h4>
+        <p class="d">A 2-minute guided check. The card lights the first LED blue and the last LED red — you confirm what you see.</p>
+        <button class="btn pri">Start the check</button>
+      </div>
+      <div class="banner"><span><b>1 thing left</b> before install: run the LED check.</span><a href="#s2">Run it →</a></div>
+    </div>
+  </div>
+
+  <!-- ================= SECTION 2 : the wizard ================= -->
+  <div class="section" id="s2">
+    <div class="notes">
+      <p class="eyebrow">02 · The bench check</p>
+      <h2>One big question per screen</h2>
+      <div class="chg"><span class="n">9·10</span><div><b>Guided wizard</b> <span>— the check takes over the panel. The old "visible from here" checkbox becomes the first screen with one honest button.</span></div></div>
+      <div class="chg"><span class="n">12</span><div><b>Recovery in place</b> <span>— every "Something's wrong" answer opens the fix right there (boundary slider, reverse direction, swap outputs), powered by the existing chase reducer.</span></div></div>
+      <div class="chg"><span class="n">11</span><div><b>Color quiz</b> <span>— nobody needs to know what "GRB" means. The strip lights up, you tap the color you see, twice. The order is derived.</span></div></div>
+    </div>
+    <div style="display:grid; gap:20px;">
+      <div class="frame">
+        <p class="wiz-progress">LED CHECK · 1 OF 6</p>
+        <p class="wiz-q">Stand where you can see the LED strips</p>
+        <p class="wiz-hint">You'll confirm what the real LEDs do at each step.</p>
+        <button class="btn pri">I can see them</button>
+        <button class="btn ghost row2">Do this later</button>
+      </div>
+      <div class="frame">
+        <p class="wiz-progress">LED CHECK · 3 OF 6</p>
+        <p class="wiz-q">Is the <em>first</em> LED lit blue?</p>
+        <div class="led-illus"><i class="b"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="r"></i></div>
+        <p class="wiz-hint">Blue marks the start of Strip A. Red marks the end.</p>
+        <button class="btn pri">Yes — blue at the start</button>
+        <button class="btn ghost row2">Something's wrong</button>
+      </div>
+      <div class="frame">
+        <p class="wiz-progress">COLOR CHECK · 1 OF 2</p>
+        <p class="wiz-q">What color do you see?</p>
+        <div class="swatch" aria-label="strip is lit green"></div>
+        <div class="quiz">
+          <button class="btn r">Red</button>
+          <button class="btn g">Green</button>
+          <button class="btn b">Blue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SECTION 3 : size & power ================= -->
+  <div class="section">
+    <div class="notes">
+      <p class="eyebrow">03 · Size &amp; Power</p>
+      <h2>Pixels and amps in the same room</h2>
+      <div class="chg"><span class="n">15·16</span><div><b>Merged panel</b> <span>— strip sizing and the power budget (today stranded in the unreachable legacy Devices panel) become one view. Draw, supply, and headroom as tiles with a meter.</span></div></div>
+      <div class="chg"><span class="n">17</span><div><b>Density you can see</b> <span>— the 30/60/144 picker renders real dot spacing.</span></div></div>
+      <div class="chg"><span class="n">18</span><div><b>Drag to size</b> <span>— pull the strip's end handle on the artwork; the number input stays for fine adjust. Length shown in cm and LEDs.</span></div></div>
+      <div class="chg"><span class="n">19</span><div><b>Advice, not just numbers</b> <span>— over budget produces a suggestion derived from the math, not a red label.</span></div></div>
+    </div>
+    <div class="frame">
+      <p class="mk-eyebrow">Size &amp; Power</p>
+      <p class="mk-h">Fit the strips, mind the amps</p>
+      <p class="mk-sub">Pixel counts drive the power budget live.</p>
+      <div class="density">
+        <div class="dopt d1"><div class="dots"><i></i><i></i><i></i><i></i></div><div class="t">30 / m</div><div class="s">airy</div></div>
+        <div class="dopt d2 sel"><div class="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="t">60 / m</div><div class="s">standard</div></div>
+        <div class="dopt d3"><div class="dots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="t">144 / m</div><div class="s">dense</div></div>
+      </div>
+      <div class="mkcard" style="padding:6px 14px;">
+        <div class="strip-row"><span class="name">Strip A</span><span class="len">47 cm · 18.5 in</span><span class="px">28 px</span></div>
+        <div class="strip-row" style="border-top:0;"><span class="name">Strip B</span><span class="len">32 cm · 12.6 in</span><span class="px">19 px</span></div>
+      </div>
+      <div class="tiles" style="grid-template-columns:repeat(3,1fr);">
+        <div class="tile"><div class="l">Max draw</div><div class="v">1.3<small> A</small></div></div>
+        <div class="tile"><div class="l">Supply</div><div class="v">5.0<small> A</small></div></div>
+        <div class="tile"><div class="l">Headroom</div><div class="v" style="color:var(--mk-ok);">3.7<small> A</small></div></div>
+      </div>
+      <div class="mkcard">
+        <div class="meter"><div class="fill"></div><div class="limit"></div></div>
+        <div class="meter-cap"><span>1.3 A at full brightness</span><span>safe limit 4.0 A</span></div>
+        <p class="advice">Plenty of headroom. You could run both strips at full white — no injection point needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= all 20 ================= -->
+  <div class="all20">
+    <p class="eyebrow">The full list</p>
+    <h2>All 20 changes</h2>
+    <div class="grid20">
+      <div class="g-item"><span class="n">01</span><b>Stat-tile summary row</b><span>Wires · outputs · pixels · draw, glanceable.</span></div>
+      <div class="g-item"><span class="n">02</span><b>Progress rail</b><span>One step expanded at a time; rail to jump.</span></div>
+      <div class="g-item"><span class="n">03</span><b>Retire status pills</b><span>Checkmarks + plain sentences, not WAITING.</span></div>
+      <div class="g-item"><span class="n">04</span><b>One card system</b><span>Same radius, border, elevation everywhere.</span></div>
+      <div class="g-item"><span class="n">05</span><b>Hierarchy pass</b><span>Title, one sentence, then controls.</span></div>
+      <div class="g-item"><span class="n">06</span><b>Plain-language steps</b><span>Titles become the question you answer.</span></div>
+      <div class="g-item"><span class="n">07</span><b>Live wiring diagram</b><span>Card → wire → strip, always visible.</span></div>
+      <div class="g-item"><span class="n">08</span><b>Visual wire chooser</b><span>Cards with wire glyphs, not 1–4 buttons.</span></div>
+      <div class="g-item"><span class="n">09</span><b>Bench-check wizard</b><span>Takeover flow, one question per screen.</span></div>
+      <div class="g-item"><span class="n">10</span><b>Fix "visible from here"</b><span>A first screen with one button, no checkbox.</span></div>
+      <div class="g-item"><span class="n">11</span><b>Color-order quiz</b><span>Tap the color you see; GRB stays internal.</span></div>
+      <div class="g-item"><span class="n">12</span><b>Inline recovery</b><span>Every "No" opens the fix in place.</span></div>
+      <div class="g-item"><span class="n">13</span><b>Blocking banner</b><span>What's missing + the button to fix it.</span></div>
+      <div class="g-item"><span class="n">14</span><b>Promote Auto Wire</b><span>Suggestion card with Preview → Apply.</span></div>
+      <div class="g-item"><span class="n">15</span><b>Size &amp; Power merge</b><span>One panel; retire the stranded legacy UI.</span></div>
+      <div class="g-item"><span class="n">16</span><b>Power tiles + meter</b><span>Draw / supply / headroom with a safe line.</span></div>
+      <div class="g-item"><span class="n">17</span><b>Visible density picker</b><span>Real dot spacing in each option.</span></div>
+      <div class="g-item"><span class="n">18</span><b>Drag-to-size strips</b><span>End handle on artwork; input for fine adjust.</span></div>
+      <div class="g-item"><span class="n">19</span><b>Computed power advice</b><span>Suggestions from headroom math.</span></div>
+      <div class="g-item"><span class="n">20</span><b>Tokens + a11y</b><span>One token file, 44px targets, focus rings.</span></div>
+    </div>
+    <div class="phases">
+      <div class="phase"><span class="p">PHASE 1</span><div><b>Primitives</b> <span>— StatTile, StepRail, Card, MeterBar + one tokens file. No behavior change.</span></div></div>
+      <div class="phase"><span class="p">PHASE 2</span><div><b>Panel restructure</b> <span>— WireModePanel keeps its state machine; rail + tiles replace the accordion.</span></div></div>
+      <div class="phase"><span class="p">PHASE 3</span><div><b>Bench wizard</b> <span>— new shell over the same wiringChase reducer; color quiz.</span></div></div>
+      <div class="phase"><span class="p">PHASE 4</span><div><b>Size &amp; Power</b> <span>— merge estimatePowerBudget into Size mode.</span></div></div>
+      <div class="phase"><span class="p">PHASE 5</span><div><b>Polish + gate</b> <span>— a11y pass, then launch:check + on-hardware smoke test.</span></div></div>
+    </div>
+  </div>
+</div>
