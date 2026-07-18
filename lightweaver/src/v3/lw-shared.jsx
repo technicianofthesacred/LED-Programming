@@ -141,7 +141,29 @@ import React from 'react';
 
   const fmtTime = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
+  // ── Canonical journey hint ───────────────────────────────────────────
+  // One compact, non-blocking strip naming the current workflow step and the
+  // recommended next action. Experienced users can ignore it entirely.
+  const JOURNEY_STEPS = [
+    'Connect card', 'Design layout', 'Create looks', 'Arrange playlist',
+    'Save to card & verify', 'Save / export',
+  ];
+  function JourneyHint({ step, nextLabel, onNext }) {
+    const label = JOURNEY_STEPS[step] || '';
+    return (
+      <div className="journey-hint" data-testid="journey-hint">
+        <span className="jh-step">Step {step + 1} of {JOURNEY_STEPS.length} · {label}</span>
+        {nextLabel && (
+          <button type="button" className="jh-next" onClick={onNext}>
+            Next: {nextLabel} →
+          </button>
+        )}
+      </div>
+    );
+  }
+
 export {
   I, PATTERNS, MIXES, PATTERN_CATS, STRIP_TESTS, SWATCHES, GEOMETRY,
   CLIP_COLOR, CLIPS, TRANSITIONS, LANES, CUES, SHOW_DURATION, fmtTime,
+  JOURNEY_STEPS, JourneyHint,
 };

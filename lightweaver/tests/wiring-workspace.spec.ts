@@ -59,7 +59,7 @@ async function openInstallReview(page: any) {
 async function saveProject(page: any) {
   await page.waitForTimeout(600);
   const pending = page.waitForEvent('download');
-  await page.locator('.la .toolbar').getByRole('button', { name: 'Save', exact: true }).click();
+  await page.locator('.la .toolbar').getByRole('button', { name: 'Export', exact: true }).click();
   const download = await pending;
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lw-wire-save-')), 'project.json');
   await download.saveAs(file);
@@ -180,7 +180,7 @@ test('review separates install from export and names the card connection state',
   await expect(review.getByText('LED outputs')).toBeVisible();
   await expect(review.getByText('LED strips')).toBeVisible();
   await expect(review.getByText('Configured color order')).toBeVisible();
-  await expect(review.getByRole('button', { name: /Install on card/ })).toContainText('Card not connected');
+  await expect(review.getByRole('button', { name: /Save to card/ })).toContainText('Card not connected');
   await expect(review.getByRole('button', { name: 'Download WLED map' })).toHaveClass(/btn-ghost/);
 });
 

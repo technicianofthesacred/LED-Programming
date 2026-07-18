@@ -482,17 +482,21 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   // carries the same job (getting a setup written to the card).
   await expect(page.getByText('Card connection')).toBeVisible();
   await expect(page.getByTestId('settings-ring-summary')).toBeVisible();
-  await expect(page.getByTestId('output-routing-summary')).toContainText('2 outputs');
-  await expect(page.locator('.set-output-row')).toHaveCount(2);
-  // Output names default to "Output 1"/"Output 2" (src/lib/standaloneController.js);
-  // they're no longer auto-named after hardware sections like "Outer circle".
-  await expect(page.locator('.set-output-row').nth(0)).toContainText('GPIO');
-  await expect(page.locator('.set-output-row').nth(0).locator('.set-outfield').first().locator('input')).toHaveValue('16');
-  await expect(page.locator('.set-output-row').nth(1).locator('.set-outfield').first().locator('input')).toHaveValue('17');
 
-  await page.getByRole('button', { name: 'Single output' }).click();
-  await expect(page.getByTestId('output-routing-summary')).toContainText('1 output');
-  await expect(page.locator('.set-output-row')).toHaveCount(1);
+  // Card settings is now a READ-ONLY summary of the Layout/Wire result: it
+  // shows totals plus per-output GPIO/pixels as text, offers Edit in Layout,
+  // and exposes no routing inputs or re-routing actions (Layout owns
+  // structure and routing for every layout type).
+  const routingSummary = page.getByTestId('output-routing-summary');
+  await expect(routingSummary).toContainText(/\d+ LEDs · \d+ sections/);
+  await expect(routingSummary).toContainText(/\d+ outputs? · \d+ LEDs routed/);
+  await expect(page.locator('[data-testid="output-summary-row"] input')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Single output' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Split by sections' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Edit in Layout' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit in Layout' }).click();
+  await expect(page).toHaveURL(/screen=layout&mode=wire/);
+  await page.goto('/#screen=card&section=settings', { waitUntil: 'domcontentloaded' });
 
   // "Designer config" JSON is hidden by default and revealed with its own
   // Show/Hide JSON button — the old always-visible "Advanced" click target
@@ -506,7 +510,9 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
 
 test('settings rows stack readable labels above controls at 390px without overflow', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  // `#screen=settings` is the legacy PREFERENCES alias (no Card connection
+  // section there) — the Card address row lives in Card settings.
+  await page.goto('/#screen=card&section=settings', { waitUntil: 'domcontentloaded' });
 
   const row = page.locator('.set-row', { hasText: "The card's name on your WiFi" }).first();
   await expect(row).toBeVisible();
@@ -604,27 +610,21 @@ test('settings text and number boxes accept direct typing', async ({ page }) => 
   await cardAddress.fill('192.168.4.1');
   await expect(cardAddress).toHaveValue('192.168.4.1');
 
-  const totalLeds = page.locator('.set-row', { hasText: 'Total LEDs' }).locator('input');
-  await totalLeds.fill('123');
-  await expect(totalLeds).toHaveValue('123');
+  // Layout structure and output routing are READ-ONLY here now (Layout/Wire
+  // owns them) — Card settings must not expose editable inputs for them.
+  await expect(page.locator('.set-row', { hasText: 'Total LEDs' }).locator('input')).toHaveCount(0);
+  await expect(page.locator('.set-seccount input')).toHaveCount(0);
+  await expect(page.locator('.set-output-row input')).toHaveCount(0);
 
-  const sectionLeds = page.locator('.set-seccount').first().locator('input');
-  await sectionLeds.fill('61');
-  await expect(sectionLeds).toHaveValue('61');
+  // Preferences fields still accept direct typing.
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  const projectNameInput = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
+  await projectNameInput.fill('Typed Piece');
+  await expect(projectNameInput).toHaveValue('Typed Piece');
 
-  // "Output 1 name" does carry a real aria-label.
-  const outputName = page.getByLabel('Output 1 name');
-  await outputName.fill('Front halo');
-  await expect(outputName).toHaveValue('Front halo');
-
-  const firstOutput = page.locator('.set-output-row').first();
-  const gpioInput = firstOutput.locator('.set-outfield', { hasText: 'GPIO' }).locator('input');
-  await gpioInput.fill('18');
-  await expect(gpioInput).toHaveValue('18');
-
-  const outputLedInput = firstOutput.locator('.set-outfield', { hasText: 'pixels' }).locator('input');
-  await outputLedInput.fill('123');
-  await expect(outputLedInput).toHaveValue('123');
+  const bpmInput = page.locator('.set-row', { hasText: 'Default BPM' }).locator('input');
+  await bpmInput.fill('96');
+  await expect(bpmInput).toHaveValue('96');
 });
 
 test('flash screen is reachable for public chip setup', async ({ page }) => {
@@ -756,6 +756,15 @@ for (const viewport of [
     });
     await page.route('http://lightweaver.local/**', benign);
     await page.route('http://192.168.4.1/**', benign);
+    // Hermetic for the same reason: the webfont CDNs are third-party network
+    // dependencies (blocked in offline/proxied environments); serve empty CSS
+    // so their availability can't leak resource errors or fallback-font
+    // metrics into this assertion. App-code errors still fail the test.
+    const emptyCss = route => route.fulfill({ status: 200, contentType: 'text/css', body: '' });
+    await page.route('https://api.fontshare.com/**', emptyCss);
+    await page.route('https://cdn.fontshare.com/**', emptyCss);
+    await page.route('https://fonts.googleapis.com/**', emptyCss);
+    await page.route('https://fonts.gstatic.com/**', emptyCss);
 
     const consoleErrors: string[] = [];
     page.on('console', msg => {

@@ -31,6 +31,8 @@ import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommi
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
 import { cardRouteFromHash, isCardSection } from './cardWorkspaceRoute.js';
+import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
@@ -87,14 +89,17 @@ function shouldRecoverScreenAutomatically() {
 }
 
 function ScreenReady() {
-  useEffect(clearScreenRecoveryAttempt, []);
+  useEffect(() => {
+    clearScreenRecoveryAttempt();
+    clearScreenFailure();
+  }, []);
   return null;
 }
 
 class ScreenErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { error: null, recovering: false, saveBlocked: false };
+    this.state = { error: null, recovering: false, saveBlocked: false, failure: null };
   }
 
   static getDerivedStateFromError(error) {
@@ -105,12 +110,20 @@ class ScreenErrorBoundary extends Component {
     console.error('Lightweaver screen failed safely', error, info);
     if (shouldRecoverScreenAutomatically()) {
       if (this.props.onBeforeReload?.() === false) {
-        this.setState({ saveBlocked: true });
+        const failure = rememberScreenFailure({ error, route: window.location.hash, phase: 'save-blocked' });
+        this.setState({ saveBlocked: true, failure });
         return;
       }
+      rememberScreenFailure({ error, route: window.location.hash, phase: 'auto-reload' });
       rememberScreenRecoveryAttempt();
       this.setState({ recovering: true }, () => window.location.reload());
+      return;
     }
+    // The automatic reload already happened for this route — keep a bounded,
+    // sanitized record (support code + route + error name only) for the
+    // fallback screen and for support conversations.
+    const failure = rememberScreenFailure({ error, route: window.location.hash, phase: 'post-reload' });
+    this.setState({ failure });
   }
 
   retryScreen = () => {
@@ -152,7 +165,12 @@ class ScreenErrorBoundary extends Component {
             <button type="button" className="btn primary" onClick={this.retryScreen}>Try this screen again</button>
             <button type="button" className="btn" onClick={this.openLayout}>Open Layout</button>
           </div>
-          <p className="screen-recovery-help">If this keeps happening, open Layout first and review the item you last changed.</p>
+          {this.state.failure && (
+            <p className="screen-recovery-code" data-testid="screen-recovery-support-code">
+              Support code {this.state.failure.code} · {this.state.failure.route || 'unknown screen'} · {this.state.failure.errorName}
+            </p>
+          )}
+          <p className="screen-recovery-help">If this keeps happening, open Layout first and review the item you last changed. Share the support code if you contact support.</p>
         </div>
       </div>
     );
@@ -195,10 +213,10 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onP
       </nav>
       <div className="top-right">
         <button className="link-btn" title="Start a new empty project" onClick={onNew}>New project</button>
-        <button className="link-btn" title="Open a project file from your computer" onClick={onLoad}>Load project</button>
+        <button className="link-btn" title="Open a project file from your computer" onClick={onLoad}>Import project</button>
         <button className="link-btn" title="Open Studio preferences" onClick={onPreferences}>Preferences</button>
         <span className="top-div" />
-        <button className="link-btn" title="Download a keepable project file to your computer (reload it anytime)" onClick={onDownload}>Download file</button>
+        <button className="link-btn" title="Download a portable project file to your computer (import it anytime)" onClick={onDownload}>Export project</button>
         <button className="btn primary" title="Save the project in this browser" onClick={onSave}>Save project</button>
       </div>
     </header>
@@ -209,7 +227,7 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onP
 function Rail({ view, setView, openCard }) {
   const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["card", "Card"]];
   const item = ([id, label, accessibleLabel]) => (
-    <button key={id} aria-label={accessibleLabel || label} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
+    <button key={id} aria-label={accessibleLabel || label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
@@ -369,7 +387,9 @@ function Shell() {
     params.delete('mode');
     setCardRoute(cardRouteFromHash(`#${params.toString()}`));
     setView('card');
-    window.location.hash = params.toString();
+    // Match rail navigation's history policy (replace, not push) so Back
+    // behaves the same for screen and section changes.
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params.toString()}`);
   }, [flushProjectAutosave]);
   const navigateStudio = useCallback((nextView) => {
     if (installActiveRef.current) return;
@@ -531,7 +551,7 @@ function Shell() {
   }, [markProjectPersisted, projectLifecycle.editedRevision, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
-      `${(projectName || 'lightweaver').replace(/\s+/g, '-').toLowerCase()}.lw.json`,
+      canonicalProjectFileName(projectName),
       serializeProject(),
     );
     if (ok) markProjectPersisted('file');
@@ -575,7 +595,7 @@ function Shell() {
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
-            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} onOpenSection={openCardSection} route={cardRoute} />
+            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} onOpenConnectionCenter={openConnectionCenter} go={navigateStudio} onOpenSection={openCardSection} route={cardRoute} />
             <ScreenReady />
           </> : null}
         </Suspense>
@@ -608,7 +628,7 @@ function Shell() {
           setupNetwork: cardStatus.status?.setupNetwork,
         }}
       />
-      <input ref={fileInputRef} type="file" accept=".lw.json,.json" style={{ display: 'none' }} onChange={onFile} />
+      <input ref={fileInputRef} type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
     </div>
   );
 }

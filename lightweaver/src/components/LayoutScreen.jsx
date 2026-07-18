@@ -60,7 +60,7 @@ export function LayoutScreen({ connected, cardHost }) {
     visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
     // import
     dragOver, fileRef, loadRef,
-    handleFile, handleDragOver, handleDragLeave, handleDrop, saveProject, handleLoad,
+    handleFile, handleDragOver, handleDragLeave, handleDrop, saveProject, handleLoad, importAccept,
     // mode (Draw | Size | Wire)
     mode, setMode,
   } = state;
@@ -119,7 +119,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
       {/* ── Hidden file inputs ─────────────────────────────────────── */}
       <input ref={fileRef} type="file" accept=".svg"  style={{ display: 'none' }} onChange={handleFile}/>
-      <input ref={loadRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleLoad}/>
+      <input ref={loadRef} type="file" accept={importAccept} data-testid="layout-import-input" style={{ display: 'none' }} onChange={handleLoad}/>
 
       {/* ── Toolbar (mockup .toolbar) ──────────────────────────────── */}
         <div className="toolbar">
@@ -215,11 +215,11 @@ export function LayoutScreen({ connected, cardHost }) {
 
           {/* Save / Load */}
           <div className="tb-group" role="group" aria-label="Project">
-            <button className="tb-btn" onClick={saveProject} title="Save project file">
-              {TbIcon.save}Save
+            <button className="tb-btn" onClick={saveProject} title="Export a portable project file (.lw.json)">
+              {TbIcon.save}Export
             </button>
-            <button className="tb-btn" onClick={() => loadRef.current?.click()} title="Load project file">
-              {TbIcon.load}Load
+            <button className="tb-btn" onClick={() => loadRef.current?.click()} title="Import a project file">
+              {TbIcon.load}Import
             </button>
           </div>
 

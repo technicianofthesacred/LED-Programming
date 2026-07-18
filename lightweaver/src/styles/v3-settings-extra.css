@@ -91,6 +91,13 @@
   background: var(--bg-elev); border: 1px solid var(--border-hair);
 }
 .set-output-row .pm-input { flex: 1; min-width: 100px; }
+/* Read-only output summary values (Layout owns editing; Card only reads) */
+.set-output-ro {
+  display: inline-flex; align-items: center;
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 12px;
+  background: transparent; border: 0; padding: 2px 0;
+}
+.set-output-row .set-output-ro.pm-input { flex: 1; min-width: 100px; color: var(--text-hi); font-family: inherit; }
 
 /* ── Advanced JSON disclosure ───────────────────────────────── */
 .set-advanced { padding: 4px 0 8px; }
@@ -101,3 +108,12 @@
   padding: 10px 12px;
 }
 .set-json:focus { outline: none; border-color: var(--accent); }
+
+/* ── Consolidated Projects area ─────────────────────────────── */
+.set-recovery { display: flex; flex-direction: column; gap: 8px; font-size: 11.5px; color: var(--text-faint); font-family: var(--font-mono); }
+.set-recovery-warn {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  color: var(--text-mid); font-family: inherit; font-size: 12px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm); padding: 8px 10px;
+}

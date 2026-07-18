@@ -86,7 +86,7 @@ export function CardPushControl({
       markProjectInstalled(attempt.revision);
       markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
       failedAttemptRef.current = null;
-      setPushStatus(`Installed revision ${attempt.revision} on card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
+      setPushStatus(`Saved revision ${attempt.revision} to card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
     } catch (err) {
       failedAttemptRef.current = attempt;
       const message = err instanceof CardPushError ? err.message : `Push failed: ${err.message || err}`;
@@ -156,10 +156,10 @@ export function CardPushControl({
           data-testid="layout-send-to-card"
           disabled={disabled || pushing || wiringTransactionActive}
           onClick={() => pushToCard()}
-          title={connected ? `Push zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
+          title={connected ? `Save zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
         >
           <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
-          <span className="la-card-push-label">{pushing ? `Installing on ${pushHost}…` : 'Install on card'}<small>{connected ? 'Card connected' : 'Card not connected'}</small></span>
+          <span className="la-card-push-label">{pushing ? `Saving to ${pushHost}…` : 'Save to card'}<small>{connected ? 'Card connected' : 'Card not connected'}</small></span>
         </button>
         {children}
       </div>
@@ -167,7 +167,7 @@ export function CardPushControl({
       {pushStatus && (
         <div className={`la-card-push-banner ${action.status === 'confirmed' ? 'is-ok' : action.status === 'failed' ? 'is-err' : 'is-pending'}`}>
           {pushStatus}
-          {action.status === 'failed' && action.confirmedRevision != null && <p>Installed revision {action.confirmedRevision} remains on the card.</p>}
+          {action.status === 'failed' && action.confirmedRevision != null && <p>Confirmed revision {action.confirmedRevision} remains on the card.</p>}
           {pushFallbackJson && (
             <div className="lw-wire-recovery" role="group" aria-label="Mixed-content recovery">
               <textarea readOnly value={pushFallbackJson} onClick={e => e.target.select()} className="la-card-push-fallback"/>

@@ -213,7 +213,7 @@ test('Playlist resolves a duplicate encoder press without pausing card setup', a
   await expect(page.locator('.pl-row')).toHaveCount(2);
   await page.locator('.pl-row').first().getByRole('button', { name: 'Copy', exact: true }).click();
   await expect(page.locator('.pl-row')).toHaveCount(3);
-  await expect(page.getByRole('button', { name: 'Load playlist to card' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save playlist to card' })).toBeDisabled();
   await expect(page.getByRole('button', { name: /Copy chip config/ })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Download', exact: true })).toBeEnabled();
 });
@@ -309,7 +309,7 @@ test('Playlist install stays pending, fails with Retry, then remains confirmed u
   });
   await gotoPlaylist(page, project);
 
-  const install = page.getByRole('button', { name: 'Load playlist to card' });
+  const install = page.getByRole('button', { name: 'Save playlist to card' });
   await expect(install).toBeEnabled();
   await install.click();
   await expect(page.getByTestId('playlist-card-status')).toContainText('Installing playlist on card…');
@@ -337,7 +337,7 @@ test('Playlist ignores a stale install success after the playlist is edited', as
   });
   await gotoPlaylist(page, project);
 
-  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await page.getByRole('button', { name: 'Save playlist to card' }).click();
   await expect.poll(() => Boolean(releaseInstall)).toBe(true);
   await page.locator('.pl-row').first().getByRole('button', { name: 'Copy', exact: true }).click();
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
@@ -373,7 +373,7 @@ test('Playlist ignores a stale install failure after a newer live preview succee
   });
   await gotoPlaylist(page, project);
 
-  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await page.getByRole('button', { name: 'Save playlist to card' }).click();
   await expect.poll(() => Boolean(releaseInstall)).toBe(true);
   const firstRow = page.locator('.pl-row').first();
   await firstRow.getByRole('button', { name: 'Live' }).click();
@@ -397,7 +397,7 @@ test('Playlist ignores a stale install completion after the card address changes
   });
   await gotoPlaylist(page, project);
 
-  const install = page.getByRole('button', { name: 'Load playlist to card' });
+  const install = page.getByRole('button', { name: 'Save playlist to card' });
   await install.click();
   await expect.poll(() => Boolean(releaseInstall)).toBe(true);
   await expect(page.getByTestId('playlist-card-status')).toContainText('Installing playlist on card…');
@@ -411,7 +411,7 @@ test('Playlist ignores a stale install completion after the card address changes
   await installResponse;
   await waitForUiCommit(page);
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
-  await expect(install).toContainText('Load playlist to card');
+  await expect(install).toContainText('Save playlist to card');
 });
 
 test('Playlist Reset live failure remains visible and retries the same bounded action', async ({ page }) => {
@@ -678,7 +678,7 @@ test('Playlist serializes card mutations behind recovery so the final physical c
 
   await expect(rows.nth(1).getByRole('button', { name: 'Live' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Reset live' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Load playlist to card' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save playlist to card' })).toBeDisabled();
   await expect(page.getByRole('textbox', { name: 'Card address' })).toBeDisabled();
   await expect(page.locator('.pl-chip').first()).toBeDisabled();
   expect(controlCount).toBe(1);

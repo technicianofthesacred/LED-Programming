@@ -708,9 +708,11 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 }
 
 @media (min-width: 641px) and (max-width: 720px) {
-  .topbar { gap: 10px; padding-inline: 12px; }
+  /* Same wrap treatment as <=640: five project actions plus fallback-font
+     metrics can exceed these widths and horizontally scroll the whole app. */
+  .topbar { gap: 10px; padding-inline: 12px; flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 6px; }
   .topbar .crumb { display: none; }
-  .top-right { min-width: 0; }
+  .top-right { min-width: 0; flex-wrap: wrap; row-gap: 6px; }
   .top-right .link-btn { padding-inline: 7px; }
 }
 

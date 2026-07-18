@@ -6,7 +6,7 @@
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
 import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
-import { I, PATTERN_CATS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
+import { I, PATTERN_CATS, SWATCHES, GEOMETRY, JourneyHint } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -66,8 +66,7 @@ import {
   getCardBridgeState,
   hasCardBridge,
   readLocalChipDefault,
-  writeLocalChipDefault,
-} from '../lib/cardBridge.js';
+  writeLocalChipDefault, openLocalCardPage } from '../lib/cardBridge.js';
 import { computeSymmetryFit } from '../lib/symmetry.js';
 import { PatternPreview } from './PatternPreview.jsx';
 
@@ -295,7 +294,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       </div>);
   }
 
-  function PatternScreen({ connected }) {
+  function PatternScreen({ connected, go }) {
     const {
       projectId,
       projectName,
@@ -1112,7 +1111,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const openCardPage = () => {
-      if (typeof window !== 'undefined') window.open(cardHostToUrl(cardHost), '_blank');
+      if (typeof window !== 'undefined') openLocalCardPage(cardHost);
     };
 
     // ── color/geometry mapping for the mockup sliders ───────────────────
@@ -1165,8 +1164,9 @@ import { PatternPreview } from './PatternPreview.jsx';
             {/* hero */}
             <header className="pm-hero">
               <div className="pm-title">
-                <h1>Patterns &amp; Mixes</h1>
-                <p>Choose chip-ready patterns, tune the colors, then save section blends as layer mixes for the card.</p>
+                <h1>Patterns &amp; Looks</h1>
+                <p>Choose chip-ready patterns, tune the colors, then save them as looks for the card.</p>
+                <JourneyHint step={2} nextLabel="Arrange playlist" onNext={() => go?.('playlist')} />
               </div>
               <div className="pm-actions">
                 <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
@@ -1283,7 +1283,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                   <div className="pm-mixbar">
                     <div className="pm-mixlabel"><span>Layer mix</span><strong>{mixLabel}</strong></div>
                     <input className="pm-input" value={mixName} onChange={(e) => setMixName(e.target.value)} placeholder="Name this mix (optional)" aria-label="Layer mix name" />
-                    <button className="btn primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save mix</button>
+                    <button className="btn primary" data-testid="save-current-combo" onClick={saveComboOnly}>Save look</button>
                   </div>
                   <div className="pm-targetcard">
                     <div className="tc-head">

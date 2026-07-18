@@ -174,7 +174,7 @@ test('Send to card stays disabled for default unverified wiring and makes no req
 
   const send = page.getByTestId('layout-send-to-card');
   await expect(send).toBeDisabled();
-  await expect(send).toContainText('Install on card');
+  await expect(send).toContainText('Save to card');
   await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
   await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
   await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup — does not change the Lightweaver card');
@@ -193,7 +193,7 @@ test('a successful push is pending until acknowledgement and records the exact i
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 5000 });
   await expect(banner).toHaveClass(/is-ok/);
-  await expect(banner).toContainText(/Installed revision \d+ on card/);
+  await expect(banner).toContainText(/Saved revision \d+ to card/);
   await expect(banner).toContainText(/zone/i);
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
@@ -245,21 +245,21 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   await page.getByTestId('layout-send-to-card').click();
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toHaveClass(/is-ok/);
-  const installed = (await banner.textContent())?.match(/Installed revision (\d+)/)?.[1];
+  const installed = (await banner.textContent())?.match(/Saved revision (\d+)/)?.[1];
   expect(installed).toBeTruthy();
 
   options.failConfig = true;
   await page.getByTestId('layout-send-to-card').click();
   await expect(banner).toBeVisible({ timeout: 5000 });
   await expect(banner).toHaveClass(/is-err/);
-  await expect(banner).toContainText(`Installed revision ${installed} remains on the card.`);
+  await expect(banner).toContainText(`Confirmed revision ${installed} remains on the card.`);
   await expect(banner.getByRole('button', { name: 'Retry' })).toBeVisible();
 
   const failedPayload = card.attemptedConfigs.at(-1);
   options.failConfig = false;
   await banner.getByRole('button', { name: 'Retry' }).click();
   await expect(banner).toHaveClass(/is-ok/);
-  await expect(banner).toContainText(`Installed revision ${installed} on card`);
+  await expect(banner).toContainText(`Saved revision ${installed} to card`);
   expect(card.attemptedConfigs.at(-1)).toEqual(failedPayload);
 });
 

@@ -17,7 +17,7 @@ test('a transient screen load failure recovers automatically', async ({ page }) 
   await page.goto('/#screen=layout');
   await page.getByRole('button', { name: 'Patterns' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Patterns & Mixes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Patterns & Looks' })).toBeVisible();
   await expect(page.getByTestId('screen-error-fallback')).toHaveCount(0);
   expect(attempts).toBeGreaterThanOrEqual(2);
 });
@@ -39,6 +39,13 @@ test('a repeated screen load failure guides the user without a reload loop', asy
   await expect(recovery.getByRole('button', { name: 'Try this screen again' })).toBeVisible();
   await expect(recovery.getByRole('button', { name: 'Open Layout' })).toBeVisible();
   await expect(recovery).not.toContainText('screen could not open');
+  // Bounded sanitized diagnostics: support code + route + error name only.
+  const supportCode = recovery.getByTestId('screen-recovery-support-code');
+  await expect(supportCode).toBeVisible();
+  await expect(supportCode).toContainText('LW-UI-102');
+  await expect(supportCode).toContainText('screen=pattern');
+  const supportText = await supportCode.textContent();
+  expect(supportText).not.toMatch(/token|password|http:\/\/192\.|lightweaver\.local/i);
   expect(attempts).toBe(2);
 
   await recovery.getByRole('button', { name: 'Open Layout' }).click();

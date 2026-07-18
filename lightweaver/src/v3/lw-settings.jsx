@@ -25,16 +25,7 @@ import {
 } from '../lib/sectionLookModel.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
-import {
-  clampHardwarePixelCount,
-  clampHardwareSectionCount,
-  countsFromDefaultCircleLayout,
-  createDefaultCircleLayout,
-  DEFAULT_CIRCLE_SECTION_LIMIT,
-  DEFAULT_CIRCLE_SECTION_COUNT,
-  DEFAULT_CIRCLE_TOTAL_PIXELS,
-  isDefaultCircleLayout,
-} from '../lib/defaultCircleLayout.js';
+import { DEFAULT_CIRCLE_SECTION_COUNT } from '../lib/defaultCircleLayout.js';
 import {
   cardHostToUrl,
   cardLoadMethodForProtocol,
@@ -55,8 +46,9 @@ import {
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
+import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { openLocalCardPage } from '../lib/cardBridge.js';
 
-const CARD_PAGE_FALLBACK = 'http://lightweaver.local/';
 const SettingsFieldContext = createContext(null);
 
   function Row({ label, hint, stack, children }) {
@@ -182,14 +174,13 @@ const SettingsFieldContext = createContext(null);
       masterHueShift, setMasterHueShift,
       motionSmoothing, setMotionSmoothing,
       gammaEnabled, setGammaEnabled,
-      strips, setStrips,
-      viewBox, setViewBox,
-      svgText,
-      patchBoard, setPatchBoard,
+      strips,
+      patchBoard,
       standaloneController, setStandaloneController,
       serializeProject, replaceProject, replaceWithNewProject,
       markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
       lastSaved,
+      autosaveStatus,
     } = useProject();
     const { tweaks, set: setTweak } = useTweaks();
     useEffect(() => {
@@ -226,9 +217,6 @@ const SettingsFieldContext = createContext(null);
        defaultLook.customHue, defaultLook.customSaturation, defaultLook.customBreathe, defaultLook.customDrift],
     );
 
-    const defaultLayoutActive = isDefaultCircleLayout(strips);
-    const editableDefaultLayout = !svgText && (defaultLayoutActive || strips.length === 0);
-    const defaultSectionCounts = defaultLayoutActive ? countsFromDefaultCircleLayout(strips) : [];
     const hardwareSectionCount = zones.length || strips.length || DEFAULT_CIRCLE_SECTION_COUNT;
     const hardwareSections = strips.length
       ? strips.map((strip, index) => ({
@@ -246,54 +234,18 @@ const SettingsFieldContext = createContext(null);
       ...(DEFAULT_STANDALONE_OUTPUTS[index] || {}),
       ...output,
     }));
+    // Outputs that actually carry pixels — what the read-only summary lists.
+    const routedOutputs = controllerOutputs.filter(output => (output.pixels || 0) > 0);
 
     const encoder = standaloneController?.controls?.encoder || {};
     const encoderDir = encoder.rotateDirection === 'clockwise-dimmer' ? 'clockwise-dimmer' : 'clockwise-brighter';
     const encoderStep = Number.isFinite(+encoder.brightnessStep) ? +encoder.brightnessStep : 18;
 
-    // ── Controller / hardware mutators (verbatim from ChipScreen) ──────
-    const applyDefaultHardwareLayout = ({ totalPixels = null, sectionCount = null, sectionPixelCounts = null } = {}) => {
-      if (!editableDefaultLayout) return;
-      const currentTotal = defaultSectionCounts.reduce((sum, count) => sum + count, 0) || config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS;
-      const nextTotal = clampHardwarePixelCount(totalPixels ?? currentTotal, currentTotal);
-      const nextSectionCount = clampHardwareSectionCount(
-        sectionCount ?? sectionPixelCounts?.length ?? defaultSectionCounts.length ?? DEFAULT_CIRCLE_SECTION_COUNT,
-        DEFAULT_CIRCLE_SECTION_COUNT,
-      );
-      const nextStrips = createDefaultCircleLayout({
-        totalPixels: nextTotal,
-        sectionCount: nextSectionCount,
-        sectionPixelCounts,
-        viewBox: viewBox || '0 0 640 400',
-      });
-      setViewBox(viewBox || '0 0 640 400');
-      setStrips(nextStrips);
-      setPatchBoard(normalizePatchBoard(null, nextStrips));
-      setStandaloneController(prev => {
-        const current = prev || {};
-        const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
-          const previous = current.outputs?.[index] || {};
-          return {
-            ...base,
-            ...previous,
-            id: index === 0 ? 'out1' : base.id,
-            name: index === 0 ? 'Output 1' : base.name,
-            pixels: index === 0 ? nextTotal : 0,
-          };
-        });
-        return { ...current, outputs };
-      });
-    };
-
-    const updateDefaultSectionPixels = (index, value) => {
-      const fallbackCount = Math.max(1, Math.floor((config.led.pixels || DEFAULT_CIRCLE_TOTAL_PIXELS) / Math.max(1, hardwareSectionCount)));
-      const counts = defaultSectionCounts.length
-        ? [...defaultSectionCounts]
-        : Array.from({ length: hardwareSectionCount }, () => fallbackCount);
-      counts[index] = clampHardwarePixelCount(value, counts[index] || 1);
-      applyDefaultHardwareLayout({ sectionPixelCounts: counts });
-    };
-
+    // ── Controller mutators (card-specific calibration only) ───────────
+    // Layout/Wire is the sole editor for sections, LED counts, and output
+    // routing; Card settings only reads that result (see the read-only
+    // summary below) and edits card-side calibration such as runtime mode,
+    // color order, brightness limit, and the encoder.
     const updateController = (patch) => {
       setStandaloneController(prev => {
         const current = prev || {};
@@ -314,51 +266,8 @@ const SettingsFieldContext = createContext(null);
       });
     };
 
-    const updateOutput = (index, patch) => {
-      setStandaloneController(prev => {
-        const current = prev || {};
-        const outputs = DEFAULT_STANDALONE_OUTPUTS.map((output, i) => ({
-          ...output,
-          ...((current.outputs || [])[i] || {}),
-        }));
-        outputs[index] = { ...(outputs[index] || DEFAULT_STANDALONE_OUTPUTS[index]), ...patch };
-        return { ...current, outputs };
-      });
-    };
-
-    const routeAsSingleOutput = () => {
-      setStandaloneController(prev => {
-        const current = prev || {};
-        const totalPixels = config.led.pixels || hardwareSections.reduce((sum, section) => sum + section.pixels, 0) || DEFAULT_CIRCLE_TOTAL_PIXELS;
-        const previous = current.outputs?.[0] || {};
-        const outputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => ({
-          ...base,
-          ...((current.outputs || [])[index] || {}),
-          name: index === 0 ? (previous.name || 'Main chain') : base.name,
-          pixels: index === 0 ? totalPixels : 0,
-        }));
-        return { ...current, outputs };
-      });
-    };
-
-    const routeBySections = () => {
-      setStandaloneController(prev => {
-        const current = prev || {};
-        const nextOutputs = DEFAULT_STANDALONE_OUTPUTS.map((base, index) => {
-          const section = hardwareSections[index];
-          const previous = current.outputs?.[index] || {};
-          return {
-            ...base,
-            ...previous,
-            name: section?.name || previous.name || base.name,
-            pixels: section ? section.pixels : 0,
-          };
-        });
-        return { ...current, outputs: nextOutputs };
-      });
-    };
-
     const persistHost = (value) => { setCardHost(value); writeStoredCardHost(value); };
+    const openLayoutWire = () => { window.location.hash = '#screen=layout&mode=wire'; };
 
     const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
     const directPushAvailable = loadMethod.directPush;
@@ -412,8 +321,12 @@ const SettingsFieldContext = createContext(null);
 
     const openCardInstaller = () => {
       try {
-        const url = buildCardConfigHandoffUrl(cardHost, runtimePackage);
-        window.open(url, '_blank', 'noopener,noreferrer');
+        const url = new URL(buildCardConfigHandoffUrl(cardHost, runtimePackage));
+        const result = openLocalCardPage(cardHost, { path: `${url.pathname}${url.search}${url.hash}`, reason: 'card-installer' });
+        if (!result.ok && result.reason === 'popup-blocked') {
+          setStatusKind('err');
+          setStatus('The browser blocked the card window. Allow popups for Studio, then try again.');
+        }
       } catch (error) {
         setStatusKind('err');
         setStatus(error?.reason === 'config-too-large'
@@ -438,7 +351,7 @@ const SettingsFieldContext = createContext(null);
     // ── Project file + library (verbatim from ChipScreen) ──────────────
     const saveProjectFile = async () => {
       const data = serializeProject();
-      const ok = await downloadJsonFile(`${safeProjectName || 'lightweaver'}-studio-project.lwproj.json`, data);
+      const ok = await downloadJsonFile(canonicalProjectFileName(projectName), data);
       if (ok) markProjectPersisted('file');
       setStatusKind(ok ? 'ok' : 'err');
       setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
@@ -594,7 +507,7 @@ const SettingsFieldContext = createContext(null);
                       {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Saving…' : cardWrite.status === 'failed' ? 'Retry save' : 'Save to card'}</button>}
                       {!directPushAvailable && <button className="btn" onClick={openCardInstaller}>{I.open}Open card installer</button>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
-                      <button className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>{I.open}Open card page</button>
+                      <button className="btn ghost-sm" onClick={() => { const result = openLocalCardPage(cardHost); if (!result.ok && result.reason === 'popup-blocked') { setStatusKind('err'); setStatus('The browser blocked the card window. Allow popups for Studio, then try again.'); } }}>{I.open}Open card page</button>
                       <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=install'; }}>{I.bolt}Flash chip</button>
                       <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=support'; }}>{I.info}Installer guide</button>
                     </div>
@@ -653,24 +566,31 @@ const SettingsFieldContext = createContext(null);
                   <Row label="Runtime mode" hint="What the card plays from on boot"><Seg opts={RUNTIME_LABELS} val={runtimeLabel} set={(o) => updateController({ runtimeMode: RUNTIME_VALUE[o] })} /></Row>
                   <Row label="Color order" hint="This card is calibrated to RGB"><Seg opts={COLOR_ORDER_LABELS} val={colorOrderLabel} set={updateColorOrder} /></Row>
                   <Row label="Brightness limit" hint="Max firmware output for sellable pieces"><Range value={brightnessLimit255} set={(v) => updateController({ led: { brightnessLimit: Math.max(0.05, Math.min(1, v / 255)) } })} min={32} max={255} step={1} fmt={(v) => `${v}`} /></Row>
-                  <Row label="LED output" hint="Firmware uses fixed connector pins" stack>
-                    <div className="set-output">
-                      <FieldInput aria-label="LED output name" className="pm-input" value={controllerOutputs[0]?.name || 'Output 1'} onChange={(e) => updateOutput(0, { name: e.target.value })} style={{ flex: 2 }} />
-                      <div className="set-outfield"><FieldInput aria-label="LED output GPIO" className="num-input" type="number" min="0" max="48" value={controllerOutputs[0]?.pin ?? 16} onChange={(e) => updateOutput(0, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
-                      <div className="set-outfield"><FieldInput aria-label="LED output pixels" className="num-input" type="number" min="0" max="2048" value={controllerOutputs[0]?.pixels || 0} onChange={(e) => updateOutput(0, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
+                  <Row label="Layout & outputs" hint="Read-only — Layout owns structure and routing" stack>
+                    <div className="set-outputs">
+                      <div className="set-outputs-toolbar">
+                        <div data-testid="output-routing-summary">
+                          <strong>{config.led.pixels} LEDs · {hardwareSections.length || hardwareSectionCount} sections</strong>
+                          <span>{routedOutputs.length || 1} {routedOutputs.length === 1 ? 'output' : 'outputs'} · {config.led.outputs.reduce((sum, output) => sum + (output.pixels || 0), 0)} LEDs routed</span>
+                        </div>
+                        <div className="set-actions">
+                          <button className="btn" type="button" onClick={openLayoutWire}>Edit in Layout</button>
+                        </div>
+                      </div>
+                      <div className="set-outputs-list">
+                        {routedOutputs.map((output, index) => (
+                          <div key={output.id || index} className="set-output-row" data-testid="output-summary-row">
+                            <span className="pm-input set-output-ro">{output.name || `Output ${index + 1}`}</span>
+                            <span className="set-outfield"><span className="num-input set-output-ro">{output.pin ?? 0}</span><span>GPIO</span></span>
+                            <span className="set-outfield"><span className="num-input set-output-ro">{output.pixels || 0}</span><span>pixels</span></span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </Row>
                   <RingSummary sections={hardwareSections} targets={sectionTargets} activeLookLabel={activeSavedLook?.label || 'Current look'} />
                 </section>}
 
-                {showPreferences && <section className="card set-card">
-                  <div className="sec-h"><span className="t">Project file</span></div>
-                  <Row label="Save project" hint="Download a .lwproj.json file you can reload"><button className="btn" onClick={saveProjectFile}>{I.download}Download .lwproj.json</button></Row>
-                  <Row label="Load project" hint="Import a .lwproj.json file">
-                    <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Choose file…</button>
-                    <FieldInput ref={importRef} type="file" accept=".json,.lwproj.json,.lw.json" className="set-file-input" onChange={importProjectFile} />
-                  </Row>
-                </section>}
               </div>
             </div>
 
@@ -684,9 +604,27 @@ const SettingsFieldContext = createContext(null);
                   <Row label="Brightness step" hint="How much each click changes brightness"><Range value={encoderStep} set={(v) => updateController({ controls: { encoder: { brightnessStep: Math.max(1, Math.min(64, Math.round(v))) } } })} min={1} max={64} step={1} fmt={(v) => `${v}`} /></Row>
                 </section>}
 
-                {/* Project library — browser-saved Studio projects */}
-                {showPreferences && <section className="card set-card">
-                  <div className="sec-h"><span className="t">Project library</span><span className="m">{formatSavedTime(lastSaved)}</span></div>
+                {/* Projects — ONE consolidated persistence area: recovery-copy
+                    status, browser library, import, and export. Autosave is the
+                    automatic recovery copy, never the user's intentional save. */}
+                {showPreferences && <section className="card set-card" data-testid="projects-area">
+                  <div className="sec-h"><span className="t">Projects</span><span className="m">{formatSavedTime(lastSaved)}</span></div>
+                  <Row label="Recovery copy" hint="Automatic backup Studio keeps while you work — not your saved project" stack>
+                    <div className="set-recovery" data-testid="autosave-status">
+                      <span>{formatSavedTime(lastSaved)}{autosaveStatus?.restoredFrom ? ` · restored from ${autosaveStatus.restoredFrom === 'legacy' ? 'an older Studio save' : 'the recovery copy'} this session` : ''}</span>
+                      {autosaveStatus?.quarantine && (
+                        <span className="set-recovery-warn" data-testid="autosave-quarantine">
+                          A saved copy from a newer or damaged Studio session could not be opened. It was preserved untouched so support can recover it.
+                          <button type="button" className="btn ghost-sm" onClick={() => autosaveStatus.dismissQuarantine()}>Dismiss</button>
+                        </span>
+                      )}
+                    </div>
+                  </Row>
+                  <Row label="Project file" hint={`Portable ${'.lw.json'} file — export to keep or share, import to open`}>
+                    <button className="btn" onClick={saveProjectFile}>{I.download}Export project</button>
+                    <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Import project</button>
+                    <FieldInput ref={importRef} type="file" accept={PROJECT_IMPORT_ACCEPT} className="set-file-input" onChange={importProjectFile} />
+                  </Row>
                   <Row label="Browser library" hint="Editable Studio projects in this browser" stack>
                     <div className="set-actions">
                       <button className="btn" onClick={saveProjectToLibrary}>Save current</button>
@@ -715,50 +653,6 @@ const SettingsFieldContext = createContext(null);
               </div>
 
               <div className="set-col">
-                {/* Hardware layout editor — total LEDs, sections, routing */}
-                {showCard && <section className="card set-card">
-                  <div className="sec-h"><span className="t">Hardware layout</span><span className="m">{config.led.pixels} pixels · {hardwareSections.length || hardwareSectionCount} sections</span></div>
-                  <Row label="Total LEDs" hint={editableDefaultLayout ? 'used by the default circles' : 'from the imported layout'}>
-                    <FieldInput className="num-input" type="number" min="1" max="2048" value={config.led.pixels} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ totalPixels: e.target.value })} />
-                  </Row>
-                  <Row label="Sections" hint={editableDefaultLayout ? 'zones on the chip' : 'from strips and patches'}>
-                    <FieldInput className="num-input" type="number" min="1" max={DEFAULT_CIRCLE_SECTION_LIMIT} value={hardwareSections.length || hardwareSectionCount} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ sectionCount: e.target.value })} />
-                  </Row>
-                  <Row label="Section LEDs" hint={editableDefaultLayout ? 'inner and outer counts' : 'read from layout'} stack>
-                    <div className="set-seccounts">
-                      {hardwareSections.map((section, index) => (
-                        <label key={section.id} className="set-seccount">
-                          <span>{section.name}</span>
-                          <input className="num-input" type="number" min="1" max="2048" value={section.pixels} disabled={!editableDefaultLayout} onChange={(e) => updateDefaultSectionPixels(index, e.target.value)} />
-                        </label>
-                      ))}
-                    </div>
-                  </Row>
-                  <Row label="Output routing" hint="GPIO and pixel count per output" stack>
-                    <div className="set-outputs">
-                      <div className="set-outputs-toolbar">
-                        <div data-testid="output-routing-summary">
-                          <strong>{controllerOutputs.length} {controllerOutputs.length === 1 ? 'output' : 'outputs'}</strong>
-                          <span>{config.led.outputs.reduce((sum, output) => sum + output.pixels, 0)} LEDs routed</span>
-                        </div>
-                        <div className="set-actions">
-                          <button className="btn ghost-sm" type="button" onClick={routeAsSingleOutput}>Single output</button>
-                          <button className="btn ghost-sm" type="button" onClick={routeBySections}>Split by sections</button>
-                        </div>
-                      </div>
-                      <div className="set-outputs-list">
-                        {controllerOutputs.map((output, index) => (
-                          <div key={output.id || index} className="set-output-row">
-                            <FieldInput className="pm-input" value={output.name || `Output ${index + 1}`} onChange={(e) => updateOutput(index, { name: e.target.value })} aria-label={`Output ${index + 1} name`} />
-                            <div className="set-outfield"><FieldInput aria-label={`Output ${index + 1} GPIO`} className="num-input" type="number" min="0" max="48" value={output.pin ?? 0} onChange={(e) => updateOutput(index, { pin: +e.target.value })} style={{ width: 56 }} /><span>GPIO</span></div>
-                            <div className="set-outfield"><FieldInput aria-label={`Output ${index + 1} pixels`} className="num-input" type="number" min="0" max="2048" value={output.pixels || 0} onChange={(e) => updateOutput(index, { pixels: +e.target.value })} style={{ width: 70 }} /><span>pixels</span></div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </Row>
-                </section>}
-
                 {/* Advanced — designer config JSON disclosure */}
                 {showAdvanced && <section className="card set-card">
                   <div className="sec-h"><span className="t">Advanced</span><span className="m">{(configJson.length / 1024).toFixed(1)} KB</span></div>

@@ -4,7 +4,8 @@
    from the SAMPLE arrays to the live app's real playlist, real pattern bank,
    and real card handlers. No visual structure was altered. */
 import React, { useCallback, useMemo, useReducer, useRef, useState } from 'react';
-import { I } from './lw-shared.jsx';
+import { I, JourneyHint } from './lw-shared.jsx';
+import { openLocalCardPage } from '../lib/cardBridge.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -94,7 +95,7 @@ function realPatternShape(patternId) {
   return REAL_PATTERN_BY_ID.get(patternId) || adaptPattern(patternId);
 }
 
-  function PlaylistScreen({ connected }) {
+  function PlaylistScreen({ connected, go }) {
     const {
       projectId,
       projectName,
@@ -414,7 +415,7 @@ function realPatternShape(patternId) {
       switch (playlistStatus?.failure?.actionId) {
         case 'update-card': return () => { window.location.hash = '#screen=flash'; };
         case 'reconnect-card': return openConnectionCenter;
-        case 'open-card-page': return () => window.open(cardHostToUrl(host), '_blank');
+        case 'open-card-page': return () => openLocalCardPage(host);
         case 'retry': return playlistStatus?.recoveryFailure
           ? recoverPhysicalOutput
           : playlistStatus?.resetLive
@@ -487,7 +488,7 @@ function realPatternShape(patternId) {
         setPlaylistStatus(makePlaylistPushErrorState(error, { host, runtimePackage }));
       }
     };
-    const openCard = () => window.open(cardHostToUrl(host), '_blank');
+    const openCard = () => openLocalCardPage(host);
     // "Adjust" on the wiring-mismatch banner: jump straight to Layout → Size,
     // where the per-strip LED counts live, so the user can change the number
     // instead of accepting the card's current wiring. Deep-linked via the hash
@@ -599,11 +600,17 @@ function realPatternShape(patternId) {
               <div className="pm-title">
                 <h1>Playlist</h1>
                 <p>The order the dial press cycles through on the card. The first look starts on boot.</p>
+                <JourneyHint step={3} nextLabel="Save to card & verify" onNext={() => go?.('card')} />
               </div>
               <div className="pm-actions">
                 <button className="btn" disabled={recoveryPending} onClick={resetLiveOutput}>{I.refresh}Reset live</button>
-                <button className="btn primary" disabled={!connected || playlistSyncing || recoveryPending || Boolean(hardwareConfigurationIssue)} onClick={() => loadPlaylistToCard()}>
-                  {I.bolt}{playlistSyncing ? 'Loading…' : 'Load playlist to card'}
+                <button
+                  className="btn primary"
+                  disabled={!connected || playlistSyncing || recoveryPending || Boolean(hardwareConfigurationIssue)}
+                  title={!connected ? 'Connect the card to save this playlist onto it' : undefined}
+                  onClick={() => loadPlaylistToCard()}
+                >
+                  {I.bolt}{playlistSyncing ? 'Saving…' : 'Save playlist to card'}
                 </button>
                 <div className="pm-menu">
                   <button className="btn" disabled={Boolean(hardwareConfigurationIssue)} onClick={copyConfig}>{I.copy}Copy chip config</button>
@@ -721,8 +728,8 @@ function realPatternShape(patternId) {
                         </div>
                         <span className="pl-art" style={{ background: p.grad }} />
                         <div className="pl-copy">
-                          <strong>{item.label}{item.type === 'combo' && <span className="mixtag">mix</span>}</strong>
-                          <span>{item.type === 'combo' ? "section mix" : `${p.label} across the piece`}</span>
+                          <strong>{item.label}{item.type === 'combo' && <span className="mixtag">look</span>}</strong>
+                          <span>{item.type === 'combo' ? "section look" : `${p.label} across the piece`}</span>
                         </div>
                         <div className="pl-actions">
                           <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} disabled={recoveryPending} onClick={() => setLiveItem(item)}>Live</button>
@@ -744,19 +751,19 @@ function realPatternShape(patternId) {
 
               <aside className="pm-aside">
                 <div className="card pm-pane">
-                  <div className="sec-h"><span className="t">Layer mixes</span><span className="m">{mixShapes.length}</span></div>
+                  <div className="sec-h"><span className="t">Saved looks</span><span className="m">{mixShapes.length}</span></div>
                   {mixShapes.map((m) => {
                     const added = playlistContainsCombo(playlist, m.id);
                     return (
                       <button key={m.id} className="pl-source" onClick={() => addCombo(savedLookById.get(m.id))} disabled={added || recoveryPending}>
                         <span className="pl-src-art" style={{ background: m.grad }} />
-                        <span className="pl-src-nm">{m.label}<span className="mixtag">mix</span></span>
+                        <span className="pl-src-nm">{m.label}<span className="mixtag">look</span></span>
                         <span className="pl-src-add">{added ? I.check : I.plus}</span>
                       </button>
                     );
                   })}
-                  {!mixShapes.length && <p className="pl-empty">All mixes added. Save more on Patterns.</p>}
-                  {mixShapes.length > 0 && !mixesRemaining && <p className="pl-empty">All mixes added. Save more on Patterns.</p>}
+                  {!mixShapes.length && <p className="pl-empty">No saved looks yet — create them on Patterns.</p>}
+                  {mixShapes.length > 0 && !mixesRemaining && <p className="pl-empty">All saved looks are in the playlist. Save more on Patterns.</p>}
                 </div>
 
                 <div className="card pm-pane">
