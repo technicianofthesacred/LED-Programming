@@ -1661,6 +1661,23 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
       segment["direction"] = source.reversed ? "reverse" : "forward";
     }
   }
+  // Applied LED output diagnostics — the bench acceptance fixture reads these
+  // from GET /api/status before/after every source change (deployment
+  // checklist, output-correctness fixture). Same contract as firmware-info.
+  JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
+  lwOutput["contract"] = 1;
+  lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
+  lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
+  lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["powerLimited"] = runtimeOutputPowerLimited();
+  lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
+  lwOutput["gammaValue"] = runtimeOutputGammaValue();
+  lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();
+  lwOutput["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  lwOutput["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  lwOutput["measuredFps"] = runtimeOutputMeasuredFps();
+  lwOutput["dithering"] = runtimeOutputDithering();
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["hostname"] = config.activeHostname;
   doc["wifi"]["ip"] = config.activeIp;

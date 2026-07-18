@@ -69,7 +69,7 @@ String buildInfoJson() {
   doc["live"] = frameSourceIsStreaming();
   doc["lc"] = 1;                      // light capability bits — RGB only
   doc["leds"]["count"] = totalPixels;
-  doc["leds"]["fps"] = 30;            // our renderer ceiling
+  doc["leds"]["fps"] = runtimeOutputMeasuredFps();  // measured, not the renderer ceiling
   doc["leds"]["rgbw"] = false;
   doc["leds"]["wv"] = 0;
   doc["leds"]["pwr"] = 0;
@@ -95,11 +95,18 @@ String buildInfoJson() {
   doc["lwLive"]["source"] = src == 1 ? "wled-realtime"
                           : src == 2 ? "artnet" : "self";
   doc["lwOutput"]["contract"] = 1;
+  doc["lwOutput"]["sourceClass"] = runtimeOutputSourceClass();
+  doc["lwOutput"]["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
+  doc["lwOutput"]["brightnessByte"] = runtimeOutputBrightnessByte();
+  doc["lwOutput"]["brightnessScale"] = runtimeOutputBrightnessScale();
+  doc["lwOutput"]["powerLimited"] = runtimeOutputPowerLimited();
   doc["lwOutput"]["gammaEnabled"] = runtimeOutputGammaEnabled();
   doc["lwOutput"]["gammaValue"] = runtimeOutputGammaValue();
   doc["lwOutput"]["calibration"]["red"] = runtimeOutputCalibrationRed();
   doc["lwOutput"]["calibration"]["green"] = runtimeOutputCalibrationGreen();
   doc["lwOutput"]["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  doc["lwOutput"]["measuredFps"] = runtimeOutputMeasuredFps();
+  doc["lwOutput"]["dithering"] = runtimeOutputDithering();
   String out;
   serializeJson(doc, out);
   return out;

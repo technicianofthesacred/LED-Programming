@@ -16,6 +16,7 @@ import { resolve } from 'node:path';
 const firmwareDir = resolve(import.meta.dirname, '../src');
 const mainSource = readFileSync(resolve(firmwareDir, 'main.cpp'), 'utf8');
 const webSource = readFileSync(resolve(firmwareDir, 'LightweaverWeb.cpp'), 'utf8');
+const statusSource = readFileSync(resolve(firmwareDir, 'LightweaverStorage.cpp'), 'utf8');
 const jsonSource = readFileSync(resolve(firmwareDir, 'LightweaverWledJsonApi.cpp'), 'utf8');
 const runtimeHeader = readFileSync(resolve(firmwareDir, 'LightweaverRuntimeApi.h'), 'utf8');
 
@@ -26,7 +27,7 @@ for (const field of [
 ]) {
   for (const [endpoint, source] of [
     ['/api/firmware-info', mainSource],
-    ['/api/status', webSource],
+    ['/api/status', statusSource],
     ['/json/info', jsonSource],
   ]) {
     assertStrict.match(source, new RegExp(`\\[\"${field}\\"\\]`),
@@ -37,8 +38,8 @@ assertStrict.match(mainSource, /doc\["outputColor"\]\["contract"\]\s*=\s*1/,
   'firmware-info should advertise outputColor contract 1');
 assertStrict.match(mainSource, /doc\["capabilities"\]\["outputColor"\]\s*=\s*1/,
   'firmware-info should advertise outputColor capability 1');
-assertStrict.match(webSource, /\\"lwOutput\\"/,
-  '/api/status should include lwOutput diagnostics');
+assertStrict.match(statusSource, /doc\["lwOutput"\]\.to<JsonObject>\(\)/,
+  '/api/status (runtimeStatusJson) should build the lwOutput diagnostics object');
 assertStrict.match(jsonSource, /doc\["lwOutput"\]/,
   '/json/info should include lwOutput diagnostics');
 assertStrict.match(jsonSource, /doc\["leds"\]\["fps"\]\s*=\s*runtimeOutputMeasuredFps\s*\(\s*\)/,

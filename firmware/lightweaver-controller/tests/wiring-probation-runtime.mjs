@@ -55,7 +55,18 @@ assert.match(discoverySetup, /start \+ LW_DISCOVERY_BATCH_SIZE/);
 assert.match(discoverySetup, /addLedsForPin/);
 assert.match(discoverySetup, /discoveryPinAvailable\(DISCOVERY_OUTPUT_PINS\[i\]\)/,
   'discovery must never drive a GPIO currently assigned to a physical control');
-assert.match(discoverySetup, /FastLED\.setBrightness\(LW_DISCOVERY_BRIGHTNESS\)/);
+// Discovery brightness is now applied through the central transmit path:
+// setup renders via showSafeDiscoveryFrame(), whose transmit call pins the
+// capped LW_DISCOVERY_BRIGHTNESS (transmitPhysicalLeds -> FastLED.setBrightness).
+assert.match(discoverySetup, /showSafeDiscoveryFrame\(\)/);
+const discoveryFrameStart = main.indexOf('void showSafeDiscoveryFrame() {');
+const discoveryFrameEnd = main.indexOf('\n}', discoveryFrameStart);
+assert.ok(discoveryFrameStart > -1 && discoveryFrameEnd > discoveryFrameStart);
+const discoveryFrame = main.slice(discoveryFrameStart, discoveryFrameEnd);
+assert.match(discoveryFrame, /transmitPhysicalLeds\(LW_DISCOVERY_BRIGHTNESS/,
+  'discovery frames must transmit at the capped discovery brightness');
+assert.match(main, /void transmitPhysicalLeds\(uint8_t brightnessByte[^]*?FastLED\.setBrightness\(brightnessByte\)/,
+  'the central transmit path must apply the requested brightness byte');
 
 const safeDiscoveryStart = main.indexOf('String runtimeSafeDiscoveryOutput(uint8_t batchIndex)');
 const safeDiscoveryEnd = main.indexOf('bool runtimeStopSafeDiscovery', safeDiscoveryStart);
