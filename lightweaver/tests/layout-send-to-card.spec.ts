@@ -136,8 +136,12 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  // The seeded project is fully verified, so once the autosave restores the
+  // panel auto-expands the install step itself. Wait for that settled state —
+  // sampling aria-expanded early and clicking races the auto-expand effect,
+  // and the late click toggles the step closed again (CI-only flake).
   const reloadedInstallToggle = page.getByRole('region', { name: 'Step 5: Review and install' }).locator('.lw-step-toggle');
-  if (await reloadedInstallToggle.getAttribute('aria-expanded') !== 'true') await reloadedInstallToggle.click();
+  await expect(reloadedInstallToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
