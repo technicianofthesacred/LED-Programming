@@ -48,6 +48,15 @@ async function activeCommissioning(page) {
 }
 
 async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}) {
+  // The launch click persists the project (library record + lifecycle record +
+  // commissioning registry) BEFORE the pending-launch record is written, so on
+  // slow runners the key may not exist the instant the click resolves. Wait for
+  // it instead of sampling once — the launch is already in flight.
+  await page.waitForFunction(
+    () => Object.keys(localStorage).some(key => key.startsWith('lightweaver.bridge.pending.v1.')),
+    undefined,
+    { timeout: 8000 },
+  );
   await page.evaluate(extra => {
     return (async () => {
       const pendingKey = Object.keys(localStorage).find(key => key.startsWith('lightweaver.bridge.pending.v1.'));
