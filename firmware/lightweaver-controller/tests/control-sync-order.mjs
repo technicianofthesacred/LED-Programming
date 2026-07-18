@@ -172,7 +172,7 @@ assert.match(
   /runtimeSetBrightnessZ\s*\(\s*zoneTarget\s*,/,
   'card controls should route brightness to the selected zone or zone broadcast',
 );
-const controlHandler = extractFunction(source, 'handleControlPost');
+const controlHandler = responseBody;
 assert.match(
   controlHandler,
   /out\s*\[\s*"brightness"\s*\]\s*=\s*runtimeGetBrightnessZ\s*\(\s*zoneTarget\s*\)/,
