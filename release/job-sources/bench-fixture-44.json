@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "jobId": "bench-fixture-44",
+  "label": "Bench fixture · 44 LEDs",
+  "artwork": "Bench fixture",
+  "batch": "rehearsal",
+  "firmware": {
+    "target": "esp32-s3-n16r8",
+    "version": "1.0.0",
+    "buildId": "0a4b3382a64cc7108b5ac8a5dafe5dbfbd02c7dd",
+    "minimumVersion": "1.0.0"
+  },
+  "project": {
+    "id": "bench-fixture",
+    "revision": 1,
+    "fingerprint": "f01fb56f1cfdd572",
+    "restoreSnapshot": {
+      "version": 4,
+      "id": "bench-fixture",
+      "name": "Bench fixture",
+      "layout": {
+        "strips": [
+          {
+            "id": "strip-1",
+            "name": "Bench strip",
+            "pixelCount": 44
+          }
+        ],
+        "patchBoard": null,
+        "wiring": {
+          "version": 1,
+          "locked": true,
+          "verified": true,
+          "controllerAnchor": null,
+          "migrationWarnings": [],
+          "outputs": [
+            {
+              "id": "out1",
+              "name": "Bench strip",
+              "pin": 16,
+              "runIds": [
+                "run-strip-1"
+              ]
+            }
+          ],
+          "runs": [
+            {
+              "id": "run-strip-1",
+              "type": "strip",
+              "verified": true,
+              "source": {
+                "stripId": "strip-1",
+                "from": 0,
+                "to": 43
+              },
+              "directionPolicy": "flexible",
+              "physicalDirection": "source-forward",
+              "seamLed": null
+            }
+          ]
+        }
+      },
+      "devices": {
+        "standaloneController": {
+          "outputs": [
+            {
+              "id": "out1",
+              "name": "Bench strip",
+              "pin": 16,
+              "pixels": 44
+            }
+          ],
+          "led": {
+            "type": "WS2815",
+            "colorOrder": "GRB",
+            "brightnessLimit": 0.35
+          },
+          "controls": {
+            "encoder": {
+              "a": 4,
+              "b": 5,
+              "press": 0,
+              "alternatePress": 6,
+              "rotateDirection": "clockwise-brighter",
+              "brightnessStep": 18
+            },
+            "previous": 7,
+            "next": 8,
+            "blackout": 9,
+            "brightness": -1,
+            "statusLed": 2
+          },
+          "defaultLook": {
+            "patternId": "aurora",
+            "brightness": 1,
+            "speed": 1,
+            "hueShift": 0,
+            "customHue": 32,
+            "customSaturation": 230,
+            "customBreathe": false,
+            "customDrift": false
+          },
+          "looks": [],
+          "playlist": [
+            {
+              "id": "aurora",
+              "type": "pattern",
+              "patternId": "aurora",
+              "label": "Aurora",
+              "enabled": true,
+              "createdAt": 0
+            }
+          ]
+        }
+      }
+    }
+  },
+  "configuration": {
+    "app": "Lightweaver",
+    "format": "lightweaver-card-runtime-package",
+    "version": 1,
+    "config": {
+      "version": 1,
+      "mode": "website-flash",
+      "piece": {
+        "id": "bench-fixture",
+        "name": "Bench fixture"
+      },
+      "projectRevision": 1,
+      "projectFingerprint": "f01fb56f1cfdd572",
+      "productionJobId": "bench-fixture-44",
+      "productionJobDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "led": {
+        "pixels": 44,
+        "outputs": [
+          {
+            "id": "out1",
+            "name": "Bench strip",
+            "pin": 16,
+            "pixels": 44,
+            "direction": "forward",
+            "segments": [
+              {
+                "id": "run-strip-1",
+                "count": 44,
+                "direction": "forward"
+              }
+            ]
+          }
+        ],
+        "colorOrder": "GRB",
+        "brightnessLimit": 0.35,
+        "maxMilliamps": 1500,
+        "outputGammaEnabled": false,
+        "outputGammaValue": 2.2,
+        "calibration": {
+          "red": 1,
+          "green": 1,
+          "blue": 1
+        }
+      },
+      "controls": {
+        "encoder": {
+          "a": 4,
+          "b": 5,
+          "press": 0,
+          "alternatePress": 6,
+          "rotateDirection": "clockwise-brighter",
+          "brightnessStep": 18,
+          "patternCycleIds": [
+            "aurora"
+          ]
+        },
+        "previous": 7,
+        "next": 8,
+        "blackout": 9,
+        "brightness": -1,
+        "statusLed": 2
+      },
+      "patterns": [
+        {
+          "id": "aurora",
+          "label": "Aurora",
+          "mode": "procedural"
+        }
+      ],
+      "looks": [
+        {
+          "id": "aurora",
+          "label": "Aurora",
+          "mode": "procedural",
+          "preset": "aurora",
+          "fps": 24,
+          "loop": true,
+          "fadeOutMs": 320,
+          "fadeInMs": 420,
+          "brightness": 1
+        }
+      ],
+      "startupPatternId": "aurora",
+      "zones": [
+        {
+          "id": "strip-1",
+          "label": "Bench strip",
+          "patternId": "aurora",
+          "brightness": 1,
+          "speed": 1,
+          "hueShift": 0,
+          "customHue": 32,
+          "customSaturation": 230,
+          "customBreathe": false,
+          "customDrift": false,
+          "ranges": [
+            {
+              "start": 0,
+              "count": 44
+            }
+          ]
+        }
+      ],
+      "syncZones": true
+    }
+  },
+  "expectedOutputs": [
+    {
+      "id": "out1",
+      "label": "Bench strip",
+      "pin": 16,
+      "pixels": 44,
+      "direction": "forward",
+      "colorOrder": "GRB"
+    }
+  ]
+}

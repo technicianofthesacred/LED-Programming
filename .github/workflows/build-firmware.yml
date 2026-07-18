@@ -135,6 +135,9 @@ jobs:
             --minimum-installer 1.4.0
           node scripts/sign-release-artifacts.mjs
 
+      - name: Rebuild production jobs against the freshly signed release
+        run: node scripts/rebuild-production-jobs.mjs
+
       - name: Verify signed release set
         run: |
           cd lightweaver
@@ -150,6 +153,8 @@ jobs:
             lightweaver/public/firmware/release-manifest.sig
             lightweaver/public/firmware/release-provenance.json
             lightweaver/public/firmware/releases
+            lightweaver/public/production/jobs
+            release/job-sources
           )
           if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
              test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then

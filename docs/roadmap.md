@@ -266,7 +266,7 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 - [x] Keep actual card control local to the ESP32 page unless a local bridge is intentionally added
 - [ ] Run the protected `firmware-release` signer for the latest merged firmware source; the currently committed public factory artifact is stale and the strict deploy gate must remain red until CI publishes the new signed release.
 - [ ] Deploy the root Studio only after `npm run launch:check` passes on that signed release commit, then require `PROD_CHECK_REQUIRED=1 npm run check:prod` and verify the live `#screen=production` route.
-- [ ] Publish at least one immutable signed production job (or deliberately document signed-file-only operation); the current public production job index is empty.
+- [x] Publish at least one immutable production job — `bench-fixture-44` (44-LED bench strip, GPIO 16) is published through the same-origin index and regenerated automatically against every newly signed firmware release by `scripts/rebuild-production-jobs.mjs` in the protected workflow. Detached-signature export for the offline file lane remains available via `--signing-key`.
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
 - [ ] AP mode SSID convention: `Lightweaver-XXXX` (MAC-suffix, set by firmware automatically; see ESP32 card smoke test in `docs/deployment-checklist.md`)
 - [ ] Captive portal end-to-end test from a phone on the AP
