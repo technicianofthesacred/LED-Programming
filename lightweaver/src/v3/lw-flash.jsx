@@ -419,7 +419,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     );
   }
 
-  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, embedded = false }) {
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, onCommissioningComplete, embedded = false }) {
     const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
@@ -590,6 +590,7 @@ import { openInChrome } from '../lib/openInChrome.js';
             result={null}
             link={cardLink}
             onReconnect={() => onConnectCard?.()}
+            onComplete={onCommissioningComplete}
             readProjectEvidence={readCardProjectEvidence}
             readCandidateEvidence={readCardWiringCandidateEvidence}
           />

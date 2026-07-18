@@ -16,16 +16,22 @@ test('keyboard 1/2/3 update the hash mode param and the active segment', async (
 
   await expect(page.getByTestId('layout-mode-switch')).toBeVisible();
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'false');
 
   await page.keyboard.press('2');
   await expect(page).toHaveURL(/mode=size/);
   await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-mode-draw')).not.toHaveClass(/on/);
+  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('layout-size-panel')).toBeVisible();
 
   await page.keyboard.press('3');
   await expect(page).toHaveURL(/mode=wire/);
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-mode-wire')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 
   await page.keyboard.press('1');

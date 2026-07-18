@@ -90,6 +90,7 @@ function makeInitialLayoutState(layout) {
   return {
     ...createLayoutState({
       strips: layout.strips,
+      starterPending: layout.starterPending,
       layers: layout.layers,
       layerGroups: layout.layerGroups,
       layerOrder: layout.layerOrder,
@@ -130,14 +131,17 @@ function layoutRootReducer(state, action) {
     (action.type === 'compat/set' ? physicalChangeKindForCompatField(action.field) : physicalChangeKinds[action.type]);
   const boundary = invalidateWiringVerification(state.wiring, { kind: physicalChangeKind, runIds: action.runIds });
   if (!boundary.ok) return state;
-  const invalidateWiring = next => boundary.wiring !== state.wiring ? { ...next, wiring: boundary.wiring } : next;
+  const finishMutation = next => {
+    const withWiring = boundary.wiring !== state.wiring ? { ...next, wiring: boundary.wiring } : next;
+    return physicalChangeKind ? { ...withWiring, starterPending: false } : withWiring;
+  };
   switch (action.type) {
     // Compat setter — mirrors a single useState field; never records history.
     case 'compat/set': {
       const current = state[action.field];
       const value = typeof action.value === 'function' ? action.value(current) : action.value;
       if (value === current) return state;
-      return invalidateWiring({ ...state, [action.field]: value });
+      return finishMutation({ ...state, [action.field]: value });
     }
     // Snapshot current state as one undo entry (called before a mutation).
     case 'layout/pushHistory':
@@ -149,7 +153,7 @@ function layoutRootReducer(state, action) {
     case 'layout/updatePatchBoard': {
       const board = normalizePatchBoard(state.patchBoard, state.strips);
       action.mutate(board);
-      return { ...state, patchBoard: normalizePatchBoard(board, state.strips) };
+      return finishMutation({ ...state, patchBoard: normalizePatchBoard(board, state.strips) });
     }
     case 'layout/setWiring':
       return { ...state, wiring: action.wiring };
@@ -158,6 +162,7 @@ function layoutRootReducer(state, action) {
       return {
         ...state,
         strips: action.strips,
+        starterPending: false,
         hidden: {},
         editCounts: {},
         stripCountOverrides: {},
@@ -195,7 +200,7 @@ function layoutRootReducer(state, action) {
     // Selection + any structured layout action flow through the pure reducer
     // (selection actions never create undo entries).
     default:
-      return invalidateWiring(layoutReducer(state, action));
+      return finishMutation(layoutReducer(state, action));
   }
 }
 
@@ -365,6 +370,7 @@ export function ProjectProvider({ children }) {
     layerOrder: layoutLayerOrder,
     patchBoard,
     wiring,
+    starterPending,
     selection,
   } = layout;
 
@@ -690,6 +696,7 @@ export function ProjectProvider({ children }) {
       type: 'layout/reset',
       init: {
         strips: restoredStrips,
+        starterPending: layout.starterPending === true,
         viewBox: layout.viewBox || defaults.layout.viewBox,
         svgText: layout.svgText ?? null,
         hidden: layout.hidden || {},
@@ -763,7 +770,7 @@ export function ProjectProvider({ children }) {
       id: projectId,
       name: projectName,
       layout: {
-        strips, viewBox, svgText, hidden,
+        strips, starterPending, viewBox, svgText, hidden,
         layers: layoutLayers,
         density: layoutDensity,
         pxPerMm: layoutPxPerMm,
@@ -811,7 +818,7 @@ export function ProjectProvider({ children }) {
 
     return project;
   }, [
-    projectId, projectName, strips, viewBox, svgText, hidden, patchBoard, wiring,
+    projectId, projectName, strips, starterPending, viewBox, svgText, hidden, patchBoard, wiring,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
@@ -887,6 +894,7 @@ export function ProjectProvider({ children }) {
     <ProjectContext.Provider value={{
       // Layout
       strips, setStrips,
+      starterPending,
       viewBox, setViewBox,
       svgText, setSvgText,
       hidden,  setHidden,

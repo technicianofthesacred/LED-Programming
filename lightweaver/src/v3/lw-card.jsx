@@ -61,7 +61,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
       commissioningAction = { label: 'Reconnect installed card', section: 'install' };
     }
   } else if (commissioningFlow?.stage === 'check-lights') {
-    commissioningAction = { label: 'Test lights', section: 'workshop' };
+    commissioningAction = { label: 'Test lights', section: 'install' };
   }
 
   let presentation;
@@ -236,7 +236,14 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
 
   const cardProps = { connected, cardHost, cardLink, onConnectCard };
   let content;
-  if (route.section === 'install') content = <AutomaticInstallScreen embedded cardLink={cardLink} onConnectCard={onConnectCard} />;
+  if (route.section === 'install') content = (
+    <AutomaticInstallScreen
+      embedded
+      cardLink={cardLink}
+      onConnectCard={onConnectCard}
+      onCommissioningComplete={() => onOpenSection('overview')}
+    />
+  );
   else if (route.section === 'settings') content = <SettingsScreen embedded mode="card" {...cardProps} />;
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;

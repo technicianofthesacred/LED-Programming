@@ -1,7 +1,6 @@
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { samplePath as libSamplePath } from '../../../lib/mapper.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
-import { isDefaultCircleLayout } from '../../../lib/defaultCircleLayout.js';
 import { createPrimitiveStripDefinition, DEFAULT_STARTER_PIXEL_COUNT } from '../../../lib/layoutPrimitives.js';
 import {
   STRIP_COLORS,
@@ -84,6 +83,7 @@ export function useLayoutState() {
     usbLedConnected,
     usbLedStatus,
     wiring,
+    starterPending,
     replaceLayoutGeometry,
   } = project;
 
@@ -187,9 +187,7 @@ export function useLayoutState() {
   const existingStrip = selLayer ? strips.find(s => stripSourceKey(s) === selLayer.layerId) : null;
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
-  const defaultCircleLayoutActive = !svgText && layers.length === 0 && isDefaultCircleLayout(strips);
-  const starterLayoutActive = !svgText && layers.length === 0 && !wiring.locked &&
-    (strips.length === 0 || defaultCircleLayoutActive);
+  const starterLayoutActive = starterPending && !svgText && layers.length === 0 && !wiring.locked;
   const selectedStrips = useMemo(() => {
     const selected = new Set(selectedStripIds);
     return orderedStrips.filter(s => selected.has(s.id));
@@ -278,7 +276,7 @@ export function useLayoutState() {
     selStripId, selLayerId, selectedStripIds,
     pathSel, pathSelName, stripSelectionName,
     orderedStrips, selectedStrips,
-    totalLeds, defaultCircleLayoutActive, starterLayoutActive, usbLedMaxPixels,
+    totalLeds, starterLayoutActive, usbLedMaxPixels,
     createStarterPrimitive, clearStarterLayout,
     expandedStrips, setExpandedStrips,
     svgRef, artworkRef, vpRef, stripListRef,

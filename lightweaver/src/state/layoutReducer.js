@@ -45,6 +45,7 @@ export function createLayoutState(init = {}) {
   const strips = Array.isArray(init.strips) ? [...init.strips] : [];
   return {
     strips,
+    starterPending: init.starterPending === true,
     layers: init.layers || [],
     layerGroups: init.layerGroups || [],
     layerOrder: init.layerOrder || [],
@@ -507,6 +508,7 @@ export function layoutReducer(state, action) {
 export function makeLayoutSnapshot(state) {
   return {
     strips: state.strips.map(({ pixels, ...rest }) => rest),
+    starterPending: state.starterPending === true,
     layers: state.layers,
     layerGroups: state.layerGroups,
     layerOrder: state.layerOrder,
@@ -532,6 +534,7 @@ export function applyLayoutSnapshot(state, snap, rebuild = identityRebuild) {
   return {
     ...state,
     strips: snap.strips.map(s => rebuild(s)),
+    starterPending: snap.starterPending === true,
     layers: snap.layers,
     layerGroups: snap.layerGroups,
     layerOrder: snap.layerOrder,

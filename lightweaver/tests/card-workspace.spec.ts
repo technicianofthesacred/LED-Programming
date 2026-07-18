@@ -13,9 +13,10 @@ async function dispatchCardLink(page, events) {
   }, events);
 }
 
-async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test') {
+async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed') {
   await page.evaluate(async requestedProgress => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
+    const startedAt = Date.now();
     const projectRecord = {
       id: 'card-workspace-project',
       updatedAt: 100,
@@ -40,21 +41,23 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
       projectRecord,
       projectRevision: 7,
       flowId: `flow-card-${requestedProgress}-123456789`,
-      now: 10,
-    }), installed, { now: 20 });
-    if (requestedProgress === 'load-project' || requestedProgress === 'test') {
+      now: startedAt,
+    }), installed, { now: startedAt + 1 });
+    if (requestedProgress === 'load-project' || requestedProgress === 'test' || requestedProgress === 'test-installed') {
       flow = api.acknowledgeCommissionedCard(flow, {
         id: installed.cardId,
         firmwareVersion: installed.firmwareVersion,
         buildId: installed.buildId,
-      }, { now: 30 }).flow;
+      }, { now: startedAt + 2 }).flow;
     }
-    if (requestedProgress === 'test') {
+    if (requestedProgress === 'test' || requestedProgress === 'test-installed') {
       flow = {
         ...flow,
         stage: 'check-lights',
-        updatedAt: 40,
-        project: { ...flow.project, pendingActivationId: 'test-activation-7' },
+        updatedAt: startedAt + 3,
+        project: requestedProgress === 'test'
+          ? { ...flow.project, pendingActivationId: 'test-activation-7' }
+          : { ...flow.project, restoredAt: startedAt + 3, restoredFingerprint: flow.project.fingerprint },
       };
     }
     await api.writeCardCommissioning(flow, { locks: null });
@@ -125,6 +128,28 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
 });
 
+test('retained pre-install card identity cannot bypass the explicit WiFi handoff', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    acknowledgedAt: '2026-01-01T00:00:00.000Z',
+    card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+  }]);
+  await seedCommissioningFlow(page, 'wifi');
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reconnect installed card', exact: true })).toBeVisible();
+
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    acknowledgedAt: new Date(Date.now() + 5_000).toISOString(),
+    card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+  }]);
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
+});
+
 test('Card overview keeps Load project and Test as resumable commissioning steps', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'load-project');
@@ -143,8 +168,53 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   steps = page.getByTestId('card-setup-steps').locator('li');
   await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
   await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
+  await page.evaluate(() => {
+    (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'testing', activationId });
+    (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+    (window as any).__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+  });
   await page.getByRole('button', { name: 'Test lights', exact: true }).click();
-  await expect(page).toHaveURL(/#screen=card&section=workshop$/);
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+  await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
+  await expect(page.getByText(/blue first pixel and red final pixel/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
+  await expect(page.getByText('Light check complete', { exact: true })).toBeVisible();
+  const done = page.getByRole('button', { name: 'Done', exact: true });
+  await expect(done).toBeVisible();
+  await done.click();
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test');
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
+  await page.getByRole('button', { name: 'No, restore working setup', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Set up card', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
+});
+
+test('installed check-lights progress runs a bounded marker test and restores the working look on rejection', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test-installed');
+  await page.evaluate(() => {
+    (window as any).__commissioningMarkerStarts = [];
+    (window as any).__commissioningMarkerStops = 0;
+    (window as any).__LW_START_COMMISSIONING_MARKERS_FOR_TEST__ = async (frame: string[]) => {
+      (window as any).__commissioningMarkerStarts.push(frame);
+      return { stop: async () => { (window as any).__commissioningMarkerStops += 1; } };
+    };
+  });
+
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Start bounded marker test', exact: true }).click();
+  await expect(page.getByText(/blue first pixel and red final pixel/i)).toBeVisible();
+  const markers = await page.evaluate(() => (window as any).__commissioningMarkerStarts[0]);
+  expect(markers[0]).toBe('00001A');
+  expect(markers.at(-1)).toBe('1A0000');
+  await page.getByRole('button', { name: 'No, restore working look', exact: true }).click();
+  await expect(page.getByText(/working look is restored/i)).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningMarkerStops)).toBe(1);
+  await expect(page.getByRole('button', { name: 'Start bounded marker test', exact: true })).toBeVisible();
 });
 
 test('Card replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {

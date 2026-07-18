@@ -1,8 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../../lib/cardRuntimeProject.js';
 import { pushConfigToCard, readCardProjectEvidence } from '../../lib/cardPushClient.js';
-import { readCardWiringCandidateEvidence } from '../../lib/cardWiringSafety.js';
+import {
+  activateAndWaitForCardWiring,
+  confirmCardWiringCandidate,
+  readCardWiringCandidateEvidence,
+  rollbackCardWiringCandidate,
+} from '../../lib/cardWiringSafety.js';
+import { isCardLinkConnected } from '../../lib/cardLink.js';
+import { compileWiring } from '../../lib/wiringCompiler.js';
+import { createWiringChaseSession } from '../../lib/wiringChase.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
   CARD_COMMISSIONING_STAGES,
@@ -11,6 +19,7 @@ import {
   bindCardWiringActivationEvidence,
   beginCardRestorationMutation,
   claimCardRestoration,
+  clearCardCommissioning,
   completeCardInstall,
   confirmCardSetupNetworkJoined,
   markCardProjectRestored,
@@ -19,6 +28,7 @@ import {
   recordCardRestorationResponse,
   inspectCardCommissioning,
   releaseCardRestoration,
+  returnCardProjectToSetupAfterLightCheck,
   verifyCardRestorationMutation,
   resumeInstalledCardAfterInterruption,
   stageCardProjectForPhysicalCheck,
@@ -45,6 +55,32 @@ function runtimePackageFromSnapshot(snapshot = {}, identity = {}) {
     wiring: snapshot.layout?.wiring || null,
     standaloneController: snapshot.devices?.standaloneController || {},
   });
+}
+
+function commissioningMarkerFrame(snapshot = {}) {
+  const strips = snapshot.layout?.strips || [];
+  let compiled = null;
+  if (snapshot.layout?.wiring) {
+    try { compiled = compileWiring({ wiring: snapshot.layout.wiring, strips }); }
+    catch { compiled = null; }
+  }
+  const fallbackCount = strips.reduce((sum, strip) => sum + Math.max(0, Number(strip.pixelCount ?? strip.pixels?.length ?? 0)), 0);
+  const outputs = compiled?.ok && compiled.outputs.length
+    ? compiled.outputs
+    : fallbackCount > 0 ? [{ start: 0, count: fallbackCount }] : [];
+  const totalPixels = compiled?.ok && compiled.totalPixels > 0 ? compiled.totalPixels : fallbackCount;
+  const frame = Array.from({ length: totalPixels }, () => '001A00');
+  for (const output of outputs) {
+    const start = Math.max(0, Number(output.start) || 0);
+    const end = Math.min(frame.length, start + Math.max(0, Number(output.count ?? output.pixels) || 0));
+    if (start >= end) continue;
+    if (end - start === 1) frame[start] = '1A001A';
+    else {
+      frame[start] = '00001A';
+      frame[end - 1] = '1A0000';
+    }
+  }
+  return frame;
 }
 
 export function CardCommissioningSteps({ stage = 'connect-card' }) {
@@ -81,6 +117,10 @@ export function CardCommissioningPanel({
   const [initialState] = useState(() => inspectCardCommissioning());
   const [flow, setFlow] = useState(initialState.flow);
   const [restoreState, setRestoreState] = useState('idle');
+  const [lightCheckState, setLightCheckState] = useState('idle');
+  const [lightCheckNotice, setLightCheckNotice] = useState('');
+  const markerSessionRef = useRef(null);
+  const markerTimeoutRef = useRef(null);
   const [failure, setFailure] = useState(initialState.error === 'corrupt'
     ? 'Saved card setup data is corrupt. Nothing was changed; restart the exact setup.'
     : initialState.error === 'invalid-lease'
@@ -102,6 +142,14 @@ export function CardCommissioningPanel({
     };
   }, []);
 
+  useEffect(() => () => {
+    if (markerTimeoutRef.current != null) window.clearTimeout(markerTimeoutRef.current);
+    markerTimeoutRef.current = null;
+    const session = markerSessionRef.current;
+    markerSessionRef.current = null;
+    if (session) void session.stop().catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (result?.status !== 'awaiting-card-acknowledgement') return;
     void (async () => { try {
@@ -121,8 +169,14 @@ export function CardCommissioningPanel({
 
   const cardAcknowledgement = useMemo(() => {
     if (!flow || flow.stage !== 'set-up-card') return null;
+    const setupNetworkReset = ['setup-required', 'setup-joined'].includes(flow.networkState);
+    const acknowledgedAt = Date.parse(link?.acknowledgedAt || '');
+    const freshAfterSetupJoin = flow.networkState === 'setup-joined'
+      && Number.isFinite(acknowledgedAt)
+      && acknowledgedAt >= flow.updatedAt;
+    if (!isCardLinkConnected(link) || (setupNetworkReset && !freshAfterSetupJoin)) return null;
     return acknowledgeCommissionedCard(flow, link?.card || {});
-  }, [flow, link?.card]);
+  }, [flow, link]);
 
   const interruptedInstallEvidence = useMemo(() => {
     if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id) return null;
@@ -145,6 +199,14 @@ export function CardCommissioningPanel({
     } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
   }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
 
+  if (!flow && lightCheckState === 'complete') return (
+    <div className="card-commissioning" aria-live="polite">
+      <CardCommissioningSteps stage="check-lights" />
+      <h3>Light check complete</h3>
+      <p>The exact temporary wiring was confirmed on the card and is now its working setup.</p>
+      {onComplete && <button type="button" className="btn primary" onClick={onComplete}>Done</button>}
+    </div>
+  );
   if (!flow) return <div className="card-commissioning" aria-live="polite"><CardCommissioningSteps stage="connect-card" />{failure && <p className="card-connection-failure" role="alert">{failure}</p>}</div>;
 
   const restore = async () => {
@@ -249,6 +311,101 @@ export function CardCommissioningPanel({
     }
   };
 
+  const startLightCheck = async () => {
+    const activationId = flow.project.pendingActivationId;
+    if (lightCheckState !== 'idle') return;
+    setFailure('');
+    setLightCheckNotice('');
+    setLightCheckState('starting');
+    try {
+      if (!activationId) {
+        const frame = commissioningMarkerFrame(flow.project.snapshot);
+        if (!frame.length) throw new Error('The saved project has no LED outputs to test.');
+        const startMarkers = window.__LW_START_COMMISSIONING_MARKERS_FOR_TEST__;
+        const session = typeof startMarkers === 'function'
+          ? await startMarkers(frame, { host: link.host })
+          : createWiringChaseSession({ host: link.host });
+        markerSessionRef.current = session;
+        if (typeof startMarkers !== 'function') await session.show(frame);
+        markerTimeoutRef.current = window.setTimeout(() => {
+          const active = markerSessionRef.current;
+          markerSessionRef.current = null;
+          markerTimeoutRef.current = null;
+          void active?.stop?.().catch(() => {});
+          setLightCheckState('idle');
+          setLightCheckNotice('The 30-second marker test ended and the working look is restored.');
+        }, 30_000);
+        setLightCheckState('testing');
+        return;
+      }
+      const activate = typeof window.__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
+        ? window.__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__
+        : activateAndWaitForCardWiring;
+      const status = await activate(activationId, { host: link.host, timeoutMs: 18000 });
+      if (status?.state !== 'testing' || status?.activationId !== activationId) {
+        throw new Error('The card did not start the exact temporary wiring test.');
+      }
+      setLightCheckState('testing');
+    } catch (error) {
+      const session = markerSessionRef.current;
+      markerSessionRef.current = null;
+      if (session) await session.stop().catch(() => {});
+      setFailure(error?.message || 'The bounded light test did not start. The previous working setup remains protected.');
+      setLightCheckState('idle');
+    }
+  };
+
+  const finishLightCheck = async visible => {
+    const activationId = flow.project.pendingActivationId;
+    if (lightCheckState !== 'testing') return;
+    setFailure('');
+    setLightCheckNotice('');
+    setLightCheckState(visible ? 'confirming' : 'restoring');
+    try {
+      if (!activationId) {
+        if (markerTimeoutRef.current != null) window.clearTimeout(markerTimeoutRef.current);
+        markerTimeoutRef.current = null;
+        const session = markerSessionRef.current;
+        markerSessionRef.current = null;
+        await session?.stop?.();
+        if (visible) {
+          await clearCardCommissioning({ flowId: flow.flowId });
+          setLightCheckState('complete');
+        } else {
+          setLightCheckState('idle');
+          setLightCheckNotice('The bounded marker test stopped and the working look is restored.');
+        }
+        return;
+      }
+      if (visible) {
+        const confirm = typeof window.__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
+          ? window.__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__
+          : confirmCardWiringCandidate;
+        const status = await confirm(activationId, { host: link.host });
+        if (status?.state !== 'known-good' || (status?.activationId && status.activationId !== activationId)) {
+          throw new Error('The card did not confirm the exact temporary wiring.');
+        }
+        await clearCardCommissioning({ flowId: flow.flowId });
+        setLightCheckState('complete');
+      } else {
+        const rollback = typeof window.__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
+          ? window.__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__
+          : rollbackCardWiringCandidate;
+        const status = await rollback(activationId, { host: link.host });
+        if (status?.state !== 'known-good' || (status?.activationId && status.activationId !== activationId)) {
+          throw new Error('The card did not restore the previous working wiring.');
+        }
+        const next = returnCardProjectToSetupAfterLightCheck(flow);
+        await writeCardCommissioning(next);
+        setFlow(next);
+        setLightCheckState('idle');
+      }
+    } catch (error) {
+      setFailure(error?.message || 'The card could not finish the wiring check. It will restore the previous setup when the test window ends.');
+      setLightCheckState('testing');
+    }
+  };
+
   return (
     <div className="card-commissioning" data-stage={flow.stage} aria-live="polite">
       <CardCommissioningSteps stage={flow.stage} />
@@ -296,7 +453,42 @@ export function CardCommissioningPanel({
           <p>{flow.project.pendingActivationId
             ? 'The saved Studio project revision is staged on this exact card. The bounded physical light check will test its GPIO wiring before making it permanent.'
             : 'The saved Studio project revision is installed on this exact card. Continue to the bounded physical light check.'}</p>
-          {onComplete && <button type="button" className="btn primary" onClick={onComplete}>Continue to light check</button>}
+          {flow.project.pendingActivationId ? (
+            <div className="card-commissioning-network">
+              {lightCheckState === 'testing' ? (
+                <>
+                  <p>Check every connected output. Do you see a <strong>blue first pixel and red final pixel</strong>, with the expected LEDs between them?</p>
+                  <div className="card-connection-actions">
+                    <button type="button" className="btn primary" onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
+                    <button type="button" className="btn" onClick={() => finishLightCheck(false)}>No, restore working setup</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>The test lasts at most 90 seconds. Until you confirm the real LEDs, the card keeps the previous working wiring ready to restore automatically.</p>
+                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle'} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded light test…' : 'Start 90-second light test'}</button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="card-commissioning-network">
+              {lightCheckState === 'testing' ? (
+                <>
+                  <p>Check every connected output. Do you see a <strong>blue first pixel and red final pixel</strong>, with green LEDs between them?</p>
+                  <div className="card-connection-actions">
+                    <button type="button" className="btn primary" onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
+                    <button type="button" className="btn" onClick={() => finishLightCheck(false)}>No, restore working look</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>This marker frame runs for at most 30 seconds, then releases the card back to its normal working look automatically.</p>
+                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle'} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded marker test…' : 'Start bounded marker test'}</button>
+                </>
+              )}
+              {lightCheckNotice && <p role="status">{lightCheckNotice}</p>}
+            </div>
+          )}
         </>
       )}
       {failure && <p className="card-connection-failure" role="alert">{failure}</p>}

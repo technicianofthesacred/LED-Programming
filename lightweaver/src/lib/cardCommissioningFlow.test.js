@@ -17,6 +17,7 @@ import {
   stageCardProjectForPhysicalCheck,
   readCardCommissioning,
   readCardRestorationAttempt,
+  returnCardProjectToSetupAfterLightCheck,
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
   claimCardRestoration,
@@ -347,6 +348,12 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
   assert.equal(staged.stage, 'check-lights');
   assert.equal(staged.project.restoredAt, null);
   assert.equal(staged.project.pendingActivationId, 'wiring-activation-7');
+
+  const rolledBack = returnCardProjectToSetupAfterLightCheck(staged, { now: 50 });
+  assert.equal(rolledBack.stage, 'set-up-card');
+  assert.equal(rolledBack.cardAcknowledgedAt, acknowledged.cardAcknowledgedAt);
+  assert.equal(rolledBack.project.pendingActivationId, '');
+  assert.equal(rolledBack.project.restoredAt, null);
 });
 
 test('preserve-in-place is allowed only for a verified compatible routine update', () => {

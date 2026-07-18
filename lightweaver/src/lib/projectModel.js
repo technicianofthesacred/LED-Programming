@@ -121,6 +121,7 @@ export function createDefaultProject() {
     name: 'Untitled Project',
     layout: {
       strips: defaultStrips,
+      starterPending: true,
       viewBox: '0 0 640 400',
       svgText: null,
       hidden: {},
@@ -343,7 +344,12 @@ export function migrateProject(data) {
       ...base,
       ...data,
       id: normalizeProjectId(data.id || data.projectId, base.id),
-      layout: { ...base.layout, ...(data.layout || {}), wiring: data.layout?.wiring ?? null },
+      layout: {
+        ...base.layout,
+        ...(data.layout || {}),
+        starterPending: data.layout?.starterPending === true,
+        wiring: data.layout?.wiring ?? null,
+      },
       pattern: { ...pattern, symSettings: { ...base.pattern.symSettings, ...(pattern.symSettings || {}) } },
       show: { ...base.show, ...(data.show || {}) },
       live: { ...base.live, ...(data.live || {}) },
@@ -364,6 +370,7 @@ export function migrateProject(data) {
       name: data.name || data.projectName || base.name,
       layout: {
         ...base.layout,
+        starterPending: false,
         strips: data.strips || [],
         viewBox: data.viewBox || base.layout.viewBox,
         svgText: data.svgText ?? base.layout.svgText,

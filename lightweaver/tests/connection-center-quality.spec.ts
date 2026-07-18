@@ -306,6 +306,7 @@ test('Bridge return does not call a successful POST independent restoration proo
   }
   await page.waitForTimeout(4100);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
 
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -375,6 +376,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
       app: 'Lightweaver', ok: true, state: 'staged', activationId: 'candidate-safe-7', outputs: [{ pin: 18, pixels: 44 }],
       cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
       projectRevision: flow?.project?.revision, projectFingerprint: flow?.project?.fingerprint,
+      wiringRevision: 2, wiringDigest: 'd'.repeat(64), maxMilliamps: 1500,
     }) });
   });
   await page.addInitScript(() => {
@@ -397,6 +399,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
   await deliverBridgeResult(page);
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },

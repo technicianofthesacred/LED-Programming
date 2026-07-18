@@ -334,6 +334,24 @@ export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { n
   };
 }
 
+export function returnCardProjectToSetupAfterLightCheck(flow, { now = Date.now() } = {}) {
+  requireFlow(flow);
+  if (flow.stage !== 'check-lights' || !text(flow.project.pendingActivationId, 128)) {
+    throw new Error('The card setup is not awaiting a temporary wiring light check');
+  }
+  return {
+    ...clone(flow),
+    stage: 'set-up-card',
+    updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
+    project: {
+      ...clone(flow.project),
+      restoredAt: null,
+      restoredFingerprint: '',
+      pendingActivationId: '',
+    },
+  };
+}
+
 function requireFlow(flow) {
   if (!flow || flow.version !== VERSION || !CARD_COMMISSIONING_STAGES.includes(flow.stage)) {
     throw new Error('Invalid card commissioning progress');

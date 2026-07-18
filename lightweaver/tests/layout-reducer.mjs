@@ -47,17 +47,19 @@ const stripPayload = (name, count) => ({
 // ── 1. Snapshot round-trip rebuilds pixels ──────────────────────────────────
 
 test('snapshot drops pixels and applyLayoutSnapshot rebuilds them', () => {
-  const state = createLayoutState({ strips: [makeStrip('strip-1', 3), makeStrip('strip-2', 5)] });
+  const state = createLayoutState({ strips: [makeStrip('strip-1', 3), makeStrip('strip-2', 5)], starterPending: true });
 
   const snap = makeLayoutSnapshot(state);
   // Snapshot carries no pixels and no bulky selection entries.
   assert.ok(snap.strips.every(s => s.pixels === undefined));
   assert.equal(snap.selection.entries, undefined);
+  assert.equal(snap.starterPending, true);
 
   const restored = applyLayoutSnapshot(state, snap, rebuild);
   assert.deepEqual(restored.strips.map(s => s.pixels.length), [3, 5]);
   assert.deepEqual(restored.strips.map(s => s.id), ['strip-1', 'strip-2']);
   assert.equal(restored.strips[0].pixelCount, 3);
+  assert.equal(restored.starterPending, true);
 });
 
 // ── 2. Undo of a strip edit restores the prior selection ────────────────────

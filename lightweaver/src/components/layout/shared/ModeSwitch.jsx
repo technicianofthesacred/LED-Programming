@@ -15,6 +15,7 @@ export function ModeSwitch({ mode, setMode }) {
         <button
           key={m.key}
           className={mode === m.key ? 'on' : ''}
+          aria-pressed={mode === m.key}
           data-testid={`layout-mode-${m.key}`}
           title={`${m.label} mode (${MODES.findIndex(x => x.key === m.key) + 1})`}
           onClick={() => setMode(m.key)}
