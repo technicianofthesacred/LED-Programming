@@ -30,7 +30,7 @@ import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
-import { cardRouteFromHash, isCardSection } from './cardWorkspaceRoute.js';
+import { cardRouteFromHash, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 
@@ -391,6 +391,7 @@ function Shell() {
   }, []);
   const openCardSection = useCallback((section = 'overview') => {
     if (installActiveRef.current) return;
+    markCardSectionNavigation();
     flushProjectAutosave();
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', 'card');

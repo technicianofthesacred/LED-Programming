@@ -56,8 +56,23 @@ async function seedBrowserProjectLibrary(page: any) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
+// The old standalone Settings and Installer rail entries were consolidated
+// into the Card workspace (Settings → Card > Preferences, Installer → Card >
+// Advanced & Support > GPIO & install guide). The legacy hash screens still
+// deep-link to the consolidated sections, so these navigation shims keep the
+// original assertions unchanged.
+async function openPreferences(page: any) {
+  await page.evaluate(() => { window.location.hash = '#screen=settings'; });
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toBeVisible();
+}
+
+async function openInstallerGuide(page: any) {
+  await page.evaluate(() => { window.location.hash = '#screen=installer'; });
+  await expect(page.locator('.inst-signoff input[type="checkbox"]').first()).toBeVisible();
+}
+
 async function markInstallerReady(page: any) {
-  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await openInstallerGuide(page);
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
   for (let index = 0; index < 6; index += 1) await checks.nth(index).check();
   await page.getByRole('button', { name: 'Mark ready' }).click();
@@ -381,9 +396,9 @@ test('installer invalidates signoff when the current project changes', async ({ 
 
 test('installer invalidates signoff when the edited revision changes', async ({ page }) => {
   await markInstallerReady(page);
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Revised Mandala');
-  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await openInstallerGuide(page);
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
   await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('installer-ready-summary')).toContainText('Revised Mandala');
@@ -395,7 +410,7 @@ test('installer invalidates signoff when the installed revision changes', async 
   await page.locator('.rail-item', { hasText: 'Patterns' }).click();
   await page.getByTitle('Save the current look to the card').click();
   await expect(page.locator('.savechip')).toContainText('Installed on card');
-  await page.locator('.rail-item', { hasText: 'Installer' }).click();
+  await openInstallerGuide(page);
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
   await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
   await expect(page.getByTestId('installer-ready-summary')).toContainText(/Revision \d+/);
@@ -416,12 +431,16 @@ test('installer invalidates signoff when a different card is paired', async ({ p
 });
 
 test('Settings controls expose stable accessible names', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   await expect(page.getByRole('slider', { name: 'Master brightness' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Gamma correction' })).toHaveAttribute('aria-pressed');
   await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
+  // The designer config JSON now lives in Card > Advanced & Support > Designer JSON.
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  await page.getByRole('button', { name: 'Advanced & Support' }).click();
+  await page.getByRole('button', { name: 'Designer JSON' }).click();
   await page.getByRole('button', { name: 'Show JSON' }).click();
   await expect(page.getByRole('textbox', { name: 'Designer config JSON' })).toBeVisible();
 
@@ -464,7 +483,9 @@ test('Daylight is a complete supported theme', async ({ page }) => {
   };
 
   for (const screen of ['Layout', 'Patterns', 'Show', 'Settings', 'Installer']) {
-    await page.locator('.rail-item', { hasText: screen }).click();
+    if (screen === 'Settings') await openPreferences(page);
+    else if (screen === 'Installer') await openInstallerGuide(page);
+    else await page.locator('.rail-item', { hasText: screen }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'daylight');
     const tokens = await page.locator('.app').evaluate(node => {
       const style = getComputedStyle(node);
@@ -487,7 +508,7 @@ test('Daylight is a complete supported theme', async ({ page }) => {
 });
 
 test('replacement guard names both projects and keeps editing until explicitly replaced', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   const projectName = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await projectName.fill('Current Mandala');
 
@@ -523,7 +544,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
 
 test('browser library Keep editing leaves the current record active', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
   await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
   await page.getByRole('dialog', { name: 'Replace current project?' }).getByRole('button', { name: 'Keep editing' }).click();
@@ -535,7 +556,7 @@ test('browser library Keep editing leaves the current record active', async ({ p
 
 test('browser library Escape leaves the current record active', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
   await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
   await page.keyboard.press('Escape');
@@ -546,7 +567,7 @@ test('browser library Escape leaves the current record active', async ({ page })
 });
 
 test('replacement dialog traps keyboard focus and restores its trigger', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Settings' }).click();
+  await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala');
   const trigger = page.getByRole('button', { name: 'New project' });
   await trigger.click();

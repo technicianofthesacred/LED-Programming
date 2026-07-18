@@ -136,7 +136,11 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
+  // The seeded project is fully verified, so once the autosave restores the
+  // panel auto-advances to the Install step itself. Wait for that settled
+  // state instead of clicking — sampling and clicking early raced the
+  // auto-advance effect on CI.
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 

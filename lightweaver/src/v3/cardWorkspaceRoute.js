@@ -18,3 +18,15 @@ export function cardRouteFromHash(hash = globalThis.location?.hash || '') {
 export function isCardSection(section) {
   return CARD_SECTION_KEYS.has(section);
 }
+
+// In-app card navigation intent: set by the shell when the user actively
+// navigates to a Card section, consumed once by CardScreen so it can focus
+// the section heading on arrival WITHOUT stealing focus on a direct page
+// load (the difference between a11y and a race).
+let pendingSectionFocus = false;
+export function markCardSectionNavigation() { pendingSectionFocus = true; }
+export function consumeCardSectionNavigation() {
+  const value = pendingSectionFocus;
+  pendingSectionFocus = false;
+  return value;
+}

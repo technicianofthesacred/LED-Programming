@@ -186,7 +186,12 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   await openWireStep(page, 'Wires', panel => panel.getByRole('group', { name: 'How many wires leave the card?' }));
   let box = await page.getByRole('group', { name: 'How many wires leave the card?' }).getByRole('button').first().boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
-  await openWireStep(page, 'Match', panel => panel.getByRole('button', { name: /Outer circle IN port/ }));
+  // Wire order is the primary surface of the Match step; the lane/port
+  // editors live behind the Advanced wiring disclosure.
+  await openWireStep(page, 'Match', panel => panel.getByTestId('wire-order'));
+  box = await page.getByTestId('wire-order-row').first().getByRole('button', { name: /Reverse direction/ }).boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await page.getByTestId('advanced-wiring-toggle').click();
   box = await page.getByRole('button', { name: /Outer circle IN port/ }).boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
   await openWireStep(page, 'Install', panel => panel.getByTestId('layout-send-to-card'));
@@ -250,8 +255,8 @@ test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ pa
   // A fresh layout opens on the starter shape picker with no strips yet —
   // create one so a strip path exists to drive with the keyboard.
   const picker = page.getByTestId('layout-primitive-picker');
-  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
-  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await picker.getByRole('button', { name: 'Line', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create line' }).click();
   const strip = page.locator('path[data-strip-path]').first();
   await strip.focus();
   await page.keyboard.press('Enter');
