@@ -273,7 +273,7 @@ test('wire scaffold is concise and recovery actions stay hidden without a mixed-
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   const guide = page.getByRole('region', { name: 'Wire setup guide' });
   await expect(guide).toBeVisible();
-  await expect(guide).toContainText('Match each run to its real data wire, then prove it on the LEDs.');
+  await expect(guide).toContainText(/Order the strips[\s\S]*real LEDs[\s\S]*install/);
   await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);

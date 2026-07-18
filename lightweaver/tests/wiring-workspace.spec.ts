@@ -172,7 +172,7 @@ test('Match leads with the primary wire-order list and keeps everything else beh
   const order = page.getByTestId('wire-order');
   await expect(order).toBeVisible();
   await expect(page.getByRole('region', { name: 'Wire order' })).toContainText('2 strips · 44 LEDs');
-  await expect(page.getByText('Put the strips in the order the data cable visits them, starting from the card.')).toBeVisible();
+  await expect(page.getByText('Order strips as the data cable visits them, starting from the card.')).toBeVisible();
   await expect(page.getByTestId('advanced-wiring-toggle')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toHaveCount(0);
@@ -1118,10 +1118,10 @@ test('disconnected card banner leads the panel and the check step restates its c
   await gotoWire(page);
   const banner = page.getByTestId('wire-card-banner');
   await expect(banner).toBeVisible();
-  await expect(banner).toContainText("To finish wiring you'll check the real LEDs. Connect your Lightweaver card when you're ready — steps up to that point work without it.");
-  await expect(banner).toContainText('Connect Lightweaver');
+  await expect(banner).toContainText("No card connected — that's fine.");
+  await expect(banner).toContainText('Everything except the real-LED check works without it.');
   // The check step (default landing) restates the requirement inline.
-  await expect(page.locator('.lw-card-banner.is-inline')).toContainText('This step lights the real LEDs, so it needs your Lightweaver card connected');
+  await expect(page.locator('.lw-card-banner.is-inline')).toContainText('This step lights the real LEDs — use Connect Lightweaver in the footer first.');
   await openStep(page, 'Match');
   const order = page.getByTestId('wire-order');
   expect(await banner.evaluate((bannerElement, orderElement) => Boolean(
