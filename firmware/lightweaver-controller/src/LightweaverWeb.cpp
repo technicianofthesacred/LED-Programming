@@ -304,6 +304,23 @@ void handleRoot() {
             ".sw-sunset{background-color:#8a2050;background-image:linear-gradient(90deg,#2a0830,#8a2050,#d04a18,#f1c40f,#d04a18,#8a2050,#2a0830);background-size:200% 100%;animation:flow 9s linear infinite}"
             ".sw-twinkle{background-color:#3a2c1a;background-image:radial-gradient(circle at 20% 40%,#f4ede0 0%,transparent 8%),radial-gradient(circle at 70% 60%,#f4ede0 0%,transparent 6%),radial-gradient(circle at 45% 80%,#f4ede0 0%,transparent 5%),linear-gradient(180deg,#3a2c1a,#1a1208);animation:flicker 2s ease-in-out infinite}"
             ".sw-wave{background-color:#3a3a8a;background-image:linear-gradient(90deg,#1a1a4a,#5c5cc8,#9b9be0,#5c5cc8,#1a1a4a);background-size:200% 100%;animation:flow 5s linear infinite}"
+            ".sw-ripple{background-color:#0033aa;background-image:radial-gradient(circle,#fff 0%,#00ccff 20%,#0033aa 50%,#000022 80%);animation:breathe 2.6s ease-in-out infinite}"
+            ".sw-lava{background-color:#cc0000;background-image:radial-gradient(ellipse at 30% 70%,#ff4400 0%,#cc0000 30%,#220000 100%);animation:flicker 2.4s ease-in-out infinite}"
+            ".sw-meteor{background-color:#000030;background-image:linear-gradient(90deg,#000010,#000030 40%,#8888ff 80%,#fff,#000010);background-size:200% 100%;animation:flow 3s linear infinite}"
+            ".sw-chase{background-color:#050510;background-image:linear-gradient(90deg,#050510 0%,#050510 30%,#4cc9f0 48%,#fff 50%,#050510 70%,#050510 100%);background-size:200% 100%;animation:scan 2s linear infinite}"
+            ".sw-candle{background-color:#ff7700;background-image:radial-gradient(ellipse at 50% 80%,#fff 0%,#ffee88 10%,#ff7700 40%,#220000 100%);animation:flicker 1.4s ease-in-out infinite}"
+            ".sw-lightning{background-color:#050515;background-image:linear-gradient(90deg,#050515,#7070ff,#fff,#7070ff,#050515);animation:flicker 1.1s ease-in-out infinite}"
+            ".sw-neon{background-color:#ff00aa;background-image:linear-gradient(90deg,#ff00aa 0 33%,#00ffcc 33% 66%,#ffff00 66%)}"
+            ".sw-matrix{background-color:#003b00;background-image:linear-gradient(180deg,#fff,#00ff41 15%,#003b00 60%,#000)}"
+            ".sw-heartbeat{background-color:#880011;background-image:radial-gradient(ellipse,#ff0022 0%,#880011 50%,#110003 100%);animation:breathe 1.2s ease-in-out infinite}"
+            ".sw-stained{background-color:#ff2200;background-image:conic-gradient(#ff2200,#ffaa00,#00dd44,#0066ff,#cc00ff,#ff2200)}"
+            ".sw-confetti{background-color:#080808;background-image:radial-gradient(circle at 20% 30%,#ff0066 0%,transparent 8%),radial-gradient(circle at 70% 60%,#00ff88 0%,transparent 6%),radial-gradient(circle at 45% 75%,#ffcc00 0%,transparent 6%);animation:flicker 1.6s ease-in-out infinite}"
+            ".sw-warp{background-color:#000022;background-image:radial-gradient(circle,#fff 0%,#8888ff 10%,#000022 50%,#000 100%);animation:breathe 2s ease-in-out infinite}"
+            ".sw-pulse-ring{background-color:#110022;background-image:radial-gradient(circle,#fff 0%,#ff00ff 18%,#110022 62%,#000 100%);animation:breathe 1.8s ease-in-out infinite}"
+            ".sw-blocks{background-color:#ff0066;background-image:linear-gradient(90deg,#ff0066 0 20%,#ffcc00 20% 40%,#00cc66 40% 60%,#0099ff 60% 80%,#6633ff 80%)}"
+            ".sw-bloom{background-color:#ff5ab3;background-image:radial-gradient(circle,#ffd6f0 0%,#ff5ab3 24%,#46102e 62%,#09030b 100%);animation:breathe 3.2s ease-in-out infinite}"
+            ".sw-calm{background-color:#14515c;background-image:linear-gradient(90deg,#071923,#14515c,#1f8076,#14515c,#071923);background-size:200% 100%;animation:flow 9s linear infinite}"
+            ".sw-drift{background-color:#d9a8ff;background-image:linear-gradient(90deg,#7fc7ff,#d9a8ff,#ffc2d6,#ffe7a8,#7fc7ff);background-size:200% 100%;animation:flow 8s linear infinite}"
             ".sw-warm-white{background-color:#c89b5c;background-image:linear-gradient(90deg,#3a2c1a,#c89b5c,#f4ede0,#c89b5c,#3a2c1a);background-size:200% 100%;animation:flow 8s linear infinite}"
             ".sw-cool-white{background-color:#5c8ac8;background-image:linear-gradient(90deg,#1a2a3a,#5c8ac8,#e0edf4,#5c8ac8,#1a2a3a);background-size:200% 100%;animation:flow 8s linear infinite}"
             ".sw-photo-white{background-color:#c8b89c;background-image:linear-gradient(90deg,#3a3328,#c8b89c,#f4ede0,#c8b89c,#3a3328);background-size:200% 100%;animation:flow 10s linear infinite}"
@@ -759,6 +776,16 @@ void handleAdvancedRoot() {
               "</div>");
 
     page += F("<div class='card'><h2>Pattern bank</h2>"
+              // Shown while Art-Net / WLED-realtime frames are driving the card:
+              // pattern taps would return 200 but produce no visible change, so
+              // the grid is disabled and the source named (same wording as the
+              // customer page's stream banner).
+              "<p class='note' id='stream-note' style='display:none'>Streaming from <b id='stream-src'>external source</b> \xE2\x80\x94 pattern buttons are paused. "
+                "<button class='ghost' id='stream-cancel' type='button' style='margin-left:8px;padding:6px 12px;font-size:12px'>Cancel stream</button></p>"
+              // Rollback status line: filled in when a pattern POST fails; the
+              // highlighted tile is already rolled back to the confirmed one.
+              "<p class='note err' id='pat-msg' style='display:none' role='status' aria-live='polite'><span id='pat-msg-text'></span> "
+                "<button class='ghost' id='pat-retry' type='button' style='margin-left:8px;padding:6px 12px;font-size:12px'>Retry</button></p>"
               "<div class='grid' id='pat-grid'></div>"
               "</div>"
               "<style>"
@@ -876,11 +903,30 @@ void handleAdvancedRoot() {
               "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
               "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
-              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.onclick=async()=>{currentId=p.id;renderGrid();setNow(p);await post('/api/control',{patternId:p.id})};g.appendChild(b)})};"
+              "let patPending=false,patStreaming=false;"
+              "const patError=t=>{$('pat-msg-text').textContent=t||'';$('pat-msg').style.display=t?'block':'none'};"
+              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';g.setAttribute('aria-busy',String(patPending));patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.disabled=patPending||patStreaming;b.onclick=()=>{if(patPending||patStreaming||p.id===currentId)return;patternControl.request(p.id)};g.appendChild(b)})};"
+              // Minimal confirmed-control (same contract as the customer page's
+              // makeConfirmedControl): optimistic render, rollback to the last
+              // confirmed pattern on failed/non-ok POST, Retry re-sends.
+              "const patternControl=(()=>{let confirmed='',active=0,failed=null;"
+                "const request=async id=>{const req=++active;failed=null;patPending=true;currentId=id;renderGrid();setNow(selectedPattern());"
+                  "try{await post('/api/control',{patternId:id});if(req!==active)return;confirmed=id;patPending=false;renderGrid();patError(null)}"
+                  "catch(e){if(req!==active)return;failed=id;currentId=confirmed;patPending=false;renderGrid();setNow(selectedPattern());patError('Could not change pattern. '+((e&&e.message)||'Try again.'))}};"
+                "const retry=()=>{if(failed===null)return;const id=failed;patError(null);return request(id)};"
+                "const setConfirmed=id=>{active++;confirmed=id;failed=null;currentId=id;patPending=false;patError(null)};"
+                "return{request,retry,setConfirmed}})();"
+              "$('pat-retry').onclick=()=>patternControl.retry();"
+              "const srcLabel=k=>k==='artnet'?'Madrix / Art-Net':k==='wled-realtime'?'designer live preview':'external source';"
+              "const applyStream=s=>{const on=!!(s&&s.streaming);if(on)$('stream-src').textContent=srcLabel(s.frameSource);if(on===patStreaming)return;patStreaming=on;$('stream-note').style.display=on?'block':'none';renderGrid()};"
+              "$('stream-cancel').onclick=async()=>{try{await post('/api/control',{cancelStream:true});applyStream({streaming:false})}catch(_){}};"
+              "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s)}catch(_){}};"
+              "setInterval(pollStream,1000);"
               "const loadOnce=async()=>{try{"
                 "const s=await get('/api/status');"
                 "const p=await get('/api/patterns');"
-                "patterns=p.patterns||[];currentId=p.currentId||'';"
+                "patterns=p.patterns||[];patternControl.setConfirmed(p.currentId||'');"
+                "applyStream(s);"
                 "blackoutOn=!!s.blackout;"
                 "setNow(selectedPattern());"
                 "renderGrid();"
