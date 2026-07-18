@@ -9,11 +9,14 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
+import { useState } from 'react';
 import {
   STRIP_COLORS,
   stripSourceKey,
   clampLedCount,
+  svgPathLength,
 } from '../../../lib/layoutGeometry.js';
+import { STARTER_PRIMITIVES } from '../../../lib/layoutPrimitives.js';
 import {
   LED_COUNT_MAX,
   LED_COUNT_SLIDER_MAX,
@@ -54,6 +57,7 @@ export function DrawModePanel({ state }) {
     calibrateScaleFromStrip,
     // strips
     updateStrip, removeStrip, reverseStrip, renameStrip, duplicateStrip,
+    addPrimitiveStrip, scaleStrip,
     addStripsToGroup, groupSelectedStrips, mergeSelectedStrips, reorderStripRows,
     usbLedConnected,
     // artwork
@@ -79,6 +83,23 @@ export function DrawModePanel({ state }) {
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
   } = state;
+
+  // "+ Add strip" shape chooser (Line / Circle / Square / Free draw) — the
+  // visible add path once the starter picker is gone. Ephemeral view state.
+  const [addChooserOpen, setAddChooserOpen] = useState(false);
+
+  const pickAddShape = (key) => {
+    setAddChooserOpen(false);
+    if (key === 'free') {
+      // Same entry as the toolbar pencil / starter Free draw: arm draw mode
+      // with a clean waypoint slate.
+      setWaypoints([]);
+      setGhostPt(null);
+      setDrawMode(true);
+      return;
+    }
+    addPrimitiveStrip(key);
+  };
 
   return (
     <>
@@ -654,6 +675,24 @@ export function DrawModePanel({ state }) {
                 {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
               </span>
             </div>
+            {/* Always-visible add path (bench test: users never found Duplicate
+                or the pencil after the first strip). */}
+            <button type="button" className="btn la-add-strip" data-testid="layout-add-strip"
+                    aria-expanded={addChooserOpen}
+                    onClick={() => setAddChooserOpen(open => !open)}>
+              + Add strip
+            </button>
+            {addChooserOpen && (
+              <div className="la-add-strip-chooser" data-testid="layout-add-strip-chooser"
+                   role="group" aria-label="New strip shape">
+                {STARTER_PRIMITIVES.map(primitive => (
+                  <button key={primitive.key} type="button" className="btn"
+                          onClick={() => pickAddShape(primitive.key)}>
+                    {primitive.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {selectedStrips.length > 1 && (
               <div className="la-batch">
                 <div className="la-batch-head">
@@ -737,7 +776,24 @@ export function DrawModePanel({ state }) {
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
-                        <div className="hint">Drag on canvas to move · click, then arrow keys to nudge (Shift = ×10).</div>
+                        <div className="hint">Drag on canvas to move · − / + to resize · arrow keys to nudge</div>
+                        {/* Size — uniform resize about the strip's own center */}
+                        <div className="row">
+                          <span className="k">Size</span>
+                          <div className="la-size-ctrl">
+                            <button type="button" className="btn" aria-label="Make strip smaller"
+                                    title="Shrink 10%"
+                                    onClick={() => scaleStrip(s.id, 0.9)}>−</button>
+                            <span className="la-size-readout" data-testid="strip-size-readout">
+                              {Math.round((Number.isFinite(s.svgLength) && s.svgLength > 0)
+                                ? s.svgLength
+                                : svgPathLength(s.pathData))} px
+                            </span>
+                            <button type="button" className="btn" aria-label="Make strip bigger"
+                                    title="Grow 10%"
+                                    onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>
+                          </div>
+                        </div>
                         {/* LED count */}
                         <div className="row">
                           <span className="k">LEDs</span>

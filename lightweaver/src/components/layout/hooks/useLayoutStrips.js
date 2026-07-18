@@ -3,8 +3,20 @@ import {
   nextStripId,
   sampleStripPixels,
   translatePathData,
+  svgPathLength,
+  parsedVb,
 } from '../../../lib/layoutGeometry.js';
+import {
+  createPrimitiveStripDefinition,
+  DEFAULT_STARTER_PIXEL_COUNT,
+} from '../../../lib/layoutPrimitives.js';
+import { scaleStripGeometry } from '../../../lib/stripScale.js';
 import { moveStripRowsInChain } from '../../../lib/patchBoard.js';
+
+// scaleStrip clamps: never shrink a strip's path below this length (px)…
+const MIN_STRIP_SVG_LENGTH = 20;
+// …and never grow it beyond this multiple of the artwork's larger dimension.
+const MAX_STRIP_LENGTH_ARTWORK_FACTOR = 4;
 
 // Strip entity CRUD + batch ops (group / merge / duplicate / reorder).
 // Reads the shared layout bundle assembled by useLayoutState.
@@ -20,6 +32,7 @@ export function useLayoutStrips(ctx) {
     updatePatchBoard,
     selectedStripIds, orderedStrips, stripSelectionName,
     nextColor, scrollToStrip, stripGroupMember,
+    rebuildStrip,
   } = ctx;
 
   const updateStrip = useCallback((id, patch) => {
@@ -96,6 +109,58 @@ export function useLayoutStrips(ctx) {
     selectStrip(newId);
     scrollToStrip(newId);
   }, [strips, layers, editCounts, hidden, svgText, viewBox, density, pushLayoutHistory, selectStrip]);
+
+  // "+ Add strip" — append a fresh Line / Circle / Square primitive to the
+  // existing layout (the starter picker only exists before the first strip).
+  // Each new strip is nudged +24px per existing strip so it never lands exactly
+  // on top of another one.
+  const addPrimitiveStrip = useCallback((type) => {
+    const id = nextStripId(strips);
+    const offset = 24 * strips.length;
+    const definition = createPrimitiveStripDefinition({
+      type,
+      viewBox,
+      pixelCount: DEFAULT_STARTER_PIXEL_COUNT,
+      id,
+      color: nextColor(),
+    });
+    // "Circle", "Circle 2", "Circle 3"… so rows stay tellable-apart.
+    const sameShape = strips.filter(s =>
+      s.name === definition.name || s.name?.startsWith(`${definition.name} `)).length;
+    const strip = rebuildStrip({
+      ...definition,
+      name: sameShape ? `${definition.name} ${sameShape + 1}` : definition.name,
+      x: offset,
+      y: offset,
+    });
+    pushLayoutHistory();
+    setStrips(prev => [...prev, strip]);
+    selectStrip(id);
+    scrollToStrip(id);
+  }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStrips, selectStrip, scrollToStrip]);
+
+  // Uniform resize of a strip's geometry about its own center (Draw panel
+  // − / + Size control). Same shape as reverseStrip: history push + setStrips,
+  // so undo/redo and autosave pick it up through the normal strip-update path.
+  const scaleStrip = useCallback((id, factor) => {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
+    const s = strips.find(st => st.id === id);
+    if (!s) return;
+    const currentLen = (Number.isFinite(s.svgLength) && s.svgLength > 0)
+      ? s.svgLength
+      : svgPathLength(s.pathData);
+    if (!(currentLen > 0)) return;
+    const vb = parsedVb(viewBox);
+    const maxLen = MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h);
+    const nextLen = currentLen * factor;
+    if (nextLen < MIN_STRIP_SVG_LENGTH || nextLen > maxLen) return;
+    const scaled = scaleStripGeometry({ ...s, svgLength: currentLen }, factor);
+    pushLayoutHistory();
+    setStrips(prev => prev.map(st => st.id !== id ? st : {
+      ...scaled,
+      pixels: sampleStripPixels(scaled.pathData, scaled.pixelCount, scaled.reversed, scaled.x || 0, scaled.y || 0),
+    }));
+  }, [strips, viewBox, pushLayoutHistory, setStrips]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
@@ -253,6 +318,8 @@ export function useLayoutStrips(ctx) {
     reverseStrip,
     renameStrip,
     duplicateStrip,
+    addPrimitiveStrip,
+    scaleStrip,
     createStripGroupFromIds,
     addStripsToGroup,
     groupSelectedStrips,
