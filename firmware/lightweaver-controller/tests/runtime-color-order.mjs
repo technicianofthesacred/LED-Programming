@@ -32,12 +32,12 @@ assert.match(
 );
 assert.match(
   mainSource,
-  /physicalLeds\[i\]\s*=\s*outputColorPipeline\.transform\(leds\[i\],\s*ledColorOrderCode\);/,
+  /physicalLeds\[[^\]]+\]\s*=\s*outputColorPipeline\.transform\(leds\[[^\]]+\],\s*ledColorOrderCode\);/,
   'logical RGB should be transformed into the physical buffer without modifying the logical canvas',
 );
 assert.doesNotMatch(
   mainSource,
-  /leds\[i\]\s*=\s*outputColorPipeline\.transform/,
+  /\bleds\[[^\]]+\]\s*=\s*outputColorPipeline\.transform/,
   'the output transform must never overwrite logical RGB',
 );
 assert.match(
