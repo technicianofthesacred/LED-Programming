@@ -94,6 +94,10 @@ uint32_t clampMilliamps(long value) {
   return static_cast<uint32_t>(value);
 }
 
+void resetOutputColor(OutputColorConfig& outputColor) {
+  outputColor = OutputColorConfig{};
+}
+
 void resetOutput(OutputConfig& output) {
   output.id = "";
   output.name = "";
@@ -190,7 +194,7 @@ void resetConfig(RuntimeConfig& config) {
   config.startupLookId = "aurora";
   config.ledColorOrder = "RGB";
   config.brightnessLimit = 0.65f;
-  config.outputColor = OutputColorConfig{};
+  resetOutputColor(config.outputColor);
   config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
   config.outputCount = 0;

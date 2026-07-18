@@ -72,7 +72,7 @@ assert.match(
 );
 assert.match(
   source,
-  /if\s*\(!loadJsonString\(json,\s*\*parsed,\s*SOURCE_NVS,\s*message\)\)[\s\S]*return false;[\s\S]*config\s*=\s*\*parsed;/,
+  /if\s*\(!(?:loadJsonString\(json,\s*\*parsed,\s*SOURCE_NVS,\s*message\)|validateRuntimeConfigJsonStrict\(json,\s*\*parsed,\s*message\))\)[\s\S]*return false;[\s\S]*config\s*=\s*\*parsed;/,
   'save validation should parse into a temporary config so a rejected save leaves active config unchanged',
 );
 assert.match(
