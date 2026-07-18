@@ -105,34 +105,82 @@ export function StripColorOrderCheck({ cardHost, controller, setController }) {
     }
   };
 
+  // Quiz answer: seeing the color the card was told to show means the saved
+  // order matches (confirm it); seeing a different color means the order is
+  // wrong, so cycle to the next candidate — both via the existing handlers.
+  const answerColor = answerId => {
+    if (busy) return;
+    if (answerId === activeTestId) {
+      if (liveTestReady) confirmOrder();
+      else void playTest(activeTestId);
+    } else {
+      void tryNextOrder();
+    }
+  };
+
+  const activeTest = COLOR_TESTS.find(item => item.id === activeTestId) || COLOR_TESTS[0];
+  const answers = activeTestId === 'w'
+    ? COLOR_TESTS
+    : COLOR_TESTS.filter(test => test.id !== 'w');
+
   return (
-    <section className="lw-color-order-check" aria-label="LED color order">
-      <div className="lw-color-order-heading">
-        <strong>LED color order</strong>
-        <span>{confirmed ? 'Confirmed' : 'Current'} <b data-testid="strip-color-order">{colorOrder}</b></span>
-        <button className="btn" disabled={busy} onClick={startCheck}>Check colors</button>
+    <section className="lw-color-order-check lwb-quiz" aria-label="LED color order">
+      <div className="lwb-quiz-head">
+        <div className="lwb-quiz-head-text">
+          <strong>Do the colors look right?</strong>
+          {/* Plain-language status only — the machine color-order token stays
+              behind the opened check (redesign change 11: "GRB" never shows
+              in primary copy). */}
+          <span className="lwb-detail">{confirmed ? 'Colors confirmed' : 'Colors not checked yet'}</span>
+        </div>
+        <button type="button" className="btn lwb-quiz-open" disabled={busy} onClick={startCheck}>Check colors</button>
       </div>
-      {open && <div className="lw-color-order-body">
-        <p>{confirmed ? 'The saved color order matches the real LEDs.' : 'If the test color is wrong, try the next order.'}</p>
-        {!confirmed && <p>{liveTestReady ? 'The live test succeeded. Confirm the order if the real LEDs match.' : 'Run a successful live test before confirming this order.'}</p>}
-        <div className="lw-color-order-actions">
-          <div className="lw-color-test-buttons" aria-label="Test color">
-            {COLOR_TESTS.map(test => (
+      {open && (
+        <div className="lwb-quiz-body">
+          <p className="lwb-quiz-q">What color do you see?</p>
+          <div
+            className={`lwb-swatch is-${activeTest.id}`}
+            role="img"
+            aria-label={`The strip should now be lit ${activeTest.label.toLowerCase()}`}
+          />
+          <p className="lwb-quiz-hint">
+            {confirmed
+              ? 'The saved order already matches the real LEDs. Tap the color you see to double-check.'
+              : 'The whole strip just lit up. Tap the color you actually see.'}
+          </p>
+          <div className="lwb-quiz-answers" role="group" aria-label="What color do you see?" style={{ gridTemplateColumns: `repeat(${answers.length}, 1fr)` }}>
+            {answers.map(test => (
               <button
                 key={test.id}
-                className={`lw-color-test-button${activeTestId === test.id ? ' is-active' : ''}`}
-                aria-label={test.label}
-                aria-pressed={activeTestId === test.id}
+                type="button"
+                className={`lwb-quiz-answer is-${test.id}`}
                 disabled={busy}
-                onClick={() => void playTest(test.id)}
-              >{test.short}</button>
+                onClick={() => answerColor(test.id)}
+              >{test.label}</button>
             ))}
           </div>
-          <button className="btn btn-ghost" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
-          <button className="btn primary" disabled={busy || confirmed || !liveTestReady} onClick={confirmOrder}>{confirmed ? 'Colors confirmed' : 'Colors look correct'}</button>
+          <div className="lwb-quiz-more">
+            <div className="lwb-quiz-minis" role="group" aria-label="Send a different test color">
+              {COLOR_TESTS.map(test => (
+                <button
+                  key={test.id}
+                  type="button"
+                  className={`lwb-quiz-mini${activeTestId === test.id ? ' is-active' : ''}`}
+                  aria-label={`Send ${test.label} test`}
+                  aria-pressed={activeTestId === test.id}
+                  disabled={busy}
+                  onClick={() => void playTest(test.id)}
+                >{test.short}</button>
+              ))}
+            </div>
+            <button type="button" className="btn btn-ghost lwb-quiz-cycle" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
+          </div>
+          {status && <p className={`lwb-quiz-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}
+          <p className="lwb-detail lwb-quiz-order">
+            Wire color order: <b data-testid="strip-color-order">{colorOrder}</b>{confirmed ? ' · confirmed' : ''}
+          </p>
         </div>
-        {status && <p className={`lw-color-order-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}
-      </div>}
+      )}
     </section>
   );
 }

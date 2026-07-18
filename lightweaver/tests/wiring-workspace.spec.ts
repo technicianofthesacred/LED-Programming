@@ -17,29 +17,32 @@ async function installStableCardIdentity(page: any) {
   } }));
 }
 
-async function openCommissioningStep(page: any, regionName: string, toggleName: string, target: (step: any) => any) {
-  const step = page.getByRole('region', { name: regionName });
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const child = target(step);
-    if (await child.isVisible().catch(() => false)) return;
-    const toggle = step.getByRole('button', { name: toggleName });
-    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
-    await page.waitForTimeout(120);
-  }
-  await expect(target(step)).toBeVisible();
+// ── Step rail helpers ────────────────────────────────────────────────────────
+// The commissioning flow renders one step at a time; the StepRail (role=group
+// "Steps") is the navigation affordance. Rail labels: Wires · Match · Route ·
+// Check · Install (done steps append a checkmark, so name matching stays on
+// the label substring).
+const rail = (page: any) => page.getByRole('group', { name: 'Steps' });
+
+async function openStep(page: any, label: 'Wires' | 'Match' | 'Route' | 'Check' | 'Install') {
+  await rail(page).getByRole('button', { name: label }).click();
+  await expect(page.getByTestId('commissioning-step')).toBeVisible();
 }
 
-async function gotoWire(page: any, { expandDataWires = true } = {}) {
+async function railStepStates(page: any) {
+  return rail(page).getByRole('button').evaluateAll((elements: Element[]) => elements.map(element => {
+    const cls = [...element.classList].find(name => /^lwui-rail-(done|current|todo|optional)$/.test(name));
+    return cls ? cls.replace('lwui-rail-', '') : null;
+  }));
+}
+
+async function gotoWire(page: any) {
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.evaluate(async () => { await document.fonts?.ready; });
-  if (expandDataWires) {
-    await page.waitForTimeout(500);
-    await openCommissioningStep(page, 'Step 1: Choose data wires', 'Edit data wire count', step => step.getByRole('group', { name: 'LED data wire count' }));
-    await openCommissioningStep(page, 'Step 2: Map LED outputs', 'Edit LED output mapping', step => step.getByTestId('wiring-output-lane').first());
-    await openCommissioningStep(page, 'Step 3: Plan the physical route', 'Open optional Auto Wire', step => step.getByRole('region', { name: 'Optional Auto Wire' }));
-  }
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await expect(page.getByTestId('commissioning-step')).toBeVisible();
 }
 
 async function openAdvanced(page: any) {
@@ -47,14 +50,16 @@ async function openAdvanced(page: any) {
   if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
 }
 
-async function openInstallReview(page: any) {
-  await openCommissioningStep(
-    page,
-    'Step 5: Review and install',
-    'Open install review',
-    step => step.locator('.lw-install-gate'),
-  );
+// Board pins + expert mapping live inside one collapsed details card in the
+// Match step now.
+async function openExpertMapping(page: any) {
+  const details = page.locator('details.lww-expert');
+  if (await details.getAttribute('open') === null) await details.locator('summary').click();
 }
+
+// The Pixels stat tile is the always-visible pixel total (the old
+// wiring-total-pixels readout only renders inside the Install step).
+const pixelsTile = (page: any) => page.locator('.lwui-tile').filter({ hasText: 'Pixels' }).locator('.lwui-tile-value');
 
 async function saveProject(page: any) {
   await page.waitForTimeout(600);
@@ -85,9 +90,8 @@ async function seedFourRunClosedFixture(page: any) {
   project.layout.wiring.locked = false;
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('region', { name: 'Step 1: Choose data wires' }).getByRole('button', { name: 'Edit data wire count' }).click();
-  await page.getByRole('region', { name: 'Step 2: Map LED outputs' }).getByRole('button', { name: 'Edit LED output mapping' }).click();
-  await page.getByRole('region', { name: 'Step 3: Plan the physical route' }).getByRole('button', { name: 'Open optional Auto Wire' }).click();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await openStep(page, 'Match');
   await expect(page.getByTestId('wiring-run-row')).toHaveCount(4);
 }
 
@@ -125,63 +129,74 @@ async function installFrameCard(page: any) {
 
 test('Wire is a compiler-derived physical output patch board', async ({ page }) => {
   await gotoWire(page);
-  await openInstallReview(page);
+  await openStep(page, 'Match');
   await expect(page.getByTestId('wiring-output-lane')).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Output A' })).toBeVisible();
   await expect(page.getByTestId('wiring-run-row')).toHaveCount(2);
   await expect(page.locator('.lw-wiring-run-index')).toHaveCount(0);
-  await expect(page.getByText('How many LED data wires leave the card?')).toBeVisible();
-  await expect(page.getByRole('button', { name: '1', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByText('GPIO 16', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('wiring-output-lane').getByText('GPIO 16', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Output A GPIO')).toHaveCount(0);
   await expect(page.getByText('Compiler preflight')).toHaveCount(0);
-  await expect(page.getByText('Complete the physical LED check before installation.', { exact: true })).toBeVisible();
   await expect(page.getByText('Edit LED range')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toHaveCount(0);
+
+  await openStep(page, 'Wires');
+  await expect(page.getByRole('group', { name: 'How many wires leave the card?' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '1 wire' })).toHaveAttribute('aria-pressed', 'true');
+
+  await openStep(page, 'Install');
+  await expect(page.getByText('One thing left before install')).toBeVisible();
+  await expect(page.getByText('Run the LED check on the real strips.', { exact: true })).toBeVisible();
 });
 
 test('Wire presents one staged commissioning path with routing before physical verification', async ({ page }) => {
-  await gotoWire(page, { expandDataWires: false });
-  const steps = page.getByTestId('commissioning-step');
+  await gotoWire(page);
+  const steps = rail(page).getByRole('button');
   await expect(steps).toHaveCount(5);
-  expect(await steps.evaluateAll(elements => elements.map(element => element.getAttribute('data-step-state')))).toEqual(['complete', 'complete', 'optional', 'current', 'blocked']);
-  await expect(page.getByRole('region', { name: 'Step 1: Choose data wires' })).toContainText('1 data wire');
-  await expect(page.getByRole('region', { name: 'Step 2: Map LED outputs' })).toContainText('1 LED output');
-  await expect(page.getByRole('region', { name: 'Step 4: Check the real LEDs' })).toContainText('Confirm RGB color order');
-  await expect(page.getByRole('region', { name: 'Step 5: Review and install' })).toContainText('Physical LED check required');
-
-  const routeStep = page.getByRole('region', { name: 'Step 3: Plan the physical route' });
-  const bench = page.getByTestId('wiring-bench-test');
-  expect(await routeStep.evaluate((routeElement, benchElement) => Boolean(
-    routeElement.compareDocumentPosition(benchElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-  ), await bench.elementHandle())).toBe(true);
+  // Only the selected step's card renders; state pills are gone in favor of
+  // rail segment states.
+  await expect(page.getByTestId('commissioning-step')).toHaveCount(1);
+  expect(await railStepStates(page)).toEqual(['done', 'done', 'optional', 'current', 'todo']);
+  const labels = await steps.allTextContents();
+  expect(labels.map(label => label.replace(' ✓', ''))).toEqual(['Wires', 'Match', 'Route', 'Check', 'Install']);
+  // Route planning sits before the physical check, which sits before install.
+  expect(labels.findIndex(label => label.startsWith('Route'))).toBeLessThan(labels.findIndex(label => label.startsWith('Check')));
+  expect(labels.findIndex(label => label.startsWith('Check'))).toBeLessThan(labels.findIndex(label => label.startsWith('Install')));
+  // The flow lands on the physical check step.
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('data-step-state', 'current');
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Light them up and check');
+  await expect(page.getByTestId('wiring-bench-test')).toBeVisible();
 });
 
-test('physical LED check states its prerequisite before the disabled action', async ({ page }) => {
+test('physical LED check requires the visibility acknowledgement before the chase starts', async ({ page }) => {
+  await installFrameCard(page);
   await gotoWire(page);
   const bench = page.getByTestId('wiring-bench-test');
-  const confirmation = bench.getByLabel('The LED strips are visible from here');
-  const start = bench.getByRole('button', { name: 'Start physical LED check' });
-  await expect(confirmation).toBeVisible();
-  await expect(start).toBeDisabled();
-  await expect(bench.getByText('Confirm that you can see the LEDs to start the check.')).toBeVisible();
-  expect(await confirmation.evaluate((confirmationElement, startElement) => Boolean(
-    confirmationElement.compareDocumentPosition(startElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-  ), await start.elementHandle())).toBe(true);
-  await confirmation.check();
-  await expect(start).toBeEnabled();
+  // First screen: stand where you can see the strips. No chase question, no
+  // frame is sent until the user acknowledges visibility.
+  await expect(bench.getByRole('heading', { name: 'Stand where you can see the LED strips' })).toBeVisible();
+  await expect(bench.getByText(/LED CHECK · 1 OF \d+/)).toBeVisible();
+  const start = bench.getByRole('button', { name: 'I can see the LED strips' });
+  await expect(start).toBeVisible();
+  await expect(bench.getByRole('button', { name: /^Yes — / })).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__wiringFrames.length)).toBe(0);
+  await start.click();
+  await expect(bench.getByText(/LED CHECK · 2 OF \d+/)).toBeVisible();
+  await expect(bench.getByRole('button', { name: /Yes — I see Wire A/ })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(0);
 });
 
 test('review separates install from export and names the card connection state', async ({ page }) => {
   await gotoWire(page);
-  const review = page.getByRole('region', { name: 'Step 5: Review and install' });
-  await review.getByRole('button', { name: 'Open install review' }).click();
-  await expect(review.getByText('Data wires')).toBeVisible();
-  await expect(review.getByText('LED outputs')).toBeVisible();
-  await expect(review.getByText('LED strips')).toBeVisible();
-  await expect(review.getByText('Configured color order')).toBeVisible();
-  await expect(review.getByRole('button', { name: /Save to card/ })).toContainText('Card not connected');
-  await expect(review.getByRole('button', { name: 'Download WLED map' })).toHaveClass(/btn-ghost/);
+  await openStep(page, 'Install');
+  const step = page.getByTestId('commissioning-step');
+  await expect(step.getByRole('button', { name: /Save to card/ })).toContainText('Card not connected');
+  await expect(step.getByRole('button', { name: 'Download WLED map' })).toHaveClass(/btn-ghost/);
+  // The install summary reads from the always-visible stat tiles; the old
+  // color-order spec row ("GRB") stays out of primary copy.
+  await expect(page.getByText('Data wires', { exact: true })).toBeVisible();
+  await expect(page.getByText('Pixels', { exact: true })).toBeVisible();
+  await expect(page.getByText('Configured color order')).toHaveCount(0);
 });
 
 test('narrow inspector uses container-aware stacked controls without clipping', async ({ page }) => {
@@ -189,12 +204,11 @@ test('narrow inspector uses container-aware stacked controls without clipping', 
   await gotoWire(page);
   const panel = page.getByTestId('layout-wire-panel');
   await panel.evaluate(element => { (element as HTMLElement).style.width = '300px'; });
-  const outputStep = panel.getByRole('region', { name: 'Step 2: Map LED outputs' });
-  const outputToggle = outputStep.locator('.lw-step-toggle');
-  if (await outputToggle.getAttribute('aria-expanded') !== 'true') await outputToggle.click();
+  await openStep(page, 'Match');
   const row = panel.getByTestId('wiring-run-row').first();
+  await expect(row).toBeVisible();
   await expect(row).toHaveCSS('grid-template-columns', /.+/);
-  for (const target of [panel, panel.getByRole('region', { name: 'Step 2: Map LED outputs' }), row]) {
+  for (const target of [panel, panel.getByTestId('commissioning-step'), row]) {
     const size = await target.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
     expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth);
   }
@@ -210,6 +224,7 @@ test('narrow inspector uses container-aware stacked controls without clipping', 
 
 test('Delete requests guarded removal instead of immediately deleting an LED strip', async ({ page }) => {
   await gotoWire(page);
+  await openStep(page, 'Match');
   const rows = page.getByTestId('wiring-run-row');
   const row = rows.first();
   await row.focus();
@@ -218,15 +233,17 @@ test('Delete requests guarded removal instead of immediately deleting an LED str
   await expect(row.getByRole('button', { name: 'Confirm remove Outer circle' })).toBeVisible();
 });
 
-test('legacy wire-count review opens only the actual current commissioning step', async ({ page }) => {
-  await gotoWire(page, { expandDataWires: false });
+test('legacy wire-count review selects the actual current commissioning step', async ({ page }) => {
+  await gotoWire(page);
   const project = await saveProject(page);
   project.layout.patchBoard.dataWireCountNeedsReview = true;
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
-  const steps = page.getByTestId('commissioning-step');
-  await expect(steps.nth(0)).toHaveAttribute('data-step-state', 'current');
-  expect(await steps.locator('.lw-step-toggle').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-expanded')))).toEqual(['true', 'false', 'false', 'false', 'false']);
+  const step = page.getByTestId('commissioning-step');
+  await expect(step).toHaveAttribute('data-step-state', 'current');
+  await expect(step).toHaveAttribute('aria-label', 'How many wires leave the card?');
+  await expect(rail(page).getByRole('button', { name: 'Wires' })).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByText('This older project needs confirmation. Tap the correct number, even if it is already selected.')).toBeVisible();
 });
 
 test('closing wire discovery stops the persistent card test before hiding it', async ({ page }) => {
@@ -240,6 +257,7 @@ test('closing wire discovery stops the persistent card test before hiding it', a
       : { ok: true, state: 'rebooting-for-discovery', batch: 0, assignments: [{ pin: 16, color: '#ff0000', label: 'Red' }] } });
   });
   await gotoWire(page);
+  await openStep(page, 'Match');
 
   await page.getByRole('button', { name: 'Find my LED wire' }).click();
   await expect(page.getByRole('region', { name: 'Find my LED wire' }).getByRole('button', { name: /Red/ })).toBeVisible();
@@ -254,26 +272,19 @@ test('closing wire discovery stops the persistent card test before hiding it', a
   await expect.poll(() => discoveryBodies.filter(body => body.stop === true).length).toBe(2);
 });
 
-test('optional Auto Wire precedes the physical check and installation', async ({ page }) => {
+test('optional route planning precedes the physical check and installation', async ({ page }) => {
   await gotoWire(page);
-  const bench = page.getByTestId('wiring-bench-test');
-  const autoWire = page.getByRole('region', { name: 'Optional Auto Wire' });
-  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
-
-  await expect(autoWire).toContainText('Optional');
-  await expect(autoWire).toContainText('Uses your 1 data wire');
-  await expect(autoWire.getByRole('combobox', { name: 'Auto Wire output count' })).toHaveCount(0);
-  await expect(autoWire.getByText('Use a proposed strip order before checking the real LEDs. Applying a route later clears the physical check.', { exact: true })).toHaveCount(1);
-  await expect(autoWire.getByRole('button', { name: 'Place card' })).toBeVisible();
-  await expect(autoWire.getByRole('button', { name: 'Preview route' })).toHaveCount(0);
-  await autoWire.getByRole('button', { name: 'Place card' }).click();
-  await expect(autoWire.getByRole('button', { name: 'Preview route' })).toBeVisible();
-  expect(await autoWire.evaluate((autoElement, benchElement) => Boolean(
-    autoElement.compareDocumentPosition(benchElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-  ), await bench.elementHandle())).toBe(true);
-  expect(await autoWire.evaluate((autoElement, installElement) => Boolean(
-    autoElement.compareDocumentPosition(installElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-  ), await installStep.elementHandle())).toBe(true);
+  await openStep(page, 'Route');
+  const step = page.getByTestId('commissioning-step');
+  await expect(step).toHaveAttribute('data-step-state', 'optional');
+  await expect(step).toContainText('Optional');
+  await expect(step).toContainText('Uses your 1 data wire');
+  await expect(step.getByText('Uses your 1 data wire. Applying a route later clears the physical check.', { exact: true })).toHaveCount(1);
+  await expect(step.getByRole('combobox', { name: 'Auto Wire output count' })).toHaveCount(0);
+  await expect(step.getByRole('button', { name: 'Place the card' })).toBeVisible();
+  await expect(step.getByRole('button', { name: 'Preview a route' })).toHaveCount(0);
+  await step.getByRole('button', { name: 'Place the card' }).click();
+  await expect(step.getByRole('button', { name: 'Preview a route' })).toBeVisible();
 });
 
 test('LED color order check lives beside the physical check and sends real card tests', async ({ page }) => {
@@ -297,20 +308,20 @@ test('LED color order check lives beside the physical check and sends real card 
 
   const check = page.getByRole('region', { name: 'LED color order' });
   const bench = page.getByTestId('wiring-bench-test');
-  const autoWire = page.getByRole('region', { name: 'Optional Auto Wire' });
-  await expect(check.getByTestId('strip-color-order')).toHaveText('RGB');
-  await expect(check.getByText('If the test color is wrong, try the next order.', { exact: true })).toHaveCount(0);
+  // The machine color-order token stays out of primary copy (change 11):
+  // before the check opens the head shows plain language only.
+  await expect(check.getByText('Colors not checked yet')).toBeVisible();
+  await expect(check.getByTestId('strip-color-order')).toHaveCount(0);
+  // Both live inside the Check step; the color quiz follows the guided check.
   expect(await bench.evaluate((benchElement, checkElement) => Boolean(
     benchElement.compareDocumentPosition(checkElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
   ), await check.elementHandle())).toBe(true);
-  expect(await autoWire.evaluate((autoElement, benchElement) => Boolean(
-    autoElement.compareDocumentPosition(benchElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
-  ), await bench.elementHandle())).toBe(true);
 
   await check.getByRole('button', { name: 'Check colors' }).click();
-  await expect(check.getByText('If the test color is wrong, try the next order.', { exact: true })).toBeVisible();
+  await expect(check.getByTestId('strip-color-order')).toHaveText('RGB');
+  await expect(check.getByText('The whole strip just lit up. Tap the color you actually see.')).toBeVisible();
   await expect.poll(() => testRequests.some(request => request.patternId === 'test-red')).toBe(true);
-  await check.getByRole('button', { name: 'Green' }).click();
+  await check.getByRole('button', { name: 'Send Green test' }).click();
   await expect.poll(() => testRequests.some(request => request.patternId === 'test-green')).toBe(true);
   await check.getByRole('button', { name: 'Try next order' }).click();
   await expect(check.getByTestId('strip-color-order')).toHaveText('GRB');
@@ -339,16 +350,16 @@ test('color confirmation persists, unlocks install with verified wiring, and exp
   await page.evaluate(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(verifiedProject));
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  const steps = page.getByTestId('commissioning-step');
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'current');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'blocked');
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  expect(await railStepStates(page)).toEqual(['done', 'done', 'optional', 'current', 'todo']);
   const check = page.getByRole('region', { name: 'LED color order' });
   await check.getByRole('button', { name: 'Check colors' }).click();
-  await expect(check.getByRole('button', { name: 'Colors look correct' })).toBeEnabled();
-  await check.getByRole('button', { name: 'Colors look correct' }).click();
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(3)).toContainText('Wiring and RGB color order verified');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
+  // The matching quiz answer is the confirmation: the card is showing red.
+  const redAnswer = check.getByRole('button', { name: 'Red', exact: true });
+  await expect(redAnswer).toBeEnabled();
+  await expect(check.getByText('Red test is live.')).toBeVisible();
+  await redAnswer.click();
+  await expect.poll(() => railStepStates(page)).toEqual(['done', 'done', 'optional', 'done', 'current']);
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toBeEnabled();
 
   const confirmedProject = await saveProject(page);
@@ -359,21 +370,15 @@ test('color confirmation persists, unlocks install with verified wiring, and exp
   });
   await page.evaluate(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(confirmedProject));
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('commissioning-step').nth(3)).toHaveAttribute('data-step-state', 'complete');
-  await expect(page.getByTestId('commissioning-step').nth(4)).toHaveAttribute('data-step-state', 'current');
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await expect.poll(() => railStepStates(page)).toEqual(['done', 'done', 'optional', 'done', 'current']);
 
-  await openCommissioningStep(
-    page,
-    'Step 4: Check the real LEDs',
-    'Open physical LED check',
-    step => step.getByRole('region', { name: 'LED color order' }),
-  );
+  await openStep(page, 'Check');
   const persistedCheck = page.getByRole('region', { name: 'LED color order' });
   await persistedCheck.getByRole('button', { name: 'Check colors' }).click();
   await persistedCheck.getByRole('button', { name: 'Try next order' }).click();
   await expect(persistedCheck.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect(page.getByTestId('commissioning-step').nth(3)).toHaveAttribute('data-step-state', 'current');
-  await expect(page.getByTestId('commissioning-step').nth(4)).toHaveAttribute('data-step-state', 'blocked');
+  await expect.poll(() => railStepStates(page)).toEqual(['done', 'done', 'optional', 'current', 'todo']);
   const invalidatedProject = await saveProject(page);
   expect(invalidatedProject.devices.standaloneController.led.colorOrderConfirmed).toBe(false);
   expect(invalidatedProject.devices.standaloneController.led.confirmedColorOrder).toBe('');
@@ -393,29 +398,32 @@ test('color confirmation requires a successful live test for the current order',
 
   const check = page.getByRole('region', { name: 'LED color order' });
   await check.getByRole('button', { name: 'Check colors' }).click();
-  const confirm = check.getByRole('button', { name: 'Colors look correct' });
   await expect(check.getByRole('button', { name: 'Check colors' })).toBeEnabled();
-  await expect(confirm).toBeDisabled();
+  // With no successful live test, answering the matching color must NOT
+  // confirm the order — it replays the test instead.
+  await check.getByRole('button', { name: 'Red', exact: true }).click();
   expect((await saveProject(page)).devices.standaloneController.led.colorOrderConfirmed).not.toBe(true);
 
   cardReachable = true;
   await check.getByRole('button', { name: 'Check colors' }).click();
-  await expect(confirm).toBeEnabled();
-  await confirm.click();
+  await expect(check.getByText('Red test is live.')).toBeVisible();
+  await check.getByRole('button', { name: 'Red', exact: true }).click();
+  await expect(check.getByText('RGB color order confirmed.')).toBeVisible();
   expect((await saveProject(page)).devices.standaloneController.led).toMatchObject({
     colorOrderConfirmed: true,
     confirmedColorOrder: 'RGB',
   });
 });
 
-test('expanded commissioning step toggle names its visible Collapse action', async ({ page }) => {
-  await gotoWire(page, { expandDataWires: false });
-  const physicalStep = page.getByRole('region', { name: 'Step 4: Check the real LEDs' });
-  const expandedToggle = physicalStep.getByRole('button', { name: 'Collapse Check the real LEDs' });
-  await expect(expandedToggle).toHaveText('Collapse');
-  await expect(expandedToggle).toHaveAttribute('aria-expanded', 'true');
-  await expandedToggle.click();
-  await expect(physicalStep.getByRole('button', { name: 'Open physical LED check' })).toHaveAttribute('aria-expanded', 'false');
+test('the step rail navigates between steps and names the current one', async ({ page }) => {
+  await gotoWire(page);
+  await expect(rail(page).getByRole('button', { name: 'Check' })).toHaveAttribute('aria-current', 'step');
+  await openStep(page, 'Match');
+  await expect(rail(page).getByRole('button', { name: 'Match' })).toHaveAttribute('aria-current', 'step');
+  await expect(rail(page).getByRole('button', { name: 'Check' })).not.toHaveAttribute('aria-current', 'step');
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Match wires to strips');
+  await openStep(page, 'Install');
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
 });
 
 test('every visible narrow commissioning form control keeps a 44px touch target', async ({ page }) => {
@@ -429,45 +437,63 @@ test('every visible narrow commissioning form control keeps a 44px touch target'
   const panel = page.getByTestId('layout-wire-panel');
   await panel.evaluate(element => { (element as HTMLElement).style.width = '300px'; });
 
-  await panel.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
+  const assertTargets = async () => {
+    const controls = panel.locator('button:visible, input:visible, select:visible, textarea:visible, summary:visible');
+    for (const control of await controls.all()) {
+      const box = await control.boundingBox();
+      const name = await control.getAttribute('aria-label') || await control.textContent() || await control.getAttribute('name') || control.toString();
+      expect(box?.width, `${name.trim()} width`).toBeGreaterThanOrEqual(44);
+      expect(box?.height, `${name.trim()} height`).toBeGreaterThanOrEqual(44);
+    }
+  };
+
+  await openStep(page, 'Wires');
+  await panel.getByRole('button', { name: '2 wires' }).click();
+  await assertTargets();
+
+  await openStep(page, 'Match');
   await panel.getByRole('button', { name: 'Find my LED wire' }).click();
   await expect(panel.getByRole('region', { name: 'Find my LED wire' }).getByRole('combobox')).toBeVisible();
   await panel.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
   await openAdvanced(page);
+  await openExpertMapping(page);
   await expect(panel.getByRole('spinbutton', { name: 'Start LED' })).toBeVisible();
+  await assertTargets();
 
-  const autoWire = panel.getByRole('region', { name: 'Optional Auto Wire' });
-  await autoWire.getByRole('button', { name: 'Place card' }).click();
-  await autoWire.getByRole('button', { name: 'Preview route' }).click();
+  await openStep(page, 'Route');
+  await panel.getByRole('button', { name: 'Place the card' }).click();
+  await panel.getByRole('button', { name: 'Preview a route' }).click();
   await expect(panel.getByTestId('auto-wire-preview')).toBeVisible();
+  await assertTargets();
+
+  await openStep(page, 'Check');
   const colorCheck = panel.getByRole('region', { name: 'LED color order' });
   await colorCheck.getByRole('button', { name: 'Check colors' }).click();
   const bench = panel.getByTestId('wiring-bench-test');
-  await bench.getByRole('checkbox').check();
-  await bench.getByRole('button', { name: 'Start physical LED check' }).click();
-  await expect(bench).toContainText('Live');
+  await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
+  await expect(bench.getByRole('button', { name: /^Yes — / })).toBeEnabled();
+  await assertTargets();
 
-  const controls = panel.locator('button:visible, input:visible, select:visible, textarea:visible, summary:visible');
-  for (const control of await controls.all()) {
-    const box = await control.boundingBox();
-    const name = await control.getAttribute('aria-label') || await control.textContent() || await control.getAttribute('name') || control.toString();
-    expect(box?.width, `${name.trim()} width`).toBeGreaterThanOrEqual(44);
-    expect(box?.height, `${name.trim()} height`).toBeGreaterThanOrEqual(44);
-  }
+  await openStep(page, 'Install');
+  await assertTargets();
 });
 
-test('output GPIO and board controls reject conflicts while Expert mapping stays behind Advanced', async ({ page }) => {
+test('output GPIO and board controls reject conflicts while expert mapping stays collapsed by default', async ({ page }) => {
   await gotoWire(page);
-  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
-  await page.getByRole('button', { name: 'Advanced wiring settings' }).click();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '2 wires' }).click();
+  await openStep(page, 'Match');
+  await openAdvanced(page);
   const gpioA = page.getByLabel('Output A GPIO');
   const gpioB = page.getByLabel('Output B GPIO');
   await expect(gpioB).toHaveValue('17');
   await expect(gpioB.locator('option[value="16"]')).toBeDisabled();
   await gpioA.selectOption('38');
   await expect(gpioA).toHaveValue('38');
-  await expect(page.getByText('Board pins')).toBeVisible();
-  await expect(page.getByText('Expert mapping')).toBeVisible();
+  // Board pins and expert mapping stay behind one collapsed details card.
+  await expect(page.getByText('Board pins and expert mapping')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toHaveCount(0);
+  await openExpertMapping(page);
   await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeVisible();
   const encoderA = page.getByLabel('Encoder A pin');
   await expect(encoderA.locator('option[value="38"]')).toHaveAttribute('disabled', '');
@@ -477,8 +503,10 @@ test('output GPIO and board controls reject conflicts while Expert mapping stays
 
 test('entire output lanes drag with their GPIO, support keyboard reorder, and only empty lanes remove', async ({ page }) => {
   await gotoWire(page);
-  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
-  await page.getByRole('button', { name: 'Advanced wiring settings' }).click();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '2 wires' }).click();
+  await openStep(page, 'Match');
+  await openAdvanced(page);
   const lanes = page.getByTestId('wiring-output-lane');
   await expect(lanes.nth(0).getByRole('button', { name: /Remove Output/ })).toBeDisabled();
   const handle = lanes.nth(0).getByRole('button', { name: 'Drag Output A' });
@@ -492,12 +520,15 @@ test('entire output lanes drag with their GPIO, support keyboard reorder, and on
   await lanes.nth(1).getByRole('button', { name: 'Drag Output B' }).focus();
   await page.keyboard.press('Alt+ArrowUp');
   await expect(lanes.nth(0)).toHaveAttribute('data-output-id', 'out1');
-  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '1', exact: true }).click();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '1 wire' }).click();
+  await openStep(page, 'Match');
   await expect(lanes).toHaveCount(1);
 });
 
 test('changing logical sections never changes the explicit physical data-wire count', async ({ page }) => {
   await gotoWire(page);
+  await openStep(page, 'Match');
   const outputs = page.getByTestId('wiring-output-lane');
   await expect(outputs).toHaveCount(1);
   const firstRun = page.getByTestId('wiring-run-row').first();
@@ -505,9 +536,11 @@ test('changing logical sections never changes the explicit physical data-wire co
   await expect(outputs).toHaveCount(1);
   await firstRun.getByRole('button', { name: 'Flip' }).click();
   await expect(outputs).toHaveCount(1);
-  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '2 wires' }).click();
+  await openStep(page, 'Match');
   await expect(outputs).toHaveCount(2);
-  await firstRun.getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
+  await page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
   await expect(outputs).toHaveCount(2);
 });
 
@@ -522,56 +555,61 @@ test('Find my LED wire maps a visible discovery color to the selected GPIO', asy
     ] }),
   }));
   await gotoWire(page);
+  await openStep(page, 'Match');
   await page.getByRole('button', { name: 'Find my LED wire' }).click();
   const finder = page.getByRole('region', { name: 'Find my LED wire' });
   await expect(finder.getByText('Choose the color you see on the real LEDs.')).toBeVisible();
   await finder.getByRole('button', { name: /Blue GPIO 17/ }).click();
-  await expect(page.getByText('GPIO 17', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('wiring-output-lane').getByText('GPIO 17', { exact: true })).toBeVisible();
   await expect(finder).toContainText('uses GPIO 17');
 });
 
-test('Wire panel and Auto Wire never scroll horizontally at phone width', async ({ page }) => {
+test('Wire panel and route planning never scroll horizontally at phone width', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoWire(page);
   const panel = page.getByTestId('layout-wire-panel');
   await expect(panel).toBeAttached();
-  const autoWire = panel.locator('.lw-auto-wire-controls');
-  const colorOrder = panel.getByRole('region', { name: 'LED color order' });
-  await expect(autoWire.getByRole('button', { name: 'Place card' })).toBeEnabled();
-  await autoWire.getByRole('button', { name: 'Place card' }).click();
-  await autoWire.getByRole('button', { name: 'Preview route' }).click();
+  await openStep(page, 'Route');
+  const step = panel.getByTestId('commissioning-step');
+  await expect(step.getByRole('button', { name: 'Place the card' })).toBeEnabled();
+  await step.getByRole('button', { name: 'Place the card' }).click();
+  await step.getByRole('button', { name: 'Preview a route' }).click();
   const preview = page.getByTestId('auto-wire-preview');
   const actions = preview.locator('.lw-auto-wire-actions');
   await expect(actions.getByRole('button', { name: 'Apply route' })).toBeVisible();
-  await expect(actions.getByRole('button', { name: 'Close' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Cancel' })).toBeVisible();
   const labels = await actions.getByRole('button').allTextContents();
   expect(labels.at(-1)).toBe('Apply route');
   const overflows = [
     { selector: 'Wire panel', ...(await panel.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
-    { selector: 'Auto Wire', ...(await autoWire.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
+    { selector: 'Route step', ...(await step.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
     { selector: 'Auto Wire preview', ...(await preview.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
     { selector: 'Auto Wire actions', ...(await actions.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
-    { selector: 'LED color order', ...(await colorOrder.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }))) },
   ];
   for (const item of overflows) expect(item.scrollWidth, item.selector).toBeLessThanOrEqual(item.clientWidth);
+  await openStep(page, 'Check');
+  const colorOrder = panel.getByRole('region', { name: 'LED color order' });
+  const colorSize = await colorOrder.evaluate(element => ({ clientWidth: element.clientWidth, scrollWidth: element.scrollWidth }));
+  expect(colorSize.scrollWidth, 'LED color order').toBeLessThanOrEqual(colorSize.clientWidth);
 });
 
 test('inline strip count controls resize the real project without selecting the row', async ({ page }) => {
   await gotoWire(page);
-  await openInstallReview(page);
+  await openStep(page, 'Match');
   const row = page.getByTestId('wiring-run-row').first();
   await expect(row).toHaveAttribute('aria-selected', 'false');
   await row.getByRole('button', { name: 'Remove one pixel from Outer circle' }).click();
   await expect(row.getByTestId('inline-run-count')).toHaveText('26');
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('43');
+  await expect(pixelsTile(page)).toHaveText('43');
   await expect(row).toHaveAttribute('aria-selected', 'false');
   await row.getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
   await expect(row.getByTestId('inline-run-count')).toHaveText('27');
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('44');
+  await expect(pixelsTile(page)).toHaveText('44');
 });
 
 test('run selection stays synchronized with the artwork canvas', async ({ page }) => {
   await gotoWire(page);
+  await openStep(page, 'Match');
   const row = page.getByTestId('wiring-run-row').first();
   await row.locator('.lw-wiring-run-name').click();
   await expect(row).toHaveAttribute('aria-selected', 'true');
@@ -580,6 +618,7 @@ test('run selection stays synchronized with the artwork canvas', async ({ page }
 
 test('accessible ports connect by tap and keyboard alternatives reorder runs', async ({ page }) => {
   await gotoWire(page);
+  await openStep(page, 'Match');
   const rows = page.getByTestId('wiring-run-row');
   const secondName = await rows.nth(1).getAttribute('data-run-id');
   await rows.nth(1).focus();
@@ -596,14 +635,15 @@ test('accessible ports connect by tap and keyboard alternatives reorder runs', a
 
 test('unverified wiring cannot lock or send and deterministic reserved runs consume addresses', async ({ page }) => {
   await gotoWire(page);
-  await openInstallReview(page);
+  await openStep(page, 'Install');
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toHaveCount(0);
-  await openAdvanced(page);
+  await openStep(page, 'Match');
+  await openExpertMapping(page);
   await page.getByRole('button', { name: 'Add skipped pixels' }).click();
   await page.getByRole('button', { name: 'Add skipped pixels' }).click();
   await expect(page.getByTestId('wiring-run-row').getByText('Reserved · unlit')).toHaveCount(2);
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('46');
+  await expect(pixelsTile(page)).toHaveText('46');
   const ids = await page.getByTestId('wiring-run-row').evaluateAll(rows => rows.map(row => row.getAttribute('data-run-id')));
   expect(ids).toContain('reserved-1');
   expect(ids).toContain('reserved-2');
@@ -620,9 +660,10 @@ test('pointer row drag captures the pointer and moves a canonical run between ou
     };
   });
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('region', { name: 'Step 1: Choose data wires' }).getByRole('button', { name: 'Edit data wire count' }).click();
-  await page.getByRole('group', { name: 'LED data wire count' }).getByRole('button', { name: '2', exact: true }).click();
-  await page.getByRole('region', { name: 'Step 2: Map LED outputs' }).getByRole('button', { name: 'Edit LED output mapping' }).click();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '2 wires' }).click();
+  await openStep(page, 'Match');
   const run = page.getByTestId('wiring-run-row').first();
   const runId = await run.getAttribute('data-run-id');
   const handle = run.getByRole('button', { name: /Drag/ });
@@ -639,20 +680,21 @@ test('pointer row drag captures the pointer and moves a canonical run between ou
   await expect(page.getByTestId('wiring-output-lane').nth(1).getByTestId('wiring-run-row')).toHaveAttribute('aria-selected', 'false');
 });
 
-test('bench boundary controls redistribute a fixed physical total and show the blue-to-red legend', async ({ page }) => {
+test('bench boundary controls redistribute a fixed physical total and explain the blue-to-red markers', async ({ page }) => {
   await installFrameCard(page);
   await gotoWire(page);
-  await openInstallReview(page);
   const bench = page.getByTestId('wiring-bench-test');
-  await bench.getByRole('checkbox').check();
-  await bench.getByRole('button', { name: 'Start wiring test' }).click();
-  await expect(bench.getByLabel('Pixel marker legend').getByText('Blue')).toBeVisible();
-  await expect(bench.getByLabel('Pixel marker legend').getByText('Red')).toBeVisible();
+  await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
+  // The blue-first / red-last convention is explained inline on the output step.
+  await expect(bench).toContainText('The first LED should be blue and the last LED red');
+  const outputPrimary = bench.getByRole('button', { name: /Yes — I see Wire/ });
+  await expect(outputPrimary).toBeEnabled();
+  await bench.getByRole('button', { name: 'Something’s wrong' }).click();
   await expect(bench.getByTestId('active-output-count')).toHaveText('44 pixels');
   const frameCountBeforeOutputChange = await page.evaluate(() => (window as any).__wiringFrames.length);
-  await bench.getByRole('button', { name: /Remove one pixel from Output/ }).click();
+  await bench.getByRole('button', { name: /Remove one pixel from Wire/ }).click();
   await expect(bench.getByTestId('active-output-count')).toHaveText('43 pixels');
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('43');
+  await expect(pixelsTile(page)).toHaveText('43');
   await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(frameCountBeforeOutputChange);
   await expect.poll(() => page.evaluate(() => {
     const frame = (window as any).__wiringFrames.at(-1);
@@ -662,24 +704,27 @@ test('bench boundary controls redistribute a fixed physical total and show the b
   expect(shortenedFrame[0]).toBe('00001A');
   expect(shortenedFrame[42]).toBe('1A0000');
   expect(shortenedFrame[43]).toBe('000000');
-  await bench.getByRole('button', { name: /Add one pixel to Output/ }).click();
+  await bench.getByRole('button', { name: /Add one pixel to Wire/ }).click();
   await expect(bench.getByTestId('active-output-count')).toHaveText('44 pixels');
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('44');
-  await bench.getByRole('button', { name: /I see Output/ }).click();
+  await expect(pixelsTile(page)).toHaveText('44');
+  await outputPrimary.click();
+  // First run step: the run-level nudges live in the same recovery panel.
+  await expect(bench.getByRole('button', { name: 'Yes — blue at the start, red at the end' })).toBeVisible();
+  await bench.getByRole('button', { name: 'Something’s wrong' }).click();
   await expect(bench.getByRole('button', { name: 'Add one pixel to Outer circle' })).toBeVisible();
   await expect(bench.getByTestId('active-run-count')).toHaveText('27 pixels');
+  await openStep(page, 'Match');
   await expect(page.getByTestId('wiring-run-row').nth(0).getByTestId('inline-run-count')).toHaveText('27');
   await expect(page.getByTestId('wiring-run-row').nth(1).getByTestId('inline-run-count')).toHaveText('17');
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('44');
+  await expect(pixelsTile(page)).toHaveText('44');
 });
 
 test('leaving Wire stops the active physical test and its hidden frame loop', async ({ page }) => {
   const controls = await installFrameCard(page);
   await gotoWire(page);
   const bench = page.getByTestId('wiring-bench-test');
-  await bench.getByRole('checkbox').check();
-  await bench.getByRole('button', { name: 'Start wiring test' }).click();
-  await expect(bench).toContainText('Live');
+  await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
+  await expect(bench.getByRole('button', { name: /Yes — I see Wire/ })).toBeEnabled();
   await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(0);
 
   await page.getByTestId('layout-mode-draw').click();
@@ -694,7 +739,7 @@ test('leaving Wire stops the active physical test and its hidden frame loop', as
 test('pointer cord drag from run DATA OUT to DATA IN creates one zero-address cable jump', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1200 });
   await gotoWire(page);
-  await openInstallReview(page);
+  await openStep(page, 'Match');
   const physicalRows = page.getByTestId('wiring-run-row').filter({ has: page.getByRole('button', { name: 'Flip' }) });
   const outPort = physicalRows.nth(0).getByRole('button', { name: /OUT port/ });
   const inPort = physicalRows.nth(1).getByRole('button', { name: /IN port/ });
@@ -710,7 +755,7 @@ test('pointer cord drag from run DATA OUT to DATA IN creates one zero-address ca
   await page.mouse.up();
   await expect(outPort).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('wiring-run-row').getByText('Cable jump')).toHaveCount(1);
-  await expect(page.getByTestId('wiring-total-pixels')).toContainText('44');
+  await expect(pixelsTile(page)).toHaveText('44');
   await page.waitForTimeout(700);
   const autosavedTypes = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').layout?.wiring?.runs?.map((run: any) => `${run.id}:${run.type}`));
   expect(autosavedTypes).toContain('cable-1:cable');
@@ -724,9 +769,10 @@ test('pointer cord drag from run DATA OUT to DATA IN creates one zero-address ca
 
 test('fixed-direction runs refuse reverse and self-connections do not create cycles or duplicates', async ({ page }) => {
   await gotoWire(page);
-  await openAdvanced(page);
+  await openStep(page, 'Match');
   await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
-  await page.getByLabel('Direction').selectOption('fixed');
+  await openExpertMapping(page);
+  await page.getByLabel('Direction policy').selectOption('fixed');
   await expect(page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Flip' })).toBeDisabled();
   const row = page.getByTestId('wiring-run-row').first();
   await row.getByRole('button', { name: /OUT port/ }).click();
@@ -739,7 +785,8 @@ test('fixed-direction runs refuse reverse and self-connections do not create cyc
 test('controller placement and physical DATA IN controls feed a preview-only Auto Wire proposal', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await gotoWire(page);
-  await page.getByRole('button', { name: 'Place card' }).click();
+  await openStep(page, 'Route');
+  await page.getByRole('button', { name: 'Place the card' }).click();
 
   const anchor = page.getByTestId('controller-anchor');
   await expect(anchor).toBeVisible();
@@ -751,14 +798,16 @@ test('controller placement and physical DATA IN controls feed a preview-only Aut
   await page.mouse.move(box.x + box.width / 2 + 45, box.y + box.height / 2 + 30, { steps: 4 });
   await page.mouse.up();
 
-  await expect(page.getByRole('region', { name: 'Optional Auto Wire' })).toContainText('Uses your 1 data wire');
+  await expect(page.getByTestId('commissioning-step')).toContainText('Uses your 1 data wire');
+  await openStep(page, 'Match');
   await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
-  await openAdvanced(page);
+  await openExpertMapping(page);
   await expect(page.getByLabel('Direction policy')).toHaveValue('flexible');
   await expect(page.getByLabel('Physical DATA IN')).toHaveValue('source-forward');
 
   const before = (await saveProject(page)).layout.wiring;
-  await page.getByRole('button', { name: 'Preview route' }).click();
+  await openStep(page, 'Route');
+  await page.getByRole('button', { name: 'Preview a route' }).click();
   const preview = page.getByTestId('auto-wire-preview');
   await expect(preview).toBeVisible();
   await expect(preview).toContainText(/Output A|Output B/);
@@ -768,7 +817,7 @@ test('controller placement and physical DATA IN controls feed a preview-only Aut
   await expect(preview.getByRole('button', { name: 'Route details' })).toHaveAttribute('aria-expanded', 'false');
   await expect(preview.getByText(/Cable length/i)).toHaveCount(0);
   await expect(preview.getByRole('button', { name: 'Apply route' })).toBeVisible();
-  await expect(preview.getByRole('button', { name: 'Close' })).toBeVisible();
+  await expect(preview.getByRole('button', { name: 'Cancel' })).toBeVisible();
   await expect(preview.getByRole('button', { name: 'Accept routing' })).toHaveCount(0);
   await preview.getByRole('button', { name: 'Route details' }).click();
   await expect(preview.getByText(/Cable length/i)).toBeVisible();
@@ -777,7 +826,7 @@ test('controller placement and physical DATA IN controls feed a preview-only Aut
   const whilePreviewing = (await saveProject(page)).layout.wiring;
   expect(whilePreviewing).toEqual(before);
 
-  await page.getByRole('button', { name: 'Close' }).click();
+  await preview.getByRole('button', { name: 'Cancel' }).click();
   await expect(preview).toHaveCount(0);
   const afterCancel = (await saveProject(page)).layout.wiring;
   expect(afterCancel).toEqual(before);
@@ -786,7 +835,8 @@ test('controller placement and physical DATA IN controls feed a preview-only Aut
 test('Auto Wire acceptance applies the displayed proposal while fixed or verified seams refuse movement', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await gotoWire(page);
-  await page.getByRole('button', { name: 'Place card' }).click();
+  await openStep(page, 'Route');
+  await page.getByRole('button', { name: 'Place the card' }).click();
   const anchor = page.getByTestId('controller-anchor');
   await anchor.hover();
   const box = await anchor.boundingBox();
@@ -796,7 +846,7 @@ test('Auto Wire acceptance applies the displayed proposal while fixed or verifie
   await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 3 });
   await page.mouse.up();
 
-  await page.getByRole('button', { name: 'Preview route' }).click();
+  await page.getByRole('button', { name: 'Preview a route' }).click();
   const preview = page.getByTestId('auto-wire-preview');
   const displayedLane = await preview.getByTestId('auto-wire-lane').first().getAttribute('data-run-order');
   await page.getByRole('button', { name: 'Apply route' }).click();
@@ -804,8 +854,9 @@ test('Auto Wire acceptance applies the displayed proposal while fixed or verifie
   const accepted = (await saveProject(page)).layout.wiring;
   expect(accepted.outputs[0].runIds.join(',')).toBe(displayedLane);
 
+  await openStep(page, 'Match');
   await page.getByTestId('wiring-run-row').first().locator('.lw-wiring-run-name').click();
-  await openAdvanced(page);
+  await openExpertMapping(page);
   const seam = page.getByLabel('Connector seam LED');
   if (await seam.count()) {
     await page.getByLabel('Direction policy').selectOption('fixed');
@@ -817,23 +868,26 @@ test('Auto Wire honors each output constraint and exposes only solver-approved e
   await page.setViewportSize({ width: 1440, height: 1100 });
   await gotoWire(page);
   await seedFourRunClosedFixture(page);
-  const outputCount = page.getByRole('group', { name: 'LED data wire count' });
 
-  for (const count of ['1', '2', '3', '4']) {
-    await outputCount.getByRole('button', { name: count, exact: true }).click();
-    await page.getByRole('button', { name: 'Preview route' }).click();
+  for (const count of [1, 2, 3, 4]) {
+    await openStep(page, 'Wires');
+    await page.getByRole('button', { name: count === 1 ? '1 wire' : `${count} wires` }).click();
+    await openStep(page, 'Route');
+    await page.getByRole('button', { name: 'Preview a route' }).click();
     const preview = page.getByTestId('auto-wire-preview');
-    await expect(preview.getByTestId('auto-wire-lane')).toHaveCount(Number(count));
+    await expect(preview.getByTestId('auto-wire-lane')).toHaveCount(count);
     await preview.getByRole('button', { name: 'Route details' }).click();
     await expect(preview).toContainText(/relative units|mm/);
     await expect(preview).toContainText(/Direction changes/i);
     await expect(preview).toContainText(/Connector changes/i);
     await expect(preview).toContainText(/Estimate notes/i);
-    await page.getByRole('button', { name: 'Close' }).click();
+    await preview.getByRole('button', { name: 'Cancel' }).click();
   }
 
-  await outputCount.getByRole('button', { name: '1', exact: true }).click();
-  await page.getByRole('button', { name: 'Preview route' }).click();
+  await openStep(page, 'Wires');
+  await page.getByRole('button', { name: '1 wire' }).click();
+  await openStep(page, 'Route');
+  await page.getByRole('button', { name: 'Preview a route' }).click();
   await expect(page.getByTestId('auto-wire-preview').getByTestId('auto-wire-lane')).toHaveCount(1);
   const alternative = page.getByRole('button', { name: 'Try another' });
   await expect(alternative).toBeVisible();
@@ -848,7 +902,7 @@ test('closed-path seam and physical DATA IN are editable independently until fix
   await seedFourRunClosedFixture(page);
   const row = page.getByTestId('wiring-run-row').first();
   await row.locator('.lw-wiring-run-name').click();
-  await openAdvanced(page);
+  await openExpertMapping(page);
   const policy = page.getByLabel('Direction policy');
   const dataIn = page.getByLabel('Physical DATA IN');
   const seam = page.getByLabel('Connector seam LED');
@@ -869,52 +923,59 @@ test('closed-path seam and physical DATA IN are editable independently until fix
 test('guided chase acknowledges full low-brightness frames, verifies every fact, then unlocks assembly documentation', async ({ page }) => {
   await installFrameCard(page);
   await gotoWire(page);
+  await openStep(page, 'Match');
   const stripRows = page.getByTestId('wiring-run-row').filter({ has: page.getByRole('button', { name: 'Flip' }) });
   await stripRows.nth(0).getByRole('button', { name: /OUT port/ }).click();
   await stripRows.nth(1).getByRole('button', { name: /IN port/ }).click();
-  await openAdvanced(page);
+  await openExpertMapping(page);
   await page.getByRole('button', { name: 'Add skipped pixels' }).click();
+  await openStep(page, 'Check');
   const bench = page.getByTestId('wiring-bench-test');
-  await bench.getByRole('checkbox').check();
-  await bench.getByRole('button', { name: 'Start wiring test' }).click();
+  await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
 
-  await expect(bench).toContainText('Live');
-  await bench.getByRole('button', { name: /I see Output/ }).click();
+  const outputPrimary = bench.getByRole('button', { name: /Yes — I see Wire/ });
+  await expect(outputPrimary).toBeEnabled();
+  await outputPrimary.click();
   for (let run = 0; run < 2; run += 1) {
-    await expect(bench).toContainText('Live');
+    const confirmRunButton = bench.getByRole('button', { name: 'Yes — blue at the start, red at the end' });
+    await expect(confirmRunButton).toBeEnabled();
     if (run === 0) {
       await expect.poll(() => page.evaluate(() => {
         const frame = (window as any).__wiringFrames.at(-1);
         return `${frame?.[0]}:${frame?.[26]}`;
       })).toBe('00001A:1A0000');
       const beforeCorrectionFrames = await page.evaluate(() => (window as any).__wiringFrames.length);
-      await bench.getByRole('button', { name: 'Flip mapping' }).click();
+      await bench.getByRole('button', { name: 'Something’s wrong' }).click();
+      await bench.getByRole('button', { name: 'Flip the direction' }).click();
       await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(beforeCorrectionFrames);
       await expect.poll(() => page.evaluate(() => {
         const frame = (window as any).__wiringFrames.at(-1);
         return `${frame?.[0]}:${frame?.[26]}`;
       })).toBe('00001A:1A0000');
-      await expect(bench).toContainText('Live');
+      await expect(confirmRunButton).toBeEnabled();
     }
-    await bench.getByRole('button', { name: 'Boundary is correct' }).click();
+    await confirmRunButton.click();
     if (run === 0) {
       await expect(bench).toContainText('Cable jump');
-      await expect(bench).toContainText('Live');
-      await bench.getByRole('button', { name: 'Cable is connected' }).click();
+      const cableButton = bench.getByRole('button', { name: 'Yes — the cable is connected' });
+      await expect(cableButton).toBeEnabled();
+      await cableButton.click();
     }
   }
-  await expect(bench).toContainText('Reserved · unlit');
-  await expect(bench).toContainText('Live');
-  await bench.getByRole('button', { name: 'Reserved LEDs stay unlit' }).click();
+  await expect(bench).toContainText('Reserved LEDs');
+  const inactiveButton = bench.getByRole('button', { name: 'Yes — they stay dark' });
+  await expect(inactiveButton).toBeEnabled();
+  await inactiveButton.click();
   await expect(bench.getByRole('button', { name: 'Finish' })).toBeEnabled();
   await bench.getByRole('button', { name: 'Finish' }).click();
-  await expect(page.getByRole('region', { name: 'Step 4: Check the real LEDs' }).getByRole('button', { name: 'Collapse Check the real LEDs' })).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByRole('region', { name: 'Step 5: Review and install' })).toHaveAttribute('data-step-state', 'blocked');
+  await expect(bench.getByText('All checked. Review and lock the wiring before installation.')).toBeVisible();
+  // Install stays blocked until the color order is confirmed too.
+  expect(await railStepStates(page)).toEqual(['done', 'done', 'optional', 'current', 'todo']);
   const colorCheck = page.getByRole('region', { name: 'LED color order' });
   await colorCheck.getByRole('button', { name: 'Check colors' }).click();
-  await colorCheck.getByRole('button', { name: 'Colors look correct' }).click();
-  await expect(page.getByRole('region', { name: 'Step 4: Check the real LEDs' }).getByRole('button', { name: 'Open physical LED check' })).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByRole('region', { name: 'Step 5: Review and install' }).getByRole('button', { name: 'Collapse Review and install' })).toHaveAttribute('aria-expanded', 'true');
+  await expect(colorCheck.getByText('Red test is live.')).toBeVisible();
+  await colorCheck.getByRole('button', { name: 'Red', exact: true }).click();
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toBeEnabled();
   const correctedProject = await saveProject(page);
   expect(correctedProject.layout.wiring.runs.find((run: any) => run.type === 'strip').physicalDirection).toBe('source-reverse');
@@ -942,22 +1003,28 @@ test('guided chase acknowledges full low-brightness frames, verifies every fact,
   await expect(assembly.getByRole('button', { name: 'Print assembly map' })).toBeVisible();
 });
 
-test('failed chase stays on the same step, cancels without false verification, and Retry requires a fresh acknowledgement', async ({ page }) => {
+test('failed chase stays on the same step, cancels without false verification, and restarting requires a fresh acknowledgement', async ({ page }) => {
   const controls = await installFrameCard(page);
   await gotoWire(page);
   await page.evaluate(() => { (window as any).__wiringFail = true; });
   const bench = page.getByTestId('wiring-bench-test');
-  await bench.getByRole('checkbox').check();
-  await bench.getByRole('button', { name: 'Start wiring test' }).click();
-  await expect(bench).toContainText(/Now checkingOutput/);
-  await expect(bench).toContainText('Offline');
-  await expect(bench.getByRole('button', { name: /I see Output/ })).toBeDisabled();
+  await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
+  await expect(bench).toContainText('Do you see Wire A lit up?');
+  await expect(bench.getByText('The lights didn’t reach the card')).toBeVisible();
+  await expect(bench.getByRole('button', { name: /Yes — I see Wire/ })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toHaveCount(0);
   expect(controls.some(body => body.cancelStream === true)).toBe(true);
 
   await page.evaluate(() => { (window as any).__wiringFail = false; });
-  await bench.getByRole('button', { name: 'Retry' }).click();
-  await expect(bench).toContainText('Live');
-  await expect(bench).toContainText(/Now checkingOutput/);
-  await expect(bench.getByRole('button', { name: /I see Output/ })).toBeEnabled();
+  await bench.getByRole('button', { name: 'Try again' }).click();
+  await expect(bench).toContainText('Do you see Wire A lit up?');
+  await expect(bench.getByRole('button', { name: /Yes — I see Wire/ })).toBeEnabled();
+
+  // Cancelling never marks anything verified and forces the next attempt back
+  // through the visibility acknowledgement screen.
+  await bench.getByRole('button', { name: 'Do this later' }).click();
+  await expect(bench.getByRole('button', { name: 'I can see the LED strips' })).toBeVisible();
+  const project = await saveProject(page);
+  expect(project.layout.wiring.verified).toBe(false);
+  expect(project.layout.wiring.runs.every((run: any) => run.verified === false)).toBe(true);
 });

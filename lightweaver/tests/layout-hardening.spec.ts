@@ -5,12 +5,11 @@ async function gotoLayout(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 }
 
-async function openWireStep(page: any, regionName: string, toggleName: string, target: (step: any) => any) {
-  const step = page.getByRole('region', { name: regionName });
-  if (!await target(step).isVisible().catch(() => false)) {
-    await step.getByRole('button', { name: toggleName }).click();
-  }
-  await expect(target(step)).toBeVisible();
+// The Wire commissioning flow shows one step at a time; the StepRail
+// (role=group "Steps") is the navigation affordance.
+async function openWireStep(page: any, railLabel: string, target: (panel: any) => any) {
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: railLabel }).click();
+  await expect(target(page)).toBeVisible();
 }
 
 test('pending drawing survives a mode visit until explicitly cancelled', async ({ page }) => {
@@ -184,17 +183,15 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
-  await openWireStep(page, 'Step 1: Choose data wires', 'Edit data wire count', step => step.getByRole('group', { name: 'LED data wire count' }));
-  await openWireStep(page, 'Step 2: Map LED outputs', 'Edit LED output mapping', step => step.getByRole('button', { name: /Outer circle IN port/ }));
-  await openWireStep(page, 'Step 5: Review and install', 'Open install review', step => step.getByTestId('layout-send-to-card'));
-  for (const control of [
-    page.getByRole('group', { name: 'LED data wire count' }).getByRole('button').first(),
-    page.getByRole('button', { name: /Outer circle IN port/ }),
-    page.getByTestId('layout-send-to-card'),
-  ]) {
-    const box = await control.boundingBox();
-    expect(box?.height).toBeGreaterThanOrEqual(44);
-  }
+  await openWireStep(page, 'Wires', panel => panel.getByRole('group', { name: 'How many wires leave the card?' }));
+  let box = await page.getByRole('group', { name: 'How many wires leave the card?' }).getByRole('button').first().boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await openWireStep(page, 'Match', panel => panel.getByRole('button', { name: /Outer circle IN port/ }));
+  box = await page.getByRole('button', { name: /Outer circle IN port/ }).boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await openWireStep(page, 'Install', panel => panel.getByTestId('layout-send-to-card'));
+  box = await page.getByTestId('layout-send-to-card').boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
   await context.close();
 });
 
@@ -230,7 +227,6 @@ test('mobile Layout keeps a useful canvas and presents the inspector as a bottom
 test('mode toolbar only presents tools that apply while keeping secondary groups named', async ({ page }) => {
   await gotoLayout(page);
   const toolbar = page.locator('.la .toolbar');
-  await expect(toolbar.getByRole('group', { name: 'Mode actions' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Project' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'View' })).toBeVisible();
   await expect(page.getByTitle('Import an SVG to map LED strips')).toBeVisible();
@@ -251,6 +247,11 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
 
 test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ page }) => {
   await gotoLayout(page);
+  // A fresh layout opens on the starter shape picker with no strips yet —
+  // create one so a strip path exists to drive with the keyboard.
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
   const strip = page.locator('path[data-strip-path]').first();
   await strip.focus();
   await page.keyboard.press('Enter');
@@ -267,7 +268,7 @@ test('wire scaffold is concise and recovery actions stay hidden without a mixed-
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
   const guide = page.getByRole('region', { name: 'Wire setup guide' });
   await expect(guide).toBeVisible();
-  await expect(guide).toContainText(/Connect each physical run[\s\S]*order[\s\S]*Validate/);
+  await expect(guide).toContainText('Match each run to its real data wire, then prove it on the LEDs.');
   await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);

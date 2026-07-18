@@ -112,14 +112,13 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   }, TEST_CARD_ID);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
-  const installToggle = installStep.locator('.lw-step-toggle');
-  if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
   if (!verified) return;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
+  await page.waitForTimeout(600);
   const pending = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
+  await page.locator('.la .toolbar').getByRole('button', { name: 'Export', exact: true }).click();
   const download = await pending;
   const source = path.join(tmp, 'source.json');
   await download.saveAs(source);
@@ -136,8 +135,8 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
-  const reloadedInstallToggle = page.getByRole('region', { name: 'Step 5: Review and install' }).locator('.lw-step-toggle');
-  if (await reloadedInstallToggle.getAttribute('aria-expanded') !== 'true') await reloadedInstallToggle.click();
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
@@ -188,7 +187,7 @@ test('a successful push is pending until acknowledgement and records the exact i
 
   await page.getByTestId('layout-send-to-card').click();
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
-  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Installing/);
+  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Saving/);
 
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 5000 });

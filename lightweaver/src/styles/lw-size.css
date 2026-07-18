@@ -1,0 +1,436 @@
+/* ============================================================
+   lw-size.css — Size & Power panel (plan changes 15,16,17,19 + 18 display).
+   Consumes the v3 token set; no new tokens, no hardcoded hex —
+   only color-mix over existing custom properties.
+   Class prefix: lws-
+   ============================================================ */
+
+.lws-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  /* Collapse rules key off the panel width, not the viewport — the panel is
+     a fixed ~320px column on desktop (redesign change 20). */
+  container-type: inline-size;
+}
+
+/* ---------- header ---------- */
+
+.lws-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+.lws-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-hi);
+  margin: 4px 0 2px;
+  text-wrap: balance;
+}
+
+.lws-sub {
+  font-size: 12.5px;
+  color: var(--text-mid);
+  margin: 0;
+  max-width: 52ch;
+}
+
+/* ---------- artwork size ---------- */
+
+.lws-scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lws-num {
+  width: 82px;
+  min-height: 44px;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lws-unit-toggle {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-mid);
+  font: 600 12.5px var(--font-mono);
+  cursor: pointer;
+}
+
+.lws-dims {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- density picker (change 17) ---------- */
+
+.lws-density-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lws-density {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@container (max-width: 420px) {
+  .lws-density {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.lws-dopt {
+  min-height: 44px;
+  border: 1px solid var(--border-hair);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  padding: 10px 6px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-hi);
+  font: inherit;
+  min-width: 0;
+}
+
+.lws-dopt.lws-dopt-sel {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.lws-dopt-dots {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+
+.lws-dopt-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-mid);
+  flex: none;
+}
+
+.lws-dopt-name {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.lws-dopt-cap {
+  display: block;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+/* ---------- strip rows (change 18, display half) ---------- */
+
+.lws-strips {
+  display: flex;
+  flex-direction: column;
+}
+
+.lws-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-hair);
+  font-size: 13px;
+}
+
+.lws-strip-row:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+
+.lws-strip-idx {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  flex: none;
+}
+
+.lws-strip-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.lws-strip-name {
+  font-weight: 600;
+  color: var(--text-hi);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lws-strip-len {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* the px chip — BufferedStripCountInput restyled (mockup .px) */
+.lws-px {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-hair);
+  border-radius: 8px;
+  padding: 0 10px 0 4px;
+  min-height: 36px;
+  flex: none;
+}
+
+.lws-px-input {
+  width: 52px;
+  border: 0;
+  background: transparent;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 6px 2px;
+  min-height: 32px;
+}
+
+.lws-px-input:focus {
+  outline: none;
+}
+
+.lws-px:focus-within {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+
+.lws-px-overridden {
+  border-color: var(--accent);
+}
+
+.lws-px-unit {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.lws-strip-meta {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 20px;
+}
+
+.lws-override {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.lws-reset {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-mid);
+  border-radius: var(--r-sm);
+  min-width: 28px;
+  min-height: 28px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.lws-calibrate {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-mid);
+  border-radius: var(--r-md);
+  padding: 6px 10px;
+  min-height: 32px;
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lws-calibrate:hover {
+  color: var(--text-hi);
+  border-color: var(--text-faint);
+}
+
+.lws-empty {
+  font-size: 12.5px;
+  color: var(--text-faint);
+  padding: 2px 0;
+}
+
+.lws-usbcap {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.lws-usbcap.lws-usbcap-over {
+  color: var(--danger);
+}
+
+/* ---------- power section (changes 15, 16, 19) ---------- */
+
+.lws-power {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lws-advice {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-mid);
+  border-left: 2px solid var(--ok);
+  padding-left: 10px;
+  margin: 12px 0 0;
+  max-width: 52ch;
+}
+
+.lws-advice-warn {
+  border-left-color: var(--warn);
+}
+
+.lws-advice-over {
+  border-left-color: var(--danger);
+}
+
+/* quiet collapsed power-supply details card */
+.lws-psu {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-hair);
+  padding-top: 4px;
+}
+
+.lws-psu summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+}
+
+.lws-psu summary::-webkit-details-marker {
+  display: none;
+}
+
+.lws-psu summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.lws-psu[open] summary::before {
+  content: '▾';
+}
+
+.lws-psu-fields {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 4px 0 8px;
+}
+
+.lws-psu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.lws-psu-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin: 0 0 6px;
+  max-width: 52ch;
+}
+
+/* ---------- touch targets ----------
+   The compact per-strip controls (reset ↺, calibrate, count chip) sit below
+   44px on desktop for row density; on touch devices they must hit the 44px
+   minimum the plan mandates (change 20 — this runs on a phone at the
+   install site). */
+
+@media (pointer: coarse) {
+  .lws-reset {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .lws-calibrate {
+    min-height: 44px;
+  }
+  .lws-px {
+    min-height: 44px;
+  }
+  .lws-px-input {
+    min-height: 40px;
+  }
+}
+
+/* ---------- shared focus + motion ---------- */
+
+.lws-panel button:focus-visible,
+.lws-panel input:focus-visible,
+.lws-psu summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lws-dopt {
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .lws-calibrate,
+  .lws-unit-toggle {
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+}

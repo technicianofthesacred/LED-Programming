@@ -68,7 +68,7 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
 
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  await page.getByRole('region', { name: 'Step 5: Review and install' }).getByRole('button', { name: 'Open install review' }).click();
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
 });
 
