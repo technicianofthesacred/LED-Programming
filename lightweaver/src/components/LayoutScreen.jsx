@@ -67,7 +67,7 @@ export function LayoutScreen({ connected, cardHost }) {
 
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
-    strips, layers, hidden,
+    strips: state.starterLayoutActive && mode === 'draw' ? [] : strips, layers, hidden,
     viewBox, computedViewBox, vbScale, svgText, artworkHTML, totalLeds,
     selection: { selStripId, selLayer, pathSel, selectedPathDecorations, existingStrip },
     lightPreview: {

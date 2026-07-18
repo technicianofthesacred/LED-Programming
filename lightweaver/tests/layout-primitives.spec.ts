@@ -15,7 +15,7 @@ test('a fresh layout offers primitive choices and creates a centered selected ci
   await expect(picker.getByRole('button', { name: 'Circle', exact: true })).toBeVisible();
   await expect(picker.getByRole('button', { name: 'Square', exact: true })).toBeVisible();
   await expect(picker.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Import SVG' })).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Import SVG' })).toBeVisible();
 
   await picker.getByRole('button', { name: 'Circle', exact: true }).click();
   await picker.getByRole('button', { name: 'Create circle' }).click();

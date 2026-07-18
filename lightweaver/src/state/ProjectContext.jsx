@@ -22,7 +22,7 @@ import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
 import { compileWiring } from '../lib/wiringCompiler.js';
-import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
+import { invalidateWiringVerification, makeDefaultWiring, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
   createLayoutState,
   createLayoutHistory,
