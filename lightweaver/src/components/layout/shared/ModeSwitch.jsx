@@ -1,6 +1,6 @@
 // Draw | Size | Wire — the same `.seg` segmented-control visual as the
-// toolbar's Density control (src/v3/v3-styles.css `.seg`), first element in
-// the Layout toolbar. Deep-linked mode state + hash sync live in
+// toolbar's Density control (src/v3/v3-styles.css `.seg`), pinned above the
+// Layout inspector. Deep-linked mode state + hash sync live in
 // useLayoutCanvasInteraction.js; this component is pure JSX.
 const MODES = [
   { key: 'draw', label: 'Draw' },
@@ -10,7 +10,7 @@ const MODES = [
 
 export function ModeSwitch({ mode, setMode }) {
   return (
-    <div className="seg la-mode-switch" data-testid="layout-mode-switch">
+    <div className="seg la-mode-switch" data-testid="layout-mode-switch" data-mode={mode} role="group" aria-label="Layout section">
       {MODES.map(m => (
         <button
           key={m.key}

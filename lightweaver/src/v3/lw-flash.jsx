@@ -581,7 +581,9 @@ import { openInChrome } from '../lib/openInChrome.js';
       }
     };
 
-    if (installState === 'complete' || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
+    const hasResumableCommissioning = commissioning
+      && (commissioning.stage === 'set-up-card' || commissioning.stage === 'check-lights');
+    if (installState === 'complete' || hasResumableCommissioning || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
       return (
         <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
           <CardCommissioningPanel

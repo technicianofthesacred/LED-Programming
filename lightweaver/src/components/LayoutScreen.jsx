@@ -123,12 +123,6 @@ export function LayoutScreen({ connected, cardHost }) {
 
       {/* ── Toolbar (mockup .toolbar) ──────────────────────────────── */}
         <div className="toolbar">
-          <div className="tb-group" role="group" aria-label="Mode actions">
-            <ModeSwitch mode={mode} setMode={setMode}/>
-          </div>
-
-          <div className="tb-div"/>
-
           {mode === 'draw' && (
             <>
               <button className="tb-btn solid" onClick={() => fileRef.current?.click()}
@@ -287,9 +281,14 @@ export function LayoutScreen({ connected, cardHost }) {
           <span aria-hidden="true"/>
           <strong>Inspector</strong>
         </button>
-        {mode === 'draw' && <DrawModePanel state={state}/>}
-        {mode === 'size' && <SizeModePanel state={state}/>}
-        {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>}
+        <div className="la-mode-nav">
+          <ModeSwitch mode={mode} setMode={setMode}/>
+        </div>
+        <div className={`la-mode-content is-${mode}`}>
+          {mode === 'draw' && <DrawModePanel state={state}/>} 
+          {mode === 'size' && <SizeModePanel state={state}/>} 
+          {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
+        </div>
       </aside>
       </div>{/* .la */}
     </div>

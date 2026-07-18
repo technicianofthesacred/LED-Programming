@@ -186,6 +186,18 @@ export function completeCardInstall(flow, result = {}, { now = Date.now() } = {}
   };
 }
 
+export function confirmCardSetupNetworkJoined(flow, { now = Date.now() } = {}) {
+  requireFlow(flow);
+  if (flow.stage !== 'set-up-card' || !['setup-required', 'setup-joined'].includes(flow.networkState)) {
+    throw new Error('The card is not waiting for its setup network');
+  }
+  return {
+    ...clone(flow),
+    updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
+    networkState: 'setup-joined',
+  };
+}
+
 export function acknowledgeCommissionedCard(flow, card = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card') return { ok: false, reason: 'not-awaiting-card' };
@@ -337,7 +349,7 @@ function requireFlow(flow) {
     || !['clean-recovery', 'preserve-in-place'].includes(flow.strategy)
     || !Number.isSafeInteger(flow.createdAt) || !Number.isSafeInteger(flow.updatedAt)
     || flow.createdAt < 0 || flow.updatedAt < flow.createdAt
-    || !['unknown', 'preserved', 'setup-required', 'connected'].includes(flow.networkState)
+    || !['unknown', 'preserved', 'setup-required', 'setup-joined', 'connected'].includes(flow.networkState)
     || (flow.acceptedResultId !== undefined && flow.acceptedResultId !== '' && !/^[A-Za-z0-9_-]{16,96}$/.test(flow.acceptedResultId))
     || !flow.project || !text(flow.project.recordId, 128)
     || !Number.isSafeInteger(flow.project.revision) || flow.project.revision < 0

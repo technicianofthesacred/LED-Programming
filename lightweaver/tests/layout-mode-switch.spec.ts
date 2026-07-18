@@ -35,6 +35,28 @@ test('keyboard 1/2/3 update the hash mode param and the active segment', async (
   await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 });
 
+test('the three equal mode tabs live at the top of the inspector and tint each section', async ({ page }) => {
+  await gotoLayout(page);
+
+  const inspector = page.locator('.la > .side');
+  const modeSwitch = page.getByTestId('layout-mode-switch');
+  await expect(inspector.locator('[data-testid="layout-mode-switch"]')).toHaveCount(1);
+  await expect(page.locator('.toolbar [data-testid="layout-mode-switch"]')).toHaveCount(0);
+
+  const widths = await modeSwitch.getByRole('button').evaluateAll(buttons =>
+    buttons.map(button => Math.round(button.getBoundingClientRect().width)));
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+
+  const tintFor = async (mode: 'draw' | 'size' | 'wire') => {
+    await page.getByTestId(`layout-mode-${mode}`).click();
+    return inspector.locator('.la-mode-content').evaluate(element => getComputedStyle(element).backgroundImage);
+  };
+  const drawTint = await tintFor('draw');
+  const sizeTint = await tintFor('size');
+  const wireTint = await tintFor('wire');
+  expect(new Set([drawTint, sizeTint, wireTint]).size).toBe(3);
+});
+
 test('reloading with #screen=layout&mode=wire opens directly in Wire mode', async ({ page }) => {
   await gotoLayout(page, '#screen=layout&mode=wire');
 

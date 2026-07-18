@@ -20,7 +20,7 @@ import {
 import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js';
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
-import { normalizePatchBoard } from '../lib/patchBoard.js';
+import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
 import { compileWiring } from '../lib/wiringCompiler.js';
 import { invalidateWiringVerification, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
@@ -124,6 +124,7 @@ function layoutRootReducer(state, action) {
     'layout/setScale': 'geometry',
     'layout/calibrate': 'geometry',
     'layout/updatePatchBoard': 'route',
+    'layout/replaceGeometry': 'geometry',
   };
   const physicalChangeKind = action.changeKind ||
     (action.type === 'compat/set' ? physicalChangeKindForCompatField(action.field) : physicalChangeKinds[action.type]);
@@ -152,6 +153,26 @@ function layoutRootReducer(state, action) {
     }
     case 'layout/setWiring':
       return { ...state, wiring: action.wiring };
+    case 'layout/replaceGeometry': {
+      const snapshot = { ...makeLayoutSnapshot(state), wiring: state.wiring };
+      return {
+        ...state,
+        strips: action.strips,
+        hidden: {},
+        editCounts: {},
+        stripCountOverrides: {},
+        layerGroups: [],
+        layerOrder: [],
+        patchBoard: action.patchBoard,
+        wiring: action.wiring,
+        selection: { kind: 'none', ids: [], entries: [], name: '' },
+        nextStripSeq: action.nextStripSeq,
+        _history: {
+          past: pushSnapshotStack(state._history.past, snapshot),
+          future: [],
+        },
+      };
+    }
     case 'layout/undo': {
       if (!state._history.past.length) return state;
       const past = state._history.past.slice();
@@ -382,6 +403,19 @@ export function ProjectProvider({ children }) {
     dispatchLayout({ type: 'layout/setWiring', wiring: result.wiring });
     return result;
   }, [wiring, strips]);
+  const replaceLayoutGeometry = useCallback((nextStrips) => {
+    const normalized = Array.isArray(nextStrips) ? nextStrips : [];
+    dispatchLayout({
+      type: 'layout/replaceGeometry',
+      strips: normalized,
+      patchBoard: createDefaultPatchBoard(normalized),
+      wiring: makeDefaultWiring(normalized),
+      nextStripSeq: normalized.reduce((max, strip) => {
+        const match = /^strip-(\d+)$/.exec(strip?.id || '');
+        return match ? Math.max(max, Number(match[1]) + 1) : max;
+      }, 1),
+    });
+  }, []);
   const compiledWiring = useMemo(() => compileWiring({ wiring, strips, groups: layoutLayerGroups }), [wiring, strips, layoutLayerGroups]);
 
   // Selection dispatchers (LayoutScreen's single selection model rides on these).
@@ -866,6 +900,7 @@ export function ProjectProvider({ children }) {
       patchBoard,        setPatchBoard,
       updatePatchBoard,
       wiring, updateWiring, compiledWiring,
+      replaceLayoutGeometry,
       // Layout undo/redo (single shared snapshot stack)
       pushLayoutHistory, undoLayout, redoLayout,
       layoutHistLen,     layoutFutLen,

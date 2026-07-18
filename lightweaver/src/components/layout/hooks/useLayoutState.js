@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect } from 'react';
 import { samplePath as libSamplePath } from '../../../lib/mapper.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { isDefaultCircleLayout } from '../../../lib/defaultCircleLayout.js';
+import { createPrimitiveStripDefinition, DEFAULT_STARTER_PIXEL_COUNT } from '../../../lib/layoutPrimitives.js';
 import {
   STRIP_COLORS,
   stripSourceKey,
@@ -82,6 +83,8 @@ export function useLayoutState() {
     symSettings,
     usbLedConnected,
     usbLedStatus,
+    wiring,
+    replaceLayoutGeometry,
   } = project;
 
   const usbLedMaxPixels = usbLedStatus?.maxPixels || 300;
@@ -185,6 +188,8 @@ export function useLayoutState() {
 
   const totalLeds = strips.reduce((n, s) => n + s.pixelCount, 0);
   const defaultCircleLayoutActive = !svgText && layers.length === 0 && isDefaultCircleLayout(strips);
+  const starterLayoutActive = !svgText && layers.length === 0 && !wiring.locked &&
+    (strips.length === 0 || defaultCircleLayoutActive);
   const selectedStrips = useMemo(() => {
     const selected = new Set(selectedStripIds);
     return orderedStrips.filter(s => selected.has(s.id));
@@ -237,6 +242,24 @@ export function useLayoutState() {
     setWaypoints: canvas.setWaypoints,
   });
 
+  const createStarterPrimitive = (type) => {
+    const definition = createPrimitiveStripDefinition({
+      type,
+      viewBox,
+      pixelCount: totalLeds || DEFAULT_STARTER_PIXEL_COUNT,
+      color: nextColor(),
+    });
+    const strip = rebuildStrip(definition);
+    replaceLayoutGeometry([strip]);
+    selectStrip(strip.id);
+    setExpandedStrips(current => ({ ...current, [strip.id]: true }));
+  };
+
+  const clearStarterLayout = () => {
+    replaceLayoutGeometry([]);
+    clearLayoutSelection();
+  };
+
   // ── Flat bundle ────────────────────────────────────────────────────────────
   return {
     // context passthroughs the JSX reads directly
@@ -255,7 +278,8 @@ export function useLayoutState() {
     selStripId, selLayerId, selectedStripIds,
     pathSel, pathSelName, stripSelectionName,
     orderedStrips, selectedStrips,
-    totalLeds, defaultCircleLayoutActive, usbLedMaxPixels,
+    totalLeds, defaultCircleLayoutActive, starterLayoutActive, usbLedMaxPixels,
+    createStarterPrimitive, clearStarterLayout,
     expandedStrips, setExpandedStrips,
     svgRef, artworkRef, vpRef, stripListRef,
 
