@@ -55,6 +55,11 @@ export const CARD_BRIDGE_FEATURE_VERSIONS = { frame: 1 };
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
 export const CARD_BRIDGE_APP = 'LightweaverCardBridge';
+// The one shared auxiliary tab name for card pages. Every Studio-initiated
+// card-page open (bridge or plain visit) must target this name so at most one
+// card tab ever exists; unnamed '_blank' opens spawn extra tabs that race the
+// tracked bridge window.
+export const CARD_BRIDGE_WINDOW_NAME = 'lightweaver-card-bridge';
 export const LOCAL_CHIP_DEFAULT_KEY = 'lw_local_chip_default';
 
 let bridgeWindow = null;
@@ -365,11 +370,54 @@ export function openCardBridge(rawHost = '', {
   const bridgeUrl = autoOpenStudio
     ? buildCardBridgeLaunchUrl(host, studioUrl)
     : `${origin}/#studioBridge=1`;
-  const opened = win.open(bridgeUrl, 'lightweaver-card-bridge');
+  const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME);
   if (opened) {
     setBridgeState({ source: opened, origin, host, connected: false, ready: false });
   }
   return opened;
+}
+
+// Opens the card's own page (visitor UI, settings, playlist views) in the SAME
+// named auxiliary tab that openCardBridge uses, so a plain "open the card page"
+// click reuses the one card tab instead of minting a new unnamed tab that races
+// the tracked bridge window. Returns { ok: true, window } on success, or
+// { ok: false, reason: 'invalid-host' | 'popup-blocked' } so callers can show
+// the existing visible popup-blocked copy.
+//
+// Safety: navigating the shared named tab reloads whatever page it held, so any
+// previous bridge handshake is void. This routes through the same
+// setBridgeState acquisition path as openCardBridge with ready:false — the
+// bridge fails closed (privileged sends stay identity-locked) until the card
+// page performs a fresh verified ready/response handshake. `reason` is a
+// caller-side diagnostic label only; it never reaches the card URL.
+export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-card-page' } = {}) {
+  void reason;
+  const win = browserWindow();
+  const host = normalizeCardHost(rawHost || readStoredCardHost());
+  if (!isLocalCardHost(host)) return { ok: false, reason: 'invalid-host' };
+  const origin = cardHostToUrl(host);
+  let url;
+  try {
+    url = new URL(String(path || '/'), `${origin}/`);
+  } catch {
+    return { ok: false, reason: 'invalid-host' };
+  }
+  // A crafted path ('//evil.example/') must not steer the named card tab to a
+  // non-card origin.
+  if (url.origin !== origin) return { ok: false, reason: 'invalid-host' };
+  if (!win?.open) return { ok: false, reason: 'popup-blocked' };
+  attachCardBridgeListener();
+  const opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
+  if (!opened) return { ok: false, reason: 'popup-blocked' };
+  // Same bookkeeping as openCardBridge: adopt the (possibly reused) named
+  // window and drop any prior handshake so identity must re-verify.
+  setBridgeState({ source: opened, origin, host, connected: false, ready: false });
+  try {
+    opened.focus?.();
+  } catch {
+    /* Browser focus permission is best-effort. */
+  }
+  return { ok: true, window: opened };
 }
 
 export function getCardBridgeState() {

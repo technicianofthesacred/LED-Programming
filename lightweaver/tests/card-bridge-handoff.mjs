@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  CARD_BRIDGE_WINDOW_NAME,
   acquireCardBridgeFromGesture,
   adoptDiscoveredCardBridgeIdentity,
   buildCardBridgeLaunchUrl,
@@ -8,6 +9,7 @@ import {
   getCardBridgeState,
   isCardBridgeLaunch,
   openCardBridge,
+  openLocalCardPage,
   sendCardBridgeRequest,
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
@@ -600,5 +602,86 @@ await assert.rejects(timeoutAttempt.ready, error => (
   error?.reason === 'bridge-timeout'
   && error.message === "The card page opened but did not answer. Check that this device is on the card's Wi-Fi."
 ));
+
+// openLocalCardPage: every plain "open the card page" click routes through the
+// SAME named window the bridge uses, so at most one auxiliary card tab exists.
+assert.equal(typeof openLocalCardPage, 'function');
+assert.equal(CARD_BRIDGE_WINDOW_NAME, 'lightweaver-card-bridge');
+const cardPageHost = '192.168.18.77';
+const cardPageTab = {
+  closed: false,
+  focusCalls: 0,
+  focus() { this.focusCalls += 1; },
+  postMessageCalls: 0,
+  postMessage() { this.postMessageCalls += 1; },
+};
+const cardPageHarness = bridgeWindowHarness({ host: cardPageHost, openResult: cardPageTab });
+globalThis.window = cardPageHarness.win;
+const firstVisit = openLocalCardPage(cardPageHost);
+assert.equal(firstVisit.ok, true);
+assert.equal(cardPageHarness.opened.length, 1);
+assert.equal(cardPageHarness.opened[0].name, CARD_BRIDGE_WINDOW_NAME, 'plain visits use the named bridge window');
+assert.equal(cardPageHarness.opened[0].url, `http://${cardPageHost}/`);
+const secondVisit = openLocalCardPage(cardPageHost, { path: '/', reason: 'open-card-page' });
+assert.equal(secondVisit.ok, true);
+assert.equal(secondVisit.window, firstVisit.window, 'repeat visits reuse the same named window handle');
+assert.equal(cardPageHarness.opened[1].name, CARD_BRIDGE_WINDOW_NAME);
+assert.equal(cardPageTab.focusCalls, 2, 'the already-open card tab is refocused');
+
+// A plain visit tracks the tab but never grants transport readiness: privileged
+// sends stay identity-locked until the freshly loaded page handshakes again.
+assert.equal(getCardBridgeState().open, true);
+assert.equal(getCardBridgeState().verified, false, 'a plain card-page visit is not a verified handshake');
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: cardPageHost, timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(cardPageTab.postMessageCalls, 0, 'no privileged command reaches the freshly navigated card tab');
+
+// Opening the plain card page over a previously verified bridge revokes the
+// stale handshake (the shared named tab navigated) rather than corrupting it.
+const revisitHost = '192.168.18.78';
+let revisitHarness;
+const revisitParent = {
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => revisitHarness.emitMessage({
+      origin: `http://${revisitHost}`,
+      source: revisitParent,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-1921681878', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+const revisitTab = { closed: false, postMessageCalls: 0, postMessage() { this.postMessageCalls += 1; }, focus() {} };
+revisitHarness = bridgeWindowHarness({ host: revisitHost, parent: revisitParent, openResult: revisitTab });
+globalThis.window = revisitHarness.win;
+assert.equal(bootstrapCardBridgeFromOpener(), true);
+revisitHarness.emitMessage({
+  origin: `http://${revisitHost}`,
+  source: revisitParent,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: revisitHost, version: 1 },
+});
+await verifyCardBridgeIdentity(revisitHost);
+assert.equal(getCardBridgeState().identityVerified, true);
+assert.equal(openLocalCardPage(revisitHost).ok, true);
+assert.equal(getCardBridgeState().verified, false, 'the plain visit revokes the stale bridge handshake');
+assert.equal(getCardBridgeState().card, null, 'verified identity is dropped until the new page re-verifies');
+await assert.rejects(
+  sendCardBridgeRequest('control', { patternId: 'fire' }, { host: revisitHost, timeoutMs: 25 }),
+  error => error?.reason === 'identity-missing',
+);
+assert.equal(revisitTab.postMessageCalls, 0);
+
+// Blocked popups and non-local hosts fail closed with caller-visible reasons.
+const blockedVisitHarness = bridgeWindowHarness({ host: '192.168.18.79', openResult: null });
+globalThis.window = blockedVisitHarness.win;
+assert.deepEqual(openLocalCardPage('192.168.18.79'), { ok: false, reason: 'popup-blocked' });
+assert.equal(blockedVisitHarness.opened.length, 1);
+assert.deepEqual(openLocalCardPage('evil.example.com'), { ok: false, reason: 'invalid-host' });
+assert.deepEqual(openLocalCardPage('192.168.18.79', { path: '//evil.example/' }), { ok: false, reason: 'invalid-host' });
+assert.equal(blockedVisitHarness.opened.length, 1, 'invalid hosts and paths never reach window.open');
 
 console.log('card-bridge-handoff tests passed');

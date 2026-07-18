@@ -66,6 +66,24 @@ test('an explicit secure iframe observation cannot use Web Serial', () => {
   assert.equal(result.mustEscapeToSecureInstaller, true);
 });
 
+test('a context that can install over Web Serial never needs the secure-installer escape', () => {
+  // Regression guard for the install flow: when canWebSerialInstall is true the
+  // UI must never render the secure-installer escape link, so the two flags can
+  // never both be true for any observed environment.
+  for (const secureContext of [true, false]) {
+    for (const topLevel of [true, false]) {
+      for (const serial of [{}, null]) {
+        const result = detectPlatformCapabilities({ secureContext, topLevel, serial });
+        assert.equal(
+          result.canWebSerialInstall && result.mustEscapeToSecureInstaller,
+          false,
+          `escape and browser USB may not coexist (secureContext=${secureContext}, topLevel=${topLevel}, serial=${Boolean(serial)})`,
+        );
+      }
+    }
+  }
+});
+
 test('keeps installed-card control available when Web Serial is absent', () => {
   const result = detectPlatformCapabilities({
     secureContext: true,

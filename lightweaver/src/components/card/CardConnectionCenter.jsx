@@ -232,8 +232,11 @@ export function CardConnectionCenter({
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':
+        // Stable named target ('lightweaver-studio', the same name the firmware
+        // card page uses for its Studio opens) so repeated clicks reuse one
+        // Studio tab instead of minting a new unnamed tab each time.
         return (
-          <a className="btn primary" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">
+          <a className="btn primary" href={SECURE_INSTALLER_URL} target="lightweaver-studio" rel="noopener noreferrer">
             Open secure installer
           </a>
         );
@@ -313,6 +316,9 @@ export function CardConnectionCenter({
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
           <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
           <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : action.explanation}</p>
+          {action.id === 'escape-insecure-card-frame' && (
+            <p>Your browser only allows USB install from a separate secure top-level tab, so the installer opens in the Lightweaver Studio tab.</p>
+          )}
           {(effectiveActionId === 'install-native-bridge') && (
             <p>A verified signed installer is not yet available. No unsigned download is offered. Use secure browser USB or continue on a supported computer.</p>
           )}

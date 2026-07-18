@@ -168,8 +168,15 @@ test('secure iframe escapes to the fixed canonical installer in a new top-level 
   await studio.getByRole('button', { name: 'Blank or not responding' }).click();
   const escape = studio.getByRole('link', { name: 'Open secure installer' });
   await expect(escape).toHaveAttribute('href', 'https://led.mandalacodes.com/#screen=flash&mode=install');
-  await expect(escape).toHaveAttribute('target', '_blank');
+  await expect(escape).toHaveAttribute('target', 'lightweaver-studio');
 
+  // Serve the canonical installer origin from a hermetic stub so the
+  // navigation commits regardless of external network availability — the
+  // assertion is about WHERE the escape goes, not the live site.
+  await context.route('https://led.mandalacodes.com/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><title>Lightweaver installer</title>',
+  }));
   const opened = context.waitForEvent('page');
   await escape.click();
   const installer = await opened;

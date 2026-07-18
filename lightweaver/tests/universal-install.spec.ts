@@ -71,7 +71,42 @@ test('installer inside a secure iframe escapes to the fixed top-level installer'
   await expect(installer.getByRole('heading', { name: 'Open secure installer' })).toBeVisible();
   const escape = installer.getByRole('link', { name: 'Open secure installer' });
   await expect(escape).toHaveAttribute('href', 'https://led.mandalacodes.com/#screen=flash&mode=install');
-  await expect(escape).toHaveAttribute('target', '_blank');
+  // The escape reuses one stable named Studio tab (the same name the firmware
+  // card page targets) instead of minting a new unnamed tab on every click.
+  await expect(escape).toHaveAttribute('target', 'lightweaver-studio');
+  await expect(escape).toHaveAttribute('rel', 'noopener noreferrer');
+  // The surrounding copy states WHY the escape is required.
+  await expect(installer.getByText(/only allows USB install from a separate secure top-level tab/)).toBeVisible();
+});
+
+test('a secure top-level installer that can use browser USB never offers the secure-installer escape', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+  });
+  await page.goto('/#screen=flash&mode=install');
+
+  await expect(page.getByRole('button', { name: 'Find connected card' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open secure installer' })).toHaveCount(0);
+  await expect(page.locator('a[href="https://led.mandalacodes.com/#screen=flash&mode=install"]')).toHaveCount(0);
+});
+
+test('a blocked card-page popup on the install-to-card handoff shows visible popup guidance', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    // Simulate a popup blocker refusing the named card-page window.
+    window.open = () => null;
+    // A stored setup-network host routes the working-card flow to the
+    // card-page handoff (join Lightweaver-XXXX, then Continue opens the card
+    // page bridge window).
+    window.localStorage.setItem('lw_chip_card_host', '192.168.4.1');
+  });
+  await page.goto('/#screen=flash&mode=install');
+
+  await page.getByTestId('card-link-status').click();
+  await page.getByRole('button', { name: /My card already lights up/ }).click();
+  await expect(page.getByText(/Join the .*Lightweaver-XXXX.* Wi-Fi network/)).toBeVisible();
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('The browser could not open the card page. Allow popups, then try again.');
 });
 
 test('technician controls remain separately labelled outside install mode', async ({ page }) => {

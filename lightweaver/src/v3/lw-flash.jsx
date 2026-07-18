@@ -373,7 +373,14 @@ import { openInChrome } from '../lib/openInChrome.js';
           <li>Plug the Lightweaver card into that computer by USB.</li>
         </ol>
         {showSecureInstaller && (
-          <a className="btn-lg" href={SECURE_INSTALLER_URL} target="_blank" rel="noopener noreferrer">Open secure installer</a>
+          <>
+            <p>Your browser only allows USB install from a separate secure top-level tab, so the button below continues in the Lightweaver Studio tab.</p>
+            {/* Stable named target ('lightweaver-studio', the same name the
+                firmware card page uses for its Studio opens) so repeated
+                clicks reuse one Studio tab instead of minting a new unnamed
+                tab each time. */}
+            <a className="btn-lg" href={SECURE_INSTALLER_URL} target="lightweaver-studio" rel="noopener noreferrer">Open secure installer</a>
+          </>
         )}
         {(action.id === 'launch-native-bridge' || action.id === 'install-native-bridge') && (
           <>
