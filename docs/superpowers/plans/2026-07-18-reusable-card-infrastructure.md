@@ -1,5 +1,7 @@
 # Reusable Card Infrastructure Implementation Plan
 
+> **Execution status:** Reference plan for Phase 3 of the [release-first roadmap](../../roadmap.md#phase-3-add-reusable-infrastructure-one-module-at-a-time). It is not required for the current release and must not be executed end to end. When a roadmap start condition becomes true, extract that module into a fresh narrow plan against current `main` rather than starting these task numbers directly.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Finish Lightweaver's reusable multi-project, multi-card hardware system without duplicating the Card workspace or Layout → Wire commissioning UX already shipped on `main`.
@@ -32,7 +34,7 @@ The retained calibration foundation is valid but not fully closed: production st
 
 ## Execution gates while the other LED UX work is active
 
-- **Safe now:** Task 1 is isolated to firmware pipeline internals, its executable test, and the source-test command.
+- **Mechanically isolated, but not required now:** Task 1 touches only firmware pipeline internals, its executable test, and the source-test command. Activate it only when the roadmap calibration condition is true.
 - **Wait for the concurrent UX branch to land or expose its changed paths:** Tasks 2–5 touch shared project/Card contracts even though they add no new visual workflow. Rebase and compare changed paths before starting them.
 - **Strictly last:** Task 6 changes visible Card surfaces and cannot begin until that UX work is on `origin/main` and has passed a fresh conceptual-overlap audit.
 - If any concurrent branch touches a file named by a task, integrate that branch first and revise the task against the resulting interface. Do not solve this with parallel edits to the same file.

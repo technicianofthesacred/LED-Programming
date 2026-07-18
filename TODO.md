@@ -2,6 +2,21 @@
 
 Living list of outstanding work on the LED installation controller. Project is branded **Lightweaver** in user-facing copy, `led/` is just the folder slug. See `CLAUDE.md` for stack and intent.
 
+## Active release path
+
+The immediate goal is to prove and ship the product already on `main`, not to
+run every historical plan. The ordered source of truth is the
+[release-first roadmap](docs/roadmap.md#current-execution-order-protect-the-working-product).
+
+1. Finish and integrate the concurrent LED UX work.
+2. Run the complete automated and real-card workflow on that exact `main`.
+3. Fix only release blockers, publish the protected signed firmware, and deploy.
+4. Use a second real LED project to decide which reusable module is actually
+   needed next.
+
+The three 2026-07-17 Hardware plans are superseded. The 2026-07-18 reusable-card
+plan is a reference library, not one large job to execute.
+
 ## Soon
 
 ### Layout wiring hardening (implemented 2026-07-13; physical signoff remains)

@@ -4,7 +4,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-07-16
+Last updated: 2026-07-18
 
 > **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
 > serves its own branded page (the visitor UI) and the WLED API; the public
@@ -12,6 +12,92 @@ Last updated: 2026-07-16
 > the runtime path.** The Pi proxy (`lightweaver/server/`), `visitor-ui/`, and
 > `docs/pi-hosted-deployment.md` are deferred for a planned future Pi
 > integration — kept, not deleted, but out of the current plan.
+
+## Current execution order: protect the working product
+
+This is the master order of work. The detailed plans under
+`docs/superpowers/plans/` are engineering references, not a stack that must be
+run end to end.
+
+### Phase 1: Finish the product already on `main` — required now
+
+**Purpose:** reach one reliable, usable Lightweaver release before adding new
+hardware architecture.
+
+1. Let the concurrent LED UX work finish and land on `main`.
+2. Re-run the existing Card, Wire, installer, production, and project tests on
+   that exact `main`.
+3. Bench-test one real card and LED run through the current workflow: Layout →
+   Wire → Card → Workshop.
+4. Fix only failures that block that real workflow. Do not add multi-card,
+   templates, power dashboards, history, or a new navigation surface during
+   this phase.
+5. Build and publish the protected signed firmware release, run
+   `npm run launch:check`, then deploy the verified Studio.
+
+**Done when:** one project can be drawn, wired, tested, loaded onto one card,
+restarted, and recovered without losing work or showing false success.
+
+**Rollback rule:** every change in this phase must be independently revertible.
+If the full test gate or bench workflow regresses, do not merge it.
+
+### Phase 2: Use the current product on the next LED project — required proof
+
+**Purpose:** discover which reusable tools are actually missing through a
+second real setup instead of predicting every future need.
+
+Use the current single-card workflow for the next project and record repeated
+setup work, unsafe manual calculations, or missing records. A repeated pain
+must happen in a real project before it becomes active product scope.
+
+**Done when:** the second project either succeeds with the current tools or
+produces a short evidence-backed list of repeated problems.
+
+### Phase 3: Add reusable infrastructure one module at a time — conditional
+
+Each module is a separate decision, branch, test gate, and merge. Do not run the
+entire reusable-card plan as one migration.
+
+When a start condition becomes true, write a narrow implementation plan for
+that one module against the then-current `main`. The large 2026-07-18 reference
+plan supplies constraints and test ideas; its task numbering is not the release
+order.
+
+Skip any module whose start condition is false. The first true condition is the
+next module; nothing in this table is mandatory merely because it has a number.
+
+| Priority | Module | What it does | Start only when |
+| --- | --- | --- | --- |
+| 1 | Output calibration hardening | Executes and verifies firmware RGB balance, gamma, and color-order math. | A real strip shows color-output problems, or calibrated output is required for a sellable piece. |
+| 2 | Reusable project templates | Copies known-good controller, LED, and power starting points into a new independent project. | The second project repeats setup that should have been reusable. |
+| 3 | Power safety recommendations | Calculates supply headroom, current ceilings, voltage compatibility, and deterministic blockers. | Projects use different LED voltages, supplies, pixel loads, or installers need calculation guidance. |
+| 4 | Multi-card project model | Lets one project own and select multiple independent ESP32 cards without confusing their identities. | A real installation requires more than one controller card. |
+| 5 | History, replacement, and as-built records | Preserves approved setup, deviations, failed-card replacement, and installation evidence. | Cards are handed off, sold, serviced, or replaced often enough that records matter. |
+| 6 | Card UI extensions | Exposes only the modules that earned their place inside the existing Card workspace. | The underlying module works and the concurrent UX work is already integrated. |
+
+Every module must preserve the current Card and Layout → Wire behavior. It may
+add a summary or deep link, but it may not create a second output editor,
+commissioning flow, installer, or top-level Hardware destination.
+
+### Phase 4: Broader runtime work — deferred
+
+Pi hosting, fleet management, cloud catalogs, OTA updates, deeper WLED
+compatibility, and new Art-Net infrastructure remain deferred until a real
+installation cannot be completed safely without them.
+
+### Plan status
+
+- `2026-07-17-hardware-foundation.md`: superseded; do not execute.
+- `2026-07-17-hardware-workspace.md`: superseded; do not execute.
+- `2026-07-17-hardware-installation-toolkit.md`: superseded; do not execute.
+- `2026-07-18-reusable-card-infrastructure.md`: detailed reference for Phase 3;
+  activate one task only after its start condition is true.
+- `2026-07-17-unified-card-workspace.md` and the 2026-07-17 closeout plans:
+  already represented in current `main`; preserve their tested behavior.
+
+**Current next action:** finish the other LED UX work, integrate it into `main`,
+then run Phase 1 verification and the real-card bench workflow. No reusable
+hardware module is currently required to ship the working product.
 
 ## Done
 
