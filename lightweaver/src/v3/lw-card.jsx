@@ -4,6 +4,7 @@ import { InstallerScreen } from './lw-installer.jsx';
 import { DeploymentCheckPanel } from '../components/card/DeploymentCheckPanel.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
+import { consumeCardSectionNavigation } from './cardWorkspaceRoute.js';
 import { cardLinkReasonText, isCardLinkConnected } from '../lib/cardLink.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
@@ -251,8 +252,17 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
 
 export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
+  const mountedRef = useRef(false);
 
   useEffect(() => {
+    // Focus the section heading after in-app section navigation (required
+    // a11y behavior), but never on a direct page load — mount-time focus
+    // steals whatever the user or a keyboard test is about to activate.
+    const navigated = consumeCardSectionNavigation();
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      if (!navigated) return undefined;
+    }
     const frame = requestAnimationFrame(() => headingRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [route.section]);
