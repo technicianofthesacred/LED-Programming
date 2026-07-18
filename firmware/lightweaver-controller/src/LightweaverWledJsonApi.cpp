@@ -279,16 +279,15 @@ void handleStatePost() {
         // so we default to start=segment start (or 0).
         int writeIdx = s["start"] | 0;
         if (writeIdx < 0) writeIdx = 0;
-        uint8_t brightnessScale = uint8_t(manualBrightness * 255.0f);
+        bool frameWritten = false;
         for (JsonVariant v : pixels) {
           if (!frameAllowed || writeIdx >= int(totalPixels)) break;
           if (v.is<const char*>()) {
             const char* hex = v.as<const char*>();
             uint8_t r, g, b;
             if (hexToRgb(hex, r, g, b)) {
-              CRGB px(r, g, b);
-              px.nscale8(brightnessScale);
-              leds[writeIdx++] = px;
+              leds[writeIdx++] = CRGB(r, g, b);
+              frameWritten = true;
             } else {
               writeIdx++;
             }
@@ -296,14 +295,14 @@ void handleStatePost() {
             // [r, g, b] triplet form
             JsonArray triplet = v.as<JsonArray>();
             if (triplet.size() >= 3) {
-              CRGB px(triplet[0].as<int>() & 0xff,
-                      triplet[1].as<int>() & 0xff,
-                      triplet[2].as<int>() & 0xff);
-              px.nscale8(brightnessScale);
-              leds[writeIdx++] = px;
+              leds[writeIdx++] = CRGB(triplet[0].as<int>() & 0xff,
+                                      triplet[1].as<int>() & 0xff,
+                                      triplet[2].as<int>() & 0xff);
+              frameWritten = true;
             }
           }
         }
+        if (frameWritten) frameSourceMarkExternal(FRAME_WLED_REALTIME);
       }
       // fx (pattern select) per segment
       if (!s["fx"].isNull()) {

@@ -93,7 +93,7 @@ function maskCommentsAndStrings(source) {
 
 function extractFunction(source, functionName) {
   const masked = maskCommentsAndStrings(source);
-  const signature = new RegExp(`\\b${functionName}\\s*\\(`);
+  const signature = new RegExp(`(?:^|\\n)[^\\n;{}()]*\\b${functionName}\\s*\\(`);
   let searchFrom = 0;
   let openBrace = -1;
   while (searchFrom < masked.length) {
@@ -213,9 +213,9 @@ function verifyOutputFunnelContracts() {
     'streaming frames should use the external output class and local frames the local class',
   );
 
-  assert.match(copy, /outputColorPipeline\.transform\s*\(\s*leds\s*\[\s*i\s*\]\s*,\s*ledColorOrderCode\s*\)/,
+  assert.match(copy, /outputColorPipeline\.transform\s*\(\s*leds\s*\[\s*\w+\s*\]\s*,\s*ledColorOrderCode\s*\)/,
     'logical pixels should pass through the configured output color pipeline');
-  assert.doesNotMatch(copy, /leds\s*\[\s*i\s*\]\s*=/,
+  assert.doesNotMatch(copy, /\bleds\s*\[[^\]]+\]\s*=/,
     'the physical copy seam must not mutate the logical canvas');
 
   assert.match(normalShow, /pushPhysicalLeds\s*\(\s*computeBrightnessByte\s*\(\s*\)/,
