@@ -29,7 +29,19 @@ The manifest `buildId` and provenance source revision must equal the exact sourc
 
 `MINIMUM_PRODUCTION_FIRMWARE_VERSION` in `lightweaver/src/lib/firmwareRelease.js` is the oldest signed release the normal installer may replay. Raise it only when an older signed release is known unsafe, with a documented reason, updated policy tests, a safe replacement release, protected CI rebuild/signing, and bench verification. Ordinary releases do not raise the floor; never lower it to accept stale firmware.
 
-After any production publish, verify the live site serves the firmware this repo built:
+After any production publish, verify the live site serves the firmware this repo built. Two ways:
+
+- **From any phone or laptop, no clone or install (browser self-check):** open
+  `https://led.mandalacodes.com/#screen=card&section=support`, choose
+  **Deployment check**, and press **Run deployment check**. It verifies, in the
+  browser, the manifest signature against the pinned release key, the factory
+  image hash, matching provenance, every indexed production job artifact, and
+  the production cache policies. All rows green = the live deployment serves a
+  coherent signed release. This catches stale, partial, or corrupted publishes;
+  because the page comes from the origin it is checking, the fully independent
+  audit remains the script below.
+
+- **From a repo checkout (independent audit):**
 
 ```bash
 cd lightweaver && npm run check:prod

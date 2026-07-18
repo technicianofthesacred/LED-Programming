@@ -117,3 +117,23 @@
   background: var(--bg-elev); border: 1px solid var(--border-soft);
   border-radius: var(--r-sm); padding: 8px 10px;
 }
+
+/* ── Browser deployment check (Advanced & Support) ──────────── */
+.deploy-check-results { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.deploy-check-verdict { font-weight: 600; }
+.deploy-check-verdict.is-ok { color: var(--ok); }
+.deploy-check-verdict.is-err { color: var(--err, #e5484d); }
+.deploy-check-summary { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); word-break: break-all; }
+.deploy-check-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.deploy-check-rows li {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: var(--r-sm);
+  background: var(--bg-elev); border: 1px solid var(--border-hair);
+  font-size: 12px;
+}
+.deploy-check-rows li[data-check-ok="true"] > span:first-child { color: var(--ok); }
+.deploy-check-rows li[data-check-ok="false"] > span:first-child { color: var(--err, #e5484d); }
+.deploy-check-label { color: var(--text-hi); }
+.deploy-check-detail { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); word-break: break-word; }
+.deploy-check-note { margin-top: 12px; font-size: 11.5px; color: var(--text-faint); }
+.deploy-check-note code { font-family: var(--font-mono); }

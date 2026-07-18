@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AutomaticInstallScreen, TechnicianFlashScreen } from './lw-flash.jsx';
 import { InstallerScreen } from './lw-installer.jsx';
+import { DeploymentCheckPanel } from '../components/card/DeploymentCheckPanel.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
 import { cardLinkReasonText, isCardLinkConnected } from '../lib/cardLink.js';
@@ -227,6 +228,9 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
         <button type="button" aria-label="Recovery" className={tool === 'recovery' ? 'selected' : ''} aria-pressed={tool === 'recovery'} onClick={() => setTool('recovery')}>
           <strong>Recovery</strong><span>Reconnect safely and choose the next evidence-based action.</span>
         </button>
+        <button type="button" aria-label="Deployment check" className={tool === 'deployment' ? 'selected' : ''} aria-pressed={tool === 'deployment'} onClick={() => setTool('deployment')}>
+          <strong>Deployment check</strong><span>Verify this site's signed release from the browser — no install needed.</span>
+        </button>
         <button type="button" aria-label="Batch production" onClick={() => onOpenSection('workshop')}>
           <strong>Batch production</strong><span>Signed-job manufacturing flow with identity binding and pass records.</span>
         </button>
@@ -238,6 +242,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
           {tool === 'guide' && <InstallerScreen embedded go={installerGo} cardLink={cardProps.cardLink} />}
           {tool === 'json' && <SettingsScreen embedded mode="advanced" {...cardProps} />}
           {tool === 'recovery' && <RecoverySupport onConnectCard={cardProps.onConnectCard} onOpenConnectionCenter={onOpenConnectionCenter} />}
+          {tool === 'deployment' && <DeploymentCheckPanel />}
         </div>
       )}
     </div>

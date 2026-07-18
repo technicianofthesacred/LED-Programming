@@ -633,3 +633,32 @@ test('an active firmware install rejects browser Back without changing visible c
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toHaveCount(0);
 });
+
+test('the browser deployment check verifies the served signed release and never overstates it', async ({ page }) => {
+  await page.goto('/#screen=card&section=support', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Deployment check' }).click();
+
+  const panel = page.getByTestId('deployment-check-panel');
+  await expect(panel).toBeVisible();
+  // Runs on demand only — opening the tool performs no check by itself.
+  await expect(page.getByTestId('deployment-check-results')).toHaveCount(0);
+
+  await panel.getByRole('button', { name: 'Run deployment check' }).click();
+  const results = page.getByTestId('deployment-check-results');
+  await expect(results).toBeVisible();
+
+  // The dev server serves the real signed release set from public/, so the
+  // cryptographic release verification passes with the release identity...
+  const releaseRow = results.locator('li').filter({ hasText: 'Signed firmware release' });
+  await expect(releaseRow).toHaveAttribute('data-check-ok', 'true', { timeout: 15000 });
+  await expect(results.locator('.deploy-check-summary')).toContainText(/Firmware v\d+\.\d+\.\d+/);
+
+  // ...while cache policies genuinely differ from production here, and the
+  // panel must say FAILED rather than claim an unverified success.
+  const cacheRow = results.locator('li').filter({ hasText: 'cache policies' });
+  await expect(cacheRow).toHaveAttribute('data-check-ok', 'false');
+  await expect(results.getByText(/Deployment checks FAILED/)).toBeVisible();
+
+  // The honest boundary stays visible: the independent audit is check:prod.
+  await expect(panel.getByText(/check:prod/)).toBeVisible();
+});
