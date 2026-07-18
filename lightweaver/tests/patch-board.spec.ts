@@ -84,7 +84,7 @@ test('wire order lists numbered strip rows and Move down reorders the canonical 
   await expect(rows.nth(1).locator('.lw-order-n')).toHaveText('2');
   await expect(rows.nth(1)).toContainText('Inner circle');
   await expect(rows.nth(0).getByRole('button', { name: 'Drag Outer circle' })).toBeVisible();
-  await expect(page.getByText('Put the strips in the order the data cable visits them, starting from the card.')).toBeVisible();
+  await expect(page.getByText('Order strips as the data cable visits them, starting from the card.')).toBeVisible();
 
   const firstId = await rows.nth(0).getAttribute('data-run-id');
   await rows.nth(0).getByRole('button', { name: 'Move Outer circle down' }).click();
@@ -191,9 +191,8 @@ test('disconnected card banner shows up front and clears when the card link conn
 
   const banner = page.getByTestId('wire-card-banner');
   await expect(banner).toBeVisible();
-  await expect(banner).toContainText("To finish wiring you'll check the real LEDs.");
-  await expect(banner).toContainText("Connect your Lightweaver card when you're ready — steps up to that point work without it.");
-  await expect(banner).toContainText('Connect Lightweaver');
+  await expect(banner).toContainText("No card connected — that's fine.");
+  await expect(banner).toContainText('Everything except the real-LED check works without it.');
 
   await page.evaluate(async () => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');

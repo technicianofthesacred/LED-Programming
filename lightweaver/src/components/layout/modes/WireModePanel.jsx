@@ -760,14 +760,13 @@ export function WireModePanel({ state, connected, cardHost }) {
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
       <section className="lw-commissioning-intro" aria-label="Wire setup guide">
-        <span className="lw-bench-kicker">Wire the installation</span>
         <strong>Wire the physical LEDs</strong>
-        <p>Connect each physical run in the order below, starting from the card. Validate the result on the real LEDs, then install it on the card.</p>
+        <p>Order the strips, check them on the real LEDs, then install.</p>
       </section>
       {!connected && (
         <p className="lw-card-banner" data-testid="wire-card-banner">
-          <strong>No card connected yet — that&apos;s fine for now.</strong>
-          To finish wiring you&apos;ll check the real LEDs. Connect your Lightweaver card when you&apos;re ready — steps up to that point work without it. Use the <b>Connect Lightweaver</b> button in the footer when the card is nearby.
+          <strong>No card connected — that&apos;s fine.</strong>
+          Everything except the real-LED check works without it.
         </p>
       )}
       <section className="lw-order-primary" role="region" aria-labelledby="lw-order-heading" data-testid="wire-order">
@@ -778,7 +777,7 @@ export function WireModePanel({ state, connected, cardHost }) {
             <span>{stripRunCount} strip{stripRunCount === 1 ? '' : 's'} · {compiledWiring.totalPixels} LEDs</span>
           </div>
         </header>
-        <p className="lw-order-lead">Put the strips in the order the data cable visits them, starting from the card. The cable jumps between strips are shown on the drawing.</p>
+        <p className="lw-order-lead">Order strips as the data cable visits them, starting from the card.</p>
         {wiring.locked && <p className="lw-order-locked-note">Wiring is locked after verification. Unlock it under Review and install to change the order.</p>}
         {patchBoard?.dataWireCountNeedsReview && (
           <p className="lw-inline-warning lw-order-review-warning">This older project needs its data wire count confirmed — open Advanced wiring below and tap the correct number.</p>
@@ -1030,7 +1029,7 @@ export function WireModePanel({ state, connected, cardHost }) {
       >
       {!connected && (
         <p className="lw-card-banner is-inline">
-          This step lights the real LEDs, so it needs your Lightweaver card connected. Use the <b>Connect Lightweaver</b> button in the footer first.
+          This step lights the real LEDs — use <b>Connect Lightweaver</b> in the footer first.
         </p>
       )}
       <WiringBenchTest

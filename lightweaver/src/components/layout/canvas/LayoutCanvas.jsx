@@ -440,8 +440,9 @@ export function LayoutCanvas({
                   onControllerAnchorMove(event);
                   }}
                 />
-                <path pointerEvents="none" d={`M ${-vbScale * 6} 0 H ${vbScale * 6} M 0 ${-vbScale * 6} V ${vbScale * 6}`}/>
-                <text pointerEvents="none" x={vbScale * 15} y={vbScale * 4}>CARD</text>
+                <title>Your Lightweaver card — drag to where it sits, so the wire order starts from the right place</title>
+                <rect pointerEvents="none" x={-vbScale * 6} y={-vbScale * 4} width={vbScale * 12} height={vbScale * 8} rx={vbScale * 1.5}/>
+                <text pointerEvents="none" x={vbScale * 15} y={vbScale * 4}>Card</text>
               </g>
             )}
 

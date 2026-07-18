@@ -163,7 +163,7 @@ test('physical LED check states its prerequisite before the disabled action', as
   const start = bench.getByRole('button', { name: 'Start physical LED check' });
   await expect(confirmation).toBeVisible();
   await expect(start).toBeDisabled();
-  await expect(bench.getByText('Confirm that you can see the LEDs to start the check.')).toBeVisible();
+  await expect(bench.getByText('Tick the box to start.')).toBeVisible();
   expect(await confirmation.evaluate((confirmationElement, startElement) => Boolean(
     confirmationElement.compareDocumentPosition(startElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING
   ), await start.elementHandle())).toBe(true);
@@ -969,8 +969,8 @@ test('disconnected card banner leads the panel and the check step restates its c
   await gotoWire(page, { advanced: false });
   const banner = page.getByTestId('wire-card-banner');
   await expect(banner).toBeVisible();
-  await expect(banner).toContainText("To finish wiring you'll check the real LEDs. Connect your Lightweaver card when you're ready — steps up to that point work without it.");
-  await expect(banner).toContainText('Connect Lightweaver');
+  await expect(banner).toContainText("No card connected — that's fine.");
+  await expect(banner).toContainText('Everything except the real-LED check works without it.');
   const order = page.getByTestId('wire-order');
   expect(await banner.evaluate((bannerElement, orderElement) => Boolean(
     bannerElement.compareDocumentPosition(orderElement as Node) & Node.DOCUMENT_POSITION_FOLLOWING

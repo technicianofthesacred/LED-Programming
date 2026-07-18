@@ -143,13 +143,11 @@ export function WiringBenchTest({
   if (!state || state.status === 'cancelled' || state.status === 'complete') return (
     <section className="lw-bench-test" data-testid="wiring-bench-test">
       <div className="lw-bench-idle-heading">
-        <span className="lw-bench-kicker">Required before installation</span>
-        <strong>Verify the real LEDs</strong>
-        <p>The card will mark the first LED blue and the final LED red on each strip.</p>
+        <p>The card lights each strip&apos;s first LED blue and last LED red.</p>
       </div>
-      <label className="lw-bench-ack"><input type="checkbox" aria-label="The LED strips are visible from here" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/><span><strong>The LED strips are visible from here</strong><small>I can watch the real LEDs while running the check.</small></span></label>
+      <label className="lw-bench-ack"><input type="checkbox" aria-label="The LED strips are visible from here" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/><span><strong>The LED strips are visible from here</strong></span></label>
       <div className="lw-bench-start-row">
-        {!acknowledged && <span>Confirm that you can see the LEDs to start the check.</span>}
+        {!acknowledged && <span>Tick the box to start.</span>}
         {acknowledged && !compiled.ok && <span>Fix the LED output mapping errors to start the check.</span>}
         <button aria-label="Start physical LED check (Start wiring test)" className={`btn${acknowledged && compiled.ok ? ' primary' : ''}`} disabled={!acknowledged || !compiled.ok} onClick={begin}>Start physical LED check</button>
       </div>
