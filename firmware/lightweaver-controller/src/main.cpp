@@ -1428,6 +1428,15 @@ void runtimeTriggerIdentify() {
 }
 
 float runtimeGetBrightness() { return manualBrightness; }
+float runtimeGetBrightnessZ(const String& targetId) {
+  if (runtimeConfig.zoneCount == 0) return manualBrightness;
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].brightness;
+    }
+  }
+  return runtimeConfig.zones[0].brightness;
+}
 float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
@@ -1540,6 +1549,20 @@ String runtimeFirmwareInfo() {
   doc["outputColor"]["calibration"]["red"] = outputColorPipeline.redBalance();
   doc["outputColor"]["calibration"]["green"] = outputColorPipeline.greenBalance();
   doc["outputColor"]["calibration"]["blue"] = outputColorPipeline.blueBalance();
+  JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
+  lwOutput["contract"] = 1;
+  lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
+  lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
+  lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["powerLimited"] = runtimeOutputPowerLimited();
+  lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
+  lwOutput["gammaValue"] = runtimeOutputGammaValue();
+  lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();
+  lwOutput["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  lwOutput["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  lwOutput["measuredFps"] = runtimeOutputMeasuredFps();
+  lwOutput["dithering"] = runtimeOutputDithering();
   String out;
   serializeJson(doc, out);
   return out;
@@ -1659,11 +1682,20 @@ uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
 bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
+uint8_t runtimeOutputRequestedBrightnessByte() { return lastRequestedOutputBrightnessByte; }
+uint8_t runtimeOutputBrightnessByte() { return lastOutputBrightnessByte; }
+float runtimeOutputBrightnessScale() { return float(lastOutputBrightnessByte) / 255.0f; }
+bool runtimeOutputPowerLimited() { return outputPowerLimited; }
+const char* runtimeOutputSourceClass() {
+  return lastOutputSourceClass == OUTPUT_EXTERNAL ? "external" : "local";
+}
 bool runtimeOutputGammaEnabled() { return outputColorPipeline.gammaEnabled(); }
 float runtimeOutputGammaValue() { return outputColorPipeline.gammaValue(); }
 float runtimeOutputCalibrationRed() { return outputColorPipeline.redBalance(); }
 float runtimeOutputCalibrationGreen() { return outputColorPipeline.greenBalance(); }
 float runtimeOutputCalibrationBlue() { return outputColorPipeline.blueBalance(); }
+uint16_t runtimeOutputMeasuredFps() { return measuredOutputFps; }
+bool runtimeOutputDithering() { return outputDithering; }
 
 String runtimeWiringSafetyStatus() {
   String stored = runtimeWiringSafetyStatusJson();

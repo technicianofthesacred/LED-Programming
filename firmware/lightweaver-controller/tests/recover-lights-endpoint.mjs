@@ -129,8 +129,8 @@ assert.match(
 
 assert.match(
   recoverBody,
-  /showLeds\(\);/,
-  'Recover lights should use the normal centralized brightness and output funnel',
+  /showLeds\(brightnessByte\);/,
+  'Recover lights should submit its computed byte through the centralized output funnel',
 );
 
 assert.doesNotMatch(
