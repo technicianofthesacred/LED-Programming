@@ -235,6 +235,17 @@ function Rail({ view, setView, openCard }) {
     <aside className="rail">
       {main.map(item)}
       <div className="spring" />
+      {/* Workshop entry for manufacturing workers who type the bare domain.
+          Kept at the bottom, visually secondary, and NOT part of the normal
+          artwork journey — it opens Batch production directly. */}
+      <button
+        aria-label="Workshop — Batch production"
+        className="rail-item rail-workshop"
+        title="Batch production for manufacturing workers"
+        onClick={() => openCard('workshop')}
+      >
+        <span className="ico">{I.production}</span><span className="lbl">Workshop</span>
+      </button>
     </aside>
   );
 }

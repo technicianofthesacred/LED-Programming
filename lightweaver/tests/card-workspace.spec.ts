@@ -662,3 +662,18 @@ test('the browser deployment check verifies the served signed release and never 
   // The honest boundary stays visible: the independent audit is check:prod.
   await expect(panel.getByText(/check:prod/)).toBeVisible();
 });
+
+
+test('a worker typing the bare domain reaches Batch production from the rail and finds the published job', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  const workshop = page.locator('.rail').getByRole('button', { name: 'Workshop — Batch production' });
+  await expect(workshop).toBeVisible();
+  await workshop.click();
+  await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
+
+  // The published same-origin job is discoverable by its printed code alone.
+  await page.getByLabel('Job code').fill('bench-fixture-44');
+  await page.getByRole('button', { name: 'Find job' }).click();
+  await expect(page.getByText('Bench fixture · 44 LEDs')).toBeVisible();
+  await expect(page.getByText(/Verified production job/i)).toBeVisible();
+});
