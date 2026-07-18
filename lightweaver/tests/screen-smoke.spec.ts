@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 // The Rail (src/v3/app.jsx) now also has a "Show" screen (the live LED
 // preview screen) alongside the original six.
-const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Show', 'Settings', 'Flash', 'Installer'];
+const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Show', 'Card'];
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -468,7 +468,7 @@ test('layout opens with the default two-circle hardware layout', async ({ page }
 });
 
 test('settings screen prioritizes card setup and keeps raw config advanced', async ({ page }) => {
-  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.goto('/#screen=card&section=settings', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
@@ -494,6 +494,8 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   // "Designer config" JSON is hidden by default and revealed with its own
   // Show/Hide JSON button — the old always-visible "Advanced" click target
   // and .lw-chip-settings-json class are gone.
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Advanced & Support' }).click();
+  await page.getByRole('button', { name: 'Designer JSON' }).click();
   await expect(page.locator('.set-json')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show JSON' }).click();
   await expect(page.locator('.set-json')).toBeVisible();
@@ -561,11 +563,11 @@ test('number keys do not navigate away from LED count fields', async ({ page }) 
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Preferences', level: 1 })).toBeVisible();
   for (const key of ['1', '2', '3', '4', '5', '6']) {
     await page.keyboard.press(key);
     await expect(page).toHaveURL(/#screen=settings$/);
-    await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Preferences', level: 1 })).toBeVisible();
   }
 });
 
@@ -579,7 +581,7 @@ test('there is no command-palette panel navigation — actions are direct button
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('heading', { name: 'Settings', level: 1 }).click();
+  await page.getByRole('heading', { name: 'Preferences', level: 1 }).click();
   await page.keyboard.press('Control+K');
   await expect(page.getByPlaceholder('Type a command...')).toHaveCount(0);
   await expect(page.getByText(/^Go to:/)).toHaveCount(0);
@@ -588,7 +590,7 @@ test('there is no command-palette panel navigation — actions are direct button
 });
 
 test('settings text and number boxes accept direct typing', async ({ page }) => {
-  await page.goto('/#screen=settings', { waitUntil: 'domcontentloaded' });
+  await page.goto('/#screen=card&section=settings', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
@@ -627,7 +629,7 @@ test('flash screen is reachable for public chip setup', async ({ page }) => {
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByText('Technician diagnostics', { exact: true }).click();
+  await expect(page.getByText('Technician diagnostics', { exact: true })).toBeVisible();
   await expect(page.getByText('Bootloader mode')).toBeVisible();
   await expect(page.getByText('Lightweaver firmware', { exact: true })).toBeVisible();
   await expect(page.getByText('Fetch latest WLED')).toHaveCount(0);
@@ -649,7 +651,7 @@ test('installer screen gives a worker the full chip setup checklist', async ({ p
   // not an <a href="#screen=flash">, so verify the click actually navigates
   // instead of checking a static href.
   await page.getByRole('button', { name: 'Flash chip' }).click();
-  await expect(page).toHaveURL(/#screen=flash$/);
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
 });
 
 test('connection center uses the stored card host and verifies the popup card', async ({ page }) => {

@@ -121,6 +121,10 @@ function realPatternShape(patternId) {
     const playlistRevision = useRef(0);
     const latestLiveItem = useRef(null);
     const [drag, setDrag] = useState({ from: null, over: null });
+    const [reorderAnnouncement, setReorderAnnouncement] = useState('');
+    const reorderHandleRefs = useRef(new Map());
+    const pendingReorderFocus = useRef(null);
+    const pointerDrag = useRef(null);
 
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
     const savedLooks = normalizeSavedLooks(standaloneController?.looks);
@@ -185,14 +189,29 @@ function realPatternShape(patternId) {
       writePlaylist(next);
     };
 
-    const move = (i, d) => moveTo(i, i + d);
+    React.useEffect(() => {
+      const itemId = pendingReorderFocus.current;
+      if (!itemId) return;
+      const handle = reorderHandleRefs.current.get(itemId);
+      if (!handle) return;
+      handle.focus();
+      pendingReorderFocus.current = null;
+    }, [playlist]);
 
-    const first = (i) => {
-      if (i <= 0) return;
-      const next = [...playlist];
-      const [item] = next.splice(i, 1);
-      next.unshift(item);
-      writePlaylist(next);
+    const reorderWithKeyboard = (event, item, fromIndex) => {
+      let toIndex;
+      switch (event.key) {
+        case 'ArrowUp': toIndex = fromIndex - 1; break;
+        case 'ArrowDown': toIndex = fromIndex + 1; break;
+        case 'Home': toIndex = 0; break;
+        case 'End': toIndex = playlist.length - 1; break;
+        default: return;
+      }
+      event.preventDefault();
+      if (toIndex < 0 || toIndex >= playlist.length || toIndex === fromIndex) return;
+      pendingReorderFocus.current = item.id;
+      setReorderAnnouncement(`${item.label} moved to position ${toIndex + 1} of ${playlist.length}`);
+      moveTo(fromIndex, toIndex);
     };
 
     const dup = (i) => {
@@ -507,7 +526,7 @@ function realPatternShape(patternId) {
       void previewSavedLookOnCard(savedLook);
     };
 
-    // ── drag + drop (attached to the existing .pl-row, no new elements) ────
+    // ── drag + drop (the handle is the source; rows remain drop targets) ───
     const startDrag = (event, index) => {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/plain', String(index));
@@ -526,6 +545,42 @@ function realPatternShape(patternId) {
       moveTo(fromIndex, index);
     };
     const endDrag = () => setDrag({ from: null, over: null });
+
+    const startPointerDrag = (event, index) => {
+      if (event.pointerType === 'mouse') return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      pointerDrag.current = {
+        pointerId: event.pointerId,
+        handle: event.currentTarget,
+        from: index,
+        over: index,
+      };
+      setDrag({ from: index, over: index });
+    };
+
+    const movePointerDrag = (event) => {
+      const active = pointerDrag.current;
+      if (!active || active.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const row = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-playlist-index]');
+      const over = Number.parseInt(row?.dataset.playlistIndex || '', 10);
+      if (!Number.isFinite(over) || over === active.over) return;
+      active.over = over;
+      setDrag({ from: active.from, over });
+    };
+
+    const finishPointerDrag = (event, commit) => {
+      const active = pointerDrag.current;
+      if (!active || active.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      if (active.handle.hasPointerCapture?.(event.pointerId)) {
+        active.handle.releasePointerCapture(event.pointerId);
+      }
+      pointerDrag.current = null;
+      setDrag({ from: null, over: null });
+      if (commit) moveTo(active.from, active.over);
+    };
 
     // ── derived view data (real banks, mockup shapes) ─────────────────────
     // Mixes pool: real saved looks adapted to the mockup mix shape.
@@ -618,6 +673,12 @@ function realPatternShape(patternId) {
                 </div>
 
                 <div className="pl-list">
+                  <span id="playlist-reorder-instructions" className="pl-reorder-instructions">
+                    Use Arrow Up or Arrow Down to move one place. Use Home or End to move to the bounds. Drag with a pointer or touch.
+                  </span>
+                  <span className="pl-reorder-status" aria-live="polite" data-testid="playlist-reorder-status">
+                    {reorderAnnouncement}
+                  </span>
                   {playlist.map((item, i) => {
                     const savedLook = item.type === 'combo' ? savedLookById.get(item.lookId) : null;
                     const p = item.type === 'combo'
@@ -628,16 +689,33 @@ function realPatternShape(patternId) {
                     return (
                       <article
                         key={id}
-                        className={"pl-row" + (live === id ? " is-live" : "")}
+                        className={"pl-row" + (live === id ? " is-live" : "") + (drag.from === i ? " is-dragging" : "") + (drag.from !== null && drag.over === i ? " is-drop-target" : "")}
                         data-testid={`playlist-row-${id}`}
-                        draggable
-                        onDragStart={(e) => startDrag(e, i)}
+                        data-playlist-index={i}
                         onDragOver={(e) => hoverDrop(e, i)}
                         onDrop={(e) => dropItem(e, i)}
-                        onDragEnd={endDrag}
                       >
                         <div className="pl-index">
-                          <span className="pl-grip">::</span>
+                          <button
+                            className={"pl-grip" + (drag.from === i ? " is-grabbing" : "")}
+                            draggable
+                            aria-label={`Reorder ${item.label}`}
+                            aria-describedby="playlist-reorder-instructions"
+                            title={`Reorder ${item.label}`}
+                            ref={(node) => {
+                              if (node) reorderHandleRefs.current.set(id, node);
+                              else reorderHandleRefs.current.delete(id);
+                            }}
+                            onKeyDown={(event) => reorderWithKeyboard(event, item, i)}
+                            onPointerDown={(event) => startPointerDrag(event, i)}
+                            onPointerMove={movePointerDrag}
+                            onPointerUp={(event) => finishPointerDrag(event, true)}
+                            onPointerCancel={(event) => finishPointerDrag(event, false)}
+                            onDragStart={(event) => startDrag(event, i)}
+                            onDragEnd={endDrag}
+                          >
+                            ::
+                          </button>
                           <strong>{String(i + 1).padStart(2, "0")}</strong>
                           <span>{i === 0 ? "startup" : "press"}</span>
                         </div>
@@ -648,11 +726,15 @@ function realPatternShape(patternId) {
                         </div>
                         <div className="pl-actions">
                           <button className={"plbtn" + (live === id ? " on" : "")} aria-pressed={live === id} disabled={recoveryPending} onClick={() => setLiveItem(item)}>Live</button>
-                          <button className="plbtn" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
-                          <button className="plbtn" disabled={i === playlist.length - 1} onClick={() => move(i, 1)}>Down</button>
-                          <button className="plbtn" disabled={i === 0} onClick={() => first(i)}>Make first</button>
                           <button className="plbtn" onClick={() => dup(i)}>Copy</button>
-                          <button className="plbtn danger" onClick={() => remove(i)}>Remove</button>
+                          <button
+                            className="plbtn danger pl-remove"
+                            aria-label={`Remove ${item.label}`}
+                            title={`Remove ${item.label}`}
+                            onClick={() => remove(i)}
+                          >
+                            ×
+                          </button>
                         </div>
                       </article>
                     );

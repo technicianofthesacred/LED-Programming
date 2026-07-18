@@ -76,10 +76,8 @@ test('installer inside a secure iframe escapes to the fixed top-level installer'
 
 test('technician controls remain separately labelled outside install mode', async ({ page }) => {
   await page.goto('/#screen=flash');
-  const disclosure = page.getByText('Technician diagnostics', { exact: true });
-  await expect(disclosure).toBeVisible();
-  await expect(page.getByRole('button', { name: /Browse \.bin/i })).toHaveCount(0);
-  await disclosure.click();
+  await expect(page.getByText('Technician diagnostics', { exact: true })).toBeVisible();
+  await expect(page.locator('details')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Browse \.bin/i })).toBeVisible();
   await expect(page.getByText('Address', { exact: true })).toBeVisible();
   await expect(page.locator('textarea.fl-log')).toBeVisible();

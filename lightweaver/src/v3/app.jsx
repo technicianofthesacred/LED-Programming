@@ -30,16 +30,15 @@ import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
+import { cardRouteFromHash, isCardSection } from './cardWorkspaceRoute.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
-const FlashScreen = lazy(() => import('./lw-flash.jsx').then(module => ({ default: module.FlashScreen })));
-const SettingsScreen = lazy(() => import('./lw-settings.jsx').then(module => ({ default: module.SettingsScreen })));
-const InstallerScreen = lazy(() => import('./lw-installer.jsx').then(module => ({ default: module.InstallerScreen })));
-const ProductionScreen = lazy(() => import('./lw-production.jsx').then(module => ({ default: module.ProductionScreen })));
+const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
 
-const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'flash', 'settings', 'installer', 'production'];
+const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'card'];
+const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
 function readScreenRecoveryAttempt() {
@@ -163,6 +162,7 @@ class ScreenErrorBoundary extends Component {
 function normalizeView(v) {
   const s = String(v || '').trim().toLowerCase();
   if (s === 'patterns') return 'pattern';
+  if (LEGACY_CARD_SCREENS.has(s)) return 'card';
   return SCREEN_KEYS.includes(s) ? s : 'layout';
 }
 function viewFromHash() {
@@ -181,10 +181,11 @@ const I = {
   playlist: <svg viewBox="0 0 24 24"><path d="M4 7h11M4 12h11M4 17h7"/><circle cx="18" cy="16" r="2.4"/><path d="M20.4 16V9l-3 1"/></svg>,
   installer: <svg viewBox="0 0 24 24"><path d="M3 13l2.5-7.5A1 1 0 0 1 6.5 5h11a1 1 0 0 1 1 .7L21 13v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 13h5l1.5 2.2h5L16 13h5"/></svg>,
   production: <svg viewBox="0 0 24 24"><path d="M4 7h16v12H4zM8 7V4h8v3"/><path d="M8 12h8M12 10v4"/></svg>,
+  card: <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>,
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
-function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
+function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onPreferences }) {
   return (
     <header className="topbar">
       <div className="brand"><span className="glyph" /><span className="name">Lightweaver</span></div>
@@ -195,6 +196,7 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
       <div className="top-right">
         <button className="link-btn" title="Start a new empty project" onClick={onNew}>New project</button>
         <button className="link-btn" title="Open a project file from your computer" onClick={onLoad}>Load project</button>
+        <button className="link-btn" title="Open Studio preferences" onClick={onPreferences}>Preferences</button>
         <span className="top-div" />
         <button className="link-btn" title="Download a keepable project file to your computer (reload it anytime)" onClick={onDownload}>Download file</button>
         <button className="btn primary" title="Save the project in this browser" onClick={onSave}>Save project</button>
@@ -204,11 +206,10 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave }) {
 }
 
 /* ---------- Left rail ---------- */
-function Rail({ view, setView }) {
-  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["flash", "Flash"], ["installer", "Installer"]];
-  const foot = [["production", "Setup", "Production setup"], ["settings", "Settings"]];
+function Rail({ view, setView, openCard }) {
+  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["card", "Card"]];
   const item = ([id, label, accessibleLabel]) => (
-    <button key={id} aria-label={accessibleLabel || label} className={"rail-item" + (view === id ? " active" : "")} onClick={() => setView(id)}>
+    <button key={id} aria-label={accessibleLabel || label} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
@@ -216,7 +217,6 @@ function Rail({ view, setView }) {
     <aside className="rail">
       {main.map(item)}
       <div className="spring" />
-      {foot.map(item)}
     </aside>
   );
 }
@@ -297,8 +297,10 @@ function Shell() {
   const [bridgeResult, setBridgeResult] = useState(readStoredBridgeResult);
   const bridgeResultAcceptedRef = useRef(Boolean(bridgeResult));
   const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
+  const [cardRoute, setCardRoute] = useState(() => cardRouteFromHash());
   const [installActive, setInstallActive] = useState(false);
   const installActiveRef = useRef(false);
+  const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject,
@@ -342,17 +344,44 @@ function Shell() {
     const onInstallActive = event => {
       const active = event.detail?.active === true;
       installActiveRef.current = active;
+      if (active) {
+        const params = new URLSearchParams(window.location.hash.slice(1));
+        const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';
+        const canonicalInstall = params.get('screen') === 'card' && params.get('section') === 'install';
+        installRouteRef.current = legacyInstall || canonicalInstall ? window.location.hash : '#screen=card&section=install';
+        setCardRoute(cardRouteFromHash(installRouteRef.current));
+        if (!legacyInstall && !canonicalInstall) {
+          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
+          setView('card');
+        }
+      }
       setInstallActive(active);
     };
     window.addEventListener('lw-install-active', onInstallActive);
     return () => window.removeEventListener('lw-install-active', onInstallActive);
   }, []);
-  const navigateStudio = useCallback((nextView) => {
-    if (!installActiveRef.current) {
-      flushProjectAutosave();
-      setView(nextView);
-    }
+  const openCardSection = useCallback((section = 'overview') => {
+    if (installActiveRef.current) return;
+    flushProjectAutosave();
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    params.set('screen', 'card');
+    params.set('section', isCardSection(section) ? section : 'overview');
+    params.delete('mode');
+    setCardRoute(cardRouteFromHash(`#${params.toString()}`));
+    setView('card');
+    window.location.hash = params.toString();
   }, [flushProjectAutosave]);
+  const navigateStudio = useCallback((nextView) => {
+    if (installActiveRef.current) return;
+    const requested = String(nextView || '').toLowerCase();
+    if (requested === 'flash') { openCardSection('support'); return; }
+    if (requested === 'installer') { openCardSection('support'); return; }
+    if (requested === 'production') { openCardSection('workshop'); return; }
+    if (requested === 'settings') { openCardSection('preferences'); return; }
+    if (requested === 'card') { openCardSection('overview'); return; }
+    flushProjectAutosave();
+    setView(normalizeView(requested));
+  }, [flushProjectAutosave, openCardSection]);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
   // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
@@ -360,22 +389,33 @@ function Shell() {
   useEffect(() => {
     if (bridgeBooting) return;
     const params = new URLSearchParams(window.location.hash.slice(1));
+    if (view === 'card' && LEGACY_CARD_SCREENS.has(String(params.get('screen') || '').toLowerCase())) return;
     params.set('screen', view);
-    if (view !== 'layout' && !(view === 'flash' && params.get('mode') === 'install')) params.delete('mode');
+    if (view === 'card') {
+      if (!isCardSection(params.get('section'))) params.set('section', 'overview');
+      params.delete('mode');
+    } else {
+      params.delete('section');
+    }
+    if (view !== 'layout') params.delete('mode');
     if (view === 'layout' && params.get('mode') === 'install') params.delete('mode');
     const next = `#${params.toString()}`;
     if (window.location.hash !== next) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
+      if (view === 'card') setCardRoute(cardRouteFromHash(next));
     }
   }, [view, bridgeBooting]);
   useEffect(() => {
     const onHash = () => {
       if (installActiveRef.current) {
-        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#screen=flash&mode=install`);
-        setView('flash');
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
+        setView('card');
+        setCardRoute(cardRouteFromHash(installRouteRef.current));
         return;
       }
-      setView(viewFromHash());
+      const nextView = viewFromHash();
+      setView(nextView);
+      if (nextView === 'card') setCardRoute(cardRouteFromHash());
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -520,7 +560,7 @@ function Shell() {
     e.target.value = '';
   }, [replaceProject]);
 
-  const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, flash: FlashScreen, settings: SettingsScreen, installer: InstallerScreen, production: ProductionScreen }[view];
+  const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, card: CardScreen }[view];
 
   return (
     <div className="app">
@@ -528,13 +568,14 @@ function Shell() {
         projectName={projectName || 'Untitled'}
         saveLabel={saveLabel || projectLifecycleLabel}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
+        onPreferences={() => openCardSection('preferences')}
       />
-      <Rail view={view} setView={navigateStudio} />
+      <Rail view={view} setView={navigateStudio} openCard={openCardSection} />
 
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
-            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} />
+            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} go={navigateStudio} onOpenSection={openCardSection} route={cardRoute} />
             <ScreenReady />
           </> : null}
         </Suspense>

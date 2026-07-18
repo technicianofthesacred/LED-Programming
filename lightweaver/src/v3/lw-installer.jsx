@@ -70,7 +70,7 @@ import { useProject } from '../state/ProjectContext.jsx';
     }
   }
 
-  function InstallerScreen({ go, cardLink }) {
+  function InstallerScreen({ go, cardLink, embedded = false }) {
     const { projectId, projectName, projectLifecycle } = useProject();
     const cardIdentity = cardLink?.card?.id || 'Not recorded';
     const identity = {
@@ -118,14 +118,13 @@ import { useProject } from '../state/ProjectContext.jsx';
       ? 'Not installed from this Studio session'
       : `Revision ${projectLifecycle.installedRevision}`;
 
-    return (
-      <div className="screen">
-        <div className="screen-scroll">
-          <div className="inst">
+    const InstallerHeading = embedded ? 'h2' : 'h1';
+    const content = (
+          <div className={`inst${embedded ? ' embedded' : ''}`}>
             <header className="inst-hero">
               <div>
                 <div className="inst-kicker">Installer</div>
-                <h1>Worker install</h1>
+                <InstallerHeading>Worker install</InstallerHeading>
                 <p>Flash the card, wire the piece, load the project, then run the bench checks before it leaves the shop.</p>
               </div>
               <div className="inst-actions">
@@ -210,9 +209,8 @@ import { useProject } from '../state/ProjectContext.jsx';
               </aside>
             </div>
           </div>
-        </div>
-      </div>
     );
+    return embedded ? content : <div className="screen"><div className="screen-scroll">{content}</div></div>;
   }
 
 export { InstallerScreen };

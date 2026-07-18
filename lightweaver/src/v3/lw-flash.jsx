@@ -51,7 +51,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
   }
 
-  function TechnicianFlashScreen() {
+  function TechnicianFlashScreen({ embedded = false } = {}) {
     const hasWebSerial = typeof navigator !== 'undefined' && 'serial' in navigator;
 
     const [connected, setConnected] = useState(false);
@@ -214,15 +214,17 @@ import { openInChrome } from '../lib/openInChrome.js';
     const canFlash = connected && fw && !flashing && (!erase || eraseConfirmed);
     const canConnect = hasWebSerial && !connecting && !flashing;
 
+    const TechnicianHeading = embedded ? 'h2' : 'h1';
+
     return (
-      <div className="screen">
-        <div className="screen-scroll">
-          <details className="technician-disclosure">
-            <summary>Technician diagnostics</summary>
+      <div className={embedded ? 'technician-embedded' : 'screen'}>
+        <div className={embedded ? 'technician-embedded-scroll' : 'screen-scroll'}>
+          <div className="technician-disclosure">
+            <div className="technician-disclosure-label">Technician diagnostics</div>
             <div className="fl">
             <div>
               <div className="eyebrow">Advanced tools</div>
-              <h1 className="flash-screen-title">Manual firmware tools</h1>
+              <TechnicianHeading className="flash-screen-title">Manual firmware tools</TechnicianHeading>
               <p className="flash-screen-intro">Manual firmware files, offsets, erase controls, and the serial log are kept here for trained repair work.</p>
             </div>
             <div className={"fl-warn " + (hasWebSerial ? "ok" : "warn")}>
@@ -305,7 +307,7 @@ import { openInChrome } from '../lib/openInChrome.js';
               <textarea ref={logRef} className="fl-log" readOnly value={log} placeholder="Connect the card to begin…" />
             </div>
             </div>
-          </details>
+          </div>
         </div>
       </div>
     );
@@ -323,7 +325,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     });
   }
 
-  function UnsupportedInstall({ action, onLaunchBridge }) {
+  function UnsupportedInstall({ action, onLaunchBridge, embedded = false }) {
     const [bridgeState, setBridgeState] = useState('idle');
     const [returnCode, setReturnCode] = useState('');
     const [returnError, setReturnError] = useState('');
@@ -358,10 +360,12 @@ import { openInChrome } from '../lib/openInChrome.js';
         break;
     }
 
+    const UnsupportedHeading = embedded ? 'h2' : 'h1';
+
     return (
       <div className="card install-handoff" role="status">
         <div className="eyebrow">Your project is safe in Studio</div>
-        <h1>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h1>
+        <UnsupportedHeading>{bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</UnsupportedHeading>
         <p>{action.explanation}</p>
         <ol>
           <li>{firstStep}</li>
@@ -415,7 +419,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     );
   }
 
-  function AutomaticInstallScreen({ cardLink = {}, onConnectCard }) {
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, embedded = false }) {
     const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
@@ -431,6 +435,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     const mountedRef = useRef(true);
     const findingRef = useRef(false);
     const installingRef = useRef(false);
+    const InstallHeading = embedded ? 'h2' : 'h1';
 
     useEffect(() => {
       if (!capabilities.canWebSerialInstall) return undefined;
@@ -483,7 +488,7 @@ import { openInChrome } from '../lib/openInChrome.js';
       },
     });
 
-    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} />;
+    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} embedded={embedded} />;
 
     const findCard = async () => {
       if (findingRef.current || installingRef.current) return;
@@ -578,7 +583,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     if (installState === 'complete' || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
       return (
-        <div className="install-flow" aria-live="polite">
+        <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
           <CardCommissioningPanel
             result={null}
             link={cardLink}
@@ -592,11 +597,11 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     const releaseReady = releaseState.state === 'ready';
     return (
-      <div className="install-flow" aria-live="polite">
+      <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
         <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
-          <h1>Install Lightweaver</h1>
+          <InstallHeading>Install Lightweaver</InstallHeading>
           <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
         </div>
 
@@ -651,4 +656,4 @@ import { openInChrome } from '../lib/openInChrome.js';
     return installMode ? <AutomaticInstallScreen {...props} /> : <TechnicianFlashScreen />;
   }
 
-export { FlashScreen };
+export { AutomaticInstallScreen, FlashScreen, TechnicianFlashScreen };

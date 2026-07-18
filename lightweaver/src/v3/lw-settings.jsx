@@ -168,7 +168,7 @@ const SettingsFieldContext = createContext(null);
     );
   }
 
-  function SettingsScreen() {
+  function SettingsScreen({ embedded = false, mode = 'all' } = {}) {
     const {
       projectId,
       projectLifecycle,
@@ -573,15 +573,16 @@ const SettingsFieldContext = createContext(null);
       const next = SWATCHES.find(s => !palette.includes(s)) || SWATCHES[palette.length % SWATCHES.length];
       setPalette([...palette, next]);
     };
+    const showPreferences = mode === 'all' || mode === 'preferences';
+    const showCard = mode === 'all' || mode === 'card';
+    const showAdvanced = mode === 'all' || mode === 'advanced';
 
-    return (
-      <div className="screen">
-        <div className="screen-scroll">
-          <div className="set">
-            <h1 className="set-title">Settings</h1>
+    const content = (
+          <div className={`set${embedded ? ' set-embedded' : ''}`}>
+            {!embedded && <h1 className="set-title">Settings</h1>}
 
             {/* ── Live-only: Card connection (top section, mockup idiom) ── */}
-            <div className="set-cols set-cols-1">
+            {showCard && <div className="set-cols set-cols-1">
               <div className="set-col">
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Card connection</span><span className="m">{directPushAvailable ? 'local card write' : 'copy or download'}</span></div>
@@ -594,8 +595,8 @@ const SettingsFieldContext = createContext(null);
                       {!directPushAvailable && <button className="btn" onClick={openCardInstaller}>{I.open}Open card installer</button>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
                       <button className="btn ghost-sm" onClick={() => window.open(cardHostToUrl(cardHost) || CARD_PAGE_FALLBACK, '_blank')}>{I.open}Open card page</button>
-                      <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=flash'; }}>{I.bolt}Flash chip</button>
-                      <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=installer'; }}>{I.info}Installer guide</button>
+                      <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=install'; }}>{I.bolt}Flash chip</button>
+                      <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=support'; }}>{I.info}Installer guide</button>
                     </div>
                   </Row>
                   {status && (
@@ -603,18 +604,18 @@ const SettingsFieldContext = createContext(null);
                   )}
                 </section>
               </div>
-            </div>
+            </div>}
 
             <div className="set-cols">
               <div className="set-col">
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Project</span></div>
                   <Row label="Project name"><FieldInput className="pm-input" value={projectName} onChange={(e) => setProjectName(e.target.value)} /></Row>
                   <Row label="Default BPM" hint="Used for beat-quantized clip recording"><FieldInput className="num-input" type="number" value={bpm} onChange={(e) => setBpm(+e.target.value)} /></Row>
                   <Row label="Show duration" hint="Total timeline length"><div className="set-v-inline"><FieldInput className="num-input" type="number" value={showDuration} onChange={(e) => setShowDuration(+e.target.value)} /><span className="set-u">sec</span></div></Row>
-                </section>
+                </section>}
 
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Pattern palette</span><span className="m">read by all patterns</span></div>
                   <div className="set-pal">
                     {palette.map((s, i) => (
@@ -624,9 +625,9 @@ const SettingsFieldContext = createContext(null);
                     ))}
                     <button className="set-paladd" aria-label="Add palette color" onClick={addPaletteColor}>{I.plus}</button>
                   </div>
-                </section>
+                </section>}
 
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Look defaults</span></div>
                   <Row label="Theme"><Seg opts={THEME_LABELS} val={themeLabel} set={(o) => setTweak('theme', THEME_VALUE[o])} /></Row>
                   <Row label="Master speed default"><Range value={masterSpeed} set={setMasterSpeed} min={0.1} max={3} step={0.01} fmt={(v) => `${v.toFixed(2)}×`} /></Row>
@@ -636,18 +637,18 @@ const SettingsFieldContext = createContext(null);
                   <Row label="Master hue shift" hint="Rotates all colors on the wheel">
                     <div className="set-v-inline"><Range value={Math.round(masterHueShift * 256)} set={(v) => setMasterHueShift(v / 256)} min={-128} max={128} step={1} fmt={(v) => `${v}`} /><button className="btn ghost-sm" onClick={() => setMasterHueShift(0)}>Reset</button></div>
                   </Row>
-                </section>
+                </section>}
               </div>
 
               <div className="set-col">
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Rendering</span></div>
                   <Row label="Gamma correction" hint="Corrects LED brightness curve"><button type="button" aria-label="Gamma correction" aria-pressed={gammaEnabled} className={"ex-toggle" + (gammaEnabled ? " on" : "")} onClick={() => setGammaEnabled(!gammaEnabled)} /></Row>
                   <Row label="Canvas resolution" hint="Lower = faster rendering"><Seg opts={RES_LABELS} val={resLabel} set={(o) => setTweak('dpr', RES_VALUE[o])} /></Row>
                   <Row label="Card push fps" hint="Max frames per second sent to the card"><Seg opts={FPS_LABELS} val={fpsLabel} set={(o) => setTweak('wledFps', +o)} /></Row>
-                </section>
+                </section>}
 
-                <section className="card set-card">
+                {showCard && <section className="card set-card">
                   <div className="sec-h"><span className="t">Card &amp; hardware</span></div>
                   <Row label="Runtime mode" hint="What the card plays from on boot"><Seg opts={RUNTIME_LABELS} val={runtimeLabel} set={(o) => updateController({ runtimeMode: RUNTIME_VALUE[o] })} /></Row>
                   <Row label="Color order" hint="This card is calibrated to RGB"><Seg opts={COLOR_ORDER_LABELS} val={colorOrderLabel} set={updateColorOrder} /></Row>
@@ -660,16 +661,16 @@ const SettingsFieldContext = createContext(null);
                     </div>
                   </Row>
                   <RingSummary sections={hardwareSections} targets={sectionTargets} activeLookLabel={activeSavedLook?.label || 'Current look'} />
-                </section>
+                </section>}
 
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Project file</span></div>
                   <Row label="Save project" hint="Download a .lwproj.json file you can reload"><button className="btn" onClick={saveProjectFile}>{I.download}Download .lwproj.json</button></Row>
                   <Row label="Load project" hint="Import a .lwproj.json file">
                     <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Choose file…</button>
                     <FieldInput ref={importRef} type="file" accept=".json,.lwproj.json,.lw.json" className="set-file-input" onChange={importProjectFile} />
                   </Row>
-                </section>
+                </section>}
               </div>
             </div>
 
@@ -677,14 +678,14 @@ const SettingsFieldContext = createContext(null);
             <div className="set-cols">
               <div className="set-col">
                 {/* Dial / encoder — relocated here from Patterns */}
-                <section className="card set-card">
+                {showCard && <section className="card set-card">
                   <div className="sec-h"><span className="t">Dial / encoder</span><span className="m">physical knob</span></div>
                   <Row label="Rotate direction" hint="Which way turns the brightness up"><Seg opts={["CW brighter", "CW dimmer"]} val={encoderDir === 'clockwise-dimmer' ? 'CW dimmer' : 'CW brighter'} set={(o) => updateController({ controls: { encoder: { rotateDirection: o === 'CW dimmer' ? 'clockwise-dimmer' : 'clockwise-brighter' } } })} /></Row>
                   <Row label="Brightness step" hint="How much each click changes brightness"><Range value={encoderStep} set={(v) => updateController({ controls: { encoder: { brightnessStep: Math.max(1, Math.min(64, Math.round(v))) } } })} min={1} max={64} step={1} fmt={(v) => `${v}`} /></Row>
-                </section>
+                </section>}
 
                 {/* Project library — browser-saved Studio projects */}
-                <section className="card set-card">
+                {showPreferences && <section className="card set-card">
                   <div className="sec-h"><span className="t">Project library</span><span className="m">{formatSavedTime(lastSaved)}</span></div>
                   <Row label="Browser library" hint="Editable Studio projects in this browser" stack>
                     <div className="set-actions">
@@ -710,12 +711,12 @@ const SettingsFieldContext = createContext(null);
                       <div className="set-lib-empty">No saved Studio projects in this browser yet.</div>
                     )}
                   </div>
-                </section>
+                </section>}
               </div>
 
               <div className="set-col">
                 {/* Hardware layout editor — total LEDs, sections, routing */}
-                <section className="card set-card">
+                {showCard && <section className="card set-card">
                   <div className="sec-h"><span className="t">Hardware layout</span><span className="m">{config.led.pixels} pixels · {hardwareSections.length || hardwareSectionCount} sections</span></div>
                   <Row label="Total LEDs" hint={editableDefaultLayout ? 'used by the default circles' : 'from the imported layout'}>
                     <FieldInput className="num-input" type="number" min="1" max="2048" value={config.led.pixels} disabled={!editableDefaultLayout} onChange={(e) => applyDefaultHardwareLayout({ totalPixels: e.target.value })} />
@@ -756,10 +757,10 @@ const SettingsFieldContext = createContext(null);
                       </div>
                     </div>
                   </Row>
-                </section>
+                </section>}
 
                 {/* Advanced — designer config JSON disclosure */}
-                <section className="card set-card">
+                {showAdvanced && <section className="card set-card">
                   <div className="sec-h"><span className="t">Advanced</span><span className="m">{(configJson.length / 1024).toFixed(1)} KB</span></div>
                   <Row label="Designer config" hint="The exact JSON written to the card">
                     <button className="btn ghost-sm" onClick={() => setAdvancedOpen(o => !o)}>{advancedOpen ? 'Hide' : 'Show'} JSON</button>
@@ -767,13 +768,12 @@ const SettingsFieldContext = createContext(null);
                   {advancedOpen && (
                     <div className="set-advanced"><FieldTextarea aria-label="Designer config JSON" readOnly value={configJson} className="set-json" /></div>
                   )}
-                </section>
+                </section>}
               </div>
             </div>
           </div>
-        </div>
-      </div>
     );
+    return embedded ? content : <div className="screen"><div className="screen-scroll">{content}</div></div>;
   }
 
 export { SettingsScreen };
