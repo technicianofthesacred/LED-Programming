@@ -121,7 +121,7 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
+  await page.getByTitle('Export a portable project file (.lw.json)').click();
   const savedProject = await saveDownload;
   const projectPath = path.join(tmp, await savedProject.suggestedFilename());
   await savedProject.saveAs(projectPath);
@@ -135,17 +135,16 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
 
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
-  // A cleared project reboots into the default two-circle hardware layout
-  // (2 strips already present), so loading a project file now requires an
-  // explicit choice in the accessible project-replacement modal.
-  await page.setInputFiles('input[accept=".json"]', projectPath);
-  const replacement = page.getByRole('dialog', { name: 'Replace current project?' });
-  await expect(replacement).toContainText('Untitled Project');
-  await expect(replacement).toContainText('Imported Workflow Project');
-  await expect(replacement.getByRole('button', { name: 'Replace project' })).toBeVisible();
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
-  await replacement.getByRole('button', { name: 'Replace project' }).click();
-  await expect(replacement).toHaveCount(0);
+  // A cleared project reboots into the starter layout picker with a clean
+  // "New project" lifecycle — an untouched default has nothing worth
+  // guarding, so loading a project file replaces it directly without the
+  // discard confirmation dialog. (The dialog still fires whenever unsaved or
+  // restored-unsaved work would be lost — covered by
+  // tests/studio-hardening.spec.ts and tests/project-recovery-fixtures.spec.ts.)
+  await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
+  await expect(page.locator('.savechip')).toContainText('New project');
+  await page.setInputFiles('[data-testid="layout-import-input"]', projectPath);
+  await expect(page.getByRole('dialog', { name: 'Replace current project?' })).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
 
   // Note: the old "Export" rail screen (ledmap.json download) no longer
@@ -290,7 +289,7 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
   await expect(page.locator('path[data-vector-path-id^="circle-layer-"]')).toHaveCount(0);
 
   const saveDownload = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
+  await page.getByTitle('Export a portable project file (.lw.json)').click();
   const savedProject = await saveDownload;
   const projectPath = path.join(tmp, await savedProject.suggestedFilename());
   await savedProject.saveAs(projectPath);
@@ -320,7 +319,7 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
 
   card.operations.length = 0;
-  await page.getByRole('button', { name: 'Load playlist to card' }).click();
+  await page.getByRole('button', { name: 'Save playlist to card' }).click();
   await expect.poll(() => card.savedConfig).not.toBeNull();
   await expect.poll(() => card.operations).toEqual(['config', 'zones']);
 

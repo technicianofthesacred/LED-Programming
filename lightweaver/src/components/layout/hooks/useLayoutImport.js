@@ -5,6 +5,9 @@ import {
 } from '../../../lib/layoutGeometry.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { download } from '../../../lib/export.js';
+import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../../../lib/projectFiles.js';
+import { writeActiveProjectLibraryRecordId } from '../../../lib/projectStorage.js';
+import { useProject } from '../../../state/ProjectContext.jsx';
 
 // SVG import (button + drag-drop), project save/load, and import error state.
 // `ctx` is the shared layout bundle; view-state resets flow in via `deps`.
@@ -25,6 +28,10 @@ export function useLayoutImport(ctx, deps) {
     serializeProject, loadProject: replaceProject,
     colorIdxRef, nextColor,
   } = ctx;
+  // Naming + lifecycle live on the project context (not in the layout ctx
+  // bundle): exports carry the canonical project file name and count as a
+  // "file" persistence destination, exactly like the top-bar download.
+  const { projectName, markProjectPersisted } = useProject();
 
   const { resetView, setDrawMode, setWaypoints } = deps;
 
@@ -102,7 +109,6 @@ export function useLayoutImport(ctx, deps) {
 
   // ── Save / Load project ────────────────────────────────────────────────────
   const saveProject = () => {
-    const date = new Date().toISOString().slice(0, 10);
     const data = {
       ...serializeProject(),
       layout: {
@@ -120,7 +126,10 @@ export function useLayoutImport(ctx, deps) {
       },
     };
     // Canonical download() (src/lib/export.js): (content, filename, mimeType).
-    download(JSON.stringify(data, null, 2), `lightweaver-project-${date}.json`, 'application/json');
+    // The file carries the canonical `<project-name>.lw.json` name and counts
+    // as a "file" save in the project lifecycle.
+    download(JSON.stringify(data, null, 2), canonicalProjectFileName(projectName), 'application/json');
+    markProjectPersisted('file');
   };
 
   const handleLoad = async (e) => {
@@ -131,6 +140,9 @@ export function useLayoutImport(ctx, deps) {
       const text = await file.text();
       const data = JSON.parse(text);
       const result = await replaceProject(data);
+      // Loading a file detaches the workspace from any browser-library record
+      // (mirrors the top-bar import in src/v3/app.jsx).
+      if (result.ok) writeActiveProjectLibraryRecordId('');
       if (result.reason === 'invalid') alert('Unrecognised file format.');
     } catch (err) {
       alert('Could not load file: ' + err.message);
@@ -148,5 +160,9 @@ export function useLayoutImport(ctx, deps) {
     handleDrop,
     saveProject,
     handleLoad,
+    // Permissive accept list for the project-file input (canonical .lw.json
+    // plus legacy export names). The rendering component owns the <input>;
+    // wire this onto its `accept` attribute.
+    importAccept: PROJECT_IMPORT_ACCEPT,
   };
 }

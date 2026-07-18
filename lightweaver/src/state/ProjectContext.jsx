@@ -34,13 +34,21 @@ import {
 } from './layoutReducer.js';
 import { resolveRotaryInputAction, selectFreshUsbRotaryEvents } from '../lib/usbRotaryInput.js';
 import {
+  clearAutosaveQuarantine,
+  quarantineAutosavePayload,
+  readAutosaveQuarantine,
+  readProjectLifecycleRecord,
+  readRestorableProjectJson,
   readStorageJsonWithBackup,
+  writeProjectLifecycleRecord,
   writeStorageJsonWithBackup,
 } from '../lib/projectStorage.js';
 import {
   createProjectLifecycle,
   hasUnsavedChanges,
+  lifecycleForRestoredProject,
   lifecycleLabel,
+  lifecycleRecordFromState,
   markEdited,
   markInstalled,
   markPersisted,
@@ -350,6 +358,9 @@ export function ProjectProvider({ children }) {
     if (action.type === 'persisted') return markPersisted(state, action.destination);
     if (action.type === 'installed') return markInstalled(state, action.revision);
     if (action.type === 'replaced') return createProjectLifecycle();
+    // Startup restore sets the whole lifecycle at once (New project vs
+    // Restored from recovery copy vs Saved in browser) — see the boot effect.
+    if (action.type === 'boot') return action.lifecycle;
     return state;
   }, undefined, createProjectLifecycle);
   const projectFingerprintRef = useRef('');
@@ -673,6 +684,8 @@ export function ProjectProvider({ children }) {
 
   // ── Auto-save state ───────────────────────────────────────────────────────
   const [lastSaved, setLastSaved] = useState(null);
+  const [autosaveRestoredFrom, setAutosaveRestoredFrom] = useState(null);
+  const [autosaveQuarantine, setAutosaveQuarantine] = useState(null);
   const registerProjectSnapshotContributor = useCallback((contributor) => {
     if (typeof contributor !== 'function') return () => {};
     projectSnapshotContributorsRef.current.add(contributor);
@@ -751,16 +764,68 @@ export function ProjectProvider({ children }) {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
     try {
-      const savedProject = readStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY) ||
-        readStorageJsonWithBackup(LS_AUTOSAVE_LEGACY_KEY, '');
+      // Try each stored copy and keep the raw payload + reason when nothing
+      // restores (parse failure, forward/unknown version, invalid shape).
+      const { payload: savedProject, restoredFrom: savedCopy, failure } =
+        readRestorableProjectJson(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY);
+
+      // B-2: quarantine an unrestorable autosave payload NOW — synchronously,
+      // before the first debounced flush can overwrite both live copies with
+      // the default project. Never runs when a copy restored (failure is null),
+      // including the corrupt-primary / healthy-backup case.
+      const quarantineRecord = failure
+        ? quarantineAutosavePayload(failure.raw, { reason: failure.reason })
+        : readAutosaveQuarantine();
+      if (quarantineRecord) {
+        setAutosaveQuarantine({ at: quarantineRecord.at, reason: quarantineRecord.reason });
+      }
+
+      const legacyProject = savedProject ? null : readStorageJsonWithBackup(LS_AUTOSAVE_LEGACY_KEY, '');
       const legacyLayoutProject = readStorageJsonWithBackup(LS_LAYOUT_LEGACY_KEY, '');
       const project = resolveStartupProject({
         savedProject,
+        legacyProject,
         legacyLayoutProject,
       });
+
+      const restoredFrom = savedCopy === 'primary' ? 'autosave'
+        : savedCopy === 'backup' ? 'backup'
+          : (migrateProject(legacyProject) || migrateProject(legacyLayoutProject)) ? 'legacy'
+            : null;
+
+      // B-1: a startup restore is not an edit — suppress the fingerprint
+      // change applyProject is about to cause, then set the truthful boot
+      // lifecycle explicitly instead of letting it fall out as false-dirty.
+      suppressNextLifecycleEditRef.current = true;
       applyProject(project);
+      setAutosaveRestoredFrom(restoredFrom);
+
+      // The persisted lifecycle record only describes the v3 autosave payload;
+      // legacy restores (and quarantined boots) never trust it.
+      const lifecycleRecord = restoredFrom === 'autosave' || restoredFrom === 'backup'
+        ? readProjectLifecycleRecord()
+        : null;
+      dispatchProjectLifecycle({
+        type: 'boot',
+        lifecycle: restoredFrom
+          ? lifecycleForRestoredProject(lifecycleRecord)
+          : createProjectLifecycle(),
+      });
     } catch {}
   }, [applyProject]);
+
+  // Keep the persisted lifecycle record in sync with the live lifecycle so a
+  // reload can distinguish "Saved in browser" from restored-unsaved work. The
+  // first run is skipped: it still sees the pre-boot placeholder state and
+  // must not clobber the record the boot effect just read.
+  const lifecycleRecordWriteReadyRef = useRef(false);
+  useEffect(() => {
+    if (!lifecycleRecordWriteReadyRef.current) {
+      lifecycleRecordWriteReadyRef.current = true;
+      return;
+    }
+    writeProjectLifecycleRecord(lifecycleRecordFromState(projectLifecycle));
+  }, [projectLifecycle]);
 
   // ── Debounced auto-save ───────────────────────────────────────────────────
   const saveTimerRef = useRef(null);
@@ -829,15 +894,23 @@ export function ProjectProvider({ children }) {
 
   useEffect(() => {
     const fingerprint = JSON.stringify(serializeProject());
-    if (!projectFingerprintRef.current || suppressNextLifecycleEditRef.current) {
+    // Very first run only records the baseline. It must NOT consume the
+    // suppression flag: the boot effect (declared earlier, same commit) has
+    // already armed it for the applyProject state that lands next commit.
+    if (!projectFingerprintRef.current) {
       projectFingerprintRef.current = fingerprint;
+      return;
+    }
+    if (projectFingerprintRef.current === fingerprint) return;
+    projectFingerprintRef.current = fingerprint;
+    if (suppressNextLifecycleEditRef.current) {
+      // A suppressed replacement (boot restore / project replace) is not an
+      // edit. The flag stays armed until the replacement actually changes the
+      // fingerprint, then clears.
       suppressNextLifecycleEditRef.current = false;
       return;
     }
-    if (projectFingerprintRef.current !== fingerprint) {
-      projectFingerprintRef.current = fingerprint;
-      dispatchProjectLifecycle({ type: 'edited' });
-    }
+    dispatchProjectLifecycle({ type: 'edited' });
   }, [serializeProject]);
 
   const flushProjectAutosave = useCallback(() => {
@@ -883,6 +956,19 @@ export function ProjectProvider({ children }) {
   }, [applyProject, projectLifecycle, projectName, requestReplacementConfirmation]);
 
   const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
+  const dismissQuarantine = useCallback(() => {
+    clearAutosaveQuarantine();
+    setAutosaveQuarantine(null);
+  }, []);
+  // Shell-facing autosave status: when the project last flushed, where the
+  // boot restore came from, and whether an unrestorable payload was
+  // quarantined (lw_autosave_v3_quarantine) instead of being overwritten.
+  const autosaveStatus = useMemo(() => ({
+    lastSavedAt: lastSaved,
+    restoredFrom: autosaveRestoredFrom,
+    quarantine: autosaveQuarantine,
+    dismissQuarantine,
+  }), [lastSaved, autosaveRestoredFrom, autosaveQuarantine, dismissQuarantine]);
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
   const markProjectInstalled = useCallback(revision => dispatchProjectLifecycle({ type: 'installed', revision }), []);
@@ -993,6 +1079,7 @@ export function ProjectProvider({ children }) {
       registerProjectSnapshotContributor,
       newProject,
       lastSaved,
+      autosaveStatus,
     }}>
       {children}
       {pendingReplacement &&
