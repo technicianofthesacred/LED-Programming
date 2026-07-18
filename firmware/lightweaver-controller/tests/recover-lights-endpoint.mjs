@@ -7,6 +7,25 @@ const web = fs.readFileSync(path.join(root, 'src/LightweaverWeb.cpp'), 'utf8');
 const runtime = fs.readFileSync(path.join(root, 'src/LightweaverRuntimeApi.h'), 'utf8');
 const main = fs.readFileSync(path.join(root, 'src/main.cpp'), 'utf8');
 
+function extractFunction(source, functionName) {
+  const signature = new RegExp(`\\b${functionName}\\s*\\(`, 'g');
+  let match;
+  while ((match = signature.exec(source))) {
+    const brace = source.indexOf('{', match.index + match[0].length);
+    const semicolon = source.indexOf(';', match.index + match[0].length);
+    if (brace < 0 || (semicolon >= 0 && semicolon < brace)) continue;
+    let depth = 0;
+    for (let i = brace; i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1;
+      if (source[i] === '}') depth -= 1;
+      if (depth === 0) return source.slice(brace + 1, i);
+    }
+  }
+  throw new Error(`Cannot find ${functionName}`);
+}
+
+const recoverBody = extractFunction(main, 'runtimeRecoverLights');
+
 for (const method of ['HTTP_OPTIONS', 'HTTP_POST']) {
   assert.ok(
     web.includes(`server.on("/api/recover-lights", ${method},`),
@@ -106,6 +125,18 @@ assert.match(
   main,
   /brightnessByte/,
   'recover diagnostics should report the final FastLED brightness byte',
+);
+
+assert.match(
+  recoverBody,
+  /showLeds\(brightnessByte\);/,
+  'Recover lights should submit its computed byte through the centralized output funnel',
+);
+
+assert.doesNotMatch(
+  recoverBody,
+  /FastLED\.setBrightness\s*\(/,
+  'Recover lights should not bypass the centralized brightness funnel',
 );
 
 assert.match(

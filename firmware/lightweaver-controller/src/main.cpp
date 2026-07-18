@@ -5,12 +5,14 @@
 #include <SPI.h>
 
 #include "LightweaverTypes.h"
+#include "LightweaverColorPipeline.h"
 #include "LightweaverStorage.h"
 #include "LightweaverPatterns.h"
 #include "LightweaverControls.h"
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
+#include "LightweaverOutputPolicy.h"
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
@@ -68,6 +70,7 @@ ControlsConfig controls;
 LookConfig looks[LW_MAX_LOOKS];
 
 RuntimeConfig runtimeConfig;
+LightweaverColorPipeline outputColorPipeline;
 
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
@@ -84,6 +87,14 @@ uint32_t ledMaxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
 // 1=GRB, 2=BRG, 3=BGR, 4=RBG, 5=GBR).
 uint8_t ledColorOrderCode = 1;
 float fadeScale = 1.0f;
+uint8_t lastRequestedOutputBrightnessByte = 0;
+uint8_t lastOutputBrightnessByte = 0;
+bool outputPowerLimited = false;
+OutputSourceClass lastOutputSourceClass = OUTPUT_LOCAL;
+uint32_t outputShowCount = 0;
+uint32_t outputFpsWindowStartedAt = 0;
+uint16_t measuredOutputFps = 0;
+bool outputDithering = false;
 
 uint8_t currentLookIndex = 0;
 bool blackedOut = false;
@@ -150,8 +161,13 @@ void applyLookToRuntimeZones(const LookConfig& look);
 void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone);
 CRGB colorForPreset(const String& preset);
 void showLeds();
+void showLeds(uint8_t brightnessByte);
+void pushPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass);
+void transmitPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass);
+void clearPhysicalLeds();
+void recordPhysicalShow();
+void updateOutputTelemetry(uint32_t now);
 void copyLogicalToPhysicalLeds();
-CRGB mapLogicalToPhysicalColor(const CRGB& color);
 bool isValidLedColorOrder(const String& order);
 uint8_t computeColorOrderCode(const String& order);
 void fadeTo(float target, uint16_t durationMs);
@@ -309,7 +325,6 @@ void loop() {
     mods.customSaturation = 230;
     bool rendered = renderRecoveryPattern(recoveryPatternId, leds, totalPixels, millis(), mods);
     if (!rendered && totalPixels > 0) fill_solid(leds, totalPixels, CRGB(255, 220, 170));
-    FastLED.setBrightness(computeBrightnessByte());
     showLeds();
     delay(10);
     return;
@@ -319,9 +334,10 @@ void loop() {
   handleArtnet();
   handleWledWebSocket();
   frameSourceTick();
+  updateOutputTelemetry(now);
 
   if (errorCode != ERROR_NONE) {
-    FastLED.clear(true);
+    clearPhysicalLeds();
     blinkError();
     delay(5);
     return;
@@ -336,8 +352,7 @@ void loop() {
       identifyActive = false;
     } else {
       fill_solid(leds, totalPixels, cycle < 150 ? CRGB::White : CRGB::Black);
-      FastLED.setBrightness(220);
-      showLeds();
+      showLeds(220);
       delay(10);
       return;
     }
@@ -352,8 +367,7 @@ void loop() {
       runtimeConfig.wifi.ssid.length() > 0) {
     uint8_t pulse = beatsin8(8, 30, 200); // 8 BPM gentle pulse
     fill_solid(leds, totalPixels, CHSV(28, 180, pulse));
-    FastLED.setBrightness(uint8_t(clampUnit(brightnessLimit) * 255.0f));
-    showLeds();
+    showLeds(uint8_t(clampUnit(brightnessLimit) * 255.0f));
     delay(20);
     return;
   }
@@ -369,10 +383,8 @@ void loop() {
     // entirely, but still apply the customer's master brightness ceiling
     // and push the frame to the strip so the dimmer knob still works
     // during streaming.
-    FastLED.setBrightness(computeBrightnessByte());
     showLeds();
   } else if (renderCurrentLook()) {
-    FastLED.setBrightness(computeBrightnessByte());
     showLeds();
   } else {
     delay(1);
@@ -384,6 +396,7 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   runtimeMode = config.mode;
   startupLookId = config.startupLookId;
   ledColorOrder = config.ledColorOrder;
+  outputColorPipeline.configure(config.outputColor);
   brightnessLimit = config.brightnessLimit;
   ledMaxMilliamps = config.maxMilliamps;
   outputCount = config.outputCount;
@@ -499,7 +512,6 @@ bool loadProfile() {
 
 bool setupLedOutputs() {
   ledOutputsReady = false;
-  FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   // FastLED owns one controller group, so this ceiling applies to the combined
   // draw of every output registered below rather than independently per GPIO.
@@ -540,9 +552,9 @@ bool setupLedOutputs() {
     }
   }
 
-  FastLED.setBrightness(0);
-  FastLED.clear(true);
   ledOutputsReady = true;
+  FastLED.setDither(false);
+  clearPhysicalLeds();
   return true;
 }
 
@@ -569,7 +581,6 @@ bool setupSafeDiscoveryOutputs(uint8_t batchIndex) {
   }
   if (registered == 0) return false;
   FastLED.clear(false);
-  FastLED.setBrightness(LW_DISCOVERY_BRIGHTNESS);
   ledOutputsReady = true;
   showSafeDiscoveryFrame();
   return true;
@@ -586,11 +597,10 @@ void showSafeDiscoveryFrame() {
   for (uint8_t i = start; i < end; i++) {
     if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
     uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
-    CRGB physicalColor = mapLogicalToPhysicalColor(colors[i - start]);
+    CRGB physicalColor = outputColorPipeline.transform(colors[i - start], computeColorOrderCode(ledColorOrder));
     fill_solid(physicalLeds + bufferStart, LW_DISCOVERY_PIXELS_PER_OUTPUT, physicalColor);
   }
-  FastLED.setBrightness(LW_DISCOVERY_BRIGHTNESS);
-  FastLED.show();
+  transmitPhysicalLeds(LW_DISCOVERY_BRIGHTNESS, OUTPUT_LOCAL);
 }
 
 void appendDiscoveryAssignments(JsonArray assignments, uint8_t batchIndex) {
@@ -660,7 +670,7 @@ void handleControlEvent(ControlEventType event) {
       fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
     } else {
       fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
-      FastLED.clear(true);
+      clearPhysicalLeds();
       blackedOut = true;
     }
   } else if (event == CONTROL_BRIGHTER || event == CONTROL_DIMMER) {
@@ -692,7 +702,6 @@ bool selectLookInstant(int index) {
   blackedOut = false;
   fadeScale = 1.0f;
   if (!startLook(currentLookIndex)) return false;
-  FastLED.setBrightness(computeBrightnessByte());
   showLeds();
   return true;
 }
@@ -1043,7 +1052,6 @@ void fadeTo(float target, uint16_t durationMs) {
   uint32_t startMs = millis();
   if (durationMs == 0) {
     fadeScale = target;
-    FastLED.setBrightness(computeBrightnessByte());
     showLeds();
     return;
   }
@@ -1051,20 +1059,67 @@ void fadeTo(float target, uint16_t durationMs) {
   while (millis() - startMs < durationMs) {
     float t = float(millis() - startMs) / float(durationMs);
     fadeScale = start + ((target - start) * t);
-    FastLED.setBrightness(computeBrightnessByte());
     showLeds();
     esp_task_wdt_reset();  // fades block the loop task; keep the WDT fed
     delay(16);
   }
 
   fadeScale = target;
-  FastLED.setBrightness(computeBrightnessByte());
   showLeds();
 }
 
 void showLeds() {
+  OutputSourceClass sourceClass = frameSourceIsStreaming() ? OUTPUT_EXTERNAL : OUTPUT_LOCAL;
+  pushPhysicalLeds(computeBrightnessByte(), sourceClass);
+}
+
+void showLeds(uint8_t brightnessByte) {
+  pushPhysicalLeds(brightnessByte, OUTPUT_LOCAL);
+}
+
+void pushPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass) {
   copyLogicalToPhysicalLeds();
+  transmitPhysicalLeds(brightnessByte, sourceClass);
+}
+
+void transmitPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass) {
+  FastLED.setBrightness(brightnessByte);
+  lastRequestedOutputBrightnessByte = brightnessByte;
+  lastOutputBrightnessByte = brightnessByte;
+  if (ledMaxMilliamps > 0) {
+    lastOutputBrightnessByte = calculate_max_brightness_for_power_mW(
+      brightnessByte, 5UL * ledMaxMilliamps);
+  }
+  outputPowerLimited = lastOutputBrightnessByte < lastRequestedOutputBrightnessByte;
+  lastOutputSourceClass = sourceClass;
+  outputDithering = FastLED.getFPS() >= 100;
+  FastLED.setDither(outputDithering);
   FastLED.show();
+  recordPhysicalShow();
+}
+
+void clearPhysicalLeds() {
+  uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
+  fill_solid(physicalLeds, limit, CRGB::Black);
+  transmitPhysicalLeds(0, OUTPUT_LOCAL);
+}
+
+void recordPhysicalShow() {
+  outputShowCount++;
+  updateOutputTelemetry(millis());
+}
+
+void updateOutputTelemetry(uint32_t now) {
+  if (outputFpsWindowStartedAt == 0) {
+    outputFpsWindowStartedAt = now;
+    return;
+  }
+  uint32_t elapsed = now - outputFpsWindowStartedAt;
+  if (elapsed < 1000) return;
+  uint32_t fps = (outputShowCount * 1000UL) / elapsed;
+  measuredOutputFps = fps > UINT16_MAX ? UINT16_MAX : uint16_t(fps);
+  outputShowCount = 0;
+  outputFpsWindowStartedAt = now;
 }
 
 void copyLogicalToPhysicalLeds() {
@@ -1081,7 +1136,7 @@ void copyLogicalToPhysicalLeds() {
         const uint16_t physicalIndex = segment.reversed
           ? segmentStart + segment.count - 1 - offset
           : logicalIndex;
-        physicalLeds[physicalIndex] = mapLogicalToPhysicalColor(leds[logicalIndex]);
+        physicalLeds[physicalIndex] = outputColorPipeline.transform(leds[logicalIndex], ledColorOrderCode);
       }
       segmentStart += segment.count;
     }
@@ -1097,28 +1152,22 @@ uint8_t computeColorOrderCode(const String& order) {
   return 0;  // RGB / unknown → passthrough
 }
 
-CRGB mapLogicalToPhysicalColor(const CRGB& color) {
-  switch (ledColorOrderCode) {
-    case 1: return CRGB(color.g, color.r, color.b);  // GRB
-    case 2: return CRGB(color.b, color.r, color.g);  // BRG
-    case 3: return CRGB(color.b, color.g, color.r);  // BGR
-    case 4: return CRGB(color.r, color.b, color.g);  // RBG
-    case 5: return CRGB(color.g, color.b, color.r);  // GBR
-    default: return color;                           // RGB
-  }
-}
-
 bool isValidLedColorOrder(const String& order) {
   return order == "RGB" || order == "GRB" || order == "BRG" ||
          order == "BGR" || order == "RBG" || order == "GBR";
 }
 
 uint8_t computeBrightnessByte() {
-  if (blackedOut) return 0;
-  float lookBrightness = lookCount ? looks[currentLookIndex].brightness : 0.35f;
-  float knob = int32_t(recoveryBrightnessBypassUntilMs - millis()) > 0 ? 1.0f : readBrightnessKnob();
-  float brightness = clampUnit(brightnessLimit) * clampUnit(lookBrightness) * clampUnit(fadeScale) * knob * clampUnit(manualBrightness);
-  return uint8_t(roundf(clampUnit(brightness) * 255.0f));
+  OutputBrightnessInputs input{};
+  input.brightnessLimit = brightnessLimit;
+  input.lookBrightness = lookCount ? looks[currentLookIndex].brightness : 0.35f;
+  input.fadeScale = fadeScale;
+  input.knob = int32_t(recoveryBrightnessBypassUntilMs - millis()) > 0 ? 1.0f : readBrightnessKnob();
+  input.manualBrightness = manualBrightness;
+  input.blackedOut = blackedOut;
+  return composeOutputBrightness(
+      input,
+      frameSourceIsStreaming() ? OUTPUT_EXTERNAL : OUTPUT_LOCAL);
 }
 
 float readBrightnessKnob() {
@@ -1257,7 +1306,6 @@ void runtimeSetBrightness(float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
   manualBrightness = value01;
-  applyToZones("", [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
 void runtimeSetSpeed(float speed) {
@@ -1281,7 +1329,7 @@ void runtimeSetBlackout(bool on) {
   }
   if (on) {
     fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
-    FastLED.clear(true);
+    clearPhysicalLeds();
     blackedOut = true;
   } else {
     blackedOut = false;
@@ -1294,7 +1342,6 @@ void runtimeSetBlackout(bool on) {
 void runtimeSetBrightnessZ(const String& targetId, float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
-  if (targetId.length() == 0) manualBrightness = value01;
   applyToZones(targetId, [&](ZoneConfig& z) { z.brightness = value01; });
 }
 
@@ -1381,6 +1428,15 @@ void runtimeTriggerIdentify() {
 }
 
 float runtimeGetBrightness() { return manualBrightness; }
+float runtimeGetBrightnessZ(const String& targetId) {
+  if (runtimeConfig.zoneCount == 0) return manualBrightness;
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].brightness;
+    }
+  }
+  return runtimeConfig.zones[0].brightness;
+}
 float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
@@ -1485,6 +1541,28 @@ String runtimeFirmwareInfo() {
   counts["blackout"] = controlEventCounts[CONTROL_BLACKOUT];
   counts["brighter"] = controlEventCounts[CONTROL_BRIGHTER];
   counts["dimmer"] = controlEventCounts[CONTROL_DIMMER];
+  doc["capabilities"]["outputColor"] = 1;
+  doc["outputColor"]["contract"] = 1;
+  doc["outputColor"]["colorOrder"] = ledColorOrder;
+  doc["outputColor"]["gammaEnabled"] = outputColorPipeline.gammaEnabled();
+  doc["outputColor"]["gammaValue"] = outputColorPipeline.gammaValue();
+  doc["outputColor"]["calibration"]["red"] = outputColorPipeline.redBalance();
+  doc["outputColor"]["calibration"]["green"] = outputColorPipeline.greenBalance();
+  doc["outputColor"]["calibration"]["blue"] = outputColorPipeline.blueBalance();
+  JsonObject lwOutput = doc["lwOutput"].to<JsonObject>();
+  lwOutput["contract"] = 1;
+  lwOutput["sourceClass"] = runtimeOutputSourceClass();
+  lwOutput["requestedBrightnessByte"] = runtimeOutputRequestedBrightnessByte();
+  lwOutput["brightnessByte"] = runtimeOutputBrightnessByte();
+  lwOutput["brightnessScale"] = runtimeOutputBrightnessScale();
+  lwOutput["powerLimited"] = runtimeOutputPowerLimited();
+  lwOutput["gammaEnabled"] = runtimeOutputGammaEnabled();
+  lwOutput["gammaValue"] = runtimeOutputGammaValue();
+  lwOutput["calibration"]["red"] = runtimeOutputCalibrationRed();
+  lwOutput["calibration"]["green"] = runtimeOutputCalibrationGreen();
+  lwOutput["calibration"]["blue"] = runtimeOutputCalibrationBlue();
+  lwOutput["measuredFps"] = runtimeOutputMeasuredFps();
+  lwOutput["dithering"] = runtimeOutputDithering();
   String out;
   serializeJson(doc, out);
   return out;
@@ -1604,6 +1682,20 @@ uint8_t runtimeGetDriftHueMax() { return driftHueMax; }
 bool runtimeIsStreaming() { return frameSourceIsStreaming(); }
 uint8_t runtimeFrameSource() { return uint8_t(frameSourceActive()); }
 void runtimeCancelStream() { frameSourceCancelStream(); }
+uint8_t runtimeOutputRequestedBrightnessByte() { return lastRequestedOutputBrightnessByte; }
+uint8_t runtimeOutputBrightnessByte() { return lastOutputBrightnessByte; }
+float runtimeOutputBrightnessScale() { return float(lastOutputBrightnessByte) / 255.0f; }
+bool runtimeOutputPowerLimited() { return outputPowerLimited; }
+const char* runtimeOutputSourceClass() {
+  return lastOutputSourceClass == OUTPUT_EXTERNAL ? "external" : "local";
+}
+bool runtimeOutputGammaEnabled() { return outputColorPipeline.gammaEnabled(); }
+float runtimeOutputGammaValue() { return outputColorPipeline.gammaValue(); }
+float runtimeOutputCalibrationRed() { return outputColorPipeline.redBalance(); }
+float runtimeOutputCalibrationGreen() { return outputColorPipeline.greenBalance(); }
+float runtimeOutputCalibrationBlue() { return outputColorPipeline.blueBalance(); }
+uint16_t runtimeOutputMeasuredFps() { return measuredOutputFps; }
+bool runtimeOutputDithering() { return outputDithering; }
 
 String runtimeWiringSafetyStatus() {
   String stored = runtimeWiringSafetyStatusJson();
@@ -1805,8 +1897,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     if (lookCount) looks[currentLookIndex].brightness = 1.0f;
     brightnessByte = computeBrightnessByte();
   }
-  FastLED.setBrightness(brightnessByte);
-  if (ledOutputsReady) showLeds();
+  if (ledOutputsReady) showLeds(brightnessByte);
 
   uint16_t nonBlackPixels = 0;
   for (uint16_t i = 0; i < totalPixels && i < LW_MAX_PIXELS; i++) {

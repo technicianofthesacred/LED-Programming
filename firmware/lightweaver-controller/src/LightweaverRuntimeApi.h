@@ -51,6 +51,7 @@ void runtimeSetDriftRangeZ(const String& targetId, uint8_t lo, uint8_t hi);
 uint8_t runtimeGetDriftHueMin();
 uint8_t runtimeGetDriftHueMax();
 float runtimeGetBrightness();
+float runtimeGetBrightnessZ(const String& targetId);
 float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
@@ -69,3 +70,19 @@ bool runtimeRename(const String& pieceName, const String& hostname, String& mess
 bool runtimeIsStreaming();
 uint8_t runtimeFrameSource();
 void runtimeCancelStream();
+
+uint8_t runtimeOutputRequestedBrightnessByte();
+uint8_t runtimeOutputBrightnessByte();
+float runtimeOutputBrightnessScale();
+bool runtimeOutputPowerLimited();
+const char* runtimeOutputSourceClass();
+
+// Read back the output-color settings configured in the physical output
+// pipeline, rather than merely echoing request JSON.
+bool runtimeOutputGammaEnabled();
+float runtimeOutputGammaValue();
+float runtimeOutputCalibrationRed();
+float runtimeOutputCalibrationGreen();
+float runtimeOutputCalibrationBlue();
+uint16_t runtimeOutputMeasuredFps();
+bool runtimeOutputDithering();

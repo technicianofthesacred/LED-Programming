@@ -238,6 +238,59 @@ test('production runtime always carries a nonzero aggregate current ceiling with
   await assert.rejects(buildProductionJob(disabled, { cryptoImpl: webcrypto }), /maxMilliamps|current ceiling/i);
 });
 
+test('production jobs preserve normalized selected-card output color without changing current safety evidence', async () => {
+  const calibrated = source();
+  calibrated.project.restoreSnapshot.devices.standaloneController.led = {
+    ...calibrated.project.restoreSnapshot.devices.standaloneController.led,
+    outputGammaEnabled: true,
+    outputGammaValue: 2.4,
+    calibration: { red: 0.8, green: 0.9, blue: 0.7 },
+  };
+  calibrated.project.fingerprint = fingerprintCommissioningProject(calibrated.project.restoreSnapshot);
+  calibrated.configuration = buildCardRuntimePackageFromProject({
+    projectId: calibrated.project.id,
+    projectName: calibrated.project.restoreSnapshot.name,
+    projectRevision: calibrated.project.revision,
+    projectFingerprint: calibrated.project.fingerprint,
+    productionJobId: calibrated.jobId,
+    productionJobDigest: hex('0', 64),
+    strips: calibrated.project.restoreSnapshot.layout.strips,
+    patchBoard: null,
+    wiring: calibrated.project.restoreSnapshot.layout.wiring,
+    standaloneController: calibrated.project.restoreSnapshot.devices.standaloneController,
+  });
+
+  const job = await buildProductionJob(calibrated, { cryptoImpl: webcrypto });
+  assert.deepEqual(job.configuration.config.led.calibration, { red: 0.8, green: 0.9, blue: 0.7 });
+  assert.equal(job.configuration.config.led.outputGammaEnabled, true);
+  assert.equal(job.configuration.config.led.outputGammaValue, 2.4);
+  assert.equal(job.configuration.config.led.maxMilliamps, 1500);
+  assert.equal((await parseProductionJobPackage(job, {
+    trust: { kind: 'same-origin-index', expectedDigest: job.digest },
+    cryptoImpl: webcrypto,
+  })).digest, job.digest);
+});
+
+test('legacy signed-job shape without output color fields remains exact and compatible', async () => {
+  const legacy = source();
+  for (const key of ['outputGammaEnabled', 'outputGammaValue', 'calibration']) {
+    delete legacy.project.restoreSnapshot.devices.standaloneController.led[key];
+    delete legacy.configuration.config.led[key];
+  }
+  const job = await buildProductionJob(legacy, { cryptoImpl: webcrypto });
+  for (const key of ['outputGammaEnabled', 'outputGammaValue', 'calibration']) {
+    assert.equal(key in job.project.restoreSnapshot.devices.standaloneController.led, false);
+    assert.equal(key in job.configuration.config.led, false);
+  }
+  const exactBytes = canonicalProductionJobBytes(job);
+  const parsed = await parseProductionJobPackage(exactBytes, {
+    trust: { kind: 'same-origin-index', expectedDigest: job.digest },
+    cryptoImpl: webcrypto,
+  });
+  assert.equal(parsed.digest, job.digest);
+  assert.deepEqual(canonicalProductionJobBytes(parsed), exactBytes);
+});
+
 test('rejects schema-valid production jobs with more than 16 physical strip boundaries before USB', async () => {
   const invalid = sourceWithStripRuns(17, 2);
   await assignProductionWiringIdentity(invalid.configuration.config, { cryptoImpl: webcrypto });
@@ -303,6 +356,11 @@ test('external imports fail closed without a complete envelope or trusted key ID
 
 test('verifies the pinned production-job key against its immutable signed fixture', async () => {
   const job = await validPackage();
+  // This fixture predates output-color settings. Keep its exact signed byte
+  // shape so adding optional neutral defaults does not invalidate old jobs.
+  delete job.configuration.config.led.outputGammaEnabled;
+  delete job.configuration.config.led.outputGammaValue;
+  delete job.configuration.config.led.calibration;
   delete job.configuration.config.led.maxMilliamps;
   delete job.configuration.config.wiringRevision;
   delete job.configuration.config.wiringDigest;
@@ -388,6 +446,7 @@ test('published schema is nested-strict and accepts exactly the runtime-valid pa
     deref(schema.properties.project.properties.restoreSnapshot.properties.layout.properties.wiring).properties.controllerAnchor.oneOf[1],
     schema.properties.project.properties.restoreSnapshot.properties.devices.properties.standaloneController,
     schema.properties.configuration.properties.config.properties.led.properties.outputs.items,
+    schema.properties.configuration.properties.config.properties.led.properties.calibration,
     deref(schema.properties.configuration.properties.config.properties.looks.items).properties.zones.items,
     schema.properties.configuration.properties.config.properties.zones.items,
   ];
@@ -400,6 +459,8 @@ test('published schema is nested-strict and accepts exactly the runtime-valid pa
     value => { value.project.restoreSnapshot.layout.strips[0].wifiPassword = 'secret'; },
     value => { value.project.restoreSnapshot.layout.wiring.outputs[0].pin = '16'; },
     value => { value.configuration.config.led.outputs[0].pixels = 2.5; },
+    value => { value.configuration.config.led.outputGammaValue = 3.01; },
+    value => { value.configuration.config.led.calibration.red = '0.8'; },
     value => { value.configuration.config.looks[0].zones = [{ id: 'z', unknown: true }]; },
   ]) {
     const invalid = structuredClone(job);

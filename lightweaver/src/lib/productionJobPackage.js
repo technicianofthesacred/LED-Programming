@@ -41,6 +41,8 @@ const PACKAGE_KEYS = ['app', 'config', 'format', 'version'];
 const CONFIG_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'productionJobDigest', 'productionJobId', 'projectFingerprint', 'projectRevision', 'startupPatternId', 'syncZones', 'version', 'wiringDigest', 'wiringRevision', 'zones'];
 const OUTPUT_KEYS = ['colorOrder', 'direction', 'id', 'label', 'pin', 'pixels'];
 const LED_KEYS = ['brightnessLimit', 'colorOrder', 'maxMilliamps', 'outputs', 'pixels'];
+const OUTPUT_COLOR_KEYS = ['calibration', 'outputGammaEnabled', 'outputGammaValue'];
+const CALIBRATION_KEYS = ['blue', 'green', 'red'];
 const LED_OUTPUT_KEYS = ['id', 'name', 'pin', 'pixels'];
 const RUNTIME_LED_OUTPUT_KEYS = ['direction', 'id', 'name', 'pin', 'pixels', 'segments'];
 const RUNTIME_SEGMENT_KEYS = ['count', 'direction', 'id'];
@@ -58,7 +60,7 @@ const STANDALONE_KEYS = ['activeLookId', 'controls', 'defaultLook', 'led', 'look
 const STANDALONE_OPTIONAL_KEYS = ['activeLookId', 'looks', 'runtimeMode'];
 const STANDALONE_REQUIRED_KEYS = STANDALONE_KEYS.filter(key => !STANDALONE_OPTIONAL_KEYS.includes(key));
 const STANDALONE_LED_REQUIRED_KEYS = ['brightnessLimit', 'colorOrder', 'type'];
-const STANDALONE_LED_OPTIONAL_KEYS = ['maxMilliamps'];
+const STANDALONE_LED_OPTIONAL_KEYS = ['maxMilliamps', ...OUTPUT_COLOR_KEYS];
 const VISUAL_LOOK_KEYS = ['brightness', 'customBreathe', 'customDrift', 'customHue', 'customSaturation', 'hueShift', 'patternId', 'speed'];
 const PLAYLIST_PATTERN_KEYS = ['createdAt', 'enabled', 'id', 'label', 'patternId', 'type'];
 const PLAYLIST_COMBO_KEYS = ['createdAt', 'enabled', 'id', 'label', 'lookId', 'type'];
@@ -155,6 +157,29 @@ function requiredText(value, label, max = 160) {
   }
 }
 
+function validateOutputColorSettings(led, label) {
+  if (led.outputGammaEnabled !== undefined && typeof led.outputGammaEnabled !== 'boolean') {
+    throw new Error(`${label} outputGammaEnabled must be a boolean`);
+  }
+  if (led.outputGammaValue !== undefined && (typeof led.outputGammaValue !== 'number'
+    || !Number.isFinite(led.outputGammaValue) || led.outputGammaValue < 1 || led.outputGammaValue > 3)) {
+    throw new Error(`${label} outputGammaValue must be a finite number from 1 to 3`);
+  }
+  if (led.calibration !== undefined) {
+    exactKeys(led.calibration, CALIBRATION_KEYS, `${label} calibration`);
+    for (const channel of CALIBRATION_KEYS) {
+      const value = led.calibration[channel];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+        throw new Error(`${label} calibration ${channel} must be a finite number from 0 to 1`);
+      }
+    }
+  }
+}
+
+function hasOutputColorSettings(led) {
+  return OUTPUT_COLOR_KEYS.some(key => Object.hasOwn(led, key));
+}
+
 function validateRestoreSnapshot(snapshot) {
   exactKeys(snapshot, SNAPSHOT_KEYS, 'restore snapshot');
   exactKeys(snapshot.layout, SNAPSHOT_LAYOUT_KEYS, 'restore snapshot layout');
@@ -185,6 +210,7 @@ function validateRestoreSnapshot(snapshot) {
   exactKeys(standalone.controls, CONTROL_KEYS, 'restore snapshot controls');
   exactRequiredAndOptionalKeys(standalone.controls.encoder, ENCODER_KEYS, ENCODER_OPTIONAL_KEYS, 'restore snapshot encoder controls');
   exactRequiredAndOptionalKeys(standalone.led, STANDALONE_LED_REQUIRED_KEYS, STANDALONE_LED_OPTIONAL_KEYS, 'restore snapshot LED settings');
+  validateOutputColorSettings(standalone.led, 'Restore snapshot LED settings');
   if (standalone.led.maxMilliamps !== undefined && (!Number.isSafeInteger(standalone.led.maxMilliamps)
     || standalone.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS || standalone.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS)) {
     throw new Error('Restore snapshot aggregate current ceiling is invalid');
@@ -297,7 +323,8 @@ function assertPackageShape(job, { source = false } = {}) {
   if (!Number.isSafeInteger(config.wiringRevision) || config.wiringRevision < 1 || config.wiringRevision > 0xffffffff
     || !/^[a-f0-9]{64}$/.test(config.wiringDigest || '')) throw new Error('Production wiring revision and digest are invalid');
 
-  exactKeys(config.led, LED_KEYS, 'LED configuration');
+  exactRequiredAndOptionalKeys(config.led, LED_KEYS, OUTPUT_COLOR_KEYS, 'LED configuration');
+  validateOutputColorSettings(config.led, 'LED configuration');
   if (!Number.isSafeInteger(config.led.maxMilliamps) || config.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS
     || config.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS) throw new Error('Production LED maxMilliamps current ceiling is invalid');
   if (!Array.isArray(config.led.outputs) || config.led.outputs.length === 0) throw new Error('At least one configured LED output is required');
@@ -328,7 +355,11 @@ function assertPackageShape(job, { source = false } = {}) {
   if (outputPixelTotal !== config.led.pixels || outputPixelTotal > CARD_HARDWARE_CAPABILITIES.maxPixels) throw new Error('LED pixels must equal the bounded sum of configured outputs');
   prepareCardStoragePayload(job.configuration);
   const expectedDigest = source ? '0'.repeat(64) : job.digest;
-  if (stableJson(rebuildRuntime(job, expectedDigest)) !== stableJson(job.configuration)) throw new Error('Production job compiled runtime does not exactly match the restore snapshot');
+  const rebuiltRuntime = rebuildRuntime(job, expectedDigest);
+  if (!hasOutputColorSettings(config.led)) {
+    for (const key of OUTPUT_COLOR_KEYS) delete rebuiltRuntime.config.led[key];
+  }
+  if (stableJson(rebuiltRuntime) !== stableJson(job.configuration)) throw new Error('Production job compiled runtime does not exactly match the restore snapshot');
 
   if (!Array.isArray(job.expectedOutputs) || job.expectedOutputs.length !== config.led.outputs.length) {
     throw new Error('Every configured output requires one expected output');

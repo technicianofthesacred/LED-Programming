@@ -7,7 +7,7 @@ import {
 } from './cardConnection.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternRuntimeId } from './cardPatternBank.js';
-import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
+import { DEFAULT_CARD_PATTERN_BANK, normalizeCardOutputSettings } from './cardRuntimeContract.js';
 import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
 import { getCardBridgeState, sendCardBridgeRequest } from './cardBridge.js';
 import {
@@ -351,6 +351,7 @@ function defaultRepairLooks() {
 export function buildMirroredLedRepairPackage(runtimePackage = {}, options = {}) {
   const sourcePackage = runtimePackage?.config ? runtimePackage : { config: runtimePackage };
   const sourceConfig = cloneJson(sourcePackage.config || {});
+  const outputSettings = normalizeCardOutputSettings(sourceConfig.led);
   const configuredOutputPixels = sumOutputPixels(sourceConfig.led?.outputs || sourceConfig.outputs);
   const pixelCount = Math.max(
     1,
@@ -391,6 +392,7 @@ export function buildMirroredLedRepairPackage(runtimePackage = {}, options = {})
       },
       led: {
         ...(sourceConfig.led || {}),
+        ...outputSettings,
         pixels: pixelCount,
         colorOrder: sourceConfig.led?.colorOrder || 'RGB',
         brightnessLimit: Number.isFinite(Number(sourceConfig.led?.brightnessLimit))

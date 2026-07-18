@@ -9,6 +9,58 @@
 //
 // Exit code 0 = all tests passed. Non-zero = at least one failure.
 
+import assertStrict from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const firmwareDir = resolve(import.meta.dirname, '../src');
+const mainSource = readFileSync(resolve(firmwareDir, 'main.cpp'), 'utf8');
+const webSource = readFileSync(resolve(firmwareDir, 'LightweaverWeb.cpp'), 'utf8');
+const jsonSource = readFileSync(resolve(firmwareDir, 'LightweaverWledJsonApi.cpp'), 'utf8');
+const runtimeHeader = readFileSync(resolve(firmwareDir, 'LightweaverRuntimeApi.h'), 'utf8');
+
+for (const field of [
+  'contract', 'sourceClass', 'requestedBrightnessByte', 'brightnessByte',
+  'brightnessScale', 'powerLimited', 'gammaEnabled', 'gammaValue', 'calibration',
+  'measuredFps', 'dithering',
+]) {
+  for (const [endpoint, source] of [
+    ['/api/firmware-info', mainSource],
+    ['/api/status', webSource],
+    ['/json/info', jsonSource],
+  ]) {
+    assertStrict.match(source, new RegExp(`\\[\"${field}\\"\\]`),
+      `${endpoint} output diagnostics should expose ${field}`);
+  }
+}
+assertStrict.match(mainSource, /doc\["outputColor"\]\["contract"\]\s*=\s*1/,
+  'firmware-info should advertise outputColor contract 1');
+assertStrict.match(mainSource, /doc\["capabilities"\]\["outputColor"\]\s*=\s*1/,
+  'firmware-info should advertise outputColor capability 1');
+assertStrict.match(webSource, /\\"lwOutput\\"/,
+  '/api/status should include lwOutput diagnostics');
+assertStrict.match(jsonSource, /doc\["lwOutput"\]/,
+  '/json/info should include lwOutput diagnostics');
+assertStrict.match(jsonSource, /doc\["leds"\]\["fps"\]\s*=\s*runtimeOutputMeasuredFps\s*\(\s*\)/,
+  '/json/info should report measured output FPS instead of a fixed renderer ceiling');
+assertStrict.doesNotMatch(jsonSource, /doc\["leds"\]\["fps"\]\s*=\s*30/,
+  '/json/info must not report a hardcoded FPS');
+for (const getter of [
+  'runtimeOutputRequestedBrightnessByte', 'runtimeOutputBrightnessByte',
+  'runtimeOutputBrightnessScale', 'runtimeOutputPowerLimited', 'runtimeOutputSourceClass',
+  'runtimeOutputGammaEnabled', 'runtimeOutputGammaValue', 'runtimeOutputCalibrationRed',
+  'runtimeOutputCalibrationGreen', 'runtimeOutputCalibrationBlue',
+  'runtimeOutputMeasuredFps', 'runtimeOutputDithering',
+]) {
+  assertStrict.match(runtimeHeader, new RegExp(`\\b${getter}\\s*\\(`),
+    `runtime API should expose ${getter}`);
+}
+
+if (process.argv[2] === '--contract') {
+  console.log('wled-compat source contract tests passed');
+  process.exit(0);
+}
+
 const HOST = process.argv[2] || 'lightweaver.local';
 const BASE = HOST.startsWith('http') ? HOST.replace(/\/$/, '') : `http://${HOST}`;
 
@@ -85,6 +137,24 @@ await run('GET /json/info', async () => {
   assert(typeof info.leds.count === 'number' && info.leds.count > 0, `leds.count not positive: ${info.leds.count}`);
   assert(typeof info.mac === 'string' && /^[0-9a-f]{12}$/i.test(info.mac), `mac format unexpected: ${info.mac}`);
   assert(info.product === 'Lightweaver', `product not "Lightweaver": ${info.product}`);
+  assert(info.lwOutput && info.lwOutput.contract === 1, `lwOutput contract missing: ${JSON.stringify(info.lwOutput)}`);
+  assert(['local', 'external'].includes(info.lwOutput.sourceClass), `lwOutput sourceClass invalid: ${info.lwOutput.sourceClass}`);
+  assert(Number.isInteger(info.lwOutput.requestedBrightnessByte)
+    && info.lwOutput.requestedBrightnessByte >= 0
+    && info.lwOutput.requestedBrightnessByte <= 255,
+  `lwOutput.requestedBrightnessByte invalid: ${info.lwOutput.requestedBrightnessByte}`);
+  assert(Number.isInteger(info.lwOutput.brightnessByte)
+    && info.lwOutput.brightnessByte >= 0
+    && info.lwOutput.brightnessByte <= info.lwOutput.requestedBrightnessByte,
+  `lwOutput.brightnessByte invalid: ${info.lwOutput.brightnessByte}`);
+  assert(typeof info.lwOutput.brightnessScale === 'number'
+    && Math.abs(info.lwOutput.brightnessScale - (info.lwOutput.brightnessByte / 255)) < 0.0001,
+  `lwOutput.brightnessScale does not describe the applied byte: ${info.lwOutput.brightnessScale}`);
+  assert(typeof info.lwOutput.powerLimited === 'boolean'
+    && info.lwOutput.powerLimited === (info.lwOutput.brightnessByte < info.lwOutput.requestedBrightnessByte),
+  `lwOutput.powerLimited inconsistent: ${info.lwOutput.powerLimited}`);
+  assert(typeof info.lwOutput.measuredFps === 'number', 'lwOutput.measuredFps missing');
+  assert(typeof info.lwOutput.dithering === 'boolean', 'lwOutput.dithering missing');
   return `count=${info.leds.count} mac=${info.mac} ver=${info.ver}`;
 });
 
@@ -159,6 +229,7 @@ await run('lwLive.streaming clears within 3 seconds of last frame', async () => 
 await run('GET /api/status reachable (and ideally has streaming + frameSource)', async () => {
   const s = await getJson('/api/status');
   assert(s && typeof s === 'object', '/api/status returned non-object');
+  assert(s.lwOutput && s.lwOutput.contract === 1, `status lwOutput missing: ${JSON.stringify(s.lwOutput)}`);
   const hasStreaming = Object.prototype.hasOwnProperty.call(s, 'streaming');
   const hasSource = Object.prototype.hasOwnProperty.call(s, 'frameSource');
   if (hasStreaming && hasSource) {

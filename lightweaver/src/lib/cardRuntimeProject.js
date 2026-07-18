@@ -109,6 +109,9 @@ export function buildCardRuntimePackageFromProject({
       colorOrder: standaloneController?.led?.colorOrder,
       brightnessLimit: standaloneController?.led?.brightnessLimit,
       maxMilliamps: standaloneController?.led?.maxMilliamps,
+      outputGammaEnabled: standaloneController?.led?.outputGammaEnabled,
+      outputGammaValue: standaloneController?.led?.outputGammaValue,
+      calibration: standaloneController?.led?.calibration,
       outputs: outputs.length
         ? outputs.map((output, index) => ({
             id: output.id || `out${index + 1}`,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   CARD_RUNTIME_MODES,
+  DEFAULT_CARD_LED,
   DEFAULT_CARD_PATTERN_BANK,
   buildCardRuntimeConfig,
   normalizeCardRuntimeConfig,
@@ -12,6 +13,7 @@ import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProjec
 import {
   DEFAULT_STANDALONE_CONTROLS,
   DEFAULT_STANDALONE_LED,
+  buildStandaloneProfile,
 } from '../src/lib/standaloneController.js';
 import { defaultStandaloneController } from '../src/lib/projectModel.js';
 
@@ -66,6 +68,82 @@ assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.alternatePress, 6);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.encoder.brightnessStep, 18);
 assert.equal(DEFAULT_STANDALONE_CONTROLS.brightness, -1);
 assert.equal(DEFAULT_STANDALONE_LED.colorOrder, 'RGB');
+assert.deepEqual({
+  outputGammaEnabled: DEFAULT_CARD_LED.outputGammaEnabled,
+  outputGammaValue: DEFAULT_CARD_LED.outputGammaValue,
+  calibration: DEFAULT_CARD_LED.calibration,
+}, {
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: { red: 1, green: 1, blue: 1 },
+});
+assert.deepEqual({
+  outputGammaEnabled: DEFAULT_STANDALONE_LED.outputGammaEnabled,
+  outputGammaValue: DEFAULT_STANDALONE_LED.outputGammaValue,
+  calibration: DEFAULT_STANDALONE_LED.calibration,
+}, {
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: { red: 1, green: 1, blue: 1 },
+});
+
+const legacyNeutralOutput = normalizeCardRuntimeConfig({
+  gammaEnabled: true,
+  gammaValue: 3,
+  pattern: { gammaEnabled: true, gammaValue: 3 },
+  led: { pixels: 44 },
+});
+assert.equal(legacyNeutralOutput.led.outputGammaEnabled, false);
+assert.equal(legacyNeutralOutput.led.outputGammaValue, 2.2);
+assert.deepEqual(legacyNeutralOutput.led.calibration, { red: 1, green: 1, blue: 1 });
+assert.equal(legacyNeutralOutput.led.maxMilliamps, 1500);
+
+const calibratedOutput = normalizeCardRuntimeConfig({
+  led: {
+    pixels: 44,
+    outputGammaEnabled: true,
+    outputGammaValue: 2.4,
+    calibration: { red: 0.8, green: 0.9, blue: 0.7 },
+  },
+});
+assert.equal(calibratedOutput.led.outputGammaEnabled, true);
+assert.equal(calibratedOutput.led.outputGammaValue, 2.4);
+assert.deepEqual(calibratedOutput.led.calibration, { red: 0.8, green: 0.9, blue: 0.7 });
+assert.equal(calibratedOutput.led.maxMilliamps, 1500);
+
+const clampedOutput = normalizeCardRuntimeConfig({
+  led: {
+    outputGammaEnabled: 'true',
+    outputGammaValue: 9,
+    calibration: { red: -0.2, green: 0.4, blue: 4 },
+  },
+});
+assert.equal(clampedOutput.led.outputGammaEnabled, false);
+assert.equal(clampedOutput.led.outputGammaValue, 3);
+assert.deepEqual(clampedOutput.led.calibration, { red: 0, green: 0.4, blue: 1 });
+
+for (const malformed of [null, '', '   ', false, true, Number.NaN, Number.POSITIVE_INFINITY]) {
+  const malformedOutput = normalizeCardRuntimeConfig({
+    led: {
+      outputGammaValue: malformed,
+      calibration: { red: malformed, green: malformed, blue: malformed },
+    },
+  });
+  assert.equal(malformedOutput.led.outputGammaValue, 2.2);
+  assert.deepEqual(malformedOutput.led.calibration, { red: 1, green: 1, blue: 1 });
+}
+
+const standaloneProfile = buildStandaloneProfile({
+  outputs: [{ id: 'main', pin: 16, pixels: 44 }],
+  led: {
+    outputGammaEnabled: true,
+    outputGammaValue: 0.5,
+    calibration: { red: 0.75, green: -1, blue: Number.NaN },
+  },
+});
+assert.equal(standaloneProfile.led.outputGammaEnabled, true);
+assert.equal(standaloneProfile.led.outputGammaValue, 1);
+assert.deepEqual(standaloneProfile.led.calibration, { red: 0.75, green: 0, blue: 1 });
 
 assert.deepEqual(normalizeInclusiveRange(2, 0), { start: 0, count: 3, reversed: true });
 
@@ -263,7 +341,13 @@ const projectPkg = buildCardRuntimePackageFromProject({
     ],
   },
   standaloneController: {
-    led: { colorOrder: 'GRB', brightnessLimit: 0.55 },
+    led: {
+      colorOrder: 'GRB',
+      brightnessLimit: 0.55,
+      outputGammaEnabled: true,
+      outputGammaValue: 2.4,
+      calibration: { red: 0.8, green: 0.9, blue: 0.7 },
+    },
     outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 20 }],
     controls: { encoder: { press: 6, alternatePress: -1, patternCycleIds: ['ember', 'scanner'] } },
   },
@@ -275,6 +359,10 @@ assert.equal(projectPkg.config.projectFingerprint, 'c'.repeat(16));
 assert.equal(projectPkg.config.led.pixels, 20);
 assert.equal(projectPkg.config.led.colorOrder, 'GRB');
 assert.equal(projectPkg.config.led.brightnessLimit, 0.55);
+assert.equal(projectPkg.config.led.outputGammaEnabled, true);
+assert.equal(projectPkg.config.led.outputGammaValue, 2.4);
+assert.deepEqual(projectPkg.config.led.calibration, { red: 0.8, green: 0.9, blue: 0.7 });
+assert.equal(projectPkg.config.led.maxMilliamps, 1500);
 assert.equal(projectPkg.config.controls.encoder.press, 6);
 assert.equal(projectPkg.config.controls.encoder.alternatePress, -1);
 assert.deepEqual(projectPkg.config.controls.encoder.patternCycleIds, ['ember', 'scanner']);

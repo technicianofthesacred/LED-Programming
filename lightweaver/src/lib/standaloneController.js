@@ -20,11 +20,33 @@ export const DEFAULT_STANDALONE_LED = {
   type: 'WS2815',
   colorOrder: 'RGB',
   brightnessLimit: 0.45,
+  outputGammaEnabled: false,
+  outputGammaValue: 2.2,
+  calibration: { red: 1, green: 1, blue: 1 },
 };
 
 export const STANDALONE_RUNTIME_MODES = ['sequence', 'procedural', 'preset'];
 
 export const DEFAULT_STANDALONE_RUNTIME_MODE = 'sequence';
+
+export function normalizeStandaloneLed(led = {}) {
+  const source = led && typeof led === 'object' ? led : {};
+  const calibration = source.calibration && typeof source.calibration === 'object'
+    ? source.calibration
+    : {};
+  return {
+    ...DEFAULT_STANDALONE_LED,
+    ...source,
+    brightnessLimit: clamp01(source.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
+    outputGammaEnabled: source.outputGammaEnabled === true,
+    outputGammaValue: clampOutputNumber(source.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
+    calibration: {
+      red: clampOutputNumber(calibration.red, DEFAULT_STANDALONE_LED.calibration.red, 0, 1),
+      green: clampOutputNumber(calibration.green, DEFAULT_STANDALONE_LED.calibration.green, 0, 1),
+      blue: clampOutputNumber(calibration.blue, DEFAULT_STANDALONE_LED.calibration.blue, 0, 1),
+    },
+  };
+}
 
 export function normalizeStandaloneOutputs(outputs = DEFAULT_STANDALONE_OUTPUTS) {
   return outputs
@@ -64,11 +86,7 @@ export function buildStandaloneProfile({
       id: sanitizeId(projectName),
       name: projectName || 'Untitled Project',
     },
-    led: {
-      ...DEFAULT_STANDALONE_LED,
-      ...led,
-      brightnessLimit: clamp01(led.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
-    },
+    led: normalizeStandaloneLed(led),
     outputs: normalizedOutputs,
     controls: normalizeControls(controls),
     looks: normalizedLooks,
@@ -289,6 +307,11 @@ function clamp01(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(1, n));
+}
+
+function clampOutputNumber(value, fallback, min, max) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
 }
 
 function clampByte(value) {
