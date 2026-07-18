@@ -99,6 +99,10 @@ installation cannot be completed safely without them.
 then run Phase 1 verification and the real-card bench workflow. No reusable
 hardware module is currently required to ship the working product.
 
+Keep `codex/unified-hardware-workspace` as an incubator and engineering
+reference. Do not merge the branch wholesale; extract only a triggered module
+through its own narrow, current-main branch and verification gate.
+
 ## Done
 
 ### Audit + foundation (commit `839eee5`)
