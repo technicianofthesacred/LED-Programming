@@ -327,6 +327,118 @@
   letter-spacing: 0.04em;
 }
 
+/* ── Card-connection banner — the card truth, stated up front ──────────── */
+.lw-card-banner {
+  display: block;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--border-soft));
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 6%, var(--bg-elev));
+  color: var(--text-mid);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.lw-card-banner > strong { display: block; margin-bottom: 2px; color: var(--text-hi); font-size: 12.5px; }
+.lw-card-banner b { color: var(--text-hi); font-weight: 650; }
+.lw-card-banner.is-inline { margin: 0 0 10px; }
+
+/* ── Wire order — the one primary way to wire ──────────────────────────── */
+.lw-order-primary { padding: 10px 0 16px; border-top: 1px solid var(--border-soft); }
+.lw-order-header { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.lw-order-lead { margin: 4px 0 10px; color: var(--text-mid); font-size: 12px; line-height: 1.5; }
+.lw-order-locked-note { margin: 0 0 8px; color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+.lw-order-review-warning { margin: 0 0 8px; font-size: 11.5px; line-height: 1.4; }
+.lw-order-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lw-order-lane { min-width: 0; }
+.lw-order-lane-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 2px 2px; }
+.lw-order-lane-h strong { color: var(--text-hi); font-size: 11.5px; }
+.lw-order-lane-h span { color: var(--text-faint); font: 9px var(--font-mono); }
+.lw-order-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.lw-order-row {
+  position: relative;
+  /* number · drag · name(+count underneath) · up · down · reverse — one row */
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  grid-template-areas: "n drag name up down reverse";
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--border-hair);
+  cursor: pointer;
+}
+.lw-order-row .lw-order-n { grid-area: n; }
+.lw-order-row .lw-order-drag { grid-area: drag; }
+.lw-order-row .lw-order-name { grid-area: name; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lw-order-row .lw-order-count { grid-area: name; align-self: end; margin-top: 18px; }
+.lw-order-row .lw-order-move[aria-label$=" up"] { grid-area: up; }
+.lw-order-row .lw-order-move[aria-label$=" down"] { grid-area: down; }
+.lw-order-row .lw-order-reverse { grid-area: reverse; }
+.lw-order-row.is-cable { display: flex; }
+.lw-order-row:last-child { border-bottom: 0; }
+.lw-order-row:hover { background: var(--bg-elev-2); }
+.lw-order-row.is-selected { background: color-mix(in oklab, var(--accent) 4%, transparent); box-shadow: inset 2px 0 color-mix(in oklab, var(--accent) 60%, var(--border)); }
+.lw-order-row.is-selected .lw-order-name { color: var(--accent); }
+.lw-order-row.is-dragging { opacity: .48; transform: scale(.985); }
+.lw-order-row.is-drop-before::before,
+.lw-order-row.is-drop-after::after { content: ""; position: absolute; z-index: 1; right: 6px; left: 6px; height: 2px; border-radius: 2px; background: var(--accent); }
+.lw-order-row.is-drop-before::before { top: -1px; }
+.lw-order-row.is-drop-after::after { bottom: -1px; }
+.lw-order-row.is-cable { min-height: 28px; padding-left: 30px; color: var(--text-faint); cursor: default; }
+.lw-order-row.is-cable:hover { background: transparent; }
+.lw-order-row.is-cable .lw-order-name { color: var(--text-faint); font-size: 11px; }
+.lw-order-row.is-empty { color: var(--text-faint); font-size: 11.5px; cursor: default; }
+.lw-order-cable { color: var(--text-faint); }
+.lw-order-n { display: grid; place-items: center; flex-shrink: 0; width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 50%; color: var(--text-mid); font: 11px var(--font-mono); }
+.lw-order-name { flex: 1; min-width: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-hi); font-size: 12.5px; }
+.lw-order-count { flex: 0 0 auto; color: var(--text-faint); font: 10px var(--font-mono); }
+.lw-order-row button { min-width: 32px; min-height: 32px; padding: 0 6px; border-radius: var(--r-sm); color: var(--text-mid); font-size: 11px; }
+.lw-order-row button:hover:not(:disabled) { color: var(--text-hi); background: var(--bg-elev); }
+.lw-order-drag { cursor: grab; touch-action: none; }
+.lw-order-drag[aria-pressed="true"] { cursor: grabbing; color: var(--accent); }
+.lw-order-reverse { border: 1px solid var(--border); background: var(--bg-elev); }
+.lw-order-reverse[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.lw-order-reverse-spacer { flex: 0 0 auto; }
+.lw-order-primary .lw-wiring-error { margin: 8px 0 0; font-size: 11.5px; }
+
+/* ── Advanced wiring — the one disclosure for everything else ──────────── */
+.lw-advanced-wiring { border-top: 1px solid var(--border-soft); }
+.lw-advanced-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 2px;
+  color: var(--text-mid);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-align: left;
+}
+.lw-advanced-toggle::after { content: '›'; color: var(--text-faint); transition: transform 160ms ease-out; }
+.lw-advanced-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
+.lw-advanced-toggle:hover, .lw-advanced-toggle:focus-visible { color: var(--text-hi); }
+.lw-advanced-body { min-width: 0; padding: 2px 0 16px; }
+.lw-advanced-group-h { margin: 16px 0 8px; color: var(--text-faint); font: 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.lw-advanced-tools { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 10px; padding: 4px 0 2px; }
+.lw-advanced-tools > button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  color: var(--text-mid);
+  font-size: 11.5px;
+  text-align: left;
+  white-space: nowrap;
+}
+.lw-advanced-tools > button:hover { color: var(--text-hi); border-color: var(--accent); }
+.lw-advanced-tools > button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.lw-advanced-tools > span { color: var(--text-faint); font-size: 10.5px; line-height: 1.4; }
+.lw-auto-wire-subtext { margin: 6px 0 0; color: var(--text-mid); font-size: 11.5px; line-height: 1.45; }
+
 /* Finish line — Send to card + Export ledmap.json */
 .lw-wire-finish { padding-top: 12px; margin-top: 8px; }
 .lw-bench-test { padding: 4px 0 14px; }
@@ -630,6 +742,20 @@
 
 @container (max-width: 420px) {
   .la-wire-panel :is(button,input,select,textarea,summary) { min-width: 44px; min-height: 44px; box-sizing: border-box; }
+  .lw-order-row { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px 44px; grid-template-rows: auto auto; gap: 4px 6px; }
+  .lw-order-n { grid-column: 1; grid-row: 1; justify-self: center; align-self: center; }
+  .lw-order-name { grid-column: 2 / -1; grid-row: 1; align-self: center; }
+  .lw-order-drag { grid-column: 1; grid-row: 2; }
+  .lw-order-count { grid-column: 2; grid-row: 2; align-self: center; justify-self: start; }
+  .lw-order-move { min-width: 44px; min-height: 44px; }
+  .lw-order-row .lw-order-move:nth-of-type(2) { grid-column: 3; grid-row: 2; }
+  .lw-order-row .lw-order-move:nth-of-type(3) { grid-column: 4; grid-row: 2; }
+  .lw-order-reverse { grid-column: 2 / -1; grid-row: 3; justify-self: end; }
+  .lw-order-reverse-spacer { display: none; }
+  .lw-order-row.is-cable { display: flex; }
+  .lw-order-row.is-empty { display: flex; }
+  .lw-advanced-tools { grid-template-columns: minmax(0,1fr); }
+  .lw-advanced-tools > button { white-space: normal; }
   .la-wire-panel summary { padding-block: 11px; }
   .lw-step-header { grid-template-columns: 24px minmax(0,1fr) auto; gap: 7px; }
   .lw-step-state { grid-column: 2; width: max-content; }
@@ -682,6 +808,9 @@
   .la .la-zoom button,
   .la .btn,
   .la .lw-wiring-run button,
+  .la .lw-order-row button,
+  .la .lw-advanced-toggle,
+  .la .lw-advanced-tools > button,
   .la .lw-wire-port,
   .la .lw-bench-nudge {
     min-height: 44px;
@@ -689,6 +818,7 @@
   .la .tb-btn.icon,
   .la .la-zoom button,
   .la .lw-wiring-run button,
+  .la .lw-order-row button,
   .la .lw-wire-port,
   .la .lw-bench-nudge {
     min-width: 44px;

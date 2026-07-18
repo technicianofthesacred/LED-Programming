@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Wire panel presentation: ONE primary way to wire — the numbered "Wire order"
+// list — with every other tool demoted to the single Advanced wiring
+// disclosure. These tests pin that structure against the canonical wiring
+// model (runs/outputs) via exported project JSON.
+
 function writeFixture(tmp: string) {
   const fixture = path.join(tmp, 'patch-board-line.svg');
   fs.writeFileSync(fixture, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 40"><g id="line-layer" data-name="Line"><path d="M 10 20 H 610" fill="none" stroke="#fff"/></g></svg>`);
@@ -24,81 +29,182 @@ async function enterWire(page: any) {
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 }
 
-async function loadVerifiedWiring(page: any, tmp: string) {
+async function gotoDefaultWire(page: any) {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
+}
+
+async function exportProject(page: any, tmp: string, name = 'saved.json') {
   const pending = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
+  await page.getByTitle('Export a portable project file (.lw.json)').click();
   const download = await pending;
-  const source = path.join(tmp, 'verification-source.json');
-  await download.saveAs(source);
-  const project = JSON.parse(fs.readFileSync(source, 'utf8'));
+  const file = path.join(tmp, name);
+  await download.saveAs(file);
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+async function openAdvanced(page: any) {
+  const toggle = page.getByTestId('advanced-wiring-toggle');
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+}
+
+async function loadVerifiedWiring(page: any, tmp: string) {
+  const project = await exportProject(page, tmp, 'verification-source.json');
   project.layout.wiring.verified = true;
   project.layout.wiring.locked = false;
   project.layout.wiring.runs.forEach((run: any) => { run.verified = true; });
-  const verified = path.join(tmp, 'verified.json');
-  fs.writeFileSync(verified, JSON.stringify(project));
+  const led = project.devices.standaloneController.led;
+  led.colorOrder = led.colorOrder || 'RGB';
+  led.colorOrderConfirmed = true;
+  led.confirmedColorOrder = led.colorOrder;
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 }
 
-test('cutter splits at the nearest sampled LED and persists canonical wiring', async ({ page }) => {
-  const tmp = await importLine(page);
-  await enterWire(page);
-  await page.getByRole('button', { name: 'Split' }).click();
-  const pathEl = page.locator('path[data-strip-path]').first();
-  const target = await pathEl.evaluate((node: SVGPathElement) => {
-    const point = node.getPointAtLength(node.getTotalLength() * .45);
+async function clickStripPathAt(page: any, fraction: number) {
+  const target = await page.locator('path[data-strip-path]').first().evaluate((node: SVGPathElement, at: number) => {
+    const point = node.getPointAtLength(node.getTotalLength() * at);
     const ctm = node.getScreenCTM()!;
     return { x: point.x * ctm.a + point.y * ctm.c + ctm.e, y: point.x * ctm.b + point.y * ctm.d + ctm.f };
-  });
+  }, fraction);
   await page.mouse.click(target.x, target.y);
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(2);
+}
+
+test('wire order lists numbered strip rows and Move down reorders the canonical output', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-order-'));
+  await gotoDefaultWire(page);
+
+  const rows = page.getByTestId('wire-order-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator('.lw-order-n')).toHaveText('1');
+  await expect(rows.nth(0)).toContainText('Outer circle');
+  await expect(rows.nth(0)).toContainText('27 LEDs');
+  await expect(rows.nth(1).locator('.lw-order-n')).toHaveText('2');
+  await expect(rows.nth(1)).toContainText('Inner circle');
+  await expect(rows.nth(0).getByRole('button', { name: 'Drag Outer circle' })).toBeVisible();
+  await expect(page.getByText('Put the strips in the order the data cable visits them, starting from the card.')).toBeVisible();
+
+  const firstId = await rows.nth(0).getAttribute('data-run-id');
+  await rows.nth(0).getByRole('button', { name: 'Move Outer circle down' }).click();
+  await expect(rows.nth(1)).toHaveAttribute('data-run-id', firstId!);
+  await expect(rows.nth(1).locator('.lw-order-n')).toHaveText('2');
+  await expect(page.getByTestId('wire-order-status')).toHaveText('Outer circle moved to position 2 of 2');
+
+  const project = await exportProject(page, tmp);
+  expect(project.layout.wiring.outputs).toHaveLength(1);
+  expect(project.layout.wiring.outputs[0].runIds[1]).toBe(firstId);
+});
+
+test('Reverse toggle flips the run direction in the canonical model', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-reverse-'));
+  await gotoDefaultWire(page);
+
+  const row = page.getByTestId('wire-order-row').first();
+  const runId = await row.getAttribute('data-run-id');
+  const reverse = row.getByRole('button', { name: 'Reverse direction of Outer circle' });
+  await expect(reverse).toHaveAttribute('aria-pressed', 'false');
+  await reverse.click();
+  await expect(reverse).toHaveAttribute('aria-pressed', 'true');
+
+  const project = await exportProject(page, tmp);
+  const run = project.layout.wiring.runs.find((item: any) => item.id === runId);
+  expect(run.physicalDirection).toBe('source-reverse');
+
+  await reverse.click();
+  await expect(reverse).toHaveAttribute('aria-pressed', 'false');
+  const restored = await exportProject(page, tmp, 'restored.json');
+  expect(restored.layout.wiring.runs.find((item: any) => item.id === runId).physicalDirection).toBe('source-forward');
+});
+
+test('Advanced wiring is one collapsed disclosure and Split still cuts a run', async ({ page }) => {
+  const tmp = await importLine(page);
+  await enterWire(page);
+
+  const toggle = page.getByTestId('advanced-wiring-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Suggest shortest order' })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'LED data wire count' })).toHaveCount(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'LED data wire count' })).toBeVisible();
+  const shortest = page.getByRole('region', { name: 'Suggest shortest order' });
+  await expect(shortest).toContainText('Mark where the card physically sits on the drawing, and Lightweaver reorders the strips to use the least cable.');
+  await expect(shortest.getByRole('button', { name: 'Mark card position on drawing' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
+  await clickStripPathAt(page, 0.45);
+  await expect(page.getByTestId('wire-order-row')).toHaveCount(2);
   await expect(page.getByText('Selected split')).toBeVisible();
   await page.getByRole('button', { name: 'Move split later' }).click();
   await page.getByRole('button', { name: 'Merge split runs' }).click();
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(1);
-  await page.mouse.click(target.x, target.y);
-  await page.getByRole('button', { name: 'Delete split' }).click();
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(1);
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTitle('Save project file').click();
-  const download = await downloadPromise;
-  const file = path.join(tmp, 'saved.json');
-  await download.saveAs(file);
-  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  await expect(page.getByTestId('wire-order-row')).toHaveCount(1);
+
+  const saved = await exportProject(page, tmp);
   expect(saved.layout.wiring.runs.filter((run: any) => run.type === 'strip')).toHaveLength(1);
 });
 
-test('ports and accessible move controls reorder canonical output runs', async ({ page }) => {
-  await page.addInitScript(() => localStorage.clear());
-  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  const rows = page.getByTestId('wiring-run-row');
-  const secondId = await rows.nth(1).getAttribute('data-run-id');
-  await rows.nth(1).getByRole('button', { name: 'Move earlier' }).click();
-  await expect(rows.first()).toHaveAttribute('data-run-id', secondId!);
-  await rows.first().getByRole('button', { name: /OUT port/ }).click();
-  await rows.nth(1).getByRole('button', { name: /IN port/ }).click();
-  await expect(rows.first()).toHaveAttribute('data-run-id', secondId!);
-});
-
-test('locked wiring blocks direction, route, split, and reserved-unlit mutations', async ({ page }) => {
+test('locked wiring blocks reorder, direction, split, and skipped-pixel mutations', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-locked-wire-'));
-  await page.addInitScript(() => localStorage.clear());
-  await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await gotoDefaultWire(page);
   await loadVerifiedWiring(page, tmp);
+
+  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await installStep.locator('.lw-install-gate').isVisible().catch(() => false)) break;
+    const installToggle = installStep.locator('.lw-step-toggle');
+    if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
+    await page.waitForTimeout(120);
+  }
+  await expect(installStep.locator('.lw-install-gate')).toBeVisible();
   await page.getByRole('button', { name: 'Lock wiring' }).click();
   await expect(page.getByRole('button', { name: 'Unlock wiring' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add reserved-unlit LEDs' })).toBeDisabled();
-  await expect(page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Reverse' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Split' }).click();
-  const before = await page.getByTestId('wiring-run-row').count();
-  const target = await page.locator('path[data-strip-path]').first().evaluate((node: SVGPathElement) => {
-    const point = node.getPointAtLength(node.getTotalLength() * .4);
-    const ctm = node.getScreenCTM()!;
-    return { x: point.x * ctm.a + point.y * ctm.c + ctm.e, y: point.x * ctm.b + point.y * ctm.d + ctm.f };
+
+  const row = page.getByTestId('wire-order-row').first();
+  await expect(row.getByRole('button', { name: /Move .* up/ })).toBeDisabled();
+  await expect(row.getByRole('button', { name: /Move .* down/ })).toBeDisabled();
+  await expect(row.getByRole('button', { name: /Reverse direction of/ })).toBeDisabled();
+  await expect(row.getByRole('button', { name: /Drag/ })).toBeDisabled();
+
+  await openAdvanced(page);
+  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeDisabled();
+  await expect(page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Flip' })).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
+  const before = await page.getByTestId('wire-order-row').count();
+  await clickStripPathAt(page, 0.4);
+  await expect(page.getByTestId('wire-order-row')).toHaveCount(before);
+
+  const project = await exportProject(page, tmp);
+  expect(project.layout.wiring.locked).toBe(true);
+  expect(project.layout.wiring.runs.every((run: any) => run.verified)).toBe(true);
+});
+
+test('disconnected card banner shows up front and clears when the card link connects', async ({ page }) => {
+  await gotoDefaultWire(page);
+
+  const banner = page.getByTestId('wire-card-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("To finish wiring you'll check the real LEDs.");
+  await expect(banner).toContainText("Connect your Lightweaver card when you're ready — steps up to that point work without it.");
+  await expect(banner).toContainText('Connect Lightweaver');
+
+  await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    getSharedCardLink().dispatch({
+      type: 'card-verified',
+      via: 'direct',
+      host: 'lightweaver.local',
+      card: { id: 'lw-banner-test', name: 'Bench card', pixelCount: 44, firmwareVersion: '1.0.0' },
+    });
   });
-  await page.mouse.click(target.x, target.y);
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(before);
+  await expect(banner).toHaveCount(0);
 });
 
 test('numeric strip count replaces the full value with an exact accessible selector', async ({ page }) => {

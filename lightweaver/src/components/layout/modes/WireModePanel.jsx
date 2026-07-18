@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { download, toWLEDLedmap } from '../../../lib/export.js';
-import { normalizePatchBoard } from '../../../lib/patchBoard.js';
+import { mainChain, normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { proposeAutoWiring } from '../../../lib/autoWire.js';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
@@ -49,7 +49,11 @@ const STEP_STATUS = {
   optional: 'Optional',
 };
 
-function CommissioningStep({ number, title, state, summary, expanded, onToggle, toggleLabel, children }) {
+// Numbered flow section. `ariaLabel` (when given) names the region for
+// assistive tech and tests independently of the visible heading — the install
+// step keeps its historical accessible name 'Step 5: Review and install'
+// because external suites (layout-send-to-card, layout-mode-switch) pin it.
+function CommissioningStep({ number, title, state, summary, expanded, onToggle, toggleLabel, ariaLabel, children }) {
   const headingId = `commissioning-step-${number}`;
   const accessibleToggleLabel = expanded ? `Collapse ${title}` : toggleLabel;
   return (
@@ -58,12 +62,13 @@ function CommissioningStep({ number, title, state, summary, expanded, onToggle, 
       data-testid="commissioning-step"
       data-step-state={state}
       role="region"
-      aria-labelledby={headingId}
+      aria-labelledby={ariaLabel ? undefined : headingId}
+      aria-label={ariaLabel}
     >
       <header className="lw-step-header">
         <span className="lw-step-number" aria-hidden="true">{number}</span>
         <div className="lw-step-heading">
-          <strong id={headingId}>Step {number}: {title}</strong>
+          <strong id={headingId}>{title}</strong>
           <span>{summary}</span>
         </div>
         <span className="lw-step-state">{STEP_STATUS[state]}</span>
@@ -74,10 +79,16 @@ function CommissioningStep({ number, title, state, summary, expanded, onToggle, 
   );
 }
 
+const CHECK_STEP = 2;
+const INSTALL_STEP = 3;
+
 export function WireModePanel({ state, connected, cardHost }) {
   const {
     strips, selectStrip, selStripId, pxPerMm, viewBox,
     selectedWireCut, nudgeSelectedWireCut, deleteSelectedWireCut, setStripCounts,
+    wireOverlayMode, setWireOverlayMode,
+    setSelectedWirePatchId, setLinkRouteIds, linkRouteStartedRef,
+    setDrawMode, setGhostPt,
   } = state;
   const {
     wiring, updateWiring, compiledWiring, patchBoard, setPatchBoard,
@@ -87,6 +98,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [connectionState, setConnectionState] = useState({ mode: 'idle', sourceId: null });
   const [advanced, setAdvanced] = useState(false);
   const [mutationError, setMutationError] = useState('');
+  const [orderAnnouncement, setOrderAnnouncement] = useState('');
   const [autoResult, setAutoResult] = useState(null);
   const [proposalIndex, setProposalIndex] = useState(0);
   const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
@@ -101,6 +113,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   const suppressPortClickRef = useRef(null);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
   const runsById = useMemo(() => new Map(wiring.runs.map(run => [run.id, run])), [wiring.runs]);
+  const compiledRunCounts = useMemo(() => new Map(compiledWiring.runs.map(run => [run.id, run.count])), [compiledWiring.runs]);
   // CardPushControl still accepts the legacy transport shape. Build that shape
   // from canonical wiring at the boundary; patchBoard is never read or mutated.
   const cardTransportBoard = useMemo(() => normalizePatchBoard({
@@ -173,6 +186,20 @@ export function WireModePanel({ state, connected, cardHost }) {
     output.runIds.splice(index, 1);
     output.runIds.splice(next, 0, runId);
   }, { changeKind: 'route' });
+
+  // Primary wire-order move: same canonical mutation, plus a polite
+  // announcement mirroring the playlist's reorder live region.
+  const moveOrderedRun = (output, run, delta, label) => {
+    const result = moveRun(output.id, run.id, delta);
+    if (!result.ok) return;
+    const ids = [...output.runIds];
+    const from = ids.indexOf(run.id);
+    const to = Math.max(0, Math.min(ids.length - 1, from + delta));
+    ids.splice(from, 1);
+    ids.splice(to, 0, run.id);
+    const physicalIds = ids.filter(id => runsById.get(id)?.type !== 'cable');
+    setOrderAnnouncement(`${label} moved to position ${physicalIds.indexOf(run.id) + 1} of ${physicalIds.length}`);
+  };
 
   const moveOutput = (outputId, delta) => mutate(draft => {
     const index = draft.outputs.findIndex(output => output.id === outputId);
@@ -380,6 +407,11 @@ export function WireModePanel({ state, connected, cardHost }) {
     run.physicalDirection = run.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
   }, { changeKind: 'direction', runIds: [runId] });
 
+  const reverseOrderedRun = (run, label) => {
+    const result = reverseRun(run.id);
+    if (result.ok) setOrderAnnouncement(`${label} direction reversed`);
+  };
+
   const addOutput = () => mutate(draft => {
     if (draft.outputs.length >= 4) throw new Error('The card supports at most four outputs.');
     const ids = new Set(draft.outputs.map(output => output.id));
@@ -442,6 +474,30 @@ export function WireModePanel({ state, connected, cardHost }) {
 
   const exportLedmap = () => {
     download(toWLEDLedmap(compiledWiring.pixels), 'ledmap.json', 'application/json');
+  };
+
+  // Canvas overlay tools (same handlers as the toolbar's Split/Link buttons).
+  const toggleSplitTool = () => {
+    setDrawMode(false);
+    setGhostPt(null);
+    setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
+  };
+  const toggleLinkTool = () => {
+    setDrawMode(false);
+    setGhostPt(null);
+    setSelectedWirePatchId(null);
+    setWireOverlayMode(mode => {
+      const nextMode = mode === 'link' ? 'idle' : 'link';
+      if (nextMode === 'link') {
+        const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
+        setLinkRouteIds(currentRows);
+        linkRouteStartedRef.current = false;
+      } else {
+        setLinkRouteIds([]);
+        linkRouteStartedRef.current = false;
+      }
+      return nextMode;
+    });
   };
 
   const availableOutputs = PINS.map((pin, index) => ({ id: `out${index + 1}`, name: outputName(index), pin }));
@@ -619,14 +675,11 @@ export function WireModePanel({ state, connected, cardHost }) {
   );
   const commissioningVerified = physicallyVerified && colorConfirmed;
   const stepStates = {
-    1: dataWireCountConfirmed ? 'complete' : 'current',
-    2: !dataWireCountConfirmed ? 'blocked' : mappingReady ? 'complete' : 'current',
-    3: mappingReady ? 'optional' : 'blocked',
-    4: !mappingReady ? 'blocked' : commissioningVerified ? 'complete' : 'current',
-    5: commissioningVerified ? 'current' : 'blocked',
+    [CHECK_STEP]: !mappingReady ? 'blocked' : commissioningVerified ? 'complete' : 'current',
+    [INSTALL_STEP]: commissioningVerified ? 'current' : 'blocked',
   };
   useEffect(() => {
-    const activeStep = !dataWireCountConfirmed ? 1 : !mappingReady ? 2 : !commissioningVerified ? 4 : 5;
+    const activeStep = commissioningVerified ? INSTALL_STEP : CHECK_STEP;
     const priorAutomaticStep = autoExpandedStepRef.current;
     autoExpandedStepRef.current = activeStep;
     setExpandedSteps(current => {
@@ -635,242 +688,351 @@ export function WireModePanel({ state, connected, cardHost }) {
       next.add(activeStep);
       return next;
     });
-  }, [dataWireCountConfirmed, mappingReady, commissioningVerified]);
+  }, [commissioningVerified]);
+
+  const renderOrderRow = (output, run, index, physicalPosition) => {
+    const label = previewRunName(run, stripsById);
+    const count = compiledRunCounts.get(run.id) ?? (run.type === 'inactive' ? run.count : 0);
+    const dragging = rowDrag?.runId === run.id;
+    const dropTarget = rowDrag?.targetRunId === run.id && rowDrag?.runId !== run.id;
+    if (run.type === 'cable') {
+      return (
+        <li key={run.id} className="lw-order-row is-cable" data-run-id={run.id} data-testid="wire-order-row">
+          <span className="lw-order-cable" aria-hidden="true">↳</span>
+          <span className="lw-order-name">Cable jump</span>
+          <span className="lw-order-count">wire only</span>
+        </li>
+      );
+    }
+    const selected = effectiveSelectedRunId === run.id;
+    return (
+      <li
+        key={run.id}
+        className={`lw-order-row is-${run.type}${selected ? ' is-selected' : ''}${dragging ? ' is-dragging' : ''}${dropTarget ? ` is-drop-${rowDrag?.placement || 'before'}` : ''}`}
+        data-run-id={run.id}
+        data-testid="wire-order-row"
+        onClick={() => selectRun(run)}
+      >
+        <span className="lw-order-n" aria-hidden="true">{physicalPosition}</span>
+        <button
+          className="lw-order-drag"
+          aria-label={`Drag ${label}`}
+          aria-pressed={dragging}
+          title="Drag to reorder. Alt+arrow keys also move this strip."
+          disabled={wiring.locked}
+          onPointerDown={event => { event.stopPropagation(); startRowPointer(run.id, event); }}
+          onClick={event => event.stopPropagation()}
+          onKeyDown={event => {
+            if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); moveOrderedRun(output, run, -1, label); }
+            if (event.altKey && event.key === 'ArrowDown') { event.preventDefault(); moveOrderedRun(output, run, 1, label); }
+          }}
+        >⋮⋮</button>
+        <span className="lw-order-name">{label}</span>
+        <span className="lw-order-count">{count} LED{count === 1 ? '' : 's'}</span>
+        <button
+          className="lw-order-move"
+          aria-label={`Move ${label} up`}
+          title={`Move ${label} one place earlier on the cable`}
+          disabled={wiring.locked || index === 0}
+          onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, -1, label); }}
+        >▲</button>
+        <button
+          className="lw-order-move"
+          aria-label={`Move ${label} down`}
+          title={`Move ${label} one place later on the cable`}
+          disabled={wiring.locked || index === output.runIds.length - 1}
+          onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, 1, label); }}
+        >▼</button>
+        {run.type === 'strip' ? (
+          <button
+            className="lw-order-reverse"
+            aria-label={`Reverse direction of ${label}`}
+            aria-pressed={run.physicalDirection === 'source-reverse'}
+            title={`Reverse which end of ${label} the data cable enters`}
+            disabled={wiring.locked || run.directionPolicy === 'fixed'}
+            onClick={event => { event.stopPropagation(); reverseOrderedRun(run, label); }}
+          >Reverse</button>
+        ) : <span className="lw-order-reverse-spacer" aria-hidden="true"/>}
+      </li>
+    );
+  };
 
   return (
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
       <section className="lw-commissioning-intro" aria-label="Wire setup guide">
-        <span className="lw-bench-kicker">Commission the installation</span>
+        <span className="lw-bench-kicker">Wire the installation</span>
         <strong>Wire the physical LEDs</strong>
-        <p><b>Connect each physical run from the card to its final LED.</b></p>
-        <p>Match the run order to the real data wire. Validate the route on the LEDs before installation.</p>
+        <p>Connect each physical run in the order below, starting from the card. Validate the result on the real LEDs, then install it on the card.</p>
       </section>
-      <CommissioningStep
-        number={1}
-        title="Choose data wires"
-        state={stepStates[1]}
-        summary={`${wiring.outputs.length} data wire${wiring.outputs.length === 1 ? '' : 's'}`}
-        expanded={expandedSteps.has(1)}
-        onToggle={() => toggleStep(1)}
-        toggleLabel="Edit data wire count"
-      >
-      <section className="lw-data-wire-count" aria-labelledby="data-wire-question">
-        <div>
-          <strong id="data-wire-question">How many LED data wires leave the card?</strong>
-          <p>Count the signal wires connected from the card to the LED strips. Most pieces use one.</p>
-          {patchBoard?.dataWireCountNeedsReview && (
-            <p className="lw-inline-warning">This older project needs confirmation. Tap the correct number, even if it is already selected.</p>
-          )}
-        </div>
-        <div className="lw-data-wire-options" role="group" aria-label="LED data wire count">
-          {[1, 2, 3, 4].map(count => (
-            <button key={count} className={`btn${wiring.outputs.length === count ? ' primary' : ''}`} aria-pressed={wiring.outputs.length === count} disabled={wiring.locked} onClick={() => changeDataWireCount(count)}>{count}</button>
-          ))}
-        </div>
-      </section>
-      </CommissioningStep>
-      <CommissioningStep
-        number={2}
-        title="Map LED outputs"
-        state={stepStates[2]}
-        summary={`${wiring.outputs.length} LED output${wiring.outputs.length === 1 ? '' : 's'} · ${stripRunCount} LED strip${stripRunCount === 1 ? '' : 's'} · ${compiledWiring.totalPixels} pixels`}
-        expanded={expandedSteps.has(2)}
-        onToggle={() => toggleStep(2)}
-        toggleLabel="Edit LED output mapping"
-      >
-      <div className="lw-wiring-toolbar">
-        <strong>{wiring.outputs.length} LED output{wiring.outputs.length === 1 ? '' : 's'}</strong>
-        <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
-        <button className="btn btn-ghost lw-expert-toggle" aria-label="Advanced wiring settings" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>{advanced ? 'Hide advanced settings' : 'Advanced settings'}</button>
-      </div>
-      <div className="lw-wiring-lanes">
-        {wiring.outputs.map((output, outputIndex) => (
-          <WiringOutputLane
-            key={output.id}
-            output={{ ...output, name: outputName(outputIndex) }}
-            runs={output.runIds.map(id => runsById.get(id)).filter(Boolean)}
-            compiledRuns={compiledWiring.runs}
-            stripsById={stripsById}
-            selectedRunId={effectiveSelectedRunId}
-            connectionState={connectionState}
-            advanced={advanced}
-            locked={wiring.locked}
-            onSelectRun={selectRun}
-            onPort={handlePort}
-            onCordPointerDown={startCordPointer}
-            onCordPointerUp={finishCordPointer}
-            onCordTargetEnter={enterCordTarget}
-            onRowPointerDown={startRowPointer}
-            draggingRunId={rowDrag?.runId}
-            dropTargetRunId={rowDrag?.targetRunId}
-            dropTarget={rowDrag?.targetOutputId === output.id}
-            dropPlacement={rowDrag?.placement}
-            onMove={moveRun}
-            onRemove={removeRun}
-            onReverse={reverseRun}
-            onAdjustCount={adjustRunCount}
-            supportedPins={CARD_HARDWARE_CAPABILITIES.supportedOutputPins}
-            unavailablePins={unavailablePinsFor(`output:${output.id}`)}
-            onPinChange={pin => changeOutputPin(output.id, pin)}
-            onOutputPointerDown={startOutputPointer}
-            onMoveOutput={delta => moveOutput(output.id, delta)}
-            onRemoveOutput={() => removeOutput(output.id)}
-            outputDragging={outputDrag?.outputId === output.id}
-            outputDropPlacement={outputDrag?.targetOutputId === output.id && outputDrag?.outputId !== output.id ? outputDrag.placement : null}
-          />
-        ))}
-      </div>
-      {advanced && <details className="lw-board-pins" open>
-        <summary>Board pins</summary>
-        <div className="lw-pin-group">
-          <strong>LED outputs</strong>
-          {wiring.outputs.map((output, index) => <label key={output.id}>{outputName(index)}
-            <select aria-label={`${outputName(index)} board pin`} value={output.pin} disabled={wiring.locked} onChange={event => changeOutputPin(output.id, Number(event.target.value))}>
-              {CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePinsFor(`output:${output.id}`).includes(pin)}>GPIO {pin}</option>)}
-            </select>
-          </label>)}
-        </div>
-        <div className="lw-pin-group">
-          <strong>Physical controls</strong>
-          {BOARD_CONTROL_FIELDS.map(field => <label key={field.key}>{field.label}
-            <select aria-label={`${field.label} pin`} value={controlPinValue(field)} disabled={wiring.locked} onChange={event => changeControlPin(field.key, Number(event.target.value))}>
-              {field.allowOff && <option value={-1}>Off</option>}
-              {Array.from({ length: 49 }, (_, pin) => <option key={pin} value={pin} disabled={pin !== controlPinValue(field) && unavailablePinsFor(`control:${field.key}`).includes(pin)}>GPIO {pin}</option>)}
-            </select>
-          </label>)}
-        </div>
-        <div className="lw-pin-input-note"><strong>Inputs</strong><span>Current card firmware has no direct microphone input. Analog or I2S input requires a supported hardware profile; I2S uses multiple pins.</span></div>
-        {pinError && <p className="lw-wiring-error">{pinError}</p>}
-      </details>}
-      {advanced && <details className="lw-expert-mapping" open>
-        <summary>Expert mapping</summary>
-        <p>Use these only for intentional gaps, splits, or custom source ranges.</p>
-        <div className="lw-wiring-additions">
-          <button className="btn" disabled={wiring.locked} aria-label="Add skipped pixels" onClick={addInactive}>Add skipped pixels</button>
-          <span>Skipped pixels stay dark but keep their addresses.</span>
-        </div>
-        {derivedCut && (
-          <section className="lw-wire-selected-detail">
-            <div className="lw-wire-section-title"><span>Selected split</span><strong>LED {derivedCut.cutLed}</strong></div>
-            <div className="lw-wire-tool-row">
-              <button className="btn" disabled={wiring.locked} aria-label="Move split earlier" onClick={() => nudgeSelectedWireCut(-1, derivedCut)}>−</button>
-              <button className="btn" disabled={wiring.locked} aria-label="Move split later" onClick={() => nudgeSelectedWireCut(1, derivedCut)}>+</button>
-              <button className="btn" disabled={wiring.locked} aria-label="Merge split runs" onClick={() => deleteSelectedWireCut(derivedCut)}>Merge</button>
-              <button className="btn lw-btn-danger" disabled={wiring.locked} aria-label="Delete split" onClick={() => deleteSelectedWireCut(derivedCut)}>Delete</button>
-            </div>
-          </section>
-        )}
-        {selectedRun?.type === 'strip' && (
-          <div className="lw-wiring-range">
-          <strong>Source range</strong>
-          <label>Start LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.from} onChange={event => updateSelectedRange('from', event.target.value)}/></label>
-          <label>End LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.to} onChange={event => updateSelectedRange('to', event.target.value)}/></label>
-          <label>Direction policy
-            <select disabled={wiring.locked} value={selectedRun.directionPolicy} onChange={event => mutate(draft => {
-              const run = draft.runs.find(item => item.id === selectedRun.id);
-              if (run?.type === 'strip') run.directionPolicy = event.target.value;
-            }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
-              <option value="flexible">Flexible</option>
-              <option value="fixed">Fixed</option>
-            </select>
-          </label>
-          <label>Physical DATA IN
-            <select disabled={wiring.locked || selectedRun.directionPolicy === 'fixed'} value={selectedRun.physicalDirection} onChange={event => mutate(draft => {
-              const run = draft.runs.find(item => item.id === selectedRun.id);
-              if (run?.type === 'strip') run.physicalDirection = event.target.value;
-            }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
-              <option value="source-forward">Start LED</option>
-              <option value="source-reverse">End LED</option>
-            </select>
-          </label>
-          {(stripsById.get(selectedRun.source.stripId)?.closed || stripsById.get(selectedRun.source.stripId)?.isClosed || selectedRun.seamLed != null) && (
-            <label>Connector seam LED
-              <input type="number" min={selectedRun.source.from} max={selectedRun.source.to} disabled={wiring.locked || selectedRun.verified || selectedRun.directionPolicy === 'fixed'} value={selectedRun.seamLed ?? selectedRun.source.from} onChange={event => mutate(draft => {
-                const run = draft.runs.find(item => item.id === selectedRun.id);
-                if (!run || run.verified || run.directionPolicy === 'fixed') throw new Error('Verified or fixed connector seams cannot move.');
-                run.seamLed = Math.max(run.source.from, Math.min(run.source.to, Math.trunc(Number(event.target.value))));
-              }, { changeKind: 'seam', runIds: [selectedRun.id] })}/>
-            </label>
-          )}
+      {!connected && (
+        <p className="lw-card-banner" data-testid="wire-card-banner">
+          <strong>No card connected yet — that&apos;s fine for now.</strong>
+          To finish wiring you&apos;ll check the real LEDs. Connect your Lightweaver card when you&apos;re ready — steps up to that point work without it. Use the <b>Connect Lightweaver</b> button in the footer when the card is nearby.
+        </p>
+      )}
+      <section className="lw-order-primary" role="region" aria-labelledby="lw-order-heading" data-testid="wire-order">
+        <header className="lw-order-header">
+          <span className="lw-step-number" aria-hidden="true">1</span>
+          <div className="lw-step-heading">
+            <strong id="lw-order-heading">Wire order</strong>
+            <span>{stripRunCount} strip{stripRunCount === 1 ? '' : 's'} · {compiledWiring.totalPixels} LEDs</span>
           </div>
+        </header>
+        <p className="lw-order-lead">Put the strips in the order the data cable visits them, starting from the card. The cable jumps between strips are shown on the drawing.</p>
+        {wiring.locked && <p className="lw-order-locked-note">Wiring is locked after verification. Unlock it under Review and install to change the order.</p>}
+        {patchBoard?.dataWireCountNeedsReview && (
+          <p className="lw-inline-warning lw-order-review-warning">This older project needs its data wire count confirmed — open Advanced wiring below and tap the correct number.</p>
         )}
-      </details>}
-      </CommissioningStep>
-      <CommissioningStep
-        number={3}
-        title="Plan the physical route"
-        state={stepStates[3]}
-        summary={wiring.controllerAnchor ? 'Controller placed · Auto Wire available' : 'Place the controller or skip Auto Wire'}
-        expanded={expandedSteps.has(3)}
-        onToggle={() => toggleStep(3)}
-        toggleLabel="Open optional Auto Wire"
-      >
-      <section className="lw-auto-wire-optional" aria-label="Optional Auto Wire">
-        <div className="lw-auto-wire-heading">
-          <strong>Auto Wire</strong>
-          <span>Optional</span>
-        </div>
-        <p className="lw-auto-wire-safety">Use a proposed strip order before checking the real LEDs. Applying a route later clears the physical check.</p>
-        <section className="lw-auto-wire-controls" aria-label="Auto Wire controls">
-          <label>
-            <span>LED outputs</span>
-            <span className="lw-auto-wire-fixed-count">Uses your {wiring.outputs.length} data wire{wiring.outputs.length === 1 ? '' : 's'}</span>
-          </label>
-          <button className="btn" title={wiring.controllerAnchor ? 'Preview a physical routing proposal' : 'Place the card at the artwork center, then drag it where it belongs'} disabled={wiring.locked} onClick={wiring.controllerAnchor ? runAutoWire : placeCard}>{wiring.controllerAnchor ? 'Preview route' : 'Place card'}</button>
-        </section>
-        {activeProposal && (
-          <section className="lw-auto-wire-preview" data-testid="auto-wire-preview" data-proposal-index={proposalIndex}>
-            <div className="lw-auto-wire-preview-heading">
-              <strong>Proposed route</strong>
-              <span>{activeProposal.wiring.outputs.length} output{activeProposal.wiring.outputs.length === 1 ? '' : 's'} · {activeProposal.outputTotals.reduce((sum, count) => sum + count, 0)} pixels</span>
-            </div>
-            {activeProposal.wiring.outputs.map((output, index) => (
-              <div key={output.id} className="lw-auto-wire-lane" data-testid="auto-wire-lane" data-run-order={output.runIds.join(',')}>
-                <div className="lw-auto-wire-lane-heading">
-                  <strong>{outputName(index)}</strong>
-                  <span>{activeProposal.outputTotals[index]} pixels</span>
+        <span className="lw-order-status" aria-live="polite" data-testid="wire-order-status">{orderAnnouncement}</span>
+        {wiring.outputs.map((output, outputIndex) => {
+          let physicalPosition = 0;
+          const runs = output.runIds.map(id => runsById.get(id)).filter(Boolean);
+          return (
+            <div key={output.id} className="lw-order-lane" data-output-id={output.id}>
+              {wiring.outputs.length > 1 && (
+                <div className="lw-order-lane-h">
+                  <strong>{outputName(outputIndex)}</strong>
+                  <span>GPIO {output.pin}</span>
                 </div>
-                <div className="lw-auto-wire-order" aria-label={`${outputName(index)} strip order`}>
-                  {output.runIds.map((runId, runIndex) => {
-                    const run = activeProposal.wiring.runs.find(item => item.id === runId);
-                    return <span key={runId}>{runIndex > 0 && <i aria-hidden="true">→</i>}{previewRunName(run, stripsById)}</span>;
-                  })}
-                </div>
-              </div>
-            ))}
-            <p className="lw-auto-wire-summary">{changeSummary(activeProposal)}</p>
-            <div className="lw-auto-wire-details">
-              <button className="lw-auto-wire-details-toggle" aria-expanded={routeDetailsOpen} onClick={() => setRouteDetailsOpen(open => !open)}>Route details</button>
-              {routeDetailsOpen && <div className="lw-auto-wire-diagnostics">
-                <p><strong>Cable length</strong><span>{activeProposal.jumpers.length} connection{activeProposal.jumpers.length === 1 ? '' : 's'} · {activeProposal.totalJumperLength.toFixed(1)} {activeProposal.unit === 'mm' ? 'mm' : 'relative units'} total · longest {activeProposal.worstJumperLength.toFixed(1)}</span></p>
-                <p><strong>Direction changes</strong><span>{activeProposal.directionChanges.length ? `${activeProposal.directionChanges.length} strip${activeProposal.directionChanges.length === 1 ? '' : 's'} change direction` : 'None'}</span></p>
-                <p><strong>Connector changes</strong><span>{activeProposal.seamChanges.length ? `${activeProposal.seamChanges.length} connector${activeProposal.seamChanges.length === 1 ? '' : 's'} move` : 'None'}</span></p>
-                <p><strong>Estimate notes</strong><span>{autoResult.assumptions.length ? autoResult.assumptions.map(item => item.message).join(' ') : 'Physical scale and card limits are known.'}</span></p>
-                {activeProposal.search?.warning && <p><strong>Route search</strong><span>Route search reached its limit. A shorter route may still be possible.</span></p>}
-              </div>}
+              )}
+              <ol className="lw-order-list" aria-label={wiring.outputs.length > 1 ? `${outputName(outputIndex)} wire order` : 'Wire order'}>
+                {runs.length === 0 && <li className="lw-order-row is-empty">No strips on this data wire yet.</li>}
+                {runs.map((run, index) => {
+                  if (run.type !== 'cable') physicalPosition += 1;
+                  return renderOrderRow(output, run, index, physicalPosition);
+                })}
+              </ol>
             </div>
-            <div className="lw-auto-wire-actions">
-              <button className="btn btn-ghost lw-auto-wire-close" onClick={() => { setAutoResult(null); setProposalIndex(0); setRouteDetailsOpen(false); }}>Close</button>
-              {proposals.length > 1 && <button className="btn" onClick={() => { setProposalIndex(index => (index + 1) % proposals.length); setRouteDetailsOpen(false); }}>Try another</button>}
-              <button className="btn primary" onClick={acceptAutoWire}>Apply route</button>
+          );
+        })}
+        {mutationError && <p className="lw-wiring-error" role="alert">{mutationError}</p>}
+      </section>
+
+      <section className="lw-advanced-wiring" data-testid="advanced-wiring">
+        <button
+          className="lw-advanced-toggle"
+          data-testid="advanced-wiring-toggle"
+          aria-expanded={advanced}
+          onClick={() => setAdvanced(value => !value)}
+        >Advanced wiring</button>
+        {advanced && <div className="lw-advanced-body">
+          <div className="lw-advanced-tools" role="group" aria-label="Route tools">
+            <button aria-pressed={wireOverlayMode === 'chop'} onClick={toggleSplitTool}>Split a strip mid-wire</button>
+            <span>Turns on the split tool — click a strip on the drawing where the cable leaves it.</span>
+            <button aria-pressed={wireOverlayMode === 'link'} onClick={toggleLinkTool}>Paint the route by clicking strips</button>
+            <span>Turns on the route tool — click strips on the drawing in the order the cable visits them.</span>
+          </div>
+
+          <div className="lw-advanced-group-h">More data wires from the card</div>
+          <section className="lw-data-wire-count" aria-labelledby="data-wire-question">
+            <div>
+              <strong id="data-wire-question">How many LED data wires leave the card?</strong>
+              <p>Count the signal wires connected from the card to the LED strips. Most pieces use one.</p>
+              {patchBoard?.dataWireCountNeedsReview && (
+                <p className="lw-inline-warning">This older project needs confirmation. Tap the correct number, even if it is already selected.</p>
+              )}
+            </div>
+            <div className="lw-data-wire-options" role="group" aria-label="LED data wire count">
+              {[1, 2, 3, 4].map(count => (
+                <button key={count} className={`btn${wiring.outputs.length === count ? ' primary' : ''}`} aria-pressed={wiring.outputs.length === count} disabled={wiring.locked} onClick={() => changeDataWireCount(count)}>{count}</button>
+              ))}
             </div>
           </section>
-        )}
+
+          <div className="lw-advanced-group-h">Data wire mapping</div>
+          <div className="lw-wiring-toolbar">
+            <strong>{wiring.outputs.length} LED output{wiring.outputs.length === 1 ? '' : 's'}</strong>
+            <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
+          </div>
+          <div className="lw-wiring-lanes">
+            {wiring.outputs.map((output, outputIndex) => (
+              <WiringOutputLane
+                key={output.id}
+                output={{ ...output, name: outputName(outputIndex) }}
+                runs={output.runIds.map(id => runsById.get(id)).filter(Boolean)}
+                compiledRuns={compiledWiring.runs}
+                stripsById={stripsById}
+                selectedRunId={effectiveSelectedRunId}
+                connectionState={connectionState}
+                advanced
+                locked={wiring.locked}
+                onSelectRun={selectRun}
+                onPort={handlePort}
+                onCordPointerDown={startCordPointer}
+                onCordPointerUp={finishCordPointer}
+                onCordTargetEnter={enterCordTarget}
+                onRowPointerDown={startRowPointer}
+                draggingRunId={rowDrag?.runId}
+                dropTargetRunId={rowDrag?.targetRunId}
+                dropTarget={rowDrag?.targetOutputId === output.id}
+                dropPlacement={rowDrag?.placement}
+                onMove={moveRun}
+                onRemove={removeRun}
+                onReverse={reverseRun}
+                onAdjustCount={adjustRunCount}
+                supportedPins={CARD_HARDWARE_CAPABILITIES.supportedOutputPins}
+                unavailablePins={unavailablePinsFor(`output:${output.id}`)}
+                onPinChange={pin => changeOutputPin(output.id, pin)}
+                onOutputPointerDown={startOutputPointer}
+                onMoveOutput={delta => moveOutput(output.id, delta)}
+                onRemoveOutput={() => removeOutput(output.id)}
+                outputDragging={outputDrag?.outputId === output.id}
+                outputDropPlacement={outputDrag?.targetOutputId === output.id && outputDrag?.outputId !== output.id ? outputDrag.placement : null}
+              />
+            ))}
+          </div>
+          <details className="lw-board-pins" open>
+            <summary>Board pins</summary>
+            <div className="lw-pin-group">
+              <strong>LED outputs</strong>
+              {wiring.outputs.map((output, index) => <label key={output.id}>{outputName(index)}
+                <select aria-label={`${outputName(index)} board pin`} value={output.pin} disabled={wiring.locked} onChange={event => changeOutputPin(output.id, Number(event.target.value))}>
+                  {CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePinsFor(`output:${output.id}`).includes(pin)}>GPIO {pin}</option>)}
+                </select>
+              </label>)}
+            </div>
+            <div className="lw-pin-group">
+              <strong>Physical controls</strong>
+              {BOARD_CONTROL_FIELDS.map(field => <label key={field.key}>{field.label}
+                <select aria-label={`${field.label} pin`} value={controlPinValue(field)} disabled={wiring.locked} onChange={event => changeControlPin(field.key, Number(event.target.value))}>
+                  {field.allowOff && <option value={-1}>Off</option>}
+                  {Array.from({ length: 49 }, (_, pin) => <option key={pin} value={pin} disabled={pin !== controlPinValue(field) && unavailablePinsFor(`control:${field.key}`).includes(pin)}>GPIO {pin}</option>)}
+                </select>
+              </label>)}
+            </div>
+            <div className="lw-pin-input-note"><strong>Inputs</strong><span>Current card firmware has no direct microphone input. Analog or I2S input requires a supported hardware profile; I2S uses multiple pins.</span></div>
+            {pinError && <p className="lw-wiring-error">{pinError}</p>}
+          </details>
+          <details className="lw-expert-mapping" open>
+            <summary>Expert mapping</summary>
+            <p>Use these only for intentional gaps, splits, or custom source ranges.</p>
+            <div className="lw-wiring-additions">
+              <button className="btn" disabled={wiring.locked} aria-label="Add skipped pixels" onClick={addInactive}>Add skipped pixels</button>
+              <span>Skipped pixels stay dark but keep their addresses.</span>
+            </div>
+            {derivedCut && (
+              <section className="lw-wire-selected-detail">
+                <div className="lw-wire-section-title"><span>Selected split</span><strong>LED {derivedCut.cutLed}</strong></div>
+                <div className="lw-wire-tool-row">
+                  <button className="btn" disabled={wiring.locked} aria-label="Move split earlier" onClick={() => nudgeSelectedWireCut(-1, derivedCut)}>−</button>
+                  <button className="btn" disabled={wiring.locked} aria-label="Move split later" onClick={() => nudgeSelectedWireCut(1, derivedCut)}>+</button>
+                  <button className="btn" disabled={wiring.locked} aria-label="Merge split runs" onClick={() => deleteSelectedWireCut(derivedCut)}>Merge</button>
+                  <button className="btn lw-btn-danger" disabled={wiring.locked} aria-label="Delete split" onClick={() => deleteSelectedWireCut(derivedCut)}>Delete</button>
+                </div>
+              </section>
+            )}
+            {selectedRun?.type === 'strip' && (
+              <div className="lw-wiring-range">
+              <strong>Source range</strong>
+              <label>Start LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.from} onChange={event => updateSelectedRange('from', event.target.value)}/></label>
+              <label>End LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.to} onChange={event => updateSelectedRange('to', event.target.value)}/></label>
+              <label>Direction policy
+                <select disabled={wiring.locked} value={selectedRun.directionPolicy} onChange={event => mutate(draft => {
+                  const run = draft.runs.find(item => item.id === selectedRun.id);
+                  if (run?.type === 'strip') run.directionPolicy = event.target.value;
+                }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
+                  <option value="flexible">Flexible</option>
+                  <option value="fixed">Fixed</option>
+                </select>
+              </label>
+              <label>Physical DATA IN
+                <select disabled={wiring.locked || selectedRun.directionPolicy === 'fixed'} value={selectedRun.physicalDirection} onChange={event => mutate(draft => {
+                  const run = draft.runs.find(item => item.id === selectedRun.id);
+                  if (run?.type === 'strip') run.physicalDirection = event.target.value;
+                }, { changeKind: 'direction', runIds: [selectedRun.id] })}>
+                  <option value="source-forward">Start LED</option>
+                  <option value="source-reverse">End LED</option>
+                </select>
+              </label>
+              {(stripsById.get(selectedRun.source.stripId)?.closed || stripsById.get(selectedRun.source.stripId)?.isClosed || selectedRun.seamLed != null) && (
+                <label>Connector seam LED
+                  <input type="number" min={selectedRun.source.from} max={selectedRun.source.to} disabled={wiring.locked || selectedRun.verified || selectedRun.directionPolicy === 'fixed'} value={selectedRun.seamLed ?? selectedRun.source.from} onChange={event => mutate(draft => {
+                    const run = draft.runs.find(item => item.id === selectedRun.id);
+                    if (!run || run.verified || run.directionPolicy === 'fixed') throw new Error('Verified or fixed connector seams cannot move.');
+                    run.seamLed = Math.max(run.source.from, Math.min(run.source.to, Math.trunc(Number(event.target.value))));
+                  }, { changeKind: 'seam', runIds: [selectedRun.id] })}/>
+                </label>
+              )}
+              </div>
+            )}
+          </details>
+
+          <section className="lw-auto-wire-optional" aria-label="Suggest shortest order">
+            <div className="lw-auto-wire-heading">
+              <strong>Suggest shortest order</strong>
+              <span>Optional</span>
+            </div>
+            <p className="lw-auto-wire-subtext">Mark where the card physically sits on the drawing, and Lightweaver reorders the strips to use the least cable. Optional — if your order above is right, skip this.</p>
+            <p className="lw-auto-wire-safety">Use a proposed strip order before checking the real LEDs. Applying a route later clears the physical check.</p>
+            <section className="lw-auto-wire-controls" aria-label="Shortest order controls">
+              <label>
+                <span>LED outputs</span>
+                <span className="lw-auto-wire-fixed-count">Uses your {wiring.outputs.length} data wire{wiring.outputs.length === 1 ? '' : 's'}</span>
+              </label>
+              <button className="btn" title={wiring.controllerAnchor ? 'Preview a physical routing proposal' : 'Places the card marker at the artwork center — drag it on the drawing to where the card really sits'} disabled={wiring.locked} onClick={wiring.controllerAnchor ? runAutoWire : placeCard}>{wiring.controllerAnchor ? 'Preview route' : 'Mark card position on drawing'}</button>
+            </section>
+            {activeProposal && (
+              <section className="lw-auto-wire-preview" data-testid="auto-wire-preview" data-proposal-index={proposalIndex}>
+                <div className="lw-auto-wire-preview-heading">
+                  <strong>Proposed route</strong>
+                  <span>{activeProposal.wiring.outputs.length} output{activeProposal.wiring.outputs.length === 1 ? '' : 's'} · {activeProposal.outputTotals.reduce((sum, count) => sum + count, 0)} pixels</span>
+                </div>
+                {activeProposal.wiring.outputs.map((output, index) => (
+                  <div key={output.id} className="lw-auto-wire-lane" data-testid="auto-wire-lane" data-run-order={output.runIds.join(',')}>
+                    <div className="lw-auto-wire-lane-heading">
+                      <strong>{outputName(index)}</strong>
+                      <span>{activeProposal.outputTotals[index]} pixels</span>
+                    </div>
+                    <div className="lw-auto-wire-order" aria-label={`${outputName(index)} strip order`}>
+                      {output.runIds.map((runId, runIndex) => {
+                        const run = activeProposal.wiring.runs.find(item => item.id === runId);
+                        return <span key={runId}>{runIndex > 0 && <i aria-hidden="true">→</i>}{previewRunName(run, stripsById)}</span>;
+                      })}
+                    </div>
+                  </div>
+                ))}
+                <p className="lw-auto-wire-summary">{changeSummary(activeProposal)}</p>
+                <div className="lw-auto-wire-details">
+                  <button className="lw-auto-wire-details-toggle" aria-expanded={routeDetailsOpen} onClick={() => setRouteDetailsOpen(open => !open)}>Route details</button>
+                  {routeDetailsOpen && <div className="lw-auto-wire-diagnostics">
+                    <p><strong>Cable length</strong><span>{activeProposal.jumpers.length} connection{activeProposal.jumpers.length === 1 ? '' : 's'} · {activeProposal.totalJumperLength.toFixed(1)} {activeProposal.unit === 'mm' ? 'mm' : 'relative units'} total · longest {activeProposal.worstJumperLength.toFixed(1)}</span></p>
+                    <p><strong>Direction changes</strong><span>{activeProposal.directionChanges.length ? `${activeProposal.directionChanges.length} strip${activeProposal.directionChanges.length === 1 ? '' : 's'} change direction` : 'None'}</span></p>
+                    <p><strong>Connector changes</strong><span>{activeProposal.seamChanges.length ? `${activeProposal.seamChanges.length} connector${activeProposal.seamChanges.length === 1 ? '' : 's'} move` : 'None'}</span></p>
+                    <p><strong>Estimate notes</strong><span>{autoResult.assumptions.length ? autoResult.assumptions.map(item => item.message).join(' ') : 'Physical scale and card limits are known.'}</span></p>
+                    {activeProposal.search?.warning && <p><strong>Route search</strong><span>Route search reached its limit. A shorter route may still be possible.</span></p>}
+                  </div>}
+                </div>
+                <div className="lw-auto-wire-actions">
+                  <button className="btn btn-ghost lw-auto-wire-close" onClick={() => { setAutoResult(null); setProposalIndex(0); setRouteDetailsOpen(false); }}>Close</button>
+                  {proposals.length > 1 && <button className="btn" onClick={() => { setProposalIndex(index => (index + 1) % proposals.length); setRouteDetailsOpen(false); }}>Try another</button>}
+                  <button className="btn primary" onClick={acceptAutoWire}>Apply route</button>
+                </div>
+              </section>
+            )}
+          </section>
+        </div>}
       </section>
-      </CommissioningStep>
+
       <CommissioningStep
-        number={4}
+        number={CHECK_STEP}
         title="Check the real LEDs"
-        state={stepStates[4]}
+        state={stepStates[CHECK_STEP]}
         summary={commissioningVerified
           ? `Wiring and ${colorOrder} color order verified`
           : physicallyVerified
             ? `Wiring verified · Confirm ${colorOrder} color order`
-            : `Verify strip boundaries and direction · Confirm ${colorOrder} color order`}
-        expanded={expandedSteps.has(4)}
-        onToggle={() => toggleStep(4)}
+            : connected
+              ? `Verify strip boundaries and direction · Confirm ${colorOrder} color order`
+              : `Needs your Lightweaver card connected · Confirm ${colorOrder} color order`}
+        expanded={expandedSteps.has(CHECK_STEP)}
+        onToggle={() => toggleStep(CHECK_STEP)}
         toggleLabel="Open physical LED check"
       >
+      {!connected && (
+        <p className="lw-card-banner is-inline">
+          This step lights the real LEDs, so it needs your Lightweaver card connected. Use the <b>Connect Lightweaver</b> button in the footer first.
+        </p>
+      )}
       <WiringBenchTest
         wiring={wiring}
         compiled={compiledWiring}
@@ -890,14 +1052,15 @@ export function WireModePanel({ state, connected, cardHost }) {
       />
       </CommissioningStep>
       <CommissioningStep
-        number={5}
+        number={INSTALL_STEP}
         title="Review and install"
-        state={stepStates[5]}
+        ariaLabel="Step 5: Review and install"
+        state={stepStates[INSTALL_STEP]}
         summary={commissioningVerified
           ? compiledWiring.sendReady ? 'Ready to install on the card' : 'Lock the verified wiring to continue'
           : physicallyVerified ? 'Color confirmation required' : 'Physical LED check required'}
-        expanded={expandedSteps.has(5)}
-        onToggle={() => toggleStep(5)}
+        expanded={expandedSteps.has(INSTALL_STEP)}
+        onToggle={() => toggleStep(INSTALL_STEP)}
         toggleLabel="Open install review"
       >
       <div className="lw-install-gate" role="status">
