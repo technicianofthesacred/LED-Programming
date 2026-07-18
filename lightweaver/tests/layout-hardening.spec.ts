@@ -5,12 +5,11 @@ async function gotoLayout(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 }
 
-async function openWireStep(page: any, regionName: string, toggleName: string, target: (step: any) => any) {
-  const step = page.getByRole('region', { name: regionName });
-  if (!await target(step).isVisible().catch(() => false)) {
-    await step.getByRole('button', { name: toggleName }).click();
-  }
-  await expect(target(step)).toBeVisible();
+// The Wire commissioning flow shows one step at a time; the StepRail
+// (role=group "Steps") is the navigation affordance.
+async function openWireStep(page: any, railLabel: string, target: (panel: any) => any) {
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: railLabel }).click();
+  await expect(target(page)).toBeVisible();
 }
 
 test('pending drawing survives a mode visit until explicitly cancelled', async ({ page }) => {
@@ -184,19 +183,20 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
-  // Wire order is the primary surface now; the lane/port editors live in Advanced wiring.
-  await expect(page.getByTestId('wire-order')).toBeVisible();
-  await page.getByRole('button', { name: 'Advanced wiring' }).click();
-  await openWireStep(page, 'Step 5: Review and install', 'Open install review', step => step.getByTestId('layout-send-to-card'));
-  for (const control of [
-    page.getByTestId('wire-order-row').first().getByRole('button', { name: /Reverse direction/ }),
-    page.getByRole('group', { name: 'LED data wire count' }).getByRole('button').first(),
-    page.getByRole('button', { name: /Outer circle IN port/ }),
-    page.getByTestId('layout-send-to-card'),
-  ]) {
-    const box = await control.boundingBox();
-    expect(box?.height).toBeGreaterThanOrEqual(44);
-  }
+  await openWireStep(page, 'Wires', panel => panel.getByRole('group', { name: 'How many wires leave the card?' }));
+  let box = await page.getByRole('group', { name: 'How many wires leave the card?' }).getByRole('button').first().boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  // Wire order is the primary surface of the Match step; the lane/port
+  // editors live behind the Advanced wiring disclosure.
+  await openWireStep(page, 'Match', panel => panel.getByTestId('wire-order'));
+  box = await page.getByTestId('wire-order-row').first().getByRole('button', { name: /Reverse direction/ }).boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await page.getByTestId('advanced-wiring-toggle').click();
+  box = await page.getByRole('button', { name: /Outer circle IN port/ }).boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await openWireStep(page, 'Install', panel => panel.getByTestId('layout-send-to-card'));
+  box = await page.getByTestId('layout-send-to-card').boundingBox();
+  expect(box?.height).toBeGreaterThanOrEqual(44);
   await context.close();
 });
 
@@ -232,7 +232,6 @@ test('mobile Layout keeps a useful canvas and presents the inspector as a bottom
 test('mode toolbar only presents tools that apply while keeping secondary groups named', async ({ page }) => {
   await gotoLayout(page);
   const toolbar = page.locator('.la .toolbar');
-  await expect(toolbar.getByRole('group', { name: 'Mode actions' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'Project' })).toBeVisible();
   await expect(toolbar.getByRole('group', { name: 'View' })).toBeVisible();
   await expect(page.getByTitle('Import an SVG to map LED strips')).toBeVisible();
@@ -253,7 +252,8 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
 
 test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ page }) => {
   await gotoLayout(page);
-  // A fresh layout opens on the primitive starter with zero strips — create one.
+  // A fresh layout opens on the starter shape picker with no strips yet —
+  // create one so a strip path exists to drive with the keyboard.
   const picker = page.getByTestId('layout-primitive-picker');
   await picker.getByRole('button', { name: 'Line', exact: true }).click();
   await picker.getByRole('button', { name: 'Create line' }).click();

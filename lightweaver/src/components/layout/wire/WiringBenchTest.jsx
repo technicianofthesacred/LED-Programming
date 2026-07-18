@@ -4,19 +4,42 @@ import { cardBridgeFeatureGap, openCardBridge } from '../../../lib/cardBridge.js
 import { pushLivePreviewToCard } from '../../../lib/cardLiveControl.js';
 import {
   buildWiringChaseFrame,
+  buildWiringChaseSteps,
   createWiringChaseSession,
-  createWiringChaseState,
   wiringChaseReducer,
 } from '../../../lib/wiringChase.js';
+import { UiCard } from '../../ui/UiCard.jsx';
+import '../../../styles/lw-bench.css';
+
+const ILLUS_CELLS = 9;
+
+// Schematic strip: blue first LED, green middle, red last — matching the
+// frame buildWiringChaseFrame actually sends. 'dark' renders unlit cells for
+// cable / reserved steps.
+function LedIllustration({ variant = 'marked' }) {
+  return (
+    <div className="lwb-illus" aria-hidden="true">
+      {Array.from({ length: ILLUS_CELLS }, (_, index) => {
+        const cls = variant === 'dark' ? ''
+          : index === 0 ? ' is-first'
+            : index === ILLUS_CELLS - 1 ? ' is-last'
+              : ' is-mid';
+        return <i key={index} className={`lwb-illus-cell${cls}`} />;
+      })}
+    </div>
+  );
+}
 
 export function WiringBenchTest({
   wiring, compiled, updateWiring, priorConfirmedLook = null, cardHost,
   strips = [], adjustableRunIds = [], onAdjustBoundary,
   adjustableOutputIds = [], onAdjustOutput,
+  onActivityChange, onDefer,
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [state, dispatch] = useReducer(wiringChaseReducer, null);
   const [featureGap, setFeatureGap] = useState(null);
+  const [troubleOpen, setTroubleOpen] = useState(false);
   const sessionRef = useRef(null);
   const mountedRef = useRef(false);
   const compiledRef = useRef(compiled);
@@ -66,13 +89,26 @@ export function WiringBenchTest({
       });
   }, [compiled.totalPixels, state]);
 
+  // Collapse the "Something's wrong" panel whenever the wizard moves.
+  useEffect(() => { setTroubleOpen(false); }, [state?.stepIndex, state?.status]);
+
+  // Tell the parent when a check question is on screen so it can clear the
+  // rest of step 4 (one question per screen, redesign change 9). The cleanup
+  // covers unmount mid-check (mode/step switch).
+  const checkActive = state?.status === 'active';
+  useEffect(() => {
+    onActivityChange?.(checkActive);
+    return () => onActivityChange?.(false);
+  }, [checkActive, onActivityChange]);
+
   if (wiring.locked) return null;
 
   // useReducer cannot lazily initialize on an event without replacing the
   // reducer state, so keep the inactive shell outside and mount the active
-  // reducer through this small reset action.
-  const begin = () => {
-    if (!acknowledged || !compiled.ok) return;
+  // reducer through this small reset action. Starting always requires a fresh
+  // visibility acknowledgement (the "I can see them" screen).
+  const startChase = () => {
+    if (!compiled.ok) return;
     if (!canPushDirectlyToCard()) {
       const gap = cardBridgeFeatureGap('frame');
       if (gap) { setFeatureGap(gap); return; }
@@ -82,13 +118,28 @@ export function WiringBenchTest({
     sessionRef.current = makeSession();
     dispatch({ type: 'begin', compiled });
   };
+  const acknowledgeAndStart = () => {
+    if (!compiled.ok) return;
+    setAcknowledged(true);
+    startChase();
+  };
 
   const activeStep = state?.steps?.[state.stepIndex];
   const activeStrip = strips.find(strip => strip.id === activeStep?.source?.stripId);
   const activeLabel = activeStrip?.name || activeStep?.label || activeStep?.runId || 'Run';
-  const stepLabel = activeStep?.kind === 'output' ? activeStep.label
+  // Wizard copy talks about "wires" (redesign change 6 — the question the
+  // user answers is about the physical wire), keyed by the same A/B letters
+  // the mapping lanes use, instead of the stored output ids/names.
+  const outputDisplayName = outputId => {
+    const index = wiring.outputs.findIndex(output => output.id === outputId);
+    return index >= 0 ? `Wire ${String.fromCharCode(65 + index)}` : null;
+  };
+  const activeOutputLabel = activeStep?.kind === 'output'
+    ? (outputDisplayName(activeStep.outputId) || activeStep.label)
+    : null;
+  const stepLabel = activeStep?.kind === 'output' ? activeOutputLabel
     : activeStep?.kind === 'cable' ? 'Cable jump'
-      : activeStep?.kind === 'inactive' ? 'Reserved · unlit'
+      : activeStep?.kind === 'inactive' ? 'Reserved LEDs'
         : activeLabel;
   const retry = () => {
     sessionRef.current = makeSession();
@@ -99,6 +150,7 @@ export function WiringBenchTest({
     sessionRef.current = null;
     await session?.stop().catch(() => {});
     highWaterPixelsRef.current = compiled.totalPixels;
+    setAcknowledged(false);
     dispatch({ type: 'cancel' });
   };
   const correctDirection = () => {
@@ -137,64 +189,152 @@ export function WiringBenchTest({
     sessionRef.current = null;
     await session?.complete().catch(() => {});
     highWaterPixelsRef.current = compiled.totalPixels;
+    setAcknowledged(false);
     dispatch({ type: 'complete' });
   };
 
-  if (!state || state.status === 'cancelled' || state.status === 'complete') return (
-    <section className="lw-bench-test" data-testid="wiring-bench-test">
-      <div className="lw-bench-idle-heading">
-        <p>The card lights each strip&apos;s first LED blue and last LED red.</p>
-      </div>
-      <label className="lw-bench-ack"><input type="checkbox" aria-label="The LED strips are visible from here" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/><span><strong>The LED strips are visible from here</strong></span></label>
-      <div className="lw-bench-start-row">
-        {!acknowledged && <span>Tick the box to start.</span>}
-        {acknowledged && !compiled.ok && <span>Fix the LED output mapping errors to start the check.</span>}
-        <button aria-label="Start physical LED check (Start wiring test)" className={`btn${acknowledged && compiled.ok ? ' primary' : ''}`} disabled={!acknowledged || !compiled.ok} onClick={begin}>Start physical LED check</button>
-      </div>
-      {state?.status === 'complete' && <p>Physical LED check complete. Review and lock the wiring before installation.</p>}
-      {featureGap && <div className="lw-wiring-error"><p>{featureGap.message}</p><button className="btn" onClick={() => { openCardBridge(); window.location.hash = '#screen=flash'; }}>Open Flash</button></div>}
-    </section>
-  );
+  if (!state || state.status === 'cancelled' || state.status === 'complete') {
+    const totalScreens = buildWiringChaseSteps(compiled).length + 1;
+    return (
+      <section className="lw-bench-test lwb-wizard" data-testid="wiring-bench-test">
+        <p className="lwb-progress">LED CHECK · 1 OF {totalScreens}</p>
+        {state?.status === 'complete' && (
+          <p className="lwb-complete" role="status">All checked. Review and lock the wiring before installation.</p>
+        )}
+        {!acknowledged ? (
+          <>
+            <h4 className="lwb-question">Stand where you can see the LED strips</h4>
+            <p className="lwb-hint">The card lights the first LED blue and the last LED red on each strip. You’ll confirm what you see at each step.</p>
+            <LedIllustration />
+            {!compiled.ok && <p className="lwb-note" role="status">Fix the LED output mapping errors before starting the check.</p>}
+            <button
+              type="button"
+              className="btn primary lwb-btn"
+              aria-label="I can see the LED strips"
+              disabled={!compiled.ok}
+              onClick={acknowledgeAndStart}
+            >I can see them</button>
+            {onDefer && (
+              <button
+                type="button"
+                className="btn btn-ghost lwb-btn lwb-btn-row"
+                onClick={onDefer}
+              >Do this later</button>
+            )}
+          </>
+        ) : (
+          <>
+            <h4 className="lwb-question">Ready when you are</h4>
+            <p className="lwb-hint">You said you can see the strips. Start the check whenever you’re ready.</p>
+            <button type="button" className="btn primary lwb-btn" disabled={!compiled.ok} onClick={() => { if (acknowledged) startChase(); }}>Start the check</button>
+            <button type="button" className="btn btn-ghost lwb-btn lwb-btn-row" onClick={() => setAcknowledged(false)}>Do this later</button>
+          </>
+        )}
+        {featureGap && (
+          <UiCard
+            tone="warning"
+            description={featureGap.message}
+            footer={<button type="button" className="btn lwb-btn-compact" onClick={() => { openCardBridge(); window.location.hash = '#screen=flash'; }}>Open Flash</button>}
+          />
+        )}
+      </section>
+    );
+  }
+
+  const confirmedDelivery = state.delivery === 'confirmed';
+  const kind = activeStep?.kind;
+  let question; let hint; let primaryLabel; let onPrimary; let illusVariant = 'marked';
+  if (kind === 'output') {
+    question = `Do you see ${activeOutputLabel} lit up?`;
+    hint = 'The first LED should be blue and the last LED red, with green in between.';
+    primaryLabel = `Yes — I see ${activeOutputLabel}`;
+    onPrimary = () => dispatch({ type: 'confirm-output' });
+  } else if (kind === 'run') {
+    question = `Is the first LED of ${activeLabel} lit blue?`;
+    hint = `Blue marks the start of ${activeLabel}. Red marks the end.`;
+    primaryLabel = 'Yes — blue at the start, red at the end';
+    onPrimary = confirmRun;
+  } else if (kind === 'cable') {
+    question = 'Is the connecting cable plugged in?';
+    hint = 'This hop has no LEDs of its own — just make sure the cable between strips is connected.';
+    primaryLabel = 'Yes — the cable is connected';
+    onPrimary = () => dispatch({ type: 'confirm-cable' });
+    illusVariant = 'dark';
+  } else {
+    question = 'Are the reserved LEDs staying dark?';
+    hint = `${activeStep?.count || 0} reserved pixels should stay unlit during this check.`;
+    primaryLabel = 'Yes — they stay dark';
+    onPrimary = () => dispatch({ type: 'confirm-inactive' });
+    illusVariant = 'dark';
+  }
 
   return (
-    <section className="lw-bench-test is-active" data-testid="wiring-bench-test">
-      <header className="lw-bench-head">
-        <span className="lw-bench-step">{state.stepIndex + 1}/{state.steps.length}</span>
-        <div><span className="lw-bench-kicker">Now checking</span><h4>{stepLabel}</h4></div>
-        <span className={`lw-bench-delivery is-${state.delivery}`}>{state.delivery === 'confirmed' ? 'Live' : state.delivery === 'failed' ? 'Offline' : 'Sending'}</span>
-      </header>
-      <div className="lw-bench-legend" aria-label="Pixel marker legend">
-        <span><i className="is-blue"/>Blue <small>first</small></span>
-        <span><i className="is-green"/>Green <small>between</small></span>
-        <span><i className="is-red"/>Red <small>last</small></span>
-      </div>
-      {activeStep?.kind === 'output' ? (
-        <div className="lw-bench-run">
-          <div className="lw-bench-count-adjust">
-            <button className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeStep.label}`} disabled={state.delivery !== 'confirmed' || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
-            <strong data-testid="active-output-count">{activeStep.count} pixels</strong>
-            <button className="lw-bench-nudge" aria-label={`Add one pixel to ${activeStep.label}`} disabled={state.delivery !== 'confirmed' || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
-          </div>
-          <span className="lw-bench-boundary-hint">GPIO {activeStep.pin} · Move red to the output’s final LED.</span>
-          <div className="lw-bench-action-row"><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-output' })}>I see {activeStep.label}</button></div>
-        </div>
-      ) : activeStep?.kind === 'run' ? (
-        <div className="lw-bench-run">
-          <div className="lw-bench-count-adjust">
-            <button className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeLabel}`} disabled={state.delivery !== 'confirmed' || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
-            <strong data-testid="active-run-count">{activeStep.count} pixels</strong>
-            <button className="lw-bench-nudge" aria-label={`Add one pixel to ${activeLabel}`} disabled={state.delivery !== 'confirmed' || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
-          </div>
-          <span className="lw-bench-boundary-hint">Blue and red set the artwork mapping; electrical data direction does not change.</span>
-          <div className="lw-bench-action-row"><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={confirmRun}>Boundary is correct</button><button className="btn" disabled={state.delivery !== 'confirmed'} onClick={correctDirection}>Flip mapping</button></div>
-        </div>
-      ) : activeStep?.kind === 'cable' ? (
-        <div className="lw-bench-action"><strong>Zero-address cable</strong><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-cable' })}>Cable is connected</button></div>
-      ) : (
-        <div className="lw-bench-action"><strong>{activeStep?.count || 0} pixels stay dark</strong><button className="btn primary" disabled={state.delivery !== 'confirmed'} onClick={() => dispatch({ type: 'confirm-inactive' })}>Reserved LEDs stay unlit</button></div>
+    <section className="lw-bench-test lwb-wizard is-active" data-testid="wiring-bench-test">
+      <p className="lwb-progress">LED CHECK · {state.stepIndex + 2} OF {state.steps.length + 1}</p>
+      <p className="lwb-context">{stepLabel}</p>
+      <h4 className="lwb-question">{question}</h4>
+      <LedIllustration variant={illusVariant} />
+      <p className="lwb-hint">{hint}</p>
+      {state.delivery === 'idle' && <p className="lwb-sending" role="status">Lighting up the LEDs…</p>}
+      {state.delivery === 'failed' && (
+        <UiCard
+          tone="warning"
+          title="The lights didn’t reach the card"
+          description={state.error}
+          footer={<button type="button" className="btn primary lwb-btn-compact" onClick={retry}>Try again</button>}
+        />
       )}
-      {state.delivery === 'failed' && <div className="lw-wiring-error"><p>{state.error}</p><button className="btn primary" onClick={retry}>Retry</button></div>}
-      <div className="lw-bench-nav"><button className="btn" disabled={state.stepIndex === 0} onClick={() => dispatch({ type: 'previous' })}>Back</button><button className="btn" disabled={state.stepIndex === state.steps.length - 1} onClick={() => dispatch({ type: 'next' })}>Skip</button><button className="btn" onClick={cancel}>Stop</button><button className="btn primary" disabled={!state.canComplete} onClick={complete}>Finish</button></div>
+      <button type="button" className="btn primary lwb-btn" disabled={!confirmedDelivery} onClick={onPrimary}>{primaryLabel}</button>
+      <button
+        type="button"
+        className="btn btn-ghost lwb-btn lwb-btn-row"
+        aria-expanded={troubleOpen}
+        onClick={() => setTroubleOpen(open => !open)}
+      >Something’s wrong</button>
+      {troubleOpen && (
+        <div className="lwb-trouble" role="group" aria-label="Fix this step">
+          <p className="lwb-trouble-title">What looks wrong?</p>
+          {kind === 'run' && (
+            <>
+              <div className="lwb-trouble-item">
+                <span>Blue is at the wrong end of the strip</span>
+                <button type="button" className="btn lwb-btn-compact" disabled={!confirmedDelivery} onClick={correctDirection}>Flip the direction</button>
+              </div>
+              <div className="lwb-trouble-item">
+                <span>Red isn’t on the strip’s last LED</span>
+                <div className="lw-bench-count-adjust">
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
+                  <strong data-testid="active-run-count">{activeStep.count} pixels</strong>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one pixel to ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
+                </div>
+              </div>
+              <p className="lwb-detail">Blue and red set the artwork mapping; electrical data direction does not change.</p>
+            </>
+          )}
+          {kind === 'output' && (
+            <>
+              <div className="lwb-trouble-item">
+                <span>Red isn’t on this wire’s last LED</span>
+                <div className="lw-bench-count-adjust">
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
+                  <strong data-testid="active-output-count">{activeStep.count} pixels</strong>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one pixel to ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
+                </div>
+              </div>
+              <p className="lwb-detail">GPIO {activeStep.pin} · Move red to this wire’s final LED.</p>
+            </>
+          )}
+          {(kind === 'cable' || kind === 'inactive') && (
+            <p className="lwb-trouble-note">If something else looks off, use Back to re-check the previous step, or choose Do this later and fix the mapping first.</p>
+          )}
+        </div>
+      )}
+      <div className="lwb-nav">
+        <button type="button" className="btn btn-ghost" disabled={state.stepIndex === 0} onClick={() => dispatch({ type: 'previous' })}>Back</button>
+        <button type="button" className="btn btn-ghost" disabled={state.stepIndex === state.steps.length - 1} onClick={() => dispatch({ type: 'next' })}>Skip</button>
+        <button type="button" className="btn btn-ghost" onClick={cancel}>Do this later</button>
+        <button type="button" className="btn primary" disabled={!state.canComplete} onClick={complete}>Finish</button>
+      </div>
     </section>
   );
 }

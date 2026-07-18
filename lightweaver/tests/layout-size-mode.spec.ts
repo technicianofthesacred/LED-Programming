@@ -94,6 +94,31 @@ test('Size mode chain renders; a manual count overrides, survives density, reset
   await expect(bgCount).toHaveValue('220');
 });
 
+test('a custom power supply size survives leaving and returning to Size mode', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-psu-'));
+  await importThreeStrips(page, tmp);
+  await page.getByTestId('layout-mode-size').click();
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+
+  // Open the collapsed supply details and declare a small 2 A supply.
+  await page.locator('.lws-psu summary').click();
+  const amps = page.getByLabel('Power supply amps');
+  await amps.fill('2');
+  await amps.blur();
+  const supplyTile = page.locator('.lwui-tile').filter({ hasText: 'Supply' }).locator('.lwui-tile-value');
+  await expect(supplyTile).toHaveText(/^2\.0/);
+
+  // Leave for Draw mode and come back — the safety math must keep using the
+  // user's supply instead of silently resetting to the default.
+  await page.getByTestId('layout-mode-draw').click();
+  await expect(page.getByTestId('layout-size-panel')).toHaveCount(0);
+  await page.getByTestId('layout-mode-size').click();
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+  await expect(supplyTile).toHaveText(/^2\.0/);
+  await page.locator('.lws-psu summary').click();
+  await expect(page.getByLabel('Power supply amps')).toHaveValue('2');
+});
+
 test('a count set in Draw mode strip detail shows as an override in Size mode', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-shared-'));
   await importThreeStrips(page, tmp);

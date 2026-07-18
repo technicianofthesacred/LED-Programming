@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Wire panel presentation: ONE primary way to wire — the numbered "Wire order"
-// list — with every other tool demoted to the single Advanced wiring
-// disclosure. These tests pin that structure against the canonical wiring
-// model (runs/outputs) via exported project JSON.
+// list on the Match step — with every other wiring tool demoted to the single
+// Advanced wiring disclosure. These tests pin that structure against the
+// canonical wiring model (runs/outputs) via exported project JSON.
 
 function writeFixture(tmp: string) {
   const fixture = path.join(tmp, 'patch-board-line.svg');
@@ -22,6 +22,14 @@ async function importLine(page: any) {
   await page.setInputFiles('input[accept=".svg"]', writeFixture(tmp));
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
   return tmp;
+}
+
+// The commissioning flow renders one step at a time; the StepRail (role=group
+// "Steps") is the navigation affordance. The Wire order list lives on the
+// Match step.
+async function openStep(page: any, label: string) {
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: label }).click();
+  await expect(page.getByTestId('commissioning-step')).toBeVisible();
 }
 
 async function enterWire(page: any) {
@@ -75,6 +83,7 @@ async function clickStripPathAt(page: any, fraction: number) {
 test('wire order lists numbered strip rows and Move down reorders the canonical output', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-order-'));
   await gotoDefaultWire(page);
+  await openStep(page, 'Match');
 
   const rows = page.getByTestId('wire-order-row');
   await expect(rows).toHaveCount(2);
@@ -100,6 +109,7 @@ test('wire order lists numbered strip rows and Move down reorders the canonical 
 test('Reverse toggle flips the run direction in the canonical model', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-reverse-'));
   await gotoDefaultWire(page);
+  await openStep(page, 'Match');
 
   const row = page.getByTestId('wire-order-row').first();
   const runId = await row.getAttribute('data-run-id');
@@ -121,22 +131,26 @@ test('Reverse toggle flips the run direction in the canonical model', async ({ p
 test('Advanced wiring is one collapsed disclosure and Split still cuts a run', async ({ page }) => {
   const tmp = await importLine(page);
   await enterWire(page);
+  await openStep(page, 'Match');
 
   const toggle = page.getByTestId('advanced-wiring-toggle');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'Suggest shortest order' })).toHaveCount(0);
-  await expect(page.getByRole('group', { name: 'LED data wire count' })).toHaveCount(0);
 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toBeVisible();
-  await expect(page.getByRole('group', { name: 'LED data wire count' })).toBeVisible();
-  const shortest = page.getByRole('region', { name: 'Suggest shortest order' });
+  // The wire count and the shortest-order suggestion each keep exactly one
+  // home — the Wires step chooser and the Route step — not the drawer.
+  await expect(page.getByRole('group', { name: 'LED data wire count' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Suggest shortest order' })).toHaveCount(0);
+  await openStep(page, 'Route');
+  const shortest = page.getByTestId('commissioning-step');
   await expect(shortest).toContainText('Mark where the card physically sits on the drawing, and Lightweaver reorders the strips to use the least cable.');
   await expect(shortest.getByRole('button', { name: 'Mark card position on drawing' })).toBeVisible();
+  await openStep(page, 'Match');
 
   await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
   await clickStripPathAt(page, 0.45);
@@ -155,17 +169,13 @@ test('locked wiring blocks reorder, direction, split, and skipped-pixel mutation
   await gotoDefaultWire(page);
   await loadVerifiedWiring(page, tmp);
 
-  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (await installStep.locator('.lw-install-gate').isVisible().catch(() => false)) break;
-    const installToggle = installStep.locator('.lw-step-toggle');
-    if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
-    await page.waitForTimeout(120);
-  }
-  await expect(installStep.locator('.lw-install-gate')).toBeVisible();
+  // The seeded project is fully verified, so the panel auto-advances to the
+  // Install step; wait for that settled state instead of clicking.
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
   await page.getByRole('button', { name: 'Lock wiring' }).click();
   await expect(page.getByRole('button', { name: 'Unlock wiring' })).toBeVisible();
 
+  await openStep(page, 'Match');
   const row = page.getByTestId('wire-order-row').first();
   await expect(row.getByRole('button', { name: /Move .* up/ })).toBeDisabled();
   await expect(row.getByRole('button', { name: /Move .* down/ })).toBeDisabled();

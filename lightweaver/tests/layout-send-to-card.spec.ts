@@ -112,14 +112,13 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   }, TEST_CARD_ID);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  const installStep = page.getByRole('region', { name: 'Step 5: Review and install' });
-  const installToggle = installStep.locator('.lw-step-toggle');
-  if (await installToggle.getAttribute('aria-expanded') !== 'true') await installToggle.click();
+  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
   await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
   if (!verified) return;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
+  await page.waitForTimeout(600);
   const pending = page.waitForEvent('download');
-  await page.getByTitle('Export a portable project file (.lw.json)').click();
+  await page.locator('.la .toolbar').getByRole('button', { name: 'Export', exact: true }).click();
   const download = await pending;
   const source = path.join(tmp, 'source.json');
   await download.saveAs(source);
@@ -136,12 +135,12 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   fs.writeFileSync(ready, JSON.stringify(project));
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
   // The seeded project is fully verified, so once the autosave restores the
-  // panel auto-expands the install step itself. Wait for that settled state —
-  // sampling aria-expanded early and clicking races the auto-expand effect,
-  // and the late click toggles the step closed again (CI-only flake).
-  const reloadedInstallToggle = page.getByRole('region', { name: 'Step 5: Review and install' }).locator('.lw-step-toggle');
-  await expect(reloadedInstallToggle).toHaveAttribute('aria-expanded', 'true');
+  // panel auto-advances to the Install step itself. Wait for that settled
+  // state instead of clicking — sampling and clicking early raced the
+  // auto-advance effect on CI.
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
