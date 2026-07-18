@@ -1,5 +1,7 @@
 # Hardware Foundation Implementation Plan
 
+> **Superseded 2026-07-18:** Current `main` now includes the unified Card workspace and the complete Wire commissioning UX. Do not execute this plan directly. Use [`2026-07-18-reusable-card-infrastructure.md`](2026-07-18-reusable-card-infrastructure.md), which preserves the completed calibrated-output port and re-sequences the remaining foundation behind compatibility adapters.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish one tested multi-card project model, connection registry, output-calibration prerequisite, and voltage-aware power contract before changing the navigation.

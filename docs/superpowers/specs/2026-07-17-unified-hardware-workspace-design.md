@@ -1,11 +1,13 @@
 # Unified Hardware Workspace Design
 
-**Date:** 2026-07-17  
-**Status:** Approved for implementation  
-**Product:** Lightweaver  
+**Date:** 2026-07-17
+**Status:** Data and safety requirements retained; UI architecture superseded by the shipped Card and Wire workspaces on `main`
+**Product:** Lightweaver
 **Runtime scope:** ESP32-S3 only; Raspberry Pi paths remain deferred
 
-## Outcome
+> **2026-07-18 integration note:** Do not implement the separate top-level Hardware route, Hardware overview, or duplicate calibration/install editors described below. Current `main` already ships one unified **Card** workspace and a five-step **Layout → Wire** commissioning workflow. The canonical remaining-work plan is [`../plans/2026-07-18-reusable-card-infrastructure.md`](../plans/2026-07-18-reusable-card-infrastructure.md). This document remains authoritative only for reusable multi-card data, power safety, templates, synchronization, history, and ESP32 runtime requirements that do not conflict with that plan.
+
+## Historical UI outcome (superseded)
 
 Lightweaver will replace the current top-level **Flash**, **Installer**, **Setup**, and hardware-related **Settings** destinations with one top-level **Hardware** workspace. Clicking Hardware opens the workspace immediately; it does not open a dropdown.
 

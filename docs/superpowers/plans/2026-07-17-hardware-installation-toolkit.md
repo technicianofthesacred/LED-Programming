@@ -1,5 +1,7 @@
 # Hardware Installation Toolkit Implementation Plan
 
+> **Superseded 2026-07-18:** Layout → Wire now owns commissioning, physical LED tests, color-order confirmation, assembly mapping, and the install gate. Do not build parallel versions from this plan. Continue only the non-duplicative Card infrastructure in [`2026-07-18-reusable-card-infrastructure.md`](2026-07-18-reusable-card-infrastructure.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the reusable Lightweaver toolkit with explainable recommendations, calibration/tests, Workshop-to-Install handoff, templates, as-built history, card replacement, and mobile/offline-safe behavior.

@@ -1,5 +1,7 @@
 # Unified Hardware Workspace Implementation Plan
 
+> **Superseded 2026-07-18:** The separate Hardware route and shell in this plan would duplicate the Card workspace already shipped on `main`. Do not execute it. Continue with [`2026-07-18-reusable-card-infrastructure.md`](2026-07-18-reusable-card-infrastructure.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the top-level Flash, Installer, Production Setup, and hardware Settings maze with one immediate Hardware workspace while preserving every working deep link and safety state machine.
