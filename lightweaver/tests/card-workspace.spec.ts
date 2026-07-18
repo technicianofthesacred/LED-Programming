@@ -159,7 +159,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'complete');
   await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'current');
   await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
-  await page.getByRole('button', { name: 'Load saved project', exact: true }).click();
+  await page.getByRole('button', { name: 'Save project to card', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
@@ -224,9 +224,12 @@ test('Card replaces the setup rail destinations and exposes ordinary section nav
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
   const sections = page.getByRole('navigation', { name: 'Card sections' });
   await expect(sections).toBeVisible();
-  for (const label of ['Install or update', 'Card settings', 'Workshop setup', 'Advanced & Support']) {
+  for (const label of ['Install or update', 'Card settings', 'Advanced & Support']) {
     await expect(sections.getByRole('button', { name: label, exact: true })).toBeVisible();
   }
+  // Batch production (formerly Workshop setup) is not a section tab.
+  await expect(sections.getByRole('button', { name: 'Workshop setup', exact: true })).toHaveCount(0);
+  await expect(sections.getByRole('button', { name: 'Batch production', exact: true })).toHaveCount(0);
   for (const label of ['Flash', 'Installer', 'Production setup', 'Settings']) {
     await expect(page.locator('.rail').getByRole('button', { name: label, exact: true })).toHaveCount(0);
   }
@@ -246,7 +249,7 @@ test('Card section navigation wraps without page overflow on a 390px viewport', 
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 
-  for (const label of ['Card', 'Install or update', 'Card settings', 'Workshop setup', 'Advanced & Support', 'Preferences']) {
+  for (const label of ['Card', 'Install or update', 'Card settings', 'Advanced & Support', 'Preferences']) {
     const button = sections.getByRole('button', { name: label, exact: true });
     await expect(button).toBeVisible();
     await expect(button).toBeInViewport();
@@ -267,11 +270,89 @@ test('disconnected Card overview shows the ordered setup path and Connect as pri
   await expect(page.getByTestId('card-detected-state')).toContainText(/not detected|not connected/i);
   const steps = page.getByTestId('card-setup-steps').locator('li');
   await expect(steps).toHaveCount(5);
-  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install', 'WiFi', 'Load project', 'Test']);
+  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install firmware', 'WiFi', 'Save to card', 'Test lights']);
   await expect(page.getByRole('button', { name: 'Connect card', exact: true })).toHaveClass(/primary/);
+
+  const batch = page.getByTestId('card-batch-link');
+  await expect(batch).toContainText('Making many cards?');
+  await expect(batch.getByRole('button', { name: 'Batch production', exact: true })).toBeVisible();
 });
 
-test('connected Card overview identifies the card and makes Load changes primary', async ({ page }) => {
+test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCard when absent', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+
+  const calls = await page.evaluate(async () => {
+    // Resolve the app's own React instance through the Vite module graph so
+    // the direct render shares the running React copy.
+    const mainSource = await (await fetch('/src/main.jsx')).text();
+    const domUrl = mainSource.match(/["']([^"']*react-dom_client[^"']*)["']/)?.[1];
+    const cardSource = await (await fetch('/src/v3/lw-card.jsx')).text();
+    const reactUrl = cardSource.match(/["']([^"']*\/deps\/react\.js[^"']*)["']/)?.[1];
+    if (!domUrl || !reactUrl) throw new Error('could not resolve React module URLs');
+    const [{ CardScreen }, reactModule, domModule] = await Promise.all([
+      import('/src/v3/lw-card.jsx'),
+      import(reactUrl),
+      import(domUrl),
+    ]);
+    const React = reactModule.default ?? reactModule;
+    const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
+    if (typeof createRoot !== 'function') throw new Error('could not resolve createRoot');
+
+    const result = { overviewCenter: 0, overviewProbe: 0, recoveryCenter: 0, fallbackProbe: 0 };
+    const disconnectedLink = { state: 'disconnected', reason: 'card-unreachable', activity: 'idle' };
+    const renderOnce = async props => {
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      root.render(React.createElement(CardScreen, props));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const button = [...host.querySelectorAll('button')].find(node => node.textContent.trim() === 'Reconnect card');
+      if (!button) throw new Error('Reconnect card action not rendered');
+      button.click();
+      root.unmount();
+      host.remove();
+    };
+
+    // Overview connect action with the connection center provided.
+    await renderOnce({
+      connected: false,
+      cardHost: 'lightweaver.local',
+      cardLink: disconnectedLink,
+      onConnectCard: () => { result.overviewProbe += 1; },
+      onOpenConnectionCenter: () => { result.overviewCenter += 1; },
+      onOpenSection: () => {},
+      route: { section: 'overview', supportTool: '' },
+    });
+    // Recovery support connect action with the connection center provided.
+    await renderOnce({
+      connected: false,
+      cardHost: 'lightweaver.local',
+      cardLink: disconnectedLink,
+      onConnectCard: () => {},
+      onOpenConnectionCenter: () => { result.recoveryCenter += 1; },
+      onOpenSection: () => {},
+      route: { section: 'support', supportTool: 'recovery' },
+    });
+    // Prop absent (current app.jsx wiring): must fall back to onConnectCard.
+    await renderOnce({
+      connected: false,
+      cardHost: 'lightweaver.local',
+      cardLink: disconnectedLink,
+      onConnectCard: () => { result.fallbackProbe += 1; },
+      onOpenSection: () => {},
+      route: { section: 'overview', supportTool: '' },
+    });
+    return result;
+  });
+
+  expect(calls.overviewCenter).toBe(1);
+  expect(calls.overviewProbe).toBe(0);
+  expect(calls.recoveryCenter).toBe(1);
+  expect(calls.fallbackProbe).toBe(1);
+});
+
+test('connected Card overview identifies the card and makes Save to card primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
   await page.evaluate(async () => {
@@ -288,7 +369,38 @@ test('connected Card overview identifies the card and makes Load changes primary
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
   await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
   await expect(page.getByTestId('card-detected-state')).not.toContainText(/has not changed|nothing changed/i);
-  await expect(page.getByRole('button', { name: 'Load changes', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
+});
+
+test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const link = getSharedCardLink();
+    link.dispatch({
+      type: 'card-verified',
+      via: 'bridge',
+      host: link.getState().host || 'lightweaver.local',
+      card: { id: 'lw-gallery-card', name: 'Gallery card' },
+    });
+  });
+  await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
+
+  await expect(page.getByTestId('card-setup-steps')).not.toContainText('Batch production');
+  const batch = page.getByTestId('card-batch-link').getByRole('button', { name: 'Batch production', exact: true });
+  await expect(batch).toHaveClass(/link-btn/);
+  await expect(batch).not.toHaveClass(/primary/);
+
+  await batch.click();
+  await expect(page).toHaveURL(/#screen=card&section=workshop$/);
+  await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
+  await expect(page.getByText('Manufacturing mode', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to Card', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
 });
 
 for (const cardState of [
@@ -363,15 +475,21 @@ for (const legacy of [
   { hash: '#screen=flash&mode=install', section: 'Install or update', heading: 'Install Lightweaver' },
   { hash: '#screen=flash', section: 'Advanced & Support', heading: 'Manual firmware tools' },
   { hash: '#screen=installer', section: 'Advanced & Support', heading: 'Worker install' },
-  { hash: '#screen=production&job=moon-batch-7', section: 'Workshop setup', heading: 'Workshop setup' },
+  // Batch production is not a section tab, so no tab is highlighted for it.
+  { hash: '#screen=production&job=moon-batch-7', section: null, heading: 'Batch production' },
   { hash: '#screen=settings', section: 'Preferences', heading: 'Preferences' },
 ]) {
-  test(`legacy ${legacy.hash} stays intact and opens ${legacy.section}`, async ({ page }) => {
+  test(`legacy ${legacy.hash} stays intact and opens ${legacy.section || legacy.heading}`, async ({ page }) => {
     await page.goto(`/${legacy.hash}`, { waitUntil: 'domcontentloaded' });
 
     await expect(page).toHaveURL(new RegExp(`${legacy.hash.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
     await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Card');
-    await expect(page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: legacy.section, exact: true })).toHaveAttribute('aria-current', 'page');
+    const sections = page.getByRole('navigation', { name: 'Card sections' });
+    if (legacy.section) {
+      await expect(sections.getByRole('button', { name: legacy.section, exact: true })).toHaveAttribute('aria-current', 'page');
+    } else {
+      await expect(sections.locator('[aria-current="page"]')).toHaveCount(0);
+    }
     await expect(page.getByRole('heading', { name: legacy.heading, exact: true }).first()).toBeVisible();
   });
 }
@@ -430,7 +548,10 @@ test('embedded workshop uses the Card heading as the only h1', async ({ page }) 
   await page.goto('/#screen=card&section=workshop', { waitUntil: 'domcontentloaded' });
 
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
-  await expect(page.getByRole('heading', { name: 'Workshop setup', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
+  await expect(page.getByText('Manufacturing mode', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back to Card', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Card sections' }).locator('[aria-current="page"]')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible();
   await expect(page.locator('main')).toHaveCount(1);
   await expect(page.locator('.prod-shell')).toHaveJSProperty('tagName', 'SECTION');
@@ -449,13 +570,25 @@ test('embedded unsupported workshop does not add a nested main landmark', async 
 test('Advanced & Support exposes its tools without a collapsed disclosure', async ({ page }) => {
   await page.goto('/#screen=card&section=support', { waitUntil: 'domcontentloaded' });
 
-  for (const label of ['Technician firmware & logs', 'GPIO & install guide', 'Designer JSON', 'Recovery']) {
+  for (const label of ['Technician firmware & logs', 'GPIO & install guide', 'Designer JSON', 'Recovery', 'Batch production']) {
     await expect(page.getByRole('button', { name: label, exact: true })).toBeVisible();
   }
   await expect(page.locator('details')).toHaveCount(0);
   await page.getByRole('button', { name: 'Technician firmware & logs' }).click();
   await expect(page.getByRole('heading', { name: 'Manual firmware tools' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Flash firmware' })).toBeVisible();
+});
+
+test('Advanced & Support Batch production tile navigates to the batch surface', async ({ page }) => {
+  await page.goto('/#screen=card&section=support', { waitUntil: 'domcontentloaded' });
+
+  const tile = page.locator('.card-support-grid').getByRole('button', { name: 'Batch production', exact: true });
+  await expect(tile).toBeVisible();
+  // It navigates rather than toggling a local support tool.
+  expect(await tile.getAttribute('aria-pressed')).toBeNull();
+  await tile.click();
+  await expect(page).toHaveURL(/#screen=card&section=workshop$/);
+  await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
 });
 
 test('an active firmware install keeps rail navigation locked to install', async ({ page }) => {
@@ -487,7 +620,10 @@ test('an active firmware install rejects direct hash mutation without changing v
 
 test('an active firmware install rejects browser Back without changing visible content', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Install or update' }).click();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  // Section clicks replace history, so push a real Back entry by mutating the
+  // hash directly — the same way an external link or bookmark would.
+  await page.evaluate(() => { window.location.hash = 'screen=card&section=install'; });
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } })));

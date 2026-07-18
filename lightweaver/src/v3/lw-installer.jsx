@@ -129,7 +129,7 @@ import { useProject } from '../state/ProjectContext.jsx';
               </div>
               <div className="inst-actions">
                 <button className="btn primary" onClick={() => goTo("flash")}>{I.bolt}Flash chip</button>
-                <button className="btn" onClick={() => goTo("settings")}>Load project</button>
+                <button className="btn" onClick={() => goTo("settings")}>Save project to card</button>
               </div>
             </header>
 

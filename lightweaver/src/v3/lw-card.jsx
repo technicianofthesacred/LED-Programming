@@ -9,16 +9,18 @@ import {
   inspectCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
 
+// Section bar labels. `workshop` is deliberately absent: Batch production is a
+// manufacturing surface reached from the overview link, the support tile, or a
+// deep link (#screen=production / #screen=card&section=workshop) — never a tab.
 const SECTION_LABELS = Object.freeze({
   overview: 'Card',
   install: 'Install or update',
   settings: 'Card settings',
-  workshop: 'Workshop setup',
   support: 'Advanced & Support',
   preferences: 'Preferences',
 });
 
-function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSection }) {
+function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection }) {
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   useEffect(() => {
     const syncCommissioning = () => setCommissioningFlow(inspectCardCommissioning().flow);
@@ -42,7 +44,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
   const state = cardLink?.state || (ready ? 'connected-direct' : 'disconnected');
   const reason = cardLink?.reason || '';
   const activity = cardLink?.activity || 'idle';
-  const setupLabels = ['Connect', 'Install', 'WiFi', 'Load project', 'Test'];
+  const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Save to card', 'Test lights'];
   let currentSetupIndex = ready ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
   else if (commissioningFlow?.stage === 'set-up-card') {
@@ -56,7 +58,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
     if (['setup-required', 'setup-joined'].includes(commissioningFlow.networkState)) {
       commissioningAction = { label: 'Continue WiFi setup', section: 'install' };
     } else if (commissioningFlow.cardAcknowledgedAt) {
-      commissioningAction = { label: 'Load saved project', section: 'install' };
+      commissioningAction = { label: 'Save project to card', section: 'install' };
     } else {
       commissioningAction = { label: 'Reconnect installed card', section: 'install' };
     }
@@ -99,7 +101,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
     presentation = {
       tone: 'connected',
       message: `${identity || 'A Lightweaver card'} is connected and available to inspect.`,
-      primary: { label: 'Load changes', section: 'settings' },
+      primary: { label: 'Save to card', section: 'settings' },
     };
   } else if (reason && reason !== 'never-connected') {
     const updateNeeded = reason === 'firmware-too-old' || reason === 'identity-missing';
@@ -122,12 +124,15 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
     };
   }
 
+  // Connect actions must be visible: prefer the connection center when the
+  // shell provides it, and fall back to the background probe otherwise.
+  const openConnection = () => (onOpenConnectionCenter ? onOpenConnectionCenter() : onConnectCard?.());
   const renderAction = (action, primary = false) => action && (
     <button
       type="button"
       className={`btn${primary ? ' primary' : ''}`}
       disabled={action.disabled}
-      onClick={() => action.action === 'connect' ? onConnectCard?.() : onOpenSection(action.section)}
+      onClick={() => action.action === 'connect' ? openConnection() : onOpenSection(action.section)}
     >
       {action.label}
     </button>
@@ -165,7 +170,6 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
           <>
             {renderAction(presentation.primary, true)}
             <button type="button" className="btn" onClick={() => onOpenSection('install')}>Check for update</button>
-            <button type="button" className="btn" onClick={() => onOpenSection('workshop')}>Verify in workshop</button>
           </>
         ) : (
           <>
@@ -174,21 +178,32 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenSect
           </>
         )}
       </div>
+
+      <p className="card-overview-batch" data-testid="card-batch-link">
+        <span style={{ color: 'var(--text-faint)' }}>Making many cards? </span>
+        <button type="button" className="link-btn" onClick={() => onOpenSection('workshop')}>Batch production</button>
+      </p>
     </div>
   );
 }
 
-function RecoverySupport({ onConnectCard }) {
+function RecoverySupport({ onConnectCard, onOpenConnectionCenter }) {
   return (
     <section className="card-support-panel">
       <h2>Safe recovery</h2>
       <p>Reconnect and inspect the card before choosing an install or write action. Opening recovery here does not erase firmware, WiFi, or the saved project.</p>
-      <button type="button" className="btn primary" onClick={() => onConnectCard?.()}>Reconnect card</button>
+      <button
+        type="button"
+        className="btn primary"
+        onClick={() => (onOpenConnectionCenter ? onOpenConnectionCenter() : onConnectCard?.())}
+      >
+        Reconnect card
+      </button>
     </section>
   );
 }
 
-function CardSupport({ initialTool, cardProps, onOpenSection }) {
+function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSection }) {
   const [tool, setTool] = useState(initialTool);
   useEffect(() => setTool(initialTool), [initialTool]);
 
@@ -212,6 +227,9 @@ function CardSupport({ initialTool, cardProps, onOpenSection }) {
         <button type="button" aria-label="Recovery" className={tool === 'recovery' ? 'selected' : ''} aria-pressed={tool === 'recovery'} onClick={() => setTool('recovery')}>
           <strong>Recovery</strong><span>Reconnect safely and choose the next evidence-based action.</span>
         </button>
+        <button type="button" aria-label="Batch production" onClick={() => onOpenSection('workshop')}>
+          <strong>Batch production</strong><span>Signed-job manufacturing flow with identity binding and pass records.</span>
+        </button>
       </div>
 
       {tool && (
@@ -219,14 +237,14 @@ function CardSupport({ initialTool, cardProps, onOpenSection }) {
           {tool === 'technician' && <TechnicianFlashScreen embedded />}
           {tool === 'guide' && <InstallerScreen embedded go={installerGo} cardLink={cardProps.cardLink} />}
           {tool === 'json' && <SettingsScreen embedded mode="advanced" {...cardProps} />}
-          {tool === 'recovery' && <RecoverySupport onConnectCard={cardProps.onConnectCard} />}
+          {tool === 'recovery' && <RecoverySupport onConnectCard={cardProps.onConnectCard} onOpenConnectionCenter={onOpenConnectionCenter} />}
         </div>
       )}
     </div>
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenSection, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
 
   useEffect(() => {
@@ -247,10 +265,15 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'settings') content = <SettingsScreen embedded mode="card" {...cardProps} />;
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
-  else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenSection={onOpenSection} />;
+  else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
 
-  const heading = route.section === 'overview' ? 'Your Lightweaver card' : SECTION_LABELS[route.section];
+  // Batch production (route.section === 'workshop') renders outside the tab
+  // set: its own heading and kicker, no section tab highlighted.
+  const workshop = route.section === 'workshop';
+  const heading = route.section === 'overview'
+    ? 'Your Lightweaver card'
+    : workshop ? 'Batch production' : SECTION_LABELS[route.section];
   return (
     <div className="screen card-workspace-screen">
       <div className="card-workspace">
@@ -268,8 +291,11 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
         </nav>
         <main className="card-workspace-body">
           <header className="card-workspace-header">
-            <span className="card-workspace-kicker">Lightweaver card</span>
+            <span className="card-workspace-kicker">{workshop ? 'Manufacturing mode' : 'Lightweaver card'}</span>
             <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>
+            {workshop && (
+              <button type="button" className="btn" onClick={() => onOpenSection('overview')}>Back to Card</button>
+            )}
           </header>
           {content}
         </main>
