@@ -454,17 +454,20 @@ test('mobile connection sheet fits without horizontal overflow', async ({ page }
   expect((await dialog.getByRole('button', { name: 'Save', exact: true }).boundingBox())?.height).toBeGreaterThanOrEqual(44);
 });
 
-test('layout opens with the default two-circle hardware layout', async ({ page }) => {
+test('layout opens with the primitive-first starter', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByTestId('default-circle-layout-panel')).toBeVisible();
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
-  await expect(page.locator('path[data-strip-path]')).toHaveCount(2);
-  await expect(page.locator('.la-strip-row', { hasText: 'Outer circle' })).toContainText('27');
-  await expect(page.locator('.la-strip-row', { hasText: 'Inner circle' })).toContainText('17');
-  await expect(page.getByText('Default two-circle hardware')).toBeVisible();
+  const picker = page.getByTestId('layout-primitive-picker');
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Line', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(picker.getByRole('button', { name: 'Circle', exact: true })).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Square', exact: true })).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
+  await expect(page.locator('.la-strip-row')).toHaveCount(0);
+  await expect(page.locator('path[data-strip-path]')).toHaveCount(0);
+  await expect(page.getByText('Default two-circle hardware')).toHaveCount(0);
 });
 
 test('settings screen prioritizes card setup and keeps raw config advanced', async ({ page }) => {

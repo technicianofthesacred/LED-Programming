@@ -46,7 +46,7 @@ export function DrawModePanel({ state }) {
     selStripId, selLayerId, selectedStripIds,
     pathSel, pathSelName, stripSelectionName,
     orderedStrips, selectedStrips,
-    totalLeds, defaultCircleLayoutActive, starterLayoutActive, usbLedMaxPixels,
+    totalLeds, starterLayoutActive, usbLedMaxPixels,
     expandedStrips, setExpandedStrips,
     stripListRef,
     // size
@@ -644,7 +644,7 @@ export function DrawModePanel({ state }) {
         })()}
 
         {/* ── Strips list ── */}
-        {strips.length > 0 && (
+        {strips.length > 0 && !starterLayoutActive && (
           <>
             <div className="panel-divider"/>
             <div className="panel-head">
