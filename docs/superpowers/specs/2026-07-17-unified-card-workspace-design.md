@@ -14,6 +14,21 @@
 > install handoffs reuse the one required local-card/Bridge tab. See the
 > [release-first roadmap](../../roadmap.md#phase-1-finish-the-product-already-on-main--required-now)
 > for execution order.
+>
+> **2026-07-18 evidence addendum:** the audited scope of the amendment is
+> recorded in
+> [the release-coherence findings](../plans/2026-07-18-release-coherence-findings.md).
+> Concretely: the "workshop" section leaves the visible section bar (its route
+> stays valid); the section-bar labels become Card, Install or update, Card
+> settings, Advanced & Support, Preferences; Batch production is reachable via
+> `#screen=production`, `#screen=card&section=workshop`, an Advanced & Support
+> tile, and a low-emphasis overview link; Card settings replaces its layout and
+> output-routing editors with a read-only summary and **Edit in Layout**; the
+> canonical export extension is `.lw.json`; "Save to card" is the single verb
+> for the acknowledged config write; the overview connect action opens the
+> guided Connection Center. The Web Serial secure-installer escape remains a
+> browser-security requirement, with its window target named and its reason
+> visible.
 
 ## Problem
 

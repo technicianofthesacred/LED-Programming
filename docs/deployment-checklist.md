@@ -72,7 +72,7 @@ The worker procedure is [worker-flash-runbook.md](worker-flash-runbook.md). Comp
 - [ ] **Real physical acceptance:** on an actual card and strip, record install/update, exact identity read-back, every blue/red/dark boundary, a temporary correction confirmed, a correction allowed to roll back, reboot recovery, pass export, and Next-artwork reset.
 - [ ] **Records exported:** save both CSV and JSON outside browser storage at the end of the batch.
 
-**Current release limiter (2026-07-16):** Production Setup source and automated browser coverage exist, but the committed public factory artifact predates the latest firmware source. Protected CI must rebuild/sign the merged source, then the site must deploy and the real-card checklist above must be completed. Until those steps are recorded, do not claim the new production workflow is live or physically accepted.
+**Current release limiter (updated 2026-07-18):** The committed public factory artifact is no longer stale — protected CI rebuilt and signed the merged firmware source in `582a476` and `factory-bin-freshness` passes. The remaining limiter is **physical acceptance**: the real-card checklist above (worker rehearsal, identity read-back, boundary checks, rollback, pass records) has not been recorded, and any new firmware source change (for example the 2026-07-18 pattern-preview repair) re-arms the freshness gate until protected CI signs it again. Do not claim the production workflow is physically accepted until those records exist.
 
 ### Physical wiring acceptance — real card and artwork required
 

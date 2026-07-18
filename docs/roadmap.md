@@ -26,21 +26,36 @@ hardware architecture.
 
 #### Phase 1A: Close confirmed release defects
 
-1. Let the concurrent LED UX work finish and land on `main`.
-2. Restore complete firmware card-page preview coverage, including the missing
-   **Ripple** and **Lava Lamp** styles, with a source test covering every
-   built-in pattern preview.
-3. Reproduce pattern selection with Studio streaming both active and inactive.
-   A tap selects without reordering. If it fails, distinguish a card rejection
-   from the intentional streaming lock before changing the selection code.
-4. Make screen recovery preserve and expose a bounded support code and useful
-   error details after the single automatic reload. Add a saved-state fixture
-   that reproduces the reported failure before changing migration or recovery
-   behavior.
+1. Let the concurrent LED UX work finish and land on `main`. _(Done — merged
+   as `8f2c0ae`.)_
+2. Restore complete firmware card-page preview coverage. The 2026-07-18 audit
+   confirmed the customer page is missing **17 of 30** factory pattern styles
+   (ripple, lava, meteor, chase, candle, lightning, neon, matrix, heartbeat,
+   stained, confetti, warp, pulse-ring, blocks, bloom, calm, drift — the
+   advanced page has all 30). The regression test must derive the factory id
+   list from `LightweaverStorage.cpp` and fail when either embedded page lacks
+   a `.sw-<id>` style.
+3. Pattern selection: the 2026-07-18 audit could **not reproduce** a failure
+   on the customer page or in Studio — both use acknowledged controls with
+   rollback, a pending lock, an explained streaming lock, and stable grid
+   order. Retain those implementations. The confirmed defect is the
+   **advanced page** grid: purely optimistic selection with no rollback and no
+   streaming lock (a tap during a stream returns 200 with no visible change).
+   Fix the advanced page and add source coverage; do not rewrite the sound
+   paths.
+4. Make screen recovery preserve and expose a bounded support code
+   (`LW-UI-xxx`), the failed route, and a sanitized error name after the
+   single automatic reload — never project contents, hosts, or tokens. Add
+   fixtures for malformed, stale/forward-version, migrated, and valid saved
+   projects. Two additional confirmed persistence defects land here: an
+   unrecognized-version autosave is silently **overwritten within ~1.5 s**
+   (must be quarantined, never destroyed), and startup restore always marks
+   the project dirty (false "Unsaved changes" on an untouched app, and
+   "Saved in browser" never survives reload).
 
-The preview-style omission and opaque recovery screen are confirmed in source.
-The pattern-selection failure and the saved-state-specific crash remain
-**reproduce first** items; they are not permission to rewrite those systems.
+Full evidence, classifications, ownership, and the answered product
+questions: [2026-07-18 release-coherence
+findings](superpowers/plans/2026-07-18-release-coherence-findings.md).
 
 #### Phase 1B: Make the ordinary project journey coherent
 
@@ -67,7 +82,20 @@ current step and one clear next action. Apply these ownership rules:
    normal Card journey and label it **Batch production**. Preserve
    `#screen=production`, production job deep links, and the former
    `#screen=card&section=workshop` entry as compatibility routes; do not weaken
-   signed firmware, identity binding, worker checks, or pass records.
+   signed firmware, identity binding, worker checks, or pass records. Keep it
+   discoverable through the direct URL, an Advanced & Support tile, and a
+   low-emphasis Card overview link — never as a setup step.
+5. **One verb per card action.** "Save to card" is the only label for the
+   acknowledged config/project write (Layout, Patterns, Playlist, Card);
+   "Install or update" is reserved for firmware; the top bar reads Save
+   project (browser) / Export project (`.lw.json` file) / Import project.
+   "Looks" is the product noun (retire visible "mixes").
+6. **Fix the reproduced journey blockers found 2026-07-18:** the Card
+   overview/Recovery connect action must open the guided Connection Center
+   instead of silently probing; Patterns must not overflow horizontally at
+   390 px and the Playlist preview status must stay visible on phones; the
+   rail gets `aria-current`; card-page opens reuse the one named local-card
+   window.
 
 These changes simplify ownership and navigation. They do not create a new
 hardware model, command transport, installer, or storage format.
@@ -76,7 +104,10 @@ hardware model, command transport, installer, or storage format.
 
 1. Re-run the existing Card, Layout/Wire, pattern, playlist, installer,
    production, persistence, migration, and recovery tests on the integrated
-   `main`.
+   `main`. The 2026-07-18 audit found CI's launch gate runs only 3 of 26
+   Playwright suites and 5 of 38 lib unit files (one stale-red test was hiding
+   on `main`); the coherence pass widens the gate to include the suites that
+   cover its changed surfaces.
 2. Bench-test one real card and LED run through the canonical normal workflow.
 3. Separately smoke-test Batch production, including a legacy job deep link.
 4. Fix only failures that block those workflows. Do not add multi-card,
