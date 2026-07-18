@@ -1,8 +1,19 @@
 # Unified Card Workspace Design
 
-**Status:** Approved
+**Status:** Implemented; amended 2026-07-18
 **Date:** 2026-07-17
 **Surface:** Public Lightweaver Studio at `led.mandalacodes.com`
+
+> **Current amendment:** The original consolidation proved that Card should be
+> immediate and visible, but it grouped two different jobs. Normal artwork
+> setup now follows Connect → Layout → Looks → Playlist → Install/verify →
+> Save/export. **Batch production** is a separate manufacturing mode, with the
+> existing production route and safety contracts preserved. Layout/Wire is the
+> only physical-layout and output-routing editor; Card presents its summary and
+> an **Edit in Layout** link. Project persistence is one consolidated area, and
+> install handoffs reuse the one required local-card/Bridge tab. See the
+> [release-first roadmap](../../roadmap.md#phase-1-finish-the-product-already-on-main--required-now)
+> for execution order.
 
 ## Problem
 

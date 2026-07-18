@@ -1,5 +1,16 @@
 # Unified Card Workspace Implementation Plan
 
+> **2026-07-18 product-coherence addendum:** This plan is implemented, but its
+> information architecture is no longer the release target. Workshop setup
+> moves out of ordinary Card navigation into a separate **Batch production**
+> mode, while `#screen=production`, job deep links, and the former Card Workshop
+> link remain compatible. Card
+> settings no longer edits section counts or output routing; it summarizes the
+> canonical Layout/Wire result and links to **Edit in Layout**. Project
+> autosave/library/import/export are consolidated into one project area, and
+> install reuses the one necessary local-card/Bridge tab. The ordered authority
+> is [the release-first roadmap](../../roadmap.md#phase-1-finish-the-product-already-on-main--required-now).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace four overlapping setup destinations with one immediate, status-aware Card workspace and simplify playlist row controls to drag, Live, Copy, and ×.

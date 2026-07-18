@@ -9,15 +9,37 @@ run every historical plan. The ordered source of truth is the
 [release-first roadmap](docs/roadmap.md#current-execution-order-protect-the-working-product).
 
 1. Finish and integrate the concurrent LED UX work.
-2. Run the complete automated and real-card workflow on that exact `main`.
-3. Fix only release blockers, publish the protected signed firmware, and deploy.
-4. Use a second real LED project to decide which reusable module is actually
+2. Close the confirmed release defects and simplify the ordinary project
+   journey without changing the underlying hardware architecture.
+3. Run the complete automated and real-card workflow on that exact `main`.
+4. Fix only release blockers, publish the protected signed firmware, and deploy.
+5. Use a second real LED project to decide which reusable module is actually
    needed next.
 
 The three 2026-07-17 Hardware plans are superseded. The 2026-07-18 reusable-card
 plan is a reference library, not one large job to execute.
 
 ## Soon
+
+### Release coherence pass (before bench signoff and deployment)
+
+Run these against the fully integrated `main`; they are Phase 1 release work,
+not part of the conditional reusable-hardware plan.
+
+- [ ] **Repair and test every firmware card-page pattern preview** — add the missing styles, including Ripple and Lava Lamp, and assert that every built-in card pattern has a non-fallback preview _(firmware agent · quick)_
+  Done when Ripple and Lava Lamp no longer render gray and a source/HTML test fails if a future built-in pattern lacks its preview class. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Reproduce pattern selection before changing it** — test a tile tap with no stream, during Studio streaming, after canceling the stream, and with a rejected card acknowledgement _(Studio + firmware agent · moderate)_
+  Selection must never reorder the grid. Done when intentional streaming disablement is visibly explained and a genuine rejection produces a specific recoverable error; do not rewrite selection if the report cannot be reproduced. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Make recovery diagnostic and saved-state safe** — retain a bounded support code and actionable error detail after the one automatic reload, then add the offending saved-state/browser fixture before repairing migration or render logic _(Studio agent · moderate)_
+  Done when the generic recovery screen is no longer the only evidence, clean projects still open, and the reported state either reproduces in a test or is explicitly closed as unreproduced. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Restore one owner for layout and output routing** — replace Card's disabled section-count and duplicate output controls with a read-only summary and **Edit in Layout** deep link _(Studio agent · moderate)_
+  Done when Draw/Size/Wire remains the sole editor for generated, imported, and customized layouts, while Card clearly summarizes what will be installed. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Consolidate project Save/Load** — put autosave/recovery, browser library, import, and export in one project area with one canonical export extension and backward-compatible imports _(Studio agent · moderate)_
+  Done when the top bar and Preferences no longer present competing Save/Load meanings, autosave is explained, and legacy `.lw.json`, `.lwproj.json`, and JSON files still load. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Converge the handoff to one auxiliary card tab** — reuse the necessary local card/Bridge context for install rather than opening another secure-installer tab _(Studio + firmware agent · moderate)_
+  Done when the normal connected-card journey needs Studio plus at most one auxiliary local-card tab and all secure Bridge/install fallbacks remain tested. → Order: [docs/roadmap.md](docs/roadmap.md)
+- [ ] **Move Workshop into separate Batch production mode** — remove it from normal Card navigation and the artwork setup steps while preserving the production implementation, signed-job checks, `#screen=production`, `#screen=card&section=workshop`, and job deep links _(Studio agent · moderate)_
+  Done when the normal journey reads Connect → Layout → Looks → Playlist → Install/verify → Save/export, and manufacturing workers can still enter Batch production directly. → Order: [docs/roadmap.md](docs/roadmap.md)
 
 ### Layout wiring hardening (implemented 2026-07-13; physical signoff remains)
 

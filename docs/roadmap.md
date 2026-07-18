@@ -24,19 +24,71 @@ run end to end.
 **Purpose:** reach one reliable, usable Lightweaver release before adding new
 hardware architecture.
 
+#### Phase 1A: Close confirmed release defects
+
 1. Let the concurrent LED UX work finish and land on `main`.
-2. Re-run the existing Card, Wire, installer, production, and project tests on
-   that exact `main`.
-3. Bench-test one real card and LED run through the current workflow: Layout →
-   Wire → Card → Workshop.
-4. Fix only failures that block that real workflow. Do not add multi-card,
-   templates, power dashboards, history, or a new navigation surface during
+2. Restore complete firmware card-page preview coverage, including the missing
+   **Ripple** and **Lava Lamp** styles, with a source test covering every
+   built-in pattern preview.
+3. Reproduce pattern selection with Studio streaming both active and inactive.
+   A tap selects without reordering. If it fails, distinguish a card rejection
+   from the intentional streaming lock before changing the selection code.
+4. Make screen recovery preserve and expose a bounded support code and useful
+   error details after the single automatic reload. Add a saved-state fixture
+   that reproduces the reported failure before changing migration or recovery
+   behavior.
+
+The preview-style omission and opaque recovery screen are confirmed in source.
+The pattern-selection failure and the saved-state-specific crash remain
+**reproduce first** items; they are not permission to rewrite those systems.
+
+#### Phase 1B: Make the ordinary project journey coherent
+
+Use this as the canonical normal workflow throughout Studio:
+
+**Connect card → Design layout (Draw / Size / Wire) → Create looks → Arrange
+playlist → Install or update when required and physically verify → Save / export**
+
+Experienced users may jump between screens, but the interface must show the
+current step and one clear next action. Apply these ownership rules:
+
+1. **Layout owns physical structure.** Card settings shows a read-only layout
+   and output summary with **Edit in Layout**. Remove the disabled section-count
+   and duplicate output-routing editors from Card settings; generated circles,
+   imported artwork, and customized layouts all use the same source of truth.
+2. **One project-persistence surface.** Consolidate browser autosave/recovery,
+   browser library, file import, and file export into one clearly named project
+   area. Keep one canonical project extension while continuing to import legacy
+   `.lw.json`, `.lwproj.json`, and plain JSON files.
+3. **One auxiliary local-card tab.** Keep the local card/Bridge context required
+   by the HTTPS-to-local command path, but reuse it for install handoffs instead
+   of opening a second installer tab.
+4. **Batch production is a separate mode.** Move Workshop setup out of the
+   normal Card journey and label it **Batch production**. Preserve
+   `#screen=production`, production job deep links, and the former
+   `#screen=card&section=workshop` entry as compatibility routes; do not weaken
+   signed firmware, identity binding, worker checks, or pass records.
+
+These changes simplify ownership and navigation. They do not create a new
+hardware model, command transport, installer, or storage format.
+
+#### Phase 1C: Verify and release
+
+1. Re-run the existing Card, Layout/Wire, pattern, playlist, installer,
+   production, persistence, migration, and recovery tests on the integrated
+   `main`.
+2. Bench-test one real card and LED run through the canonical normal workflow.
+3. Separately smoke-test Batch production, including a legacy job deep link.
+4. Fix only failures that block those workflows. Do not add multi-card,
+   templates, power dashboards, history, or another navigation surface during
    this phase.
 5. Build and publish the protected signed firmware release, run
    `npm run launch:check`, then deploy the verified Studio.
 
-**Done when:** one project can be drawn, wired, tested, loaded onto one card,
-restarted, and recovered without losing work or showing false success.
+**Done when:** one project can be drawn, wired, given looks and a playlist,
+installed, physically verified, saved/exported, restarted, and recovered
+without losing work or showing false success; Batch production remains
+available without appearing as a required artwork-configuration step.
 
 **Rollback rule:** every change in this phase must be independently revertible.
 If the full test gate or bench workflow regresses, do not merge it.
@@ -92,12 +144,17 @@ installation cannot be completed safely without them.
 - `2026-07-17-hardware-installation-toolkit.md`: superseded; do not execute.
 - `2026-07-18-reusable-card-infrastructure.md`: detailed reference for Phase 3;
   activate one task only after its start condition is true.
-- `2026-07-17-unified-card-workspace.md` and the 2026-07-17 closeout plans:
-  already represented in current `main`; preserve their tested behavior.
+- `2026-07-17-unified-card-workspace.md`: implemented, then amended by the
+  Phase 1B ownership rules above. Preserve its installer safety and legacy
+  aliases, but do not preserve Workshop as a normal Card section or Card as a
+  second layout editor.
+- The remaining 2026-07-17 closeout plans are already represented in current
+  `main`; preserve their tested behavior.
 
-**Current next action:** finish the other LED UX work, integrate it into `main`,
-then run Phase 1 verification and the real-card bench workflow. No reusable
-hardware module is currently required to ship the working product.
+**Current next action:** integrate the other LED UX work into `main`, then run
+Phase 1A and 1B as one narrow release-coherence pass before the Phase 1C test,
+bench, signing, and deployment gate. No reusable hardware module is currently
+required to ship the working product.
 
 Keep `codex/unified-hardware-workspace` as an incubator and engineering
 reference. Do not merge the branch wholesale; extract only a triggered module
