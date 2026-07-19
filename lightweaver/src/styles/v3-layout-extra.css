@@ -501,6 +501,93 @@
 }
 .la-strip-physical-field .la-size-readout { flex: 0 1 auto; gap: 3px; }
 .la-strip-physical-field .la-size-readout input[type=number] { width: 44px; height: 28px; }
+
+/* Draw strip controls form one instrument panel, not a stack of loose black
+   controls. The GPIO group owns the surface; its rows are simply sections. */
+.la-gpio-group {
+  overflow: visible;
+  background: color-mix(in oklab, var(--bg-panel) 84%, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+}
+.la-gpio-group + .la-gpio-group { margin-top: 8px; }
+.la-gpio-group-head {
+  padding: 8px 10px 6px;
+  background: color-mix(in oklab, var(--bg-panel) 92%, var(--bg-app));
+  border-radius: calc(var(--r-md) - 1px) calc(var(--r-md) - 1px) 0 0;
+}
+.la-gpio-group .la-strip-row {
+  min-height: 36px;
+  background: transparent;
+  border-radius: 0;
+}
+.la-gpio-group .la-strip-row:hover { background: var(--bg-sel); }
+.la-gpio-group .la-strip-row.sel { background: var(--bg-sel); }
+.la-strip-detail {
+  gap: 0;
+  margin: 0;
+  padding: 6px 8px 8px;
+  background: transparent;
+  border-top: 1px solid var(--border-hair);
+  border-radius: 0;
+}
+.la-strip-detail .actions {
+  min-height: 34px;
+  padding: 3px 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-bottom: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+.la-strip-detail .actions .btn {
+  background: color-mix(in oklab, var(--bg-panel) 78%, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+.la-strip-physical-row {
+  gap: 8px;
+  margin: 0;
+  padding: 5px 6px;
+  background: color-mix(in oklab, var(--bg-elev) 88%, var(--bg-panel));
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-hair);
+  border-bottom: 0;
+  border-radius: 0;
+}
+.la-strip-output-row {
+  gap: 5px;
+  margin: 0;
+  padding: 5px 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-hair);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+}
+.la-strip-output-row .la-strip-density { flex: 1; flex-wrap: nowrap; gap: 3px; }
+.la-strip-output-row .la-strip-density .btn { flex: 1; min-width: 0; padding: 0 3px; }
+.la-led-count-field,
+.la-strip-detail .la-size-readout input[type=number] {
+  background: var(--bg-panel);
+  border-color: var(--border);
+}
+.la-strip-detail .la-led-count-field input[type=number] { background: var(--bg-panel); }
+.la-gpio-button {
+  gap: 4px;
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
+.la-gpio-popover {
+  background: var(--bg-panel);
+  border-color: var(--border);
+  box-shadow: 0 16px 32px -16px oklch(0.08 0.004 75 / .9);
+}
+.la-gpio-popover .btn { background: var(--bg-elev); border-color: var(--border-soft); }
+.la-gpio-error {
+  margin-top: 5px; padding: 5px 7px;
+  color: var(--warn); background: color-mix(in oklab, var(--warn) 10%, var(--bg-elev));
+  border: 1px solid color-mix(in oklab, var(--warn) 32%, var(--border));
+  border-radius: var(--r-sm); font-size: 10px; line-height: 1.35;
+}
 .la-primitive-physical {
   display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft);

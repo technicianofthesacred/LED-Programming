@@ -365,6 +365,25 @@ test('GPIO picker groups strips by output and assigns the selected strip to that
   ]));
 });
 
+test('GPIO picker explains when verified wiring cannot be changed', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    saved.layout.wiring.locked = true;
+    saved.layout.wiring.verified = true;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(saved));
+  });
+  await page.reload();
+
+  const strip = page.locator('[data-strip-id]').first();
+  if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'GPIO 16' }).click();
+  await page.getByRole('button', { name: 'GPIO 17' }).click();
+  await expect(page.getByRole('alert')).toContainText('Unlock wiring in Wire before changing GPIO.');
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();

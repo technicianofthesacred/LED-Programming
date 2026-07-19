@@ -130,6 +130,7 @@ export function DrawModePanel({ state }) {
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
   const [gpioPickerFor, setGpioPickerFor] = useState(null);
+  const [gpioError, setGpioError] = useState('');
 
   const setLinkedAddCount = rawValue => {
     const count = clampLedCount(rawValue);
@@ -256,7 +257,14 @@ export function DrawModePanel({ state }) {
       source.runIds = source.runIds.filter(runId => runId !== run.id);
       draft.outputs.push({ id: nextOutputId(draft.outputs), name: `Output ${draft.outputs.length + 1}`, pin: selectedPin, runIds: [run.id] });
     }, { changeKind: 'gpio' });
-    if (result.ok) setGpioPickerFor(null);
+    if (result.ok) {
+      setGpioError('');
+      setGpioPickerFor(null);
+    } else {
+      setGpioError(wiring.locked
+        ? 'Unlock wiring in Wire before changing GPIO.'
+        : result.errors?.[0]?.message || 'That GPIO assignment could not be changed.');
+    }
   };
 
   const moveStripsInGpioOrder = (draggedStripIds, targetStripId) => {
@@ -1087,8 +1095,11 @@ export function DrawModePanel({ state }) {
                             <button type="button" className="btn la-gpio-button"
                                     aria-label={`GPIO ${outputForStrip(s.id)?.pin ?? 16}`}
                                     aria-expanded={gpioPickerFor === s.id}
-                                    onClick={() => setGpioPickerFor(current => current === s.id ? null : s.id)}>
-                              GPIO {outputForStrip(s.id)?.pin ?? 16}
+                                    onClick={() => {
+                                      setGpioError('');
+                                      setGpioPickerFor(current => current === s.id ? null : s.id);
+                                    }}>
+                              <span>GPIO {outputForStrip(s.id)?.pin ?? 16}</span><ChevronDownIcon/>
                             </button>
                             {gpioPickerFor === s.id && (
                               <div className="la-gpio-popover" role="dialog" aria-label="Choose GPIO output">
@@ -1118,6 +1129,7 @@ export function DrawModePanel({ state }) {
                             ))}
                           </div>
                         </div>
+                        {gpioError && gpioPickerFor === s.id && <div className="la-gpio-error" role="alert">{gpioError}</div>}
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
                             USB direct cap {usbLedMaxPixels} LEDs.
