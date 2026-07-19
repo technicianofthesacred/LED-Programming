@@ -31,10 +31,6 @@ import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js'
 import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
 import '../../../styles/lw-draw.css';
 
-function startedFromDragHandle(e) {
-  return !!e.target?.closest?.('[data-drag-handle="true"]');
-}
-
 // Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
 function formatMetersValue(meters) {
   return meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
@@ -130,6 +126,7 @@ export function DrawModePanel({ state }) {
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
   const [gpioError, setGpioError] = useState('');
+  const [droppedStripIds, setDroppedStripIds] = useState([]);
 
   const setLinkedAddCount = rawValue => {
     const count = clampLedCount(rawValue);
@@ -999,16 +996,16 @@ export function DrawModePanel({ state }) {
                 return (
                   <div key={s.id} data-strip-id={s.id}>
                   <div
-                       className={`la-strip-row${isSel ? ' sel' : ''}`}
+                       className={`la-strip-row${isSel ? ' sel' : ''}${droppedStripIds.includes(s.id) ? ' is-dropped' : ''}${stripGroupDragOver === `strip:${s.id}` ? ' is-drop-target' : ''}`}
                        draggable
                        onDragStart={e => {
-                         if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
                          const ids = selectedStripIds.includes(s.id) ? selectedStripIds : [s.id];
                          e.dataTransfer.effectAllowed = 'move';
                          e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
                          e.dataTransfer.setData('text/plain', ids.join(','));
-                         // Do NOT setState here — re-rendering the row during dragstart
-                         // cancels the native HTML5 drag. The ids ride in dataTransfer.
+                         // Preserve the native drag session, so this uses a direct class
+                         // rather than React state for the lift feedback.
+                         e.currentTarget.classList.add('is-dragging');
                        }}
                        onDragOver={e => {
                          if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
@@ -1022,9 +1019,14 @@ export function DrawModePanel({ state }) {
                          e.preventDefault();
                          e.stopPropagation();
                          moveStripsInGpioOrder(draggedStripIds, s.id);
+                         setDroppedStripIds(draggedStripIds);
+                         window.setTimeout(() => setDroppedStripIds([]), 220);
                          setStripGroupDragOver(null);
                        }}
-                       onDragEnd={() => setStripGroupDragOver(null)}
+                       onDragEnd={e => {
+                         e.currentTarget.classList.remove('is-dragging');
+                         setStripGroupDragOver(null);
+                       }}
                        style={{ opacity: hidden[s.id] ? 0.4 : 1,
                                 outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
                                 outlineOffset: -1 }}
@@ -1033,7 +1035,9 @@ export function DrawModePanel({ state }) {
                          selectStrip(s.id);
                          setExpandedStrips(ex => ({ ...ex, [s.id]: !ex[s.id] }));
                        }}>
-                      <span data-drag-handle="true" className="la-wire-n" title="Drag to reorder" style={{ flexShrink: 0, cursor: 'grab', color: isBatchSel ? 'var(--accent)' : undefined }}>{String(i + 1).padStart(2, '0')}</span>
+                      <span className="la-wire-n" title="Click and drag to change wiring order" style={{ flexShrink: 0, cursor: 'grab', color: isBatchSel ? 'var(--accent)' : undefined }}>
+                        {String(i + 1).padStart(2, '0')}<DragHandleIcon/>
+                      </span>
                       <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : undefined }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}

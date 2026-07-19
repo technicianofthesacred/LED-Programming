@@ -403,6 +403,23 @@ test('GPIO picker reconciles a run after the strip LED count is reduced', async 
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+test('Draw strip rows drag into first-to-last wiring order', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+
+  const rows = page.locator('.la-strip-row');
+  await expect(rows).toHaveCount(2);
+  await rows.nth(1).dragTo(rows.nth(0));
+
+  await expect(rows.first()).toContainText('Line 2');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return saved?.layout?.wiring?.outputs?.[0]?.runIds;
+  })).toEqual(['run-strip-2', 'run-strip-1']);
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
