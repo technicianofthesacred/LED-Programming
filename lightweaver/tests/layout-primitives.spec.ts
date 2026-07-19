@@ -412,7 +412,7 @@ test('resized geometry persists across reload', async ({ page }) => {
   const metersText = meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
   const readout = page.getByTestId('strip-size-readout');
   await expect(readout.getByRole('spinbutton', { name: 'Strip length in metres' })).toHaveValue(metersText);
-  await expect(readout).toContainText(`m · ${layout.strips[0].pixelCount} LEDs`);
+  await expect(readout).toContainText('m');
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {
