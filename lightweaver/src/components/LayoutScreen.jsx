@@ -20,6 +20,8 @@ export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [firstLedPicker, setFirstLedPicker] = useState(null);
+  const [firstLedError, setFirstLedError] = useState(null);
+  const [firstLedMarkerRunId, setFirstLedMarkerRunId] = useState(null);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -67,23 +69,55 @@ export function LayoutScreen({ connected, cardHost }) {
 
   const beginFirstLedPicker = stripId => {
     selectStrip(stripId);
+    setFirstLedError(null);
     setFirstLedPicker({ stripId, ledIndex: null });
   };
-  const cancelFirstLedPicker = () => setFirstLedPicker(null);
+  const cancelFirstLedPicker = () => {
+    setFirstLedError(null);
+    setFirstLedPicker(null);
+  };
   const pickFirstLed = (stripId, ledIndex) => {
     if (firstLedPicker?.stripId !== stripId) return;
-    updateWiring(draft => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.pixels?.[ledIndex]) {
+      setFirstLedError({ stripId, message: 'That light is outside this strip.' });
+      return;
+    }
+    let pickedRunId = null;
+    const result = updateWiring(draft => {
       if (draft.locked) {
         draft.locked = false;
         draft.verified = false;
         draft.runs.forEach(run => { run.verified = false; });
       }
-      const run = draft.runs.find(item => item.type === 'strip' && item.source?.stripId === stripId);
-      if (!run) throw new Error('This strip is not connected to a GPIO output yet.');
-      run.seamLed = Math.max(run.source.from, Math.min(run.source.to, ledIndex));
+      const runs = draft.runs.filter(item => item.type === 'strip' && item.source?.stripId === stripId);
+      if (!runs.length) throw new Error('This strip is not connected to a GPIO output yet.');
+
+      // A normal Draw strip owns one complete run. LED-count and size edits can
+      // leave that run's old range behind, so repair it before validation.
+      // Advanced split strips remain split; the clicked LED identifies the run.
+      let run;
+      if (runs.length === 1) {
+        [run] = runs;
+        run.source.from = 0;
+        run.source.to = strip.pixels.length - 1;
+      } else {
+        run = runs.find(item => ledIndex >= item.source.from && ledIndex <= item.source.to);
+      }
+      if (!run) throw new Error('That light is not covered by this strip’s wiring runs.');
+      pickedRunId = run.id;
+      run.seamLed = ledIndex;
     }, { changeKind: 'seam' });
+    if (!result.ok) {
+      setFirstLedError({ stripId, message: result.errors?.[0]?.message || 'The first LED could not be changed.' });
+      return;
+    }
+    setFirstLedMarkerRunId(pickedRunId);
+    setFirstLedError(null);
     setFirstLedPicker(null);
   };
+
+  const markerRun = wiring.runs.find(run => run.id === firstLedMarkerRunId && run.type === 'strip' && run.source.stripId === selStripId);
 
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
@@ -99,7 +133,7 @@ export function LayoutScreen({ connected, cardHost }) {
       wiring, compiledWiring,
       firstLedPicker,
       onFirstLedPick: pickFirstLed,
-      selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
+      selectedWiringRunId: markerRun?.id || wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
       onSeamMove: (runId, event) => {
         if (!svgRef.current || wiring.locked) return;
         const point = svgPt(svgRef.current, event.clientX, event.clientY);
@@ -307,6 +341,7 @@ export function LayoutScreen({ connected, cardHost }) {
           {mode === 'draw' && (
             <DrawModePanel state={state}
                            firstLedPicker={firstLedPicker}
+                           firstLedError={firstLedError}
                            onBeginFirstLedPicker={beginFirstLedPicker}
                            onCancelFirstLedPicker={cancelFirstLedPicker}/>
           )}

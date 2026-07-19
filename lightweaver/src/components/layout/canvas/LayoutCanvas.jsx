@@ -46,7 +46,10 @@ export function LayoutCanvas({
   } = wire;
   const selectedPhysicalRun = wiring?.runs?.find(run => run.id === selectedWiringRunId);
   const selectedPhysicalStrip = strips.find(strip => strip.id === selectedPhysicalRun?.source?.stripId);
-  const selectedSeamLed = selectedPhysicalRun?.seamLed ?? selectedPhysicalRun?.source?.from;
+  const selectedSeamLed = selectedPhysicalRun?.seamLed
+    ?? (selectedPhysicalRun?.physicalDirection === 'source-reverse'
+      ? selectedPhysicalRun?.source?.to
+      : selectedPhysicalRun?.source?.from);
   const selectedSeamPoint = selectedPhysicalStrip?.pixels?.[selectedSeamLed];
   const { mode, drawMode, waypoints, ghostPt, ghostD } = draw;
   const {
@@ -120,7 +123,8 @@ export function LayoutCanvas({
             onClick={handleSvgClick}
             onDoubleClick={handleSvgDblClick}
             onPointerMove={handleSvgMouseMove}
-            onPointerDown={handleCanvasPointerDown}
+            onPointerDown={firstLedPicker ? undefined : handleCanvasPointerDown}
+            onPointerDownCapture={firstLedPicker ? handleCanvasPointerDown : undefined}
             onPointerUp={handleSvgMouseUp}
             onPointerLeave={handleSvgMouseLeave}
             onContextMenu={handleContextMenu}

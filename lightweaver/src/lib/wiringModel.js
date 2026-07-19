@@ -26,8 +26,50 @@ export function makeDefaultWiring(strips = [], options = {}) {
   };
 }
 
+export function reconcileWiringToStrips(wiring, strips = []) {
+  const model = normalizeWiring(wiring);
+  const stripById = new Map(strips.map(strip => [String(strip.id), strip]));
+  const runsByStrip = new Map();
+  for (const run of model.runs) {
+    if (run.type !== 'strip') continue;
+    const stripId = String(run.source?.stripId || '');
+    const runs = runsByStrip.get(stripId) || [];
+    runs.push(run);
+    runsByStrip.set(stripId, runs);
+  }
+
+  let changed = false;
+  for (const [stripId, runs] of runsByStrip) {
+    // Split runs carry intentional Advanced-wiring boundaries. A single Draw
+    // run represents the complete strip and must follow its live LED count.
+    if (runs.length !== 1) continue;
+    const strip = stripById.get(stripId);
+    if (!strip) continue;
+    const lastLed = Math.max(0, stripCount(strip) - 1);
+    const run = runs[0];
+    if (run.source.from !== 0 || run.source.to !== lastLed) {
+      run.source.from = 0;
+      run.source.to = lastLed;
+      changed = true;
+    }
+    if (run.seamLed != null) {
+      const seamLed = Math.max(0, Math.min(lastLed, run.seamLed));
+      if (seamLed !== run.seamLed) {
+        run.seamLed = seamLed;
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    model.locked = false;
+    model.verified = false;
+    model.runs.forEach(run => { run.verified = false; });
+  }
+  return model;
+}
+
 export function migrateWiring(wiring, strips = [], legacyPatchBoard = null, options = {}) {
-  if (wiring && typeof wiring === 'object') return normalizeWiring(wiring);
+  if (wiring && typeof wiring === 'object') return reconcileWiringToStrips(wiring, strips);
   if (!legacyPatchBoard?.patches?.length) return makeDefaultWiring(strips, options);
   const patchesById = new Map(legacyPatchBoard.patches.map(patch => [patch.id, patch]));
   const savedRows = legacyPatchBoard.chains?.[0]?.rowIds;

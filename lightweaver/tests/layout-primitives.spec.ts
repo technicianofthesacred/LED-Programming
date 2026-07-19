@@ -6,6 +6,27 @@ async function gotoFreshLayout(page: any) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
+async function clickStripLed(page: any, stripId: string, ledIndex: number) {
+  const led = page.getByTestId(`strip-led-${stripId}-${ledIndex}`);
+  await expect(led).toBeVisible();
+  const box = await led.boundingBox();
+  if (!box) throw new Error(`LED ${ledIndex} has no pointer target.`);
+  await led.dispatchEvent('pointerdown', {
+    bubbles: true,
+    button: 0,
+    pointerId: 1,
+    clientX: box.x + box.width / 2,
+    clientY: box.y + box.height / 2,
+  });
+}
+
+async function waitForSavedStripWiring(page: any) {
+  await expect.poll(() => page.evaluate(() => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    return Boolean(layout?.strips?.length === 1 && layout?.wiring?.runs?.some((run: any) => run.source?.stripId === layout.strips[0].id));
+  })).toBe(true);
+}
+
 async function seedLegacyDefaultCircles(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
@@ -616,6 +637,123 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
     return transform ? [transform.e, transform.f] : null;
   })).toEqual([target.ledX, target.ledY]);
   expect([target.ledX, target.ledY]).not.toEqual(markerBefore);
+});
+
+test('Set first LED repairs a stale run range left by an LED count change', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+  await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const run = project.layout.wiring.runs.find((item: any) => item.source?.stripId === strip.id);
+    run.source.to = strip.pixelCount + 20;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, lastLed: strip.pixelCount - 1 };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, seeded.stripId, 2);
+
+  await expect.poll(() => page.evaluate(({ stripId }) => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    const run = layout?.wiring?.runs?.find((item: any) => item.source?.stripId === stripId);
+    return run ? [run.source.from, run.source.to, run.seamLed] : null;
+  }, seeded)).toEqual([0, seeded.lastLed, 2]);
+  await expect(page.getByRole('button', { name: 'Set first LED' })).toBeVisible();
+});
+
+test('Set first LED targets the split run containing the clicked light', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const runIndex = project.layout.wiring.runs.findIndex((item: any) => item.source?.stripId === strip.id);
+    const original = project.layout.wiring.runs[runIndex];
+    const middle = Math.floor((strip.pixelCount - 1) / 2);
+    const first = { ...original, id: `${original.id}-head`, source: { ...original.source, from: 0, to: middle }, seamLed: null };
+    const second = { ...original, id: `${original.id}-tail`, source: { ...original.source, from: middle + 1, to: strip.pixelCount - 1 }, seamLed: null };
+    project.layout.wiring.runs.splice(runIndex, 1, first, second);
+    project.layout.wiring.outputs.forEach((output: any) => {
+      output.runIds = output.runIds.flatMap((id: string) => id === original.id ? [first.id, second.id] : [id]);
+    });
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, targetLed: Math.min(strip.pixelCount - 1, middle + 2), firstRunId: first.id, secondRunId: second.id };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, seeded.stripId, seeded.targetLed);
+
+  await expect.poll(() => page.evaluate(({ firstRunId, secondRunId }) => {
+    const runs = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout?.wiring?.runs || [];
+    return [runs.find((run: any) => run.id === firstRunId)?.seamLed, runs.find((run: any) => run.id === secondRunId)?.seamLed];
+  }, seeded)).toEqual([null, seeded.targetLed]);
+  const marker = await page.getByTestId('first-led-marker').evaluate(node => {
+    const matrix = node.transform.baseVal.consolidate()?.matrix;
+    return matrix ? [matrix.e, matrix.f] : null;
+  });
+  const target = await page.getByTestId(`strip-led-${seeded.stripId}-${seeded.targetLed}`).locator('circle').first().evaluate(circle => [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))]);
+  expect(marker).toEqual(target);
+});
+
+test('a rejected first LED change stays armed and explains the wiring error', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+  const stripId = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    project.layout.wiring.outputs[0].pin = 999;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return project.layout.strips[0].id;
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, stripId, 2);
+
+  await expect(page.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Unsupported output pin 999');
+});
+
+test('the first LED marker starts at the data-input end of a reversed strip', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Create line' }).click();
+  await waitForSavedStripWiring(page);
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const run = project.layout.wiring.runs.find((item: any) => item.source?.stripId === strip.id);
+    run.physicalDirection = 'source-reverse';
+    run.seamLed = null;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, lastLed: strip.pixelCount - 1 };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+
+  const marker = await page.getByTestId('first-led-marker').evaluate(node => {
+    const matrix = node.transform.baseVal.consolidate()?.matrix;
+    return matrix ? [matrix.e, matrix.f] : null;
+  });
+  const target = await page.getByTestId(`strip-led-${seeded.stripId}-${seeded.lastLed}`).locator('circle').first().evaluate(circle => [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))]);
+  expect(marker).toEqual(target);
 });
 
 test('Set first LED binds the 1 marker to the strip whose button was armed', async ({ page }) => {

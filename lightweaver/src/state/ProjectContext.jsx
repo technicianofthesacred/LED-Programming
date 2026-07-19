@@ -22,7 +22,7 @@ import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
 import { compileWiring } from '../lib/wiringCompiler.js';
-import { invalidateWiringVerification, makeDefaultWiring, migrateWiring, physicalChangeKindForCompatField, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
+import { invalidateWiringVerification, makeDefaultWiring, migrateWiring, physicalChangeKindForCompatField, reconcileWiringToStrips, standaloneControllerPhysicalChangeKind, updateWiring as mutateWiring } from '../lib/wiringModel.js';
 import {
   createLayoutState,
   createLayoutHistory,
@@ -142,7 +142,10 @@ function layoutRootReducer(state, action) {
   const boundary = invalidateWiringVerification(state.wiring, { kind: physicalChangeKind, runIds: action.runIds });
   if (!boundary.ok) return state;
   const finishMutation = next => {
-    const withWiring = boundary.wiring !== state.wiring ? { ...next, wiring: boundary.wiring } : next;
+    const boundaryWiring = next.strips !== state.strips
+      ? reconcileWiringToStrips(boundary.wiring, next.strips)
+      : boundary.wiring;
+    const withWiring = boundaryWiring !== state.wiring ? { ...next, wiring: boundaryWiring } : next;
     return physicalChangeKind ? { ...withWiring, starterPending: false } : withWiring;
   };
   switch (action.type) {

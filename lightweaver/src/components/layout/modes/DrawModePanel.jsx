@@ -77,6 +77,7 @@ const SHAPE_ICONS = {
 export function DrawModePanel({
   state,
   firstLedPicker,
+  firstLedError,
   onBeginFirstLedPicker,
   onCancelFirstLedPicker,
 }) {
@@ -1190,6 +1191,9 @@ export function DrawModePanel({
                                     onClick={() => removeStrip(s.id)}>×</button>
                           </div>
                         </div>
+                        {firstLedError?.stripId === s.id && (
+                          <div className="la-gpio-error" role="alert">{firstLedError.message}</div>
+                        )}
                         {/* Size is physical truth and recounts LEDs; LED count is
                             a direct cut-strip correction that keeps size. */}
                         <div className="row la-strip-physical-row">

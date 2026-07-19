@@ -31,6 +31,16 @@ test('default wiring creates one ascending run per strip on one output', () => {
   ]);
 });
 
+test('saved single-run wiring follows the strip LED count when a project reloads', () => {
+  const original = makeDefaultWiring([{ id: 'a', pixelCount: 8 }]);
+  original.runs[0].seamLed = 7;
+
+  const migrated = migrateWiring(original, [{ id: 'a', pixelCount: 3 }]);
+
+  assert.deepEqual(migrated.runs[0].source, { stripId: 'a', from: 0, to: 2 });
+  assert.equal(migrated.runs[0].seamLed, 2);
+});
+
 test('legacy descending chains migrate to ascending sources and physical reverse', () => {
   const wiring = migrateWiring(null, strips, {
     chains: [{ rowIds: ['pb', 'off', 'pa'] }],
