@@ -563,6 +563,26 @@ test('resized geometry persists across reload', async ({ page }) => {
   await expect(readout).toContainText('m');
 });
 
+test('Set first LED anchors the selected canvas LED when confirmed', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  if (await page.getByLabel('Strip actions').count() === 0) await page.locator('.la-strip-row').first().click();
+
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await expect(page.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
+  const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
+  await page.getByTestId(`strip-led-${stripId}-8`).dispatchEvent('click');
+  await expect(page.getByRole('button', { name: 'Anchor first LED' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Anchor first LED' }).click();
+
+  await expect.poll(async () => page.evaluate(id => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;
+  }, stripId)).toBe(8);
+});
+
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {
   await gotoFreshLayout(page);
 

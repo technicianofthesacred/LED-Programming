@@ -19,6 +19,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [firstLedPicker, setFirstLedPicker] = useState(null);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -64,6 +65,27 @@ export function LayoutScreen({ connected, cardHost }) {
     mode, setMode,
   } = state;
 
+  const beginFirstLedPicker = stripId => setFirstLedPicker({ stripId, ledIndex: null });
+  const pickFirstLed = (stripId, ledIndex) => {
+    setFirstLedPicker(current => current?.stripId === stripId ? { ...current, ledIndex } : current);
+  };
+  const cancelFirstLedPicker = () => setFirstLedPicker(null);
+  const confirmFirstLedPicker = () => {
+    if (!firstLedPicker || firstLedPicker.ledIndex == null) return;
+    const { stripId, ledIndex } = firstLedPicker;
+    updateWiring(draft => {
+      if (draft.locked) {
+        draft.locked = false;
+        draft.verified = false;
+        draft.runs.forEach(run => { run.verified = false; });
+      }
+      const run = draft.runs.find(item => item.type === 'strip' && item.source?.stripId === stripId);
+      if (!run) throw new Error('This strip is not connected to a GPIO output yet.');
+      run.seamLed = Math.max(run.source.from, Math.min(run.source.to, ledIndex));
+    }, { changeKind: 'seam' });
+    setFirstLedPicker(null);
+  };
+
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
     strips: state.starterLayoutActive && mode === 'draw' ? [] : strips, layers, hidden,
@@ -76,6 +98,8 @@ export function LayoutScreen({ connected, cardHost }) {
     wire: {
       wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
       wiring, compiledWiring,
+      firstLedPicker,
+      onFirstLedPick: pickFirstLed,
       selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
       onControllerAnchorMove: event => {
         if (!svgRef.current || wiring.locked) return;
@@ -286,7 +310,13 @@ export function LayoutScreen({ connected, cardHost }) {
           <ModeSwitch mode={mode} setMode={setMode}/>
         </div>
         <div className={`la-mode-content is-${mode}`}>
-          {mode === 'draw' && <DrawModePanel state={state}/>} 
+          {mode === 'draw' && (
+            <DrawModePanel state={state}
+                           firstLedPicker={firstLedPicker}
+                           onBeginFirstLedPicker={beginFirstLedPicker}
+                           onCancelFirstLedPicker={cancelFirstLedPicker}
+                           onConfirmFirstLedPicker={confirmFirstLedPicker}/>
+          )}
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>
       </aside>

@@ -43,6 +43,7 @@ export function LayoutCanvas({
   const {
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
     wiring, compiledWiring, selectedWiringRunId, onControllerAnchorMove, onSeamMove,
+    firstLedPicker, onFirstLedPick,
   } = wire;
   const fallbackAnchor = { x: parsedVb(viewBox).w * 0.12, y: parsedVb(viewBox).h * 0.12 };
   const [dragAnchor, setDragAnchor] = useState(null);
@@ -474,9 +475,9 @@ export function LayoutCanvas({
             )}
 
             {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
-            {showLeds && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
+            {(showLeds || firstLedPicker) && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
-	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
+	                <g key={s.id + '-dots'} style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -485,8 +486,15 @@ export function LayoutCanvas({
                     // Keep unlit LEDs clearly visible so the strip's pixels are countable at rest.
                     const shellOpacity = Math.max(selected ? 0.85 : 0.62, restingLedAlpha(ledFrame, { selected }));
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
+                    const isFirstLedCandidate = firstLedPicker?.stripId === s.id && firstLedPicker.ledIndex === i;
                     return (
-                    <g key={i}>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
+                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       onClick={event => {
+                         if (firstLedPicker?.stripId !== s.id) return;
+                         event.stopPropagation();
+                         onFirstLedPick(s.id, i);
+                       }}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
                               fill={ledColor} opacity={shellOpacity}/>
@@ -495,12 +503,14 @@ export function LayoutCanvas({
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
                                 fill={ledColor} opacity={coreOpacity}/>
                       )}
+                      {isFirstLedCandidate && <circle cx={px.x} cy={px.y} r={vbScale * 8}
+                                                     fill="none" stroke="var(--accent)" strokeWidth={vbScale * 1.5}/>}
                     </g>
                     );
                   })}
                 </g>
               ) : (
-	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
+	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -508,11 +518,22 @@ export function LayoutCanvas({
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
+                    const isFirstLedCandidate = firstLedPicker?.stripId === s.id && firstLedPicker.ledIndex === i;
                     return (
-                    <circle key={i} cx={px.x} cy={px.y}
-                            r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
-                            fill={ledColor}
-                            opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
+                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       onClick={event => {
+                         if (firstLedPicker?.stripId !== s.id) return;
+                         event.stopPropagation();
+                         onFirstLedPick(s.id, i);
+                       }}>
+                      <circle cx={px.x} cy={px.y}
+                              r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
+                              fill={ledColor}
+                              opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
+                      {isFirstLedCandidate && <circle cx={px.x} cy={px.y} r={vbScale * 5}
+                                                     fill="none" stroke="var(--accent)" strokeWidth={vbScale * 1.5}/>}
+                    </g>
                     );
                   })}
                 </g>
