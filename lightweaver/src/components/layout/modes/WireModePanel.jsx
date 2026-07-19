@@ -66,7 +66,7 @@ const STEP_TITLES = {
 };
 const STEP_DESCRIPTIONS = {
   1: 'Count the signal wires running from the card to the LED strips. Most pieces use one.',
-  2: 'Put each strip on the wire that feeds it, in the order the data flows.',
+  2: 'Order strips as the data cable visits them, starting from the card.',
   3: 'Mark where the card physically sits on the drawing, and Lightweaver reorders the strips to use the least cable. Optional — if your order above is right, skip this.',
   4: 'A short guided check on the real LEDs. The card lights them up and you confirm what you see.',
   5: 'Review the wiring, lock it, then install it on the card.',
@@ -752,32 +752,36 @@ export function WireModePanel({ state, connected, cardHost }) {
             if (event.altKey && event.key === 'ArrowDown') { event.preventDefault(); moveOrderedRun(output, run, 1, label); }
           }}
         >⋮⋮</button>
-        <span className="lw-order-name">{label}</span>
-        <span className="lw-order-count">{count} LED{count === 1 ? '' : 's'}</span>
-        <button
-          className="lw-order-move"
-          aria-label={`Move ${label} up`}
-          title={`Move ${label} one place earlier on the cable`}
-          disabled={wiring.locked || index === 0}
-          onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, -1, label); }}
-        >▲</button>
-        <button
-          className="lw-order-move"
-          aria-label={`Move ${label} down`}
-          title={`Move ${label} one place later on the cable`}
-          disabled={wiring.locked || index === output.runIds.length - 1}
-          onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, 1, label); }}
-        >▼</button>
-        {run.type === 'strip' ? (
+        <span className="lw-order-id">
+          <span className="lw-order-name">{label}</span>
+          <span className="lw-order-count">{count} LED{count === 1 ? '' : 's'}</span>
+        </span>
+        <span className="lw-order-actions">
           <button
-            className="lw-order-reverse"
-            aria-label={`Reverse direction of ${label}`}
-            aria-pressed={run.physicalDirection === 'source-reverse'}
-            title={`Reverse which end of ${label} the data cable enters`}
-            disabled={wiring.locked || run.directionPolicy === 'fixed'}
-            onClick={event => { event.stopPropagation(); reverseOrderedRun(run, label); }}
-          >Reverse</button>
-        ) : <span className="lw-order-reverse-spacer" aria-hidden="true"/>}
+            className="lw-order-move"
+            aria-label={`Move ${label} up`}
+            title={`Move ${label} one place earlier on the cable`}
+            disabled={wiring.locked || index === 0}
+            onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, -1, label); }}
+          >▲</button>
+          <button
+            className="lw-order-move"
+            aria-label={`Move ${label} down`}
+            title={`Move ${label} one place later on the cable`}
+            disabled={wiring.locked || index === output.runIds.length - 1}
+            onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, 1, label); }}
+          >▼</button>
+          {run.type === 'strip' && (
+            <button
+              className="lw-order-reverse"
+              aria-label={`Reverse direction of ${label}`}
+              aria-pressed={run.physicalDirection === 'source-reverse'}
+              title={`Reverse which end of ${label} the data cable enters`}
+              disabled={wiring.locked || run.directionPolicy === 'fixed'}
+              onClick={event => { event.stopPropagation(); reverseOrderedRun(run, label); }}
+            ><span aria-hidden="true">⇄</span><span className="lw-order-reverse-word"> Reverse</span></button>
+          )}
+        </span>
       </li>
     );
   };
@@ -837,12 +841,9 @@ export function WireModePanel({ state, connected, cardHost }) {
       {currentStep === 2 && <>
       <section className="lw-order-primary" role="region" aria-labelledby="lw-order-heading" data-testid="wire-order">
         <header className="lw-order-header">
-          <div className="lw-step-heading">
-            <strong id="lw-order-heading">Wire order</strong>
-            <span>{stripRunCount} strip{stripRunCount === 1 ? '' : 's'} · {compiledWiring.totalPixels} LEDs</span>
-          </div>
+          <strong id="lw-order-heading">Wire order</strong>
+          <span className="lw-order-meta">{stripRunCount} strip{stripRunCount === 1 ? '' : 's'} · {compiledWiring.totalPixels} LEDs</span>
         </header>
-        <p className="lw-order-lead">Order strips as the data cable visits them, starting from the card.</p>
         {wiring.locked && <p className="lw-order-locked-note">Wiring is locked after verification. Unlock it in the Install step to change the order.</p>}
         {patchBoard?.dataWireCountNeedsReview && (
           <p className="lw-inline-warning lw-order-review-warning">This older project needs its data wire count confirmed — go to the Wires step and tap the correct number.</p>

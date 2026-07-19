@@ -317,3 +317,12 @@
     transition: border-color 0.2s ease, background-color 0.2s ease;
   }
 }
+
+/* ── Narrow-container header compacts (after base rules to win the cascade) ── */
+@container (max-width: 480px) {
+  .lww-intro { padding-bottom: 8px; }
+  .lww-intro > strong { font-size: 15px; }
+  .lww-summary { gap: 6px; }
+  .lww-diagram { gap: 4px; }
+  .lww-diagram-cap { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
