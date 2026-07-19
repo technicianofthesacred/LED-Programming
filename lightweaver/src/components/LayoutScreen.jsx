@@ -65,7 +65,10 @@ export function LayoutScreen({ connected, cardHost }) {
     mode, setMode,
   } = state;
 
-  const beginFirstLedPicker = stripId => setFirstLedPicker({ stripId, ledIndex: null });
+  const beginFirstLedPicker = stripId => {
+    selectStrip(stripId);
+    setFirstLedPicker({ stripId, ledIndex: null });
+  };
   const cancelFirstLedPicker = () => setFirstLedPicker(null);
   const pickFirstLed = (stripId, ledIndex) => {
     if (firstLedPicker?.stripId !== stripId) return;

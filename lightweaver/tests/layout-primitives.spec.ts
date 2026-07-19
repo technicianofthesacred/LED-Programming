@@ -564,9 +564,12 @@ test('resized geometry persists across reload', async ({ page }) => {
 });
 
 test('Set first LED anchors the specifically clicked LED dot', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await gotoFreshLayout(page);
   const picker = page.getByTestId('layout-primitive-picker');
   await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('spinbutton', { name: 'Starting strip size in metres' }).fill('0.1');
+  await picker.getByRole('spinbutton', { name: 'Starting strip size in metres' }).blur();
   await picker.getByRole('button', { name: 'Create circle' }).click();
   if (await page.getByLabel('Strip actions').count() === 0) await page.locator('.la-strip-row').first().click();
 
@@ -578,23 +581,54 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
   await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
-  const targetLedIndex = 8;
-  const point = await page.getByTestId(`strip-led-${stripId}-${targetLedIndex}`).evaluate(node => {
-    const svg = node.ownerSVGElement;
-    const circle = node.querySelector('circle');
-    if (!svg || !circle) throw new Error('Expected LED dot on the canvas.');
-    const svgPoint = svg.createSVGPoint();
-    svgPoint.x = Number(circle.getAttribute('cx'));
-    svgPoint.y = Number(circle.getAttribute('cy'));
-    const screenPoint = svgPoint.matrixTransform(svg.getScreenCTM());
-    return { x: screenPoint.x, y: screenPoint.y };
+  const target = await page.locator(`[data-testid^="strip-led-${stripId}-"]`).evaluateAll(nodes => {
+    const candidate = nodes.map(node => {
+      const circle = node.querySelector('circle');
+      if (!circle) return null;
+      const rect = circle.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return hit && node.contains(hit) ? {
+        index: Number(node.getAttribute('data-testid')?.split('-').pop()),
+        x,
+        y,
+        ledX: Number(circle.getAttribute('cx')),
+        ledY: Number(circle.getAttribute('cy')),
+      } : null;
+    }).find(Boolean);
+    if (!candidate) throw new Error('No rendered LED accepts a real pointer hit.');
+    return candidate;
   });
-  await page.locator('svg:has(path[data-strip-path])').dispatchEvent('pointerdown', { clientX: point.x, clientY: point.y });
+  await page.mouse.click(target.x, target.y);
 
   await expect.poll(async () => page.evaluate(id => {
     const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
     return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;
-  }, stripId)).toBe(targetLedIndex);
+  }, stripId)).toBe(target.index);
+  await expect(page.getByRole('button', { name: 'Set first LED' })).toBeVisible();
+  await expect.poll(() => page.getByTestId('first-led-marker').evaluate(marker => {
+    const transform = marker.transform.baseVal.consolidate()?.matrix;
+    return transform ? [transform.e, transform.f] : null;
+  })).toEqual([target.ledX, target.ledY]);
+});
+
+test('Set first LED binds the 1 marker to the strip whose button was armed', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Circle', exact: true }).click();
+
+  const strips = page.locator('[data-strip-id]');
+  await expect(strips).toHaveCount(2);
+  const firstStrip = strips.first();
+  await expect(strips.nth(1).locator('.la-strip-row')).toHaveClass(/sel/);
+  await firstStrip.getByRole('button', { name: 'Set first LED' }).click();
+
+  await expect(firstStrip.locator('.la-strip-row')).toHaveClass(/sel/);
+  await expect(firstStrip.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {
