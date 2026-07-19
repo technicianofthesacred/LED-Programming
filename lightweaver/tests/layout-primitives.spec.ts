@@ -307,6 +307,40 @@ test('the compact Add strip row links its size input to LEDs and density', async
   await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('45');
 });
 
+test('linked controls resize the strip while fine LED nudges preserve its size', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  let starting: any = null;
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    starting = strips?.[0] ?? null;
+    return Boolean(starting?.svgLength > 0);
+  }).toBe(true);
+
+  await page.getByRole('button', { name: 'One LED more' }).click();
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    const strip = strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength > starting.svgLength] : null;
+  }).toEqual([starting.pixelCount + 1, true]);
+
+  const linked = (await readAutosaveStrips(page))?.[0];
+  await page.getByRole('button', { name: 'Fine tune 5 LEDs more' }).click();
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    const strip = strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength] : null;
+  }).toEqual([linked.pixelCount + 5, linked.svgLength]);
+
+  const actions = page.getByLabel('Strip actions');
+  await expect(actions.getByRole('button', { name: 'Reverse strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Duplicate strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Remove strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Calibrate scale from LED count' })).toHaveCount(0);
+  await expect(page.getByText(/Drag on canvas to move/)).toHaveCount(0);
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
