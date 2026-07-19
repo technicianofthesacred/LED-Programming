@@ -65,6 +65,22 @@ export function LayoutCanvas({
     startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
     toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
   } = interactionHandlers;
+  const handleFirstLedCanvasClick = event => {
+    if (!firstLedPicker || !svgRef.current) {
+      handleSvgClick(event);
+      return;
+    }
+    const matrix = svgRef.current.getScreenCTM()?.inverse();
+    const strip = strips.find(item => item.id === firstLedPicker.stripId);
+    if (!matrix || !strip?.pixels?.length) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix);
+    let nearest = 0;
+    strip.pixels.forEach((pixel, index) => {
+      if (Math.hypot(point.x - pixel.x, point.y - pixel.y) < Math.hypot(point.x - strip.pixels[nearest].x, point.y - strip.pixels[nearest].y)) nearest = index;
+    });
+    event.stopPropagation();
+    onFirstLedPick(strip.id, nearest);
+  };
 
   return (
         <main className="body">
@@ -99,9 +115,10 @@ export function LayoutCanvas({
               maxWidth: '100%', maxHeight: '100%',
               aspectRatio: `${parsedVb(viewBox).w} / ${parsedVb(viewBox).h}`,
               objectFit: 'contain',
-              cursor: drawMode ? 'crosshair' : rubberBand ? 'crosshair' : isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
+              cursor: firstLedPicker ? 'crosshair' : drawMode ? 'crosshair' : rubberBand ? 'crosshair' : isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
             }}
-            onClick={handleSvgClick}
+            onClickCapture={firstLedPicker ? handleFirstLedCanvasClick : undefined}
+            onClick={firstLedPicker ? undefined : handleSvgClick}
             onDoubleClick={handleSvgDblClick}
             onPointerMove={handleSvgMouseMove}
             onPointerDown={handleSvgMouseDown}
@@ -477,7 +494,7 @@ export function LayoutCanvas({
             {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
             {(showLeds || firstLedPicker) && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
-	                <g key={s.id + '-dots'} style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
+	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -486,15 +503,8 @@ export function LayoutCanvas({
                     // Keep unlit LEDs clearly visible so the strip's pixels are countable at rest.
                     const shellOpacity = Math.max(selected ? 0.85 : 0.62, restingLedAlpha(ledFrame, { selected }));
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
-                    const isFirstLedCandidate = firstLedPicker?.stripId === s.id && firstLedPicker.ledIndex === i;
                     return (
-                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
-                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
-                       onClick={event => {
-                         if (firstLedPicker?.stripId !== s.id) return;
-                         event.stopPropagation();
-                         onFirstLedPick(s.id, i);
-                       }}>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
                               fill={ledColor} opacity={shellOpacity}/>
@@ -503,14 +513,12 @@ export function LayoutCanvas({
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
                                 fill={ledColor} opacity={coreOpacity}/>
                       )}
-                      {isFirstLedCandidate && <circle cx={px.x} cy={px.y} r={vbScale * 8}
-                                                     fill="none" stroke="var(--accent)" strokeWidth={vbScale * 1.5}/>}
                     </g>
                     );
                   })}
                 </g>
               ) : (
-	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
+	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -518,21 +526,12 @@ export function LayoutCanvas({
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
-                    const isFirstLedCandidate = firstLedPicker?.stripId === s.id && firstLedPicker.ledIndex === i;
                     return (
-                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
-                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
-                       onClick={event => {
-                         if (firstLedPicker?.stripId !== s.id) return;
-                         event.stopPropagation();
-                         onFirstLedPick(s.id, i);
-                       }}>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                               fill={ledColor}
                               opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
-                      {isFirstLedCandidate && <circle cx={px.x} cy={px.y} r={vbScale * 5}
-                                                     fill="none" stroke="var(--accent)" strokeWidth={vbScale * 1.5}/>}
                     </g>
                     );
                   })}

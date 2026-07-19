@@ -66,13 +66,9 @@ export function LayoutScreen({ connected, cardHost }) {
   } = state;
 
   const beginFirstLedPicker = stripId => setFirstLedPicker({ stripId, ledIndex: null });
-  const pickFirstLed = (stripId, ledIndex) => {
-    setFirstLedPicker(current => current?.stripId === stripId ? { ...current, ledIndex } : current);
-  };
   const cancelFirstLedPicker = () => setFirstLedPicker(null);
-  const confirmFirstLedPicker = () => {
-    if (!firstLedPicker || firstLedPicker.ledIndex == null) return;
-    const { stripId, ledIndex } = firstLedPicker;
+  const pickFirstLed = (stripId, ledIndex) => {
+    if (firstLedPicker?.stripId !== stripId) return;
     updateWiring(draft => {
       if (draft.locked) {
         draft.locked = false;
@@ -314,8 +310,7 @@ export function LayoutScreen({ connected, cardHost }) {
             <DrawModePanel state={state}
                            firstLedPicker={firstLedPicker}
                            onBeginFirstLedPicker={beginFirstLedPicker}
-                           onCancelFirstLedPicker={cancelFirstLedPicker}
-                           onConfirmFirstLedPicker={confirmFirstLedPicker}/>
+                           onCancelFirstLedPicker={cancelFirstLedPicker}/>
           )}
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>

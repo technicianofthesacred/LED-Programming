@@ -563,7 +563,7 @@ test('resized geometry persists across reload', async ({ page }) => {
   await expect(readout).toContainText('m');
 });
 
-test('Set first LED anchors the selected canvas LED when confirmed', async ({ page }) => {
+test('Set first LED anchors the nearest LED on the next canvas click', async ({ page }) => {
   await gotoFreshLayout(page);
   const picker = page.getByTestId('layout-primitive-picker');
   await picker.getByRole('button', { name: 'Circle', exact: true }).click();
@@ -573,10 +573,21 @@ test('Set first LED anchors the selected canvas LED when confirmed', async ({ pa
   await page.getByRole('button', { name: 'Set first LED' }).click();
   await expect(page.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
-  await page.getByTestId(`strip-led-${stripId}-8`).dispatchEvent('click');
-  await expect(page.getByRole('button', { name: 'Anchor first LED' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Anchor first LED' }).click();
+  await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
+    getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
+  await page.getByTestId(`strip-led-${stripId}-8`).evaluate(node => {
+    const svg = node.ownerSVGElement;
+    const circle = node.querySelector('circle');
+    if (!svg || !circle) throw new Error('Expected LED dot on the canvas.');
+    const point = svg.createSVGPoint();
+    point.x = Number(circle.getAttribute('cx'));
+    point.y = Number(circle.getAttribute('cy'));
+    const screen = point.matrixTransform(svg.getScreenCTM());
+    node.dispatchEvent(new MouseEvent('click', {
+      bubbles: true, clientX: screen.x, clientY: screen.y,
+    }));
 
+  });
   await expect.poll(async () => page.evaluate(id => {
     const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
     return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;

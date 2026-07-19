@@ -75,7 +75,6 @@ export function DrawModePanel({
   firstLedPicker,
   onBeginFirstLedPicker,
   onCancelFirstLedPicker,
-  onConfirmFirstLedPicker,
 }) {
   const {
     strips, layers, hidden, setHidden,
@@ -1110,19 +1109,14 @@ export function DrawModePanel({
                                     onClick={() => reverseStrip(s.id)}>↔</button>
                             {stripRuns.get(s.id) && (
                               <button className={`btn${firstLedPicker?.stripId === s.id ? ' active' : ''}`}
-                                      aria-label={firstLedPicker?.stripId === s.id && firstLedPicker.ledIndex != null
-                                        ? 'Anchor first LED'
-                                        : firstLedPicker?.stripId === s.id
-                                          ? 'Cancel first LED selection'
-                                          : 'Set first LED'}
+                                      aria-label={firstLedPicker?.stripId === s.id
+                                        ? 'Cancel first LED selection'
+                                        : 'Set first LED'}
                                       title={firstLedPicker?.stripId === s.id
-                                        ? firstLedPicker.ledIndex != null
-                                          ? 'Anchor the selected LED as the first LED'
-                                          : 'Choose one LED on the canvas, then click again to anchor it'
+                                        ? 'Cancel first LED selection'
                                         : 'Choose which physical LED is first'}
                                       onClick={() => {
                                         if (firstLedPicker?.stripId !== s.id) onBeginFirstLedPicker(s.id);
-                                        else if (firstLedPicker.ledIndex != null) onConfirmFirstLedPicker();
                                         else onCancelFirstLedPicker();
                                       }}>◎</button>
                             )}
