@@ -738,39 +738,27 @@ export function WireModePanel({ state, connected, cardHost }) {
         data-testid="wire-order-row"
         onClick={() => selectRun(run)}
       >
-        <span className="lw-order-n" aria-hidden="true">{physicalPosition}</span>
         <button
-          className="lw-order-drag"
-          aria-label={`Drag ${label}`}
+          className="lw-order-grip"
+          aria-label={`Drag ${label} to reorder — or press the arrow keys`}
           aria-pressed={dragging}
-          title="Drag to reorder. Alt+arrow keys also move this strip."
+          title="Drag the number to reorder. Arrow keys also move this strip."
           disabled={wiring.locked}
           onPointerDown={event => { event.stopPropagation(); startRowPointer(run.id, event); }}
           onClick={event => event.stopPropagation()}
           onKeyDown={event => {
-            if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); moveOrderedRun(output, run, -1, label); }
-            if (event.altKey && event.key === 'ArrowDown') { event.preventDefault(); moveOrderedRun(output, run, 1, label); }
+            if (event.key === 'ArrowUp') { event.preventDefault(); if (index > 0) moveOrderedRun(output, run, -1, label); }
+            if (event.key === 'ArrowDown') { event.preventDefault(); if (index < output.runIds.length - 1) moveOrderedRun(output, run, 1, label); }
           }}
-        >⋮⋮</button>
+        >
+          <span className="lw-order-grip-n">{physicalPosition}</span>
+          <span className="lw-order-grip-dots" aria-hidden="true">⋮⋮</span>
+        </button>
         <span className="lw-order-id">
-          <span className="lw-order-name">{label}</span>
+          <span className="lw-order-name" title={label}>{label}</span>
           <span className="lw-order-count">{count} LED{count === 1 ? '' : 's'}</span>
         </span>
         <span className="lw-order-actions">
-          <button
-            className="lw-order-move"
-            aria-label={`Move ${label} up`}
-            title={`Move ${label} one place earlier on the cable`}
-            disabled={wiring.locked || index === 0}
-            onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, -1, label); }}
-          >▲</button>
-          <button
-            className="lw-order-move"
-            aria-label={`Move ${label} down`}
-            title={`Move ${label} one place later on the cable`}
-            disabled={wiring.locked || index === output.runIds.length - 1}
-            onClick={event => { event.stopPropagation(); moveOrderedRun(output, run, 1, label); }}
-          >▼</button>
           {run.type === 'strip' && (
             <button
               className="lw-order-reverse"
