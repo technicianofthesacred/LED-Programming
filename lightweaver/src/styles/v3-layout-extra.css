@@ -109,6 +109,13 @@
   color: var(--text-mid);
 }
 .la-strip-detail .actions .btn:hover { color: var(--text-hi); }
+.la-strip-detail .actions .btn.active,
+.la-strip-detail .actions .btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent), 0 0 14px color-mix(in oklab, var(--accent) 18%, transparent);
+}
 .la-strip-detail .actions .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .la-strip-detail .actions .btn.danger:hover { color: var(--danger); }
 .la-led-count-field { display: inline-flex; align-items: stretch; overflow: hidden; background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm); }

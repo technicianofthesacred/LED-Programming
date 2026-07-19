@@ -571,7 +571,10 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
   if (await page.getByLabel('Strip actions').count() === 0) await page.locator('.la-strip-row').first().click();
 
   await page.getByRole('button', { name: 'Set first LED' }).click();
-  await expect(page.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
+  const activeFirstLedButton = page.getByRole('button', { name: 'Cancel first LED selection' });
+  await expect(activeFirstLedButton).toBeVisible();
+  await expect(activeFirstLedButton).toHaveClass(/active/);
+  await expect.poll(() => activeFirstLedButton.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe('none');
   await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
