@@ -23,55 +23,119 @@ test('pending drawing survives a mode visit until explicitly cancelled', async (
   await page.getByTestId('layout-mode-size').click();
   await page.getByTestId('layout-mode-draw').click();
   await page.getByTitle('Draw a new LED strip path on the artwork.').click();
+  // Live physical readout (points · metres · LEDs at the fixed density) plus
+  // the plain-language termination hint.
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
+  await expect(page.getByTestId('draw-live-readout')).toHaveText(/2 points · \d+(\.\d+)? m · \d+ LEDs? so far/);
+  await expect(page.locator('.la-draw-hint'))
+    .toContainText('Click to add points · Double-click or Enter to finish · Esc to cancel');
   await page.getByRole('button', { name: /Cancel \(Esc\)/ }).click();
   await expect(page.locator('.la-draw-hint')).toHaveCount(0);
+});
+
+test('Enter finishes a two-point path and the naming panel Enter still confirms', async ({ page }) => {
+  await gotoLayout(page);
+  await page.getByTitle('Draw a new LED strip path on the artwork.').click();
+  const svg = page.locator('.lw-viewport svg');
+  const box = await svg.boundingBox();
+  if (!box) throw new Error('canvas unavailable');
+  await page.mouse.click(box.x + 40, box.y + 40);
+  await page.mouse.click(box.x + 160, box.y + 90);
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Name your new strip')).toBeVisible();
+  // The naming panel's own Enter confirms the strip (no draw-tool conflict).
+  await page.getByPlaceholder('Strip name…').fill('Enter strip');
+  await page.getByPlaceholder('Strip name…').press('Enter');
+  await expect(page.locator('.la-strip-row').filter({ hasText: 'Enter strip' })).toHaveCount(1);
+});
+
+test('double-click and the Finish button produce identical geometry from the same clicks', async ({ page }) => {
+  const drawAndFinish = async (finishWithDblClick: boolean) => {
+    await gotoLayout(page);
+    await page.getByTitle('Draw a new LED strip path on the artwork.').click();
+    const svg = page.locator('.lw-viewport svg');
+    const box = await svg.boundingBox();
+    if (!box) throw new Error('canvas unavailable');
+    await page.mouse.click(box.x + 40, box.y + 40);
+    await page.mouse.click(box.x + 150, box.y + 100);
+    if (finishWithDblClick) {
+      // The double-click's own first click lands a duplicate waypoint on the
+      // last point; the unified terminator must drop it.
+      await page.mouse.dblclick(box.x + 150, box.y + 100);
+    } else {
+      await page.getByRole('button', { name: 'Finish path' }).click();
+    }
+    await expect(page.getByText('Name your new strip')).toBeVisible();
+    await page.getByRole('button', { name: '+ Add Strip', exact: true }).click();
+    let length = 0;
+    await expect.poll(async () => {
+      length = await page.evaluate(() => {
+        const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+        const strips = saved?.layout?.strips ?? [];
+        return strips[strips.length - 1]?.svgLength ?? 0;
+      });
+      return length > 0;
+    }).toBe(true);
+    return length;
+  };
+
+  const viaButton = await drawAndFinish(false);
+  const viaDblClick = await drawAndFinish(true);
+  expect(Math.abs(viaButton - viaDblClick)).toBeLessThan(0.5);
 });
 
 test('manual counts and reset are independently undoable', async ({ page }) => {
   await gotoLayout(page);
   await page.getByTestId('layout-mode-size').click();
-  const count = page.getByTestId('layout-size-strip-row').first().getByRole('spinbutton');
-  const original = await count.inputValue();
-  await count.fill('77');
-  await count.blur();
-  await page.getByTitle('Reset to the computed count').click();
+  const row = page.getByTestId('layout-size-strip-row').first();
+  const leds = row.getByTestId('layout-size-strip-leds');
+  const original = (await leds.textContent())!;
+  const nudged = `${parseInt(original, 10) + 1} LEDs`;
+  await row.getByRole('button', { name: /Add one LED to/ }).click();
+  await expect(leds).toHaveText(nudged);
+  // Reset rejoins the geometry-computed count, which may differ from the
+  // project's original stored count — capture it rather than assuming.
+  await page.getByTitle('Back to the computed count').click();
+  await expect(leds).not.toHaveText(nudged);
+  const computed = (await leds.textContent())!;
   await page.getByTitle(/Undo/).click();
-  await expect(count).toHaveValue('77');
+  await expect(leds).toHaveText(nudged);
   await page.getByTitle(/Undo/).click();
-  await expect(count).toHaveValue(original);
+  await expect(leds).toHaveText(original);
   await page.getByTitle(/Redo/).click();
-  await expect(count).toHaveValue('77');
+  await expect(leds).toHaveText(nudged);
+  await page.getByTitle(/Redo/).click();
+  await expect(leds).toHaveText(computed);
 });
 
-test('multi-character count edit creates one undo entry', async ({ page }) => {
+test('multi-character length edit creates one undo entry', async ({ page }) => {
   await gotoLayout(page);
   await page.getByTestId('layout-mode-size').click();
-  const count = page.getByTestId('layout-size-strip-row').first().getByRole('spinbutton');
-  const original = await count.inputValue();
+  const row = page.getByTestId('layout-size-strip-row').first();
+  const length = row.getByRole('spinbutton', { name: /length in metres/ });
+  const original = await length.inputValue();
 
-  await count.click();
-  await page.keyboard.type('123');
-  await count.blur();
+  await length.fill('0.6');
+  await length.blur();
 
-  await expect(count).toHaveValue('123');
+  await expect(length).toHaveValue('0.6');
   await expect(page.getByTitle(/Undo/)).toHaveAttribute('title', /1 step/);
   await page.getByTitle(/Undo/).click();
-  await expect(count).toHaveValue(original);
+  await expect(length).toHaveValue(original);
   await expect(page.getByTitle(/Undo/)).toBeDisabled();
 });
 
-test('Escape restores a count edit without adding history', async ({ page }) => {
+test('Escape restores a length edit without adding history', async ({ page }) => {
   await gotoLayout(page);
   await page.getByTestId('layout-mode-size').click();
-  const count = page.getByTestId('layout-size-strip-row').first().getByRole('spinbutton');
-  const original = await count.inputValue();
+  const row = page.getByTestId('layout-size-strip-row').first();
+  const length = row.getByRole('spinbutton', { name: /length in metres/ });
+  const original = await length.inputValue();
 
-  await count.click();
-  await page.keyboard.type('999');
+  await length.fill('9');
   await page.keyboard.press('Escape');
 
-  await expect(count).toHaveValue(original);
+  await expect(length).toHaveValue(original);
   await expect(page.getByTitle(/Undo/)).toBeDisabled();
 });
 

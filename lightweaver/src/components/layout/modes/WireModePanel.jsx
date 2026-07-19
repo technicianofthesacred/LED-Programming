@@ -192,6 +192,38 @@ export function WireModePanel({ state, connected, cardHost }) {
     output.runIds.splice(next, 0, runId);
   }, { changeKind: 'route' });
 
+  // Move a run to a different data wire (appended at the end of the target
+  // wire's order). Same canonical outputs/runIds mutation as reordering.
+  const moveRunToWire = (run, fromOutput, toOutputId, label) => {
+    if (toOutputId === fromOutput.id) return;
+    const targetIndex = wiring.outputs.findIndex(output => output.id === toOutputId);
+    const result = mutate(draft => {
+      const source = draft.outputs.find(output => output.id === fromOutput.id);
+      const target = draft.outputs.find(output => output.id === toOutputId);
+      const index = source?.runIds.indexOf(run.id) ?? -1;
+      if (!source || !target || index < 0) return;
+      source.runIds.splice(index, 1);
+      target.runIds.push(run.id);
+    }, { changeKind: 'route' });
+    if (result.ok) setOrderAnnouncement(`${label} moved to ${outputName(targetIndex)}`);
+  };
+
+  // First-LED position on a closed shape: nudge the ring seam one LED at a
+  // time. Same 'seam' changeKind as the canvas handle, so verification
+  // invalidation and locking behave identically.
+  const nudgeSeam = (run, delta, label) => {
+    const min = run.source.from;
+    const max = run.source.to;
+    const current = run.seamLed ?? min;
+    const next = Math.min(max, Math.max(min, current + delta));
+    if (next === current) return;
+    const result = mutate(draft => {
+      const target = draft.runs.find(item => item.id === run.id);
+      if (target?.type === 'strip') target.seamLed = next;
+    }, { changeKind: 'seam', runIds: [run.id] });
+    if (result.ok) setOrderAnnouncement(`${label} first LED moved to position ${next + 1}`);
+  };
+
   // Primary wire-order move: same canonical mutation, plus a polite
   // announcement mirroring the playlist's reorder live region.
   const moveOrderedRun = (output, run, delta, label) => {
@@ -759,6 +791,21 @@ export function WireModePanel({ state, connected, cardHost }) {
           <span className="lw-order-count">{count} LED{count === 1 ? '' : 's'}</span>
         </span>
         <span className="lw-order-actions">
+          {wiring.outputs.length > 1 && (
+            <select
+              className="lw-order-wire"
+              aria-label={`Data wire for ${label}`}
+              title={`Which data wire feeds ${label}`}
+              value={output.id}
+              disabled={wiring.locked}
+              onClick={event => event.stopPropagation()}
+              onChange={event => { event.stopPropagation(); moveRunToWire(run, output, event.target.value, label); }}
+            >
+              {wiring.outputs.map((item, itemIndex) => (
+                <option key={item.id} value={item.id}>{outputName(itemIndex).replace('Output', 'Wire')}</option>
+              ))}
+            </select>
+          )}
           {run.type === 'strip' && (
             <button
               className="lw-order-reverse"
@@ -770,6 +817,25 @@ export function WireModePanel({ state, connected, cardHost }) {
             ><span aria-hidden="true">⇄</span><span className="lw-order-reverse-word"> Reverse</span></button>
           )}
         </span>
+        {selected && run.type === 'strip' && stripsById.get(run.source.stripId)?.closed && (
+          <span className="lw-order-seam" onClick={event => event.stopPropagation()}>
+            <span className="lw-order-seam-label">First LED</span>
+            <button
+              type="button"
+              aria-label={`Move first LED of ${label} back one`}
+              disabled={wiring.locked}
+              onClick={() => nudgeSeam(run, -1, label)}
+            >−</button>
+            <strong data-testid="order-seam-position">{(run.seamLed ?? run.source.from) + 1}</strong>
+            <button
+              type="button"
+              aria-label={`Move first LED of ${label} forward one`}
+              disabled={wiring.locked}
+              onClick={() => nudgeSeam(run, 1, label)}
+            >+</button>
+            <span className="lw-order-seam-hint">or drag the ring handle on the drawing</span>
+          </span>
+        )}
       </li>
     );
   };
@@ -844,8 +910,19 @@ export function WireModePanel({ state, connected, cardHost }) {
             <div key={output.id} className="lw-order-lane" data-output-id={output.id}>
               {wiring.outputs.length > 1 && (
                 <div className="lw-order-lane-h">
-                  <strong>{outputName(outputIndex)}</strong>
-                  <span>GPIO {output.pin}</span>
+                  <strong>{outputName(outputIndex).replace('Output', 'Wire')}</strong>
+                  <select
+                    className="lw-lane-gpio"
+                    aria-label={`${outputName(outputIndex).replace('Output', 'Wire')} GPIO pin`}
+                    value={output.pin}
+                    disabled={wiring.locked}
+                    onChange={event => changeOutputPin(output.id, Number(event.target.value))}
+                  >
+                    {CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => (
+                      <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePinsFor(`output:${output.id}`).includes(pin)}>GPIO {pin}</option>
+                    ))}
+                  </select>
+                  <span className="lw-lane-total">{runs.reduce((sum, run) => sum + (compiledRunCounts.get(run.id) || 0), 0)} LEDs</span>
                 </div>
               )}
               <ol className="lw-order-list" aria-label={wiring.outputs.length > 1 ? `${outputName(outputIndex)} wire order` : 'Wire order'}>
@@ -858,6 +935,16 @@ export function WireModePanel({ state, connected, cardHost }) {
             </div>
           );
         })}
+        {wiring.outputs.length > 1 && !wiring.locked && (
+          <p className="lw-order-split-hint">
+            Need half a strip on each wire?{' '}
+            <button
+              type="button"
+              className="lw-order-split-link"
+              onClick={() => { setAdvanced(true); document.querySelector('[data-testid="advanced-wiring"]')?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }}
+            >Split a strip in Advanced wiring</button>
+          </p>
+        )}
         {mutationError && <p className="lw-wiring-error" role="alert">{mutationError}</p>}
       </section>
 

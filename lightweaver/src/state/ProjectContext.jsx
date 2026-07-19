@@ -103,6 +103,8 @@ function makeInitialLayoutState(layout) {
       layerGroups: layout.layerGroups,
       layerOrder: layout.layerOrder,
       editCounts: layout.editCounts,
+      stripCountOverrides: layout.stripCountOverrides,
+      stripDensities: layout.stripDensities,
       hidden: layout.hidden || {},
       svgText: layout.svgText ?? null,
       viewBox: layout.viewBox || '0 0 640 400',
@@ -174,6 +176,7 @@ function layoutRootReducer(state, action) {
         hidden: {},
         editCounts: {},
         stripCountOverrides: {},
+        stripDensities: {},
         layerGroups: [],
         layerOrder: [],
         patchBoard: action.patchBoard,
@@ -377,6 +380,7 @@ export function ProjectProvider({ children }) {
     pxPerMm: layoutPxPerMm,
     editCounts: layoutEditCounts,
     stripCountOverrides: layoutStripCountOverrides,
+    stripDensities: layoutStripDensities,
     layerGroups: layoutLayerGroups,
     layerOrder: layoutLayerOrder,
     patchBoard,
@@ -397,6 +401,7 @@ export function ProjectProvider({ children }) {
   const setLayoutPxPerMm     = useCallback(value => setLayoutField('pxPerMm', value), [setLayoutField]);
   const setLayoutEditCounts  = useCallback(value => setLayoutField('editCounts', value), [setLayoutField]);
   const setLayoutStripCountOverrides = useCallback(value => setLayoutField('stripCountOverrides', value), [setLayoutField]);
+  const setLayoutStripDensities = useCallback(value => setLayoutField('stripDensities', value), [setLayoutField]);
   const setLayoutLayerGroups = useCallback(value => setLayoutField('layerGroups', value), [setLayoutField]);
   const setLayoutLayerOrder  = useCallback(value => setLayoutField('layerOrder', value), [setLayoutField]);
   const setPatchBoard        = useCallback(value => setLayoutField('patchBoard', value), [setLayoutField]);
@@ -718,6 +723,7 @@ export function ProjectProvider({ children }) {
         pxPerMm: layout.pxPerMm || defaults.layout.pxPerMm,
         editCounts: layout.editCounts || {},
         stripCountOverrides: layout.stripCountOverrides || {},
+        stripDensities: layout.stripDensities || {},
         layerGroups: layout.layerGroups || [],
         layerOrder: layout.layerOrder || [],
         patchBoard: normalizePatchBoard(shouldSeedDefaultLayout ? defaults.layout.patchBoard : layout.patchBoard, restoredStrips),
@@ -841,6 +847,7 @@ export function ProjectProvider({ children }) {
         pxPerMm: layoutPxPerMm,
         editCounts: layoutEditCounts,
         stripCountOverrides: layoutStripCountOverrides,
+        stripDensities: layoutStripDensities,
         layerGroups: layoutLayerGroups,
         layerOrder: layoutLayerOrder,
         patchBoard: normalizePatchBoard(patchBoard, strips),
@@ -884,7 +891,7 @@ export function ProjectProvider({ children }) {
     return project;
   }, [
     projectId, projectName, strips, starterPending, viewBox, svgText, hidden, patchBoard, wiring,
-    layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutLayerGroups, layoutLayerOrder,
+    layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutStripDensities, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
     motionSmoothing,
@@ -989,6 +996,7 @@ export function ProjectProvider({ children }) {
       layoutPxPerMm,     setLayoutPxPerMm,
       layoutEditCounts,  setLayoutEditCounts,
       layoutStripCountOverrides, setLayoutStripCountOverrides,
+      layoutStripDensities, setLayoutStripDensities,
       layoutLayerGroups, setLayoutLayerGroups,
       layoutLayerOrder,  setLayoutLayerOrder,
       patchBoard,        setPatchBoard,

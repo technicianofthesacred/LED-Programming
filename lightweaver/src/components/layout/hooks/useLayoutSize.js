@@ -1,20 +1,35 @@
 import { useState, useCallback } from 'react';
-import { recountStrips, svgPathLength } from '../../../lib/layoutGeometry.js';
+import {
+  clampLedCount,
+  parsedVb,
+  recountStrips,
+  svgPathLength,
+} from '../../../lib/layoutGeometry.js';
+import { scaleStripGeometry } from '../../../lib/stripScale.js';
 
-// Size mode logic: artwork density / real-world scale / per-strip counts.
-// `ctx` is the shared layout bundle assembled by useLayoutState.
+// Geometry clamps — keep in lockstep with useLayoutStrips.js (scaleStrip),
+// which owns the same bounds for the Draw-mode − / + resize control.
+const MIN_STRIP_SVG_LENGTH = 20;
+const MAX_STRIP_LENGTH_ARTWORK_FACTOR = 4;
+
+// Size mode logic: the physical strips are the ground truth. Each strip has a
+// real length (metres) and a reel density (LEDs/m, `stripDensities[id]`,
+// falling back to the global `density` default); counts and drawn geometry
+// derive from those. `ctx` is the shared layout bundle from useLayoutState.
 export function useLayoutSize(ctx) {
   const {
     strips, setStrips,
+    viewBox,
     editCounts, setEditCounts,
     stripCountOverrides, setStripCountOverrides,
+    stripDensities, setStripDensities,
     density, setDensity,
     pxPerMm, setPxPerMm,
     pushLayoutHistory,
     rebuildStrip,
   } = ctx;
 
-  // 'cm' | 'in' — display unit for the artwork Size control
+  // 'cm' | 'in' — display unit for the drawing-scale control
   const [scaleUnit, setScaleUnit] = useState('cm');
 
   const getLedCount = (layer) => {
@@ -22,13 +37,20 @@ export function useLayoutSize(ctx) {
     return Math.max(1, Math.round((layer.svgLength / pxPerMm) * density / 1000));
   };
 
-  // Compute a strip's LED count from the current density/scale (canonical formula).
+  // The density a strip actually counts at: its own reel density if declared,
+  // else the global default.
+  const stripDensity = useCallback(
+    (id) => (Number.isFinite(stripDensities[id]) && stripDensities[id] > 0 ? stripDensities[id] : density),
+    [stripDensities, density],
+  );
+
+  // Compute a strip's LED count from its density + the current scale (canonical formula).
   const computeStripCount = useCallback((strip) => {
     const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
     const len = (Number.isFinite(strip.svgLength) && strip.svgLength > 0)
       ? strip.svgLength : svgPathLength(strip.pathData);
-    return { len, count: Math.max(1, Math.round((len / scale) * density / 1000)) };
-  }, [pxPerMm, density]);
+    return { len, count: Math.max(1, Math.round((len / scale) * stripDensity(strip.id) / 1000)) };
+  }, [pxPerMm, stripDensity]);
 
   // Re-sample a strip to `newCount` without touching the override map. Used by
   // the per-layer inspector (whose manual counts ride in `editCounts`, not the
@@ -39,8 +61,8 @@ export function useLayoutSize(ctx) {
 
   // Manual per-strip count: re-sample the strip AND flag it overridden so that
   // density / scale / calibrate rescales leave its count alone. This is the
-  // handler behind the per-strip count controls in Size mode and Draw mode's
-  // strip detail.
+  // handler behind the per-strip count fine-tune controls in Size mode and
+  // Draw mode's strip detail.
   const setStripCount = useCallback((id, newCount) => {
     pushLayoutHistory();
     resampleStrip(id, newCount);
@@ -61,7 +83,7 @@ export function useLayoutSize(ctx) {
     });
   }, [pushLayoutHistory, setStrips, rebuildStrip, setStripCountOverrides]);
 
-  // Clear a strip's override and recompute its count from the current density/scale.
+  // Clear a strip's override and recompute its count from its density + scale.
   const resetStripCount = useCallback((id) => {
     pushLayoutHistory();
     setStripCountOverrides(prev => {
@@ -77,19 +99,62 @@ export function useLayoutSize(ctx) {
     }));
   }, [setStrips, setStripCountOverrides, rebuildStrip, computeStripCount, pushLayoutHistory]);
 
+  // ── The inverted sizing model ─────────────────────────────────────────────
+  // Declare a strip's physical truth: how long the purchased strip is
+  // (`lengthM`, metres) and/or the reel density it was cut from (`ledsPerM`).
+  // The LED count derives (round(length × density)) and the drawn geometry is
+  // rescaled about its own center so svgLength = lengthM · 1000 · pxPerMm.
+  // Geometry clamps (min 20 svg px, max 4× the artwork's larger dimension)
+  // win over the request: when a length is clamped, the achieved length is
+  // what the count derives from and what the panel reads back.
+  const setStripPhysical = useCallback((id, { lengthM, ledsPerM } = {}) => {
+    const strip = strips.find(s => s.id === id);
+    if (!strip) return;
+    const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+    const nextDensity = Number.isFinite(ledsPerM) && ledsPerM > 0 ? ledsPerM : stripDensity(id);
+    const currentLen = (Number.isFinite(strip.svgLength) && strip.svgLength > 0)
+      ? strip.svgLength : svgPathLength(strip.pathData);
+    if (!(currentLen > 0)) return;
+
+    let targetLen = Number.isFinite(lengthM) && lengthM > 0 ? lengthM * 1000 * scale : currentLen;
+    const vb = parsedVb(viewBox);
+    const maxLen = MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h);
+    targetLen = Math.min(Math.max(targetLen, MIN_STRIP_SVG_LENGTH), maxLen);
+
+    // Count follows the ACHIEVED length so length · density · count never
+    // disagree, even when the geometry clamp bites.
+    const count = clampLedCount(Math.round((targetLen / scale) * nextDensity / 1000));
+
+    pushLayoutHistory();
+    setStripDensities(prev => (prev[id] === nextDensity ? prev : { ...prev, [id]: nextDensity }));
+    setStrips(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      const len = (Number.isFinite(s.svgLength) && s.svgLength > 0)
+        ? s.svgLength : svgPathLength(s.pathData);
+      const factor = len > 0 ? targetLen / len : 1;
+      const scaled = factor !== 1
+        ? scaleStripGeometry({ ...s, svgLength: len }, factor)
+        : { ...s, svgLength: len };
+      return rebuildStrip({ ...scaled, pixelCount: count });
+    }));
+    // The physical declaration IS the count's source of truth — ride the
+    // override path so global density / scale changes leave it alone.
+    setStripCountOverrides(prev => (prev[id] ? prev : { ...prev, [id]: true }));
+  }, [strips, pxPerMm, viewBox, stripDensity, pushLayoutHistory, setStripDensities, setStrips, rebuildStrip, setStripCountOverrides]);
+
   const handleDensityChange = useCallback((newDensity) => {
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, pxPerMm, newDensity, stripCountOverrides));
+    setStrips(prev => recountStrips(prev, pxPerMm, newDensity, stripCountOverrides, stripDensities));
     setEditCounts({});
     setDensity(newDensity);
-  }, [pxPerMm, stripCountOverrides, setStrips, setEditCounts, setDensity, pushLayoutHistory]);
+  }, [pxPerMm, stripCountOverrides, stripDensities, setStrips, setEditCounts, setDensity, pushLayoutHistory]);
 
   const handleScaleChange = useCallback((nextPxPerMm) => {
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides));
+    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides, stripDensities));
     setEditCounts({});
     setPxPerMm(nextPxPerMm);
-  }, [density, stripCountOverrides, setStrips, setEditCounts, setPxPerMm, pushLayoutHistory]);
+  }, [density, stripCountOverrides, stripDensities, setStrips, setEditCounts, setPxPerMm, pushLayoutHistory]);
 
   // Calibrate the whole piece's scale from one strip's counted LEDs. The
   // calibrating strip is NOT marked overridden: pxPerMm is back-solved so this
@@ -103,16 +168,17 @@ export function useLayoutSize(ctx) {
       ? strip.svgLength : svgPathLength(strip.pathData);
     const count = Math.max(1, Math.round(Number(realCount)));
     if (!len || !Number.isFinite(count)) return;
-    // nextPxPerMm = (len * density) / (count * 1000). Substituting back into the
-    // recount formula recovers exactly `count` for this strip (round(count) ===
-    // count), so its count never drifts — no override required.
-    const nextPxPerMm = (len * density) / (count * 1000);
+    // nextPxPerMm = (len * density) / (count * 1000), with THIS strip's reel
+    // density. Substituting back into the recount formula recovers exactly
+    // `count` for this strip (round(count) === count), so its count never
+    // drifts — no override required.
+    const nextPxPerMm = (len * stripDensity(stripId)) / (count * 1000);
     if (!Number.isFinite(nextPxPerMm) || nextPxPerMm <= 0) return;
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides));
+    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides, stripDensities));
     setPxPerMm(nextPxPerMm);
     setEditCounts({});
-  }, [strips, density, stripCountOverrides, setStrips, setPxPerMm, setEditCounts, pushLayoutHistory]);
+  }, [strips, density, stripDensity, stripCountOverrides, stripDensities, setStrips, setPxPerMm, setEditCounts, pushLayoutHistory]);
 
   return {
     scaleUnit, setScaleUnit,
@@ -122,6 +188,9 @@ export function useLayoutSize(ctx) {
     setStripCounts,
     resetStripCount,
     stripCountOverrides,
+    stripDensities,
+    stripDensity,
+    setStripPhysical,
     handleDensityChange,
     handleScaleChange,
     calibrateScaleFromStrip,

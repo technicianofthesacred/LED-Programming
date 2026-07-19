@@ -217,7 +217,7 @@ test('review separates install from export and names the card connection state',
   // The install summary reads from the always-visible stat tiles; the old
   // color-order spec row ("GRB") stays out of primary copy.
   await expect(page.getByText('Data wires', { exact: true })).toBeVisible();
-  await expect(page.getByText('LEDs', { exact: true })).toBeVisible();
+  await expect(page.locator('.lwui-tile-label').filter({ hasText: /^LEDs$/ })).toBeVisible();
   await expect(page.getByText('Configured color order')).toHaveCount(0);
 });
 

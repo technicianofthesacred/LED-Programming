@@ -51,6 +51,9 @@ export function createLayoutState(init = {}) {
     layerOrder: init.layerOrder || [],
     editCounts: init.editCounts || {},
     stripCountOverrides: init.stripCountOverrides || {},
+    // Per-strip LED density (id → LEDs/m) — the density printed on the reel a
+    // strip was cut from. Strips without an entry follow the global `density`.
+    stripDensities: init.stripDensities || {},
     hidden: init.hidden || {},
     svgText: init.svgText ?? null,
     viewBox: init.viewBox || DEFAULT_VIEWBOX,
@@ -166,10 +169,12 @@ function pruneRemovedStrips(state, removedIds, extra = {}) {
   const hidden = { ...state.hidden };
   const editCounts = { ...state.editCounts };
   const stripCountOverrides = { ...state.stripCountOverrides };
+  const stripDensities = { ...state.stripDensities };
   for (const id of removed) {
     delete hidden[id];
     delete editCounts[id];
     delete stripCountOverrides[id];
+    delete stripDensities[id];
   }
   const layerGroups = state.layerGroups
     .map(g => ({ ...g, members: g.members.filter(m => !removed.has(m.stripId)) }))
@@ -189,6 +194,7 @@ function pruneRemovedStrips(state, removedIds, extra = {}) {
     hidden,
     editCounts,
     stripCountOverrides,
+    stripDensities,
     layerGroups,
     layerOrder,
     patchBoard: resyncBoard(state.patchBoard, strips),
@@ -514,6 +520,7 @@ export function makeLayoutSnapshot(state) {
     layerOrder: state.layerOrder,
     editCounts: state.editCounts,
     stripCountOverrides: state.stripCountOverrides,
+    stripDensities: state.stripDensities,
     hidden: state.hidden,
     svgText: state.svgText,
     viewBox: state.viewBox,
@@ -540,6 +547,7 @@ export function applyLayoutSnapshot(state, snap, rebuild = identityRebuild) {
     layerOrder: snap.layerOrder,
     editCounts: snap.editCounts,
     stripCountOverrides: snap.stripCountOverrides,
+    stripDensities: snap.stripDensities || {},
     hidden: snap.hidden,
     svgText: snap.svgText,
     viewBox: snap.viewBox,

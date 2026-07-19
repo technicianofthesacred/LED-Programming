@@ -181,14 +181,21 @@ export function svgPathLength(pathData) {
 // (the per-strip count controls in Size/Draw mode). Those keep their count +
 // sampled pixels untouched — density / scale / calibrate rescales only refresh
 // their measured `svgLength`. Everything else rescales as before.
-export function recountStrips(strips, pxPerMm, density, overrides = {}) {
+//
+// `stripDensities` (id → LEDs/m) records the density of the physical reel each
+// strip was cut from; a strip with its own entry counts from that instead of
+// the global `density`, so changing the global default never restyles it.
+export function recountStrips(strips, pxPerMm, density, overrides = {}, stripDensities = {}) {
   const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
   return strips.map(s => {
     const len = (Number.isFinite(s.svgLength) && s.svgLength > 0)
       ? s.svgLength
       : svgPathLength(s.pathData);
     if (overrides[s.id]) return { ...s, svgLength: len };
-    const count = Math.max(1, Math.round((len / scale) * density / 1000));
+    const d = Number.isFinite(stripDensities[s.id]) && stripDensities[s.id] > 0
+      ? stripDensities[s.id]
+      : density;
+    const count = Math.max(1, Math.round((len / scale) * d / 1000));
     return {
       ...s,
       svgLength: len,

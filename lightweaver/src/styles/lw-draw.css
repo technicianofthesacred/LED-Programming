@@ -1,0 +1,64 @@
+/* ── Draw mode: physical-first controls ──────────────────────────────────────
+   Companion to v3-layout-extra.css (which owns the base .la-* Draw panel
+   idiom). This file only adds the new lw-* pieces: the icon shape chooser,
+   the live free-draw readout, and the LED fine-tune stepper. Tokens only. */
+
+/* "+ Add strip" chooser — icon tiles + one LEDs input */
+.lw-shape-chooser { display: flex; flex-direction: column; gap: 8px; }
+.lw-shape-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+.la-add-strip-chooser .btn.lw-shape-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; min-height: 48px; padding: 6px 2px;
+  color: var(--text-mid);
+}
+.la-add-strip-chooser .btn.lw-shape-tile:hover { color: var(--accent); border-color: var(--accent); }
+.lw-shape-tile svg { flex-shrink: 0; }
+.lw-shape-tile-label {
+  font-size: 9px; line-height: 1.2; color: var(--text-faint);
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 100%;
+}
+.lw-shape-tile:hover .lw-shape-tile-label { color: inherit; }
+
+.lw-shape-count { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.lw-shape-count-label { color: var(--text-mid); flex-shrink: 0; }
+.lw-shape-count input[type=number] {
+  width: 64px; height: 28px; text-align: right; background: var(--bg-app);
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 12px; padding: 0 8px;
+}
+.lw-shape-count-note {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Live physical readout + key hints while drawing */
+.lw-draw-live {
+  display: block; margin-bottom: 2px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-hi);
+}
+.lw-draw-keys { display: block; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+
+/* LED count fine-tune stepper (− count +) — count is derived from size ×
+   density; this control exists for cut-strip / miscount calibration only. */
+.lw-led-nudge { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.lw-led-nudge .btn {
+  width: 30px; min-width: 30px; height: 26px; padding: 0;
+  justify-content: center; flex-shrink: 0;
+  font-size: 15px; line-height: 1;
+}
+.lw-led-nudge input[type=number] { min-width: 0; }
+
+/* Touch: everything tappable in these new controls meets 44px */
+@media (pointer: coarse) {
+  .la-add-strip-chooser .btn.lw-shape-tile { min-height: 56px; }
+  .lw-led-nudge .btn { min-width: 44px; height: 44px; }
+  .lw-shape-count input[type=number],
+  .lw-led-nudge input[type=number] { height: 44px; }
+  .la-size-ctrl .btn { min-width: 44px; height: 44px; }
+}

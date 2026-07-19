@@ -25,10 +25,42 @@ import {
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
 import { PrimitiveStarter } from './PrimitiveStarter.jsx';
+import '../../../styles/lw-draw.css';
 
 function startedFromDragHandle(e) {
   return !!e.target?.closest?.('[data-drag-handle="true"]');
 }
+
+// Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
+function formatMetersValue(meters) {
+  return meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
+}
+
+// Convert a strip's on-canvas path length to metres at the current scale.
+function stripMeters(svgLength, pxPerMm) {
+  const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+  return svgLength / scale / 1000;
+}
+
+// Compact glyphs for the "+ Add strip" shape tiles (icon leads, small label
+// under it). Stroke inherits the button's text color.
+const shapeGlyph = (children) => (
+  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 16 16" fill="none"
+       stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const SHAPE_ICONS = {
+  line: shapeGlyph(<line x1="2" y1="14" x2="14" y2="2"/>),
+  circle: shapeGlyph(<circle cx="8" cy="8" r="6"/>),
+  square: shapeGlyph(<rect x="2.5" y="2.5" width="11" height="11" rx="1"/>),
+  free: shapeGlyph(<path d="M2 12 C 4.5 3, 8 14, 11 6 S 13.5 4.5, 14 4"/>),
+  import: shapeGlyph(<>
+    <path d="M3 2.5 h6.5 L13 6 v7.5 H3 Z"/>
+    <path d="M9.5 2.5 V6 H13"/>
+    <path d="M8 8 v3.5 M6.5 10 L8 11.5 L9.5 10"/>
+  </>),
+};
 
 // ── Draw-mode side panel ─────────────────────────────────────────────────────
 // Verbatim lift of LayoutScreen's Draw branch: error banner, draw-mode hint,
@@ -41,7 +73,7 @@ function startedFromDragHandle(e) {
 export function DrawModePanel({ state }) {
   const {
     strips, layers, hidden, setHidden,
-    svgText, pxPerMm,
+    svgText, pxPerMm, density,
     editCounts, setEditCounts, layerGroups, layerOrder, setLayers,
     selectStrip, selectLayer, selectPaths, toggleStripSel,
     clearLayoutSelection, renameLayoutSelection,
@@ -77,29 +109,43 @@ export function DrawModePanel({ state }) {
     drawMode, waypoints,
     pendingDraw, pendingDrawName, setPendingDrawName,
     pendingDrawCount, setPendingDrawCount, pendingDrawNameRef,
-    finishDraw, confirmDraw, cancelDraw, drawEstimatedLeds,
+    confirmDraw, cancelDraw, completeDraw, drawStats,
     setHoveredLayerId, setHoveredSubPathId,
     // import
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
   } = state;
 
-  // "+ Add strip" shape chooser (Line / Circle / Square / Free draw) — the
-  // visible add path once the starter picker is gone. Ephemeral view state.
+  // "+ Add strip" shape chooser — icon tiles (Line / Circle / Square / Free
+  // draw / Import vector) plus one LEDs input. The count is the strip the
+  // user is physically adding, and the shape arrives sized to hold it at the
+  // strip's fixed density. Ephemeral view state.
   const [addChooserOpen, setAddChooserOpen] = useState(false);
+  const [addLedCount, setAddLedCount] = useState(60);
 
   const pickAddShape = (key) => {
     setAddChooserOpen(false);
+    if (key === 'import') {
+      // Reuse the existing SVG import flow (same hidden input as Import SVG).
+      fileRef.current?.click();
+      return;
+    }
     if (key === 'free') {
       // Same entry as the toolbar pencil / starter Free draw: arm draw mode
-      // with a clean waypoint slate.
+      // with a clean waypoint slate. Free draw ignores the count input — the
+      // path is drawn first, then measured.
       setWaypoints([]);
       setGhostPt(null);
       setDrawMode(true);
       return;
     }
-    addPrimitiveStrip(key);
+    addPrimitiveStrip(key, clampLedCount(addLedCount));
   };
+
+  const addShapeTiles = [
+    ...STARTER_PRIMITIVES,
+    { key: 'import', label: 'Import vector' },
+  ];
 
   return (
     <>
@@ -134,21 +180,20 @@ export function DrawModePanel({ state }) {
                 Cancel (Esc)
               </button>
             </div>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-faint)', display: 'block' }}>
-              {waypoints.length} point{waypoints.length !== 1 ? 's' : ''}
-              {waypoints.length >= 2 && ` · ~${drawEstimatedLeds} LEDs · double-click to finish`}
-              {waypoints.length < 2 && ' · click to place, ⌫ undo, right-click cancel'}
+            {waypoints.length >= 1 && drawStats && (
+              <span className="lw-draw-live" data-testid="draw-live-readout">
+                {waypoints.length} point{waypoints.length !== 1 ? 's' : ''}
+                {' · '}{formatMetersValue(drawStats.meters)} m · {drawStats.leds} LED{drawStats.leds !== 1 ? 's' : ''} so far
+              </span>
+            )}
+            <span className="lw-draw-keys">
+              Click to add points · Double-click or Enter to finish · Esc to cancel
             </span>
             {waypoints.length >= 2 && (
               <button
                 className="btn primary"
                 style={{ width: '100%', justifyContent: 'center', marginTop: 8 }}
-                onClick={() => {
-                  finishDraw(waypoints);
-                  setDrawMode(false);
-                  setWaypoints([]);
-                  setGhostPt(null);
-                }}>
+                onClick={() => completeDraw()}>
                 Finish path
               </button>
             )}
@@ -172,19 +217,23 @@ export function DrawModePanel({ state }) {
                 autoFocus
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                <span style={{ color: 'var(--text-mid)', width: 72, flexShrink: 0 }}>LED count</span>
-                <input className="lw" type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
-                       value={ledCountToSliderValue(pendingDrawCount)}
-                       aria-label="New strip LED count slider"
-                       onChange={e => setPendingDrawCount(sliderValueToLedCount(e.target.value))}
-                       style={{ flex: 1, minWidth: 0 }}/>
-                <input type="number" min="1" max={LED_COUNT_MAX}
-                       value={pendingDrawCount}
-                       aria-label="New strip LED count"
-                       inputMode="numeric"
-                       onFocus={e => e.target.select()}
-                       onChange={e => setPendingDrawCount(clampLedCount(e.target.value))}/>
+                <span style={{ color: 'var(--text-mid)', width: 72, flexShrink: 0 }}>LEDs</span>
+                <div className="lw-led-nudge">
+                  <button type="button" className="btn" aria-label="One LED fewer" title="Nudge the count down 1"
+                          onClick={() => setPendingDrawCount(clampLedCount(pendingDrawCount - 1))}>−</button>
+                  <input type="number" min="1" max={LED_COUNT_MAX}
+                         value={pendingDrawCount}
+                         aria-label="New strip LED count"
+                         inputMode="numeric"
+                         onFocus={e => e.target.select()}
+                         onChange={e => setPendingDrawCount(clampLedCount(e.target.value))}/>
+                  <button type="button" className="btn" aria-label="One LED more" title="Nudge the count up 1"
+                          onClick={() => setPendingDrawCount(clampLedCount(pendingDrawCount + 1))}>+</button>
+                </div>
               </div>
+              <span className="lw-draw-keys">
+                Count comes from your path length at this strip's density — nudge to match the real strip.
+              </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn primary" style={{ flex: 1, justifyContent: 'center' }} onClick={confirmDraw}>
                   + Add Strip
@@ -296,7 +345,7 @@ export function DrawModePanel({ state }) {
                             )}
                             <span className="nm">{m.name}</span>
                             {isStripGroup ? (
-                              <span className="len">{(m.pixelCount || 0).toLocaleString()}px</span>
+                              <span className="len">{(m.pixelCount || 0).toLocaleString()} LEDs</span>
                             ) : m.svgLength > 0 && (
                               <span className="len">{Math.round(m.svgLength / pxPerMm)}mm</span>
                             )}
@@ -683,14 +732,33 @@ export function DrawModePanel({ state }) {
               + Add strip
             </button>
             {addChooserOpen && (
-              <div className="la-add-strip-chooser" data-testid="layout-add-strip-chooser"
+              <div className="la-add-strip-chooser lw-shape-chooser" data-testid="layout-add-strip-chooser"
                    role="group" aria-label="New strip shape">
-                {STARTER_PRIMITIVES.map(primitive => (
-                  <button key={primitive.key} type="button" className="btn"
-                          onClick={() => pickAddShape(primitive.key)}>
-                    {primitive.label}
-                  </button>
-                ))}
+                <div className="lw-shape-tiles">
+                  {addShapeTiles.map(tile => (
+                    <button key={tile.key} type="button" className="btn lw-shape-tile"
+                            aria-label={tile.label}
+                            title={tile.key === 'free' ? 'Draw any path — its length sets the LEDs'
+                              : tile.key === 'import' ? 'Import an SVG of your artwork'
+                              : `Add a ${tile.label.toLowerCase()} sized for the LEDs below`}
+                            onClick={() => pickAddShape(tile.key)}>
+                      {SHAPE_ICONS[tile.key]}
+                      <span className="lw-shape-tile-label" aria-hidden="true">{tile.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="lw-shape-count">
+                  <span className="lw-shape-count-label">LEDs</span>
+                  <input type="number" min="1" max={LED_COUNT_MAX} step="1"
+                         value={addLedCount}
+                         aria-label="New strip LEDs"
+                         inputMode="numeric"
+                         onFocus={e => e.target.select()}
+                         onChange={e => setAddLedCount(clampLedCount(e.target.value))}/>
+                  <span className="lw-shape-count-note">
+                    ≈ {formatMetersValue(clampLedCount(addLedCount) / density)} m at {density} LEDs/m
+                  </span>
+                </div>
               </div>
             )}
             {selectedStrips.length > 1 && (
@@ -772,12 +840,14 @@ export function DrawModePanel({ state }) {
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
                                     className="layer-name" style={{ cursor: 'pointer', flex: 1, minWidth: 0 }}/>
                       {s.reversed && <span className="la-strip-rev">REV</span>}
-                      <span className="layer-len">{s.pixelCount} px</span>
+                      <span className="layer-len">{s.pixelCount} LEDs</span>
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
                         <div className="hint">Drag on canvas to move · − / + to resize · arrow keys to nudge</div>
-                        {/* Size — uniform resize about the strip's own center */}
+                        {/* Size — uniform resize about the strip's own center.
+                            Physical-first: resizing recounts the LEDs (length ×
+                            density) unless the count was hand-pinned. */}
                         <div className="row">
                           <span className="k">Size</span>
                           <div className="la-size-ctrl">
@@ -785,35 +855,43 @@ export function DrawModePanel({ state }) {
                                     title="Shrink 10%"
                                     onClick={() => scaleStrip(s.id, 0.9)}>−</button>
                             <span className="la-size-readout" data-testid="strip-size-readout">
-                              {Math.round((Number.isFinite(s.svgLength) && s.svgLength > 0)
-                                ? s.svgLength
-                                : svgPathLength(s.pathData))} px
+                              {formatMetersValue(stripMeters(
+                                (Number.isFinite(s.svgLength) && s.svgLength > 0)
+                                  ? s.svgLength
+                                  : svgPathLength(s.pathData),
+                                pxPerMm))} m · {s.pixelCount} LED{s.pixelCount !== 1 ? 's' : ''}
                             </span>
                             <button type="button" className="btn" aria-label="Make strip bigger"
                                     title="Grow 10%"
                                     onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>
                           </div>
                         </div>
-                        {/* LED count */}
+                        {/* LED count — a fine-tune nudge, not a free dial: the
+                            count follows size × density; ± is for calibrating
+                            cut strips or miscounts (hand-pins the count). */}
                         <div className="row">
                           <span className="k">LEDs</span>
-                          <input className="lw" type="range" min={LED_COUNT_SLIDER_MIN} max={LED_COUNT_SLIDER_MAX} step="1"
-                                 value={ledCountToSliderValue(s.pixelCount)}
-                                 aria-label="Strip LED count slider"
-                                 onChange={e => setStripCount(s.id, sliderValueToLedCount(e.target.value))}/>
-                          <input type="number" min="1" max={LED_COUNT_MAX} step="1"
-                                 value={s.pixelCount}
-                                 aria-label="Strip LED count"
-                                 inputMode="numeric"
-                                 style={{ width: 72 }}
-                                 onFocus={e => e.target.select()}
-                                 onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
-                                 onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
-                                 onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
+                          <div className="lw-led-nudge">
+                            <button type="button" className="btn" aria-label="One LED fewer" title="Nudge the count down 1"
+                                    onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 1))}>−</button>
+                            <input type="number" min="1" max={LED_COUNT_MAX} step="1"
+                                   value={s.pixelCount}
+                                   aria-label="Strip LED count"
+                                   inputMode="numeric"
+                                   style={{ width: 72 }}
+                                   onFocus={e => e.target.select()}
+                                   onClick={e => e.target.select()}
+                                   onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                   onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                   onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
+                            <button type="button" className="btn" aria-label="One LED more" title="Nudge the count up 1"
+                                    onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 1))}>+</button>
+                          </div>
                           <button className="btn" style={{ padding: '0 6px' }}
                                   title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
                                   onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Set real count</button>
                         </div>
+                        <div className="hint">Count follows size at this strip's density — nudge ± only to match the real strip.</div>
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
                             USB direct cap {usbLedMaxPixels} LEDs.

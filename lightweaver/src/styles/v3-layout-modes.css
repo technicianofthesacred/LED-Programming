@@ -352,14 +352,17 @@
 .lw-order-review-warning { margin: 0 0 8px; font-size: 11.5px; line-height: 1.4; }
 .lw-order-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .lw-order-lane { min-width: 0; }
-.lw-order-lane-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 2px 2px; }
+.lw-order-lane-h { display: flex; align-items: center; gap: 8px; padding: 10px 2px 4px; }
 .lw-order-lane-h strong { color: var(--text-hi); font-size: 11.5px; }
-.lw-order-lane-h span { color: var(--text-faint); font: 9px var(--font-mono); }
+.lw-lane-gpio { min-height: 36px; padding: 0 6px; border: 1px solid var(--border-hair); border-radius: var(--r-sm); background: var(--bg-elev); color: var(--text-mid); font: 10.5px var(--font-mono); }
+.lw-lane-total { margin-left: auto; color: var(--text-faint); font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; }
 .lw-order-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .lw-order-row {
   position: relative;
-  /* number · drag · name+count · [▲ ▼ ⇄ Reverse] — one flex row, no grid areas */
+  /* number-grip · name+count · [wire ⇄ Reverse] — one flex row, no grid areas.
+     wrap exists solely for the full-width first-LED seam line. */
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -393,6 +396,15 @@
 .lw-order-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-hi); font-size: 13px; font-weight: 600; line-height: 1.25; }
 .lw-order-count { flex: 0 0 auto; color: var(--text-faint); font: 10.5px var(--font-mono); font-variant-numeric: tabular-nums; }
 .lw-order-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.lw-order-wire { flex: 0 0 auto; min-height: 44px; padding: 0 4px; border: 1px solid var(--border-hair); border-radius: var(--r-sm); background: var(--bg-elev); color: var(--text-mid); font-size: 11px; }
+/* First-LED (ring seam) nudge — wraps to its own quiet line under the row. */
+.lw-order-seam { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 4px 52px; }
+.lw-order-seam-label { color: var(--text-mid); font-size: 11px; font-weight: 600; }
+.lw-order-seam strong { min-width: 24px; color: var(--text-hi); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; text-align: center; }
+.lw-order-seam button { min-width: 36px; border: 1px solid var(--border-hair); background: var(--bg-elev); }
+.lw-order-seam-hint { margin-left: 4px; color: var(--text-faint); font-size: 10px; }
+.lw-order-split-hint { margin: 8px 2px 0; color: var(--text-faint); font-size: 11.5px; }
+.lw-order-split-link { padding: 0 2px; border: 0; background: none; color: var(--accent); font-size: 11.5px; cursor: pointer; }
 .lw-order-row button { min-height: 44px; padding: 0 6px; border-radius: var(--r-sm); color: var(--text-mid); font-size: 12px; }
 .lw-order-row button:hover:not(:disabled) { color: var(--text-hi); background: var(--bg-elev); }
 .lw-order-reverse { border: 1px solid var(--border); background: var(--bg-elev); font-size: 11px; padding: 0 9px; white-space: nowrap; }
@@ -769,7 +781,7 @@
   .lw-wiring-output > header .lw-wire-remove { grid-column: 4; grid-row: 2; min-width: 44px; min-height: 44px; }
   .lw-output-drag { grid-column: 1; grid-row: 1 / span 2; min-height: 44px; }
   .lw-output-port { grid-column: 2; grid-row: 1 / span 2; min-height: 44px; }
-  .lw-wiring-run { display: grid; grid-template-columns: 44px minmax(0,1fr) 44px; gap: 6px 8px; padding-block: 8px; }
+  .lw-wiring-run { display: grid; grid-template-columns: 44px minmax(0,1fr) minmax(44px,auto); gap: 6px 8px; padding-block: 8px; }
   /* Signal-flow rows: line 1 reads like the wire itself (IN → name → OUT);
      line 2 is the quiet tool strip (drag · count fine-tune · flip · remove).
      Explicit line numbers only — never named grid areas (they leak implicit
@@ -779,7 +791,8 @@
   .lw-wiring-run-name { grid-column: 2; grid-row: 1; align-self: center; padding-inline: 2px; }
   .lw-run-out { grid-column: 3; grid-row: 1; }
   .lw-wire-drag { grid-column: 1; grid-row: 2; min-height: 44px !important; }
-  .lw-run-tools { grid-column: 2; grid-row: 2; justify-self: start; }
+  .lw-run-tools { grid-column: 2; grid-row: 2; justify-self: start; flex-wrap: wrap; }
+  .lw-run-remove { font-size: 10px; padding: 0 2px; }
   .lw-inline-pixel-count { grid-template-columns: 44px minmax(24px,auto) 44px; min-height: 44px; }
   .lw-inline-pixel-count button { min-width: 44px; min-height: 44px; }
   .lw-run-remove { grid-column: 3; grid-row: 2; justify-self: stretch; min-width: 44px !important; min-height: 44px !important; }
