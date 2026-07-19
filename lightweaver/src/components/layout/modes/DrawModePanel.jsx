@@ -32,6 +32,10 @@ import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
 import '../../../styles/lw-draw.css';
 
 // Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
+function startedFromDragHandle(e) {
+  return !!e.target?.closest?.('[data-drag-handle="true"]');
+}
+
 function formatMetersValue(meters) {
   return meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
 }
@@ -119,7 +123,7 @@ export function DrawModePanel({
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
   } = state;
-  const { wiring, updateWiring, standaloneController } = useProject();
+  const { wiring, updateWiring, standaloneController, patchBoard, setPatchBoard } = useProject();
 
   // "+ Add strip" shape chooser — icon tiles (Line / Circle / Square / Free
   // draw / Import vector) plus one LEDs input. The count is the strip the
@@ -192,6 +196,16 @@ export function DrawModePanel({
       .filter(run => run.type === 'strip' && stripById.has(run.source?.stripId))
       .map(run => [run.source.stripId, run]),
   ), [wiring.runs, stripById]);
+  // Strips split into multiple runs (Advanced wiring) have no single run to
+  // bind row controls to; their direction/seam edits stay in Advanced wiring.
+  const splitStripIds = useMemo(() => {
+    const counts = new Map();
+    wiring.runs.forEach(run => {
+      if (run.type !== 'strip' || !run.source?.stripId) return;
+      counts.set(run.source.stripId, (counts.get(run.source.stripId) || 0) + 1);
+    });
+    return new Set([...counts.keys()].filter(id => counts.get(id) > 1));
+  }, [wiring.runs]);
   const outputForStrip = stripId => wiring.outputs.find(output => output.runIds.includes(stripRuns.get(stripId)?.id)) || wiring.outputs[0];
 
   // The Draw list is the physical wiring overview. Each GPIO gets a compact
@@ -199,11 +213,13 @@ export function DrawModePanel({
   const gpioGroups = useMemo(() => {
     const assigned = new Set();
     const groups = wiring.outputs.map(output => {
+      // Dedupe per strip: a split strip has several runs but one physical row.
+      const seen = new Set();
       const groupStrips = output.runIds
         .map(runId => wiring.runs.find(run => run.id === runId))
         .filter(run => run?.type === 'strip')
         .map(run => stripById.get(run.source.stripId))
-        .filter(Boolean);
+        .filter(strip => strip && !seen.has(strip.id) && seen.add(strip.id));
       groupStrips.forEach(strip => assigned.add(strip.id));
       return { output, strips: groupStrips };
     });
@@ -315,6 +331,40 @@ export function DrawModePanel({
       targetOutput.runIds.splice(insertAt, 0, ...movedRuns.map(run => run.id));
       draft.outputs = draft.outputs.filter(output => output.runIds.length || output.id === targetOutput.id);
     }, { changeKind: 'route' });
+  };
+
+  // Reopen a locked plan so a Draw-mode edit always applies — same rationale
+  // as assignStripGpio: direct edits here are intentional physical changes.
+  const unlockDraft = draft => {
+    if (!draft.locked) return;
+    draft.locked = false;
+    draft.verified = false;
+    draft.runs.forEach(item => { item.verified = false; });
+  };
+
+  // Wiring direction: which end of the strip the data cable enters. Distinct
+  // from reverseStrip, which flips the drawn path itself.
+  const toggleRunDirection = run => updateWiring(draft => {
+    unlockDraft(draft);
+    const target = draft.runs.find(item => item.id === run.id);
+    if (!target || target.type !== 'strip') return;
+    if (target.directionPolicy === 'fixed') throw new Error('This run has a fixed physical direction.');
+    target.physicalDirection = target.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
+  }, { changeKind: 'direction', runIds: [run.id] });
+
+  // First-LED position on a closed shape: nudge the ring seam one LED at a
+  // time (same 'seam' changeKind as the canvas handle).
+  const nudgeSeam = (run, delta) => {
+    const min = run.source.from;
+    const max = run.source.to;
+    const current = run.seamLed ?? min;
+    const next = Math.min(max, Math.max(min, current + delta));
+    if (next === current) return;
+    updateWiring(draft => {
+      unlockDraft(draft);
+      const target = draft.runs.find(item => item.id === run.id);
+      if (target?.type === 'strip') target.seamLed = next;
+    }, { changeKind: 'seam', runIds: [run.id] });
   };
 
   const gpioChoicesForStrip = stripId => {
@@ -898,7 +948,7 @@ export function DrawModePanel({
 
               {existingStrip && (
                 <div className="la-insp-actions">
-                  <button className="btn" onClick={() => reverseStrip(existingStrip.id)} title="Flip pixel 0 from start to end">↔ Reverse</button>
+                  <button className="btn" onClick={() => reverseStrip(existingStrip.id)} title="Flip the drawing path so pixel 0 swaps ends">↔ Flip path direction</button>
                   <button className="btn danger" onClick={() => removeStrip(existingStrip.id)}>Remove</button>
                 </div>
               )}
@@ -1001,6 +1051,15 @@ export function DrawModePanel({
                 {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
               </span>
             </div>
+            {patchBoard?.dataWireCountNeedsReview && (
+              <div className="lw-legacy-confirm" role="alert" data-testid="legacy-gpio-confirm">
+                <span>Older project — confirm each strip&apos;s GPIO looks right.</span>
+                <button type="button" className="btn"
+                        onClick={() => setPatchBoard(current => ({ ...current, dataWireCountNeedsReview: false }))}>
+                  Looks right
+                </button>
+              </div>
+            )}
             {selectedStrips.length > 1 && (
               <div className="la-batch">
                 <div className="la-batch-head">
@@ -1047,6 +1106,8 @@ export function DrawModePanel({
                 const densityChoices = DENSITY_OPTIONS.includes(selectedDensity)
                   ? DENSITY_OPTIONS
                   : [...DENSITY_OPTIONS, selectedDensity].sort((a, b) => a - b);
+                const run = stripRuns.get(s.id);
+                const isSplit = splitStripIds.has(s.id);
                 return (
                   <div key={s.id} data-strip-id={s.id}>
                   <div
@@ -1105,8 +1166,17 @@ export function DrawModePanel({
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
                         <div className="actions" aria-label="Strip actions">
                           <div className="la-strip-actions-left">
-                            <button className="btn" aria-label="Reverse strip" title="Reverse pixel order"
+                            <button className="btn" aria-label="Flip path direction" title="Flip the drawing path so pixel 0 swaps ends"
                                     onClick={() => reverseStrip(s.id)}>↔</button>
+                            {run && (
+                              <button className="btn" aria-label={`Reverse data direction of ${s.name}`}
+                                      title={isSplit
+                                        ? 'Strip is split into multiple runs — set direction per run in Advanced wiring'
+                                        : 'Reverse which end of this strip the data cable enters'}
+                                      aria-pressed={run.physicalDirection === 'source-reverse'}
+                                      disabled={isSplit || run.directionPolicy === 'fixed'}
+                                      onClick={() => toggleRunDirection(run)}>⇄</button>
+                            )}
                             {stripRuns.get(s.id) && (
                               <button className={`btn${firstLedPicker?.stripId === s.id ? ' active' : ''}`}
                                       aria-label={firstLedPicker?.stripId === s.id
@@ -1210,6 +1280,20 @@ export function DrawModePanel({
                             ))}
                           </div>
                         </div>
+                        {s.closed && run && !isSplit && (
+                          <div className="row lw-seam-row">
+                            <span className="k">First LED</span>
+                            <div className="lw-led-nudge">
+                              <button type="button" className="btn" aria-label={`Move first LED of ${s.name} back one`}
+                                      title="Where the data run starts on this closed shape"
+                                      onClick={() => nudgeSeam(run, -1)}>−</button>
+                              <strong className="lw-seam-value" data-testid="order-seam-position">{(run.seamLed ?? run.source.from) + 1}</strong>
+                              <button type="button" className="btn" aria-label={`Move first LED of ${s.name} forward one`}
+                                      title="Where the data run starts on this closed shape"
+                                      onClick={() => nudgeSeam(run, 1)}>+</button>
+                            </div>
+                          </div>
+                        )}
                         {gpioError && <div className="la-gpio-error" role="alert">{gpioError}</div>}
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>

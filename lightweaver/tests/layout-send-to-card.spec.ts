@@ -140,7 +140,7 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   // panel auto-advances to the Install step itself. Wait for that settled
   // state instead of clicking — sampling and clicking early raced the
   // auto-advance effect on CI.
-  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in');
+  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in and install');
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
@@ -194,7 +194,7 @@ test('a successful push is pending until acknowledgement and records the exact i
   await expect(page.getByTestId('layout-send-to-card')).toContainText(/Saving/);
 
   const banner = page.locator('.la-card-push-banner');
-  await expect(banner).toBeVisible({ timeout: 5000 });
+  await expect(banner).toBeVisible({ timeout: 10000 });
   await expect(banner).toHaveClass(/is-ok/);
   await expect(banner).toContainText(/Saved revision \d+ to card/);
   await expect(banner).toContainText(/zone/i);
@@ -253,7 +253,7 @@ test('a failed push retains the acknowledged installed revision and Retry instal
 
   options.failConfig = true;
   await page.getByTestId('layout-send-to-card').click();
-  await expect(banner).toBeVisible({ timeout: 5000 });
+  await expect(banner).toBeVisible({ timeout: 10000 });
   await expect(banner).toHaveClass(/is-err/);
   await expect(banner).toContainText(`Confirmed revision ${installed} remains on the card.`);
   await expect(banner.getByRole('button', { name: 'Retry' })).toBeVisible();

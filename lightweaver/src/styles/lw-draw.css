@@ -57,6 +57,27 @@
 }
 .lw-led-nudge input[type=number] { width: 56px; min-width: 0; }
 
+/* Legacy-project GPIO confirmation banner */
+.lw-legacy-confirm {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 6px; padding: 6px 8px;
+  font-size: 11px; line-height: 1.4; color: var(--text-mid);
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border-soft));
+  border-radius: var(--r-sm);
+}
+.lw-legacy-confirm span { flex: 1; min-width: 0; }
+.lw-legacy-confirm .btn { flex-shrink: 0; height: 24px; padding: 0 8px; font-size: 11px; }
+
+/* First-LED seam nudge for closed strips (moved from Wire's order list) */
+.lw-seam-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.lw-seam-row .k { color: var(--text-mid); flex-shrink: 0; }
+.lw-seam-value {
+  min-width: 28px; text-align: center;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text-hi);
+}
+.lw-seam-row .lw-led-nudge { flex: 0 0 auto; }
+
 /* Touch: everything tappable in these new controls meets 44px */
 @media (pointer: coarse) {
   .la-add-strip-chooser .btn.lw-shape-tile { min-height: 56px; }

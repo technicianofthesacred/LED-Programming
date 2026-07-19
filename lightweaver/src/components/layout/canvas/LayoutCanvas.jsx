@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import {
   rgbCss,
   pointsAttr,
@@ -42,13 +41,9 @@ export function LayoutCanvas({
   } = lightPreview;
   const {
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
-    wiring, compiledWiring, selectedWiringRunId, onControllerAnchorMove, onSeamMove,
+    wiring, compiledWiring, selectedWiringRunId, onSeamMove,
     firstLedPicker, onFirstLedPick,
   } = wire;
-  const fallbackAnchor = { x: parsedVb(viewBox).w * 0.12, y: parsedVb(viewBox).h * 0.12 };
-  const [dragAnchor, setDragAnchor] = useState(null);
-  useEffect(() => setDragAnchor(null), [wiring?.controllerAnchor?.x, wiring?.controllerAnchor?.y]);
-  const displayedAnchor = dragAnchor || wiring?.controllerAnchor || fallbackAnchor;
   const selectedPhysicalRun = wiring?.runs?.find(run => run.id === selectedWiringRunId);
   const selectedPhysicalStrip = strips.find(strip => strip.id === selectedPhysicalRun?.source?.stripId);
   const selectedSeamLed = selectedPhysicalRun?.seamLed ?? selectedPhysicalRun?.source?.from;
@@ -407,42 +402,6 @@ export function LayoutCanvas({
                     </g>
                   );
                 })}
-              </g>
-            )}
-
-            {mode === 'wire' && (
-              <g
-                className="lw-controller-anchor"
-                transform={`translate(${displayedAnchor.x} ${displayedAnchor.y})`}
-              >
-                <circle
-                  data-testid="controller-anchor"
-                  role="button"
-                  aria-label="Controller anchor"
-                  tabIndex={0}
-                  pointerEvents="all"
-                  r={vbScale * 12}
-                  onPointerDown={event => {
-                  event.stopPropagation();
-                  event.currentTarget.setPointerCapture?.(event.pointerId);
-                  setDragAnchor(displayedAnchor);
-                  }}
-                  onPointerMove={event => {
-                  if (!event.currentTarget.hasPointerCapture?.(event.pointerId) || !svgRef.current) return;
-                  const matrix = svgRef.current.getScreenCTM()?.inverse();
-                  if (!matrix) return;
-                  const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix);
-                  setDragAnchor({ x: point.x, y: point.y });
-                  }}
-                  onPointerUp={event => {
-                  if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) return;
-                  event.currentTarget.releasePointerCapture?.(event.pointerId);
-                  onControllerAnchorMove(event);
-                  }}
-                />
-                <title>Your Lightweaver card — drag to where it sits, so the wire order starts from the right place</title>
-                <rect pointerEvents="none" x={-vbScale * 6} y={-vbScale * 4} width={vbScale * 12} height={vbScale * 8} rx={vbScale * 1.5}/>
-                <text pointerEvents="none" x={vbScale * 15} y={vbScale * 4}>Card</text>
               </g>
             )}
 

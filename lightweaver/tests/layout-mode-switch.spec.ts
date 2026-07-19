@@ -33,7 +33,10 @@ test('Wire owns the power supply controls and Size is not a layout mode', async 
   await expect(page.getByTestId('layout-mode-size')).toHaveCount(0);
 
   await page.getByTestId('layout-mode-wire').click();
-  await expect(page.getByTestId('wire-power-section')).toBeVisible();
+  // The supply inputs live behind the "Power details" disclosure.
+  const power = page.getByTestId('wire-power-section');
+  await expect(power).toBeVisible();
+  await power.locator('summary').click();
   await expect(page.getByLabel('Power supply amps')).toBeVisible();
   await expect(page.getByLabel('Milliamps per LED')).toBeVisible();
 });

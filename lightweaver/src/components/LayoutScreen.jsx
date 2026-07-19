@@ -97,11 +97,6 @@ export function LayoutScreen({ connected, cardHost }) {
       firstLedPicker,
       onFirstLedPick: pickFirstLed,
       selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
-      onControllerAnchorMove: event => {
-        if (!svgRef.current || wiring.locked) return;
-        const point = svgPt(svgRef.current, event.clientX, event.clientY);
-        updateWiring(draft => { draft.controllerAnchor = { x: point.x, y: point.y }; }, { changeKind: 'controller-anchor' });
-      },
       onSeamMove: (runId, event) => {
         if (!svgRef.current || wiring.locked) return;
         const point = svgPt(svgRef.current, event.clientX, event.clientY);

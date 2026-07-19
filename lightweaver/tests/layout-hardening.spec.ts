@@ -5,9 +5,9 @@ async function gotoLayout(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 }
 
-// The Wire commissioning flow shows one step at a time; the StepRail
+// The Wire commissioning flow is two steps (Check · Install); the StepRail
 // (role=group "Steps") is the navigation affordance.
-async function openWireStep(page: any, railLabel: string, target: (panel: any) => any) {
+async function openWireStep(page: any, railLabel: 'Check' | 'Install', target: (panel: any) => any) {
   await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: railLabel }).click();
   await expect(target(page)).toBeVisible();
 }
@@ -191,13 +191,11 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
-  await openWireStep(page, 'Wires', panel => panel.getByRole('group', { name: 'How many wires leave the card?' }));
-  let box = await page.getByRole('group', { name: 'How many wires leave the card?' }).getByRole('button').first().boundingBox();
+  // Check step: the guided bench check is the primary control surface.
+  let box = await page.getByRole('button', { name: 'I can see the LED strips' }).boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
-  // Wire order is the primary surface of the Match step; the lane/port
-  // editors live behind the Advanced wiring disclosure.
-  await openWireStep(page, 'Match', panel => panel.getByTestId('wire-order'));
-  box = await page.getByTestId('wire-order-row').first().getByRole('button', { name: /Reverse direction/ }).boundingBox();
+  // The lane/port editors live behind the top-level Advanced wiring disclosure.
+  box = await page.getByTestId('advanced-wiring-toggle').boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
   await page.getByTestId('advanced-wiring-toggle').click();
   box = await page.getByRole('button', { name: /Outer circle IN port/ }).boundingBox();
@@ -279,9 +277,11 @@ test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ pa
 
 test('wire scaffold is concise and recovery actions stay hidden without a mixed-content failure', async ({ page }) => {
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  const guide = page.getByRole('region', { name: 'Wire setup guide' });
-  await expect(guide).toBeVisible();
-  await expect(guide).toContainText(/Order the strips[\s\S]*real LEDs[\s\S]*install/);
+  // The intro guide is gone — the two-step rail plus a one-line step
+  // description is the whole scaffold.
+  await expect(page.getByRole('region', { name: 'Wire setup guide' })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Steps' }).getByRole('button')).toHaveCount(2);
+  await expect(page.getByText('The card lights the real LEDs and you confirm what you see.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);

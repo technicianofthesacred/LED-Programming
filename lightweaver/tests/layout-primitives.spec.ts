@@ -355,7 +355,7 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
   }).toEqual([linked.pixelCount + 1, linked.svgLength]);
 
   const actions = page.getByLabel('Strip actions');
-  await expect(actions.getByRole('button', { name: 'Reverse strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Flip path direction' })).toBeVisible();
   await expect(actions.getByRole('button', { name: 'Duplicate strip' })).toBeVisible();
   await expect(actions.getByRole('button', { name: 'Remove strip' })).toBeVisible();
   await expect(actions.getByRole('button', { name: 'Calibrate scale from LED count' })).toHaveCount(0);
@@ -578,18 +578,31 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
   await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
-  await page.getByTestId(`strip-led-${stripId}-8`).evaluate(node => {
-    node.dispatchEvent(new MouseEvent('click', {
-      // Deliberately unrelated coordinates prove the LED dot itself is the
-      // target—not a nearest-point canvas approximation.
-      bubbles: true, clientX: 0, clientY: 0,
-    }));
+  const target = await page.locator(`[data-testid^="strip-led-${stripId}-"]`).evaluateAll(nodes => {
+    const visible = nodes.map(node => {
+      const svg = node.ownerSVGElement;
+      const circle = node.querySelector('circle');
+      if (!svg || !circle) return null;
+      const point = svg.createSVGPoint();
+      point.x = Number(circle.getAttribute('cx'));
+      point.y = Number(circle.getAttribute('cy'));
+      const screen = point.matrixTransform(svg.getScreenCTM());
+      return {
+        index: Number(node.getAttribute('data-testid')?.split('-').pop()),
+        x: screen.x,
+        y: screen.y,
+      };
+    }).find(point => point && point.x >= 0 && point.x <= window.innerWidth && point.y >= 0 && point.y <= window.innerHeight);
+    if (!visible) throw new Error('Expected a visible LED dot on the canvas.');
+    return visible;
   });
+  console.log(await page.evaluate(point => document.elementFromPoint(point.x, point.y)?.outerHTML.slice(0, 400), target));
+  await page.mouse.click(target.x, target.y);
 
   await expect.poll(async () => page.evaluate(id => {
     const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
     return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;
-  }, stripId)).toBe(8);
+  }, stripId)).toBe(target.index);
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {

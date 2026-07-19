@@ -6,30 +6,6 @@
    Imported by src/components/layout/modes/WireModePanel.jsx.
    ============================================================ */
 
-/* ---------- intro: one title + one sentence ---------- */
-
-.lww-intro {
-  display: grid;
-  gap: 4px;
-  padding: 2px 0 14px;
-  min-width: 0;
-}
-
-.lww-intro > strong {
-  color: var(--text-hi);
-  font-size: 17px;
-  font-weight: 700;
-  text-wrap: balance;
-}
-
-.lww-intro > p {
-  margin: 0;
-  color: var(--text-mid);
-  font-size: 12.5px;
-  line-height: 1.5;
-  max-width: 52ch;
-}
-
 /* ---------- summary block spacing (tiles + diagram + rail) ---------- */
 
 .lww-summary {
@@ -39,13 +15,12 @@
   min-width: 0;
 }
 
-.lww-power-options {
+.lww-power-details {
   margin: 8px 0 0; padding: 9px;
   background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-md);
 }
-.lww-power-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-.lww-power-head strong { color: var(--text-hi); font-size: 12px; }
-.lww-power-head span { color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; }
+.lww-power-details > summary { color: var(--text-mid); font-size: 12px; font-weight: 600; cursor: pointer; }
+.lww-power-details > summary:hover { color: var(--text-hi); }
 .lww-power-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
 .lww-power-fields label { display: grid; gap: 4px; color: var(--text-mid); font-size: 10px; }
 .lww-power-fields input {
@@ -64,86 +39,6 @@
 .lww-cta {
   min-height: 44px;
   padding: 10px 16px;
-}
-
-/* ---------- step 1: wire-count chooser cards ---------- */
-
-.lww-review-note {
-  margin: 0 0 10px;
-  color: var(--warn);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.lww-choices {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-/* Container query, not viewport: the panel is a fixed ~320px column on
-   desktop (.la-wire-panel has container-type: inline-size), so a viewport
-   query would never fire there (redesign change 20). */
-@container (max-width: 520px) {
-  .lww-choices {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-.lww-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  min-height: 44px;
-  min-width: 0;
-  padding: 12px 8px 10px;
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border-hair);
-  border-radius: 12px;
-  color: var(--text-mid);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-}
-
-.lww-choice:hover:not(:disabled) {
-  border-color: var(--border);
-  color: var(--text-hi);
-}
-
-.lww-choice:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.lww-choice.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev-2));
-  color: var(--text-hi);
-}
-
-.lww-choice-glyph {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  color: var(--text-faint);
-}
-
-.lww-choice:hover:not(:disabled) .lww-choice-glyph,
-.lww-choice.is-selected .lww-choice-glyph {
-  color: var(--accent);
-}
-
-.lww-choice-title {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.lww-choice-cap {
-  font-size: 10.5px;
-  line-height: 1.3;
-  color: var(--text-faint);
 }
 
 /* ---------- mini wiring diagram ---------- */
@@ -251,65 +146,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- step 2: quiet expert card ---------- */
-
-.lww-expert {
-  margin-top: 12px;
-  border: 1px solid var(--border-hair);
-  border-radius: 12px;
-  background: var(--bg-elev);
-  padding: 0 14px;
-}
-
-.lww-expert > summary {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 10px 0;
-  color: var(--text-mid);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.lww-expert > summary:hover {
-  color: var(--text-hi);
-}
-
-.lww-expert > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--r-sm);
-}
-
-.lww-expert[open] > summary {
-  color: var(--text-hi);
-  border-bottom: 1px solid var(--border-hair);
-}
-
-.lww-expert-body {
-  display: grid;
-  gap: 12px;
-  padding: 12px 0 14px;
-}
-
-.lww-expert-note {
-  margin: 0;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-/* ---------- step 3: auto-wire suggestion card ---------- */
-
-.lww-auto-note {
-  margin: 0 0 12px;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-/* ---------- step 5: ready line ---------- */
+/* ---------- install step: ready line ---------- */
 
 .lww-install-ready {
   margin: 0 0 12px;
@@ -325,9 +162,6 @@
 /* ---------- motion ---------- */
 
 @media (prefers-reduced-motion: no-preference) {
-  .lww-choice {
-    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-  }
   .lww-diagram-strip,
   .lww-diagram-strip i {
     transition: border-color 0.2s ease, background-color 0.2s ease;
@@ -336,8 +170,6 @@
 
 /* ── Narrow-container header compacts (after base rules to win the cascade) ── */
 @container (max-width: 480px) {
-  .lww-intro { padding-bottom: 8px; }
-  .lww-intro > strong { font-size: 15px; }
   .lww-summary { gap: 6px; }
   .lww-diagram { gap: 4px; }
   .lww-diagram-cap { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
