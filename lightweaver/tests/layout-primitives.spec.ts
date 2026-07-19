@@ -388,6 +388,21 @@ test('GPIO picker unlocks verified wiring and applies the chosen pin', async ({ 
   })).toEqual([false, 17]);
 });
 
+test('GPIO picker reconciles a run after the strip LED count is reduced', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  const strip = page.locator('[data-strip-id]').first();
+  if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
+
+  const ledCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await ledCount.fill('12');
+  await ledCount.press('Tab');
+  await page.getByLabel('GPIO output').selectOption('17');
+
+  await expect(page.getByLabel('GPIO output')).toHaveValue('17');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();

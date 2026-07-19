@@ -218,6 +218,23 @@ export function DrawModePanel({ state }) {
   const ensureRunsForAllStrips = draft => {
     const known = new Set(draft.runs.filter(run => run.type === 'strip').map(run => run.source?.stripId));
     const primary = draft.outputs[0];
+    const stripsById = new Map(strips.map(strip => [strip.id, strip]));
+    draft.runs.forEach(run => {
+      if (run.type !== 'strip') return;
+      const strip = stripsById.get(run.source?.stripId);
+      if (!strip) return;
+      const lastLed = Math.max(0, strip.pixelCount - 1);
+      // The default, whole-strip run must track manual LED-count corrections.
+      // Advanced split runs keep their range, but are clamped if it now falls
+      // beyond the shortened strip.
+      if (run.id === `run-${strip.id}`) {
+        run.source = { ...run.source, from: 0, to: lastLed };
+        return;
+      }
+      const from = Math.min(lastLed, Math.max(0, Number(run.source?.from) || 0));
+      const to = Math.min(lastLed, Math.max(from, Number(run.source?.to) || from));
+      run.source = { ...run.source, from, to };
+    });
     strips.forEach(strip => {
       if (known.has(strip.id)) return;
       const run = makeRunForStrip(strip);
