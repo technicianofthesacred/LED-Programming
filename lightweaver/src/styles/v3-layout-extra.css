@@ -66,7 +66,14 @@
 }
 .la-strip-detail input[type=number]:focus { outline: none; border-color: var(--accent); }
 .la-strip-detail input[type=range].lw { flex: 1; min-width: 0; }
-.la-strip-detail .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.la-strip-detail .actions { display: flex; align-items: center; gap: 5px; }
+.la-strip-detail .actions .btn {
+  width: 34px; min-width: 34px; height: 28px; padding: 0; justify-content: center;
+  color: var(--text-mid);
+}
+.la-strip-detail .actions .btn:hover { color: var(--text-hi); }
+.la-strip-detail .actions .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.la-strip-detail .actions .btn.danger:hover { color: var(--danger); }
 
 /* strip-row expandable affordance */
 .la-strip-row { cursor: pointer; }
@@ -447,10 +454,21 @@
   border-radius: var(--r-sm); font: inherit;
 }
 .la-size-readout input[type=number]:focus { border-color: var(--accent); outline: none; }
+.la-strip-physical-row { gap: 6px; align-items: center; justify-content: space-between; }
+.la-strip-physical-field { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.la-strip-physical-field > .k { color: var(--text-mid); font-size: 11px; flex-shrink: 0; }
+.la-strip-physical-field .la-size-ctrl { gap: 3px; }
+.la-strip-physical-field .la-size-ctrl .btn,
+.la-strip-physical-field .lw-led-nudge .btn {
+  width: 22px; min-width: 22px; height: 28px;
+}
+.la-strip-physical-field .la-size-readout { flex: 0 1 auto; gap: 3px; }
+.la-strip-physical-field .la-size-readout input[type=number] { width: 44px; height: 28px; }
 .la-primitive-physical {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
   margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft);
 }
+.la-primitive-dimensions { display: flex; align-items: center; gap: 10px; }
 .la-primitive-physical label { display: flex; align-items: center; gap: 6px; color: var(--text-mid); font-size: 11px; }
 .la-primitive-physical input[type=number] {
   width: 52px; height: 26px; padding: 0 6px; text-align: right; color: var(--text-hi);

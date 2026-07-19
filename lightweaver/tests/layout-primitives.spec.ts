@@ -273,6 +273,40 @@ test('the Add strip chooser sets density before the new shape is drawn', async (
   }).toEqual([144, 144]);
 });
 
+test('the physical creation controls keep LEDs, size, and density linked', async ({ page }) => {
+  await gotoFreshLayout(page);
+
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByLabel('Starting strip LEDs').fill('60');
+  await picker.getByTestId('primitive-density-control').getByRole('button', { name: '30 LEDs/m' }).click();
+  await expect(picker.getByLabel('Starting strip size in metres')).toHaveValue('2.00');
+  await picker.getByLabel('Starting strip size in metres').fill('1.5');
+  await picker.getByLabel('Starting strip size in metres').press('Tab');
+  await expect(picker.getByLabel('Starting strip LEDs')).toHaveValue('45');
+  await picker.getByRole('button', { name: 'Create line' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id], strip.svgLength / layout.pxPerMm / 1000] : null;
+  }).toEqual([45, 30, 1.5]);
+});
+
+test('the compact Add strip row links its size input to LEDs and density', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+
+  const chooser = page.getByTestId('layout-add-strip-chooser');
+  await chooser.getByLabel('New strip LEDs').fill('60');
+  await chooser.getByTestId('add-strip-density-control').getByRole('button', { name: '30 LEDs/m' }).click();
+  await expect(chooser.getByLabel('New strip size in metres')).toHaveValue('2.00');
+  await chooser.getByLabel('New strip size in metres').fill('1.5');
+  await chooser.getByLabel('New strip size in metres').press('Tab');
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('45');
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();

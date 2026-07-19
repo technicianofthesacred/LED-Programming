@@ -245,7 +245,7 @@ export function useLayoutState() {
     setWaypoints: canvas.setWaypoints,
   });
 
-  const createStarterPrimitive = (type, requestedCount, requestedDensity) => {
+  const createStarterPrimitive = (type, requestedCount, requestedDensity, requestedLengthM) => {
     const count = clampLedCount(requestedCount ?? (totalLeds || DEFAULT_STARTER_PIXEL_COUNT));
     const reelDensity = Number.isFinite(Number(requestedDensity)) && Number(requestedDensity) > 0
       ? Number(requestedDensity)
@@ -256,7 +256,10 @@ export function useLayoutState() {
       pixelCount: count,
       color: nextColor(),
     });
-    const targetLength = (count / reelDensity) * 1000 * pxPerMm;
+    const physicalLength = Number.isFinite(Number(requestedLengthM)) && Number(requestedLengthM) > 0
+      ? Number(requestedLengthM)
+      : count / reelDensity;
+    const targetLength = physicalLength * 1000 * pxPerMm;
     const sized = definition.svgLength > 0 && Number.isFinite(targetLength)
       ? scaleStripGeometry(definition, targetLength / definition.svgLength)
       : definition;

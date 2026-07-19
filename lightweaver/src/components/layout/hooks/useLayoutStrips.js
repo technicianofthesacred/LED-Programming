@@ -138,7 +138,7 @@ export function useLayoutStrips(ctx) {
   // count override is needed and later resizes recount cleanly.
   // Each new strip is nudged +24px per existing strip so it never lands exactly
   // on top of another one.
-  const addPrimitiveStrip = useCallback((type, ledCount, ledsPerM) => {
+  const addPrimitiveStrip = useCallback((type, ledCount, ledsPerM, lengthM) => {
     const id = nextStripId(strips);
     const offset = 24 * strips.length;
     const definition = createPrimitiveStripDefinition({
@@ -159,10 +159,10 @@ export function useLayoutStrips(ctx) {
     // strip's density. Only the minimum-length clamp applies here: the
     // physical strip is as long as it is, even if that overflows the artwork
     // (the resize clamps still stop runaway ± growth afterwards).
-    const targetLen = Math.max(
-      MIN_STRIP_SVG_LENGTH,
-      (count / effectiveDensity) * 1000 * safePxPerMm,
-    );
+    const physicalLength = Number.isFinite(Number(lengthM)) && Number(lengthM) > 0
+      ? Number(lengthM)
+      : count / effectiveDensity;
+    const targetLen = Math.max(MIN_STRIP_SVG_LENGTH, physicalLength * 1000 * safePxPerMm);
     const sized = (definition.svgLength > 0 && Number.isFinite(targetLen) && targetLen !== definition.svgLength)
       ? scaleStripGeometry(definition, targetLen / definition.svgLength)
       : definition;
