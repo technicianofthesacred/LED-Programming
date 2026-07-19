@@ -918,7 +918,9 @@ export function DrawModePanel({ state }) {
                         <div className="row la-strip-physical-row">
                           <div className="la-strip-physical-field">
                             <span className="k">LEDs</span>
-                            <div className="la-led-count-field">
+                            <div className="la-led-count-field" role="group" aria-label="LED count tuning">
+                              <button type="button" className="btn" aria-label="One LED fewer" title="Subtract one LED without changing size"
+                                      onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 1))}>−</button>
                               <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                                      value={s.pixelCount}
                                      aria-label="Strip LED count"
@@ -928,6 +930,8 @@ export function DrawModePanel({ state }) {
                                      onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
                                      onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
                                      onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
+                              <button type="button" className="btn" aria-label="One LED more" title="Add one LED without changing size"
+                                      onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 1))}>+</button>
                             </div>
                           </div>
                           <div className="la-strip-physical-field">

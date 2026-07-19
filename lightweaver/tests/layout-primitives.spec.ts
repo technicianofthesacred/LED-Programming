@@ -318,7 +318,6 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
     return Boolean(starting?.svgLength > 0);
   }).toBe(true);
 
-  await expect(page.getByRole('button', { name: 'One LED more' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Make strip bigger' }).click();
   await expect.poll(async () => {
     const strips = await readAutosaveStrips(page);
@@ -327,15 +326,12 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
   }).toEqual([Math.round(starting.pixelCount / 0.9), true]);
 
   const linked = (await readAutosaveStrips(page))?.[0];
-  await expect(page.getByRole('button', { name: 'Fine tune 5 LEDs more' })).toHaveCount(0);
-  const manualCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
-  await manualCount.fill(String(linked.pixelCount + 5));
-  await manualCount.press('Enter');
+  await page.getByRole('button', { name: 'One LED more' }).click();
   await expect.poll(async () => {
     const strips = await readAutosaveStrips(page);
     const strip = strips?.[0];
     return strip ? [strip.pixelCount, strip.svgLength] : null;
-  }).toEqual([linked.pixelCount + 5, linked.svgLength]);
+  }).toEqual([linked.pixelCount + 1, linked.svgLength]);
 
   const actions = page.getByLabel('Strip actions');
   await expect(actions.getByRole('button', { name: 'Reverse strip' })).toBeVisible();

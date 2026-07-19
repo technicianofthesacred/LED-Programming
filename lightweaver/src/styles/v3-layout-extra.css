@@ -76,9 +76,12 @@
 .la-strip-detail .actions .btn:hover { color: var(--text-hi); }
 .la-strip-detail .actions .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .la-strip-detail .actions .btn.danger:hover { color: var(--danger); }
-.la-led-count-field input[type=number] {
-  width: 62px; min-width: 0; height: 28px; padding: 0 7px; text-align: center;
-}
+.la-led-count-field { display: inline-flex; align-items: stretch; overflow: hidden; background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm); }
+.la-led-count-field .btn { width: 24px; min-width: 24px; height: 28px; padding: 0; justify-content: center; border: 0; border-radius: 0; color: var(--text-faint); font-size: 15px; }
+.la-led-count-field .btn:first-child { border-right: 1px solid var(--border-soft); }
+.la-led-count-field .btn:last-child { border-left: 1px solid var(--border-soft); }
+.la-led-count-field .btn:hover { color: var(--text-hi); background: var(--bg-elev); }
+.la-led-count-field input[type=number] { width: 50px; min-width: 0; height: 28px; padding: 0 5px; border: 0; border-radius: 0; background: transparent; text-align: center; }
 
 /* strip-row expandable affordance */
 .la-strip-row { cursor: pointer; }
