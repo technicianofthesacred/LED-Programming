@@ -262,7 +262,7 @@ export function WiringBenchTest({
     illusVariant = 'dark';
   } else {
     question = 'Are the reserved LEDs staying dark?';
-    hint = `${activeStep?.count || 0} reserved pixels should stay unlit during this check.`;
+    hint = `${activeStep?.count || 0} reserved LEDs should stay unlit during this check.`;
     primaryLabel = 'Yes — they stay dark';
     onPrimary = () => dispatch({ type: 'confirm-inactive' });
     illusVariant = 'dark';
@@ -303,9 +303,9 @@ export function WiringBenchTest({
               <div className="lwb-trouble-item">
                 <span>Red isn’t on the strip’s last LED</span>
                 <div className="lw-bench-count-adjust">
-                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
-                  <strong data-testid="active-run-count">{activeStep.count} pixels</strong>
-                  <button type="button" className="lw-bench-nudge" aria-label={`Add one pixel to ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
+                  <strong data-testid="active-run-count">{activeStep.count} LEDs</strong>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
                 </div>
               </div>
               <p className="lwb-detail">Blue and red set the artwork mapping; electrical data direction does not change.</p>
@@ -316,9 +316,9 @@ export function WiringBenchTest({
               <div className="lwb-trouble-item">
                 <span>Red isn’t on this wire’s last LED</span>
                 <div className="lw-bench-count-adjust">
-                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one pixel from ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
-                  <strong data-testid="active-output-count">{activeStep.count} pixels</strong>
-                  <button type="button" className="lw-bench-nudge" aria-label={`Add one pixel to ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
+                  <strong data-testid="active-output-count">{activeStep.count} LEDs</strong>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
                 </div>
               </div>
               <p className="lwb-detail">GPIO {activeStep.pin} · Move red to this wire’s final LED.</p>

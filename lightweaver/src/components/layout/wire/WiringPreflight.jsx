@@ -5,7 +5,7 @@ export function WiringPreflight({ compiled, locked, canLock, onToggleLock, mutat
     <section className={`lw-wiring-preflight${compiled.ok ? '' : ' has-errors'}`} aria-live="polite">
       <div className="lw-wire-section-title">
         <span>{ready ? 'Ready to install' : 'Physical check required'}</span>
-        <strong data-testid="wiring-total-pixels">{compiled.totalPixels} pixels</strong>
+        <strong data-testid="wiring-total-pixels">{compiled.totalPixels} LEDs</strong>
       </div>
       {mutationError && <p className="lw-wiring-error">{mutationError}</p>}
       {compiled.errors.map(item => <p className="lw-wiring-error" key={`${item.code}-${item.runId || ''}`}>{plainMessage(item.message)}</p>)}

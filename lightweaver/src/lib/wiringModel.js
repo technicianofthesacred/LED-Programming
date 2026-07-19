@@ -240,6 +240,7 @@ export const PHYSICAL_COMPAT_FIELD_KINDS = Object.freeze({
   pxPerMm: 'geometry',
   editCounts: 'led-count',
   stripCountOverrides: 'led-count',
+  stripDensities: 'led-count',
 });
 
 export function physicalChangeKindForCompatField(field) {

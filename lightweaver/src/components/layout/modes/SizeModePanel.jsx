@@ -3,6 +3,7 @@ import {
   DENSITY_OPTIONS,
   clampLedCount,
   parsedVb,
+  svgPathLength,
 } from '../../../lib/layoutGeometry.js';
 import { LED_COUNT_MAX } from '../../../lib/controlScale.js';
 import { estimatePowerBudget } from '../../../lib/controllerProfiles.js';
@@ -16,66 +17,51 @@ import { StatTile, StatTileRow } from '../../ui/StatTile.jsx';
 import { MeterBar } from '../../ui/MeterBar.jsx';
 import '../../../styles/lw-size.css';
 
-function BufferedStripCountInput({ strip, overridden, setStripCount }) {
-  const [draft, setDraft] = useState(String(strip.pixelCount));
+// Compact "1.5" style metres formatting (no trailing zeros, 2 dp max).
+const fmtMeters = m => String(Number((Math.round(m * 100) / 100).toFixed(2)));
+
+// Buffered strip-length input (metres). Commits on blur/Enter; Escape restores.
+function BufferedStripLengthInput({ strip, lengthM, onCommit }) {
+  const [draft, setDraft] = useState(fmtMeters(lengthM));
   const focusedRef = useRef(false);
 
   useEffect(() => {
-    if (!focusedRef.current) setDraft(String(strip.pixelCount));
-  }, [strip.pixelCount]);
+    if (!focusedRef.current) setDraft(fmtMeters(lengthM));
+  }, [lengthM]);
 
   const commit = () => {
-    const next = clampLedCount(draft);
-    setDraft(String(next));
-    if (next !== strip.pixelCount) setStripCount(strip.id, next);
+    const val = parseFloat(draft);
+    if (Number.isFinite(val) && val > 0 && Math.abs(val - lengthM) > 0.0005) {
+      onCommit(val);
+    } else {
+      setDraft(fmtMeters(lengthM));
+    }
   };
 
   return (
-    <span className={`lws-px${overridden ? ' lws-px-overridden' : ''}`}>
-      <input
-        className="lws-px-input"
-        type="number" min="1" max={LED_COUNT_MAX} step="1"
-        value={draft}
-        aria-label={`${strip.name} LED count`}
-        inputMode="numeric"
-        onFocus={event => {
-          focusedRef.current = true;
-          setDraft(String(strip.pixelCount));
-          event.target.select();
-        }}
-        onChange={event => setDraft(event.target.value)}
-        onBlur={() => {
-          focusedRef.current = false;
-          commit();
-        }}
-        onKeyDown={event => {
-          if (event.key === 'Enter') event.currentTarget.blur();
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            setDraft(String(strip.pixelCount));
-          }
-        }}/>
-      <span className="lws-px-unit" aria-hidden="true">px</span>
-    </span>
+    <input
+      className="lws-num lws-len-input"
+      type="number" min="0.1" step="0.1" inputMode="decimal"
+      value={draft}
+      aria-label={`${strip.name} length in metres`}
+      onFocus={event => {
+        focusedRef.current = true;
+        setDraft(fmtMeters(lengthM));
+        event.target.select();
+      }}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={() => {
+        focusedRef.current = false;
+        commit();
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setDraft(fmtMeters(lengthM));
+        }
+      }}/>
   );
-}
-
-// Density preview geometry — denser options render more, tighter dots so
-// spacing is seen rather than decoded (plan change 17). Keyed off the
-// LEDs-per-metre value; unknown densities fall back to a derived spacing.
-const DENSITY_PREVIEW = {
-  30: { dots: 4, gap: 7 },
-  60: { dots: 6, gap: 4 },
-  96: { dots: 8, gap: 2.5 },
-  144: { dots: 10, gap: 1.5 },
-};
-const DENSITY_CAPTIONS = { 30: 'airy', 60: 'standard', 96: 'fine', 144: 'dense' };
-
-function densityPreview(d) {
-  return DENSITY_PREVIEW[d] || {
-    dots: Math.min(12, Math.max(4, Math.round(d / 14))),
-    gap: Math.max(1.5, Math.min(8, 220 / d)),
-  };
 }
 
 // One sentence computed from the power numbers (plan change 19). Calm and
@@ -115,25 +101,25 @@ const parsePositive = (raw, fallback) => {
 };
 
 // ── Size & Power side panel ──────────────────────────────────────────────────
-// The top-to-bottom derivation chain (docs/layout-redesign-plan.md, Phase 2
-// Size mode + step 8): artwork size → density → per-strip LED counts. Density
-// lives ONLY here now. Per-strip counts carry an override badge + reset when a
-// count has been set by hand (density/scale/calibrate then leave that strip
-// alone); "Calibrate from this strip" back-solves the whole piece's scale from
-// one strip's counted LEDs. Receives the full useLayoutState() bundle as one
-// `state` prop, mirroring DrawModePanel.
+// The physical strips are the ground truth (wiring/sizing redesign): each row
+// declares what was bought — the strip's real length in metres and the LED
+// density printed on its reel. The LED count derives from those and the drawn
+// geometry rescales to match (setStripPhysical in useLayoutSize). The count
+// stepper nudges ±1 for cut strips / miscounts via the stripCountOverrides
+// path. The global density picker is only the default for strips that haven't
+// declared a reel; the old artwork-width input lives on inside the collapsed
+// "Drawing scale" card along with per-strip calibrate.
 //
-// Redesign (docs/wiring-sizing-ui-redesign.md changes 15–19): the power budget
-// (estimatePowerBudget) now renders here — pixel counts drive draw/supply/
-// headroom tiles, a safe-limit meter, and a computed advice sentence. Supply
-// size and per-LED draw persist on standaloneController.led (via
-// powerSupplySettings.js) so a custom PSU survives mode switches and project
-// reloads instead of silently resetting to the defaults.
+// The power budget (estimatePowerBudget) renders below — LED counts drive
+// draw/supply/headroom tiles, a safe-limit meter, and a computed advice
+// sentence. Supply size and per-LED draw persist on standaloneController.led
+// (via powerSupplySettings.js) so a custom PSU survives mode switches and
+// project reloads.
 export function SizeModePanel({ state }) {
   const {
     viewBox, pxPerMm, density,
     scaleUnit, setScaleUnit, handleScaleChange, handleDensityChange,
-    orderedStrips, stripCountOverrides,
+    orderedStrips, stripCountOverrides, stripDensity, setStripPhysical,
     setStripCount, resetStripCount, calibrateScaleFromStrip,
     usbLedConnected, usbLedMaxPixels,
   } = state;
@@ -148,9 +134,19 @@ export function SizeModePanel({ state }) {
     handleScaleChange(vb.w / (val * per));          // pxPerMm = svgWidth / targetWidthMm
   };
 
+  // Physical facts per strip, derived once per render for row + power use.
+  const rows = orderedStrips.map(s => {
+    const effDensity = stripDensity(s.id);
+    const svgLen = (Number.isFinite(s.svgLength) && s.svgLength > 0)
+      ? s.svgLength : svgPathLength(s.pathData);
+    const lengthM = pxPerMm > 0 ? (svgLen / pxPerMm) / 1000 : 0;
+    const derivedCount = Math.max(1, Math.round(lengthM * effDensity));
+    return { strip: s, effDensity, lengthM, derivedCount };
+  });
+
   const usbOver = usbLedConnected && orderedStrips.some(s => s.pixelCount > usbLedMaxPixels);
 
-  // ── Power budget (change 15/16): persisted supply settings, live estimate ──
+  // ── Power budget: persisted supply settings, live estimate ──
   const { standaloneController, setStandaloneController } = useProject();
   const storedPower = readPowerSupplySettings(standaloneController);
   const [psuAmpsDraft, setPsuAmpsDraft] = useState(String(storedPower.psuAmps));
@@ -166,7 +162,7 @@ export function SizeModePanel({ state }) {
   };
 
   const totalPixels = orderedStrips.reduce((sum, s) => sum + (s.pixelCount || 0), 0);
-  const totalMeters = density > 0 ? totalPixels / density : 0;
+  const totalMeters = rows.reduce((sum, r) => sum + (r.effDensity > 0 ? (r.strip.pixelCount || 0) / r.effDensity : 0), 0);
   const budget = estimatePowerBudget({
     led: { length: totalPixels, maxBrightness: 255 },   // full white = worst case
     power: { psuAmps, milliampsPerPixel },
@@ -178,14 +174,110 @@ export function SizeModePanel({ state }) {
 
       <header>
         <p className="lws-eyebrow">Size &amp; Power</p>
-        <h3 className="lws-title">Fit the strips, mind the amps</h3>
-        <p className="lws-sub">Pixel counts drive the power budget live.</p>
+        <h3 className="lws-title">Your strips set the size</h3>
+        <p className="lws-sub">Enter what you bought — the drawing and the power budget follow.</p>
       </header>
 
-      {/* 1 · Artwork size ─────────────────────────────────────────────── */}
+      {/* 1 · The physical strips — ground truth ───────────────────────── */}
       <UiCard
-        title="How wide is the real artwork?"
-        description="Everything else — strip lengths, LED counts — scales from this one number.">
+        title="Your LED strips"
+        description={orderedStrips.length > 0
+          ? 'Length and density are facts of the strip you bought — the density is printed on the reel. The drawing rescales to match.'
+          : undefined}>
+        {orderedStrips.length === 0 ? (
+          <div className="lws-empty">
+            Add strips in Draw mode, then enter their real lengths here.
+          </div>
+        ) : (
+          <div className="lws-strips">
+            {rows.map(({ strip: s, effDensity, lengthM, derivedCount }, i) => {
+              const overridden = !!stripCountOverrides[s.id];
+              const nudged = overridden && s.pixelCount !== derivedCount;
+              const lengthFt = lengthM * 3.28084;
+              const densityChoices = DENSITY_OPTIONS.includes(effDensity)
+                ? DENSITY_OPTIONS
+                : [...DENSITY_OPTIONS, effDensity].sort((a, b) => a - b);
+              return (
+                <div key={s.id} className="lws-strip-row" data-testid="layout-size-strip-row">
+                  <span className="lws-strip-idx">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="lws-strip-swatch" style={{ background: s.color }} aria-hidden="true"/>
+                  <span className="lws-strip-name" title={s.name}>{s.name}</span>
+                  <span className="lws-count">
+                    <button className="lws-nudge" type="button"
+                            aria-label={`Remove one LED from ${s.name}`}
+                            title="Fine-tune down — for a strip cut one LED short"
+                            disabled={s.pixelCount <= 1}
+                            onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 1))}>−</button>
+                    <span className="lws-count-value" data-testid="layout-size-strip-leds">{s.pixelCount} LEDs</span>
+                    <button className="lws-nudge" type="button"
+                            aria-label={`Add one LED to ${s.name}`}
+                            title="Fine-tune up — for a strip cut one LED long"
+                            disabled={s.pixelCount >= LED_COUNT_MAX}
+                            onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 1))}>+</button>
+                  </span>
+                  <div className="lws-strip-facts">
+                    <label className="lws-fact">
+                      <span className="lws-fact-name">How long is this strip?</span>
+                      <span className="lws-fact-ctl">
+                        <BufferedStripLengthInput strip={s} lengthM={lengthM}
+                          onCommit={val => setStripPhysical(s.id, { lengthM: val })}/>
+                        <span className="lws-fact-unit" aria-hidden="true">m</span>
+                        <span className="lws-ft">≈ {lengthFt.toFixed(1)} ft</span>
+                      </span>
+                    </label>
+                    <label className="lws-fact">
+                      <span className="lws-fact-name">On the reel</span>
+                      <select className="lws-reel"
+                              value={effDensity}
+                              aria-label={`${s.name} reel density`}
+                              title="The LEDs-per-metre printed on the reel this strip was cut from"
+                              onChange={e => setStripPhysical(s.id, { ledsPerM: Number(e.target.value) })}>
+                        {densityChoices.map(d => (
+                          <option key={d} value={d}>{d} LEDs / m</option>
+                        ))}
+                      </select>
+                    </label>
+                    {nudged && (
+                      <span className="lws-override" data-testid="layout-size-count-override-badge"
+                            title="Hand-tuned count — length and density changes leave it alone.">
+                        tuned
+                        <button className="lws-reset" title="Back to the computed count"
+                                aria-label={`Reset ${s.name} to the computed count`}
+                                onClick={() => resetStripCount(s.id)}>↺</button>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </UiCard>
+
+      {/* 2 · Default density — only for undeclared strips ─────────────── */}
+      <div className="lws-density-block">
+        <p className="lws-eyebrow">Default density</p>
+        <div className="lws-density" data-testid="layout-size-density">
+          {DENSITY_OPTIONS.map(d => (
+            <button key={d} type="button"
+                    className={`lws-dopt${density === d ? ' lws-dopt-sel' : ''}`}
+                    aria-pressed={density === d}
+                    onClick={() => handleDensityChange(d)}>
+              {d} / m
+            </button>
+          ))}
+        </div>
+        <p className="lws-hint">
+          Only for strips that haven&apos;t set a reel above — a strip&apos;s own density is fixed by what you bought.
+        </p>
+      </div>
+
+      {/* 3 · Drawing scale — demoted fine-tune card ───────────────────── */}
+      <details className="lws-fold" data-testid="layout-size-drawing-scale">
+        <summary>Drawing scale</summary>
+        <p className="lws-hint">
+          Fine-tune the drawing scale — how wide is the real artwork?
+        </p>
         <div className="lws-scale">
           <input
             className="lws-num"
@@ -202,77 +294,24 @@ export function SizeModePanel({ state }) {
             {wDisp.toFixed(1)} × {hDisp.toFixed(1)} {scaleUnit}
           </span>
         </div>
-      </UiCard>
-
-      {/* 2 · Density (change 17: previews you can see) ────────────────── */}
-      <div className="lws-density-block">
-        <p className="lws-eyebrow">Density</p>
-        <div className="lws-density" data-testid="layout-size-density">
-          {DENSITY_OPTIONS.map(d => {
-            const { dots, gap } = densityPreview(d);
-            return (
-              <button key={d} type="button"
-                      className={`lws-dopt${density === d ? ' lws-dopt-sel' : ''}`}
-                      aria-pressed={density === d}
-                      onClick={() => handleDensityChange(d)}>
-                <span className="lws-dopt-dots" style={{ gap: `${gap}px` }} aria-hidden="true">
-                  {Array.from({ length: dots }, (_, k) => <i key={k}/>)}
-                </span>
-                <span className="lws-dopt-name">{d} / m</span>
-                <span className="lws-dopt-cap">{DENSITY_CAPTIONS[d] || `${d} LEDs per metre`}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 3 · Strips (change 18, display half: length in cm and inches) ── */}
-      <UiCard
-        title="Strips"
-        description={orderedStrips.length > 0
-          ? `${orderedStrips.length} strip${orderedStrips.length !== 1 ? 's' : ''} in wiring order. Adjust a count by hand if the physical strip differs.`
-          : undefined}>
-        {orderedStrips.length === 0 ? (
-          <div className="lws-empty">
-            Add strips in Draw mode, then set exact LED counts here.
-          </div>
-        ) : (
-          <div className="lws-strips">
-            {orderedStrips.map((s, i) => {
-              const overridden = !!stripCountOverrides[s.id];
-              const lenCm = density > 0 ? (s.pixelCount / density) * 100 : 0;
-              const lenIn = lenCm / 2.54;
-              return (
-                <div key={s.id} className="lws-strip-row" data-testid="layout-size-strip-row">
-                  <span className="lws-strip-idx">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="lws-strip-swatch" style={{ background: s.color }} aria-hidden="true"/>
-                  <span className="lws-strip-name" title={s.name}>{s.name}</span>
-                  <span className="lws-strip-len">
-                    {lenCm.toFixed(lenCm >= 10 ? 0 : 1)} cm · {lenIn.toFixed(1)} in
-                  </span>
-                  <BufferedStripCountInput strip={s} overridden={overridden} setStripCount={setStripCount}/>
-                  <span className="lws-strip-meta">
-                    {overridden && (
-                      <span className="lws-override" data-testid="layout-size-count-override-badge"
-                            title="Manual count — density, scale and calibrate leave this strip untouched.">
-                        manual
-                        <button className="lws-reset" title="Reset to the computed count"
-                                aria-label={`Reset ${s.name} to the computed count`}
-                                onClick={() => resetStripCount(s.id)}>↺</button>
-                      </span>
-                    )}
-                    <button className="lws-calibrate"
-                            title="Uses this strip's count as ground truth and rescales the whole piece"
-                            onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>
-                      Calibrate from this strip
-                    </button>
-                  </span>
-                </div>
-              );
-            })}
+        {orderedStrips.length > 0 && (
+          <div className="lws-cal-list">
+            <p className="lws-hint">
+              Or count the LEDs on one strip and calibrate the whole drawing from it.
+            </p>
+            {orderedStrips.map(s => (
+              <div key={s.id} className="lws-cal-row" data-testid="layout-size-calibrate-row">
+                <span className="lws-strip-name" title={s.name}>{s.name}</span>
+                <span className="lws-cal-count">{s.pixelCount} LEDs</span>
+                <button className="lws-calibrate"
+                        title="Uses this strip's count as ground truth and rescales the whole piece"
+                        onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>
+                  Calibrate from this strip
+                </button>
+              </div>
+            ))}
           </div>
         )}
-
         {usbLedConnected && orderedStrips.length > 0 && (
           <div className={`lws-usbcap${usbOver ? ' lws-usbcap-over' : ''}`}>
             {usbOver
@@ -280,9 +319,9 @@ export function SizeModePanel({ state }) {
               : `USB power caps each strip at ${usbLedMaxPixels} LEDs.`}
           </div>
         )}
-      </UiCard>
+      </details>
 
-      {/* 4 · Power (changes 15/16/19) ─────────────────────────────────── */}
+      {/* 4 · Power ────────────────────────────────────────────────────── */}
       <div className="lws-power" data-testid="size-power-section">
         <p className="lws-eyebrow">Power</p>
         <StatTileRow columns={3}>

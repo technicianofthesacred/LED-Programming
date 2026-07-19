@@ -182,7 +182,7 @@ test('locked wiring blocks reorder, direction, split, and skipped-pixel mutation
   await expect(row.getByRole('button', { name: /Drag/ })).toBeDisabled();
 
   await openAdvanced(page);
-  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toBeDisabled();
   await expect(page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Flip' })).toBeDisabled();
 
   await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();

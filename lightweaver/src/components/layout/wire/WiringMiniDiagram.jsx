@@ -15,14 +15,14 @@ function runPixelCount(run) {
 }
 
 function runName(run, stripsById) {
-  if (run.type === 'inactive') return 'skipped pixels';
+  if (run.type === 'inactive') return 'skipped LEDs';
   return stripsById.get(run.source.stripId)?.name || 'Unnamed strip';
 }
 
 function rowCaption(row) {
   if (!row.runs.length) return `${row.label} · no strips yet`;
   const checked = row.runs.every(run => run.verified) ? ' · checked on the LEDs' : '';
-  return `${row.label} → ${row.names.join(' → ')} · ${row.pixels} px · first LED blue, last LED red${checked}`;
+  return `${row.label} → ${row.names.join(' → ')} · ${row.pixels} LEDs · first LED blue, last LED red${checked}`;
 }
 
 /**

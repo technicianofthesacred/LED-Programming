@@ -148,7 +148,7 @@ async function readAutosaveStrips(page: any) {
   });
 }
 
-test('"+ Add strip" adds a second primitive without touching Duplicate', async ({ page }) => {
+test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs input', async ({ page }) => {
   await gotoFreshLayout(page);
 
   const picker = page.getByTestId('layout-primitive-picker');
@@ -160,9 +160,16 @@ test('"+ Add strip" adds a second primitive without touching Duplicate', async (
   await expect(addButton).toBeVisible();
   await addButton.click();
   const chooser = page.getByTestId('layout-add-strip-chooser');
+  // Five icon tiles: the four shapes plus the existing SVG import flow.
   await expect(chooser.getByRole('button', { name: 'Line', exact: true })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Circle', exact: true })).toBeVisible();
   await expect(chooser.getByRole('button', { name: 'Square', exact: true })).toBeVisible();
   await expect(chooser.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Import vector', exact: true })).toBeVisible();
+
+  // The LEDs input is the ground truth: a 120-LED strip at 60 LEDs/m arrives
+  // 2 m long — svgLength = (count / density) × 1000 mm × pxPerMm.
+  await chooser.getByLabel('New strip LEDs').fill('120');
   await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
 
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
@@ -175,6 +182,19 @@ test('"+ Add strip" adds a second primitive without touching Duplicate', async (
     const circle = strips?.find((s: any) => s.name === 'Circle');
     return circle ? [circle.x, circle.y] : null;
   }).toEqual([24, 24]);
+
+  const layout = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+  const circle = layout.strips.find((s: any) => s.name === 'Circle');
+  expect(circle.pixelCount).toBe(120);
+  const expectedLength = (120 / layout.density) * 1000 * layout.pxPerMm;
+  expect(Math.abs(circle.svgLength - expectedLength)).toBeLessThan(1);
+
+  // Import vector reuses the existing hidden SVG input (native file chooser).
+  await addButton.click();
+  const fileChooserPromise = page.waitForEvent('filechooser');
+  await chooser.getByRole('button', { name: 'Import vector', exact: true }).click();
+  expect(await fileChooserPromise).toBeTruthy();
 });
 
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
@@ -225,6 +245,25 @@ test('the Size + control grows a strip ~23% about a fixed center', async ({ page
   const centerAfter = endpointCenter(after);
   expect(Math.abs(centerAfter.x - centerBefore.x)).toBeLessThanOrEqual(2);
   expect(Math.abs(centerAfter.y - centerBefore.y)).toBeLessThanOrEqual(2);
+
+  // Physical-first: a non-pinned strip's LED count is re-derived from the new
+  // length at the fixed density (count = length(m) × density) on every resize.
+  const layout = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+  expect(after.pixelCount).toBe(
+    Math.max(1, Math.round((after.svgLength / layout.pxPerMm) * layout.density / 1000)));
+
+  // A hand-pinned count survives resize: pin it via the LEDs fine-tune input,
+  // grow again, and the count must not recount.
+  const count = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await count.fill('60');
+  await count.blur();
+  await grow.click();
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    const s = strips?.[0];
+    return s ? [s.pixelCount, s.svgLength > after.svgLength * 1.05] : null;
+  }).toEqual([60, true]);
 });
 
 test('resized geometry persists across reload', async ({ page }) => {
@@ -255,9 +294,15 @@ test('resized geometry persists across reload', async ({ page }) => {
     (element: SVGGraphicsElement) => element.getBBox().width);
   expect(Math.abs(width - grown)).toBeLessThan(2);
 
-  // The expanded row's Size readout shows the persisted length.
+  // The expanded row's Size readout shows the persisted length as a physical
+  // fact: metres at the current scale plus the LED count it holds.
   await page.locator('.la-strip-row').click();
-  await expect(page.getByTestId('strip-size-readout')).toHaveText(`${Math.round(grown)} px`);
+  const layout = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+  const meters = grown / layout.pxPerMm / 1000;
+  const metersText = meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
+  await expect(page.getByTestId('strip-size-readout'))
+    .toHaveText(`${metersText} m · ${layout.strips[0].pixelCount} LEDs`);
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {

@@ -3,10 +3,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// Phase 2 step 8 (docs/layout-redesign-plan.md) — the Size mode panel: the
-// artwork-size → density → per-strip-count derivation chain, plus the
-// `stripCountOverrides` behaviour fix (a manual per-strip count survives
-// density / scale / calibrate rescales instead of being silently overwritten).
+// Size mode — the physical strips are the ground truth (wiring/sizing
+// redesign): each row declares a strip's real length (metres) and the reel
+// density it was cut from; the LED count derives and the drawn geometry
+// rescales to match. The `stripCountOverrides` behaviour stands: a hand-tuned
+// count (±1 nudge) survives density / scale / calibrate rescales instead of
+// being silently overwritten. The old artwork-width input lives on inside the
+// collapsed "Drawing scale" card.
 
 function writeLayerFixture(tmp: string, fileName = 'size-mode-layers.svg') {
   const fixture = path.join(tmp, fileName);
@@ -35,7 +38,20 @@ async function importThreeStrips(page: any, tmp: string) {
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
 }
 
-test('Size mode chain renders; a manual count overrides, survives density, resets, and calibrates', async ({ page }) => {
+// The derived "N LEDs" readout for one strip row.
+function ledText(page: any, name: string) {
+  return page.getByTestId('layout-size-strip-row')
+    .filter({ hasText: name })
+    .getByTestId('layout-size-strip-leds');
+}
+
+async function openDrawingScale(page: any) {
+  const fold = page.getByTestId('layout-size-drawing-scale');
+  await fold.locator('summary').click();
+  return fold;
+}
+
+test('Size mode chain renders; a nudged count overrides, survives density, resets, and calibrates', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-mode-'));
   await importThreeStrips(page, tmp);
 
@@ -44,54 +60,137 @@ test('Size mode chain renders; a manual count overrides, survives density, reset
   await page.keyboard.press('2');
   await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
 
-  // The derivation chain: artwork size field, density segmented control, one
-  // row per strip.
+  // The inverted chain: one physical row per strip (length + reel density +
+  // derived count), the demoted default-density pills, and the artwork-width
+  // input now folded into the collapsed Drawing scale card.
   await expect(page.getByTestId('layout-size-panel')).toBeVisible();
-  // (the toolbar carries a twin Size width control this step — dupes trim in
-  // step 10 — so scope the width-field assertion to the panel)
-  await expect(page.getByTestId('layout-size-panel').getByLabel(/Artwork width in cm/)).toBeVisible();
-  await expect(page.getByTestId('layout-size-density')).toBeVisible();
   await expect(page.getByTestId('layout-size-strip-row')).toHaveCount(3);
+  await expect(page.getByLabel('Background length in metres')).toBeVisible();
+  await expect(page.getByLabel('Background reel density')).toBeVisible();
+  await expect(page.getByTestId('layout-size-density')).toBeVisible();
+  await expect(page.getByTestId('layout-size-panel').getByLabel(/Artwork width in cm/)).toBeHidden();
+  await openDrawingScale(page);
+  await expect(page.getByTestId('layout-size-panel').getByLabel(/Artwork width in cm/)).toBeVisible();
+  await openDrawingScale(page); // fold it back
 
-  const bgCount = page.getByLabel('Background LED count');
-  const circleCount = page.getByLabel('Circle LED count');
+  const bgLeds = ledText(page, 'Background');
+  const circleLeds = ledText(page, 'Circle');
+  const barLeds = ledText(page, 'Bar');
 
   // No override to start with.
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(0);
 
-  // ── Manually set the Background strip's count → override badge appears ──
-  await bgCount.fill('99');
-  await bgCount.blur();
+  // ── Nudge the Background strip's count +1 → override badge appears ──
+  const bgComputed = await bgLeds.textContent();
+  await page.getByRole('button', { name: 'Add one LED to Background' }).click();
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(1);
-  await expect(bgCount).toHaveValue('99');
+  await expect(bgLeds).not.toHaveText(bgComputed!);
+  const bgNudged = await bgLeds.textContent();
 
-  const circleBefore = await circleCount.inputValue();
+  const circleBefore = await circleLeds.textContent();
 
-  // ── Change density → the overridden strip is untouched, others rescale ──
+  // ── Change the default density → the tuned strip is untouched, others rescale ──
   await page.getByTestId('layout-size-density').getByRole('button', { name: '144' }).click();
-  await expect(bgCount).toHaveValue('99');                 // override preserved
-  await expect(circleCount).not.toHaveValue(circleBefore); // non-overridden rescaled
+  await expect(bgLeds).toHaveText(bgNudged!);                // override preserved
+  await expect(circleLeds).not.toHaveText(circleBefore!);    // non-overridden rescaled
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(1);
 
   // ── Reset → badge clears and the count rejoins the computed value ──
   await page.getByTestId('layout-size-count-override-badge').getByRole('button').click();
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(0);
-  await expect(bgCount).not.toHaveValue('99');
+  await expect(bgLeds).not.toHaveText(bgNudged!);
 
   // ── Calibrate from a strip rescales every other (non-overridden) strip ──
-  const barCount = page.getByLabel('Bar LED count');
-  const barBefore = await barCount.inputValue();
+  const barBefore = await barLeds.textContent();
   // Skew the Background strip to a distinctly different count, then declare it
   // ground truth — the whole piece's scale back-solves and the others follow.
-  await bgCount.fill('220');
-  await bgCount.blur();
-  await page.getByTestId('layout-size-strip-row')
+  for (let i = 0; i < 5; i++) {
+    await page.getByRole('button', { name: 'Add one LED to Background' }).click();
+  }
+  const bgSkewed = await bgLeds.textContent();
+  await openDrawingScale(page);
+  await page.getByTestId('layout-size-calibrate-row')
     .filter({ hasText: 'Background' })
     .getByRole('button', { name: 'Calibrate from this strip' })
     .click();
-  await expect(barCount).not.toHaveValue(barBefore);
+  await expect(barLeds).not.toHaveText(barBefore!);
   // The calibrating strip keeps the counted value it was calibrated from.
-  await expect(bgCount).toHaveValue('220');
+  await expect(bgLeds).toHaveText(bgSkewed!);
+});
+
+test('declaring a strip 4 m at 60/m yields 240 LEDs and rescales its drawn geometry', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-physical-'));
+  await importThreeStrips(page, tmp);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+
+  // Give the drawing a real-world scale a 4 m strip fits inside (the geometry
+  // clamp is 4× the artwork's larger dimension): 200 cm wide → pxPerMm = 0.2.
+  await openDrawingScale(page);
+  const width = page.getByTestId('layout-size-panel').getByLabel(/Artwork width in cm/);
+  await width.fill('200');
+  await width.press('Enter');
+  await expect(page.getByTestId('layout-size-panel')).toContainText('200.0');
+
+  // ── "We have one 4 m strip at 60/m" — count derives, drawing follows ──
+  const barLen = page.getByLabel('Bar length in metres');
+  await barLen.fill('4');
+  await barLen.blur();
+  await expect(ledText(page, 'Bar')).toHaveText('240 LEDs');
+  // Physical declarations are the truth, not hand-tuning — no override badge.
+  await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(0);
+
+  // The drawn path really is 4 m at this scale: 4000 mm × 0.2 px/mm = 800 px.
+  const drawnLen = await page.locator('path[aria-label="Select Bar strip"]')
+    .evaluate((el: SVGPathElement) => el.getTotalLength());
+  expect(Math.abs(drawnLen - 800)).toBeLessThan(8);
+
+  // The length input reads back the achieved length.
+  await expect(barLen).toHaveValue('4');
+});
+
+test('per-strip reel densities persist across reload ("one 1 m strip at 96/m")', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-size-densities-'));
+  await importThreeStrips(page, tmp);
+  await page.keyboard.press('2');
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+
+  await openDrawingScale(page);
+  const width = page.getByTestId('layout-size-panel').getByLabel(/Artwork width in cm/);
+  await width.fill('200');
+  await width.press('Enter');
+
+  // One 4 m strip at 60/m…
+  const barLen = page.getByLabel('Bar length in metres');
+  await barLen.fill('4');
+  await barLen.blur();
+  await expect(ledText(page, 'Bar')).toHaveText('240 LEDs');
+
+  // …and one 1 m strip at 96/m. Its reel density is its own fact — the global
+  // default (60) does not change.
+  await page.getByLabel('Circle reel density').selectOption('96');
+  const circleLen = page.getByLabel('Circle length in metres');
+  await circleLen.fill('1');
+  await circleLen.blur();
+  await expect(ledText(page, 'Circle')).toHaveText('96 LEDs');
+
+  // The reel map persists in the project autosave (id → LEDs/m).
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const densities = saved?.layout?.stripDensities || {};
+    return Object.values(densities).sort((a: any, b: any) => a - b);
+  })).toEqual([60, 96]);
+
+  // Reload — the physical declarations survive.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByTestId('layout-mode-size').click();
+  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+  await expect(page.getByLabel('Circle reel density')).toHaveValue('96');
+  await expect(page.getByLabel('Bar reel density')).toHaveValue('60');
+  await expect(ledText(page, 'Circle')).toHaveText('96 LEDs');
+  await expect(ledText(page, 'Bar')).toHaveText('240 LEDs');
+  await expect(page.getByLabel('Bar length in metres')).toHaveValue('4');
+  await expect(page.getByLabel('Circle length in metres')).toHaveValue('1');
 });
 
 test('a custom power supply size survives leaving and returning to Size mode', async ({ page }) => {
@@ -138,7 +237,7 @@ test('a count set in Draw mode strip detail shows as an override in Size mode', 
   // The shared override state surfaces here: the first strip carries the badge
   // and the hand-set count.
   await expect(page.getByTestId('layout-size-count-override-badge')).toHaveCount(1);
-  await expect(page.getByLabel('Background LED count')).toHaveValue('55');
+  await expect(ledText(page, 'Background')).toHaveText('55 LEDs');
 });
 
 // ── Canvas behavior matrix (Phase 2 step 11) ─────────────────────────────────

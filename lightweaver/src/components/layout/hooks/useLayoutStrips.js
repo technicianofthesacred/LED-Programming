@@ -25,7 +25,11 @@ export function useLayoutStrips(ctx) {
     strips, setStrips,
     editCounts, setEditCounts,
     hidden, setHidden,
-    layers, svgText, viewBox, density,
+    layers, svgText, viewBox, density, pxPerMm,
+    stripCountOverrides,
+    // Per-strip density map (id → LEDs/m) being introduced in a parallel
+    // change; read defensively — absent entries fall back to the global density.
+    stripDensities,
     layerGroups, setLayerGroups, setLayerOrder,
     pushLayoutHistory,
     selectStrip, selectStrips, clearLayoutSelection,
@@ -34,6 +38,21 @@ export function useLayoutStrips(ctx) {
     nextColor, scrollToStrip, stripGroupMember,
     rebuildStrip,
   } = ctx;
+
+  // Density is a physical fact of the purchased strip — count and length are
+  // locked together through it: count = length(m) × density(LEDs/m).
+  const safePxPerMm = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+  const densityFor = useCallback(
+    (id) => {
+      const perStrip = stripDensities?.[id];
+      return Number.isFinite(perStrip) && perStrip > 0 ? perStrip : density;
+    },
+    [stripDensities, density],
+  );
+  const physicalCountForLength = useCallback(
+    (svgLength, id) => Math.max(1, Math.round((svgLength / safePxPerMm) * densityFor(id) / 1000)),
+    [safePxPerMm, densityFor],
+  );
 
   const updateStrip = useCallback((id, patch) => {
     setStrips(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
@@ -112,9 +131,14 @@ export function useLayoutStrips(ctx) {
 
   // "+ Add strip" — append a fresh Line / Circle / Square primitive to the
   // existing layout (the starter picker only exists before the first strip).
+  // Physical-first: `ledCount` is the LEDs of the strip the user is physically
+  // adding (ground truth), and the shape arrives SIZED to hold exactly that
+  // count at its density — path length = (count / density) metres at the
+  // current scale. The size↔count round-trip is exact by construction, so no
+  // count override is needed and later resizes recount cleanly.
   // Each new strip is nudged +24px per existing strip so it never lands exactly
   // on top of another one.
-  const addPrimitiveStrip = useCallback((type) => {
+  const addPrimitiveStrip = useCallback((type, ledCount) => {
     const id = nextStripId(strips);
     const offset = 24 * strips.length;
     const definition = createPrimitiveStripDefinition({
@@ -124,11 +148,27 @@ export function useLayoutStrips(ctx) {
       id,
       color: nextColor(),
     });
+    // No count given (legacy callers): derive it from the default shape size.
+    const count = Number.isFinite(Number(ledCount)) && Number(ledCount) > 0
+      ? Math.round(Number(ledCount))
+      : physicalCountForLength(definition.svgLength, id);
+    // Scale the default shape so its length holds `count` LEDs at this
+    // strip's density. Only the minimum-length clamp applies here: the
+    // physical strip is as long as it is, even if that overflows the artwork
+    // (the resize clamps still stop runaway ± growth afterwards).
+    const targetLen = Math.max(
+      MIN_STRIP_SVG_LENGTH,
+      (count / densityFor(id)) * 1000 * safePxPerMm,
+    );
+    const sized = (definition.svgLength > 0 && Number.isFinite(targetLen) && targetLen !== definition.svgLength)
+      ? scaleStripGeometry(definition, targetLen / definition.svgLength)
+      : definition;
     // "Circle", "Circle 2", "Circle 3"… so rows stay tellable-apart.
     const sameShape = strips.filter(s =>
       s.name === definition.name || s.name?.startsWith(`${definition.name} `)).length;
     const strip = rebuildStrip({
-      ...definition,
+      ...sized,
+      pixelCount: count,
       name: sameShape ? `${definition.name} ${sameShape + 1}` : definition.name,
       x: offset,
       y: offset,
@@ -137,11 +177,15 @@ export function useLayoutStrips(ctx) {
     setStrips(prev => [...prev, strip]);
     selectStrip(id);
     scrollToStrip(id);
-  }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStrips, selectStrip, scrollToStrip]);
+  }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStrips, selectStrip, scrollToStrip, physicalCountForLength, densityFor, safePxPerMm]);
 
   // Uniform resize of a strip's geometry about its own center (Draw panel
   // − / + Size control). Same shape as reverseStrip: history push + setStrips,
   // so undo/redo and autosave pick it up through the normal strip-update path.
+  // Physical-first: resizing changes how many LEDs the strip holds — the count
+  // is re-derived from the new length at the strip's (fixed) density unless
+  // the user hand-pinned it (stripCountOverrides), in which case the pinned
+  // count survives the resize.
   const scaleStrip = useCallback((id, factor) => {
     if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return;
     const s = strips.find(st => st.id === id);
@@ -153,14 +197,22 @@ export function useLayoutStrips(ctx) {
     const vb = parsedVb(viewBox);
     const maxLen = MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h);
     const nextLen = currentLen * factor;
-    if (nextLen < MIN_STRIP_SVG_LENGTH || nextLen > maxLen) return;
+    // Directional clamps: never grow past the artwork cap, never shrink into a
+    // degenerate dot — but always allow moving back TOWARD the valid range
+    // (a count-sized strip can legitimately start beyond the grow cap).
+    if (factor > 1 && nextLen > maxLen) return;
+    if (factor < 1 && nextLen < MIN_STRIP_SVG_LENGTH) return;
     const scaled = scaleStripGeometry({ ...s, svgLength: currentLen }, factor);
+    const pixelCount = stripCountOverrides?.[id]
+      ? scaled.pixelCount
+      : physicalCountForLength(scaled.svgLength, id);
     pushLayoutHistory();
     setStrips(prev => prev.map(st => st.id !== id ? st : {
       ...scaled,
-      pixels: sampleStripPixels(scaled.pathData, scaled.pixelCount, scaled.reversed, scaled.x || 0, scaled.y || 0),
+      pixelCount,
+      pixels: sampleStripPixels(scaled.pathData, pixelCount, scaled.reversed, scaled.x || 0, scaled.y || 0),
     }));
-  }, [strips, viewBox, pushLayoutHistory, setStrips]);
+  }, [strips, viewBox, stripCountOverrides, physicalCountForLength, pushLayoutHistory, setStrips]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);

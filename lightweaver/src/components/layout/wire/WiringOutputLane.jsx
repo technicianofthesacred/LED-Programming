@@ -29,7 +29,7 @@ export function WiringOutputLane({
           title="LED data leaves the card here"
         >DATA</button>
         <h3>{output.name || output.id}</h3>
-        <span>{runs.reduce((sum, run) => sum + (compiledById.get(run.id)?.count || 0), 0)} px</span>
+        <span>{runs.reduce((sum, run) => sum + (compiledById.get(run.id)?.count || 0), 0)} LEDs</span>
         {advanced ? (
           <select className="lw-output-gpio" aria-label={`${output.name} GPIO`} value={output.pin} disabled={locked} onChange={event => onPinChange(Number(event.target.value))}>
             {supportedPins.map(pin => <option key={pin} value={pin} disabled={pin !== output.pin && unavailablePins.includes(pin)}>GPIO {pin}</option>)}

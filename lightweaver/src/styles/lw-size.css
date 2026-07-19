@@ -1,5 +1,7 @@
 /* ============================================================
-   lw-size.css — Size & Power panel (plan changes 15,16,17,19 + 18 display).
+   lw-size.css — Size & Power panel (physical-strips-first redesign).
+   The strip rows carry real length + reel density; the density
+   default and drawing scale are demoted below them.
    Consumes the v3 token set; no new tokens, no hardcoded hex —
    only color-mix over existing custom properties.
    Class prefix: lws-
@@ -41,7 +43,14 @@
   max-width: 52ch;
 }
 
-/* ---------- artwork size ---------- */
+.lws-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin: 0;
+  max-width: 52ch;
+}
+
+/* ---------- drawing scale (demoted fine-tune) ---------- */
 
 .lws-scale {
   display: flex;
@@ -82,72 +91,42 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- density picker (change 17) ---------- */
+/* ---------- default density (demoted: only for undeclared strips) ---------- */
 
 .lws-density-block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .lws-density {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-@container (max-width: 420px) {
-  .lws-density {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .lws-dopt {
   min-height: 44px;
+  min-width: 44px;
   border: 1px solid var(--border-hair);
-  border-radius: 10px;
+  border-radius: var(--r-md);
   background: var(--bg-elev);
-  padding: 10px 6px;
+  padding: 8px 12px;
   text-align: center;
   cursor: pointer;
-  color: var(--text-hi);
-  font: inherit;
-  min-width: 0;
+  color: var(--text-mid);
+  font: 600 11.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .lws-dopt.lws-dopt-sel {
   border-color: var(--accent);
   background: var(--accent-soft);
+  color: var(--text-hi);
 }
 
-.lws-dopt-dots {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 6px;
-}
-
-.lws-dopt-dots i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--text-mid);
-  flex: none;
-}
-
-.lws-dopt-name {
-  display: block;
-  font-size: 11.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.lws-dopt-cap {
-  display: block;
-  font-size: 10px;
-  color: var(--text-faint);
-}
-
-/* ---------- strip rows (change 18, display half) ---------- */
+/* ---------- strip rows: the physical facts ---------- */
 
 .lws-strips {
   display: flex;
@@ -192,66 +171,107 @@
   white-space: nowrap;
 }
 
-.lws-strip-len {
+/* derived LED count + ±1 fine-tune stepper (the displayed truth) */
+.lws-count {
   margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-mid);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* the px chip — BufferedStripCountInput restyled (mockup .px) */
-.lws-px {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   background: var(--bg-elev-2);
   border: 1px solid var(--border-hair);
   border-radius: 8px;
-  padding: 0 10px 0 4px;
+  padding: 2px;
   min-height: 36px;
   flex: none;
 }
 
-.lws-px-input {
-  width: 52px;
-  border: 0;
-  background: transparent;
-  color: var(--text-hi);
+.lws-count-value {
   font-family: var(--font-mono);
   font-size: 12.5px;
+  color: var(--text-hi);
   font-variant-numeric: tabular-nums;
-  text-align: right;
-  padding: 6px 2px;
-  min-height: 32px;
+  white-space: nowrap;
+  padding: 0 4px;
 }
 
-.lws-px-input:focus {
-  outline: none;
-}
-
-.lws-px:focus-within {
-  border-color: var(--accent);
-  outline: 1px solid var(--accent);
-}
-
-.lws-px-overridden {
-  border-color: var(--accent);
-}
-
-.lws-px-unit {
+.lws-nudge {
+  border: 0;
+  background: transparent;
+  color: var(--text-mid);
+  border-radius: 6px;
+  min-width: 30px;
+  min-height: 30px;
+  cursor: pointer;
   font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.lws-nudge:hover:not(:disabled) {
+  color: var(--text-hi);
+  background: color-mix(in oklab, var(--text-hi) 8%, transparent);
+}
+
+.lws-nudge:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* the physical facts: length (m) + reel density */
+.lws-strip-facts {
+  flex-basis: 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-left: 20px;
+}
+
+.lws-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lws-fact-name {
   font-size: 10.5px;
   color: var(--text-faint);
 }
 
-.lws-strip-meta {
-  flex-basis: 100%;
-  display: flex;
+.lws-fact-ctl {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding-left: 20px;
+  gap: 6px;
+}
+
+.lws-len-input {
+  width: 64px;
+}
+
+.lws-fact-unit {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.lws-ft {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lws-reel {
+  min-height: 44px;
+  padding: 8px 10px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .lws-override {
@@ -303,8 +323,72 @@
   padding: 2px 0;
 }
 
+/* ---------- Drawing scale fold (demoted card) ---------- */
+
+.lws-fold {
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  padding: 0 12px 4px;
+}
+
+.lws-fold > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+}
+
+.lws-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lws-fold > summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.lws-fold[open] > summary::before {
+  content: '▾';
+}
+
+.lws-fold .lws-hint {
+  margin: 2px 0 8px;
+}
+
+.lws-fold .lws-scale {
+  padding-bottom: 8px;
+}
+
+.lws-cal-list {
+  border-top: 1px solid var(--border-hair);
+  padding: 8px 0;
+}
+
+.lws-cal-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+
+.lws-cal-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-mid);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .lws-usbcap {
-  margin-top: 10px;
+  margin: 4px 0 10px;
   font-size: 11.5px;
   color: var(--text-faint);
 }
@@ -395,10 +479,9 @@
 }
 
 /* ---------- touch targets ----------
-   The compact per-strip controls (reset ↺, calibrate, count chip) sit below
+   The compact per-strip controls (reset ↺, calibrate, ±1 nudge) sit below
    44px on desktop for row density; on touch devices they must hit the 44px
-   minimum the plan mandates (change 20 — this runs on a phone at the
-   install site). */
+   minimum the plan mandates (this runs on a phone at the install site). */
 
 @media (pointer: coarse) {
   .lws-reset {
@@ -408,10 +491,11 @@
   .lws-calibrate {
     min-height: 44px;
   }
-  .lws-px {
+  .lws-count {
     min-height: 44px;
   }
-  .lws-px-input {
+  .lws-nudge {
+    min-width: 44px;
     min-height: 40px;
   }
 }
@@ -420,7 +504,9 @@
 
 .lws-panel button:focus-visible,
 .lws-panel input:focus-visible,
-.lws-psu summary:focus-visible {
+.lws-panel select:focus-visible,
+.lws-psu summary:focus-visible,
+.lws-fold > summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -430,7 +516,8 @@
     transition: border-color 0.15s ease, background-color 0.15s ease;
   }
   .lws-calibrate,
+  .lws-nudge,
   .lws-unit-toggle {
-    transition: border-color 0.15s ease, color 0.15s ease;
+    transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
   }
 }

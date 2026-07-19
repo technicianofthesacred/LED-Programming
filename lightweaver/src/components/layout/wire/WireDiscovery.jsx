@@ -52,7 +52,7 @@ export function WireDiscovery({ outputs = [], cardHost, onPinConfirmed, disabled
     try {
       await stopCardDiscovery();
       onPinConfirmed?.(outputId, assignment.pin);
-      setStatus(`${outputs.find(output => output.id === outputId)?.name || 'LED port'} uses GPIO ${assignment.pin}. Test its pixel count next.`);
+      setStatus(`${outputs.find(output => output.id === outputId)?.name || 'LED port'} uses GPIO ${assignment.pin}. Test its LED count next.`);
       setAssignments([]);
     } catch (error) {
       setStatus(error.message || 'The card could not leave wire discovery.');

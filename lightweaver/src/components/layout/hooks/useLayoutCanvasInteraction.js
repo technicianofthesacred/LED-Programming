@@ -337,18 +337,49 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     const tempPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     tempPath.setAttribute('d', pathData);
     const svgLength = tempPath.getTotalLength ? tempPath.getTotalLength() : 0;
-    const pitch = 16.6;
-    const autoCount = Math.max(1, Math.round(svgLength / (pitch * pxPerMm)));
+    // Density is the fixed physical fact of the strip: the drawn length
+    // dictates the count (length(m) × density(LEDs/m)); the naming panel then
+    // allows ± nudges for cut-strip fine-tuning.
+    const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+    const autoCount = Math.max(1, Math.round((svgLength / scale) * density / 1000));
     const defaultName = `Strip ${strips.length + 1}`;
     setPendingDraw({ pathData, svgLength });
     setPendingDrawName(defaultName);
     setPendingDrawCount(autoCount);
     setTimeout(() => pendingDrawNameRef.current?.select(), 50);
-  }, [strips.length, pxPerMm]);
+  }, [strips.length, pxPerMm, density]);
+
+  // Single terminator for every finish affordance (double-click, Enter, the
+  // Finish path button) so they all yield IDENTICAL geometry from the same
+  // clicks. A double-click's own first click has already appended a waypoint
+  // on top of the previous one — drop that trailing near-duplicate (within
+  // ~8 screen px at the current zoom) before building the path. Returns true
+  // when a path was actually finished.
+  const completeDraw = useCallback((pts = waypoints) => {
+    let cleaned = pts;
+    if (cleaned.length >= 2) {
+      const a = cleaned[cleaned.length - 2];
+      const b = cleaned[cleaned.length - 1];
+      let tol = 1; // SVG units — floor for exact/near-exact duplicates
+      const svg = svgRef.current;
+      if (svg) {
+        const rect = svg.getBoundingClientRect();
+        const vb = parsedVb(viewBox);
+        if (rect.width > 0) tol = Math.max(tol, (vb.w / zoom / rect.width) * 8);
+      }
+      if (Math.hypot(b.x - a.x, b.y - a.y) <= tol) cleaned = cleaned.slice(0, -1);
+    }
+    if (cleaned.length < 2) return false;
+    setDrawMode(false);
+    setWaypoints([]);
+    setGhostPt(null);
+    finishDraw(cleaned);
+    return true;
+  }, [waypoints, viewBox, zoom, finishDraw]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const confirmDraw = useCallback(() => {
     if (!pendingDraw) return;
-    const { pathData } = pendingDraw;
+    const { pathData, svgLength } = pendingDraw;
     const count = Math.max(1, pendingDrawCount);
     const name = pendingDrawName.trim() || `Strip ${strips.length + 1}`;
     const color = nextColor();
@@ -357,10 +388,11 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     const pixels = libSamplePath(pathEl, count);
     const newStrip = {
       id: nextStripId(strips),
-      // Freehand strip: no artwork source.
+      // Freehand strip: no artwork source. svgLength rides along so the
+      // physical Size readout and resize-recount work without re-measuring.
       sourceLayerId: null, sourcePathId: null,
       name,
-      pathData, closed: isClosedPathData(pathData), pixelCount: count, pixels, color,
+      pathData, svgLength, closed: isClosedPathData(pathData), pixelCount: count, pixels, color,
       x: 0, y: 0,
       emit: 'dir', angle: 0, reversed: false,
       speed: 1.0, brightness: 1.0, hueShift: 0, patternId: null,
@@ -391,6 +423,16 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       if (drawMode && e.key === 'Backspace') {
         e.preventDefault();
         setWaypoints(prev => prev.slice(0, -1));
+        return;
+      }
+
+      // Draw mode: Enter finishes the path (≥2 points) — same terminator as
+      // double-click / the Finish path button. Never fires while the naming
+      // panel's input is focused (input targets bail out above), and once the
+      // panel is open drawMode is already false.
+      if (drawMode && e.key === 'Enter') {
+        e.preventDefault();
+        if (waypoints.length >= 2) completeDraw();
         return;
       }
 
@@ -498,7 +540,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [mode, drawMode, pendingDraw, selection, selectedWireCut, deleteSelectedWireCut, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden, cancelActiveTool, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, drawMode, waypoints, completeDraw, pendingDraw, selection, selectedWireCut, deleteSelectedWireCut, removeStrip, removeSelectedStrips, deleteSelectedVectorPaths, deleteLayer, groupSelectedStrips, mergeSelectedStrips, createLayerGroup, clearLayoutSelection, doUndo, doRedo, layers, addAllStrips, strips, setStripOffset, setHidden, cancelActiveTool, setMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Memoised visualisation data ────────────────────────────────────────────
   const isEditingGesture = movingStripIds.length > 0 || !!rubberBand;
@@ -770,11 +812,14 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const handleSvgDblClick = (e) => {
     if (!drawMode) return;
     e.preventDefault();
-    const pts = waypoints.length >= 2 ? waypoints.slice(0, -1) : waypoints;
-    setWaypoints([]);
-    setGhostPt(null);
-    setDrawMode(false);
-    if (pts.length >= 2) finishDraw(pts);
+    // completeDraw drops the double-click's own duplicate waypoint and opens
+    // the naming panel — identical geometry to Enter / the Finish button.
+    if (!completeDraw()) {
+      // Fewer than 2 usable points: a double-click just leaves draw mode.
+      setDrawMode(false);
+      setWaypoints([]);
+      setGhostPt(null);
+    }
   };
 
   const handleSvgMouseMove = (e) => {
@@ -844,13 +889,18 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     return ptsToD(pts.length === 1 ? [pts[0], pts[0]] : pts);
   }, [drawMode, waypoints, ghostPt]);
 
-  // Estimated LED count during drawing
-  const drawEstimatedLeds = useMemo(() => {
-    if (!drawMode || waypoints.length < 2) return 0;
-    const pathData = ptsToD(waypoints);
-    const len = measurePathLen(pathData);
-    return Math.max(1, Math.round(len / (16.6 * pxPerMm)));
-  }, [drawMode, waypoints, pxPerMm]);
+  // Live physical readout while drawing: path length so far + the LED count
+  // it would need at the (fixed) density. Waypoints only — the ghost point is
+  // deliberately excluded so the numbers update per click, not per mousemove.
+  // Same length source (measured path) as finishDraw.
+  const drawStats = useMemo(() => {
+    if (!drawMode || waypoints.length < 1) return null;
+    if (waypoints.length < 2) return { meters: 0, leds: 0 };
+    const len = measurePathLen(ptsToD(waypoints));
+    const scale = Number.isFinite(pxPerMm) && pxPerMm > 0 ? pxPerMm : 3.7795;
+    const meters = len / scale / 1000;
+    return { meters, leds: Math.max(1, Math.round(meters * density)) };
+  }, [drawMode, waypoints, pxPerMm, density]);
 
   // ── Render-time derived preview flags ──────────────────────────────────────
   const effectiveGlowMode = isEditingGesture ? 'dots' : glowMode;
@@ -877,8 +927,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     pendingDrawName, setPendingDrawName,
     pendingDrawCount, setPendingDrawCount,
     pendingDrawNameRef,
-    finishDraw, confirmDraw, cancelDraw,
-    drawEstimatedLeds, ghostD,
+    finishDraw, confirmDraw, cancelDraw, completeDraw,
+    drawStats, ghostD,
     selectedPathDecorations,
     // pan/zoom
     zoom, setZoom,
