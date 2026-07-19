@@ -592,22 +592,6 @@ export function LayoutCanvas({
               );
             })()}
 
-            {/* ── Head/tail connectors on selected strip ── */}
-            {selStripId && (() => {
-              const s = strips.find(st => st.id === selStripId);
-              if (!s || !s.pixels?.length) return null;
-              const first = s.pixels[0];
-              const last  = s.pixels[s.pixels.length - 1];
-              return (
-                <g key="strip-connectors" style={{ pointerEvents: 'none' }}>
-                  <circle cx={first.x} cy={first.y} r={vbScale * 5}  fill="oklch(0.745 0.095 150)" opacity={0.95}/>
-                  <circle cx={first.x} cy={first.y} r={vbScale * 9}  fill="none" stroke="oklch(0.745 0.095 150)" strokeWidth={1.5} opacity={0.35}/>
-                  <circle cx={last.x}  cy={last.y}  r={vbScale * 7}  fill="none" stroke="oklch(0.800 0.130 72)" strokeWidth={2} opacity={0.9}/>
-                  <circle cx={last.x}  cy={last.y}  r={vbScale * 11} fill="none" stroke="oklch(0.800 0.130 72)" strokeWidth={1} opacity={0.3}/>
-                </g>
-              );
-            })()}
-
             {/* ── Draw mode ghost ── */}
             {drawMode && ghostD && (
               <path d={ghostD} stroke="oklch(0.615 0.112 57)" strokeWidth="1.5" fill="none"

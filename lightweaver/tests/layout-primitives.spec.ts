@@ -756,6 +756,15 @@ test('the first LED marker starts at the data-input end of a reversed strip', as
   expect(marker).toEqual(target);
 });
 
+test('the selected first LED is the only endpoint marker in Draw mode', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  await expect(page.getByTestId('first-led-marker')).toBeVisible();
+  await expect(page.locator('circle[fill="oklch(0.745 0.095 150)"]')).toHaveCount(0);
+  await expect(page.locator('circle[stroke="oklch(0.800 0.130 72)"]')).toHaveCount(0);
+});
+
 test('Set first LED binds the 1 marker to the strip whose button was armed', async ({ page }) => {
   await gotoFreshLayout(page);
   const picker = page.getByTestId('layout-primitive-picker');
