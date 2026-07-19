@@ -65,23 +65,6 @@ export function LayoutCanvas({
     startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
     toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
   } = interactionHandlers;
-  const handleFirstLedCanvasClick = event => {
-    if (!firstLedPicker || !svgRef.current) {
-      handleSvgClick(event);
-      return;
-    }
-    const matrix = svgRef.current.getScreenCTM()?.inverse();
-    const strip = strips.find(item => item.id === firstLedPicker.stripId);
-    if (!matrix || !strip?.pixels?.length) return;
-    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix);
-    let nearest = 0;
-    strip.pixels.forEach((pixel, index) => {
-      if (Math.hypot(point.x - pixel.x, point.y - pixel.y) < Math.hypot(point.x - strip.pixels[nearest].x, point.y - strip.pixels[nearest].y)) nearest = index;
-    });
-    event.stopPropagation();
-    onFirstLedPick(strip.id, nearest);
-  };
-
   return (
         <main className="body">
         <div className="dotgrid"/>
@@ -117,8 +100,7 @@ export function LayoutCanvas({
               objectFit: 'contain',
               cursor: firstLedPicker ? 'crosshair' : drawMode ? 'crosshair' : rubberBand ? 'crosshair' : isPanning ? 'grabbing' : spaceRef.current ? 'grab' : 'default',
             }}
-            onClickCapture={firstLedPicker ? handleFirstLedCanvasClick : undefined}
-            onClick={firstLedPicker ? undefined : handleSvgClick}
+            onClick={handleSvgClick}
             onDoubleClick={handleSvgDblClick}
             onPointerMove={handleSvgMouseMove}
             onPointerDown={handleSvgMouseDown}
@@ -356,7 +338,7 @@ export function LayoutCanvas({
               );
             })}
 
-            {!isEditingGesture && visibleWirePathCanvasSegments.length > 0 && (
+            {mode === 'wire' && !isEditingGesture && visibleWirePathCanvasSegments.length > 0 && (
               <g
                 className="lw-wire-canvas-segments"
                 style={{ pointerEvents: wireOverlayMode === 'link' ? 'auto' : 'none' }}
@@ -391,7 +373,7 @@ export function LayoutCanvas({
               </g>
             )}
 
-            {!isEditingGesture && wireRouteJumps.length > 0 && (
+            {mode === 'wire' && !isEditingGesture && wireRouteJumps.length > 0 && (
               <g className="lw-wire-route-jumps" style={{ pointerEvents: 'none' }}>
                 {wireRouteJumps.map(jump => (
                   <line
@@ -406,7 +388,7 @@ export function LayoutCanvas({
               </g>
             )}
 
-            {!isEditingGesture && wireCutMarkers.length > 0 && (
+            {mode === 'wire' && !isEditingGesture && wireCutMarkers.length > 0 && (
               <g className="lw-wire-cut-markers" style={{ pointerEvents: 'none' }}>
                 {wireCutMarkers.map(marker => {
                   const notchSize = vbScale * (marker.selected ? 10 : 8);
@@ -494,7 +476,7 @@ export function LayoutCanvas({
             {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
             {(showLeds || firstLedPicker) && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
-	                <g key={s.id + '-dots'} style={{ pointerEvents: 'none' }}>
+                <g key={s.id + '-dots'} style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -504,7 +486,13 @@ export function LayoutCanvas({
                     const shellOpacity = Math.max(selected ? 0.85 : 0.62, restingLedAlpha(ledFrame, { selected }));
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
-                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
+                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       onClick={event => {
+                         if (firstLedPicker?.stripId !== s.id) return;
+                         event.stopPropagation();
+                         onFirstLedPick(s.id, i);
+                       }}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
                               fill={ledColor} opacity={shellOpacity}/>
@@ -513,12 +501,14 @@ export function LayoutCanvas({
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
                                 fill={ledColor} opacity={coreOpacity}/>
                       )}
+                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 9}
+                                                                  fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
                   })}
                 </g>
               ) : (
-	                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: 'none' }}>
+                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -527,17 +517,32 @@ export function LayoutCanvas({
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
                     return (
-                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}>
+                    <g key={i} data-testid={`strip-led-${s.id}-${i}`}
+                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       onClick={event => {
+                         if (firstLedPicker?.stripId !== s.id) return;
+                         event.stopPropagation();
+                         onFirstLedPick(s.id, i);
+                       }}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                               fill={ledColor}
                               opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
+                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 9}
+                                                                  fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
                   })}
                 </g>
               )
             ))}
+
+            {mode === 'draw' && selectedSeamPoint && (
+              <g data-testid="first-led-marker" transform={`translate(${selectedSeamPoint.x} ${selectedSeamPoint.y})`} style={{ pointerEvents: 'none' }}>
+                <circle r={vbScale * 10} fill="var(--bg-canvas)" stroke="var(--accent)" strokeWidth={vbScale * 2}/>
+                <text textAnchor="middle" dominantBaseline="central" fill="var(--accent)" fontSize={vbScale * 11} fontWeight="700">1</text>
+              </g>
+            )}
 
             {/* ── Strip mid-path labels (selected strip only) ── */}
             {!isEditingGesture && strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
@@ -557,7 +562,7 @@ export function LayoutCanvas({
             })}
 
             {/* ── Direction arrows (all visible strips) ── */}
-            {!isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => {
+            {mode === 'wire' && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => {
               const arrow = stripArrows[s.id];
               if (!arrow) return null;
               const isSel = s.id === selStripId;
