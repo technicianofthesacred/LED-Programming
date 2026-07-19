@@ -57,6 +57,16 @@
 .la-gpio-group-head span:last-child { color: var(--text-faint); font-size: 9px; letter-spacing: .03em; }
 .la-strip-output-row { position: relative; min-height: 28px; }
 .la-gpio-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
+.la-gpio-wrap::after {
+  content: '⌄'; position: absolute; right: 7px; top: 50%; transform: translateY(-53%);
+  color: var(--text-faint); font-family: var(--font-mono); font-size: 12px; pointer-events: none;
+}
+.la-gpio-select {
+  appearance: none; height: 26px; min-width: 76px; padding: 0 22px 0 8px;
+  color: var(--text-hi); background: var(--bg-elev-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+}
+.la-gpio-select:hover, .la-gpio-select:focus { border-color: var(--accent-line); outline: none; }
 .la-gpio-button {
   height: 26px; min-width: 66px; padding: 0 8px; justify-content: center;
   color: var(--text-mid); font-family: var(--font-mono); font-size: 11px;

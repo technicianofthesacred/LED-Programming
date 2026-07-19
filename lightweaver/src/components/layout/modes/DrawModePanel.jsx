@@ -129,7 +129,6 @@ export function DrawModePanel({ state }) {
   const [addDensity, setAddDensity] = useState(density);
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
-  const [gpioPickerFor, setGpioPickerFor] = useState(null);
   const [gpioError, setGpioError] = useState('');
 
   const setLinkedAddCount = rawValue => {
@@ -267,7 +266,6 @@ export function DrawModePanel({ state }) {
     }, { changeKind: 'gpio' });
     if (result.ok) {
       setGpioError('');
-      setGpioPickerFor(null);
     } else {
       setGpioError(wiring.locked
         ? 'Unlock wiring in Wire before changing GPIO.'
@@ -1100,28 +1098,13 @@ export function DrawModePanel({ state }) {
                         </div>
                         <div className="row la-strip-output-row">
                           <div className="la-gpio-wrap">
-                            <button type="button" className="btn la-gpio-button"
-                                    aria-label={`GPIO ${outputForStrip(s.id)?.pin ?? 16}`}
-                                    aria-expanded={gpioPickerFor === s.id}
-                                    onClick={() => {
-                                      setGpioError('');
-                                      setGpioPickerFor(current => current === s.id ? null : s.id);
-                                    }}>
-                              <span>GPIO {outputForStrip(s.id)?.pin ?? 16}</span><ChevronDownIcon/>
-                            </button>
-                            {gpioPickerFor === s.id && (
-                              <div className="la-gpio-popover" role="dialog" aria-label="Choose GPIO output">
-                                <span>LED output</span>
-                                <div role="group" aria-label="GPIO choices">
-                                  {gpioChoicesForStrip(s.id).map(({ pin, disabled }) => (
-                                    <button key={pin} type="button" className="btn"
-                                            disabled={disabled}
-                                            aria-pressed={outputForStrip(s.id)?.pin === pin}
-                                            onClick={() => assignStripGpio(s.id, pin)}>GPIO {pin}</button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                            <select className="la-gpio-select" aria-label="GPIO output"
+                                    value={outputForStrip(s.id)?.pin ?? 16}
+                                    onChange={event => assignStripGpio(s.id, Number(event.target.value))}>
+                              {gpioChoicesForStrip(s.id).map(({ pin, disabled }) => (
+                                <option key={pin} value={pin} disabled={disabled}>GPIO {pin}</option>
+                              ))}
+                            </select>
                           </div>
                           <div className="la-strip-density" data-testid="strip-density-control"
                                role="group" aria-label={`${s.name} reel density`}>
@@ -1137,7 +1120,7 @@ export function DrawModePanel({ state }) {
                             ))}
                           </div>
                         </div>
-                        {gpioError && gpioPickerFor === s.id && <div className="la-gpio-error" role="alert">{gpioError}</div>}
+                        {gpioError && <div className="la-gpio-error" role="alert">{gpioError}</div>}
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
                             USB direct cap {usbLedMaxPixels} LEDs.

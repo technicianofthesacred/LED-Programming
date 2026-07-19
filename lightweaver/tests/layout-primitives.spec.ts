@@ -350,10 +350,10 @@ test('GPIO picker groups strips by output and assigns the selected strip to that
 
   const firstStrip = page.locator('[data-strip-id]').first();
   if (!await firstStrip.locator('.la-strip-detail').isVisible()) await firstStrip.locator('.la-strip-row').click();
-  const gpio = page.getByRole('button', { name: 'GPIO 16' });
+  const gpio = page.getByLabel('GPIO output');
   await expect(gpio).toBeVisible();
-  await gpio.click();
-  await page.getByRole('button', { name: 'GPIO 17' }).click();
+  await gpio.selectOption('17');
+  await expect(gpio).toHaveValue('17');
 
   await expect(page.getByTestId('gpio-group-17')).toContainText('GPIO 17');
   await expect.poll(async () => page.evaluate(() => {
@@ -379,10 +379,9 @@ test('GPIO picker unlocks verified wiring and applies the chosen pin', async ({ 
 
   const strip = page.locator('[data-strip-id]').first();
   if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
-  await page.getByRole('button', { name: 'GPIO 16' }).click();
-  await page.getByRole('button', { name: 'GPIO 17' }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await expect(page.locator('.la-gpio-button')).toContainText('GPIO 17');
+  const gpio = page.getByLabel('GPIO output');
+  await gpio.selectOption('17');
+  await expect(gpio).toHaveValue('17');
   await expect.poll(async () => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
     return [saved?.layout?.wiring?.locked, saved?.layout?.wiring?.outputs?.[0]?.pin];
