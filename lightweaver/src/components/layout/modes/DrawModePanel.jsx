@@ -236,6 +236,14 @@ export function DrawModePanel({ state }) {
   const assignStripGpio = (stripId, pin) => {
     const selectedPin = Number(pin);
     const result = updateWiring(draft => {
+      // A direct Draw-mode assignment is an intentional edit to the physical
+      // plan. Reopen the plan first, so selecting a GPIO always applies and
+      // invalidates the previous bench verification in the same undo step.
+      if (draft.locked) {
+        draft.locked = false;
+        draft.verified = false;
+        draft.runs.forEach(item => { item.verified = false; });
+      }
       ensureRunsForAllStrips(draft);
       const run = draft.runs.find(item => item.type === 'strip' && item.source?.stripId === stripId);
       const source = draft.outputs.find(output => output.runIds.includes(run?.id));

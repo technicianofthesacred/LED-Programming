@@ -365,7 +365,7 @@ test('GPIO picker groups strips by output and assigns the selected strip to that
   ]));
 });
 
-test('GPIO picker explains when verified wiring cannot be changed', async ({ page }) => {
+test('GPIO picker unlocks verified wiring and applies the chosen pin', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
   await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
@@ -381,7 +381,12 @@ test('GPIO picker explains when verified wiring cannot be changed', async ({ pag
   if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
   await page.getByRole('button', { name: 'GPIO 16' }).click();
   await page.getByRole('button', { name: 'GPIO 17' }).click();
-  await expect(page.getByRole('alert')).toContainText('Unlock wiring in Wire before changing GPIO.');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.la-gpio-button')).toContainText('GPIO 17');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return [saved?.layout?.wiring?.locked, saved?.layout?.wiring?.outputs?.[0]?.pin];
+  })).toEqual([false, 17]);
 });
 
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {

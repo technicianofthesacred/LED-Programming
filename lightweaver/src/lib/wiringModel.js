@@ -214,7 +214,7 @@ export function updateWiring(wiring, mutate, options = {}) {
   const draft = clone(current);
   try { mutate(draft); } catch (cause) { return { ok: false, wiring: current, errors: [error('mutation-failed', cause.message || String(cause))] }; }
   let next = normalizeWiring(draft);
-  if (current.locked && wiringFingerprint(current) !== wiringFingerprint(next)) {
+  if (current.locked && next.locked && wiringFingerprint(current) !== wiringFingerprint(next)) {
     return { ok: false, wiring: current, errors: [error('wiring-locked', 'Unlock verified wiring before changing physical configuration.')] };
   }
   const validation = validateWiring(next, options.strips || [], options.capabilities || CARD_HARDWARE_CAPABILITIES, {
