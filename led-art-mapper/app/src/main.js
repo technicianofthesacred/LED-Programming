@@ -23,6 +23,7 @@ import { PreviewRenderer }                           from './preview.js';
 import { toWLEDIndexMap, toCoordinateMap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
+import { calculateStripLengthMeters, DEFAULT_LEDS_PER_METER } from './density.js';
 
 const _LIBRARY_IDS = new Set(PATTERNS.map(p => p.id));
 
@@ -890,13 +891,14 @@ function _updateEmptyState() {
 
 // ── Quick-start shape templates ────────────────────────────────────────────
 
-function _createQuickStrip(name, pathData, pixelCount, color) {
+function _createQuickStrip(name, pathData, pixelCount, color, ledsPerMeter = _getEmptyDensity()) {
   _pushHistory();
   const strip = {
     id:         crypto.randomUUID(),
     name,
     pathData,
     pixelCount,
+    ledsPerMeter,
     color:      color ?? canvasManager.nextColor(),
     visible:    true,
     speed:      1.0,
@@ -932,6 +934,7 @@ function _spiralPathData(w, h, turns, n) {
 
 function _startShapeTemplate(shape) {
   const leds = parseInt(/** @type {HTMLInputElement} */ (document.getElementById('empty-leds'))?.value ?? '144', 10);
+  const density = _getEmptyDensity();
   const vb   = svgEl.viewBox.baseVal;
   const w    = vb.width  || 800;
   const h    = vb.height || 600;
@@ -940,14 +943,14 @@ function _startShapeTemplate(shape) {
   if (shape === 'strip') {
     _createQuickStrip('Strip',
       `M ${(w*0.1).toFixed(1)} ${cy.toFixed(1)} L ${(w*0.9).toFixed(1)} ${cy.toFixed(1)}`,
-      leds);
+      leds, undefined, density);
 
   } else if (shape === 'circle') {
     const r  = Math.min(w, h) * 0.35;
     const x1 = (cx + r).toFixed(1), x2 = (cx - r).toFixed(1), rs = r.toFixed(1);
     _createQuickStrip('Circle',
       `M ${x1} ${cy.toFixed(1)} A ${rs} ${rs} 0 1 1 ${x2} ${cy.toFixed(1)} A ${rs} ${rs} 0 1 1 ${x1} ${cy.toFixed(1)}`,
-      leds);
+      leds, undefined, density);
 
   } else if (shape === 'grid') {
     const rows   = 4;
@@ -960,7 +963,7 @@ function _startShapeTemplate(shape) {
       _createQuickStrip(`Row ${r + 1}`,
         `M ${x0.toFixed(1)} ${y.toFixed(1)} L ${x1.toFixed(1)} ${y.toFixed(1)}`,
         Math.max(1, Math.round(leds / rows)),
-        colors[r]);
+        colors[r], density);
     }
 
   } else if (shape === 'rings') {
@@ -971,11 +974,11 @@ function _startShapeTemplate(shape) {
       _createQuickStrip(`Ring ${i + 1}`,
         `M ${x1} ${cy.toFixed(1)} A ${rs} ${rs} 0 1 1 ${x2} ${cy.toFixed(1)} A ${rs} ${rs} 0 1 1 ${x1} ${cy.toFixed(1)}`,
         Math.max(1, Math.round(leds / radii.length)),
-        colors[i]);
+        colors[i], density);
     });
 
   } else if (shape === 'spiral') {
-    _createQuickStrip('Spiral', _spiralPathData(w, h, 3, 120), leds);
+    _createQuickStrip('Spiral', _spiralPathData(w, h, 3, 120), leds, undefined, density);
   }
   // onStripCreated handles _reindex/_rebuildNorm/renderStripsList/syncExportInfo/_updateEmptyState
   // for each strip; no duplicate calls needed here.
@@ -3419,8 +3422,6 @@ function _initInspector() {
   // Populate the global LED type selector (project-level setting)
   const globalTypeEl  = document.getElementById('global-led-type');
   const emptyTypeEl   = document.getElementById('empty-led-type');
-  const emptyDensEl   = document.getElementById('empty-density');
-  const panelDensEl   = document.getElementById('default-density');
 
   [globalTypeEl, emptyTypeEl].forEach(sel => {
     if (!sel) return;
@@ -3437,17 +3438,6 @@ function _initInspector() {
       _recalcInspectorCount();
     });
   });
-
-  if (emptyDensEl) {
-    emptyDensEl.addEventListener('change', () => {
-      if (panelDensEl) { panelDensEl.value = emptyDensEl.value; panelDensEl.dispatchEvent(new Event('change')); }
-    });
-  }
-  if (panelDensEl) {
-    panelDensEl.addEventListener('change', () => {
-      if (emptyDensEl) emptyDensEl.value = panelDensEl.value;
-    });
-  }
 
   _updateInspectorDensities();
 }
@@ -4737,6 +4727,23 @@ document.getElementById('btn-close-library')?.addEventListener('click', () => {
 
 // ── Empty-state onboarding ────────────────────────────────────────────────
 
+function _getEmptyDensity() {
+  const active = document.querySelector('.density-preset.active')?.dataset.density;
+  const raw = active === 'custom'
+    ? document.getElementById('empty-custom-density')?.value
+    : active;
+  const density = Number(raw);
+  return Number.isFinite(density) && density > 0 ? density : DEFAULT_LEDS_PER_METER;
+}
+
+function _updateEmptyLengthNote() {
+  const count = document.getElementById('empty-leds')?.value;
+  const density = _getEmptyDensity();
+  const metres = calculateStripLengthMeters(count, density);
+  const note = document.getElementById('empty-length-note');
+  if (note && metres !== null) note.textContent = `≈ ${metres.toFixed(2)} m at ${density} LEDs/m`;
+}
+
 // Shape template buttons
 document.querySelectorAll('.shape-btn').forEach(btn => {
   btn.addEventListener('click', () => _startShapeTemplate(/** @type {HTMLElement} */ (btn).dataset.shape));
@@ -4746,7 +4753,22 @@ document.querySelectorAll('.shape-btn').forEach(btn => {
 document.getElementById('empty-leds')?.addEventListener('input', e => {
   const v = /** @type {HTMLInputElement} */ (e.target).value;
   document.getElementById('empty-leds-val').textContent = v;
+  _updateEmptyLengthNote();
 });
+
+document.querySelectorAll('.density-preset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.density-preset').forEach(preset => {
+      const selected = preset === btn;
+      preset.classList.toggle('active', selected);
+      preset.setAttribute('aria-pressed', String(selected));
+    });
+    document.getElementById('empty-custom-density-wrap').hidden = btn.dataset.density !== 'custom';
+    _updateEmptyLengthNote();
+  });
+});
+
+document.getElementById('empty-custom-density')?.addEventListener('input', _updateEmptyLengthNote);
 
 // Empty drop-zone click + browse button → open file picker
 const _openFilePicker = () => document.getElementById('file-input').click();
