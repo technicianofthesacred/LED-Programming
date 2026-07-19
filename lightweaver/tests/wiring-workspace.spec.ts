@@ -741,13 +741,16 @@ test('pointer row drag captures the pointer and moves a canonical run between ou
   await expect(page.getByTestId('wiring-output-lane').nth(1).getByTestId('wiring-run-row')).toHaveAttribute('aria-selected', 'false');
 });
 
-test('wire order rows reorder with Move down and reverse with the Reverse toggle', async ({ page }) => {
+test('wire order rows reorder with the keyboard grip and reverse with the Reverse toggle', async ({ page }) => {
   await gotoWire(page);
   await openStep(page, 'Match');
   const rows = page.getByTestId('wire-order-row');
   await expect(rows).toHaveCount(2);
   const firstId = await rows.nth(0).getAttribute('data-run-id');
-  await rows.nth(0).getByRole('button', { name: 'Move Outer circle down' }).click();
+  // The numbered grip is the one reorder control: draggable, and a keyboard
+  // path (arrow keys) so reordering never requires a pointer.
+  await rows.nth(0).getByRole('button', { name: /Drag Outer circle/ }).focus();
+  await page.keyboard.press('ArrowDown');
   await expect(rows.nth(1)).toHaveAttribute('data-run-id', firstId!);
   await expect(page.getByTestId('wire-order-status')).toHaveText('Outer circle moved to position 2 of 2');
   const reverse = rows.nth(1).getByRole('button', { name: 'Reverse direction of Outer circle' });

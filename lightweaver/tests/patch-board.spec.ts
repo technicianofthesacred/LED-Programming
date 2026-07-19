@@ -80,25 +80,26 @@ async function clickStripPathAt(page: any, fraction: number) {
   await page.mouse.click(target.x, target.y);
 }
 
-test('wire order lists numbered strip rows and Move down reorders the canonical output', async ({ page }) => {
+test('wire order lists numbered strip rows and the keyboard grip reorders the canonical output', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-order-'));
   await gotoDefaultWire(page);
   await openStep(page, 'Match');
 
   const rows = page.getByTestId('wire-order-row');
   await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0).locator('.lw-order-n')).toHaveText('1');
+  await expect(rows.nth(0).locator('.lw-order-grip-n')).toHaveText('1');
   await expect(rows.nth(0)).toContainText('Outer circle');
   await expect(rows.nth(0)).toContainText('27 LEDs');
-  await expect(rows.nth(1).locator('.lw-order-n')).toHaveText('2');
+  await expect(rows.nth(1).locator('.lw-order-grip-n')).toHaveText('2');
   await expect(rows.nth(1)).toContainText('Inner circle');
-  await expect(rows.nth(0).getByRole('button', { name: 'Drag Outer circle' })).toBeVisible();
+  await expect(rows.nth(0).getByRole('button', { name: /Drag Outer circle/ })).toBeVisible();
   await expect(page.getByText('Order strips as the data cable visits them, starting from the card.')).toBeVisible();
 
   const firstId = await rows.nth(0).getAttribute('data-run-id');
-  await rows.nth(0).getByRole('button', { name: 'Move Outer circle down' }).click();
+  await rows.nth(0).getByRole('button', { name: /Drag Outer circle/ }).focus();
+  await page.keyboard.press('ArrowDown');
   await expect(rows.nth(1)).toHaveAttribute('data-run-id', firstId!);
-  await expect(rows.nth(1).locator('.lw-order-n')).toHaveText('2');
+  await expect(rows.nth(1).locator('.lw-order-grip-n')).toHaveText('2');
   await expect(page.getByTestId('wire-order-status')).toHaveText('Outer circle moved to position 2 of 2');
 
   const project = await exportProject(page, tmp);
@@ -177,8 +178,6 @@ test('locked wiring blocks reorder, direction, split, and skipped-pixel mutation
 
   await openStep(page, 'Match');
   const row = page.getByTestId('wire-order-row').first();
-  await expect(row.getByRole('button', { name: /Move .* up/ })).toBeDisabled();
-  await expect(row.getByRole('button', { name: /Move .* down/ })).toBeDisabled();
   await expect(row.getByRole('button', { name: /Reverse direction of/ })).toBeDisabled();
   await expect(row.getByRole('button', { name: /Drag/ })).toBeDisabled();
 
