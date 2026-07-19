@@ -789,20 +789,12 @@ test('Draw wiring-direction toggle flips physicalDirection and honors a fixed po
   await expect(outerAgain.getByRole('button', { name: 'Reverse data direction of Outer circle' })).toBeDisabled();
 });
 
-test('Draw first-LED nudge moves the seam on closed strips', async ({ page }) => {
+test('Draw keeps first-LED positioning in the canvas picker only', async ({ page }) => {
   await seedDefaultCircles(page, { mode: 'draw' });
   const outer = await expandDrawStrip(page, 'Outer circle');
-  const position = outer.getByTestId('order-seam-position');
-  await expect(position).toHaveText('1');
-  await outer.getByRole('button', { name: 'Move first LED of Outer circle forward one' }).click();
-  await expect(position).toHaveText('2');
-  // Clamped at the run start: nudging back below LED 1 stays put.
-  await outer.getByRole('button', { name: 'Move first LED of Outer circle back one' }).click();
-  await outer.getByRole('button', { name: 'Move first LED of Outer circle back one' }).click();
-  await expect(position).toHaveText('1');
-  await outer.getByRole('button', { name: 'Move first LED of Outer circle forward one' }).click();
-  const project = await saveProject(page);
-  expect(project.layout.wiring.runs.find((run: any) => run.source?.stripId === 'default-outer-circle').seamLed).toBe(1);
+  await expect(outer.getByText('First LED', { exact: true })).toHaveCount(0);
+  await expect(outer.getByRole('button', { name: /Move first LED/ })).toHaveCount(0);
+  await expect(outer.getByRole('button', { name: 'Set first LED' })).toBeVisible();
 });
 
 test('bench boundary controls redistribute a fixed physical total and explain the blue-to-red markers', async ({ page }) => {

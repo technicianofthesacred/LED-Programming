@@ -352,21 +352,6 @@ export function DrawModePanel({
     target.physicalDirection = target.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
   }, { changeKind: 'direction', runIds: [run.id] });
 
-  // First-LED position on a closed shape: nudge the ring seam one LED at a
-  // time (same 'seam' changeKind as the canvas handle).
-  const nudgeSeam = (run, delta) => {
-    const min = run.source.from;
-    const max = run.source.to;
-    const current = run.seamLed ?? min;
-    const next = Math.min(max, Math.max(min, current + delta));
-    if (next === current) return;
-    updateWiring(draft => {
-      unlockDraft(draft);
-      const target = draft.runs.find(item => item.id === run.id);
-      if (target?.type === 'strip') target.seamLed = next;
-    }, { changeKind: 'seam', runIds: [run.id] });
-  };
-
   const gpioChoicesForStrip = stripId => {
     const output = outputForStrip(stripId);
     const controlPins = new Set(activeBoardGpios([], standaloneController?.controls).map(item => item.pin));
@@ -1280,20 +1265,6 @@ export function DrawModePanel({
                             ))}
                           </div>
                         </div>
-                        {s.closed && run && !isSplit && (
-                          <div className="row lw-seam-row">
-                            <span className="k">First LED</span>
-                            <div className="lw-led-nudge">
-                              <button type="button" className="btn" aria-label={`Move first LED of ${s.name} back one`}
-                                      title="Where the data run starts on this closed shape"
-                                      onClick={() => nudgeSeam(run, -1)}>−</button>
-                              <strong className="lw-seam-value" data-testid="order-seam-position">{(run.seamLed ?? run.source.from) + 1}</strong>
-                              <button type="button" className="btn" aria-label={`Move first LED of ${s.name} forward one`}
-                                      title="Where the data run starts on this closed shape"
-                                      onClick={() => nudgeSeam(run, 1)}>+</button>
-                            </div>
-                          </div>
-                        )}
                         {gpioError && <div className="la-gpio-error" role="alert">{gpioError}</div>}
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>

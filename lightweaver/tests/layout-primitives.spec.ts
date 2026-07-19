@@ -580,6 +580,10 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
   await expect.poll(() => activeFirstLedButton.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe('none');
   await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
+  const markerBefore = await page.getByTestId('first-led-marker').evaluate(marker => {
+    const transform = marker.transform.baseVal.consolidate()?.matrix;
+    return transform ? [transform.e, transform.f] : null;
+  });
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
   const target = await page.locator(`[data-testid^="strip-led-${stripId}-"]`).evaluateAll(nodes => {
     const candidate = nodes.map(node => {
@@ -591,12 +595,12 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
       const hit = document.elementFromPoint(x, y);
       return hit && node.contains(hit) ? {
         index: Number(node.getAttribute('data-testid')?.split('-').pop()),
-        x,
+        x: x + rect.width * 1.5,
         y,
         ledX: Number(circle.getAttribute('cx')),
         ledY: Number(circle.getAttribute('cy')),
       } : null;
-    }).find(Boolean);
+    }).find(candidate => candidate && candidate.index > 0);
     if (!candidate) throw new Error('No rendered LED accepts a real pointer hit.');
     return candidate;
   });
@@ -611,6 +615,7 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
     const transform = marker.transform.baseVal.consolidate()?.matrix;
     return transform ? [transform.e, transform.f] : null;
   })).toEqual([target.ledX, target.ledY]);
+  expect([target.ledX, target.ledY]).not.toEqual(markerBefore);
 });
 
 test('Set first LED binds the 1 marker to the strip whose button was armed', async ({ page }) => {

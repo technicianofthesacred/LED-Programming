@@ -73,7 +73,7 @@ export function LayoutCanvas({
     let nearest = null;
     strip.pixels.forEach((pixel, index) => {
       const distance = Math.hypot(point.x - pixel.x, point.y - pixel.y);
-      if (distance <= vbScale * 12 && (!nearest || distance < nearest.distance)) {
+      if (distance <= vbScale * 20 && (!nearest || distance < nearest.distance)) {
         nearest = { index, distance };
       }
     });
@@ -483,7 +483,7 @@ export function LayoutCanvas({
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
                                 fill={ledColor} opacity={coreOpacity}/>
                       )}
-                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 9}
+                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 20}
                                                                   fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
@@ -511,7 +511,7 @@ export function LayoutCanvas({
                               r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                               fill={ledColor}
                               opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
-                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 9}
+                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 20}
                                                                   fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
