@@ -123,6 +123,7 @@ export function DrawModePanel({ state }) {
   // strip's fixed density. Ephemeral view state.
   const [addChooserOpen, setAddChooserOpen] = useState(false);
   const [addLedCount, setAddLedCount] = useState(60);
+  const [addDensity, setAddDensity] = useState(density);
 
   const pickAddShape = (key) => {
     setAddChooserOpen(false);
@@ -140,7 +141,7 @@ export function DrawModePanel({ state }) {
       setDrawMode(true);
       return;
     }
-    addPrimitiveStrip(key, clampLedCount(addLedCount));
+    addPrimitiveStrip(key, clampLedCount(addLedCount), addDensity);
   };
 
   const addShapeTiles = [
@@ -154,6 +155,7 @@ export function DrawModePanel({ state }) {
         {starterLayoutActive && !drawMode && !pendingDraw && (
           <PrimitiveStarter
             currentPixelCount={totalLeds || 37}
+            defaultDensity={density}
             onImport={() => fileRef.current?.click()}
             onCreate={createStarterPrimitive}
             onFreeDraw={() => {
@@ -757,8 +759,19 @@ export function DrawModePanel({ state }) {
                          onFocus={e => e.target.select()}
                          onChange={e => setAddLedCount(clampLedCount(e.target.value))}/>
                   <span className="lw-shape-count-note">
-                    ≈ {formatMetersValue(clampLedCount(addLedCount) / density)} m at {density} LEDs/m
+                    ≈ {formatMetersValue(clampLedCount(addLedCount) / addDensity)} m at {addDensity} LEDs/m
                   </span>
+                </div>
+                <div className="lw-shape-density" data-testid="add-strip-density-control"
+                     role="group" aria-label="New strip density">
+                  <span>Density</span>
+                  {DENSITY_OPTIONS.map(option => (
+                    <button key={option} type="button"
+                            className={`btn${addDensity === option ? ' is-selected' : ''}`}
+                            aria-label={`${option} LEDs/m`}
+                            aria-pressed={addDensity === option}
+                            onClick={() => setAddDensity(option)}>{option}/m</button>
+                  ))}
                 </div>
               </div>
             )}
@@ -859,13 +872,24 @@ export function DrawModePanel({ state }) {
                             <button type="button" className="btn" aria-label="Make strip smaller"
                                     title="Shrink 10%"
                                     onClick={() => scaleStrip(s.id, 0.9)}>−</button>
-                            <span className="la-size-readout" data-testid="strip-size-readout">
-                              {formatMetersValue(stripMeters(
-                                (Number.isFinite(s.svgLength) && s.svgLength > 0)
-                                  ? s.svgLength
-                                  : svgPathLength(s.pathData),
-                                pxPerMm))} m · {s.pixelCount} LED{s.pixelCount !== 1 ? 's' : ''}
-                            </span>
+                            <label className="la-size-readout" data-testid="strip-size-readout">
+                              <input type="number" min="0.001" step="0.001"
+                                     key={`${s.id}:${s.svgLength}:${pxPerMm}`}
+                                     defaultValue={formatMetersValue(stripMeters(
+                                       (Number.isFinite(s.svgLength) && s.svgLength > 0)
+                                         ? s.svgLength
+                                         : svgPathLength(s.pathData),
+                                       pxPerMm))}
+                                     aria-label="Strip length in metres"
+                                     inputMode="decimal"
+                                     onFocus={e => e.target.select()}
+                                     onBlur={e => {
+                                       const value = Number(e.target.value);
+                                       if (Number.isFinite(value) && value > 0) setStripPhysical(s.id, { lengthM: value });
+                                     }}
+                                     onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/>
+                              <span>m · {s.pixelCount} LED{s.pixelCount !== 1 ? 's' : ''}</span>
+                            </label>
                             <button type="button" className="btn" aria-label="Make strip bigger"
                                     title="Grow 10%"
                                     onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>

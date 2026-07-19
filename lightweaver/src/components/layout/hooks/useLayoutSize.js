@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import {
   clampLedCount,
-  parsedVb,
   recountStrips,
   svgPathLength,
 } from '../../../lib/layoutGeometry.js';
@@ -10,7 +9,6 @@ import { scaleStripGeometry } from '../../../lib/stripScale.js';
 // Geometry clamps — keep in lockstep with useLayoutStrips.js (scaleStrip),
 // which owns the same bounds for the Draw-mode − / + resize control.
 const MIN_STRIP_SVG_LENGTH = 20;
-const MAX_STRIP_LENGTH_ARTWORK_FACTOR = 4;
 
 // Size mode logic: the physical strips are the ground truth. Each strip has a
 // real length (metres) and a reel density (LEDs/m, `stripDensities[id]`,
@@ -104,9 +102,10 @@ export function useLayoutSize(ctx) {
   // (`lengthM`, metres) and/or the reel density it was cut from (`ledsPerM`).
   // The LED count derives (round(length × density)) and the drawn geometry is
   // rescaled about its own center so svgLength = lengthM · 1000 · pxPerMm.
-  // Geometry clamps (min 20 svg px, max 4× the artwork's larger dimension)
-  // win over the request: when a length is clamped, the achieved length is
-  // what the count derives from and what the panel reads back.
+  // An explicitly typed physical length is the maker's source of truth. Keep a
+  // tiny lower bound so the path remains drawable, but do not cap it to the
+  // imported artwork's dimensions: installations routinely extend beyond the
+  // artwork used to plan them.
   const setStripPhysical = useCallback((id, { lengthM, ledsPerM } = {}) => {
     const strip = strips.find(s => s.id === id);
     if (!strip) return;
@@ -117,9 +116,7 @@ export function useLayoutSize(ctx) {
     if (!(currentLen > 0)) return;
 
     let targetLen = Number.isFinite(lengthM) && lengthM > 0 ? lengthM * 1000 * scale : currentLen;
-    const vb = parsedVb(viewBox);
-    const maxLen = MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h);
-    targetLen = Math.min(Math.max(targetLen, MIN_STRIP_SVG_LENGTH), maxLen);
+    targetLen = Math.max(targetLen, MIN_STRIP_SVG_LENGTH);
 
     // Count follows the ACHIEVED length so length · density · count never
     // disagree, even when the geometry clamp bites.

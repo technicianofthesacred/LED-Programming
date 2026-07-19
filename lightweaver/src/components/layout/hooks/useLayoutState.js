@@ -6,7 +6,9 @@ import {
   STRIP_COLORS,
   stripSourceKey,
   sampleStripPixels,
+  clampLedCount,
 } from '../../../lib/layoutGeometry.js';
+import { scaleStripGeometry } from '../../../lib/stripScale.js';
 import { orderedStripIdsFromChain } from '../../../lib/patchBoard.js';
 import { isClosedPathData } from '../../../lib/pathClosure.js';
 
@@ -243,15 +245,24 @@ export function useLayoutState() {
     setWaypoints: canvas.setWaypoints,
   });
 
-  const createStarterPrimitive = (type) => {
+  const createStarterPrimitive = (type, requestedCount, requestedDensity) => {
+    const count = clampLedCount(requestedCount ?? (totalLeds || DEFAULT_STARTER_PIXEL_COUNT));
+    const reelDensity = Number.isFinite(Number(requestedDensity)) && Number(requestedDensity) > 0
+      ? Number(requestedDensity)
+      : density;
     const definition = createPrimitiveStripDefinition({
       type,
       viewBox,
-      pixelCount: totalLeds || DEFAULT_STARTER_PIXEL_COUNT,
+      pixelCount: count,
       color: nextColor(),
     });
-    const strip = rebuildStrip(definition);
+    const targetLength = (count / reelDensity) * 1000 * pxPerMm;
+    const sized = definition.svgLength > 0 && Number.isFinite(targetLength)
+      ? scaleStripGeometry(definition, targetLength / definition.svgLength)
+      : definition;
+    const strip = rebuildStrip({ ...sized, pixelCount: count });
     replaceLayoutGeometry([strip]);
+    setStripDensities({ [strip.id]: reelDensity });
     selectStrip(strip.id);
     setExpandedStrips(current => ({ ...current, [strip.id]: true }));
   };

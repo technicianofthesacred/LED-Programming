@@ -218,6 +218,61 @@ test('an expanded strip lets the maker choose its reel density', async ({ page }
   await expect(page.getByText(/Count follows size at this strip's density/)).toHaveCount(0);
 });
 
+test('physical strip values can be typed and density is chosen before creating a strip', async ({ page }) => {
+  await gotoFreshLayout(page);
+
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByLabel('Starting strip LEDs').fill('120');
+  const starterDensity = page.getByTestId('primitive-density-control');
+  await starterDensity.getByRole('button', { name: '96 LEDs/m' }).click();
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id]] : null;
+  }).toEqual([120, 96]);
+
+  const size = page.getByLabel('Strip length in metres');
+  await size.fill('0.5');
+  await size.press('Tab');
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength / layout.pxPerMm / 1000] : null;
+  }).toEqual([48, 0.5]);
+
+  const ledCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await ledCount.fill('60');
+  await ledCount.press('Enter');
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    return strips?.[0]?.pixelCount;
+  }).toBe(60);
+});
+
+test('the Add strip chooser sets density before the new shape is drawn', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  await page.getByTestId('layout-add-strip').click();
+  const chooser = page.getByTestId('layout-add-strip-chooser');
+  await chooser.getByLabel('New strip LEDs').fill('144');
+  const density = page.getByTestId('add-strip-density-control');
+  await density.getByRole('button', { name: '144 LEDs/m' }).click();
+  await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.find((item: any) => item.name === 'Circle');
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id]] : null;
+  }).toEqual([144, 144]);
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
@@ -315,15 +370,15 @@ test('resized geometry persists across reload', async ({ page }) => {
     (element: SVGGraphicsElement) => element.getBBox().width);
   expect(Math.abs(width - grown)).toBeLessThan(2);
 
-  // The expanded row's Size readout shows the persisted length as a physical
-  // fact: metres at the current scale plus the LED count it holds.
+  // The expanded row keeps the persisted physical length directly editable.
   await page.locator('.la-strip-row').click();
   const layout = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
   const meters = grown / layout.pxPerMm / 1000;
   const metersText = meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
-  await expect(page.getByTestId('strip-size-readout'))
-    .toHaveText(`${metersText} m · ${layout.strips[0].pixelCount} LEDs`);
+  const readout = page.getByTestId('strip-size-readout');
+  await expect(readout.getByRole('spinbutton', { name: 'Strip length in metres' })).toHaveValue(metersText);
+  await expect(readout).toContainText(`m · ${layout.strips[0].pixelCount} LEDs`);
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { STARTER_PRIMITIVES } from '../../../lib/layoutPrimitives.js';
+import { DENSITY_OPTIONS, clampLedCount } from '../../../lib/layoutGeometry.js';
 
 function PrimitiveIcon({ type }) {
   if (type === 'circle') return <circle cx="24" cy="14" r="9"/>;
@@ -8,8 +9,10 @@ function PrimitiveIcon({ type }) {
   return <path d="M7 20 L41 8"/>;
 }
 
-export function PrimitiveStarter({ currentPixelCount, onCreate, onFreeDraw, onImport }) {
+export function PrimitiveStarter({ currentPixelCount, defaultDensity, onCreate, onFreeDraw, onImport }) {
   const [selected, setSelected] = useState('line');
+  const [ledCount, setLedCount] = useState(currentPixelCount);
+  const [density, setDensity] = useState(defaultDensity);
   const freeDraw = selected === 'free';
 
   return (
@@ -36,13 +39,34 @@ export function PrimitiveStarter({ currentPixelCount, onCreate, onFreeDraw, onIm
           </button>
         ))}
       </div>
+      <div className="la-primitive-physical">
+        <label>
+          <span>LEDs</span>
+          <input type="number" min="1" step="1"
+                 value={ledCount}
+                 aria-label="Starting strip LEDs"
+                 inputMode="numeric"
+                 onFocus={e => e.target.select()}
+                 onChange={e => setLedCount(clampLedCount(e.target.value))}/>
+        </label>
+        <div className="la-primitive-density" data-testid="primitive-density-control"
+             role="group" aria-label="Starting strip density">
+          {DENSITY_OPTIONS.map(option => (
+            <button key={option} type="button"
+                    className={density === option ? 'is-selected' : ''}
+                    aria-label={`${option} LEDs/m`}
+                    aria-pressed={density === option}
+                    onClick={() => setDensity(option)}>{option}/m</button>
+          ))}
+        </div>
+      </div>
       <div className="la-primitive-action">
-        <span>{freeDraw ? 'Place points directly on the canvas.' : `${currentPixelCount} LEDs to start · adjust next in Size.`}</span>
+        <span>{freeDraw ? 'Place points directly on the canvas.' : `≈ ${(clampLedCount(ledCount) / density).toFixed(2)} m at ${density} LEDs/m`}</span>
         <button
           type="button"
           className="btn primary"
           aria-label={freeDraw ? 'Start drawing' : `Create ${selected}`}
-          onClick={() => freeDraw ? onFreeDraw() : onCreate(selected)}>
+          onClick={() => freeDraw ? onFreeDraw() : onCreate(selected, clampLedCount(ledCount), density)}>
           {freeDraw ? 'Start drawing' : `Create ${selected}`}
         </button>
       </div>

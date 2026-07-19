@@ -36,6 +36,8 @@
   font-family: var(--font-mono); font-size: 10px; color: var(--text-faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.lw-shape-density { font-size: 11px; color: var(--text-mid); }
+.lw-shape-density > span { margin-right: 2px; }
 
 /* Live physical readout + key hints while drawing */
 .lw-draw-live {
