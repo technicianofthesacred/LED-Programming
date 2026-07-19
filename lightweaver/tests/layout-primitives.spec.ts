@@ -579,7 +579,17 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
   const targetLedIndex = 8;
-  await page.getByTestId(`strip-led-${stripId}-${targetLedIndex}`).dispatchEvent('pointerdown');
+  const point = await page.getByTestId(`strip-led-${stripId}-${targetLedIndex}`).evaluate(node => {
+    const svg = node.ownerSVGElement;
+    const circle = node.querySelector('circle');
+    if (!svg || !circle) throw new Error('Expected LED dot on the canvas.');
+    const svgPoint = svg.createSVGPoint();
+    svgPoint.x = Number(circle.getAttribute('cx'));
+    svgPoint.y = Number(circle.getAttribute('cy'));
+    const screenPoint = svgPoint.matrixTransform(svg.getScreenCTM());
+    return { x: screenPoint.x, y: screenPoint.y };
+  });
+  await page.locator('svg:has(path[data-strip-path])').dispatchEvent('pointerdown', { clientX: point.x, clientY: point.y });
 
   await expect.poll(async () => page.evaluate(id => {
     const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;

@@ -60,6 +60,28 @@ export function LayoutCanvas({
     startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
     toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
   } = interactionHandlers;
+  const handleCanvasPointerDown = event => {
+    if (!firstLedPicker) {
+      handleSvgMouseDown(event);
+      return;
+    }
+    const svg = svgRef.current;
+    const strip = strips.find(item => item.id === firstLedPicker.stripId);
+    const matrix = svg?.getScreenCTM()?.inverse();
+    if (!strip?.pixels?.length || !matrix) return;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix);
+    let nearest = null;
+    strip.pixels.forEach((pixel, index) => {
+      const distance = Math.hypot(point.x - pixel.x, point.y - pixel.y);
+      if (distance <= vbScale * 12 && (!nearest || distance < nearest.distance)) {
+        nearest = { index, distance };
+      }
+    });
+    if (!nearest) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onFirstLedPick(strip.id, nearest.index);
+  };
   return (
         <main className="body">
         <div className="dotgrid"/>
@@ -98,7 +120,7 @@ export function LayoutCanvas({
             onClick={handleSvgClick}
             onDoubleClick={handleSvgDblClick}
             onPointerMove={handleSvgMouseMove}
-            onPointerDown={handleSvgMouseDown}
+            onPointerDown={handleCanvasPointerDown}
             onPointerUp={handleSvgMouseUp}
             onPointerLeave={handleSvgMouseLeave}
             onContextMenu={handleContextMenu}
