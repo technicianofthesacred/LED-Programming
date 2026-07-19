@@ -176,6 +176,19 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
   expect(await fileChooserPromise).toBeTruthy();
 });
 
+test('Add strip appears before the LED strips inventory heading', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  const order = await page.locator('body').evaluate(panel => {
+    const add = panel.querySelector('[data-testid="layout-add-strip"]');
+    const heading = Array.from(panel.querySelectorAll('.ttl')).find(node => node.textContent?.trim() === 'LED strips');
+    return add && heading ? Boolean(add.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING) : false;
+  });
+
+  expect(order).toBe(true);
+});
+
 test('an expanded strip lets the maker choose its reel density', async ({ page }) => {
   await gotoFreshLayout(page);
   const picker = page.getByTestId('layout-primitive-picker');

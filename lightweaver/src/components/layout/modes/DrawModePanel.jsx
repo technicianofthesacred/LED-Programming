@@ -888,13 +888,6 @@ export function DrawModePanel({ state }) {
         {strips.length > 0 && !starterLayoutActive && (
           <>
             <div className="panel-divider"/>
-            <div className="panel-head">
-              <span className="ttl">LED strips</span>
-              <span className="meta">
-                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
-                {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
-              </span>
-            </div>
             {/* Always-visible add path (bench test: users never found Duplicate
                 or the pencil after the first strip). */}
             <button type="button" className="btn la-add-strip" data-testid="layout-add-strip"
@@ -950,6 +943,13 @@ export function DrawModePanel({ state }) {
                 </div>
               </div>
             )}
+            <div className="panel-head">
+              <span className="ttl">LED strips</span>
+              <span className="meta">
+                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
+                {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
+              </span>
+            </div>
             {selectedStrips.length > 1 && (
               <div className="la-batch">
                 <div className="la-batch-head">
