@@ -287,7 +287,7 @@ export function DrawModePanel({ state }) {
     }
   };
 
-  const moveStripsInGpioOrder = (draggedStripIds, targetStripId) => {
+  const moveStripsInGpioOrder = (draggedStripIds, targetStripId, placement = 'before') => {
     const ids = (draggedStripIds || []).filter(id => id && id !== targetStripId);
     if (!ids.length) return;
     updateWiring(draft => {
@@ -299,7 +299,10 @@ export function DrawModePanel({ state }) {
       if (!targetOutput || !movedRuns.length) return;
       draft.outputs.forEach(output => { output.runIds = output.runIds.filter(runId => !movedRuns.some(run => run.id === runId)); });
       const targetIndex = targetOutput.runIds.indexOf(targetRun.id);
-      targetOutput.runIds.splice(targetIndex < 0 ? targetOutput.runIds.length : targetIndex, 0, ...movedRuns.map(run => run.id));
+      const insertAt = targetIndex < 0
+        ? targetOutput.runIds.length
+        : targetIndex + (placement === 'after' ? 1 : 0);
+      targetOutput.runIds.splice(insertAt, 0, ...movedRuns.map(run => run.id));
       draft.outputs = draft.outputs.filter(output => output.runIds.length || output.id === targetOutput.id);
     }, { changeKind: 'route' });
   };
@@ -1018,7 +1021,9 @@ export function DrawModePanel({ state }) {
                          if (!draggedStripIds.length) return;
                          e.preventDefault();
                          e.stopPropagation();
-                         moveStripsInGpioOrder(draggedStripIds, s.id);
+                         const bounds = e.currentTarget.getBoundingClientRect();
+                         const placement = e.clientY > bounds.top + bounds.height / 2 ? 'after' : 'before';
+                         moveStripsInGpioOrder(draggedStripIds, s.id, placement);
                          setDroppedStripIds(draggedStripIds);
                          window.setTimeout(() => setDroppedStripIds([]), 220);
                          setStripGroupDragOver(null);

@@ -23,8 +23,8 @@ import {
 import { isClosedPathData } from '../../../lib/pathClosure.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 
-// Draw | Size | Wire — deep-linked via `#screen=layout&mode=<x>`.
-const LAYOUT_MODES = ['draw', 'size', 'wire'];
+// Draw | Wire — deep-linked via `#screen=layout&mode=<x>`.
+const LAYOUT_MODES = ['draw', 'wire'];
 
 function parseModeFromHash() {
   if (typeof window === 'undefined') return 'draw';
@@ -109,7 +109,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const [pendingDrawCount, setPendingDrawCount] = useState(0);
   const pendingDrawNameRef = useRef(null);
 
-  // ── Mode (Draw | Size | Wire) — ephemeral, never in undo/autosave ──────────
+  // ── Mode (Draw | Wire) — ephemeral, never in undo/autosave ─────────────────
   // Deep-linked via `#screen=layout&mode=<x>`; the initial read tolerates a
   // missing/invalid param (falls back to 'draw'). Writes only happen on an
   // explicit mode change (setMode), merging into whatever hash already exists
@@ -491,8 +491,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       // Global shortcuts (all modes): mode switch, reset view.
       switch (e.key) {
         case '1': setMode('draw'); return;
-        case '2': setMode('size'); return;
-        case '3': setMode('wire'); return;
+        case '2': setMode('wire'); return;
         case 'f': resetView(); return;
         default: break;
       }

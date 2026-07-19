@@ -16,7 +16,7 @@ import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from 
 import { parsedVb } from '../../../lib/layoutGeometry.js';
 import { normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
 import { estimatePowerBudget } from '../../../lib/controllerProfiles.js';
-import { readPowerSupplySettings } from '../../../lib/powerSupplySettings.js';
+import { readPowerSupplySettings, withPowerSupplySettings } from '../../../lib/powerSupplySettings.js';
 import { StatTile, StatTileRow } from '../../ui/StatTile.jsx';
 import { StepRail } from '../../ui/StepRail.jsx';
 import { UiCard } from '../../ui/UiCard.jsx';
@@ -30,6 +30,10 @@ const nextRunId = (runs, prefix) => {
   let index = 1;
   while (ids.has(`${prefix}-${index}`)) index += 1;
   return `${prefix}-${index}`;
+};
+const parsePositive = (raw, fallback) => {
+  const value = Number.parseFloat(raw);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
 };
 
 function previewRunName(run, stripsById) {
@@ -115,6 +119,8 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [outputDrag, setOutputDrag] = useState(null);
   const [pinError, setPinError] = useState('');
   const [selectedStep, setSelectedStep] = useState(null);
+  const [psuAmpsDraft, setPsuAmpsDraft] = useState(() => String(readPowerSupplySettings(standaloneController).psuAmps));
+  const [milliampsDraft, setMilliampsDraft] = useState(() => String(readPowerSupplySettings(standaloneController).milliampsPerPixel));
   // True while the guided LED check has a question on screen — the color quiz
   // hides then so step 4 keeps one question per screen (redesign change 9).
   const [benchCheckActive, setBenchCheckActive] = useState(false);
@@ -735,6 +741,13 @@ export function WireModePanel({ state, connected, cardHost }) {
     led: { length: compiledWiring.totalPixels, maxBrightness: 255 },
     power: powerSettings,
   }), [compiledWiring.totalPixels, powerSettings.psuAmps, powerSettings.milliampsPerPixel]);
+  const psuAmps = parsePositive(psuAmpsDraft, powerSettings.psuAmps);
+  const milliampsPerPixel = parsePositive(milliampsDraft, powerSettings.milliampsPerPixel);
+  const persistPowerSettings = next => setStandaloneController(previous => withPowerSupplySettings(previous, {
+    psuAmps,
+    milliampsPerPixel,
+    ...next,
+  }));
   const installBlocker = !dataWireCountConfirmed
     ? { step: 1, text: 'Confirm how many wires leave the card.', action: 'Go to wires' }
     : !mappingReady
@@ -863,6 +876,43 @@ export function WireModePanel({ state, connected, cardHost }) {
         <WiringMiniDiagram wiring={wiring} stripsById={stripsById} />
         <StepRail steps={railSteps} activeId={currentStep} onSelect={setSelectedStep} />
       </div>
+      <section className="lww-power-options" data-testid="wire-power-section" aria-label="Power supply">
+        <div className="lww-power-head">
+          <strong>Power</strong>
+          <span>Worst case, full white</span>
+        </div>
+        <StatTileRow columns={3}>
+          <StatTile label="Max draw" value={powerEstimate.maxAmps.toFixed(1)} unit="A"
+                    tone={powerEstimate.status === 'over' ? 'danger' : undefined}/>
+          <StatTile label="Supply" value={psuAmps.toFixed(1)} unit="A"/>
+          <StatTile label="Headroom" value={(psuAmps - powerEstimate.maxAmps).toFixed(1)} unit="A"
+                    tone={powerEstimate.status === 'over' ? 'danger' : 'ok'}/>
+        </StatTileRow>
+        <div className="lww-power-fields">
+          <label>Power supply amps
+            <input type="number" min="0.5" step="0.5" inputMode="decimal"
+                   value={psuAmpsDraft} aria-label="Power supply amps"
+                   onFocus={event => event.target.select()}
+                   onChange={event => {
+                     setPsuAmpsDraft(event.target.value);
+                     const value = Number.parseFloat(event.target.value);
+                     if (Number.isFinite(value) && value > 0) persistPowerSettings({ psuAmps: value });
+                   }}
+                   onBlur={() => setPsuAmpsDraft(String(psuAmps))}/>
+          </label>
+          <label>Milliamps per LED
+            <input type="number" min="1" step="1" inputMode="numeric"
+                   value={milliampsDraft} aria-label="Milliamps per LED"
+                   onFocus={event => event.target.select()}
+                   onChange={event => {
+                     setMilliampsDraft(event.target.value);
+                     const value = Number.parseFloat(event.target.value);
+                     if (Number.isFinite(value) && value > 0) persistPowerSettings({ milliampsPerPixel: value });
+                   }}
+                   onBlur={() => setMilliampsDraft(String(milliampsPerPixel))}/>
+          </label>
+        </div>
+      </section>
       <section
         className="lww-step-region"
         data-testid="commissioning-step"

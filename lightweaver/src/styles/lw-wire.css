@@ -39,6 +39,22 @@
   min-width: 0;
 }
 
+.lww-power-options {
+  margin: 8px 0 0; padding: 9px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-md);
+}
+.lww-power-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.lww-power-head strong { color: var(--text-hi); font-size: 12px; }
+.lww-power-head span { color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; }
+.lww-power-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.lww-power-fields label { display: grid; gap: 4px; color: var(--text-mid); font-size: 10px; }
+.lww-power-fields input {
+  width: 100%; height: 28px; min-width: 0; padding: 0 7px;
+  color: var(--text-hi); background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.lww-power-fields input:focus { outline: none; border-color: var(--accent); }
+
 .lww-step-region {
   min-width: 0;
 }

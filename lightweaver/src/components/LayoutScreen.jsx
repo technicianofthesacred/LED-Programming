@@ -5,7 +5,6 @@ import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
 import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
-import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
 import { useProject } from '../state/ProjectContext.jsx';
@@ -61,7 +60,7 @@ export function LayoutScreen({ connected, cardHost }) {
     // import
     dragOver, fileRef, loadRef,
     handleFile, handleDragOver, handleDragLeave, handleDrop, saveProject, handleLoad, importAccept,
-    // mode (Draw | Size | Wire)
+    // mode (Draw | Wire)
     mode, setMode,
   } = state;
 
@@ -288,7 +287,6 @@ export function LayoutScreen({ connected, cardHost }) {
         </div>
         <div className={`la-mode-content is-${mode}`}>
           {mode === 'draw' && <DrawModePanel state={state}/>} 
-          {mode === 'size' && <SizeModePanel state={state}/>} 
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>
       </aside>

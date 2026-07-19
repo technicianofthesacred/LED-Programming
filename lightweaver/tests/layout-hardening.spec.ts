@@ -20,7 +20,7 @@ test('pending drawing survives a mode visit until explicitly cancelled', async (
   if (!box) throw new Error('canvas unavailable');
   await page.mouse.click(box.x + 30, box.y + 30);
   await page.mouse.click(box.x + 80, box.y + 60);
-  await page.getByTestId('layout-mode-size').click();
+  await page.getByTestId('layout-mode-wire').click();
   await page.getByTestId('layout-mode-draw').click();
   await page.getByTitle('Draw a new LED strip path on the artwork.').click();
   // Live physical readout (points · metres · LEDs at the fixed density) plus
@@ -84,61 +84,6 @@ test('double-click and the Finish button produce identical geometry from the sam
   expect(Math.abs(viaButton - viaDblClick)).toBeLessThan(0.5);
 });
 
-test('manual counts and reset are independently undoable', async ({ page }) => {
-  await gotoLayout(page);
-  await page.getByTestId('layout-mode-size').click();
-  const row = page.getByTestId('layout-size-strip-row').first();
-  const leds = row.getByTestId('layout-size-strip-leds');
-  const original = (await leds.textContent())!;
-  const nudged = `${parseInt(original, 10) + 1} LEDs`;
-  await row.getByRole('button', { name: /Add one LED to/ }).click();
-  await expect(leds).toHaveText(nudged);
-  // Reset rejoins the geometry-computed count, which may differ from the
-  // project's original stored count — capture it rather than assuming.
-  await page.getByTitle('Back to the computed count').click();
-  await expect(leds).not.toHaveText(nudged);
-  const computed = (await leds.textContent())!;
-  await page.getByTitle(/Undo/).click();
-  await expect(leds).toHaveText(nudged);
-  await page.getByTitle(/Undo/).click();
-  await expect(leds).toHaveText(original);
-  await page.getByTitle(/Redo/).click();
-  await expect(leds).toHaveText(nudged);
-  await page.getByTitle(/Redo/).click();
-  await expect(leds).toHaveText(computed);
-});
-
-test('multi-character length edit creates one undo entry', async ({ page }) => {
-  await gotoLayout(page);
-  await page.getByTestId('layout-mode-size').click();
-  const row = page.getByTestId('layout-size-strip-row').first();
-  const length = row.getByRole('spinbutton', { name: /length in metres/ });
-  const original = await length.inputValue();
-
-  await length.fill('0.6');
-  await length.blur();
-
-  await expect(length).toHaveValue('0.6');
-  await expect(page.getByTitle(/Undo/)).toHaveAttribute('title', /1 step/);
-  await page.getByTitle(/Undo/).click();
-  await expect(length).toHaveValue(original);
-  await expect(page.getByTitle(/Undo/)).toBeDisabled();
-});
-
-test('Escape restores a length edit without adding history', async ({ page }) => {
-  await gotoLayout(page);
-  await page.getByTestId('layout-mode-size').click();
-  const row = page.getByTestId('layout-size-strip-row').first();
-  const length = row.getByRole('spinbutton', { name: /length in metres/ });
-  const original = await length.inputValue();
-
-  await length.fill('9');
-  await page.keyboard.press('Escape');
-
-  await expect(length).toHaveValue(original);
-  await expect(page.getByTitle(/Undo/)).toBeDisabled();
-});
-
 test('Finish path is touch-visible and the completed pending path survives mode visits', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await gotoLayout(page);
@@ -154,7 +99,6 @@ test('Finish path is touch-visible and the completed pending path survives mode 
   await finish.click();
   await expect(page.getByText('Name your new strip')).toBeVisible();
 
-  await page.getByTestId('layout-mode-size').click();
   await page.getByTestId('layout-mode-wire').click();
   await page.getByTestId('layout-mode-draw').click();
   await expect(page.getByText('Name your new strip')).toBeVisible();
@@ -303,7 +247,7 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
   await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toHaveCount(0);
   await expect(page.getByTitle('Join two strips into one continuous run.')).toHaveCount(0);
 
-  await page.getByTestId('layout-mode-size').click();
+  await page.getByTestId('layout-mode-wire').click();
   await expect(page.getByTitle('Import an SVG to map LED strips')).toHaveCount(0);
   await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toHaveCount(0);
 

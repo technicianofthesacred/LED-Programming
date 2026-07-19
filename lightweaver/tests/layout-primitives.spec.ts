@@ -77,9 +77,6 @@ test('a fresh layout offers primitive choices and creates a centered selected ci
   expect(center.x).toBeCloseTo(320, 0);
   expect(center.y).toBeCloseTo(200, 0);
 
-  await page.getByTestId('layout-mode-size').click();
-  await expect(page.getByTestId('layout-size-panel')).toContainText('Circle');
-
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
     return saved ? [saved.layout?.starterPending, saved.layout?.strips?.length] : null;
@@ -101,24 +98,6 @@ test('an untouched fresh starter survives autosave reload, but a saved legacy ci
   await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
   await expect(page.locator('path[data-strip-path]')).toHaveCount(2);
-});
-
-test('editing the seeded geometry clears starter provenance before reload', async ({ page }) => {
-  await gotoFreshLayout(page);
-
-  await page.getByTestId('layout-mode-size').click();
-  await page.getByTestId('layout-size-density').getByRole('button', { name: '144' }).click();
-  await page.getByTestId('layout-mode-draw').click();
-  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
-
-  await expect.poll(() => page.evaluate(() => {
-    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
-    return saved ? [saved.layout?.starterPending, saved.layout?.strips?.length] : null;
-  })).toEqual([false, 2]);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
 });
 
 test('importing artwork clears starter provenance before reload', async ({ page }) => {
@@ -418,6 +397,20 @@ test('Draw strip rows drag into first-to-last wiring order', async ({ page }) =>
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
     return saved?.layout?.wiring?.outputs?.[0]?.runIds;
   })).toEqual(['run-strip-2', 'run-strip-1']);
+});
+
+test('dropping below a Draw strip places the row after it', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+
+  const rows = page.locator('.la-strip-row');
+  const targetBox = await rows.nth(1).boundingBox();
+  if (!targetBox) throw new Error('Expected a second strip row.');
+  await rows.nth(0).dragTo(rows.nth(1), { targetPosition: { x: 24, y: targetBox.height - 2 } });
+
+  await expect(rows.first()).toContainText('Line 2');
 });
 
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
