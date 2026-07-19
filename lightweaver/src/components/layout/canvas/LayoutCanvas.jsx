@@ -447,8 +447,9 @@ export function LayoutCanvas({
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
                        style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
-                       onClick={event => {
+                       onPointerDown={event => {
                          if (firstLedPicker?.stripId !== s.id) return;
+                         event.preventDefault();
                          event.stopPropagation();
                          onFirstLedPick(s.id, i);
                        }}>
@@ -478,8 +479,9 @@ export function LayoutCanvas({
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
                        style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
-                       onClick={event => {
+                       onPointerDown={event => {
                          if (firstLedPicker?.stripId !== s.id) return;
+                         event.preventDefault();
                          event.stopPropagation();
                          onFirstLedPick(s.id, i);
                        }}>

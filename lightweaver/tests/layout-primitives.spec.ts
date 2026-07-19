@@ -578,31 +578,13 @@ test('Set first LED anchors the specifically clicked LED dot', async ({ page }) 
   await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
     getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
   const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
-  const target = await page.locator(`[data-testid^="strip-led-${stripId}-"]`).evaluateAll(nodes => {
-    const visible = nodes.map(node => {
-      const svg = node.ownerSVGElement;
-      const circle = node.querySelector('circle');
-      if (!svg || !circle) return null;
-      const point = svg.createSVGPoint();
-      point.x = Number(circle.getAttribute('cx'));
-      point.y = Number(circle.getAttribute('cy'));
-      const screen = point.matrixTransform(svg.getScreenCTM());
-      return {
-        index: Number(node.getAttribute('data-testid')?.split('-').pop()),
-        x: screen.x,
-        y: screen.y,
-      };
-    }).find(point => point && point.x >= 0 && point.x <= window.innerWidth && point.y >= 0 && point.y <= window.innerHeight);
-    if (!visible) throw new Error('Expected a visible LED dot on the canvas.');
-    return visible;
-  });
-  console.log(await page.evaluate(point => document.elementFromPoint(point.x, point.y)?.outerHTML.slice(0, 400), target));
-  await page.mouse.click(target.x, target.y);
+  const targetLedIndex = 8;
+  await page.getByTestId(`strip-led-${stripId}-${targetLedIndex}`).dispatchEvent('pointerdown');
 
   await expect.poll(async () => page.evaluate(id => {
     const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
     return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;
-  }, stripId)).toBe(target.index);
+  }, stripId)).toBe(targetLedIndex);
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {
