@@ -181,6 +181,7 @@ export function useLayoutStrips(ctx) {
     setStrips(prev => [...prev, strip]);
     selectStrip(id);
     scrollToStrip(id);
+    return id;
   }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStripDensities, setStrips, selectStrip, scrollToStrip, physicalCountForLength, densityFor, safePxPerMm]);
 
   // Uniform resize of a strip's geometry about its own center (Draw panel

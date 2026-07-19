@@ -9,7 +9,7 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   STRIP_COLORS,
@@ -125,20 +125,24 @@ export function DrawModePanel({ state }) {
   const [addDensity, setAddDensity] = useState(density);
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
+  const [addGpio, setAddGpio] = useState(16);
+  const [pendingAddGpio, setPendingAddGpio] = useState(null);
   const [gpioError, setGpioError] = useState('');
   const [droppedStripIds, setDroppedStripIds] = useState([]);
 
   const setLinkedAddCount = rawValue => {
     const count = clampLedCount(rawValue);
-    const nextLength = count / addDensity;
     setAddLedCount(count);
-    setAddLengthM(nextLength);
-    setAddLengthDraft(formatMetersValue(nextLength));
   };
   const setLinkedAddDensity = nextDensity => {
-    const nextLength = clampLedCount(addLedCount) / nextDensity;
+    const nextCount = clampLedCount(Math.round(addLengthM * nextDensity));
     setAddDensity(nextDensity);
+    setAddLedCount(nextCount);
+  };
+  const scaleAddStrip = factor => {
+    const nextLength = Math.max(0.001, addLengthM * factor);
     setAddLengthM(nextLength);
+    setAddLedCount(clampLedCount(Math.round(nextLength * addDensity)));
     setAddLengthDraft(formatMetersValue(nextLength));
   };
   const commitAddLength = () => {
@@ -168,7 +172,8 @@ export function DrawModePanel({ state }) {
       setDrawMode(true);
       return;
     }
-    addPrimitiveStrip(key, clampLedCount(addLedCount), addDensity, addLengthM);
+    const stripId = addPrimitiveStrip(key, clampLedCount(addLedCount), addDensity, addLengthM);
+    setPendingAddGpio({ stripId, pin: addGpio });
   };
 
   const addShapeTiles = [
@@ -316,6 +321,20 @@ export function DrawModePanel({ state }) {
       disabled: controlPins.has(pin) || (pin !== output?.pin && !wiring.outputs.some(item => item.pin === pin) && !canCreateOutput),
     }));
   };
+  const addGpioChoices = () => {
+    const controlPins = new Set(activeBoardGpios([], standaloneController?.controls).map(item => item.pin));
+    const canCreateOutput = wiring.outputs.length < CARD_HARDWARE_CAPABILITIES.maxOutputs;
+    return CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => ({
+      pin,
+      disabled: controlPins.has(pin) || (!wiring.outputs.some(output => output.pin === pin) && !canCreateOutput),
+    }));
+  };
+
+  useEffect(() => {
+    if (!pendingAddGpio || !strips.some(strip => strip.id === pendingAddGpio.stripId)) return;
+    assignStripGpio(pendingAddGpio.stripId, pendingAddGpio.pin);
+    setPendingAddGpio(null);
+  }, [pendingAddGpio, strips]);
 
   return (
     <>
@@ -911,35 +930,62 @@ export function DrawModePanel({ state }) {
                     </button>
                   ))}
                 </div>
-                <div className="lw-shape-count">
-                  <span className="lw-shape-count-label">LEDs</span>
-                  <input type="number" min="1" max={LED_COUNT_MAX} step="1"
-                         value={addLedCount}
-                         aria-label="New strip LEDs"
-                         inputMode="numeric"
-                         onFocus={e => e.target.select()}
-                         onChange={e => setLinkedAddCount(e.target.value)}/>
-                  <span className="lw-shape-count-label">Size</span>
-                  <input type="number" min="0.001" step="0.001"
-                         value={addLengthDraft}
-                         aria-label="New strip size in metres"
-                         inputMode="decimal"
-                         onFocus={e => e.target.select()}
-                         onChange={e => setAddLengthDraft(e.target.value)}
-                         onBlur={commitAddLength}
-                         onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/>
-                  <span className="lw-shape-count-unit">m</span>
+                <div className="row la-strip-physical-row la-add-strip-physical-row">
+                  <div className="la-strip-physical-field">
+                    <span className="k">LEDs</span>
+                    <div className="la-led-count-field">
+                      <button type="button" className="btn" aria-label="One new LED fewer"
+                              onClick={() => setLinkedAddCount(addLedCount - 1)}>−</button>
+                      <input type="number" min="1" max={LED_COUNT_MAX} step="1"
+                             value={addLedCount}
+                             aria-label="New strip LEDs"
+                             inputMode="numeric"
+                             onFocus={e => e.target.select()}
+                             onChange={e => setLinkedAddCount(e.target.value)}/>
+                      <button type="button" className="btn" aria-label="One new LED more"
+                              onClick={() => setLinkedAddCount(addLedCount + 1)}>+</button>
+                    </div>
+                  </div>
+                  <div className="la-strip-physical-field">
+                    <span className="k">Size</span>
+                    <div className="la-size-ctrl">
+                      <button type="button" className="btn" aria-label="Make new strip smaller"
+                              onClick={() => scaleAddStrip(0.9)}>−</button>
+                      <label className="la-size-readout">
+                        <input type="number" min="0.001" step="0.001"
+                               value={addLengthDraft}
+                               aria-label="New strip size in metres"
+                               inputMode="decimal"
+                               onFocus={e => e.target.select()}
+                               onChange={e => setAddLengthDraft(e.target.value)}
+                               onBlur={commitAddLength}
+                               onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/>
+                        <span>m</span>
+                      </label>
+                      <button type="button" className="btn" aria-label="Make new strip bigger"
+                              onClick={() => scaleAddStrip(1 / 0.9)}>+</button>
+                    </div>
+                  </div>
                 </div>
-                <div className="lw-shape-density" data-testid="add-strip-density-control"
-                     role="group" aria-label="New strip density">
-                  <span>Density</span>
-                  {DENSITY_OPTIONS.map(option => (
-                    <button key={option} type="button"
-                            className={`btn${addDensity === option ? ' is-selected' : ''}`}
-                            aria-label={`${option} LEDs/m`}
-                            aria-pressed={addDensity === option}
-                            onClick={() => setLinkedAddDensity(option)}>{option}/m</button>
-                  ))}
+                <div className="row la-strip-output-row la-add-strip-output-row">
+                  <div className="la-gpio-wrap">
+                    <select className="la-gpio-select" aria-label="New strip GPIO output"
+                            value={addGpio} onChange={event => setAddGpio(Number(event.target.value))}>
+                      {addGpioChoices().map(({ pin, disabled }) => (
+                        <option key={pin} value={pin} disabled={disabled}>GPIO {pin}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="la-strip-density" data-testid="add-strip-density-control"
+                       role="group" aria-label="New strip density">
+                    {DENSITY_OPTIONS.map(option => (
+                      <button key={option} type="button"
+                              className={`btn${addDensity === option ? ' is-selected' : ''}`}
+                              aria-label={`${option} LEDs/m`}
+                              aria-pressed={addDensity === option}
+                              onClick={() => setLinkedAddDensity(option)}>{option}/m</button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}

@@ -127,7 +127,7 @@ async function readAutosaveStrips(page: any) {
   });
 }
 
-test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs input', async ({ page }) => {
+test('"+ Add strip" offers icon tiles and preserves size during manual LED entry', async ({ page }) => {
   await gotoFreshLayout(page);
 
   const picker = page.getByTestId('layout-primitive-picker');
@@ -146,9 +146,9 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
   await expect(chooser.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
   await expect(chooser.getByRole('button', { name: 'Import vector', exact: true })).toBeVisible();
 
-  // The LEDs input is the ground truth: a 120-LED strip at 60 LEDs/m arrives
-  // 2 m long — svgLength = (count / density) × 1000 mm × pxPerMm.
+  // Manual count is a fine-tune: it preserves the chosen physical size.
   await chooser.getByLabel('New strip LEDs').fill('120');
+  await expect(chooser.getByLabel('New strip size in metres')).toHaveValue('1.00');
   await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
 
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
@@ -166,7 +166,7 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
     JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
   const circle = layout.strips.find((s: any) => s.name === 'Circle');
   expect(circle.pixelCount).toBe(120);
-  const expectedLength = (120 / layout.density) * 1000 * layout.pxPerMm;
+  const expectedLength = 1000 * layout.pxPerMm;
   expect(Math.abs(circle.svgLength - expectedLength)).toBeLessThan(1);
 
   // Import vector reuses the existing hidden SVG input (native file chooser).
@@ -285,18 +285,40 @@ test('the physical creation controls keep LEDs, size, and density linked', async
   }).toEqual([45, 30, 1.5]);
 });
 
-test('the compact Add strip row links its size input to LEDs and density', async ({ page }) => {
+test('the Add strip controls match the selected-strip physical controls', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
   await page.getByTestId('layout-add-strip').click();
 
   const chooser = page.getByTestId('layout-add-strip-chooser');
-  await chooser.getByLabel('New strip LEDs').fill('60');
+  await expect(chooser.getByRole('button', { name: 'One new LED fewer' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'One new LED more' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Make new strip smaller' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Make new strip bigger' })).toBeVisible();
+  await expect(chooser.getByLabel('New strip GPIO output')).toBeVisible();
+
+  const size = chooser.getByLabel('New strip size in metres');
+  await chooser.getByRole('button', { name: 'One new LED more' }).click();
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('61');
+  await expect(size).toHaveValue('1.00');
+
+  await chooser.getByRole('button', { name: 'Make new strip bigger' }).click();
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('67');
+  await expect(size).toHaveValue('1.11');
+
+  await chooser.getByLabel('New strip GPIO output').selectOption('17');
   await chooser.getByTestId('add-strip-density-control').getByRole('button', { name: '30 LEDs/m' }).click();
-  await expect(chooser.getByLabel('New strip size in metres')).toHaveValue('2.00');
-  await chooser.getByLabel('New strip size in metres').fill('1.5');
-  await chooser.getByLabel('New strip size in metres').press('Tab');
-  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('45');
+  await expect(size).toHaveValue('1.11');
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('33');
+
+  await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = saved?.layout?.strips?.find((item: any) => item.name === 'Circle');
+    const run = saved?.layout?.wiring?.runs?.find((item: any) => item.source?.stripId === strip?.id);
+    const output = saved?.layout?.wiring?.outputs?.find((item: any) => item.runIds?.includes(run?.id));
+    return output?.pin;
+  })).toBe(17);
 });
 
 test('size controls recalculate LEDs while manual LED entry preserves size', async ({ page }) => {
