@@ -297,6 +297,13 @@ test('the Add strip controls match the selected-strip physical controls', async 
   await expect(chooser.getByRole('button', { name: 'Make new strip bigger' })).toBeVisible();
   await expect(chooser.getByLabel('New strip GPIO output')).toBeVisible();
 
+  const ledBox = await chooser.getByLabel('New strip LEDs').boundingBox();
+  const sizeBox = await chooser.getByLabel('New strip size in metres').boundingBox();
+  const gpioBox = await chooser.getByLabel('New strip GPIO output').boundingBox();
+  const densityBox = await chooser.getByTestId('add-strip-density-control').boundingBox();
+  expect(Math.abs((ledBox?.y ?? 0) - (sizeBox?.y ?? 0))).toBeLessThanOrEqual(2);
+  expect(Math.abs((gpioBox?.y ?? 0) - (densityBox?.y ?? 0))).toBeLessThanOrEqual(2);
+
   const size = chooser.getByLabel('New strip size in metres');
   await chooser.getByRole('button', { name: 'One new LED more' }).click();
   await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('61');

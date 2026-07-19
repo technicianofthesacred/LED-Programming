@@ -584,6 +584,12 @@
   border-bottom: 0;
   border-radius: 0;
 }
+.lw-shape-chooser .la-add-strip-physical-row,
+.lw-shape-chooser .la-add-strip-output-row {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
 .la-strip-output-row {
   gap: 5px;
   margin: 0;
