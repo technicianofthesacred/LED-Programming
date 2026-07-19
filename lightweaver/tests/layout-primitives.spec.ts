@@ -341,6 +341,30 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
   await expect(page.getByText(/Drag on canvas to move/)).toHaveCount(0);
 });
 
+test('GPIO picker groups strips by output and assigns the selected strip to that wire', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+  await expect(page.locator('.la-strip-row')).toHaveCount(2);
+
+  const firstStrip = page.locator('[data-strip-id]').first();
+  if (!await firstStrip.locator('.la-strip-detail').isVisible()) await firstStrip.locator('.la-strip-row').click();
+  const gpio = page.getByRole('button', { name: 'GPIO 16' });
+  await expect(gpio).toBeVisible();
+  await gpio.click();
+  await page.getByRole('button', { name: 'GPIO 17' }).click();
+
+  await expect(page.getByTestId('gpio-group-17')).toContainText('GPIO 17');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return saved?.layout?.wiring?.outputs?.map((output: any) => ({ pin: output.pin, runIds: output.runIds }));
+  })).toEqual(expect.arrayContaining([
+    expect.objectContaining({ pin: 16, runIds: expect.any(Array) }),
+    expect.objectContaining({ pin: 17, runIds: expect.any(Array) }),
+  ]));
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();

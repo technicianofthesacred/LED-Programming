@@ -9,7 +9,8 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   STRIP_COLORS,
   DENSITY_OPTIONS,
@@ -26,6 +27,8 @@ import {
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
 import { PrimitiveStarter } from './PrimitiveStarter.jsx';
+import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
+import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
 import '../../../styles/lw-draw.css';
 
 function startedFromDragHandle(e) {
@@ -90,7 +93,7 @@ export function DrawModePanel({ state }) {
     // strips
     updateStrip, removeStrip, reverseStrip, renameStrip, duplicateStrip,
     addPrimitiveStrip, scaleStrip,
-    addStripsToGroup, groupSelectedStrips, mergeSelectedStrips, reorderStripRows,
+    addStripsToGroup, groupSelectedStrips, mergeSelectedStrips,
     usbLedConnected,
     // artwork
     expandedLayers, setExpandedLayers,
@@ -115,6 +118,7 @@ export function DrawModePanel({ state }) {
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
   } = state;
+  const { wiring, updateWiring, standaloneController } = useProject();
 
   // "+ Add strip" shape chooser — icon tiles (Line / Circle / Square / Free
   // draw / Import vector) plus one LEDs input. The count is the strip the
@@ -125,6 +129,7 @@ export function DrawModePanel({ state }) {
   const [addDensity, setAddDensity] = useState(density);
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
+  const [gpioPickerFor, setGpioPickerFor] = useState(null);
 
   const setLinkedAddCount = rawValue => {
     const count = clampLedCount(rawValue);
@@ -173,6 +178,113 @@ export function DrawModePanel({ state }) {
     ...STARTER_PRIMITIVES,
     { key: 'import', label: 'Import vector' },
   ];
+
+  const stripById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
+  const stripRuns = useMemo(() => new Map(
+    wiring.runs
+      .filter(run => run.type === 'strip' && stripById.has(run.source?.stripId))
+      .map(run => [run.source.stripId, run]),
+  ), [wiring.runs, stripById]);
+  const outputForStrip = stripId => wiring.outputs.find(output => output.runIds.includes(stripRuns.get(stripId)?.id)) || wiring.outputs[0];
+
+  // The Draw list is the physical wiring overview. Each GPIO gets a compact
+  // group and the rows inside it are the data order from the card outward.
+  const gpioGroups = useMemo(() => {
+    const assigned = new Set();
+    const groups = wiring.outputs.map(output => {
+      const groupStrips = output.runIds
+        .map(runId => wiring.runs.find(run => run.id === runId))
+        .filter(run => run?.type === 'strip')
+        .map(run => stripById.get(run.source.stripId))
+        .filter(Boolean);
+      groupStrips.forEach(strip => assigned.add(strip.id));
+      return { output, strips: groupStrips };
+    });
+    const unassigned = orderedStrips.filter(strip => !assigned.has(strip.id));
+    if (unassigned.length && groups[0]) groups[0] = { ...groups[0], strips: [...groups[0].strips, ...unassigned] };
+    return groups.filter(group => group.strips.length);
+  }, [orderedStrips, stripById, wiring]);
+
+  const makeRunForStrip = strip => ({
+    id: `run-${strip.id}`,
+    type: 'strip',
+    source: { stripId: strip.id, from: 0, to: Math.max(0, strip.pixelCount - 1) },
+    directionPolicy: 'flexible',
+    physicalDirection: 'source-forward',
+    seamLed: null,
+    verified: false,
+  });
+
+  const ensureRunsForAllStrips = draft => {
+    const known = new Set(draft.runs.filter(run => run.type === 'strip').map(run => run.source?.stripId));
+    const primary = draft.outputs[0];
+    strips.forEach(strip => {
+      if (known.has(strip.id)) return;
+      const run = makeRunForStrip(strip);
+      draft.runs.push(run);
+      primary.runIds.push(run.id);
+    });
+  };
+
+  const nextOutputId = outputs => {
+    let number = 1;
+    while (outputs.some(output => output.id === `out${number}`)) number += 1;
+    return `out${number}`;
+  };
+
+  const assignStripGpio = (stripId, pin) => {
+    const selectedPin = Number(pin);
+    const result = updateWiring(draft => {
+      ensureRunsForAllStrips(draft);
+      const run = draft.runs.find(item => item.type === 'strip' && item.source?.stripId === stripId);
+      const source = draft.outputs.find(output => output.runIds.includes(run?.id));
+      const target = draft.outputs.find(output => output.pin === selectedPin);
+      if (!run || !source || source === target) return;
+
+      if (target) {
+        source.runIds = source.runIds.filter(runId => runId !== run.id);
+        target.runIds.push(run.id);
+        if (!source.runIds.length && draft.outputs.length > 1) draft.outputs = draft.outputs.filter(output => output.id !== source.id);
+        return;
+      }
+
+      if (source.runIds.length === 1) {
+        source.pin = selectedPin;
+        return;
+      }
+      if (draft.outputs.length >= CARD_HARDWARE_CAPABILITIES.maxOutputs) throw new Error(`This card supports up to ${CARD_HARDWARE_CAPABILITIES.maxOutputs} GPIO outputs.`);
+      source.runIds = source.runIds.filter(runId => runId !== run.id);
+      draft.outputs.push({ id: nextOutputId(draft.outputs), name: `Output ${draft.outputs.length + 1}`, pin: selectedPin, runIds: [run.id] });
+    }, { changeKind: 'gpio' });
+    if (result.ok) setGpioPickerFor(null);
+  };
+
+  const moveStripsInGpioOrder = (draggedStripIds, targetStripId) => {
+    const ids = (draggedStripIds || []).filter(id => id && id !== targetStripId);
+    if (!ids.length) return;
+    updateWiring(draft => {
+      ensureRunsForAllStrips(draft);
+      const runsByStrip = new Map(draft.runs.filter(run => run.type === 'strip').map(run => [run.source.stripId, run]));
+      const targetRun = runsByStrip.get(targetStripId);
+      const targetOutput = draft.outputs.find(output => output.runIds.includes(targetRun?.id));
+      const movedRuns = ids.map(id => runsByStrip.get(id)).filter(Boolean);
+      if (!targetOutput || !movedRuns.length) return;
+      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(runId => !movedRuns.some(run => run.id === runId)); });
+      const targetIndex = targetOutput.runIds.indexOf(targetRun.id);
+      targetOutput.runIds.splice(targetIndex < 0 ? targetOutput.runIds.length : targetIndex, 0, ...movedRuns.map(run => run.id));
+      draft.outputs = draft.outputs.filter(output => output.runIds.length || output.id === targetOutput.id);
+    }, { changeKind: 'route' });
+  };
+
+  const gpioChoicesForStrip = stripId => {
+    const output = outputForStrip(stripId);
+    const controlPins = new Set(activeBoardGpios([], standaloneController?.controls).map(item => item.pin));
+    const canCreateOutput = output?.runIds.length <= 1 || wiring.outputs.length < CARD_HARDWARE_CAPABILITIES.maxOutputs;
+    return CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => ({
+      pin,
+      disabled: controlPins.has(pin) || (pin !== output?.pin && !wiring.outputs.some(item => item.pin === pin) && !canCreateOutput),
+    }));
+  };
 
   return (
     <>
@@ -838,8 +950,14 @@ export function DrawModePanel({ state }) {
               </div>
             )}
             <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', minHeight: 0, paddingBottom: 4 }}>
-              {/* List order = chain order; the row badge is the strip's chain position. */}
-              {orderedStrips.map((s, i) => {
+              {/* GPIO groups are physical data chains, ordered from the card outward. */}
+              {gpioGroups.map(({ output, strips: groupedStrips }) => (
+                <section key={output.id} className="la-gpio-group" data-testid={`gpio-group-${output.pin}`}>
+                  <div className="la-gpio-group-head">
+                    <span>GPIO {output.pin}</span>
+                    <span>first → last</span>
+                  </div>
+                  {groupedStrips.map((s, i) => {
                 const isSel = s.id === selStripId;
                 const isBatchSel = selectedStripIds.includes(s.id);
                 const isOpen = !!expandedStrips[s.id];
@@ -872,7 +990,7 @@ export function DrawModePanel({ state }) {
                          if (!draggedStripIds.length) return;
                          e.preventDefault();
                          e.stopPropagation();
-                         reorderStripRows(draggedStripIds, s.id);
+                         moveStripsInGpioOrder(draggedStripIds, s.id);
                          setStripGroupDragOver(null);
                        }}
                        onDragEnd={() => setStripGroupDragOver(null)}
@@ -964,8 +1082,28 @@ export function DrawModePanel({ state }) {
                             </div>
                           </div>
                         </div>
-                        <div className="row">
-                          <span className="k">Density</span>
+                        <div className="row la-strip-output-row">
+                          <div className="la-gpio-wrap">
+                            <button type="button" className="btn la-gpio-button"
+                                    aria-label={`GPIO ${outputForStrip(s.id)?.pin ?? 16}`}
+                                    aria-expanded={gpioPickerFor === s.id}
+                                    onClick={() => setGpioPickerFor(current => current === s.id ? null : s.id)}>
+                              GPIO {outputForStrip(s.id)?.pin ?? 16}
+                            </button>
+                            {gpioPickerFor === s.id && (
+                              <div className="la-gpio-popover" role="dialog" aria-label="Choose GPIO output">
+                                <span>LED output</span>
+                                <div role="group" aria-label="GPIO choices">
+                                  {gpioChoicesForStrip(s.id).map(({ pin, disabled }) => (
+                                    <button key={pin} type="button" className="btn"
+                                            disabled={disabled}
+                                            aria-pressed={outputForStrip(s.id)?.pin === pin}
+                                            onClick={() => assignStripGpio(s.id, pin)}>GPIO {pin}</button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                           <div className="la-strip-density" data-testid="strip-density-control"
                                role="group" aria-label={`${s.name} reel density`}>
                             {densityChoices.map(d => (
@@ -989,7 +1127,9 @@ export function DrawModePanel({ state }) {
                     )}
                   </div>
                 );
-              })}
+                  })}
+                </section>
+              ))}
             </div>
           </>
         )}
