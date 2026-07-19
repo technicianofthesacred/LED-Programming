@@ -197,6 +197,27 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
   expect(await fileChooserPromise).toBeTruthy();
 });
 
+test('an expanded strip lets the maker choose its reel density', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+
+  const density = page.getByTestId('strip-density-control');
+  await expect(density).toBeVisible();
+  await expect(density.getByRole('button', { name: '60 LEDs/m' })).toHaveAttribute('aria-pressed', 'true');
+  await density.getByRole('button', { name: '144 LEDs/m' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? layout.stripDensities?.[strip.id] : null;
+  }).toBe(144);
+
+  await expect(page.getByText(/Count follows size at this strip's density/)).toHaveCount(0);
+});
+
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();

@@ -50,6 +50,15 @@
 .la-strip-detail .move-grid label { display: flex; align-items: center; gap: 5px; color: var(--text-mid); font-size: 12px; }
 .la-strip-detail .hint { color: var(--text-faint); font-size: 11px; padding-left: 0; line-height: 1.45; }
 .la-strip-detail .presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-left: 60px; }
+.la-strip-density { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.la-strip-density .btn {
+  min-width: 43px; height: 26px; padding: 0 7px; justify-content: center;
+  color: var(--text-faint); font-family: var(--font-mono); font-size: 11px;
+}
+.la-strip-density .btn:hover { color: var(--text-hi); border-color: var(--border); }
+.la-strip-density .btn.is-selected {
+  color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft);
+}
 .la-strip-detail input[type=number] {
   width: 100%; min-width: 0; height: 28px; text-align: right;
   background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm);

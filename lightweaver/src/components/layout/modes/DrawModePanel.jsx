@@ -12,6 +12,7 @@ import {
 import { useState } from 'react';
 import {
   STRIP_COLORS,
+  DENSITY_OPTIONS,
   stripSourceKey,
   clampLedCount,
   svgPathLength,
@@ -85,7 +86,7 @@ export function DrawModePanel({ state }) {
     expandedStrips, setExpandedStrips,
     stripListRef,
     // size
-    getLedCount, resampleStrip, setStripCount,
+    getLedCount, resampleStrip, setStripCount, stripDensity, setStripPhysical,
     calibrateScaleFromStrip,
     // strips
     updateStrip, removeStrip, reverseStrip, renameStrip, duplicateStrip,
@@ -797,6 +798,10 @@ export function DrawModePanel({ state }) {
                 const isSel = s.id === selStripId;
                 const isBatchSel = selectedStripIds.includes(s.id);
                 const isOpen = !!expandedStrips[s.id];
+                const selectedDensity = stripDensity(s.id);
+                const densityChoices = DENSITY_OPTIONS.includes(selectedDensity)
+                  ? DENSITY_OPTIONS
+                  : [...DENSITY_OPTIONS, selectedDensity].sort((a, b) => a - b);
                 return (
                   <div key={s.id} data-strip-id={s.id}>
                   <div
@@ -891,7 +896,22 @@ export function DrawModePanel({ state }) {
                                   title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
                                   onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Set real count</button>
                         </div>
-                        <div className="hint">Count follows size at this strip's density — nudge ± only to match the real strip.</div>
+                        <div className="row">
+                          <span className="k">Density</span>
+                          <div className="la-strip-density" data-testid="strip-density-control"
+                               role="group" aria-label={`${s.name} reel density`}>
+                            {densityChoices.map(d => (
+                              <button key={d} type="button"
+                                      className={`btn${selectedDensity === d ? ' is-selected' : ''}`}
+                                      aria-label={`${d} LEDs/m`}
+                                      aria-pressed={selectedDensity === d}
+                                      title={`${d} LEDs per metre`}
+                                      onClick={() => setStripPhysical(s.id, { ledsPerM: d })}>
+                                {d}/m
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
                             USB direct cap {usbLedMaxPixels} LEDs.
