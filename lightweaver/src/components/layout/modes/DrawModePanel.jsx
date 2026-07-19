@@ -913,26 +913,21 @@ export function DrawModePanel({ state }) {
                                     onClick={() => removeStrip(s.id)}>×</button>
                           </div>
                         </div>
-                        {/* Direct physical controls stay together. Changing a
-                            size or normal LED ± keeps the physical plan linked.
-                            Fine LED ±5 controls below retain the real size. */}
+                        {/* Size is physical truth and recounts LEDs; LED count is
+                            a direct cut-strip correction that keeps size. */}
                         <div className="row la-strip-physical-row">
                           <div className="la-strip-physical-field">
                             <span className="k">LEDs</span>
-                            <div className="lw-led-nudge">
-                              <button type="button" className="btn" aria-label="One LED fewer" title="Nudge the count down 1"
-                                      onClick={() => setStripPhysical(s.id, { lengthM: clampLedCount(s.pixelCount - 1) / selectedDensity })}>−</button>
+                            <div className="la-led-count-field">
                               <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                                      value={s.pixelCount}
                                      aria-label="Strip LED count"
                                      inputMode="numeric"
                                      onFocus={e => e.target.select()}
                                      onClick={e => e.target.select()}
-                                     onChange={e => setStripPhysical(s.id, { lengthM: clampLedCount(e.target.value) / selectedDensity })}
-                                     onBlur={e => setStripPhysical(s.id, { lengthM: clampLedCount(e.target.value) / selectedDensity })}
-                                     onKeyDown={e => { if (e.key === 'Enter') setStripPhysical(s.id, { lengthM: clampLedCount(e.target.value) / selectedDensity }); }}/>
-                              <button type="button" className="btn" aria-label="One LED more" title="Nudge the count up 1"
-                                      onClick={() => setStripPhysical(s.id, { lengthM: clampLedCount(s.pixelCount + 1) / selectedDensity })}>+</button>
+                                     onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                     onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                     onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
                             </div>
                           </div>
                           <div className="la-strip-physical-field">
@@ -964,12 +959,6 @@ export function DrawModePanel({ state }) {
                                       onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>
                             </div>
                           </div>
-                        </div>
-                        <div className="la-led-fine" aria-label="Fine LED adjustment">
-                          <button type="button" className="btn" aria-label="Fine tune 5 LEDs fewer" title="Subtract 5 LEDs without changing size"
-                                  onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 5))}>−5</button>
-                          <button type="button" className="btn" aria-label="Fine tune 5 LEDs more" title="Add 5 LEDs without changing size"
-                                  onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 5))}>+5</button>
                         </div>
                         <div className="row">
                           <span className="k">Density</span>

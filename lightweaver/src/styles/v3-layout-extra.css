@@ -76,12 +76,9 @@
 .la-strip-detail .actions .btn:hover { color: var(--text-hi); }
 .la-strip-detail .actions .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .la-strip-detail .actions .btn.danger:hover { color: var(--danger); }
-.la-led-fine { display: flex; justify-content: flex-end; gap: 4px; margin-top: -3px; }
-.la-led-fine .btn {
-  min-width: 30px; height: 22px; padding: 0 5px; justify-content: center;
-  color: var(--text-faint); font-family: var(--font-mono); font-size: 10px;
+.la-led-count-field input[type=number] {
+  width: 62px; min-width: 0; height: 28px; padding: 0 7px; text-align: center;
 }
-.la-led-fine .btn:hover { color: var(--text-hi); border-color: var(--border); }
 
 /* strip-row expandable affordance */
 .la-strip-row { cursor: pointer; }
@@ -462,8 +459,12 @@
   border-radius: var(--r-sm); font: inherit;
 }
 .la-size-readout input[type=number]:focus { border-color: var(--accent); outline: none; }
-.la-strip-physical-row { gap: 6px; align-items: center; justify-content: space-between; }
+.la-strip-physical-row {
+  gap: 10px; align-items: center; justify-content: flex-start;
+  padding: 4px 6px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+}
 .la-strip-physical-field { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.la-strip-physical-field + .la-strip-physical-field { padding-left: 10px; border-left: 1px solid var(--border-soft); }
 .la-strip-physical-field > .k { color: var(--text-mid); font-size: 11px; flex-shrink: 0; }
 .la-strip-physical-field .la-size-ctrl { gap: 3px; }
 .la-strip-physical-field .la-size-ctrl .btn,

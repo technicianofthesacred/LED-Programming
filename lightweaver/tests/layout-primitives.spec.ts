@@ -307,7 +307,7 @@ test('the compact Add strip row links its size input to LEDs and density', async
   await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('45');
 });
 
-test('linked controls resize the strip while fine LED nudges preserve its size', async ({ page }) => {
+test('size controls recalculate LEDs while manual LED entry preserves size', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
 
@@ -318,15 +318,19 @@ test('linked controls resize the strip while fine LED nudges preserve its size',
     return Boolean(starting?.svgLength > 0);
   }).toBe(true);
 
-  await page.getByRole('button', { name: 'One LED more' }).click();
+  await expect(page.getByRole('button', { name: 'One LED more' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Make strip bigger' }).click();
   await expect.poll(async () => {
     const strips = await readAutosaveStrips(page);
     const strip = strips?.[0];
     return strip ? [strip.pixelCount, strip.svgLength > starting.svgLength] : null;
-  }).toEqual([starting.pixelCount + 1, true]);
+  }).toEqual([Math.round(starting.pixelCount / 0.9), true]);
 
   const linked = (await readAutosaveStrips(page))?.[0];
-  await page.getByRole('button', { name: 'Fine tune 5 LEDs more' }).click();
+  await expect(page.getByRole('button', { name: 'Fine tune 5 LEDs more' })).toHaveCount(0);
+  const manualCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await manualCount.fill(String(linked.pixelCount + 5));
+  await manualCount.press('Enter');
   await expect.poll(async () => {
     const strips = await readAutosaveStrips(page);
     const strip = strips?.[0];
