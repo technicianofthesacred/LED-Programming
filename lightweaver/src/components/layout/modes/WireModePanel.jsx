@@ -35,7 +35,7 @@ const nextRunId = (runs, prefix) => {
 function previewRunName(run, stripsById) {
   if (!run) return 'Unknown strip';
   if (run.type === 'cable') return 'Cable jump';
-  if (run.type === 'inactive') return 'Skipped pixels';
+  if (run.type === 'inactive') return 'Skipped LEDs';
   return stripsById.get(run.source?.stripId)?.name || 'Unnamed strip';
 }
 
@@ -790,7 +790,7 @@ export function WireModePanel({ state, connected, cardHost }) {
         <StatTileRow>
           <StatTile label="Data wires" value={wiring.outputs.length} />
           <StatTile label="Strips" value={stripRunCount} />
-          <StatTile label="Pixels" value={compiledWiring.totalPixels} />
+          <StatTile label="LEDs" value={compiledWiring.totalPixels} />
           <StatTile label="Max draw" value={powerEstimate.maxAmps.toFixed(1)} unit="A"
                     tone={powerEstimate.status === 'over' ? 'danger' : undefined} />
         </StatTileRow>
@@ -944,7 +944,7 @@ export function WireModePanel({ state, connected, cardHost }) {
             <summary>Expert mapping</summary>
             <p>Use these only for intentional gaps, splits, or custom source ranges.</p>
             <div className="lw-wiring-additions">
-              <button className="btn" disabled={wiring.locked} aria-label="Add skipped pixels" onClick={addInactive}>Add skipped pixels</button>
+              <button className="btn" disabled={wiring.locked} aria-label="Add skipped LEDs" onClick={addInactive}>Add skipped LEDs</button>
               <span>Skipped pixels stay dark but keep their addresses.</span>
             </div>
             {derivedCut && (

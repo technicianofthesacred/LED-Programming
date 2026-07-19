@@ -38,11 +38,11 @@ export function WiringRunRow({
       <span className="lw-wiring-run-name">{label}</span>
       {run.type === 'strip' ? (
         <span className="lw-inline-pixel-count" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
-          <button aria-label={`Remove one pixel from ${label}`} disabled={locked || count <= 1} onClick={() => onAdjustCount(-1)}>−</button>
+          <button aria-label={`Remove one LED from ${label}`} disabled={locked || count <= 1} onClick={() => onAdjustCount(-1)}>−</button>
           <strong data-testid="inline-run-count">{count}</strong>
-          <button aria-label={`Add one pixel to ${label}`} disabled={locked} onClick={() => onAdjustCount(1)}>+</button>
+          <button aria-label={`Add one LED to ${label}`} disabled={locked} onClick={() => onAdjustCount(1)}>+</button>
         </span>
-      ) : <span className="lw-wiring-run-count">{run.type === 'cable' ? 'wire' : `${count} px`}</span>}
+      ) : <span className="lw-wiring-run-count">{run.type === 'cable' ? 'wire' : `${count} LEDs`}</span>}
       {run.type === 'strip' && <button className="lw-run-flip" aria-label="Flip" title={`Flip ${label} mapping direction`} disabled={locked || run.directionPolicy === 'fixed'} onClick={event => { event.stopPropagation(); onReverse(); }}>Flip</button>}
       <button
         className="lw-wire-port lw-run-out"

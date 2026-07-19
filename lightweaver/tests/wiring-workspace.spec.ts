@@ -55,7 +55,7 @@ async function openAdvanced(page: any) {
 
 // The Pixels stat tile is the always-visible pixel total (the old
 // wiring-total-pixels readout only renders inside the Install step).
-const pixelsTile = (page: any) => page.locator('.lwui-tile').filter({ hasText: 'Pixels' }).locator('.lwui-tile-value');
+const pixelsTile = (page: any) => page.locator('.lwui-tile').filter({ hasText: 'LEDs' }).locator('.lwui-tile-value');
 
 async function saveProject(page: any) {
   await page.waitForTimeout(600);
@@ -127,7 +127,7 @@ test('Wire is a compiler-derived physical output patch board', async ({ page }) 
   await gotoWire(page);
   await openStep(page, 'Match');
   await expect(page.getByTestId('wire-order-row')).toHaveCount(2);
-  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toHaveCount(0);
   await openAdvanced(page);
   await expect(page.getByTestId('wiring-output-lane')).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Output A' })).toBeVisible();
@@ -136,7 +136,7 @@ test('Wire is a compiler-derived physical output patch board', async ({ page }) 
   await expect(page.getByLabel('Output A GPIO')).toHaveValue('16');
   await expect(page.getByText('Compiler preflight')).toHaveCount(0);
   await expect(page.getByText('Edit LED range')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toBeVisible();
 
   await openStep(page, 'Wires');
   await expect(page.getByRole('group', { name: 'How many wires leave the card?' })).toBeVisible();
@@ -217,7 +217,7 @@ test('review separates install from export and names the card connection state',
   // The install summary reads from the always-visible stat tiles; the old
   // color-order spec row ("GRB") stays out of primary copy.
   await expect(page.getByText('Data wires', { exact: true })).toBeVisible();
-  await expect(page.getByText('Pixels', { exact: true })).toBeVisible();
+  await expect(page.getByText('LEDs', { exact: true })).toBeVisible();
   await expect(page.getByText('Configured color order')).toHaveCount(0);
 });
 
@@ -527,7 +527,7 @@ test('output GPIO and board controls reject conflicts while expert mapping stays
   // Board pins and expert mapping stay behind the collapsed Advanced drawer.
   await expect(page.getByText('Expert mapping')).toHaveCount(0);
   await expect(page.getByText('Board pins')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toHaveCount(0);
   await openAdvanced(page);
   const gpioA = page.getByLabel('Output A GPIO');
   const gpioB = page.getByLabel('Output B GPIO');
@@ -537,7 +537,7 @@ test('output GPIO and board controls reject conflicts while expert mapping stays
   await expect(gpioA).toHaveValue('38');
   await expect(page.getByText('Board pins')).toBeVisible();
   await expect(page.getByText('Expert mapping')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add skipped pixels' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toBeVisible();
   const encoderA = page.getByLabel('Encoder A pin');
   await expect(encoderA.locator('option[value="38"]')).toHaveAttribute('disabled', '');
   await encoderA.selectOption('10');
@@ -576,7 +576,7 @@ test('changing logical sections never changes the explicit physical data-wire co
   const outputs = page.getByTestId('wiring-output-lane');
   await expect(outputs).toHaveCount(1);
   const firstRun = page.getByTestId('wiring-run-row').first();
-  await firstRun.getByRole('button', { name: 'Remove one pixel from Outer circle' }).click();
+  await firstRun.getByRole('button', { name: 'Remove one LED from Outer circle' }).click();
   await expect(outputs).toHaveCount(1);
   await firstRun.getByRole('button', { name: 'Flip' }).click();
   await expect(outputs).toHaveCount(1);
@@ -584,7 +584,7 @@ test('changing logical sections never changes the explicit physical data-wire co
   await page.getByRole('button', { name: '2 wires' }).click();
   await openStep(page, 'Match');
   await expect(outputs).toHaveCount(2);
-  await page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
+  await page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Add one LED to Outer circle' }).click();
   await expect(outputs).toHaveCount(2);
 });
 
@@ -647,11 +647,11 @@ test('inline strip count controls resize the real project without selecting the 
   await openAdvanced(page);
   const row = page.getByTestId('wiring-run-row').first();
   await expect(row).toHaveAttribute('aria-selected', 'false');
-  await row.getByRole('button', { name: 'Remove one pixel from Outer circle' }).click();
+  await row.getByRole('button', { name: 'Remove one LED from Outer circle' }).click();
   await expect(row.getByTestId('inline-run-count')).toHaveText('26');
   await expect(pixelsTile(page)).toHaveText('43');
   await expect(row).toHaveAttribute('aria-selected', 'false');
-  await row.getByRole('button', { name: 'Add one pixel to Outer circle' }).click();
+  await row.getByRole('button', { name: 'Add one LED to Outer circle' }).click();
   await expect(row.getByTestId('inline-run-count')).toHaveText('27');
   await expect(pixelsTile(page)).toHaveText('44');
 });
@@ -700,8 +700,8 @@ test('unverified wiring cannot lock or send and deterministic reserved runs cons
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toHaveCount(0);
   await openStep(page, 'Match');
   await openAdvanced(page);
-  await page.getByRole('button', { name: 'Add skipped pixels' }).click();
-  await page.getByRole('button', { name: 'Add skipped pixels' }).click();
+  await page.getByRole('button', { name: 'Add skipped LEDs' }).click();
+  await page.getByRole('button', { name: 'Add skipped LEDs' }).click();
   await expect(page.getByTestId('wiring-run-row').getByText('Reserved · unlit')).toHaveCount(2);
   await expect(pixelsTile(page)).toHaveText('46');
   const ids = await page.getByTestId('wiring-run-row').evaluateAll(rows => rows.map(row => row.getAttribute('data-run-id')));
@@ -774,10 +774,10 @@ test('bench boundary controls redistribute a fixed physical total and explain th
   const outputPrimary = bench.getByRole('button', { name: /Yes — I see Wire/ });
   await expect(outputPrimary).toBeEnabled();
   await bench.getByRole('button', { name: 'Something’s wrong' }).click();
-  await expect(bench.getByTestId('active-output-count')).toHaveText('44 pixels');
+  await expect(bench.getByTestId('active-output-count')).toHaveText('44 LEDs');
   const frameCountBeforeOutputChange = await page.evaluate(() => (window as any).__wiringFrames.length);
-  await bench.getByRole('button', { name: /Remove one pixel from Wire/ }).click();
-  await expect(bench.getByTestId('active-output-count')).toHaveText('43 pixels');
+  await bench.getByRole('button', { name: /Remove one LED from Wire/ }).click();
+  await expect(bench.getByTestId('active-output-count')).toHaveText('43 LEDs');
   await expect(pixelsTile(page)).toHaveText('43');
   await expect.poll(() => page.evaluate(() => (window as any).__wiringFrames.length)).toBeGreaterThan(frameCountBeforeOutputChange);
   await expect.poll(() => page.evaluate(() => {
@@ -788,15 +788,15 @@ test('bench boundary controls redistribute a fixed physical total and explain th
   expect(shortenedFrame[0]).toBe('00001A');
   expect(shortenedFrame[42]).toBe('1A0000');
   expect(shortenedFrame[43]).toBe('000000');
-  await bench.getByRole('button', { name: /Add one pixel to Wire/ }).click();
-  await expect(bench.getByTestId('active-output-count')).toHaveText('44 pixels');
+  await bench.getByRole('button', { name: /Add one LED to Wire/ }).click();
+  await expect(bench.getByTestId('active-output-count')).toHaveText('44 LEDs');
   await expect(pixelsTile(page)).toHaveText('44');
   await outputPrimary.click();
   // First run step: the run-level nudges live in the same recovery panel.
   await expect(bench.getByRole('button', { name: 'Yes — blue at the start, red at the end' })).toBeVisible();
   await bench.getByRole('button', { name: 'Something’s wrong' }).click();
-  await expect(bench.getByRole('button', { name: 'Add one pixel to Outer circle' })).toBeVisible();
-  await expect(bench.getByTestId('active-run-count')).toHaveText('27 pixels');
+  await expect(bench.getByRole('button', { name: 'Add one LED to Outer circle' })).toBeVisible();
+  await expect(bench.getByTestId('active-run-count')).toHaveText('27 LEDs');
   await openStep(page, 'Match');
   await openAdvanced(page);
   await expect(page.getByTestId('wiring-run-row').nth(0).getByTestId('inline-run-count')).toHaveText('27');
@@ -1016,7 +1016,7 @@ test('guided chase acknowledges full low-brightness frames, verifies every fact,
   const stripRows = page.getByTestId('wiring-run-row').filter({ has: page.getByRole('button', { name: 'Flip' }) });
   await stripRows.nth(0).getByRole('button', { name: /OUT port/ }).click();
   await stripRows.nth(1).getByRole('button', { name: /IN port/ }).click();
-  await page.getByRole('button', { name: 'Add skipped pixels' }).click();
+  await page.getByRole('button', { name: 'Add skipped LEDs' }).click();
   await openStep(page, 'Check');
   const bench = page.getByTestId('wiring-bench-test');
   await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
