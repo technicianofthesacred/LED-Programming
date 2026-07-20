@@ -4,10 +4,10 @@
 
 namespace lightweaver {
 
-constexpr uint32_t kInitialJoinTimeoutMs = 15000;
-constexpr uint32_t kReconnectCadenceMs = 10000;
-constexpr uint32_t kRecoveryApThresholdMs = 60000;
-constexpr uint32_t kHandoffGraceMs = 120000;
+constexpr std::uint32_t kInitialJoinTimeoutMs = 15000;
+constexpr std::uint32_t kReconnectCadenceMs = 10000;
+constexpr std::uint32_t kRecoveryApThresholdMs = 60000;
+constexpr std::uint32_t kHandoffGraceMs = 120000;
 
 enum class ConnectivityPhase {
   SetupAp,
@@ -28,8 +28,8 @@ enum class ConnectivityEvent {
 
 struct ConnectivityInput {
   ConnectivityEvent event = ConnectivityEvent::Tick;
-  uint32_t nowMs = 0;
-  uint32_t generation = 0;
+  std::uint32_t nowMs = 0;
+  std::uint32_t generation = 0;
 };
 
 struct ConnectivityState {
@@ -37,15 +37,15 @@ struct ConnectivityState {
   bool apActive = true;
   bool stationAssociated = false;
   bool reconnectDue = false;
-  uint32_t phaseStartedMs = 0;
-  uint32_t lastAttemptMs = 0;
-  uint32_t generation = 0;
+  std::uint32_t phaseStartedMs = 0;
+  std::uint32_t lastAttemptMs = 0;
+  std::uint32_t generation = 0;
 };
 
-constexpr bool elapsed(uint32_t nowMs,
-                       uint32_t startedMs,
-                       uint32_t durationMs) {
-  return static_cast<uint32_t>(nowMs - startedMs) >= durationMs;
+constexpr bool elapsed(std::uint32_t nowMs,
+                       std::uint32_t startedMs,
+                       std::uint32_t durationMs) {
+  return static_cast<std::uint32_t>(nowMs - startedMs) >= durationMs;
 }
 
 constexpr ConnectivityState advanceConnectivity(
@@ -82,7 +82,9 @@ constexpr ConnectivityState advanceConnectivity(
 
     case ConnectivityEvent::StationLost:
       if (!current.stationAssociated) return next;
-      next.phase = ConnectivityPhase::Reconnecting;
+      next.phase = current.phase == ConnectivityPhase::HandoffReady
+          ? ConnectivityPhase::Joining
+          : ConnectivityPhase::Reconnecting;
       next.stationAssociated = false;
       next.reconnectDue = true;
       next.phaseStartedMs = input.nowMs;

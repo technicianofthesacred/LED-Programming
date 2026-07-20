@@ -14,9 +14,18 @@ using lightweaver::kInitialJoinTimeoutMs;
 using lightweaver::kReconnectCadenceMs;
 using lightweaver::kRecoveryApThresholdMs;
 
+static_assert(kInitialJoinTimeoutMs == 15000,
+              "initial join timeout must remain 15 seconds");
+static_assert(kReconnectCadenceMs == 10000,
+              "reconnect cadence must remain 10 seconds");
+static_assert(kRecoveryApThresholdMs == 60000,
+              "recovery AP threshold must remain 60 seconds");
+static_assert(kHandoffGraceMs == 120000,
+              "handoff grace must remain 120 seconds");
+
 ConnectivityInput input(ConnectivityEvent event,
-                        uint32_t nowMs,
-                        uint32_t generation = 0) {
+                        std::uint32_t nowMs,
+                        std::uint32_t generation = 0) {
   ConnectivityInput value{};
   value.event = event;
   value.nowMs = nowMs;
@@ -70,6 +79,43 @@ int main() {
   assert(!state.apActive);
   assert(state.stationAssociated);
   assert(state.phaseStartedMs == 800);
+
+  ConnectivityState interruptedHandoff{};
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::CredentialsAccepted, 1000, 8));
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::StationAssociated, 1500, 8));
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff, input(ConnectivityEvent::StationLost, 2000));
+  assert(interruptedHandoff.apActive);
+  assert(!interruptedHandoff.stationAssociated);
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::StationAssociated, 2500, 8));
+  assert(interruptedHandoff.phase == ConnectivityPhase::HandoffReady);
+  assert(interruptedHandoff.apActive);
+  assert(interruptedHandoff.stationAssociated);
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::Tick, 1500 + kHandoffGraceMs));
+  assert(interruptedHandoff.phase == ConnectivityPhase::HandoffReady);
+  assert(interruptedHandoff.apActive);
+
+  ConnectivityState acknowledgedRejoin = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::StationOriginAck,
+            1500 + kHandoffGraceMs + 1,
+            8));
+  assert(acknowledgedRejoin.phase == ConnectivityPhase::Station);
+  assert(!acknowledgedRejoin.apActive);
+
+  interruptedHandoff = advanceConnectivity(
+      interruptedHandoff,
+      input(ConnectivityEvent::Tick, 2500 + kHandoffGraceMs));
+  assert(interruptedHandoff.phase == ConnectivityPhase::Station);
+  assert(!interruptedHandoff.apActive);
 
   ConnectivityState grace{};
   grace = advanceConnectivity(
@@ -135,7 +181,7 @@ int main() {
   assert(!state.stationAssociated);
   assert(state.reconnectDue);
 
-  const uint32_t recoveryAttempt = state.lastAttemptMs;
+  const std::uint32_t recoveryAttempt = state.lastAttemptMs;
   state = advanceConnectivity(
       state, input(ConnectivityEvent::Tick,
                    recoveryAttempt + kReconnectCadenceMs - 1));
@@ -156,7 +202,8 @@ int main() {
   assert(state.stationAssociated);
   assert(!state.reconnectDue);
 
-  const uint32_t nearWrap = std::numeric_limits<uint32_t>::max() - 1000;
+  const std::uint32_t nearWrap =
+      std::numeric_limits<std::uint32_t>::max() - 1000;
   ConnectivityState wrapped{};
   wrapped = advanceConnectivity(
       wrapped,
