@@ -15,6 +15,7 @@ import {
   validatePatternLabExperimentalFlags,
   validatePatternLabStudioRecordingDescriptor,
 } from './patternLabExperimental.js';
+import { normalizePatternLabRecipe } from './patternLabRecipe.js';
 
 function assertDeepFrozen(value) {
   if (!value || typeof value !== 'object') return;
@@ -53,10 +54,9 @@ function generatedLwseq({ pixelCount = 3, fps = 24, frameCount = 240 } = {}) {
   return bytes;
 }
 
-function trustedArtifact(artifact, cryptoImpl = globalThis.crypto) {
+function trustedArtifact(artifact) {
   return {
     produceArtifact: async () => artifact,
-    cryptoImpl,
   };
 }
 
@@ -219,7 +219,6 @@ test('disabled or mismatched feature descriptors block lowering before the trust
       producerCalls += 1;
       return canonicalRecipe();
     },
-    cryptoImpl: globalThis.crypto,
   };
   await assert.rejects(
     () => createPatternLabExperimentalLowering(
@@ -317,7 +316,7 @@ test('lowering rejects native targets, forged metadata, hostile structures, and 
       { featureId: 'advancedGraph', target: 'bounded-recipe' },
       trustedArtifact(invalidRecipe),
     ),
-    /layer.*3/i,
+    /3 layers|layer.*3/i,
   );
 
   const symbolicRecipe = canonicalRecipe();
@@ -398,6 +397,68 @@ test('LWSEQ duration is capped at 900 seconds even at low frame rates', async ()
     ),
     /duration|900 seconds|frame count/i,
   );
+});
+
+test('LWSEQ fingerprints always use platform crypto and reject a caller-supplied digest', async () => {
+  let fakeDigestCalls = 0;
+  await assert.rejects(
+    () => createPatternLabExperimentalLowering(
+      createPatternLabExperimentalDescriptor({ shaderBake: true }),
+      { featureId: 'shaderBake', target: 'lwseq' },
+      {
+        produceArtifact: async () => generatedLwseq({ pixelCount: 1, fps: 1, frameCount: 1 }),
+        cryptoImpl: {
+          subtle: {
+            digest: async () => {
+              fakeDigestCalls += 1;
+              return new Uint8Array(32);
+            },
+          },
+        },
+      },
+    ),
+    /cryptoImpl|unknown/i,
+  );
+  assert.equal(fakeDigestCalls, 0);
+});
+
+test('LWSEQ absolute size is rejected before cloning producer bytes', async () => {
+  const maximumBytes = 64 + 1024 * 3 * 24 * 60 * 15;
+  const oversized = new Uint8Array(maximumBytes + 1);
+  await assert.rejects(
+    () => createPatternLabExperimentalLowering(
+      createPatternLabExperimentalDescriptor({ shaderBake: true }),
+      { featureId: 'shaderBake', target: 'lwseq' },
+      trustedArtifact(oversized),
+    ),
+    /absolute.*size|maximum.*byte|exceeds.*byte/i,
+  );
+});
+
+test('experimental lowering reuses the forward-compatible canonical Recipe contract', async () => {
+  const source = canonicalRecipe({
+    futureTop: { enabled: true },
+    base: {
+      kind: 'lightweaver-pattern',
+      patternId: 'aurora',
+      params: { density: 0.5 },
+      futureBase: 'kept',
+    },
+    layers: [{ id: 'one', futureLayer: true }],
+    targets: [{ kind: 'section', id: 'outer', futureTarget: true }],
+    requirements: [{ capability: 'noise-v2', futureRequirement: 2 }],
+    provenance: [{ source: 'fastled', futureProvenance: 'commit' }],
+  });
+  const canonical = normalizePatternLabRecipe(source);
+  const lowering = await createPatternLabExperimentalLowering(
+    createPatternLabExperimentalDescriptor({ advancedGraph: true }),
+    { featureId: 'advancedGraph', target: 'bounded-recipe' },
+    trustedArtifact(source),
+  );
+  assert.deepEqual(lowering.artifact.payload, canonical);
+  assert.equal(lowering.artifact.payload.futureTop.enabled, true);
+  assert.equal(lowering.artifact.payload.base.futureBase, 'kept');
+  assert.equal(lowering.artifact.payload.layers[0].futureLayer, true);
 });
 
 test('card-side Art-Net recording stays unavailable behind four explicit hardware gates', () => {

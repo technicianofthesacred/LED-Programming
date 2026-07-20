@@ -1,3 +1,8 @@
+import {
+  assertPatternLabJsonSafe,
+  normalizePatternLabRecipe,
+} from './patternLabRecipe.js';
+
 export const PATTERN_LAB_EXPERIMENTAL_VERSION = 1;
 
 export const PATTERN_LAB_EXPERIMENTAL_FEATURE_IDS = Object.freeze([
@@ -17,12 +22,12 @@ export const PATTERN_LAB_EXPERIMENTAL_LOWERING_TARGETS = Object.freeze([
   'lwseq',
 ]);
 
-const MAX_RECIPE_LAYERS = 3;
 const MAX_RECIPE_BYTES = 256 * 1024;
 const MAX_LWSEQ_PIXELS = 1024;
 const MAX_LWSEQ_FPS = 24;
 const MAX_LWSEQ_FRAMES = 24 * 60 * 15;
 const LWSEQ_HEADER_BYTES = 64;
+const MAX_LWSEQ_BYTES = LWSEQ_HEADER_BYTES + MAX_LWSEQ_PIXELS * 3 * MAX_LWSEQ_FRAMES;
 
 export const PATTERN_LAB_CARD_RECORD_HARDWARE_GATES = deepFreeze([
   {
@@ -225,32 +230,6 @@ function requireStudioRecordingAuthorization(descriptor) {
   return canonical;
 }
 
-function cloneData(value) {
-  if (Array.isArray(value)) return value.map(cloneData);
-  if (value && typeof value === 'object') {
-    const result = {};
-    for (const key of Reflect.ownKeys(value)) {
-      const property = Object.getOwnPropertyDescriptor(value, key);
-      if (property && Object.hasOwn(property, 'value')) result[key] = cloneData(property.value);
-    }
-    return result;
-  }
-  return value;
-}
-
-function finiteRange(value, name, minimum, maximum) {
-  if (!Number.isFinite(value) || value < minimum || value > maximum) {
-    throw new RangeError(`${name} must be between ${minimum} and ${maximum}`);
-  }
-  return value;
-}
-
-function exactObject(value, allowed, name) {
-  plainObject(value, name);
-  exactKeys(value, allowed, name);
-  return value;
-}
-
 function rejectExecutableFields(value, path = '$') {
   if (!value || typeof value !== 'object') return;
   for (const key of Reflect.ownKeys(value)) {
@@ -265,59 +244,11 @@ function rejectExecutableFields(value, path = '$') {
 
 function validateCanonicalRecipe(input) {
   assertPlainDataTree(input, 'Canonical Pattern Lab Recipe');
-  const recipe = exactObject(input, [
-    'version', 'id', 'name', 'base', 'palette', 'macros', 'evolution', 'seed',
-    'layers', 'targets', 'requirements', 'provenance',
-  ], 'Canonical Pattern Lab Recipe');
-  rejectExecutableFields(recipe);
-  if (recipe.version !== 1) throw new RangeError('Canonical Pattern Lab Recipe version must be 1');
-  if (typeof recipe.id !== 'string' || !recipe.id.trim() || recipe.id.length > 128) {
-    throw new TypeError('Canonical Pattern Lab Recipe ID is required and bounded');
-  }
-  if (typeof recipe.name !== 'string' || !recipe.name.trim() || recipe.name.length > 160) {
-    throw new TypeError('Canonical Pattern Lab Recipe name is required and bounded');
-  }
-  exactObject(recipe.base, ['kind', 'patternId', 'params'], 'Canonical Pattern Lab Recipe base');
-  if (recipe.base.kind !== 'lightweaver-pattern'
-    || typeof recipe.base.patternId !== 'string'
-    || !recipe.base.patternId.trim()) {
-    throw new TypeError('Canonical Pattern Lab Recipe base must name a Lightweaver pattern');
-  }
-  plainObject(recipe.base.params, 'Canonical Pattern Lab Recipe params');
-  if (!Array.isArray(recipe.palette) || recipe.palette.length < 2 || recipe.palette.length > 8
-    || recipe.palette.some(color => typeof color !== 'string' || !color.trim())) {
-    throw new RangeError('Canonical Pattern Lab Recipe palette must contain 2 to 8 colors');
-  }
-  exactObject(
-    recipe.macros,
-    ['color', 'movement', 'shape', 'texture', 'energy'],
-    'Canonical Pattern Lab Recipe macros',
-  );
-  for (const name of ['color', 'movement', 'shape', 'texture', 'energy']) {
-    finiteRange(recipe.macros[name], `Canonical Pattern Lab Recipe macro ${name}`, 0, 1);
-  }
-  exactObject(
-    recipe.evolution,
-    ['enabled', 'character', 'durationSeconds', 'change'],
-    'Canonical Pattern Lab Recipe evolution',
-  );
-  if (typeof recipe.evolution.enabled !== 'boolean' || typeof recipe.evolution.character !== 'string') {
-    throw new TypeError('Canonical Pattern Lab Recipe evolution fields are invalid');
-  }
-  finiteRange(recipe.evolution.durationSeconds, 'Canonical Pattern Lab Recipe duration', 300, 900);
-  finiteRange(recipe.evolution.change, 'Canonical Pattern Lab Recipe evolution change', 0, 1);
-  wholeNumber(recipe.seed, 'Canonical Pattern Lab Recipe seed', 0, 0xffffffff);
-  if (!Array.isArray(recipe.layers) || recipe.layers.length > MAX_RECIPE_LAYERS) {
-    throw new RangeError(`Canonical Pattern Lab Recipe layer count must not exceed ${MAX_RECIPE_LAYERS}`);
-  }
-  for (const [name, collection] of [
-    ['targets', recipe.targets],
-    ['requirements', recipe.requirements],
-    ['provenance', recipe.provenance],
-  ]) {
-    if (!Array.isArray(collection)) throw new TypeError(`Canonical Pattern Lab Recipe ${name} must be an array`);
-  }
-  const payload = cloneData(recipe);
+  rejectExecutableFields(input);
+  const payload = normalizePatternLabRecipe(input);
+  assertPatternLabJsonSafe(payload);
+  assertPlainDataTree(payload, 'Canonical Pattern Lab Recipe');
+  rejectExecutableFields(payload);
   const byteLength = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
   if (byteLength > MAX_RECIPE_BYTES) {
     throw new RangeError(`Canonical Pattern Lab Recipe exceeds ${MAX_RECIPE_BYTES} bytes`);
@@ -330,7 +261,8 @@ function validateCanonicalRecipe(input) {
   });
 }
 
-async function digestSha256(bytes, cryptoImpl) {
+async function digestSha256(bytes) {
+  const cryptoImpl = globalThis.crypto;
   if (!cryptoImpl?.subtle?.digest) throw new Error('Secure SHA-256 fingerprinting is unavailable');
   const result = await cryptoImpl.subtle.digest('SHA-256', bytes);
   const digest = ArrayBuffer.isView(result)
@@ -340,8 +272,11 @@ async function digestSha256(bytes, cryptoImpl) {
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function validateProducedLwseq(input, cryptoImpl) {
+async function validateProducedLwseq(input) {
   if (!(input instanceof Uint8Array)) throw new TypeError('Trusted LWSEQ producer must return Uint8Array bytes');
+  if (input.byteLength > MAX_LWSEQ_BYTES) {
+    throw new RangeError(`LWSEQ exceeds the absolute maximum of ${MAX_LWSEQ_BYTES} bytes`);
+  }
   const bytes = Uint8Array.from(input);
   if (bytes.byteLength < LWSEQ_HEADER_BYTES) throw new TypeError('LWSEQ bytes are shorter than the header');
   const magic = String.fromCharCode(...bytes.subarray(0, 6));
@@ -363,7 +298,7 @@ async function validateProducedLwseq(input, cryptoImpl) {
   if (bytes.byteLength !== expectedBytes) {
     throw new RangeError(`LWSEQ byte length ${bytes.byteLength} does not match header frame data ${expectedBytes}`);
   }
-  const sha256 = await digestSha256(bytes, cryptoImpl);
+  const sha256 = await digestSha256(bytes);
   return deepFreeze({
     kind: 'lwseq',
     version,
@@ -388,7 +323,7 @@ export async function createPatternLabExperimentalLowering(descriptor, input, de
   }
   requireEnabledFeature(descriptor, source.featureId);
   plainObject(dependencies, 'Pattern Lab trusted artifact producer');
-  exactKeys(dependencies, ['produceArtifact', 'cryptoImpl'], 'Pattern Lab trusted artifact producer');
+  exactKeys(dependencies, ['produceArtifact'], 'Pattern Lab trusted artifact producer');
   if (typeof dependencies.produceArtifact !== 'function') {
     throw new TypeError('Pattern Lab lowering requires a trusted produceArtifact function');
   }
@@ -398,7 +333,7 @@ export async function createPatternLabExperimentalLowering(descriptor, input, de
   }));
   const artifact = source.target === 'bounded-recipe'
     ? validateCanonicalRecipe(produced)
-    : await validateProducedLwseq(produced, dependencies.cryptoImpl ?? globalThis.crypto);
+    : await validateProducedLwseq(produced);
   return deepFreeze({
     version: PATTERN_LAB_EXPERIMENTAL_VERSION,
     featureId: source.featureId,
