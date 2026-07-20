@@ -6,12 +6,13 @@ export const OFFLINE_AUDIO_CAPABILITY = 'offline-analysis';
 export const DEFAULT_OFFLINE_AUDIO_LIMITS = Object.freeze({
   maxFileBytes: 192 * 1024 * 1024,
   maxDurationSeconds: 15 * 60,
-  maxFrames: 60_000,
+  maxFrames: 45_000,
+  maxWorkUnits: 1_000_000_000,
 });
 
 const DEFAULT_WINDOW_SIZE = 2048;
 const DEFAULT_HOP_SIZE = 1024;
-const DEFAULT_YIELD_EVERY_FRAMES = 64;
+const DEFAULT_YIELD_EVERY_FRAMES = 8;
 const MIN_WINDOW_SIZE = 256;
 const MAX_WINDOW_SIZE = 32_768;
 const FEATURE_CONTRACT = 'show-audio-features-v1';
@@ -32,6 +33,27 @@ function throwIfAborted(signal) {
 
 function yieldToHost() {
   return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function abortableOperation(operation, signal) {
+  throwIfAborted(signal);
+  if (!signal) return Promise.resolve().then(operation);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, signal.reason?.name === 'AbortError' ? signal.reason : abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    // Blob reads and Web Crypto digests cannot themselves be interrupted. This
+    // race rejects promptly and ignores their eventual result after cancellation.
+    Promise.resolve()
+      .then(() => (settled ? undefined : operation()))
+      .then(value => finish(resolve, value), error => finish(reject, error));
+  });
 }
 
 function positiveInteger(value, name) {
@@ -58,24 +80,25 @@ function ascii(bytes, offset, length) {
 
 async function readSourceBytes(source, maxFileBytes, signal) {
   throwIfAborted(signal);
-  let bytes;
+  let sourceBytes;
   if (source instanceof ArrayBuffer) {
-    bytes = new Uint8Array(source);
+    sourceBytes = new Uint8Array(source);
   } else if (ArrayBuffer.isView(source)) {
-    bytes = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+    sourceBytes = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
   } else if (source && typeof source.arrayBuffer === 'function') {
     if (Number.isFinite(source.size) && source.size > maxFileBytes) {
       throw new RangeError(`Audio file exceeds the ${maxFileBytes}-byte file limit`);
     }
-    bytes = new Uint8Array(await source.arrayBuffer());
+    const buffer = await abortableOperation(() => source.arrayBuffer(), signal);
+    sourceBytes = new Uint8Array(buffer);
   } else {
     throw new TypeError('Offline audio analysis requires WAV bytes or a Blob/File');
   }
   throwIfAborted(signal);
-  if (bytes.byteLength > maxFileBytes) {
+  if (sourceBytes.byteLength > maxFileBytes) {
     throw new RangeError(`Audio file exceeds the ${maxFileBytes}-byte file limit`);
   }
-  return bytes;
+  return Uint8Array.from(sourceBytes);
 }
 
 function parseWav(bytes) {
@@ -83,19 +106,26 @@ function parseWav(bytes) {
     throw new TypeError('Offline audio input must be a RIFF/WAVE file');
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const riffEnd = 8 + view.getUint32(4, true);
+  if (riffEnd < 12) throw new TypeError('WAV RIFF bounds are incomplete');
+  if (riffEnd > bytes.byteLength) throw new TypeError('WAV RIFF size exceeds the file bounds');
   let format = null;
   let dataOffset = -1;
   let dataBytes = 0;
   let offset = 12;
 
-  while (offset + 8 <= bytes.byteLength) {
+  while (offset < riffEnd) {
+    if (offset + 8 > riffEnd) throw new TypeError('WAV chunk header is incomplete within RIFF bounds');
     const chunkId = ascii(bytes, offset, 4);
     const chunkBytes = view.getUint32(offset + 4, true);
     const payloadOffset = offset + 8;
     const payloadEnd = payloadOffset + chunkBytes;
-    if (payloadEnd > bytes.byteLength) throw new TypeError(`WAV chunk ${chunkId} exceeds the file bounds`);
+    if (payloadEnd > riffEnd) throw new TypeError(`WAV chunk ${chunkId} exceeds the RIFF bounds`);
+    const paddedEnd = payloadEnd + (chunkBytes % 2);
+    if (paddedEnd > riffEnd) throw new TypeError(`WAV chunk ${chunkId} is missing required odd-byte padding`);
 
     if (chunkId === 'fmt ') {
+      if (format) throw new TypeError('WAV contains a duplicate fmt chunk');
       if (chunkBytes < 16) throw new TypeError('WAV fmt chunk is incomplete');
       format = {
         audioFormat: view.getUint16(payloadOffset, true),
@@ -104,11 +134,12 @@ function parseWav(bytes) {
         blockAlign: view.getUint16(payloadOffset + 12, true),
         bitsPerSample: view.getUint16(payloadOffset + 14, true),
       };
-    } else if (chunkId === 'data' && dataOffset < 0) {
+    } else if (chunkId === 'data') {
+      if (dataOffset >= 0) throw new TypeError('WAV contains a duplicate data chunk');
       dataOffset = payloadOffset;
       dataBytes = chunkBytes;
     }
-    offset = payloadEnd + (chunkBytes % 2);
+    offset = paddedEnd;
   }
 
   if (!format || dataOffset < 0) throw new TypeError('WAV requires fmt and data chunks');
@@ -126,7 +157,8 @@ function parseWav(bytes) {
   }
   const bytesPerSample = bitsPerSample / 8;
   if (blockAlign !== channels * bytesPerSample) throw new TypeError('WAV block alignment is inconsistent');
-  const sampleFrames = Math.floor(dataBytes / blockAlign);
+  if (dataBytes % blockAlign !== 0) throw new TypeError('WAV data has a partial frame outside its block alignment');
+  const sampleFrames = dataBytes / blockAlign;
   if (sampleFrames < 1) throw new RangeError('WAV contains no audio sample frames');
 
   function channelSample(byteOffset) {
@@ -231,9 +263,14 @@ function spectrumForFrame(readMonoSample, frameOffset, window, windowSum, real, 
 
 async function sha256(bytes, cryptoImpl, signal) {
   if (!cryptoImpl?.subtle?.digest) throw new Error('Secure SHA-256 fingerprinting is unavailable');
-  throwIfAborted(signal);
-  const digest = new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes));
-  throwIfAborted(signal);
+  const digestResult = await abortableOperation(
+    () => cryptoImpl.subtle.digest('SHA-256', bytes),
+    signal,
+  );
+  const digest = ArrayBuffer.isView(digestResult)
+    ? new Uint8Array(digestResult.buffer, digestResult.byteOffset, digestResult.byteLength)
+    : new Uint8Array(digestResult);
+  if (digest.byteLength !== 32) throw new TypeError('SHA-256 digest must contain exactly 32 bytes');
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
@@ -257,6 +294,10 @@ export async function analyzeOfflineAudioWav(source, options = {}) {
     options.maxFrames ?? DEFAULT_OFFLINE_AUDIO_LIMITS.maxFrames,
     'maxFrames',
   );
+  const maxWorkUnits = positiveInteger(
+    options.maxWorkUnits ?? DEFAULT_OFFLINE_AUDIO_LIMITS.maxWorkUnits,
+    'maxWorkUnits',
+  );
   const yieldEveryFrames = positiveInteger(
     options.yieldEveryFrames ?? DEFAULT_YIELD_EVERY_FRAMES,
     'yieldEveryFrames',
@@ -278,6 +319,10 @@ export async function analyzeOfflineAudioWav(source, options = {}) {
   if (frameCount > maxFrames) {
     throw new RangeError(`Audio frame count ${frameCount} exceeds the ${maxFrames}-frame limit`);
   }
+  const analysisWorkUnits = frameCount * windowSize * Math.log2(windowSize) * wav.channels;
+  if (!Number.isSafeInteger(analysisWorkUnits) || analysisWorkUnits > maxWorkUnits) {
+    throw new RangeError(`Audio FFT work unit count ${analysisWorkUnits} exceeds the ${maxWorkUnits}-unit limit`);
+  }
 
   const fingerprint = await sha256(bytes, options.cryptoImpl ?? globalThis.crypto, options.signal);
   const analyzer = createShowAudioFeatures({ sampleRate: wav.sampleRate, fftSize: windowSize });
@@ -297,12 +342,10 @@ export async function analyzeOfflineAudioWav(source, options = {}) {
   const frameDt = hopSize / wav.sampleRate;
 
   for (let frame = 0; frame < frameCount; frame += 1) {
-    if (frame % yieldEveryFrames === 0) {
+    throwIfAborted(options.signal);
+    if (frame > 0 && frame % yieldEveryFrames === 0) {
+      await yieldToHost();
       throwIfAborted(options.signal);
-      if (frame > 0) {
-        await yieldToHost();
-        throwIfAborted(options.signal);
-      }
     }
     spectrumForFrame(
       wav.readMonoSample,
@@ -338,6 +381,9 @@ export async function analyzeOfflineAudioWav(source, options = {}) {
       windowSize,
       hopSize,
       frameCount,
+      frameTimeOrigin: 'window-center',
+      frameTimeOffsetSeconds: windowSize / (2 * wav.sampleRate),
+      analysisWorkUnits,
       window: WINDOW_NAME,
       spectrumScale: 'web-audio-byte-frequency',
       minDecibels: WEB_AUDIO_MIN_DECIBELS,
@@ -350,8 +396,10 @@ export async function analyzeOfflineAudioWav(source, options = {}) {
 
 export function createOfflineAudioRequirement(analysis) {
   const sha = analysis?.audioFingerprint?.sha256;
-  if (analysis?.version !== OFFLINE_AUDIO_LANES_VERSION || !/^[a-f0-9]{64}$/.test(String(sha || ''))) {
-    throw new TypeError('Offline audio requirement needs a valid analyzed audio fingerprint');
+  if (analysis?.version !== OFFLINE_AUDIO_LANES_VERSION
+    || analysis?.audioFingerprint?.algorithm !== 'SHA-256'
+    || !/^[a-f0-9]{64}$/.test(String(sha || ''))) {
+    throw new TypeError('Offline audio requirement needs a valid SHA-256 analyzed audio fingerprint');
   }
   return Object.freeze({
     capability: OFFLINE_AUDIO_CAPABILITY,
