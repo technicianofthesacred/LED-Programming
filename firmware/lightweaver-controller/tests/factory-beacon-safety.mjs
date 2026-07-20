@@ -53,6 +53,8 @@ assert.doesNotMatch(factorySetup, /38|39|40|48/);
 const factoryFrame = functionBody(main, 'void showFactoryBeaconFrame()', 'void showSafeDiscoveryFrame()');
 assert.match(factoryFrame, /FactoryBeaconOwnershipInputs/);
 assert.match(factoryFrame, /factoryBeaconMayOwnOutput/);
+assert.match(factoryFrame, /LW_FACTORY_BEACON_SAFETY_POLL_MS/,
+  'the factory animation must not read NVS on every 10ms frame');
 assert.match(factoryFrame, /clearPhysicalLeds\(\)/,
   'every factory beacon step must first submit black to every registered output');
 assert.match(factoryFrame, /factoryBeaconPinForStep/);
@@ -60,6 +62,14 @@ assert.match(factoryFrame, /LW_FACTORY_BEACON_PIXEL_LIMIT/);
 assert.match(factoryFrame, /transmitPhysicalLeds\(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT/);
 assert.equal((factoryFrame.match(/fill_solid\(physicalLeds \+ bufferStart/g) || []).length, 1,
   'only one approved output slice may receive non-black data');
+
+const wiringSafety = functionBody(storage, 'WiringSafetyStatus getRuntimeWiringSafetyStatus()', 'String runtimeWiringSafetyStatusJson()');
+assert.match(wiringSafety,
+  /prefs\.isKey\(NVS_KNOWN_GOOD_CONFIG_KEY\)[\s\S]*prefs\.getString\(NVS_KNOWN_GOOD_CONFIG_KEY/,
+  'an erased card must not call getString for a missing known-good key');
+assert.match(wiringSafety,
+  /prefs\.isKey\(NVS_CANDIDATE_CONFIG_KEY\)[\s\S]*prefs\.getString\(NVS_CANDIDATE_CONFIG_KEY/,
+  'an erased card must not call getString for a missing candidate key');
 
 const discoverySetup = functionBody(main, 'bool setupSafeDiscoveryOutputs(uint8_t stepIndex)', 'void showFactoryBeaconFrame()');
 assert.match(discoverySetup, /factoryBeaconPinForStep\(stepIndex\)/);

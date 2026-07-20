@@ -1491,8 +1491,10 @@ WiringSafetyStatus getRuntimeWiringSafetyStatus() {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) return status;
   status.candidateState = readCandidateState(prefs);
-  status.hasKnownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "").length() > 0;
-  status.hasCandidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "").length() > 0;
+  status.hasKnownGood = prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) &&
+                        prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "").length() > 0;
+  status.hasCandidate = prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) &&
+                        prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "").length() > 0;
   if (status.hasCandidate) status.activationId = prefs.getString(NVS_CANDIDATE_ID_KEY, "");
   status.bootedCandidate = status.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
   status.discoveryActive = prefs.getBool(NVS_DISCOVERY_ACTIVE_KEY, false);

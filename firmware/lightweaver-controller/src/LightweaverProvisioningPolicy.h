@@ -11,6 +11,7 @@ constexpr uint16_t LW_FACTORY_BEACON_PIXEL_LIMIT = 8;
 constexpr uint8_t LW_FACTORY_BEACON_BRIGHTNESS_LIMIT = 20;
 constexpr uint32_t LW_FACTORY_BEACON_MAX_MILLIAMPS = 100;
 constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 1200;
+constexpr uint32_t LW_FACTORY_BEACON_SAFETY_POLL_MS = 100;
 
 enum class ProvisioningPhase : uint8_t {
   Factory = 0,

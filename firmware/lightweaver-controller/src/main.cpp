@@ -633,7 +633,14 @@ void showFactoryBeaconFrame() {
   static uint8_t lastStep = UINT8_MAX;
   static bool lastPulseOn = false;
   static bool blackHeld = false;
-  WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+  static uint32_t lastSafetyPollAtMs = 0;
+  static WiringSafetyStatus safety;
+  uint32_t now = millis();
+  if (lastSafetyPollAtMs == 0 ||
+      uint32_t(now - lastSafetyPollAtMs) >= LW_FACTORY_BEACON_SAFETY_POLL_MS) {
+    safety = getRuntimeWiringSafetyStatus();
+    lastSafetyPollAtMs = now;
+  }
   FactoryBeaconOwnershipInputs ownership;
   ownership.phase = runtimeConfig.runtimePhase;
   ownership.outputReady = ledOutputsReady;
@@ -641,7 +648,7 @@ void showFactoryBeaconFrame() {
   ownership.wifiTransition = restartTransitionPending;
   ownership.candidateActive = safety.candidateState != WIRING_CANDIDATE_NONE || safety.hasCandidate;
   ownership.discoveryActive = safety.discoveryActive;
-  ownership.recoveryActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
+  ownership.recoveryActive = int32_t(recoveryHoldUntilMs - now) > 0;
   if (!factoryBeaconMayOwnOutput(ownership)) {
     if (!blackHeld) clearPhysicalLeds();
     blackHeld = true;
@@ -649,7 +656,6 @@ void showFactoryBeaconFrame() {
   }
   blackHeld = false;
 
-  uint32_t now = millis();
   uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % LW_APPROVED_OUTPUT_GPIO_COUNT);
   uint32_t elapsedInStep = now % LW_FACTORY_BEACON_STEP_MS;
   bool pulseOn = factoryBeaconPulseOn(elapsedInStep);
