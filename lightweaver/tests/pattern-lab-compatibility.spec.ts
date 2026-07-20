@@ -216,3 +216,27 @@ test('downloads xLights, MADRIX, and Art-Net setup files from verified physical 
   }
   await expect(page.getByTestId('pattern-lab-layout-export-status')).toContainText('Exported Art-Net setup notes');
 });
+
+test('starts and safely cancels a real baked card export', async ({ page }) => {
+  await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
+  await page.evaluate(key => {
+    const project = JSON.parse(localStorage.getItem(key) || '{}');
+    project.layout.wiring = {
+      ...project.layout.wiring,
+      locked: true,
+      verified: true,
+      migrationWarnings: [],
+      runs: project.layout.wiring.runs.map((run: Record<string, unknown>) => ({ ...run, verified: true })),
+    };
+    localStorage.setItem(key, JSON.stringify(project));
+  }, AUTOSAVE_KEY);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Base pattern').selectOption('generator:particles');
+  await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
+
+  const cardExport = page.getByTestId('pattern-lab-export');
+  await expect(cardExport.locator('[data-classification]')).toHaveAttribute('data-classification', 'bake-to-card');
+  await cardExport.getByRole('button', { name: 'Bake to card' }).click();
+  await cardExport.getByRole('button', { name: 'Cancel bake' }).click();
+  await expect(page.getByTestId('pattern-lab-bake-status')).toContainText('Bake canceled');
+});

@@ -7,6 +7,7 @@ import {
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
+import { bakePatternLabRecipe } from '../lib/lwseqBake.js';
 import { OFFLINE_AUDIO_CAPABILITY } from '../lib/offlineAudioLanes.js';
 import {
   PATTERN_LAB_GENERATOR_IDS,
@@ -737,6 +738,25 @@ export default function PatternLabScreen() {
     await downloadJsonFile(safeFilename(canonical.name), canonical, { preferPicker: false });
   }
 
+  async function bakeForCard(_compatibility, { signal } = {}) {
+    if (!draft) throw new TypeError('Choose a Pattern Lab recipe before baking.');
+    return bakePatternLabRecipe({
+      recipe: draft,
+      strips: project.strips,
+      groups: project.layoutLayerGroups,
+      wiring: project.wiring,
+      hidden: project.hidden,
+      audioLanes: draft.offlineAudio,
+      render: {
+        bpm: project.bpm,
+        gammaEnabled: project.gammaEnabled,
+        gammaValue: project.gammaValue,
+        symSettings: project.symSettings,
+      },
+      signal,
+    });
+  }
+
   async function importRecipe(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -928,7 +948,7 @@ export default function PatternLabScreen() {
                   </ul>
                   <PatternLabExport
                     compatibility={compatibility}
-                    onBake={() => setMessage('Baked card export is not enabled in this preview-only workspace.')}
+                    onBake={bakeForCard}
                     onSimplify={simplifyForCard}
                     onRemoveFeature={removeUnsupportedFeatures}
                   />
