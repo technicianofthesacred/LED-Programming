@@ -474,3 +474,29 @@ export function getPatternLabGenerator(generatorId) {
   if (!generator) throw new RangeError(`Unknown Pattern Lab generator: ${String(generatorId)}`);
   return generator;
 }
+
+const MAX_OPERATIONS_PER_SAMPLE = Object.freeze({
+  particles: 96 * 12 + 12,
+  ripple: 12 * 12 + 12,
+  'random-walkers': 64 * 10 + 12,
+  'cellular-field': PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate * 8 + 16,
+  'gray-scott-1d': PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate * 40 + 20,
+});
+
+export function estimatePatternLabGeneratorBudgets(generatorId, context = {}) {
+  const sampleCount = Math.min(
+    PATTERN_LAB_GENERATOR_BUDGETS.maxSamples,
+    Math.max(1, Math.trunc(Number(context.sampleCount) || 0)),
+  );
+  const generator = getPatternLabGenerator(generatorId);
+  const state = generator.initialize({ sampleCount, seed: Number(context.seed) >>> 0 });
+  try {
+    return Object.freeze({
+      sampleCount,
+      stateBytes: measurePatternLabGeneratorStateBytes(state),
+      operationsPerFrame: sampleCount * MAX_OPERATIONS_PER_SAMPLE[generatorId],
+    });
+  } finally {
+    generator.dispose(state);
+  }
+}

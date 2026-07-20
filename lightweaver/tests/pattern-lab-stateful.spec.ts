@@ -25,6 +25,12 @@ test('chooses and sculpts a living simulation through the simple Pattern Lab con
   await page.getByLabel('Base pattern').selectOption('generator:particles');
   await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
   await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Particle Drift');
+  const thumbnails = page.getByTestId('pattern-lab-variation-preview');
+  await expect(thumbnails).toHaveCount(4);
+  for (let index = 0; index < 4; index += 1) {
+    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-available', 'true');
+    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-state', 'frame');
+  }
   await page.getByText('Advanced controls').click();
   await page.getByRole('slider', { name: 'Particle count' }).fill('48');
   await page.getByRole('slider', { name: 'Movement', exact: true }).fill('68');
@@ -48,6 +54,20 @@ test('chooses and sculpts a living simulation through the simple Pattern Lab con
   expect(stateful.length).toBeGreaterThan(0);
   expect(stateful.every(recipe => Number.isInteger(recipe.seed))).toBe(true);
   expect(stateful.some(recipe => (recipe.macros as { movement?: number })?.movement === 0.68)).toBe(true);
+  await page.getByTestId('pattern-lab-runtime-tools').evaluate((element: HTMLDetailsElement) => { element.open = true; });
+  await expect(page.getByTestId('pattern-lab-export').locator('.plab-export-status'))
+    .toHaveAttribute('data-classification', 'bake-to-card');
+
+  await page.getByRole('button', { name: 'Save private draft' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Open Particle Drift/ }).click();
+  await page.getByText('Advanced controls').click();
+  await expect(page.getByRole('slider', { name: 'Particle count' })).toHaveValue('48');
+  const sourceSnapshot = JSON.parse(
+    await page.getByTestId('pattern-lab-runtime-tools').getAttribute('data-source-recipe-snapshot') || '{}',
+  );
+  expect(sourceSnapshot.base?.kind).toBe('particles');
+  expect(sourceSnapshot.base?.params?.advanced).toEqual({});
 });
 
 test('the real worker renders the deterministic bounded stateful generator pack', async ({ page }) => {

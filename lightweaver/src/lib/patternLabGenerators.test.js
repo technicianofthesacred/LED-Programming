@@ -6,6 +6,7 @@ import {
   PATTERN_LAB_GENERATOR_BUDGETS,
   PATTERN_LAB_GENERATOR_CONTROLS,
   PATTERN_LAB_GENERATOR_IDS,
+  estimatePatternLabGeneratorBudgets,
   getPatternLabGenerator,
   measurePatternLabGeneratorStateBytes,
   resolvePatternLabGeneratorInputs,
@@ -176,4 +177,14 @@ test('dispose clears typed state and prevents later updates', () => {
 test('generator logic has no browser-global dependency', async () => {
   const source = await readFile(new URL('./patternLabGenerators.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:window|document|navigator|performance|requestAnimationFrame|cancelAnimationFrame)\b/);
+});
+
+test('exposes conservative finite compatibility budgets without retaining generator state', () => {
+  for (const id of PATTERN_LAB_GENERATOR_IDS) {
+    const estimate = estimatePatternLabGeneratorBudgets(id, { sampleCount: 1024, seed: 7 });
+    assert.equal(estimate.sampleCount, 1024);
+    assert.ok(Number.isSafeInteger(estimate.stateBytes) && estimate.stateBytes > 0, id);
+    assert.ok(Number.isSafeInteger(estimate.operationsPerFrame) && estimate.operationsPerFrame > 0, id);
+    assert.ok(Object.isFrozen(estimate));
+  }
 });

@@ -86,9 +86,9 @@ export default function PatternLabPreview({
   const [physicalPreview, setPhysicalPreview] = useState({ state: 'idle', active: false, error: null });
   const patternId = recipe.base.patternId;
   const macros = resolvePatternLabMacros(recipe);
-  const evolutionRecipe = seedPreview && !recipe.evolution.enabled
+  const evolutionRecipe = useMemo(() => seedPreview && !recipe.evolution.enabled
     ? { ...recipe, evolution: { ...recipe.evolution, enabled: true } }
-    : recipe;
+    : recipe, [recipe, seedPreview]);
   const renderTime = seedPreview
     ? evolutionRecipe.evolution.durationSeconds / 2
     : previewTime;
@@ -131,12 +131,14 @@ export default function PatternLabPreview({
     masterSaturation: saturation,
     masterHueShift: hueShift,
   }), [brightness, hueShift, saturation, speed]);
-  const workerMode = useSettledWorkerMode({
+  const settledWorkerMode = useSettledWorkerMode({
     playing,
     recipe: evolutionRecipe,
     time: renderTime,
     renderOptions,
   });
+  const stateful = recipe.base?.kind && recipe.base.kind !== 'lightweaver-pattern';
+  const workerMode = thumbnail ? 'preview' : settledWorkerMode;
   const workerTime = quantizePatternLabWorkerTime(renderTime, workerMode);
   const worker = usePatternLabWorker({
     recipe: evolutionRecipe,
@@ -144,7 +146,7 @@ export default function PatternLabPreview({
     time: workerTime,
     mode: workerMode,
     renderOptions,
-    enabled: !thumbnail,
+    enabled: !thumbnail || stateful,
   });
   const workerFunction = useMemo(() => workerColorLookup(worker.frame), [worker.frame]);
   const physicalPixels = useMemo(() => patternLabFrameToCardPixels(worker.frame), [worker.frame]);
@@ -199,8 +201,8 @@ export default function PatternLabPreview({
       className={`plab-mapped-preview${thumbnail ? ' plab-mapped-preview-thumbnail' : ''}`}
       data-testid={thumbnail ? 'pattern-lab-variation-preview' : 'pattern-lab-mapped-preview'}
       aria-hidden={thumbnail ? 'true' : undefined}
-      data-worker-available={thumbnail ? 'false' : String(worker.available)}
-      data-worker-state={thumbnail ? 'static' : worker.status}
+      data-worker-available={thumbnail && !stateful ? 'false' : String(worker.available)}
+      data-worker-state={thumbnail && !stateful ? 'static' : worker.status}
       data-worker-request-id={worker.requestId ?? undefined}
       data-worker-frame-id={worker.frameRequestId ?? undefined}
       data-worker-sample-limit={workerSampleLimit}

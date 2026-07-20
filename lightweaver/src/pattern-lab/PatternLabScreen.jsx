@@ -7,7 +7,10 @@ import {
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
-import { PATTERN_LAB_GENERATOR_IDS } from '../lib/patternLabGenerators.js';
+import {
+  PATTERN_LAB_GENERATOR_IDS,
+  estimatePatternLabGeneratorBudgets,
+} from '../lib/patternLabGenerators.js';
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
@@ -118,6 +121,14 @@ function runtimeMetricsFor(recipe, geometry) {
   metrics.framebufferBytes = pixelCount * 3;
   if (hasKnownStatelessRuntime(recipe)) {
     metrics.stateBytes = 0;
+    metrics.operationsPerFrame = pixelCount * 64 * (1 + (recipe.layers?.length || 0));
+  } else if (PATTERN_LAB_GENERATOR_IDS.includes(recipe?.base?.kind)) {
+    const generator = estimatePatternLabGeneratorBudgets(recipe.base.kind, {
+      sampleCount: Math.min(pixelCount, PATTERN_LAB_WORKER_BUDGETS.finalSamples),
+      seed: recipe.seed,
+    });
+    metrics.stateBytes = generator.stateBytes;
+    metrics.operationsPerFrame = generator.operationsPerFrame;
   }
   return metrics;
 }
@@ -170,7 +181,12 @@ function sourceFromRecipe(recipe) {
     ...source,
     id: recipe.id,
     name: recipe.name,
-    ...(stateful ? { base: cloneRecipe(recipe.base) } : {}),
+    ...(stateful ? {
+      base: {
+        ...cloneRecipe(recipe.base),
+        params: { ...cloneRecipe(recipe.base.params || {}), advanced: {} },
+      },
+    } : {}),
   });
 }
 
