@@ -528,6 +528,13 @@ function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
     const unsupported = requirementReason(requirement, index, descriptor, changes);
     if (unsupported) reasons.push(unsupported);
   }
+  if (recipe.evolution?.enabled === true && finite(recipe.evolution?.durationSeconds) >= 300) {
+    reasons.push(reason(
+      'long-evolution-bake-only',
+      'Five-to-fifteen-minute Pattern Lab evolution is rendered as a deterministic card sequence.',
+      { bakeable: true },
+    ));
+  }
   if ((recipe.layers || []).length > descriptor.limits.layers) reasons.push(reason(
     'layers-over-budget',
     `layers uses ${recipe.layers.length}, above the card limit of ${descriptor.limits.layers}.`,

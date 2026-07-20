@@ -61,6 +61,16 @@ test('classifies a supported bounded recipe as live on card', () => {
   assert.equal(result.reasons.length, 0);
 });
 
+test('routes the real five-to-fifteen-minute evolution engine through deterministic baking', () => {
+  const result = classifyPatternLabCompatibility(recipe({
+    evolution: { enabled: true, character: 'tidal', durationSeconds: 600, change: 0.3 },
+  }), { metrics: { ...FIT_METRICS, microSdBytes: 1_000_000 } });
+
+  assert.equal(result.classification, 'bake-to-card');
+  assert.ok(result.reasons.some(reason => reason.code === 'long-evolution-bake-only'));
+  assert.ok(result.actions.some(action => action.id === 'bake'));
+});
+
 test('fails closed when a normalized recipe has no authoritative runtime estimates', () => {
   const source = createPatternLabRecipe({ id: 'missing-runtime-estimates' });
   const result = classifyPatternLabCompatibility(source);
