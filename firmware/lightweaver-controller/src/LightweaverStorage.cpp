@@ -397,8 +397,8 @@ bool loadJsonString(const String& json, RuntimeConfig& config, RuntimeSource sou
 }
 
 bool supportedOutputPin(int pin) {
-  return pin == 16 || pin == 17 || pin == 18 || pin == 21 ||
-         pin == 38 || pin == 39 || pin == 40 || pin == 48;
+  return pin >= 0 && pin <= UINT8_MAX &&
+         isApprovedProvisioningOutputGpio(static_cast<uint8_t>(pin));
 }
 
 bool isLowerHex(const String& value) {

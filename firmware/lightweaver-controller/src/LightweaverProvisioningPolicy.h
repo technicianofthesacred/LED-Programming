@@ -55,3 +55,12 @@ inline bool isApprovedProvisioningOutputGpio(uint8_t gpio) {
   }
   return false;
 }
+
+constexpr bool provisioningZoneSelected(size_t zoneIndex,
+                                        bool targetSpecified,
+                                        size_t targetZoneIndex,
+                                        bool syncZones) {
+  return targetSpecified
+      ? zoneIndex == targetZoneIndex
+      : syncZones || zoneIndex == 0;
+}

@@ -1421,8 +1421,12 @@ void handleControlPost() {
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"unknown zone\"}");
     return;
   }
-  uint8_t affectedOutputCount = runtimeAffectedOutputCount(zoneTarget);
-  if (affectedOutputCount == 0) {
+  bool effectiveSyncZones = hasControlField(doc, "syncZones")
+      ? controlBool(doc, "syncZones")
+      : runtimeGetSyncZones();
+  uint8_t preflightAffectedOutputCount =
+      runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones);
+  if (preflightAffectedOutputCount == 0) {
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
@@ -1504,6 +1508,8 @@ void handleControlPost() {
   }
   if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
   // Echo current state back
+  uint8_t affectedOutputCount =
+      runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones());
   JsonDocument out;
   out["ok"] = !patternRequested || patternApplied;
   out["cardId"] = runtimeCardId();
@@ -1511,7 +1517,8 @@ void handleControlPost() {
   out["affectedOutputCount"] = affectedOutputCount;
   JsonArray affectedOutputs = out["affectedOutputs"].to<JsonArray>();
   for (uint8_t index = 0; index < affectedOutputCount; index++) {
-    affectedOutputs.add(runtimeAffectedOutputId(zoneTarget, index));
+    affectedOutputs.add(runtimeAffectedOutputId(
+        zoneTarget, runtimeGetSyncZones(), index));
   }
   if (hasRevision) {
     // Backward-compatible client correlation. The independently generated

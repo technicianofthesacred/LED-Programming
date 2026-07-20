@@ -40,6 +40,11 @@ for (const field of ['configValid', 'knownGoodProject', 'runtimePhase']) {
 }
 
 const load = functionBody(storage, /RuntimeLoadResult\s+loadRuntimeConfig\s*\(/);
+const supportedOutputPin = functionBody(storage, /bool\s+supportedOutputPin\s*\(/);
+assert.match(supportedOutputPin, /isApprovedProvisioningOutputGpio\s*\(/,
+  'runtime config output validation must use the shared approved GPIO policy');
+assert.doesNotMatch(supportedOutputPin, /38|39|40|48/,
+  'production runtime configs must reject legacy discovery-only GPIOs');
 assert.match(load, /loadNvsConfigKeyStrict\(NVS_KNOWN_GOOD_CONFIG_KEY[\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
   'successfully parsed canonical known-good NVS must become known-good truth');
 assert.match(load, /loadSdConfig\([\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
@@ -104,11 +109,30 @@ assert.match(runtimeApi, /bool\s+runtimeOutputReady\s*\(\)/);
 assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*ledOutputsReady[\s\S]*transitionPending/,
   'commandReady must require web serving, initialized output, and no transition');
 
+const affectedOutputCount = functionBody(main, /uint8_t\s+runtimeAffectedOutputCount\s*\(/);
+const affectedOutputId = functionBody(main, /String\s+runtimeAffectedOutputId\s*\(/);
+const outputAffectedByCommand = functionBody(main, /bool\s+runtimeOutputAffectedByCommand\s*\(/);
+assert.match(outputAffectedByCommand, /provisioningZoneSelected\s*\(/,
+  'affected outputs must follow targeted/current sync-zone application semantics');
+for (const source of [affectedOutputCount, affectedOutputId]) {
+  assert.match(source, /runtimeOutputAffectedByCommand\s*\(/,
+    'affected output evidence must share the exact command-selection helper');
+}
+
 const control = functionBody(web, /void\s+handleControlPost\s*\(/);
 assert.match(control, /colorOrder[\s\S]*400[\s\S]*invalid color order/,
   'invalid live color order must receive a 4xx acknowledgement');
 assert.match(control, /runtimeControlTargetExists\s*\([\s\S]*422/,
   'an unknown zone must be rejected before mutation');
+const syncSetter = control.indexOf('runtimeSetSyncZones(');
+const preflightAffected = control.indexOf('preflightAffectedOutputCount');
+const finalAffected = control.lastIndexOf('runtimeAffectedOutputCount(');
+assert.ok(preflightAffected !== -1 && preflightAffected < syncSetter,
+  'zero-effect preflight must use prospective sync semantics before mutation');
+assert.ok(syncSetter !== -1 && finalAffected > syncSetter,
+  'reported affected outputs must be recalculated after requested syncZones is applied');
+assert.match(control, /effectiveSyncZones[\s\S]*runtimeAffectedOutputCount\(zoneTarget, effectiveSyncZones\)/,
+  'preflight must account for a command that changes syncZones');
 assert.match(control, /runtimeAdvanceStateRevision\s*\([\s\S]*affectedOutputCount[\s\S]*affectedOutputs/,
   'successful control acknowledgement must report card-owned affected outputs and state revision');
 assert.ok(

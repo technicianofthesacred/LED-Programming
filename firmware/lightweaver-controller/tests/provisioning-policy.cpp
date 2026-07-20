@@ -42,7 +42,16 @@ int main() {
   assert(!provisioningCommandReady(readiness));
 
   assert(isApprovedProvisioningOutputGpio(16));
+  assert(isApprovedProvisioningOutputGpio(17));
+  assert(isApprovedProvisioningOutputGpio(18));
   assert(isApprovedProvisioningOutputGpio(21));
   assert(!isApprovedProvisioningOutputGpio(38));
+
+  assert(provisioningZoneSelected(0, false, 0, false));
+  assert(!provisioningZoneSelected(1, false, 0, false));
+  assert(provisioningZoneSelected(0, false, 0, true));
+  assert(provisioningZoneSelected(1, false, 0, true));
+  assert(!provisioningZoneSelected(0, true, 1, true));
+  assert(provisioningZoneSelected(1, true, 1, false));
   return 0;
 }

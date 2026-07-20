@@ -1328,36 +1328,45 @@ bool zoneAffectsOutput(const ZoneConfig& zone, const OutputConfig& output) {
   return false;
 }
 
-uint8_t runtimeAffectedOutputCount(const String& targetId) {
-  if (targetId.length() == 0) return outputCount;
-  const ZoneConfig* zone = nullptr;
+bool runtimeOutputAffectedByCommand(uint8_t outputIndex,
+                                    const String& targetId,
+                                    bool syncZones) {
+  bool targetSpecified = targetId.length() > 0;
+  uint8_t targetZoneIndex = 0;
+  bool targetFound = !targetSpecified;
   for (uint8_t index = 0; index < runtimeConfig.zoneCount; index++) {
     if (runtimeConfig.zones[index].id == targetId) {
-      zone = &runtimeConfig.zones[index];
+      targetZoneIndex = index;
+      targetFound = true;
       break;
     }
   }
-  if (!zone) return 0;
+  if (!targetFound || outputIndex >= outputCount) return false;
+  for (uint8_t zoneIndex = 0; zoneIndex < runtimeConfig.zoneCount; zoneIndex++) {
+    if (provisioningZoneSelected(
+            zoneIndex, targetSpecified, targetZoneIndex, syncZones) &&
+        zoneAffectsOutput(runtimeConfig.zones[zoneIndex], outputs[outputIndex])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones) {
   uint8_t affected = 0;
   for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
-    if (zoneAffectsOutput(*zone, outputs[outputIndex])) affected++;
+    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones)) affected++;
   }
   return affected;
 }
 
-String runtimeAffectedOutputId(const String& targetId, uint8_t affectedIndex) {
+String runtimeAffectedOutputId(const String& targetId,
+                               bool syncZones,
+                               uint8_t affectedIndex) {
   uint8_t found = 0;
   for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
-    bool affected = targetId.length() == 0;
-    if (!affected) {
-      for (uint8_t zoneIndex = 0; zoneIndex < runtimeConfig.zoneCount; zoneIndex++) {
-        if (runtimeConfig.zones[zoneIndex].id == targetId) {
-          affected = zoneAffectsOutput(runtimeConfig.zones[zoneIndex], outputs[outputIndex]);
-          break;
-        }
-      }
-    }
-    if (affected && found++ == affectedIndex) return outputs[outputIndex].id;
+    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones) &&
+        found++ == affectedIndex) return outputs[outputIndex].id;
   }
   return String("");
 }
