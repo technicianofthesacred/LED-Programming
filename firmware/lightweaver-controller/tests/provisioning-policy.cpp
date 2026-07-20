@@ -53,5 +53,18 @@ int main() {
   assert(provisioningZoneSelected(1, false, 0, true));
   assert(!provisioningZoneSelected(0, true, 1, true));
   assert(provisioningZoneSelected(1, true, 1, false));
+
+  ProvisioningOperationScopeInputs scope{};
+  assert(provisioningOperationScope(scope) == ProvisioningOutputScope::None);
+  scope.selectedZones = true;
+  assert(provisioningOperationScope(scope) == ProvisioningOutputScope::SelectedZones);
+  scope.globalOutputs = true;
+  assert(provisioningOperationScope(scope) == ProvisioningOutputScope::AllOutputs);
+  scope.globalOutputs = false;
+  scope.selectedZones = false;
+  scope.syncStateChanged = true;
+  assert(provisioningOperationScope(scope) == ProvisioningOutputScope::AllOutputs);
+  scope.selectedZones = true;
+  assert(provisioningOperationScope(scope) == ProvisioningOutputScope::AllOutputs);
   return 0;
 }

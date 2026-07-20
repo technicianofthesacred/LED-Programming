@@ -23,6 +23,18 @@ struct ProvisioningReadinessInputs {
   bool transitionPending = false;
 };
 
+enum class ProvisioningOutputScope : uint8_t {
+  None = 0,
+  SelectedZones = 1,
+  AllOutputs = 2,
+};
+
+struct ProvisioningOperationScopeInputs {
+  bool globalOutputs = false;
+  bool selectedZones = false;
+  bool syncStateChanged = false;
+};
+
 constexpr ProvisioningPhase provisioningPhaseForLoad(
     bool configValid,
     bool knownGoodProject,
@@ -63,4 +75,16 @@ constexpr bool provisioningZoneSelected(size_t zoneIndex,
   return targetSpecified
       ? zoneIndex == targetZoneIndex
       : syncZones || zoneIndex == 0;
+}
+
+// A sync-state change alters the command fan-out contract for every active
+// output, even when it does not immediately write a pixel. Mixed commands use
+// the union: any global/sync-state operation promotes the scope to all outputs.
+constexpr ProvisioningOutputScope provisioningOperationScope(
+    const ProvisioningOperationScopeInputs& input) {
+  return input.globalOutputs || input.syncStateChanged
+      ? ProvisioningOutputScope::AllOutputs
+      : input.selectedZones
+          ? ProvisioningOutputScope::SelectedZones
+          : ProvisioningOutputScope::None;
 }

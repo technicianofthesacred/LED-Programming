@@ -1330,7 +1330,11 @@ bool zoneAffectsOutput(const ZoneConfig& zone, const OutputConfig& output) {
 
 bool runtimeOutputAffectedByCommand(uint8_t outputIndex,
                                     const String& targetId,
-                                    bool syncZones) {
+                                    bool syncZones,
+                                    ProvisioningOutputScope scope) {
+  if (outputIndex >= outputCount || outputs[outputIndex].pixels == 0 ||
+      scope == ProvisioningOutputScope::None) return false;
+  if (scope == ProvisioningOutputScope::AllOutputs) return true;
   bool targetSpecified = targetId.length() > 0;
   uint8_t targetZoneIndex = 0;
   bool targetFound = !targetSpecified;
@@ -1341,7 +1345,7 @@ bool runtimeOutputAffectedByCommand(uint8_t outputIndex,
       break;
     }
   }
-  if (!targetFound || outputIndex >= outputCount) return false;
+  if (!targetFound) return false;
   for (uint8_t zoneIndex = 0; zoneIndex < runtimeConfig.zoneCount; zoneIndex++) {
     if (provisioningZoneSelected(
             zoneIndex, targetSpecified, targetZoneIndex, syncZones) &&
@@ -1352,20 +1356,23 @@ bool runtimeOutputAffectedByCommand(uint8_t outputIndex,
   return false;
 }
 
-uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones) {
+uint8_t runtimeAffectedOutputCount(const String& targetId,
+                                   bool syncZones,
+                                   ProvisioningOutputScope scope) {
   uint8_t affected = 0;
   for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
-    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones)) affected++;
+    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones, scope)) affected++;
   }
   return affected;
 }
 
 String runtimeAffectedOutputId(const String& targetId,
                                bool syncZones,
+                               ProvisioningOutputScope scope,
                                uint8_t affectedIndex) {
   uint8_t found = 0;
   for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
-    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones) &&
+    if (runtimeOutputAffectedByCommand(outputIndex, targetId, syncZones, scope) &&
         found++ == affectedIndex) return outputs[outputIndex].id;
   }
   return String("");
@@ -1488,6 +1495,15 @@ bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternI
     if (runtimeConfig.zones[i].id == targetId) return true;
   }
   return false;
+}
+
+bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patternId) {
+  if (targetId.length() > 0) return false;
+  const LookConfig* look = findLookByExactId(patternId);
+  if (look && isLoadedLookRenderable(*look, false)) return true;
+  if (isSupportedCompiledPattern(patternId)) return false;
+  look = findLookByPresetAlias(patternId);
+  return look && isLoadedLookRenderable(*look, false);
 }
 
 // Zone-targeted pattern selection. Used by the per-zone designer flow.

@@ -112,8 +112,13 @@ assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*le
 const affectedOutputCount = functionBody(main, /uint8_t\s+runtimeAffectedOutputCount\s*\(/);
 const affectedOutputId = functionBody(main, /String\s+runtimeAffectedOutputId\s*\(/);
 const outputAffectedByCommand = functionBody(main, /bool\s+runtimeOutputAffectedByCommand\s*\(/);
+const patternAffectsAllOutputs = functionBody(main, /bool\s+runtimePatternAffectsAllOutputs\s*\(/);
 assert.match(outputAffectedByCommand, /provisioningZoneSelected\s*\(/,
   'affected outputs must follow targeted/current sync-zone application semantics');
+assert.match(outputAffectedByCommand, /ProvisioningOutputScope::AllOutputs[\s\S]*return\s+true/,
+  'physical-global operations must include every active output');
+assert.match(patternAffectsAllOutputs, /targetId\.length\(\)[\s\S]*findLookByExactId[\s\S]*findLookByPresetAlias/,
+  'empty-target loaded looks must be recognized as global transitions');
 for (const source of [affectedOutputCount, affectedOutputId]) {
   assert.match(source, /runtimeOutputAffectedByCommand\s*\(/,
     'affected output evidence must share the exact command-selection helper');
@@ -131,8 +136,18 @@ assert.ok(preflightAffected !== -1 && preflightAffected < syncSetter,
   'zero-effect preflight must use prospective sync semantics before mutation');
 assert.ok(syncSetter !== -1 && finalAffected > syncSetter,
   'reported affected outputs must be recalculated after requested syncZones is applied');
-assert.match(control, /effectiveSyncZones[\s\S]*runtimeAffectedOutputCount\(zoneTarget, effectiveSyncZones\)/,
-  'preflight must account for a command that changes syncZones');
+assert.match(control, /patternAffectsAllOutputs\s*=\s*patternRequested\s*&&[\s\S]*runtimePatternAffectsAllOutputs/,
+  'loaded/global pattern scope must come from runtime pattern behavior');
+assert.match(control, /scopeInputs\.globalOutputs\s*=\s*colorOrderRequested[\s\S]*nextRequested[\s\S]*previousRequested[\s\S]*patternAffectsAllOutputs/,
+  'global physical operations must request all-output evidence');
+assert.match(control, /scopeInputs\.selectedZones\s*=/,
+  'zone-scoped controls must request selected-zone evidence');
+assert.match(control, /scopeInputs\.syncStateChanged\s*=\s*syncStateChanged/,
+  'sync-only state changes must have an explicit tested output scope');
+assert.match(control, /ProvisioningOutputScope\s+operationScope\s*=\s*provisioningOperationScope\(scopeInputs\)/,
+  'mixed command scope must be the policy union of requested operations');
+assert.match(control, /runtimeAffectedOutputCount\(zoneTarget, effectiveSyncZones, operationScope\)/,
+  'preflight must use operation-specific prospective scope');
 assert.match(control, /runtimeAdvanceStateRevision\s*\([\s\S]*affectedOutputCount[\s\S]*affectedOutputs/,
   'successful control acknowledgement must report card-owned affected outputs and state revision');
 assert.ok(

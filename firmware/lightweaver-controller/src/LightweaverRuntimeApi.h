@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "LightweaverProvisioningPolicy.h"
 
 void runtimeSetBrightness(float value01);     // 0.02..1.0
 void runtimeSetSpeed(float speed);             // 0.25..4.0
@@ -35,8 +36,10 @@ void runtimeSetLedColorOrder(const String& order);
 bool runtimeCanSetLedColorOrder(const String& order);
 String runtimeGetLedColorOrder();
 bool runtimeControlTargetExists(const String& targetId);
-uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones);
-String runtimeAffectedOutputId(const String& targetId, bool syncZones, uint8_t affectedIndex);
+bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patternId);
+uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones, ProvisioningOutputScope scope);
+String runtimeAffectedOutputId(const String& targetId, bool syncZones,
+                               ProvisioningOutputScope scope, uint8_t affectedIndex);
 uint32_t runtimeAdvanceStateRevision();
 uint32_t runtimeStateRevision();
 void runtimeSetSyncZones(bool on);

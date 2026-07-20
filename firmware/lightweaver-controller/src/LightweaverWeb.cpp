@@ -1421,16 +1421,14 @@ void handleControlPost() {
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"unknown zone\"}");
     return;
   }
-  bool effectiveSyncZones = hasControlField(doc, "syncZones")
+  bool syncZonesRequested = hasControlField(doc, "syncZones");
+  bool currentSyncZones = runtimeGetSyncZones();
+  bool effectiveSyncZones = syncZonesRequested
       ? controlBool(doc, "syncZones")
-      : runtimeGetSyncZones();
-  uint8_t preflightAffectedOutputCount =
-      runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones);
-  if (preflightAffectedOutputCount == 0) {
-    server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
-    return;
-  }
-  if (hasControlField(doc, "colorOrder") &&
+      : currentSyncZones;
+  bool syncStateChanged = syncZonesRequested && effectiveSyncZones != currentSyncZones;
+  bool colorOrderRequested = hasControlField(doc, "colorOrder");
+  if (colorOrderRequested &&
       !runtimeCanSetLedColorOrder(controlString(doc, "colorOrder"))) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid color order\"}");
     return;
@@ -1462,38 +1460,50 @@ void handleControlPost() {
     return;
   }
 
-  bool operationApplied =
-      hasControlField(doc, "syncZones") ||
-      hasControlField(doc, "colorOrder") ||
+  bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
+  bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
+  bool cancelStreamRequested =
+      hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream");
+  bool patternAffectsAllOutputs = patternRequested &&
+      runtimePatternAffectsAllOutputs(zoneTarget, confirmedPatternId);
+  bool selectedZoneOperationRequested =
       hasControlField(doc, "brightness") ||
       hasControlField(doc, "speed") ||
       hasControlField(doc, "hueShift") ||
       hasControlField(doc, "blackout") ||
-      (hasControlField(doc, "next") && controlBool(doc, "next")) ||
-      (hasControlField(doc, "previous") && controlBool(doc, "previous")) ||
-      patternRequested ||
+      (patternRequested && !patternAffectsAllOutputs) ||
       hasControlField(doc, "hue") ||
       hasControlField(doc, "saturation") ||
       hasControlField(doc, "breathe") ||
       hasControlField(doc, "drift") ||
       hasControlField(doc, "driftMin") ||
-      hasControlField(doc, "driftMax") ||
-      (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream"));
-  if (!operationApplied) {
+      hasControlField(doc, "driftMax");
+  ProvisioningOperationScopeInputs scopeInputs;
+  scopeInputs.globalOutputs = colorOrderRequested || nextRequested ||
+      previousRequested || cancelStreamRequested || patternAffectsAllOutputs;
+  scopeInputs.selectedZones = selectedZoneOperationRequested;
+  scopeInputs.syncStateChanged = syncStateChanged;
+  ProvisioningOutputScope operationScope = provisioningOperationScope(scopeInputs);
+  if (operationScope == ProvisioningOutputScope::None) {
+    server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
+    return;
+  }
+  uint8_t preflightAffectedOutputCount = runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones, operationScope);
+  if (preflightAffectedOutputCount == 0) {
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
 
   // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
   // command sent while the card is in split preview mode updates only zone 0.
-  if (hasControlField(doc, "syncZones")) runtimeSetSyncZones(controlBool(doc, "syncZones"));
-  if (hasControlField(doc, "colorOrder")) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
+  if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
+  if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
   if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
   if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
   if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
   if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
-  if (hasControlField(doc, "next") && controlBool(doc, "next")) runtimeNextPattern();
-  if (hasControlField(doc, "previous") && controlBool(doc, "previous")) runtimePreviousPattern();
+  if (nextRequested) runtimeNextPattern();
+  if (previousRequested) runtimePreviousPattern();
   if (patternRequested) {
     patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
   }
@@ -1506,19 +1516,21 @@ void handleControlPost() {
     uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
     runtimeSetDriftRangeZ(zoneTarget, lo, hi);
   }
-  if (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream")) runtimeCancelStream();
+  if (cancelStreamRequested) runtimeCancelStream();
   // Echo current state back
   uint8_t affectedOutputCount =
-      runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones());
+      runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones(), operationScope);
   JsonDocument out;
   out["ok"] = !patternRequested || patternApplied;
   out["cardId"] = runtimeCardId();
   out["stateRevision"] = runtimeAdvanceStateRevision();
   out["affectedOutputCount"] = affectedOutputCount;
+  out["affectedOutputScope"] = operationScope == ProvisioningOutputScope::AllOutputs
+      ? "all-active-outputs" : "selected-zones";
   JsonArray affectedOutputs = out["affectedOutputs"].to<JsonArray>();
   for (uint8_t index = 0; index < affectedOutputCount; index++) {
     affectedOutputs.add(runtimeAffectedOutputId(
-        zoneTarget, runtimeGetSyncZones(), index));
+        zoneTarget, runtimeGetSyncZones(), operationScope, index));
   }
   if (hasRevision) {
     // Backward-compatible client correlation. The independently generated
