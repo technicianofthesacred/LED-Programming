@@ -66,5 +66,15 @@ int main() {
   assert(provisioningOperationScope(scope) == ProvisioningOutputScope::AllOutputs);
   scope.selectedZones = true;
   assert(provisioningOperationScope(scope) == ProvisioningOutputScope::AllOutputs);
+
+  assert(!provisioningLookStepChangesSelection(0, 0, 1));
+  assert(!provisioningLookStepChangesSelection(1, 0, 1));
+  assert(!provisioningLookStepChangesSelection(1, 0, -1));
+  assert(provisioningLookStepChangesSelection(2, 0, 1));
+  assert(provisioningLookStepChangesSelection(2, 0, -1));
+  assert(provisioningLookStepChangesSelection(3, 2, 1));
+  assert(provisioningLookStepChangesSelection(3, 0, -1));
+  assert(!provisioningLookStepChangesSelection(3, 3, 1));
+  assert(!provisioningLookStepChangesSelection(3, 0, 0));
   return 0;
 }

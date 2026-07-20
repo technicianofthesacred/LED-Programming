@@ -113,12 +113,17 @@ const affectedOutputCount = functionBody(main, /uint8_t\s+runtimeAffectedOutputC
 const affectedOutputId = functionBody(main, /String\s+runtimeAffectedOutputId\s*\(/);
 const outputAffectedByCommand = functionBody(main, /bool\s+runtimeOutputAffectedByCommand\s*\(/);
 const patternAffectsAllOutputs = functionBody(main, /bool\s+runtimePatternAffectsAllOutputs\s*\(/);
+const canStepPattern = functionBody(main, /bool\s+runtimeCanStepPattern\s*\(/);
 assert.match(outputAffectedByCommand, /provisioningZoneSelected\s*\(/,
   'affected outputs must follow targeted/current sync-zone application semantics');
 assert.match(outputAffectedByCommand, /ProvisioningOutputScope::AllOutputs[\s\S]*return\s+true/,
   'physical-global operations must include every active output');
 assert.match(patternAffectsAllOutputs, /targetId\.length\(\)[\s\S]*findLookByExactId[\s\S]*findLookByPresetAlias/,
   'empty-target loaded looks must be recognized as global transitions');
+assert.match(runtimeApi, /bool\s+runtimeCanStepPattern\s*\(int8_t direction\)/,
+  'the web transaction must be able to preflight loaded-look steps');
+assert.match(canStepPattern, /provisioningLookStepChangesSelection\s*\([\s\S]*isLoadedLookRenderable\s*\(/,
+  'step preflight must prove both a different selected index and a renderable destination');
 for (const source of [affectedOutputCount, affectedOutputId]) {
   assert.match(source, /runtimeOutputAffectedByCommand\s*\(/,
     'affected output evidence must share the exact command-selection helper');
@@ -138,8 +143,18 @@ assert.ok(syncSetter !== -1 && finalAffected > syncSetter,
   'reported affected outputs must be recalculated after requested syncZones is applied');
 assert.match(control, /patternAffectsAllOutputs\s*=\s*patternRequested\s*&&[\s\S]*runtimePatternAffectsAllOutputs/,
   'loaded/global pattern scope must come from runtime pattern behavior');
-assert.match(control, /scopeInputs\.globalOutputs\s*=\s*colorOrderRequested[\s\S]*nextRequested[\s\S]*previousRequested[\s\S]*patternAffectsAllOutputs/,
-  'global physical operations must request all-output evidence');
+assert.match(control, /nextCanChange\s*=\s*nextRequested\s*&&\s*runtimeCanStepPattern\(1\)/,
+  'next must be preflighted before it contributes output scope');
+assert.match(control, /previousCanChange\s*=\s*previousRequested\s*&&\s*runtimeCanStepPattern\(-1\)/,
+  'previous must be preflighted before it contributes output scope');
+assert.match(control, /scopeInputs\.globalOutputs\s*=\s*colorOrderRequested[\s\S]*nextCanChange[\s\S]*previousCanChange[\s\S]*patternAffectsAllOutputs/,
+  'only effective loaded-look steps may promote mixed commands to all-output scope');
+assert.doesNotMatch(control, /scopeInputs\.globalOutputs\s*=\s*[^;]*nextRequested/,
+  'a no-op next request must not create all-output scope by presence alone');
+assert.match(control, /if\s*\(nextCanChange\)\s*runtimeNextPattern\(\)/,
+  'a rejected no-op next must not mutate runtime state');
+assert.match(control, /if\s*\(previousCanChange\)\s*runtimePreviousPattern\(\)/,
+  'a rejected no-op previous must not mutate runtime state');
 assert.match(control, /scopeInputs\.selectedZones\s*=/,
   'zone-scoped controls must request selected-zone evidence');
 assert.match(control, /scopeInputs\.syncStateChanged\s*=\s*syncStateChanged/,
@@ -148,6 +163,10 @@ assert.match(control, /ProvisioningOutputScope\s+operationScope\s*=\s*provisioni
   'mixed command scope must be the policy union of requested operations');
 assert.match(control, /runtimeAffectedOutputCount\(zoneTarget, effectiveSyncZones, operationScope\)/,
   'preflight must use operation-specific prospective scope');
+const zeroEffectReject = control.indexOf('command affects zero outputs');
+assert.ok(zeroEffectReject !== -1 && zeroEffectReject < control.indexOf('runtimeNextPattern()') &&
+    zeroEffectReject < control.indexOf('runtimeAdvanceStateRevision()'),
+  'zero-look and one-look step requests must reject before mutation, revision echo, or card revision advance');
 assert.match(control, /runtimeAdvanceStateRevision\s*\([\s\S]*affectedOutputCount[\s\S]*affectedOutputs/,
   'successful control acknowledgement must report card-owned affected outputs and state revision');
 assert.ok(

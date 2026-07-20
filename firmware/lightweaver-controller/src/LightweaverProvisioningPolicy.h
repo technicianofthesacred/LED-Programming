@@ -88,3 +88,14 @@ constexpr ProvisioningOutputScope provisioningOperationScope(
           ? ProvisioningOutputScope::SelectedZones
           : ProvisioningOutputScope::None;
 }
+
+constexpr bool provisioningLookStepChangesSelection(size_t lookCount,
+                                                    size_t currentLookIndex,
+                                                    int8_t direction) {
+  return lookCount >= 2 &&
+         currentLookIndex < lookCount &&
+         direction != 0 &&
+         (direction > 0
+              ? (currentLookIndex + 1) % lookCount
+              : (currentLookIndex + lookCount - 1) % lookCount) != currentLookIndex;
+}

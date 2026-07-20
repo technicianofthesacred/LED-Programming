@@ -37,6 +37,7 @@ bool runtimeCanSetLedColorOrder(const String& order);
 String runtimeGetLedColorOrder();
 bool runtimeControlTargetExists(const String& targetId);
 bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patternId);
+bool runtimeCanStepPattern(int8_t direction);
 uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones, ProvisioningOutputScope scope);
 String runtimeAffectedOutputId(const String& targetId, bool syncZones,
                                ProvisioningOutputScope scope, uint8_t affectedIndex);

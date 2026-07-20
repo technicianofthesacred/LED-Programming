@@ -1462,6 +1462,8 @@ void handleControlPost() {
 
   bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
   bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
+  bool nextCanChange = nextRequested && runtimeCanStepPattern(1);
+  bool previousCanChange = previousRequested && runtimeCanStepPattern(-1);
   bool cancelStreamRequested =
       hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream");
   bool patternAffectsAllOutputs = patternRequested &&
@@ -1479,8 +1481,8 @@ void handleControlPost() {
       hasControlField(doc, "driftMin") ||
       hasControlField(doc, "driftMax");
   ProvisioningOperationScopeInputs scopeInputs;
-  scopeInputs.globalOutputs = colorOrderRequested || nextRequested ||
-      previousRequested || cancelStreamRequested || patternAffectsAllOutputs;
+  scopeInputs.globalOutputs = colorOrderRequested || nextCanChange ||
+      previousCanChange || cancelStreamRequested || patternAffectsAllOutputs;
   scopeInputs.selectedZones = selectedZoneOperationRequested;
   scopeInputs.syncStateChanged = syncStateChanged;
   ProvisioningOutputScope operationScope = provisioningOperationScope(scopeInputs);
@@ -1502,8 +1504,8 @@ void handleControlPost() {
   if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
   if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
   if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
-  if (nextRequested) runtimeNextPattern();
-  if (previousRequested) runtimePreviousPattern();
+  if (nextCanChange) runtimeNextPattern();
+  if (previousCanChange) runtimePreviousPattern();
   if (patternRequested) {
     patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
   }

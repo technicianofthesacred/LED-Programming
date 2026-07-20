@@ -1450,6 +1450,14 @@ void runtimeSetBlackoutZ(const String& targetId, bool on) {
   applyToZones(targetId, [&](ZoneConfig& z) { z.blackout = on; });
 }
 
+bool runtimeCanStepPattern(int8_t direction) {
+  if (!provisioningLookStepChangesSelection(lookCount, currentLookIndex, direction)) return false;
+  uint8_t targetIndex = direction > 0
+      ? (currentLookIndex + 1) % lookCount
+      : (currentLookIndex + lookCount - 1) % lookCount;
+  return isLoadedLookRenderable(looks[targetIndex], false);
+}
+
 void runtimeNextPattern() {
   selectLook(currentLookIndex + 1);
 }
