@@ -177,3 +177,39 @@ test('explains an observed all-black preview frame without inventing invalid out
   await expect(diagnostics).not.toContainText('The generator returned an invalid or non-finite color.');
   await expect(diagnostics).not.toContainText('No known mask, brightness, gamma, power, output, or target issue was detected.');
 });
+
+test('downloads xLights, MADRIX, and Art-Net setup files from verified physical wiring', async ({ page }) => {
+  await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
+  await page.evaluate(key => {
+    const project = JSON.parse(localStorage.getItem(key) || '{}');
+    project.name = 'Export & Sculpture';
+    project.layout.wiring = {
+      ...project.layout.wiring,
+      locked: true,
+      verified: true,
+      migrationWarnings: [],
+      runs: project.layout.wiring.runs.map((run: Record<string, unknown>) => ({ ...run, verified: true })),
+    };
+    localStorage.setItem(key, JSON.stringify(project));
+  }, AUTOSAVE_KEY);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
+
+  const downloads = [
+    ['Export xLights model', '.xmodel', /<custommodel .*name="Export &amp; Sculpture"/],
+    ['Export MADRIX fixture CSV', '.madrix-fixtures.csv', /^Product,Display Name,Fixture ID/m],
+    ['Export Art-Net setup notes', '.artnet-setup.txt', /^# Lightweaver Art-Net Setup/m],
+  ] as const;
+  for (const [label, suffix, content] of downloads) {
+    const pending = page.waitForEvent('download');
+    await page.getByRole('button', { name: label, exact: true }).click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toMatch(new RegExp(`${suffix.replaceAll('.', '\\.')}$`));
+    const stream = await download.createReadStream();
+    let body = '';
+    for await (const chunk of stream) body += chunk.toString();
+    expect(body).toMatch(content);
+  }
+  await expect(page.getByTestId('pattern-lab-layout-export-status')).toContainText('Exported Art-Net setup notes');
+});
