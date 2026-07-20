@@ -156,6 +156,7 @@ export default function PatternLabPreview({
       data-worker-request-id={worker.requestId ?? undefined}
       data-worker-frame-id={worker.frameRequestId ?? undefined}
       data-worker-sample-limit={workerSampleLimit}
+      data-worker-error={worker.error?.message ?? undefined}
     >
       <PatternPreview
         patternId={patternId}

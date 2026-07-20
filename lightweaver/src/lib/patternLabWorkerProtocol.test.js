@@ -6,10 +6,14 @@ import {
   PATTERN_LAB_WORKER_REPLY_TYPES,
   PATTERN_LAB_WORKER_REQUEST_TYPES,
   clampPatternLabWorkerSampleCount,
+  clonePatternLabWorkerGeometryForTransfer,
+  compactPatternLabWorkerGeometry,
   createPatternLabWorkerReply,
   createPatternLabWorkerRequestSequencer,
   quantizePatternLabWorkerTime,
   shouldAcceptPatternLabWorkerReply,
+  validatePatternLabWorkerFrameReply,
+  validatePatternLabWorkerGeometry,
   validatePatternLabWorkerRenderRequest,
 } from './patternLabWorkerProtocol.js';
 
@@ -61,11 +65,72 @@ test('worker budgets encode the bounded Task 7 limits', () => {
     finalSamples: 1024,
     previewFps: 24,
     maxFrameBytes: 3072,
+    maxSourcePixels: 16384,
+    maxGeometryBytes: 512 * 1024,
+    maxGeometryMetadataBytes: 64 * 1024,
     maxAllocationBytes: 4 * 1024 * 1024,
     renderWarningMs: 40,
     exportWarningMs: 250,
   });
   assert.ok(Object.isFrozen(PATTERN_LAB_WORKER_BUDGETS));
+});
+
+test('compacts static geometry once with authoritative bounds and hidden pixel metadata', () => {
+  const visiblePixels = Array.from({ length: 500 }, (_, index) => ({ x: index, y: index % 7 }));
+  const geometry = compactPatternLabWorkerGeometry({
+    strips: [
+      { id: 'visible', pixels: visiblePixels, speed: 1.2, brightness: 0.8, hueShift: 4 },
+      { id: 'hidden-extreme', pixels: [{ x: 10000, y: -5000 }] },
+    ],
+    hidden: { 'hidden-extreme': true },
+    bpm: 96,
+    svgText: '<svg>must not cross the worker boundary</svg>',
+  });
+
+  assert.equal(geometry.sourcePixelCount, 501);
+  assert.equal(geometry.visiblePixelCount, 500);
+  assert.deepEqual(geometry.normalizationBounds, { minX: 0, minY: -5000, range: 10000 });
+  assert.equal(geometry.coordinates.length, 1000);
+  assert.equal(geometry.progress.length, 500);
+  assert.equal(geometry.strips.length, 1);
+  assert.equal(geometry.strips[0].count, 500);
+  assert.equal('svgText' in geometry, false);
+  assert.deepEqual(validatePatternLabWorkerGeometry(geometry), geometry);
+});
+
+test('geometry compaction enforces source count and metadata bytes before dispatch', () => {
+  assert.throws(() => compactPatternLabWorkerGeometry({
+    strips: [{
+      id: 'too-many',
+      pixels: Array.from({ length: PATTERN_LAB_WORKER_BUDGETS.maxSourcePixels + 1 }, () => ({ x: 0, y: 0 })),
+    }],
+  }), /source pixels/);
+  assert.throws(() => compactPatternLabWorkerGeometry({
+    strips: [{ id: 'x'.repeat(PATTERN_LAB_WORKER_BUDGETS.maxGeometryMetadataBytes + 1), pixels: [{ x: 0, y: 0 }] }],
+  }), /metadata/);
+});
+
+test('geometry transfer cloning leaves the cached typed snapshot reusable', () => {
+  const cached = compactPatternLabWorkerGeometry({
+    strips: [{ id: 'one', pixels: [{ x: 2, y: 3 }, { x: 4, y: 5 }] }],
+  });
+  const cloned = clonePatternLabWorkerGeometryForTransfer(cached);
+  assert.notEqual(cloned.geometry.coordinates.buffer, cached.coordinates.buffer);
+  assert.notEqual(cloned.geometry.progress.buffer, cached.progress.buffer);
+  assert.deepEqual(cloned.transfer, [cloned.geometry.coordinates.buffer, cloned.geometry.progress.buffer]);
+  assert.equal(cached.coordinates.byteLength, 32);
+});
+
+test('worker-side geometry validation rejects forged non-finite typed values', () => {
+  const geometry = compactPatternLabWorkerGeometry({
+    strips: [{ id: 'one', pixels: [{ x: 2, y: 3 }, { x: 4, y: 5 }] }],
+  });
+  const forgedCoordinate = { ...geometry, coordinates: new Float64Array(geometry.coordinates) };
+  forgedCoordinate.coordinates[1] = Number.NaN;
+  assert.throws(() => validatePatternLabWorkerGeometry(forgedCoordinate), /coordinates/);
+  const forgedProgress = { ...geometry, progress: new Float64Array(geometry.progress) };
+  forgedProgress.progress[0] = 2;
+  assert.throws(() => validatePatternLabWorkerGeometry(forgedProgress), /progress/);
 });
 
 test('sample counts clamp by preview or final render mode', () => {
@@ -84,16 +149,44 @@ test('preview time is quantized to the 24 fps budget while final and export time
 
 test('render validation rejects layer and typed-allocation overflow', () => {
   assert.deepEqual(validatePatternLabWorkerRenderRequest({
-    mode: 'preview', sampleCount: 300, layerCount: 3, allocationBytes: 4096,
-  }), { mode: 'preview', sampleCount: 300, layerCount: 3, allocationBytes: 4096 });
+    mode: 'preview', sampleCount: 300, layerCount: 3, geometryBytes: 4096, allocationBytes: 1,
+  }), { mode: 'preview', sampleCount: 300, layerCount: 3, allocationBytes: 6196 });
   assert.throws(
     () => validatePatternLabWorkerRenderRequest({ mode: 'preview', sampleCount: 10, layerCount: 4 }),
     { name: 'RangeError', message: 'Pattern Lab worker supports at most 3 layers' },
   );
   assert.throws(
     () => validatePatternLabWorkerRenderRequest({
-      mode: 'final', sampleCount: 10, layerCount: 0, allocationBytes: 4 * 1024 * 1024 + 1,
+      mode: 'final', sampleCount: 10, layerCount: 0, geometryBytes: 4 * 1024 * 1024 + 1,
     }),
     { name: 'RangeError', message: 'Pattern Lab worker allocation exceeds 4194304 bytes' },
   );
+});
+
+test('strict frame validation accepts bounded Uint32 indices and rejects malformed buffers', () => {
+  const valid = {
+    type: 'frame',
+    requestId: 9,
+    payload: {
+      mode: 'preview',
+      sampleCount: 2,
+      totalSamples: 500,
+      colors: new Uint8ClampedArray([1, 2, 3, 4, 5, 6]).buffer,
+      indices: new Uint32Array([0, 499]).buffer,
+    },
+  };
+  const frame = validatePatternLabWorkerFrameReply(valid, 9, 500);
+  assert.deepEqual([...frame.colors], [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual([...frame.indices], [0, 499]);
+
+  for (const payload of [
+    { ...valid.payload, colors: new ArrayBuffer(5) },
+    { ...valid.payload, indices: new Uint16Array([0, 499]).buffer },
+    { ...valid.payload, indices: new Uint32Array([10, 9]).buffer },
+    { ...valid.payload, indices: new Uint32Array([9, 9]).buffer },
+    { ...valid.payload, indices: new Uint32Array([0, 500]).buffer },
+    { ...valid.payload, colors: new ArrayBuffer(PATTERN_LAB_WORKER_BUDGETS.maxFrameBytes + 1) },
+  ]) {
+    assert.throws(() => validatePatternLabWorkerFrameReply({ ...valid, payload }, 9, 500));
+  }
 });

@@ -1,66 +1,71 @@
-import { buildGammaLut, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
+import {
+  buildGammaLut,
+  compilePattern,
+  normalizePalette,
+  renderPixelFrame,
+} from '../lib/frameEngine.js';
 import {
   PATTERN_LAB_WORKER_BUDGETS,
+  clampPatternLabWorkerSampleCount,
   createPatternLabWorkerReply,
+  validatePatternLabWorkerGeometry,
   validatePatternLabWorkerRenderRequest,
 } from '../lib/patternLabWorkerProtocol.js';
 
 let initialized = false;
+let staticGeometry = null;
 const cancelledRequests = new Set();
 
 function reply(type, requestId, payload = {}, transfer = []) {
   globalThis.postMessage(createPatternLabWorkerReply(type, requestId, payload), transfer);
 }
 
-function visiblePixels(geometry = {}) {
-  const hidden = geometry.hidden || {};
-  const entries = [];
-  for (const strip of geometry.strips || []) {
-    if (!strip || hidden[strip.id] || strip.hidden) continue;
-    const pixels = Array.isArray(strip.pixels) ? strip.pixels : [];
-    pixels.forEach((pixel, pixelIndex) => entries.push({
-      strip,
-      pixel,
-      progress: pixels.length > 1 ? pixelIndex / (pixels.length - 1) : 0.5,
-      index: entries.length,
-    }));
-  }
-  return entries;
-}
-
-function sampledEntries(entries, sampleCount) {
-  if (entries.length <= sampleCount) return entries;
-  if (sampleCount === 1) return [entries[Math.floor(entries.length / 2)]];
-  return Array.from({ length: sampleCount }, (_, index) => (
-    entries[Math.round(index * (entries.length - 1) / (sampleCount - 1))]
+function sampledIndices(total, sampleCount) {
+  if (total <= sampleCount) return Uint32Array.from({ length: total }, (_, index) => index);
+  if (sampleCount === 1) return Uint32Array.of(Math.floor(total / 2));
+  return Uint32Array.from({ length: sampleCount }, (_, index) => (
+    Math.round(index * (total - 1) / (sampleCount - 1))
   ));
 }
 
-function sampledStrips(entries) {
+function sampledStrips(geometry, indices) {
   const strips = [];
-  const byId = new Map();
-  for (const entry of entries) {
-    let sampled = byId.get(entry.strip.id);
-    if (!sampled) {
+  let stripIndex = 0;
+  for (const sourceIndex of indices) {
+    while (stripIndex < geometry.strips.length - 1
+      && sourceIndex >= geometry.strips[stripIndex].start + geometry.strips[stripIndex].count) {
+      stripIndex += 1;
+    }
+    const sourceStrip = geometry.strips[stripIndex];
+    let sampled = strips.at(-1);
+    if (!sampled || sampled.id !== sourceStrip.id) {
       sampled = {
-        id: entry.strip.id,
-        speed: entry.strip.speed,
-        brightness: entry.strip.brightness,
-        hueShift: entry.strip.hueShift,
+        id: sourceStrip.id,
+        speed: sourceStrip.speed,
+        brightness: sourceStrip.brightness,
+        hueShift: sourceStrip.hueShift,
         patternId: null,
         pts: [],
       };
-      byId.set(entry.strip.id, sampled);
       strips.push(sampled);
     }
     sampled.pts.push({
-      x: Number(entry.pixel?.x) || 0,
-      y: Number(entry.pixel?.y) || 0,
-      p: entry.progress,
-      i: entry.index,
+      x: geometry.coordinates[sourceIndex * 2],
+      y: geometry.coordinates[sourceIndex * 2 + 1],
+      p: geometry.progress[sourceIndex],
+      i: sourceIndex,
     });
   }
   return strips;
+}
+
+function compileAuthoritativePattern(patternId, indices, visiblePixelCount) {
+  const compiled = compilePattern(patternId);
+  if (!compiled) return null;
+  return (index, x, y, t, time, _sampleCount, ...rest) => {
+    const sampledIndex = Math.max(0, Math.min(indices.length - 1, Math.round(index)));
+    return compiled(indices[sampledIndex], x, y, t, time, visiblePixelCount, ...rest);
+  };
 }
 
 function wait(milliseconds) {
@@ -69,17 +74,13 @@ function wait(milliseconds) {
 
 async function renderRequest(requestId, payload) {
   const startedAt = performance.now();
-  const allEntries = visiblePixels(payload.geometry);
-  const requestedSamples = Math.min(
-    Math.max(1, allEntries.length),
-    Number(payload.sampleCount) || Math.max(1, allEntries.length),
-  );
-  const allocationBytes = payload.allocationBytes ?? requestedSamples * 5;
+  const geometry = validatePatternLabWorkerGeometry(staticGeometry);
+  const requestedSamples = clampPatternLabWorkerSampleCount(geometry.visiblePixelCount, payload.mode);
   const validated = validatePatternLabWorkerRenderRequest({
     mode: payload.mode,
     sampleCount: requestedSamples,
     layerCount: payload.layerCount,
-    allocationBytes,
+    geometryBytes: geometry.geometryBytes,
   });
 
   if (payload.testGenerator?.kind === 'loop') {
@@ -93,23 +94,25 @@ async function renderRequest(requestId, payload) {
   }
   if (cancelledRequests.delete(requestId)) return;
 
-  const samples = sampledEntries(allEntries, validated.sampleCount);
+  const indices = sampledIndices(geometry.visiblePixelCount, validated.sampleCount);
   const recipe = payload.recipe || {};
   const options = payload.renderOptions || {};
   const frame = renderPixelFrame({
     t: Number(payload.time) || 0,
-    strips: sampledStrips(samples),
+    strips: sampledStrips(geometry, indices),
     patternId: recipe.base?.patternId,
+    activeFn: compileAuthoritativePattern(recipe.base?.patternId, indices, geometry.visiblePixelCount),
     params: recipe.base?.params || {},
     paletteNorm: normalizePalette(recipe.palette),
-    bpm: Number(payload.geometry?.bpm) || 120,
+    bpm: geometry.bpm,
     masterSpeed: options.masterSpeed,
     masterBrightness: options.masterBrightness,
     masterSaturation: options.masterSaturation,
     masterHueShift: options.masterHueShift,
-    gammaLUT: buildGammaLut(Boolean(payload.geometry?.gammaEnabled), payload.geometry?.gammaValue),
-    symSettings: payload.geometry?.symSettings,
-    audioBands: payload.geometry?.audioBands,
+    gammaLUT: buildGammaLut(geometry.gammaEnabled, geometry.gammaValue),
+    symSettings: geometry.symSettings,
+    audioBands: geometry.audioBands,
+    normBounds: geometry.normalizationBounds,
   });
   if (cancelledRequests.delete(requestId)) return;
 
@@ -119,7 +122,6 @@ async function renderRequest(requestId, payload) {
     colors[index * 3 + 1] = color.g;
     colors[index * 3 + 2] = color.b;
   });
-  const indices = new Uint16Array(samples.map(sample => sample.index));
   const allocatedBytes = colors.byteLength + indices.byteLength;
   const elapsedMs = performance.now() - startedAt;
   const warningMs = validated.mode === 'export'
@@ -134,15 +136,16 @@ async function renderRequest(requestId, payload) {
   reply('frame', requestId, {
     mode: validated.mode,
     time: Number(payload.time) || 0,
-    totalSamples: allEntries.length,
-    sampleCount: samples.length,
+    totalSamples: geometry.visiblePixelCount,
+    sampleCount: indices.length,
     colors: colors.buffer,
     indices: indices.buffer,
   }, [colors.buffer, indices.buffer]);
   reply('stats', requestId, {
     elapsedMs,
-    sampleCount: samples.length,
-    allocatedBytes,
+    sampleCount: indices.length,
+    allocatedBytes: validated.allocationBytes,
+    outputBytes: allocatedBytes,
   });
 }
 
@@ -150,8 +153,14 @@ async function handleMessage(message) {
   const { type, requestId, payload = {} } = message || {};
   try {
     if (type === 'initialize') {
+      staticGeometry = validatePatternLabWorkerGeometry(payload.geometry);
       initialized = true;
-      reply('ready', requestId, { budgets: PATTERN_LAB_WORKER_BUDGETS });
+      reply('ready', requestId, {
+        budgets: PATTERN_LAB_WORKER_BUDGETS,
+        sourcePixelCount: staticGeometry.sourcePixelCount,
+        visiblePixelCount: staticGeometry.visiblePixelCount,
+        geometryBytes: staticGeometry.geometryBytes,
+      });
       return;
     }
     if (type === 'cancel') {
@@ -161,6 +170,7 @@ async function handleMessage(message) {
       return;
     }
     if (type === 'dispose') {
+      staticGeometry = null;
       reply('stats', requestId, { disposed: true });
       globalThis.close();
       return;

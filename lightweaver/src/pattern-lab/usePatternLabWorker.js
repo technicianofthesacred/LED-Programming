@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PATTERN_LAB_WORKER_BUDGETS,
-  clampPatternLabWorkerSampleCount,
+  clonePatternLabWorkerGeometryForTransfer,
+  compactPatternLabWorkerGeometry,
   createPatternLabWorkerRequestSequencer,
   shouldAcceptPatternLabWorkerReply,
+  validatePatternLabWorkerFrameReply,
 } from '../lib/patternLabWorkerProtocol.js';
 
 const WATCHDOG_MS = 350;
@@ -13,15 +15,6 @@ export function cancelPatternLabWorker(worker) {
   if (!worker || typeof worker.terminate !== 'function') return false;
   worker.terminate();
   return true;
-}
-
-function countVisiblePixels(geometry) {
-  const hidden = geometry?.hidden || {};
-  return (geometry?.strips || []).reduce((total, strip) => (
-    !strip || strip.hidden || hidden[strip.id]
-      ? total
-      : total + (Array.isArray(strip.pixels) ? strip.pixels.length : 0)
-  ), 0);
 }
 
 function workerSupported() {
@@ -41,6 +34,21 @@ export default function usePatternLabWorker({
   renderOptions = {},
   enabled = true,
 }) {
+  const geometryState = useMemo(() => {
+    if (!geometry) return { compact: null, error: null };
+    try {
+      return { compact: compactPatternLabWorkerGeometry(geometry), error: null };
+    } catch (error) {
+      return {
+        compact: null,
+        error: {
+          name: error instanceof Error ? error.name : 'Error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }, [geometry]);
+  const compactGeometry = geometryState.compact;
   const sequencerRef = useRef(createPatternLabWorkerRequestSequencer());
   const workerRef = useRef(null);
   const watchdogRef = useRef(0);
@@ -87,8 +95,13 @@ export default function usePatternLabWorker({
   }, []);
 
   const spawnWorker = useCallback(() => {
-    if (!enabled || !workerSupported()) {
-      if (mountedRef.current) setResult(current => ({ ...current, available: false, status: 'fallback' }));
+    if (!enabled || !workerSupported() || !compactGeometry) {
+      if (mountedRef.current) setResult(current => ({
+        ...current,
+        available: enabled && workerSupported(),
+        status: geometryState.error ? (current.frame ? 'frame' : 'error') : 'fallback',
+        error: geometryState.error,
+      }));
       return null;
     }
     if (workerRef.current) return workerRef.current;
@@ -113,11 +126,24 @@ export default function usePatternLabWorker({
       if (reply.type === 'frame') {
         clearWatchdog();
         pendingRenderRef.current = 0;
-        const frame = {
-          ...reply.payload,
-          colors: new Uint8ClampedArray(reply.payload.colors),
-          indices: new Uint16Array(reply.payload.indices),
-        };
+        let frame;
+        try {
+          frame = validatePatternLabWorkerFrameReply(
+            reply,
+            latestRenderRef.current,
+            compactGeometry.visiblePixelCount,
+          );
+        } catch (error) {
+          setResult(current => ({
+            ...current,
+            status: current.frame ? 'frame' : 'error',
+            error: {
+              name: 'MalformedWorkerFrame',
+              message: `Malformed worker frame: ${error instanceof Error ? error.message : String(error)}`,
+            },
+          }));
+          return;
+        }
         setResult(current => ({
           ...current,
           status: 'frame',
@@ -151,9 +177,13 @@ export default function usePatternLabWorker({
       }));
     };
 
-    worker.postMessage(sequencerRef.current.next('initialize', { budgets: PATTERN_LAB_WORKER_BUDGETS }));
+    const snapshot = clonePatternLabWorkerGeometryForTransfer(compactGeometry);
+    worker.postMessage(sequencerRef.current.next('initialize', {
+      budgets: PATTERN_LAB_WORKER_BUDGETS,
+      geometry: snapshot.geometry,
+    }), snapshot.transfer);
     return worker;
-  }, [clearWatchdog, enabled]);
+  }, [clearWatchdog, compactGeometry, enabled, geometryState.error]);
 
   const dispatchQueuedRender = useCallback(() => {
     dispatchTimerRef.current = 0;
@@ -211,17 +241,19 @@ export default function usePatternLabWorker({
   }, [clearDispatchTimer, clearWatchdog, spawnWorker]);
 
   useEffect(() => {
-    if (!enabled || !recipe || !geometry) return undefined;
-    const totalSamples = countVisiblePixels(geometry);
-    const sampleCount = clampPatternLabWorkerSampleCount(Math.max(1, totalSamples), mode);
+    if (!enabled || !recipe || !compactGeometry) return undefined;
     queuedRenderRef.current = {
-      recipe,
-      geometry,
+      recipe: {
+        base: {
+          patternId: recipe.base?.patternId,
+          params: recipe.base?.params || {},
+        },
+        palette: Array.isArray(recipe.palette) ? recipe.palette : [],
+        layers: Array.isArray(recipe.layers) ? recipe.layers.map(() => null) : [],
+      },
       time,
       mode,
-      sampleCount,
       layerCount: Array.isArray(recipe.layers) ? recipe.layers.length : 0,
-      allocationBytes: sampleCount * 5,
       renderOptions,
       testGenerator: testGenerator(),
     };
@@ -233,7 +265,7 @@ export default function usePatternLabWorker({
       dispatchTimerRef.current = setTimeout(dispatchQueuedRender, delay);
     }
     return undefined;
-  }, [dispatchQueuedRender, enabled, geometry, mode, recipe, renderOptions, time]);
+  }, [compactGeometry, dispatchQueuedRender, enabled, mode, recipe, renderOptions, time]);
 
   const cancel = useCallback(() => {
     const targetRequestId = pendingRenderRef.current;
