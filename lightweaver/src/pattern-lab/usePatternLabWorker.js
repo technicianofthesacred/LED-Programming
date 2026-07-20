@@ -125,7 +125,8 @@ export default function usePatternLabWorker({
       }
       if (reply.type === 'frame') {
         const pending = pendingRenderRef.current;
-        if (!pending || !shouldAcceptPatternLabWorkerReply(reply, pending.id)) return;
+        if (!pending || pending.id !== latestRenderRef.current
+          || !shouldAcceptPatternLabWorkerReply(reply, pending.id)) return;
         clearWatchdog();
         pendingRenderRef.current = null;
         let frame;

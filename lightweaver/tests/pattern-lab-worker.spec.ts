@@ -204,6 +204,151 @@ test('coalesces changing control inputs to at most 24 worker renders per second'
   expect(times.length).toBeLessThanOrEqual(allowed);
 });
 
+test('does not publish a superseded frame before the coalesced replacement dispatches', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const telemetry = {
+      renderPosts: [] as Array<{ requestId: number; time: number }>,
+      deliveredFrames: [] as Array<{ requestId: number; time: number }>,
+      publishedFrames: [] as Array<{ requestId: number; time: number }>,
+      terminated: 0,
+      replacementQueued: false,
+    };
+    class SupersededFrameWorker extends NativeWorker {
+      postMessage(message: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions) {
+        const request = message as { type?: string; requestId?: number; payload?: { time?: number } };
+        if (request.type === 'render' && request.payload?.time === 987.25) {
+          telemetry.renderPosts.push({ requestId: request.requestId || 0, time: request.payload.time });
+          if (!telemetry.replacementQueued) {
+            telemetry.replacementQueued = true;
+            queueMicrotask(() => {
+              (window as typeof window & { __LW_SUPERSEDED_FRAME_RENDER__?: (time: number) => void })
+                .__LW_SUPERSEDED_FRAME_RENDER__?.(988.5);
+            });
+          }
+          setTimeout(() => {
+            this.dispatchEvent(new MessageEvent('message', {
+              data: {
+                type: 'frame',
+                requestId: request.requestId,
+                payload: {
+                  mode: 'final',
+                  time: request.payload?.time,
+                  generation: (request.payload as { generation?: number })?.generation,
+                  sampleCount: 2,
+                  totalSamples: 2,
+                  colors: new Uint8ClampedArray([1, 2, 3, 4, 5, 6]).buffer,
+                  indices: new Uint32Array([0, 1]).buffer,
+                  syntheticDelayedFrame: true,
+                },
+              },
+            }));
+          }, 10);
+        } else if (request.type === 'render' && request.payload?.time === 988.5) {
+          telemetry.renderPosts.push({ requestId: request.requestId || 0, time: request.payload.time });
+        }
+        if (transferOrOptions === undefined) super.postMessage(message);
+        else super.postMessage(message, transferOrOptions);
+      }
+
+      set onmessage(handler: ((this: Worker, ev: MessageEvent) => unknown) | null) {
+        super.onmessage = handler ? event => {
+          const time = event.data?.payload?.time;
+          if (event.data?.type === 'frame' && (time === 987.25 || time === 988.5)) {
+            if (time === 987.25 && event.data?.payload?.syntheticDelayedFrame !== true) return;
+            const deliver = () => {
+              telemetry.deliveredFrames.push({ requestId: event.data.requestId, time });
+              handler.call(this, event);
+            };
+            deliver();
+            return;
+          }
+          handler.call(this, event);
+        } : null;
+      }
+
+      terminate() {
+        telemetry.terminated += 1;
+        super.terminate();
+      }
+    }
+    Object.defineProperty(window, 'Worker', { configurable: true, value: SupersededFrameWorker });
+    Object.defineProperty(window, '__LW_SUPERSEDED_FRAME_TELEMETRY__', { value: telemetry });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    const ReactModule = await import('/node_modules/.vite/deps/react.js');
+    const React = ReactModule.default || ReactModule;
+    const ReactDomClient = await import('/node_modules/.vite/deps/react-dom_client.js');
+    const createRoot = ReactDomClient.createRoot || ReactDomClient.default.createRoot;
+    const { default: usePatternLabWorker } = await import('/src/pattern-lab/usePatternLabWorker.js');
+    const telemetry = (window as typeof window & {
+      __LW_SUPERSEDED_FRAME_TELEMETRY__: {
+        publishedFrames: Array<{ requestId: number; time: number }>;
+      };
+    }).__LW_SUPERSEDED_FRAME_TELEMETRY__;
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    const recipe = {
+      base: { patternId: 'aurora', params: {} },
+      palette: ['#102040', '#f09030'],
+      layers: [],
+    };
+    const geometry = {
+      strips: [{ id: 'race', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+      hidden: {},
+    };
+    const renderOptions = {
+      masterSpeed: 1,
+      masterBrightness: 1,
+      masterSaturation: 1,
+      masterHueShift: 0,
+    };
+    function Harness({ time }: { time: number }) {
+      const result = usePatternLabWorker({ recipe, geometry, time, mode: 'final', renderOptions });
+      React.useEffect(() => {
+        if (result.frameRequestId && result.frame) {
+          const previous = telemetry.publishedFrames.at(-1);
+          if (previous?.requestId !== result.frameRequestId) {
+            telemetry.publishedFrames.push({
+              requestId: result.frameRequestId,
+              time: result.frame.time,
+            });
+          }
+        }
+      }, [result.frame, result.frameRequestId]);
+      return React.createElement('div', {
+        id: 'superseded-frame-harness',
+        'data-status': result.status,
+        'data-frame': result.frameRequestId ?? '',
+        'data-frame-time': result.frame?.time ?? '',
+      });
+    }
+    const render = (time: number) => root.render(React.createElement(Harness, { time }));
+    Object.defineProperty(window, '__LW_SUPERSEDED_FRAME_RENDER__', { value: render });
+    render(987.25);
+  });
+
+  const harness = page.locator('#superseded-frame-harness');
+  await expect(harness).toHaveAttribute('data-status', 'frame');
+  await expect(harness).toHaveAttribute('data-frame-time', '988.5');
+  const telemetry = await page.evaluate(() => {
+    const value = (window as typeof window & {
+      __LW_SUPERSEDED_FRAME_TELEMETRY__: Record<string, unknown>;
+    }).__LW_SUPERSEDED_FRAME_TELEMETRY__;
+    return JSON.parse(JSON.stringify(value));
+  });
+  const requestA = telemetry.renderPosts.find((post: { time: number }) => post.time === 987.25);
+  const requestB = telemetry.renderPosts.find((post: { time: number }) => post.time === 988.5);
+  expect(requestA).toBeTruthy();
+  expect(requestB).toBeTruthy();
+  expect(telemetry.deliveredFrames.some((frame: { requestId: number }) => frame.requestId === requestA.requestId)).toBe(true);
+  expect(telemetry.publishedFrames.some((frame: { requestId: number }) => frame.requestId === requestA.requestId)).toBe(false);
+  expect(telemetry.publishedFrames.at(-1)?.requestId).toBe(requestB.requestId);
+  expect(telemetry.terminated).toBeGreaterThan(0);
+});
+
 test('cancels queued work and rejects forged geometry budgets without trusting render allocation hints', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const {
