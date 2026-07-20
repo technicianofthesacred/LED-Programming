@@ -182,6 +182,21 @@ test('warmth and saturation adjustment stays inside declared and RGB bounds', ()
   assert.ok(color.b < 255);
 });
 
+test('strict saturation bounds are enforced after warmth and incandescent cooling', () => {
+  const [{ color }] = adjustPaletteStops(
+    [{ position: 0, color: '#ff3000' }],
+    {
+      warmth: 1,
+      saturation: 2,
+      saturationBounds: [0, 0],
+      incandescentIntensity: 0.35,
+    },
+  );
+
+  assert.deepEqual(color, { r: color.r, g: color.r, b: color.r });
+  assert.equal(rgbSaturation(color), 0);
+});
+
 test('incandescent cooling preserves full intensity and warms lower intensities', () => {
   assert.deepEqual(applyIncandescentCooling({ r: 255, g: 255, b: 255 }, 1), { r: 255, g: 255, b: 255 });
   assert.deepEqual(applyIncandescentCooling({ r: 255, g: 255, b: 255 }, 0.5), { r: 128, g: 99, b: 77 });

@@ -1,6 +1,14 @@
 export const PATTERN_LAB_RECIPE_VERSION = 1;
 export const PATTERN_LAB_MAX_LAYERS = 3;
 
+export function assertPatternLabLayerCount(layers) {
+  if (!Array.isArray(layers)) throw new TypeError('Pattern Lab layers must be an array');
+  if (layers.length > PATTERN_LAB_MAX_LAYERS) {
+    throw new RangeError(`Pattern Lab supports at most ${PATTERN_LAB_MAX_LAYERS} layers`);
+  }
+  return layers;
+}
+
 const DEFAULT_PALETTE = ['#1a0c05', '#8f3f18', '#f0a04a', '#ffe1a3'];
 const DEFAULT_MACROS = { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5, energy: 0.5 };
 const DEFAULT_EVOLUTION = { enabled: true, character: 'slow-bloom', durationSeconds: 600, change: 0.35 };
@@ -118,6 +126,8 @@ export function normalizePatternLabRecipe(input = {}) {
   evolution.character = String(evolutionSource.character || DEFAULT_EVOLUTION.character);
   evolution.durationSeconds = bounded(evolutionSource.durationSeconds, 300, 900, DEFAULT_EVOLUTION.durationSeconds);
   evolution.change = bounded(evolutionSource.change, 0, 1, DEFAULT_EVOLUTION.change);
+  const layers = arrayOr(source.layers);
+  assertPatternLabLayerCount(layers);
 
   return {
     ...source,
@@ -129,7 +139,7 @@ export function normalizePatternLabRecipe(input = {}) {
     macros,
     evolution,
     seed: (Number.isFinite(Number(source.seed)) ? Math.trunc(Number(source.seed)) : 1) >>> 0,
-    layers: arrayOr(source.layers).slice(0, PATTERN_LAB_MAX_LAYERS),
+    layers,
     targets: arrayOr(source.targets, [{ kind: 'whole-piece', id: 'all' }]),
     requirements: arrayOr(source.requirements),
     provenance: arrayOr(source.provenance),

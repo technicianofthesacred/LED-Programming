@@ -382,19 +382,28 @@ function adjustColor(color, options) {
   hsl.s = clamp(hsl.s * clamp(options.saturation ?? 1, 0, 2), minimum, maximum);
   const saturated = hslToRgb(hsl);
   const warmth = clamp(options.warmth ?? 0, -1, 1);
+  let processed;
   if (warmth >= 0) {
-    return {
+    processed = {
       r: clampByte(saturated.r + (255 - saturated.r) * 0.2 * warmth),
       g: clampByte(saturated.g + (255 - saturated.g) * 0.08 * warmth),
       b: clampByte(saturated.b * (1 - 0.25 * warmth)),
     };
+  } else {
+    const cool = -warmth;
+    processed = {
+      r: clampByte(saturated.r * (1 - 0.2 * cool)),
+      g: clampByte(saturated.g + (255 - saturated.g) * 0.04 * cool),
+      b: clampByte(saturated.b + (255 - saturated.b) * 0.2 * cool),
+    };
   }
-  const cool = -warmth;
-  return {
-    r: clampByte(saturated.r * (1 - 0.2 * cool)),
-    g: clampByte(saturated.g + (255 - saturated.g) * 0.04 * cool),
-    b: clampByte(saturated.b + (255 - saturated.b) * 0.2 * cool),
-  };
+
+  if (options.incandescentIntensity != null) {
+    processed = applyIncandescentCooling(processed, options.incandescentIntensity);
+  }
+  const finalHsl = rgbToHsl(processed);
+  finalHsl.s = clamp(finalHsl.s, minimum, maximum);
+  return hslToRgb(finalHsl);
 }
 
 export function adjustPaletteStops(stops, options = {}) {

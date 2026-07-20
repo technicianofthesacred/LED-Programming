@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PATTERN_LAB_MAX_LAYERS, PATTERN_LAB_RECIPE_VERSION, createPatternLabRecipe, normalizePatternLabRecipe } from './patternLabRecipe.js';
+import { assertPatternLabLayerCount, PATTERN_LAB_MAX_LAYERS, PATTERN_LAB_RECIPE_VERSION, createPatternLabRecipe, normalizePatternLabRecipe } from './patternLabRecipe.js';
 
 test('creates the complete v1 recipe contract with a stable caller-supplied ID', () => {
   const recipe = createPatternLabRecipe({ id: 'dawn-tide', name: 'Dawn Tide' });
@@ -30,7 +30,7 @@ test('bounds creative values and does not mutate the source', () => {
   const source = { version: 1, id: 'bounded', name: 'Bounded', palette: ['#111111'],
     macros: { color: -2, movement: 2, shape: .25, texture: Number.NaN, energy: .75 },
     evolution: { enabled: true, character: 'tidal', durationSeconds: 1200, change: -1 },
-    layers: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }] };
+    layers: [{ id: 1 }, { id: 2 }, { id: 3 }] };
   const before = structuredClone(source);
   const recipe = normalizePatternLabRecipe(source);
   assert.deepEqual(source, before);
@@ -39,6 +39,18 @@ test('bounds creative values and does not mutate the source', () => {
   assert.equal(recipe.evolution.durationSeconds, 900);
   assert.equal(recipe.evolution.change, 0);
   assert.deepEqual(recipe.layers.map(layer => layer.id), [1, 2, 3]);
+});
+
+test('rejects a fourth layer instead of silently changing the recipe', () => {
+  const layers = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+  assert.throws(
+    () => assertPatternLabLayerCount(layers),
+    { name: 'RangeError', message: 'Pattern Lab supports at most 3 layers' },
+  );
+  assert.throws(
+    () => normalizePatternLabRecipe({ version: 1, id: 'too-many-layers', layers }),
+    { name: 'RangeError', message: 'Pattern Lab supports at most 3 layers' },
+  );
 });
 
 test('applies lower bounds, truncates palettes, and fills nested defaults', () => {

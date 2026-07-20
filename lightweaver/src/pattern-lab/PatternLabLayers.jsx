@@ -1,5 +1,5 @@
 import { PATTERN_LAB_BLEND_MODES } from '../lib/patternLabCompositor.js';
-import { PATTERN_LAB_MAX_LAYERS } from '../lib/patternLabRecipe.js';
+import { assertPatternLabLayerCount, PATTERN_LAB_MAX_LAYERS } from '../lib/patternLabRecipe.js';
 
 const BLEND_LABELS = {
   normal: 'Normal',
@@ -25,12 +25,11 @@ export default function PatternLabLayers({
   onLayersChange,
 }) {
   const safeLayers = Array.isArray(layers) ? layers : [];
+  assertPatternLabLayerCount(safeLayers);
   const canAdd = !disabled && safeLayers.length < PATTERN_LAB_MAX_LAYERS;
 
   function commit(nextLayers) {
-    if (nextLayers.length > PATTERN_LAB_MAX_LAYERS) {
-      throw new RangeError(`Pattern Lab supports at most ${PATTERN_LAB_MAX_LAYERS} layers`);
-    }
+    assertPatternLabLayerCount(nextLayers);
     onLayersChange?.(nextLayers);
   }
 
