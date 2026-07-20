@@ -53,12 +53,17 @@ async function mockConnectedPlaylistCard(page, project, cardId = 'lw-playlist-in
   await page.route('**/api/firmware-info', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ cardId, firmwareVersion: '1.0.0', outputs: runtime.led.outputs }),
+    body: JSON.stringify({ cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40), outputs: runtime.led.outputs }),
   }));
   await page.route('**/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: runtime.led.pixels } }),
+    body: JSON.stringify({
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      ok: true, cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-playlist-test', runtimePhase: 'ready', knownGoodProject: true,
+      commandReady: true, outputReady: true, led: { pixels: runtime.led.pixels },
+    }),
   }));
   await page.route('**/api/zones', route => route.fulfill({
     status: 200,

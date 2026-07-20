@@ -38,6 +38,8 @@ async function mockLocalCard(page: any, options: any = {}) {
     if (pathname === '/api/status') {
       await route.fulfill({ json: {
         app: 'Lightweaver', ok: true, cardId, cardName, firmwareVersion, buildId,
+        provisioningContractVersion: 1, bootId: 'boot-workflow-test', runtimePhase: 'ready',
+        knownGoodProject: true, commandReady: true, outputReady: true,
         led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' },
         source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef',
       } });
