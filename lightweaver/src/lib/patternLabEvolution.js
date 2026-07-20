@@ -23,11 +23,25 @@ export const PATTERN_LAB_EVOLUTION_PRESETS = Object.freeze({
 });
 
 const TAU = Math.PI * 2;
+const DEFAULT_DURATION_SECONDS = 600;
+const DEFAULT_CHANGE = 0.35;
+const DEFAULT_SEED = 1;
 
 function clamp(value, minimum = 0, maximum = 1) {
   const number = Number(value);
   if (!Number.isFinite(number)) return minimum;
   return Math.min(maximum, Math.max(minimum, number));
+}
+
+function bounded(value, minimum, maximum, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function uint32Seed(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) >>> 0 : DEFAULT_SEED;
 }
 
 function fract(value) {
@@ -99,28 +113,66 @@ function brightnessCeiling(recipe) {
   return clamp(value);
 }
 
+function brightnessRangeAtCeiling(presetRange, ceiling) {
+  const maximum = Math.min(presetRange[1], ceiling);
+  return [Math.min(presetRange[0], maximum), maximum];
+}
+
 export function sampleEvolution(recipe, elapsedSeconds) {
   const character = String(recipe?.evolution?.character || 'slow-bloom');
   const preset = PATTERN_LAB_EVOLUTION_PRESETS[character];
   if (!preset) throw new RangeError(`Unknown evolution character: ${character}`);
 
-  const duration = clamp(recipe?.evolution?.durationSeconds, 300, 900);
+  const enabled = recipe?.evolution?.enabled !== false;
+  const duration = bounded(recipe?.evolution?.durationSeconds, 300, 900, DEFAULT_DURATION_SECONDS);
   const elapsed = Math.max(0, Number.isFinite(Number(elapsedSeconds)) ? Number(elapsedSeconds) : 0);
-  const change = clamp(recipe?.evolution?.change ?? 0.35);
-  const seed = (Math.trunc(Number(recipe?.seed) || 1)) >>> 0;
+  const change = bounded(recipe?.evolution?.change, 0, 1, DEFAULT_CHANGE);
+  const seed = uint32Seed(recipe?.seed);
+  const ceiling = brightnessCeiling(recipe);
+  const effectiveBrightnessRange = brightnessRangeAtCeiling(preset.brightness, ceiling);
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      character,
+      durationSeconds: duration,
+      change,
+      seed,
+      arc: 0,
+      spatial: 0,
+      texture: 0,
+      rare: 0,
+      brightnessCeiling: ceiling,
+      effectiveBrightnessRange,
+      destinations: null,
+    };
+  }
+
   const arc = smoothCycle(elapsed / duration, character);
   const spatial = seededNoise1D(seed + 11, elapsed / 137);
   const texture = seededNoise1D(seed + 23, elapsed / 17);
   const rare = sampleRareEvents(seed + 47, elapsed, change);
-  const ceiling = brightnessCeiling(recipe);
 
   const destinations = {
-    brightness: Math.min(ceiling, rangeValue(preset.brightness, clamp(arc * 0.72 + texture * 0.18 + rare * 0.1), change)),
+    brightness: rangeValue(effectiveBrightnessRange, clamp(arc * 0.72 + texture * 0.18 + rare * 0.1), change),
     color: rangeValue(preset.color, clamp(arc * 0.68 + spatial * 0.32), change),
     movement: rangeValue(preset.movement, clamp(spatial * 0.82 + rare * 0.18), change),
     shape: rangeValue(preset.shape, clamp(arc * 0.55 + spatial * 0.45), change),
     texture: rangeValue(preset.texture, clamp(texture * 0.88 + rare * 0.12), change),
   };
 
-  return { character, durationSeconds: duration, change, arc, spatial, texture, rare, brightnessCeiling: ceiling, destinations };
+  return {
+    enabled: true,
+    character,
+    durationSeconds: duration,
+    change,
+    seed,
+    arc,
+    spatial,
+    texture,
+    rare,
+    brightnessCeiling: ceiling,
+    effectiveBrightnessRange,
+    destinations,
+  };
 }

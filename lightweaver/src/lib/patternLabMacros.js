@@ -56,9 +56,23 @@ export function resolvePatternLabMacros(recipeOrMacros = {}) {
   }));
 }
 
-export function patternLabMacrosFromTechnicalValues(technicalValues = {}) {
+/**
+ * Project technical groups onto macro values using each group's documented
+ * primary field. Secondary fields may have independent Advanced edits, so
+ * this is deliberately a projection rather than validation or a general
+ * inverse. Values are rounded to twelve decimal places for stable recipes.
+ */
+export function projectPatternLabMacrosFromTechnicalValues(technicalValues = {}) {
   return Object.fromEntries(Object.entries(DEFINITIONS).map(([macro, definition]) => {
     const primaryRange = definition.fields[definition.primary];
     return [macro, unmap(technicalValues?.[macro]?.[definition.primary], primaryRange)];
   }));
+}
+
+/**
+ * Backward-compatible name retained for existing callers. Prefer
+ * projectPatternLabMacrosFromTechnicalValues for explicit semantics.
+ */
+export function patternLabMacrosFromTechnicalValues(technicalValues = {}) {
+  return projectPatternLabMacrosFromTechnicalValues(technicalValues);
 }

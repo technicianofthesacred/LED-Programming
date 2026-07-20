@@ -41,17 +41,20 @@ for (const character of REQUIRED_CHARACTERS) {
     assert.deepEqual(sampleEvolution(source, 237.125), sampleEvolution(source, 237.125));
   });
 
-  test(`${character} does not reset all clocks before its full duration`, () => {
+  test(`${character} produces varied destination samples across its full duration`, () => {
     for (const durationSeconds of [300, 600, 900]) {
       const source = recipe(character, {
         evolution: { enabled: true, character, durationSeconds, change: 0.65 },
       });
-      const initial = sampleEvolution(source, 0);
-      for (let second = 1; second < durationSeconds; second += 1) {
-        const sample = sampleEvolution(source, second);
-        const allReset = ['arc', 'spatial', 'texture', 'rare']
-          .every(key => Math.abs(sample[key] - initial[key]) < 1e-12);
-        assert.equal(allReset, false, `all clocks reset at ${second}s of ${durationSeconds}s`);
+      const times = Array.from({ length: 37 }, (_, index) => (
+        (index * 73.137 + index * index * 0.619 + 0.137) % (durationSeconds - 0.5)
+      ));
+      const samples = times.map(time => sampleEvolution(source, time).destinations);
+      const signatures = samples.map(destinations => Object.values(destinations).map(value => value.toFixed(10)).join(':'));
+      assert.ok(new Set(signatures).size >= 35, `too many repeated sampled destinations for ${durationSeconds}s`);
+      for (const key of Object.keys(PATTERN_LAB_EVOLUTION_PRESETS[character])) {
+        const values = samples.map(sample => sample[key]);
+        assert.ok(Math.max(...values) - Math.min(...values) > 1e-4, `${key} did not vary for ${durationSeconds}s`);
       }
     }
   });
@@ -76,11 +79,53 @@ test('different seeds produce different spatial and texture clocks', () => {
   assert.notDeepEqual([first.spatial, first.texture], [second.spatial, second.texture]);
 });
 
-test('an installation brightness ceiling below a preset range is never exceeded', () => {
+test('disabled evolution returns one explicit stable result at every time', () => {
+  const source = recipe('tidal', {
+    evolution: { enabled: false, character: 'tidal', durationSeconds: 600, change: 0.65 },
+  });
+  const initial = sampleEvolution(source, 0);
+  assert.equal(initial.enabled, false);
+  assert.equal(initial.destinations, null);
+  for (const time of [0.125, 17, 137.25, 599.9, 1200]) {
+    assert.deepEqual(sampleEvolution(source, time), initial);
+  }
+});
+
+test('raw missing and non-finite evolution values use recipe defaults', () => {
+  const missing = sampleEvolution({ seed: 3 }, 11);
+  const invalid = sampleEvolution({
+    seed: 3,
+    evolution: { character: 'slow-bloom', durationSeconds: Number.NaN, change: Number.POSITIVE_INFINITY },
+  }, 11);
+  for (const sample of [missing, invalid]) {
+    assert.equal(sample.enabled, true);
+    assert.equal(sample.durationSeconds, 600);
+    assert.equal(sample.change, 0.35);
+  }
+});
+
+test('seed parsing preserves zero and normalizes finite uint32 edges', () => {
+  const cases = [
+    [0, 0], ['0', 0], [1, 1], [-1, 0xffffffff],
+    [0x100000000, 0], [0x100000001, 1], [Number.NaN, 1], [Number.POSITIVE_INFINITY, 1], [undefined, 1],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(sampleEvolution(recipe('wandering', { seed: input }), 19.25).seed, expected);
+  }
+  const zero = sampleEvolution(recipe('wandering', { seed: 0 }), 19.25);
+  const one = sampleEvolution(recipe('wandering', { seed: 1 }), 19.25);
+  assert.notDeepEqual([zero.spatial, zero.texture], [one.spatial, one.texture]);
+});
+
+test('effective brightness range exposes ceiling conflicts without claiming the preset minimum', () => {
   const source = recipe('rare-surprises', { limits: { brightnessCeiling: 0.2 } });
   for (let second = 0; second <= 600; second += 5) {
-    assert.ok(sampleEvolution(source, second).destinations.brightness <= 0.2);
+    const sample = sampleEvolution(source, second);
+    assert.deepEqual(sample.effectiveBrightnessRange, [0.2, 0.2]);
+    assert.equal(sample.destinations.brightness, 0.2);
   }
+  const intersected = sampleEvolution(recipe('rare-surprises', { limits: { brightnessCeiling: 0.5 } }), 80);
+  assert.deepEqual(intersected.effectiveBrightnessRange, [0.3, 0.5]);
 });
 
 test('sampling uses neither Math.random nor wall-clock time', () => {

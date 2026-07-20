@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   patternLabMacrosFromTechnicalValues,
+  projectPatternLabMacrosFromTechnicalValues,
   resolvePatternLabMacros,
 } from './patternLabMacros.js';
 
@@ -55,29 +56,53 @@ test('resolution returns fresh values and never mutates the source recipe or mac
   assert.notEqual(second.color.warmth, 99);
 });
 
-test('technical values reverse exactly to endpoint and midpoint macros', () => {
+test('primary-field projection recovers endpoint and midpoint resolver outputs', () => {
   for (const [macro, atZero, atMidpoint, atOne] of CASES) {
     for (const [amount, technical] of [[0, atZero], [0.5, atMidpoint], [1, atOne]]) {
-      const reversed = patternLabMacrosFromTechnicalValues({ [macro]: technical });
-      assert.equal(reversed[macro], amount, `${macro} should reverse to ${amount}`);
+      const projected = projectPatternLabMacrosFromTechnicalValues({ [macro]: technical });
+      assert.equal(projected[macro], amount, `${macro} should project to ${amount}`);
     }
   }
 });
 
-test('a resolve-reverse-resolve round trip is stable and non-destructive', () => {
+test('resolver output projects back within documented twelve-decimal precision', () => {
   const macros = { color: 0.13, movement: 0.27, shape: 0.49, texture: 0.68, energy: 0.91 };
   const before = structuredClone(macros);
   const technical = resolvePatternLabMacros(macros);
-  const reversed = patternLabMacrosFromTechnicalValues(technical);
-  const resolvedAgain = resolvePatternLabMacros(reversed);
+  const projected = projectPatternLabMacrosFromTechnicalValues(technical);
+  const resolvedAgain = resolvePatternLabMacros(projected);
 
   assert.deepEqual(macros, before);
-  assert.deepEqual(reversed, macros);
+  assert.deepEqual(projected, macros);
   assert.deepEqual(resolvedAgain, technical);
 });
 
+test('projection uses only the documented primary field for contradictory technical groups', () => {
+  const technical = {
+    color: { paletteTravel: 0.25, warmth: 1, saturation: 0.55 },
+    energy: { brightness: 0.575, dynamicRange: 1, rareEventStrength: 0 },
+  };
+  const before = structuredClone(technical);
+  const projected = projectPatternLabMacrosFromTechnicalValues(technical);
+  assert.equal(projected.color, 0.25);
+  assert.equal(projected.energy, 0.5);
+  assert.deepEqual(technical, before);
+});
+
+test('arbitrary macro floats project within precision without promising an exact inverse', () => {
+  const amount = 0.123456789012345;
+  const projected = projectPatternLabMacrosFromTechnicalValues(resolvePatternLabMacros({ color: amount }));
+  assert.ok(Math.abs(projected.color - amount) <= 1e-12);
+  assert.notEqual(projected.color, amount);
+});
+
+test('legacy technical-to-macro name remains a projection-compatible alias', () => {
+  const technical = resolvePatternLabMacros({ color: 0.2, movement: 0.7 });
+  assert.deepEqual(patternLabMacrosFromTechnicalValues(technical), projectPatternLabMacrosFromTechnicalValues(technical));
+});
+
 test('missing macros use midpoint defaults and out-of-range inputs clamp', () => {
-  assert.deepEqual(patternLabMacrosFromTechnicalValues(resolvePatternLabMacros({})), {
+  assert.deepEqual(projectPatternLabMacrosFromTechnicalValues(resolvePatternLabMacros({})), {
     color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5, energy: 0.5,
   });
   const resolved = resolvePatternLabMacros({ color: -1, movement: 2 });
