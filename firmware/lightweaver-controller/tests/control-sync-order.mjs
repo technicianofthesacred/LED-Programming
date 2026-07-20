@@ -89,6 +89,16 @@ assert.match(parserGuard, /_currentUri\s*==\s*"\/api\/control"/);
 assert.match(parserGuard, /_clientContentLength\s*>\s*LW_WEB_CONTROL_MAX_BODY_BYTES/);
 assert.match(parserGuard, /client\.stop\(\)/);
 assert.match(parserGuard, /return false;/, 'oversized multipart/json/form requests must exit before every framework body branch');
+assert.match(
+  parserGuard,
+  /_clientContentLength\s*-\s*_currentRaw->totalSize/,
+  'the pinned raw parser must read only the remaining Content-Length instead of waiting five seconds for a full buffer',
+);
+assert.match(
+  parserGuard,
+  /lwRawRemaining\s*<\s*static_cast<size_t>\(HTTP_RAW_BUFLEN\)/,
+  'the remaining raw read must stay bounded by the framework buffer',
+);
 assert.match(parserGuard, /corsOriginAllowed/, 'pre-parser rejection must preserve the project origin allowlist');
 assert.match(parserGuard, /Access-Control-Allow-Origin/, 'oversized browser requests must expose the 413 through CORS');
 assert.match(parserGuard, /Access-Control-Allow-Private-Network/, 'local-card private-network CORS must survive early rejection');
