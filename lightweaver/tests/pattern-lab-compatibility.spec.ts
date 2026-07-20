@@ -139,9 +139,12 @@ test('adds a concrete visible layer and routes the compositor through baking', a
   await expect(layerPattern).toHaveValue('gradient');
   await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(before);
   const layered = await canvas.evaluate(element => element.toDataURL());
+  await page.getByLabel('Gradient layer spatial treatment').selectOption('mirror');
+  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(layered);
+  const mirroredLayer = await canvas.evaluate(element => element.toDataURL());
   await layerPattern.selectOption('candle');
   await expect(page.getByLabel('Candle layer pattern')).toHaveValue('candle');
-  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(layered);
+  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(mirroredLayer);
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
 
   const compatibility = page.getByTestId('pattern-lab-export');

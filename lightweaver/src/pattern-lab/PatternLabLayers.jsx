@@ -10,6 +10,31 @@ const BLEND_LABELS = {
   mask: 'Mask',
 };
 
+const SPATIAL_TREATMENTS = [
+  ['none', 'None'],
+  ['mirror', 'Mirror weave'],
+  ['repeat', 'Repeating tiles'],
+  ['kaleidoscope', 'Kaleidoscope'],
+  ['radial', 'Radial focus'],
+];
+
+function spatialTreatment(layer) {
+  if (layer?.mask?.kind === 'radial') return 'radial';
+  const transform = Array.isArray(layer?.transforms) ? layer.transforms[0] : layer?.transform;
+  return SPATIAL_TREATMENTS.some(([id]) => id === transform?.kind) ? transform.kind : 'none';
+}
+
+function treatmentChanges(kind) {
+  if (kind === 'mirror') return { transforms: [{ kind: 'mirror', axis: 'both' }], mask: null };
+  if (kind === 'repeat') return { transforms: [{ kind: 'repeat', axis: 'both', count: 3 }], mask: null };
+  if (kind === 'kaleidoscope') return { transforms: [{ kind: 'kaleidoscope', slices: 6 }], mask: null };
+  if (kind === 'radial') return {
+    transforms: [],
+    mask: { kind: 'radial', center: { x: 0.5, y: 0.5 }, radius: 0.5, softness: 0.18 },
+  };
+  return { transforms: [], mask: null };
+}
+
 function moveLayer(layers, index, direction) {
   const target = index + direction;
   if (target < 0 || target >= layers.length) return layers;
@@ -95,6 +120,19 @@ export default function PatternLabLayers({
               >
                 {PATTERN_LAB_BLEND_MODES.map(mode => (
                   <option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="plab-field">
+              <span>Spatial treatment</span>
+              <select
+                aria-label={`${layer.name || `Layer ${index + 1}`} spatial treatment`}
+                value={spatialTreatment(layer)}
+                onChange={event => updateLayer(index, treatmentChanges(event.target.value))}
+              >
+                {SPATIAL_TREATMENTS.map(([id, label]) => (
+                  <option key={id} value={id}>{label}</option>
                 ))}
               </select>
             </label>
