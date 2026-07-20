@@ -723,4 +723,55 @@ assert.equal(blankAdoptLink.getState().cardBlank, true, 'adopting a blank card s
 assert.equal(nextCardConnectionAction({ link: blankAdoptLink.getState() }).id, 'card-needs-project');
 blankAdoptLink.destroy();
 
+// ── runtime: direct keepalive ping (idle-time silent-drop detection) ────────
+// When a paired card is connected-direct, the link should poll /api/status
+// every 20 seconds. If the card stops answering, demote to 'reconnecting' and
+// surface the disconnection to the user.
+const directPingLink = createCardLink({
+  host: '192.168.1.100',
+  directPingIntervalMs: 50,
+  pingTimeoutMs: 100,
+  fetchImpl: async (url) => {
+    if (/\/api\/status/.test(String(url))) {
+      return { ok: true, json: async () => ({ cardId: 'lw-ping-test', firmwareVersion: '1.4.0' }) };
+    }
+    return { ok: false };
+  },
+});
+directPingLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.1.100',
+  card: { id: 'lw-ping-test' }, expectedCard: { id: 'lw-ping-test' }, blank: false,
+});
+assert.equal(directPingLink.getState().state, 'connected-direct', 'start connected-direct');
+assert.equal(directPingLink.getState().missedPings, 0);
+
+// Let a successful ping run.
+await waitFor(() => directPingLink.getState().missedPings >= 0, 500, 'ping scheduled');
+directPingLink.destroy();
+
+// Test silent-drop recovery: start connected, then fail pings.
+let pingMisses = 0;
+const dropLink = createCardLink({
+  host: '192.168.1.101',
+  directPingIntervalMs: 30,
+  pingTimeoutMs: 50,
+  missLimit: 2,
+  fetchImpl: async () => {
+    pingMisses += 1;
+    throw new Error('timeout'); // simulate card stopped answering
+  },
+});
+dropLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.1.101',
+  card: { id: 'lw-drop-test' }, expectedCard: { id: 'lw-drop-test' }, blank: false,
+});
+assert.equal(dropLink.getState().state, 'connected-direct');
+await waitFor(
+  () => dropLink.getState().state === 'reconnecting' && dropLink.getState().reason === 'card-stopped-answering',
+  1000,
+  'direct silent-drop detected'
+);
+assert.equal(cardLinkStatusText(dropLink.getState()), 'Card stopped responding — reconnecting…');
+dropLink.destroy();
+
 console.log('card-link-state tests passed');

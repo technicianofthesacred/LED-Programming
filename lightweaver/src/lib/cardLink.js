@@ -32,6 +32,7 @@ import {
 } from './cardIdentity.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
+export const CARD_LINK_DIRECT_PING_INTERVAL_MS = 20000;
 export const CARD_LINK_PING_TIMEOUT_MS = 2500;
 export const CARD_LINK_PING_MISS_LIMIT = 2;
 export const CARD_LINK_CONNECT_TIMEOUT_MS = 15000;
@@ -39,7 +40,7 @@ export const CARD_LINK_CONNECT_TIMEOUT_MS = 15000;
 // before showing the one-click "Connect to card" affordance.
 export const CARD_LINK_BRIDGE_ACTIVE_KEY = 'lw_card_bridge_was_active';
 
-export const CARD_LINK_STATES = ['disconnected', 'connecting', 'reconnecting-bridge', 'connected-bridge', 'connected-direct'];
+export const CARD_LINK_STATES = ['disconnected', 'connecting', 'reconnecting', 'reconnecting-bridge', 'connected-bridge', 'connected-direct'];
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
@@ -136,6 +137,28 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
           state: 'reconnecting-bridge',
           reason: 'card-restarting',
           transport: 'bridge',
+          host,
+          missedPings,
+        };
+      }
+      return { ...prev, missedPings };
+    }
+    case 'direct-ping-ok': {
+      // A successful keepalive on direct connection.
+      if (prev.state !== 'connected-direct') return prev;
+      if (prev.host !== host || prev.missedPings === 0) return prev;
+      return { ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0 };
+    }
+    case 'direct-ping-missed': {
+      // A missed keepalive on direct connection demotes to reconnecting.
+      if (prev.state !== 'connected-direct') return prev;
+      const missedPings = prev.missedPings + 1;
+      if (missedPings >= Math.max(1, missLimit)) {
+        return {
+          ...prev,
+          state: 'reconnecting',
+          reason: 'card-stopped-answering',
+          transport: 'direct',
           host,
           missedPings,
         };
@@ -243,6 +266,7 @@ export function cardLinkStatusText(state = {}) {
   switch (state.state) {
     case 'connected-bridge': return 'Live via card page';
     case 'connected-direct': return 'Live direct';
+    case 'reconnecting': return 'Card stopped responding — reconnecting…';
     case 'reconnecting-bridge': return 'Card restarting…';
     case 'connecting': return 'Looking for the card…';
     default: return cardLinkReasonText(state.reason);
@@ -271,7 +295,9 @@ export function writeBridgeWasActive(active) {
 // Everything time- or transport-shaped is injectable so Node tests can drive it.
 export function createCardLink({
   sendRequest = (type, payload = {}, options = {}) => sendCardBridgeRequest(type, payload, options),
+  fetchImpl = typeof globalThis !== 'undefined' ? globalThis.fetch : null,
   pingIntervalMs = CARD_LINK_PING_INTERVAL_MS,
+  directPingIntervalMs = CARD_LINK_DIRECT_PING_INTERVAL_MS,
   pingTimeoutMs = CARD_LINK_PING_TIMEOUT_MS,
   connectTimeoutMs = CARD_LINK_CONNECT_TIMEOUT_MS,
   missLimit = CARD_LINK_PING_MISS_LIMIT,
@@ -280,8 +306,10 @@ export function createCardLink({
   let state = initialCardLinkState(host);
   const listeners = new Set();
   let pingTimer = null;
+  let directPingTimer = null;
   let connectTimer = null;
   let pinging = false;
+  let directPinging = false;
   let destroyed = false;
 
   function emit() {
@@ -299,6 +327,11 @@ export function createCardLink({
     pingTimer = null;
   }
 
+  function stopDirectKeepalive() {
+    if (directPingTimer) clearTimeout(directPingTimer);
+    directPingTimer = null;
+  }
+
   function clearConnectTimer() {
     if (connectTimer) clearTimeout(connectTimer);
     connectTimer = null;
@@ -310,6 +343,15 @@ export function createCardLink({
     pingTimer = setTimeout(() => {
       pingTimer = null;
       void runPing();
+    }, delayMs);
+  }
+
+  function scheduleDirectPing(delayMs = directPingIntervalMs) {
+    stopDirectKeepalive();
+    if (destroyed) return;
+    directPingTimer = setTimeout(() => {
+      directPingTimer = null;
+      void runDirectPing();
     }, delayMs);
   }
 
@@ -335,6 +377,30 @@ export function createCardLink({
     if (state.state === 'connected-bridge' || state.state === 'reconnecting-bridge') schedulePing();
   }
 
+  async function runDirectPing() {
+    if (destroyed || directPinging || state.state !== 'connected-direct') return;
+    const pingHost = state.host;
+    directPinging = true;
+    try {
+      const fetcher = fetchImpl || (typeof globalThis !== 'undefined' ? globalThis.fetch : null);
+      if (typeof fetcher !== 'function') throw new Error('fetch unavailable');
+      const response = await Promise.race([
+        fetcher(`${cardHostToUrl(pingHost)}/api/status`),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), pingTimeoutMs)),
+      ]);
+      if (!response?.ok) throw new Error('not ok');
+      if (state.host === pingHost && state.state === 'connected-direct') {
+        dispatch({ type: 'direct-ping-ok', host: pingHost });
+      }
+    } catch (error) {
+      if (state.host !== pingHost || state.state !== 'connected-direct') return;
+      dispatch({ type: 'direct-ping-missed', host: pingHost });
+    } finally {
+      directPinging = false;
+    }
+    if (state.state === 'connected-direct') scheduleDirectPing();
+  }
+
   function dispatch(event) {
     const next = reduceCardLink(state, event, { missLimit });
     if (next === state) return state;
@@ -344,6 +410,7 @@ export function createCardLink({
       clearConnectTimer();
       if (prev.state !== 'connected-bridge') writeBridgeWasActive(true);
       if (!pingTimer && !pinging) schedulePing();
+      stopDirectKeepalive();
     } else if (state.state === 'reconnecting-bridge') {
       if (prev.state !== 'reconnecting-bridge') {
         clearConnectTimer();
@@ -355,8 +422,24 @@ export function createCardLink({
         }
       }
       if (!pingTimer && !pinging) schedulePing();
+      stopDirectKeepalive();
+    } else if (state.state === 'connected-direct') {
+      clearConnectTimer();
+      stopKeepalive();
+      if (!directPingTimer && !directPinging) scheduleDirectPing();
+    } else if (state.state === 'reconnecting' && state.transport === 'direct') {
+      clearConnectTimer();
+      stopKeepalive();
+      if (connectTimeoutMs > 0) {
+        connectTimer = setTimeout(() => {
+          connectTimer = null;
+          dispatch({ type: 'direct-status', connected: false, host: state.host, reason: 'no-answer' });
+        }, connectTimeoutMs);
+      }
+      if (!directPingTimer && !directPinging) scheduleDirectPing();
     } else if (state.state === 'connecting' && state.transport === 'bridge') {
       stopKeepalive();
+      stopDirectKeepalive();
       clearConnectTimer();
       if (connectTimeoutMs > 0) {
         connectTimer = setTimeout(() => {
@@ -366,6 +449,7 @@ export function createCardLink({
       }
     } else {
       stopKeepalive();
+      stopDirectKeepalive();
       clearConnectTimer();
     }
     emit();
@@ -382,6 +466,7 @@ export function createCardLink({
     destroy() {
       destroyed = true;
       stopKeepalive();
+      stopDirectKeepalive();
       clearConnectTimer();
       listeners.clear();
     },
