@@ -20,8 +20,10 @@ function moveLayer(layers, index, direction) {
 
 export default function PatternLabLayers({
   layers = [],
+  patterns = [],
   disabled = false,
   onAddLayer,
+  onLayerPatternChange,
   onLayersChange,
 }) {
   const safeLayers = Array.isArray(layers) ? layers : [];
@@ -71,6 +73,19 @@ export default function PatternLabLayers({
                 onClick={() => commit(safeLayers.filter((_, layerIndex) => layerIndex !== index))}
               >Remove</button>
             </div>
+
+            <label className="plab-field">
+              <span>Layer pattern</span>
+              <select
+                aria-label={`${layer.name || `Layer ${index + 1}`} pattern`}
+                value={layer.generator?.patternId || ''}
+                onChange={event => onLayerPatternChange?.(index, event.target.value)}
+              >
+                {patterns.map(pattern => (
+                  <option key={pattern.id} value={pattern.id}>{pattern.name}</option>
+                ))}
+              </select>
+            </label>
 
             <label className="plab-field">
               <span>Blend mode</span>

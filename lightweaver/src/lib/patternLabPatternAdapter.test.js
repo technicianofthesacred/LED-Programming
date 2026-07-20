@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { PALETTE_DEFAULT } from '../data.js';
 import { CUSTOM_PATTERNS_KEY } from './customPatterns.js';
+import { blendPatternLabColors } from './patternLabCompositor.js';
 import { compilePattern, normalizePalette, renderPixelFrame } from './frameEngine.js';
 import { recipeFromPattern, renderPatternLabRecipeFrame } from './patternLabPatternAdapter.js';
 import { parseParamsFromCode } from './patternParams.js';
@@ -176,6 +177,37 @@ test('legacy wrapped patterns intentionally ignore recipe seed', () => {
   const second = renderPatternLabRecipeFrame({ ...recipe, seed: 0xffffffff }, context);
 
   assert.deepEqual(second, first);
+});
+
+test('renders configured built-in layers through the bounded compositor', () => {
+  const recipe = recipeFromPattern('gradient', { palette: FIXED_PALETTE });
+  recipe.layers = [{
+    id: 'sparkle-layer',
+    name: 'Sparkle layer',
+    generator: { kind: 'lightweaver-pattern', patternId: 'candle', params: defaultParams('candle') },
+    blendMode: 'add',
+    opacity: 1,
+  }];
+  const context = { t: FIXED_TIME, strips: FIXED_LAYOUT, bpm: 93 };
+  const base = renderPixelFrame({
+    ...context,
+    patternId: 'gradient',
+    params: defaultParams('gradient'),
+    paletteNorm: normalizePalette(FIXED_PALETTE),
+  });
+  const layer = renderPixelFrame({
+    ...context,
+    patternId: 'candle',
+    params: defaultParams('candle'),
+    paletteNorm: normalizePalette(FIXED_PALETTE),
+  });
+
+  const rendered = renderPatternLabRecipeFrame(recipe, context);
+  const expected = base.pixels.map((color, index) => (
+    blendPatternLabColors(color, layer.pixels[index], 'add', 1)
+  ));
+  assert.notDeepEqual(expected, base.pixels);
+  assert.deepEqual(rendered.pixels, expected);
 });
 
 test('palette-aware pattern keeps every representative pixel unchanged', () => {

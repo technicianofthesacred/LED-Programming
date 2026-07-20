@@ -127,19 +127,29 @@ test('keeps the advanced tools usable in the phone controls drawer', async ({ pa
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('fails closed when a draft layer has no authoritative runtime estimates', async ({ page }) => {
+test('adds a concrete visible layer and routes the compositor through baking', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('aurora');
+  const preview = page.getByTestId('pattern-lab-mapped-preview');
+  await expect(preview).toHaveAttribute('data-worker-state', 'frame');
+  const canvas = preview.locator('canvas');
+  const before = await canvas.evaluate(element => element.toDataURL());
   await page.getByTestId('pattern-lab-layers').locator(':scope > summary').click();
   await page.getByRole('button', { name: 'Add layer' }).click();
+  const layerPattern = page.getByLabel('Gradient layer pattern');
+  await expect(layerPattern).toHaveValue('gradient');
+  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(before);
+  const layered = await canvas.evaluate(element => element.toDataURL());
+  await layerPattern.selectOption('candle');
+  await expect(page.getByLabel('Candle layer pattern')).toHaveValue('candle');
+  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(layered);
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
 
   const compatibility = page.getByTestId('pattern-lab-export');
-  await expect(compatibility.locator('[data-classification]')).toHaveAttribute('data-classification', 'studio-only');
+  await expect(compatibility.locator('[data-classification]')).toHaveAttribute('data-classification', 'bake-to-card');
   await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('Pixels');
-  await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('Operations / frameUnknown');
-  await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('State memoryUnknown');
-  await expect(compatibility).toContainText('has no concrete generator');
-  await expect(page.getByTestId('pattern-lab-diagnostics')).toHaveCount(0);
+  await expect(compatibility.getByLabel('Card compatibility budgets')).not.toContainText('Operations / frameUnknown');
+  await expect(compatibility).toContainText('layers are composited into a deterministic card sequence');
+  await expect(page.getByTestId('pattern-lab-diagnostics')).toHaveCount(1);
 });
 
 test('explains when every visible strip has zero brightness', async ({ page }) => {

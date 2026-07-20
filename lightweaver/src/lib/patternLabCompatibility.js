@@ -535,6 +535,13 @@ function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
       { bakeable: true },
     ));
   }
+  if ((recipe.layers || []).length > 0) {
+    reasons.push(reason(
+      'layer-compositor-bake-only',
+      'Pattern Lab layers are composited into a deterministic card sequence.',
+      { bakeable: true },
+    ));
+  }
   if ((recipe.layers || []).length > descriptor.limits.layers) reasons.push(reason(
     'layers-over-budget',
     `layers uses ${recipe.layers.length}, above the card limit of ${descriptor.limits.layers}.`,

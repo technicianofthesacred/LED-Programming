@@ -303,7 +303,7 @@ export default function usePatternLabWorker({
         seed: recipe.seed,
         macros: recipe.macros || {},
         palette: Array.isArray(recipe.palette) ? recipe.palette : [],
-        layers: Array.isArray(recipe.layers) ? recipe.layers.map(() => null) : [],
+        layers: Array.isArray(recipe.layers) ? recipe.layers : [],
       },
       time: Number(time) || 0,
       mode,

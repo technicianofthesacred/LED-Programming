@@ -660,17 +660,35 @@ export default function PatternLabScreen() {
     setDraft(current => {
       if (!current || current.layers.length >= 3) return current;
       const index = current.layers.length + 1;
+      const patternId = current.base?.patternId === 'gradient' ? 'candle' : 'gradient';
+      const layerSource = recipeFromPattern(patternId, { palette: current.palette });
       return {
         ...current,
         layers: [...current.layers, {
           id: `layer-${current.id}-${index}`,
-          name: `Layer ${index}`,
-          blendMode: 'normal',
-          opacity: 0.65,
+          name: `${layerSource.name} layer`,
+          generator: cloneRecipe(layerSource.base),
+          blendMode: 'screen',
+          opacity: 0.35,
         }],
       };
     });
     setComparison('draft');
+  }
+
+  function changeLayerPattern(index, patternId) {
+    if (!isBuiltInPattern(patternId)) return;
+    const source = recipeFromPattern(patternId, { palette: draft?.palette || project.palette });
+    setDraft(current => current ? {
+      ...current,
+      layers: current.layers.map((layer, layerIndex) => layerIndex === index ? {
+        ...layer,
+        name: `${source.name} layer`,
+        generator: cloneRecipe(source.base),
+      } : layer),
+    } : current);
+    setComparison('draft');
+    setMessage('');
   }
 
   function useDraftVariant(variant, status) {
@@ -921,7 +939,9 @@ export default function PatternLabScreen() {
               <div className="plab-layer-inspector">
                 <PatternLabLayers
                   layers={draft.layers}
+                  patterns={patterns}
                   onAddLayer={addLayer}
+                  onLayerPatternChange={changeLayerPattern}
                   onLayersChange={changeLayers}
                 />
               </div>

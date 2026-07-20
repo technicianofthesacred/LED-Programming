@@ -17,6 +17,8 @@ import {
   measurePatternLabGeneratorStateBytes,
   resolvePatternLabGeneratorInputs,
 } from '../lib/patternLabGenerators.js';
+import { blendPatternLabColors } from '../lib/patternLabCompositor.js';
+import { applyPatternLabTransform, samplePatternLabMask } from '../lib/patternLabTransforms.js';
 
 let initialized = false;
 let staticGeometry = null;
@@ -74,6 +76,46 @@ function compileAuthoritativePattern(patternId, indices, visiblePixelCount) {
     const sampledIndex = Math.max(0, Math.min(indices.length - 1, Math.round(index)));
     return compiled(indices[sampledIndex], x, y, t, time, visiblePixelCount, ...rest);
   };
+}
+
+function layerTransforms(layer) {
+  if (Array.isArray(layer?.transforms)) return layer.transforms;
+  return layer?.transform ? [layer.transform] : [];
+}
+
+function layerTargetMatches(layer, stripId) {
+  const target = layer?.target;
+  if (!target || target.kind === 'whole-piece' || target.kind === 'all') return true;
+  if (target.kind === 'section') return String(target.id || '') === String(stripId || '');
+  throw new RangeError(`Unsupported Pattern Lab layer target: ${String(target.kind)}`);
+}
+
+function layerGeometry(strips, layer, bounds) {
+  const transforms = layerTransforms(layer);
+  const coordinates = [];
+  const transformed = strips.map(strip => ({
+    ...strip,
+    pts: strip.pts.map(point => {
+      const normalized = {
+        ...point,
+        x: (point.x - bounds.minX) / bounds.range,
+        y: (point.y - bounds.minY) / bounds.range,
+      };
+      coordinates.push({
+        ...normalized,
+        stripId: strip.id,
+        stripProgress: point.stripProgress ?? point.p,
+        targetMatched: layerTargetMatches(layer, strip.id),
+      });
+      const changed = applyPatternLabTransform(normalized, transforms);
+      return {
+        ...point,
+        x: bounds.minX + changed.x * bounds.range,
+        y: bounds.minY + changed.y * bounds.range,
+      };
+    }),
+  }));
+  return { strips: transformed, coordinates };
 }
 
 function wait(milliseconds) {
@@ -153,9 +195,10 @@ async function renderRequest(requestId, payload) {
       }, stateful.state);
     }
     : compileAuthoritativePattern(recipe.base?.patternId, indices, geometry.visiblePixelCount);
+  const sampled = sampledStrips(geometry, indices);
   const frame = renderPixelFrame({
     t: Number(payload.time) || 0,
-    strips: sampledStrips(geometry, indices),
+    strips: sampled,
     patternId: recipe.base?.patternId,
     activeFn,
     params: recipe.base?.params || {},
@@ -170,10 +213,56 @@ async function renderRequest(requestId, payload) {
     audioBands: geometry.audioBands,
     normBounds: geometry.normalizationBounds,
   });
+  let renderedPixels = frame.pixels;
+  for (const layer of recipe.layers || []) {
+    if (layer?.generator?.kind !== 'lightweaver-pattern') {
+      throw new RangeError(`Unsupported Pattern Lab layer generator: ${String(layer?.generator?.kind)}`);
+    }
+    const layerFn = compileAuthoritativePattern(
+      layer.generator.patternId,
+      indices,
+      geometry.visiblePixelCount,
+    );
+    if (!layerFn) throw new RangeError(`Unknown Pattern Lab layer pattern: ${String(layer.generator.patternId)}`);
+    const preparedLayer = layerGeometry(sampled, layer, geometry.normalizationBounds);
+    const layerFrame = renderPixelFrame({
+      t: Number(payload.time) || 0,
+      strips: preparedLayer.strips,
+      patternId: layer.generator.patternId,
+      activeFn: layerFn,
+      params: layer.generator.params || {},
+      paletteNorm: normalizePalette(layer.palette || recipe.palette),
+      bpm: geometry.bpm,
+      masterSpeed: options.masterSpeed,
+      masterBrightness: options.masterBrightness,
+      masterSaturation: options.masterSaturation,
+      masterHueShift: options.masterHueShift,
+      gammaLUT: buildGammaLut(geometry.gammaEnabled, geometry.gammaValue),
+      symSettings: geometry.symSettings,
+      audioBands: geometry.audioBands,
+      normBounds: geometry.normalizationBounds,
+    });
+    if (layerFrame.pixels.length !== renderedPixels.length
+      || preparedLayer.coordinates.length !== renderedPixels.length) {
+      throw new RangeError('Pattern Lab layer output does not match the base geometry');
+    }
+    renderedPixels = renderedPixels.map((backdrop, index) => {
+      const coordinate = preparedLayer.coordinates[index];
+      const mask = coordinate.targetMatched
+        ? samplePatternLabMask(layer.mask || { kind: 'none' }, coordinate)
+        : 0;
+      return blendPatternLabColors(
+        backdrop,
+        layerFrame.pixels[index],
+        layer.blendMode || 'normal',
+        (layer.opacity ?? 1) * mask,
+      );
+    });
+  }
   if (cancelledRequests.delete(requestId)) return;
 
-  const colors = new Uint8ClampedArray(frame.pixels.length * 3);
-  frame.pixels.forEach((color, index) => {
+  const colors = new Uint8ClampedArray(renderedPixels.length * 3);
+  renderedPixels.forEach((color, index) => {
     colors[index * 3] = color.r;
     colors[index * 3 + 1] = color.g;
     colors[index * 3 + 2] = color.b;
