@@ -176,6 +176,12 @@ for (const handlerName of [
   assert.doesNotMatch(provisioningHandler, /runtimeCommandReady|provisioningControlAdmitted/,
     `${handlerName} must remain available while runtime control is locked`);
 }
+const identifyHandler = functionBody(web, /void\s+handleIdentify\s*\(/);
+assert.match(identifyHandler, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
+  'identify must share the command-readiness gate');
+assert.ok(identifyHandler.indexOf('provisioningControlAdmitted(runtimeCommandReady())') <
+          identifyHandler.indexOf('runtimeTriggerIdentify()'),
+  'identify must reject before changing output ownership');
 assert.match(control, /colorOrder[\s\S]*400[\s\S]*invalid color order/,
   'invalid live color order must receive a 4xx acknowledgement');
 assert.match(control, /runtimeControlTargetExists\s*\([\s\S]*422/,

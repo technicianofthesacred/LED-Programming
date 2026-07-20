@@ -81,17 +81,27 @@ test('discovery is one approved assignment per rebooted step and never persists 
     'a discovery response must not expose multiple active assignments');
 });
 
-test('factory reset refuses to claim completion when SD config removal fails', () => {
-  const runtimeReset = body(main, 'bool runtimeFactoryReset(', 'void runtimeResetWifi(');
+test('factory reset stages SD config and restores it when NVS clear fails', () => {
+  const runtimeReset = body(main, 'FactoryResetResult runtimeFactoryReset(', 'bool runtimeFinalizeFactoryResetRadio(');
   assert.match(runtimeReset, /SD\.begin\(LW_SD_CS\)/,
     'factory reset must mount SD even when normal boot loaded known-good NVS first');
-  assert.match(runtimeReset, /if \(!sdMounted\)[\s\S]*sd unavailable; remove card or retry[\s\S]*return false/,
+  assert.match(runtimeReset, /if \(!sdMounted\)[\s\S]*sd unavailable; remove card or retry[\s\S]*return result/,
     'an uncertain SD state must fail closed with an actionable error');
-  assert.match(runtimeReset, /SD\.exists\("\/lightweaver\.json"\)/);
-  assert.match(runtimeReset, /SD\.remove\("\/lightweaver\.json"\)/);
-  assert.match(runtimeReset, /sd[^"\n]*remove|remove[^"\n]*sd/i);
-  assert.ok(runtimeReset.indexOf('SD.remove') < runtimeReset.indexOf('prefs.clear'),
-    'SD removal must succeed before NVS is erased');
+  assert.match(runtimeReset, /SD\.exists\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
+    'factory reset must detect stale recovery files');
+  assert.match(runtimeReset, /if \(staleRecoveryExists && sdConfigExists\)[\s\S]*SD\.remove\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
+    'a stale recovery file may be removed only when the active config still exists');
+  assert.match(runtimeReset, /else if \(staleRecoveryExists\)[\s\S]*sdConfigStaged\s*=\s*true/,
+    'a lone recovery file must stay staged so NVS failure can restore it');
+  assert.match(runtimeReset, /SD\.rename\(\s*LW_FACTORY_CONFIG_PATH,\s*LW_FACTORY_RESET_RECOVERY_PATH\)/,
+    'active SD config must be staged by rename before NVS mutation');
+  assert.doesNotMatch(runtimeReset, /SD\.remove\(LW_FACTORY_CONFIG_PATH\)/,
+    'active SD config must not be deleted before later reset failure points');
+  assert.match(runtimeReset, /if \(!nvsCleared\)[\s\S]*SD\.rename\(\s*LW_FACTORY_RESET_RECOVERY_PATH,\s*LW_FACTORY_CONFIG_PATH\)/,
+    'NVS failure must restore the active SD filename');
+  assert.match(runtimeReset, /nvs[^"\n]*sd config restored/i);
+  assert.ok(runtimeReset.indexOf('sdConfigStaged = SD.rename(') < runtimeReset.indexOf('prefs.clear'),
+    'SD staging must complete before NVS is erased');
   assert.ok(runtimeReset.indexOf('SD.begin') < runtimeReset.indexOf('SD.exists'),
     'SD must be mounted before reset decides whether a config exists');
   const sdUnavailableBranch = runtimeReset.slice(
@@ -100,8 +110,48 @@ test('factory reset refuses to claim completion when SD config removal fails', (
   );
   assert.doesNotMatch(sdUnavailableBranch, /prefs|Preferences|\.clear\(|ESP\.restart/,
     'SD mount failure must return before NVS mutation or reboot');
+  const cleanupAfterNvs = runtimeReset.slice(runtimeReset.indexOf('if (!nvsCleared)'));
+  assert.match(cleanupAfterNvs, /SD\.remove\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
+    'staged SD config is deleted only after irreversible NVS clear');
+  assert.match(cleanupAfterNvs, /recovery backup remains[^"\n]*not auto-loaded/i,
+    'backup cleanup failure must report actionable non-bootable recovery truth');
+});
+
+test('factory reset acknowledges pending verification before radio erase and reboot', () => {
+  const runtimeReset = body(main, 'FactoryResetResult runtimeFactoryReset(', 'bool runtimeFinalizeFactoryResetRadio(');
+  assert.doesNotMatch(runtimeReset, /WiFi\.(?:disconnect|eraseAP|mode)/,
+    'storage transaction must not disable the response radio');
+  const finalizeRadio = body(main, 'bool runtimeFinalizeFactoryResetRadio(', 'void runtimeResetWifi(');
+  assert.match(finalizeRadio, /WiFi\.eraseAP\(\)/,
+    'post-response finalizer must use the SDK credential erase result');
+  assert.match(finalizeRadio, /WiFi\.mode\(WIFI_OFF\)/,
+    'post-response finalizer must disable the radio');
   const webReset = body(web, 'void handleFactoryReset()', 'void handleResetWifi()');
-  assert.match(webReset, /runtimeFactoryReset\(message\)/);
+  assert.match(webReset, /FactoryResetResult\s+result\s*=\s*runtimeFactoryReset\(\)/);
   assert.match(webReset, /server\.send\(500/);
-  assert.match(webReset, /ESP\.restart\(\)/);
+  for (const field of ['accepted', 'pendingVerification', 'requiresReboot']) {
+    assert.ok(webReset.includes(`\\"${field}\\":true`),
+      `pending reset acknowledgement must report ${field}`);
+  }
+  assert.doesNotMatch(webReset, /"source":"defaults"|"knownGoodProject":false|"runtimePhase":"factory"/,
+    'pre-reboot response must not claim post-reboot state is verified');
+  const sendAt = webReset.indexOf('server.send(202');
+  const flushAt = webReset.indexOf('server.client().flush()');
+  const delayAt = webReset.indexOf('delay(200)');
+  const finalizeAt = webReset.indexOf('runtimeFinalizeFactoryResetRadio');
+  const rebootAt = webReset.indexOf('ESP.restart()');
+  assert.ok(sendAt >= 0 && sendAt < flushAt && flushAt < delayAt && delayAt < finalizeAt && finalizeAt < rebootAt,
+    'handler must send and flush pending acknowledgement, then erase radio credentials, then reboot');
+});
+
+test('identify is locked out before it can suppress the factory beacon', () => {
+  const identify = body(web, 'void handleIdentify()', 'void handleZones()');
+  const gateAt = identify.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+  const triggerAt = identify.indexOf('runtimeTriggerIdentify()');
+  assert.ok(gateAt >= 0 && gateAt < triggerAt,
+    'identify readiness gate must run before output ownership changes');
+  assert.match(identify.slice(gateAt, triggerAt), /server\.send\(423/);
+  for (const field of ['cardId', 'bootId', 'runtimePhase', 'commandReady']) {
+    assert.match(identify.slice(gateAt, triggerAt), new RegExp(`rejected\\["${field}"\\]`));
+  }
 });

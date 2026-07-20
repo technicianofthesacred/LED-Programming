@@ -55,6 +55,9 @@
 #define LW_CAPABILITIES_VERSION 1
 #endif
 
+constexpr const char* LW_FACTORY_CONFIG_PATH = "/lightweaver.json";
+constexpr const char* LW_FACTORY_RESET_RECOVERY_PATH = "/lightweaver.reset-recovery.json";
+
 CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
@@ -1791,20 +1794,40 @@ String runtimeFirmwareInfo() {
   return out;
 }
 
-bool runtimeFactoryReset(String& message) {
+FactoryResetResult runtimeFactoryReset() {
+  FactoryResetResult result;
   runtimeMarkRestartPending();
   bool sdMounted = SD.begin(LW_SD_CS);
   if (!sdMounted) {
     restartTransitionPending = false;
-    message = "sd unavailable; remove card or retry; factory reset not completed";
-    return false;
+    result.message = "sd unavailable; remove card or retry; factory reset not completed";
+    return result;
   }
-  bool sdConfigExists = SD.exists("/lightweaver.json");
-  bool sdConfigRemoved = !sdConfigExists || SD.remove("/lightweaver.json");
-  if (sdConfigExists && !sdConfigRemoved) {
-    restartTransitionPending = false;
-    message = "sd /lightweaver.json removal failed; factory reset not completed";
-    return false;
+
+  bool sdConfigExists = SD.exists(LW_FACTORY_CONFIG_PATH);
+  bool staleRecoveryExists = SD.exists(LW_FACTORY_RESET_RECOVERY_PATH);
+  bool sdConfigStaged = false;
+  if (staleRecoveryExists && sdConfigExists) {
+    if (!SD.remove(LW_FACTORY_RESET_RECOVERY_PATH)) {
+      restartTransitionPending = false;
+      result.message = "sd stale reset recovery cleanup failed; remove /lightweaver.reset-recovery.json or retry";
+      return result;
+    }
+  } else if (staleRecoveryExists) {
+    // A power loss may leave the only recoverable project under the inert
+    // backup name. Keep it staged so an NVS failure can restore active boot.
+    sdConfigStaged = true;
+    sdConfigExists = true;
+  }
+
+  if (sdConfigExists && !sdConfigStaged) {
+    sdConfigStaged = SD.rename(
+        LW_FACTORY_CONFIG_PATH, LW_FACTORY_RESET_RECOVERY_PATH);
+    if (!sdConfigStaged) {
+      restartTransitionPending = false;
+      result.message = "sd config staging rename failed; factory reset not started";
+      return result;
+    }
   }
 
   Preferences prefs;
@@ -1813,15 +1836,42 @@ bool runtimeFactoryReset(String& message) {
     nvsCleared = prefs.clear();
     prefs.end();
   }
+  if (!nvsCleared) {
+    bool sdRestored = !sdConfigStaged || SD.rename(
+        LW_FACTORY_RESET_RECOVERY_PATH, LW_FACTORY_CONFIG_PATH);
+    restartTransitionPending = false;
+    result.message = sdRestored
+        ? "nvs erase failed; sd config restored; factory reset not completed"
+        : "nvs erase failed and sd restore failed; config remains at /lightweaver.reset-recovery.json; recover manually";
+    return result;
+  }
+
+  bool sdConfigRemoved = !sdConfigStaged || SD.remove(LW_FACTORY_RESET_RECOVERY_PATH);
+  if (!sdConfigRemoved) {
+    restartTransitionPending = false;
+    result.message = "nvs erased; sd recovery backup remains at /lightweaver.reset-recovery.json and is not auto-loaded; remove manually; factory reset incomplete";
+    return result;
+  }
   if (!provisioningFactoryResetMayComplete(
           sdMounted, sdConfigExists, sdConfigRemoved, nvsCleared)) {
     restartTransitionPending = false;
-    message = "nvs erase failed after sd cleanup; factory reset not completed";
-    return false;
+    result.message = "factory reset verification failed after storage cleanup";
+    return result;
   }
-  WiFi.disconnect(true, true);
-  message = "factory storage erased; rebooting blank";
-  return true;
+  result.accepted = true;
+  result.pendingVerification = true;
+  result.message = "factory storage erased; reboot pending verification";
+  return result;
+}
+
+bool runtimeFinalizeFactoryResetRadio(String& message) {
+  bool credentialsErased = WiFi.eraseAP();
+  bool radioDisabled = WiFi.mode(WIFI_OFF);
+  bool ok = credentialsErased && radioDisabled;
+  message = ok
+      ? "sdk wifi erased and radio disabled"
+      : "sdk wifi erase or radio shutdown failed; reboot status must verify reset";
+  return ok;
 }
 
 // Wipe only the WiFi key. Keeps piece name, hostname, and pattern config.

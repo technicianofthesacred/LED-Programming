@@ -88,5 +88,8 @@ const factoryBranch = setup.slice(setup.indexOf('ProvisioningPhase::Factory'), s
 assert.match(factoryBranch, /runtimeRecoveryAfterRestartPending\(\)/);
 assert.match(factoryBranch, /clearRuntimeRecoveryAfterRestart/,
   'a factory boot must complete recovery intent without starting normal project output');
+const identify = functionBody(web, 'void handleIdentify()', 'void handleZones()');
+assert.match(identify, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
+  'identify must not take output ownership on a factory card');
 
 console.log('factory-beacon-safety tests passed');

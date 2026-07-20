@@ -1644,6 +1644,19 @@ void handleRecoverLights() {
 
 void handleIdentify() {
   sendCors();
+  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["error"] = "runtime is not ready for output commands";
+    rejected["cardId"] = runtimeCardId();
+    rejected["bootId"] = runtimeBootId();
+    rejected["runtimePhase"] = runtimeProvisioningPhase();
+    rejected["commandReady"] = false;
+    String body;
+    serializeJson(rejected, body);
+    server.send(423, "application/json", body);
+    return;
+  }
   runtimeTriggerIdentify();
   server.send(200, "application/json", "{\"ok\":true}");
 }
@@ -1673,14 +1686,19 @@ void handleFactoryReset() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
     return;
   }
-  String message;
-  if (!runtimeFactoryReset(message)) {
-    server.send(500, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
+  FactoryResetResult result = runtimeFactoryReset();
+  if (!result.accepted) {
+    server.send(500, "application/json", String("{\"ok\":false,\"error\":\"") + result.message + "\"}");
     return;
   }
-  server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message +
-              "\",\"source\":\"defaults\",\"knownGoodProject\":false,\"runtimePhase\":\"factory\"}");
+  server.send(202, "application/json", String("{\"ok\":true,\"accepted\":true,\"pendingVerification\":true,\"requiresReboot\":true,\"message\":\"") +
+              result.message + "\"}");
+  server.client().flush();
   delay(200);
+  String radioMessage;
+  if (!runtimeFinalizeFactoryResetRadio(radioMessage) && Serial) {
+    Serial.println(radioMessage);
+  }
   ESP.restart();
 }
 
