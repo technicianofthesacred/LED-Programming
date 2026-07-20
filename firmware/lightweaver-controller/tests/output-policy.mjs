@@ -267,8 +267,9 @@ function verifyOutputFunnelContracts() {
     'special output modes should use an explicit-brightness show overload');
   assert.match(main, /showLeds\s*\(\s*220\s*\)/,
     'identify should preserve its explicit brightness through the shared funnel');
-  assert.match(main, /showLeds\s*\(\s*uint8_t\s*\(\s*clampUnit\s*\(\s*brightnessLimit\s*\)\s*\*\s*255\.0f\s*\)\s*\)/,
-    'AP recovery should preserve its brightness-limit output through the shared funnel');
+  assert.doesNotMatch(main,
+    /activeTransport\s*==\s*WIFI_TRANSPORT_AP[\s\S]{0,600}showLeds\s*\(/,
+    'AP recovery should preserve normal saved-project rendering instead of owning the output funnel');
 
   assert.match(main, /outputColorPipeline\.configure\s*\(\s*config\.outputColor\s*\)/,
     'runtime config should configure the shared output color pipeline');

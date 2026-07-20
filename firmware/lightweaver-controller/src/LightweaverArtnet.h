@@ -21,6 +21,9 @@ constexpr uint16_t LW_ARTNET_PORT = 6454;
 constexpr uint16_t LW_ARTNET_PIXELS_PER_UNIVERSE = 170;
 
 void setupArtnet(CRGB* leds, uint16_t totalPixels);
+// Discard stale UDP state and re-open port 6454 after station association.
+// Safe to call on every association; handleArtnet retains its lazy fallback.
+void artnetRebind();
 void handleArtnet();
 bool artnetIsConfigured();
 void artnetConfigure(const ArtnetUniverseConfig* configs, uint8_t count);

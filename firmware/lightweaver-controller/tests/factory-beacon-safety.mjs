@@ -78,7 +78,6 @@ assert.equal((discoverySetup.match(/addLedsForPin\(/g) || []).length, 1,
 assert.match(discoverySetup, /LW_FACTORY_BEACON_PIXEL_LIMIT/);
 
 for (const [handler, nextHandler] of [
-  ['void handleWifiPost()', 'void handleWifiScan()'],
   ['void handleReboot()', 'void handleControlPost();'],
   ['void handleResetWifi()', 'void handleRenamePost()'],
 ]) {
@@ -87,6 +86,9 @@ for (const [handler, nextHandler] of [
   assert.ok(markAt >= 0 && markAt < transition.indexOf('server.send(200'),
     `${handler} must black the factory beacon before acknowledging a WiFi/restart transition`);
 }
+const wifiPost = functionBody(web, 'void handleWifiPost()', 'void handleWifiScan()');
+assert.doesNotMatch(wifiPost, /runtimeMarkRestartPending|clearPhysicalLeds|FastLED/,
+  'nonblocking WiFi association must not stop factory or known-good LED playback');
 const stopDiscovery = functionBody(main, 'bool runtimeStopSafeDiscovery(', 'String runtimeRecoverLights(');
 assert.match(stopDiscovery, /if \(stopped\) runtimeMarkRestartPending\(\)/,
   'stopping discovery must submit black before its reboot delay');
@@ -101,5 +103,12 @@ assert.match(factoryBranch, /clearRuntimeRecoveryAfterRestart/,
 const identify = functionBody(web, 'void handleIdentify()', 'void handleZones()');
 assert.match(identify, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
   'identify must not take output ownership on a factory card');
+
+const loop = functionBody(main, 'void loop()', 'void applyRuntimeConfig(');
+assert.doesNotMatch(loop,
+  /runtimeConfig\.activeTransport\s*==\s*WIFI_TRANSPORT_AP[\s\S]{0,600}fill_solid/,
+  'recovery AP transport alone must never replace a commissioned project with a beacon');
+assert.match(factoryBranch, /factoryBeaconMode\s*=\s*true/,
+  'the factory-alive beacon remains restricted to the genuinely blank factory branch');
 
 console.log('factory-beacon-safety tests passed');

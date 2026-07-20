@@ -10,6 +10,8 @@ const storageHeader = read('src/LightweaverStorage.h');
 const runtimeApi = read('src/LightweaverRuntimeApi.h');
 const main = read('src/main.cpp');
 const web = read('src/LightweaverWeb.cpp');
+const artnet = read('src/LightweaverArtnet.cpp');
+const artnetHeader = read('src/LightweaverArtnet.h');
 const parserGuard = read('scripts/guard-webserver-control-body.py');
 const platformio = read('platformio.ini');
 
@@ -32,8 +34,6 @@ assert.match(web, /#include "LightweaverConnectivityPolicy\.h"/,
   'firmware orchestration must use the native-tested connectivity policy');
 assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*ConnectivityState[\s\S]*stationIp[\s\S]*lastError[\s\S]*attemptCount[\s\S]*};/,
   'transient WiFi truth must be separate from saved credentials and include transition/retry metadata');
-assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*bool stationLinkPending\s*=\s*false/,
-  'completed-station link loss must have a passive readiness interlock without changing policy phase');
 assert.match(types, /struct RuntimeConfig\s*{[\s\S]*WifiConfig wifi;[\s\S]*WifiRuntimeState wifiRuntime;/,
   'runtime configuration must carry live WiFi truth separately from WifiConfig');
 
@@ -125,8 +125,12 @@ for (const proof of [
 assert.ok(processTeardown.indexOf('apTeardownDeadlineMs') < processTeardown.indexOf('retireSetupAp'),
   'AP teardown must happen only after the response-settle deadline and proof revalidation');
 
-assert.match(web, /constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES\s*=\s*256/);
-assert.match(web, /constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES\s*=\s*128/);
+assert.match(web, /constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES\s*=\s*LW_WEB_WIFI_MAX_BODY_BYTES/);
+assert.match(web, /constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES\s*=\s*LW_WEB_WIFI_ACK_MAX_BODY_BYTES/);
+assert.match(web, /static_assert\s*\(LW_MAX_WIFI_REQUEST_BODY_BYTES\s*>=\s*320/,
+  'the C++ buffer must compile-time enforce room for maximum validator-legal escaped credentials');
+assert.match(web, /static_assert\s*\(LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES\s*>=\s*128/,
+  'the handoff acknowledgement buffer must retain its compile-time lower bound');
 assert.match(web, /class BoundedWifiRequestHandler/,
   'WiFi mutations must use a dedicated raw request handler');
 assert.match(web, /server\.addHandler\(new BoundedWifiRequestHandler\(\)\)/,
@@ -143,12 +147,22 @@ for (const route of ['/api/wifi', '/api/wifi/handoff-ack']) {
 }
 assert.match(parserGuard, /LW_WEB_WIFI_MAX_BODY_BYTES[\s\S]*LW_WEB_WIFI_ACK_MAX_BODY_BYTES/,
   'framework allocation guard must use explicit WiFi body limits');
-assert.match(platformio, /-DLW_WEB_WIFI_MAX_BODY_BYTES=256/);
+assert.match(platformio, /-DLW_WEB_WIFI_MAX_BODY_BYTES=(?:384|512)/);
 assert.match(platformio, /-DLW_WEB_WIFI_ACK_MAX_BODY_BYTES=128/);
+const maximumEscapedWifiBody = JSON.stringify({
+  ssid: '"'.repeat(32),
+  password: '\\'.repeat(63),
+  hostname: '"'.repeat(32),
+});
+assert.ok(maximumEscapedWifiBody.length > 256 && maximumEscapedWifiBody.length <= 512,
+  'the raised bound must fit fully escaped validator-maximum WiFi fields');
 
 const connectivity = functionBody(web, /void\s+maintainConnectivity\s*\(/);
 assert.match(connectivity, /advanceConnectivity\s*\(/,
   'runtime lifecycle must be driven by the tested pure policy');
+assert.match(connectivity,
+  /bool\s+stationReady\s*=\s*connected[\s\S]{0,180}0\.0\.0\.0[\s\S]*if\s*\(stationReady[\s\S]*recordStationAssociation/,
+  'recovery must not retire its AP or restore readiness until station DHCP is usable');
 assert.match(connectivity, /processScheduledApTeardown\(cfg, state, now\);\s*if\s*\(apTeardownScheduled\)\s*return;/,
   'an accepted ACK deadline must fence grace-based teardown until response settlement');
 assert.match(connectivity, /WL_CONNECTED[\s\S]*HandoffReady|StationAssociated/,
@@ -158,14 +172,34 @@ assert.match(connectivity, /station association timed out[\s\S]*startApMode|Setu
 const associated = functionBody(web, /void\s+recordStationAssociation\s*\(/);
 assert.match(associated, /announceMdns[\s\S]*wledRealtimeRebind/,
   'association must refresh mDNS and existing realtime binding');
+assert.match(associated, /wledRealtimeRebind[\s\S]*artnetRebind/,
+  'every association and reassociation must refresh both UDP listeners');
+assert.ok(associated.indexOf('artnetRebind()') < associated.indexOf('syncWifiReadiness(config)'),
+  'command readiness may return only after all runtime UDP bindings are refreshed');
+assert.match(artnetHeader, /void\s+artnetRebind\s*\(\s*\)/,
+  'Art-Net must expose an explicit reconnect binding API');
+const artnetRebind = functionBody(artnet, /void\s+artnetRebind\s*\(\s*\)/);
+assert.match(artnetRebind, /gUdp\.stop\s*\(\s*\)[\s\S]*gListening\s*=\s*false[\s\S]*LW_ARTNET_PORT/,
+  'Art-Net rebind must discard stale socket truth and reopen UDP 6454');
+const recoveryAp = functionBody(web, /void\s+ensureRecoveryAp\s*\([^;]*\)\s*\{/);
+assert.match(recoveryAp, /apActive\s*=\s*apRadioStarted/,
+  'recovery AP status must reflect whether the AP radio actually started');
+assert.match(recoveryAp,
+  /activeIp\s*=\s*apRadioStarted\s*\?\s*WiFi\.softAPIP\(\)\.toString\(\)\s*:\s*String\(\)/,
+  'recovery AP status must not publish a dead soft-AP address');
 assert.match(connectivity, /kHandoffGraceMs|advanceConnectivity[\s\S]*Tick/,
   'a still-associated station may retire the AP after the tested grace period');
-assert.match(connectivity, /state\.phase\s*==\s*lightweaver::ConnectivityPhase::Station[\s\S]*stationLinkPending\s*=\s*true[\s\S]*stationAssociated\s*=\s*false/,
-  'completed Station loss must demote readiness while leaving the policy in Station');
-assert.match(connectivity, /state\.phase\s*==\s*lightweaver::ConnectivityPhase::Station[\s\S]*stationLinkPending\s*=\s*false[\s\S]*announceMdns[\s\S]*wledRealtimeRebind/,
-  'passive SDK station reacquisition must refresh IP and network bindings');
-assert.doesNotMatch(connectivity, /ConnectivityPhase::RecoveryAp|ConnectivityPhase::Reconnecting|kRecoveryApThresholdMs|kReconnectCadenceMs/,
-  'Task 2 must not orchestrate active post-handoff retry or recovery AP behavior');
+assert.match(connectivity, /ConnectivityPhase::Station[\s\S]*ConnectivityEvent::StationLost[\s\S]*syncWifiReadiness[\s\S]*(?:WiFi\.reconnect|startStationReconnect)/,
+  'completed Station loss must enter policy Reconnecting, fail readiness closed, and retry immediately');
+assert.match(connectivity,
+  /ConnectivityPhase::Station[\s\S]*currentStationIp\s*!=\s*cfg\.wifiRuntime\.stationIp[\s\S]*recordStationAssociation/,
+  'a changed station address must refresh mDNS and both UDP bindings even without an observed disconnect');
+assert.match(connectivity, /advanceConnectivity[\s\S]*ConnectivityEvent::Tick[\s\S]*reconnectDue[\s\S]*(?:WiFi\.reconnect|startStationReconnect)/,
+  'policy reconnectDue ticks must actively retry the station association');
+assert.match(connectivity, /ConnectivityPhase::RecoveryAp[\s\S]*(?:ensureRecoveryAp|startRecoveryAp)/,
+  'the 60-second policy transition must enable the recovery AP');
+assert.match(connectivity, /ConnectivityPhase::Reconnecting[\s\S]*ConnectivityPhase::RecoveryAp[\s\S]*recordStationAssociation/,
+  'both runtime recovery phases must accept reassociation without replaying initial handoff');
 assert.match(connectivity, /ConnectivityPhase::HandoffReady[\s\S]*ConnectivityEvent::StationLost[\s\S]*stationIp\s*=\s*""[\s\S]*activeTransport\s*=\s*WIFI_TRANSPORT_AP[\s\S]*activeIp\s*=\s*WiFi\.softAPIP\(\)\.toString\(\)[\s\S]*activeHostname\s*=\s*""/,
   'pre-ack loss must immediately restore legacy AP transport, IP, and hostname truth');
 

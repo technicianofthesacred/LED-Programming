@@ -391,20 +391,6 @@ void loop() {
     }
   }
 
-  // Recovery indicator: when the card has saved WiFi but couldn't join,
-  // it's now broadcasting Lightweaver-XXXX waiting for someone to fix it.
-  // Pulse the strip in warm white so a homeowner can see "something's up"
-  // without having to think about networks. Skipped on truly fresh cards
-  // (no WiFi configured yet) because those are following first-boot setup.
-  if (runtimeConfig.activeTransport == WIFI_TRANSPORT_AP &&
-      runtimeConfig.wifi.ssid.length() > 0) {
-    uint8_t pulse = beatsin8(8, 30, 200); // 8 BPM gentle pulse
-    fill_solid(leds, totalPixels, CHSV(28, 180, pulse));
-    showLeds(uint8_t(clampUnit(brightnessLimit) * 255.0f));
-    delay(20);
-    return;
-  }
-
   if (blackedOut) {
     delay(10);
     return;

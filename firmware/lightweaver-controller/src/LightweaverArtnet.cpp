@@ -135,6 +135,16 @@ void setupArtnet(CRGB* leds, uint16_t totalPixels) {
   }
 }
 
+void artnetRebind() {
+  gUdp.stop();
+  gListening = false;
+  gListening = gUdp.begin(LW_ARTNET_PORT);
+  if (Serial) {
+    Serial.println(gListening ? "Art-Net: rebound UDP 6454 after reconnect"
+                              : "Art-Net: UDP 6454 rebind failed; lazy retry armed");
+  }
+}
+
 void handleArtnet() {
   if (!gListening) {
     // Lazy retry — useful when WiFi associates after setup() returns.

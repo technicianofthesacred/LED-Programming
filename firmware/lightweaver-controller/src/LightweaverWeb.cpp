@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWledJsonApi.h"
 #include "LightweaverWledRealtime.h"
+#include "LightweaverArtnet.h"
 #include "LightweaverConnectivityPolicy.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -15,6 +16,13 @@ RuntimeConfig* runtimeConfigPtr = nullptr;
 ErrorCode* errorCodePtr = nullptr;
 uint16_t* totalPixelsPtr = nullptr;
 uint8_t* currentLookIndexPtr = nullptr;
+#ifndef LW_WEB_WIFI_MAX_BODY_BYTES
+#define LW_WEB_WIFI_MAX_BODY_BYTES 512
+#endif
+#ifndef LW_WEB_WIFI_ACK_MAX_BODY_BYTES
+#define LW_WEB_WIFI_ACK_MAX_BODY_BYTES 128
+#endif
+
 constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
 uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
 size_t controlRequestBodyLength = 0;
@@ -30,8 +38,12 @@ size_t runtimeRequestExpectedLength = 0;
 size_t runtimeRequestBodyLimit = 0;
 bool runtimeRequestBodyReady = false;
 bool runtimeRequestBodyRejected = false;
-constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES = 256;
-constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES = 128;
+constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES = LW_WEB_WIFI_MAX_BODY_BYTES;
+constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES = LW_WEB_WIFI_ACK_MAX_BODY_BYTES;
+static_assert(LW_MAX_WIFI_REQUEST_BODY_BYTES >= 320,
+              "WiFi request body limit must cover escaped credentials");
+static_assert(LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES >= 128,
+              "WiFi acknowledgement body limit is too small");
 uint8_t wifiRequestBody[LW_MAX_WIFI_REQUEST_BODY_BYTES + 1] = {};
 size_t wifiRequestBodyLength = 0;
 size_t wifiRequestExpectedLength = 0;
@@ -40,11 +52,13 @@ bool wifiRequestBodyReady = false;
 bool wifiRequestBodyRejected = false;
 constexpr uint32_t LW_HANDOFF_RESPONSE_SETTLE_MS = 400;
 bool apTeardownScheduled = false;
+bool apRadioStarted = false;
 uint32_t apTeardownGeneration = 0;
 uint32_t apTeardownDeadlineMs = 0;
 String apTeardownStationIp;
 
 void startApMode(RuntimeConfig& config);
+void ensureRecoveryAp(RuntimeConfig& config);
 void beginStationJoin(RuntimeConfig& config, uint32_t generation);
 void scheduleApTeardown(uint32_t generation);
 
@@ -1984,10 +1998,10 @@ void startApMode(RuntimeConfig& config) {
   WiFi.mode(config.wifi.ssid.length() ? WIFI_AP_STA : WIFI_AP);
   WiFi.setSleep(false);
   String ssid = apSsid();
-  WiFi.softAP(ssid.c_str());
-  config.wifiRuntime.connectivity.apActive = true;
+  if (!apRadioStarted) apRadioStarted = WiFi.softAP(ssid.c_str());
+  config.wifiRuntime.connectivity.apActive = apRadioStarted;
   config.activeTransport = WIFI_TRANSPORT_AP;
-  config.activeIp = WiFi.softAPIP().toString();
+  config.activeIp = apRadioStarted ? WiFi.softAPIP().toString() : String();
   config.activeHostname = "";
   if (Serial) {
     Serial.print("Lightweaver AP: ");
@@ -1997,9 +2011,30 @@ void startApMode(RuntimeConfig& config) {
   }
 
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServerActive = dnsServer.start(53, "*", WiFi.softAPIP());
+  if (apRadioStarted && !dnsServerActive) {
+    dnsServerActive = dnsServer.start(53, "*", WiFi.softAPIP());
+  }
   if (dnsServerActive) {
     if (Serial) Serial.println("Captive DNS up");
+  }
+}
+
+void ensureRecoveryAp(RuntimeConfig& config) {
+  // Runtime recovery is deliberately separate from commissioning and reset:
+  // keep the saved credentials/project intact while making setup reachable.
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleep(false);
+  if (!apRadioStarted) {
+    String ssid = apSsid();
+    apRadioStarted = WiFi.softAP(ssid.c_str());
+  }
+  config.wifiRuntime.connectivity.apActive = apRadioStarted;
+  config.activeTransport = WIFI_TRANSPORT_AP;
+  config.activeIp = apRadioStarted ? WiFi.softAPIP().toString() : String();
+  config.activeHostname = "";
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  if (apRadioStarted && !dnsServerActive) {
+    dnsServerActive = dnsServer.start(53, "*", WiFi.softAPIP());
   }
 }
 
@@ -2025,6 +2060,18 @@ void startStationAttempt(RuntimeConfig& config) {
   WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
   config.wifiRuntime.attemptCount++;
   if (Serial) Serial.println("WiFi station association started");
+}
+
+void startStationReconnect(RuntimeConfig& config) {
+  WiFi.mode(config.wifiRuntime.connectivity.apActive ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setHostname(sanitizeHostname(config.wifi.hostname).c_str());
+  if (!WiFi.reconnect()) {
+    WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
+  }
+  config.wifiRuntime.attemptCount++;
+  if (Serial) Serial.println("WiFi station reassociation requested");
 }
 
 void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
@@ -2061,6 +2108,7 @@ void retireSetupAp(RuntimeConfig& config) {
     dnsServerActive = false;
   }
   WiFi.softAPdisconnect(true);
+  apRadioStarted = false;
   WiFi.mode(WIFI_STA);
   config.wifiRuntime.connectivity.apActive = false;
   config.wifiRuntime.stationLinkPending = false;
@@ -2094,6 +2142,9 @@ void processScheduledApTeardown(
 }
 
 void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
+  bool recoveryApWasActive =
+      config.wifiRuntime.connectivity.phase ==
+      lightweaver::ConnectivityPhase::RecoveryAp;
   config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
       config.wifiRuntime.connectivity,
       {lightweaver::ConnectivityEvent::StationAssociated, now, 0});
@@ -2105,6 +2156,10 @@ void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
   config.activeHostname = sanitizeHostname(config.wifi.hostname);
   announceMdns(config.activeHostname);
   wledRealtimeRebind();
+  artnetRebind();
+  // A recovery AP is retired only after station IP and runtime listeners have
+  // been refreshed. Initial handoff AP retirement still requires ACK/grace.
+  if (recoveryApWasActive) retireSetupAp(config);
   syncWifiReadiness(config);
   if (Serial) {
     Serial.print("WiFi station associated at ");
@@ -2126,50 +2181,40 @@ void maintainConnectivity() {
   lastPollMs = now;
 
   bool connected = WiFi.status() == WL_CONNECTED;
+  String currentStationIp = connected ? WiFi.localIP().toString() : String();
+  bool stationReady = connected && currentStationIp.length() > 0 &&
+      currentStationIp != "0.0.0.0";
 
-  // Completed handoff is deliberately passive in Task 2. The ESP32 SDK owns
-  // auto-reconnect; we only make the outage observable/fail-closed and refresh
-  // bindings when the link returns. Active retry cadence + recovery AP belong
-  // to the later connectivity-recovery task.
   if (state.phase == lightweaver::ConnectivityPhase::Station) {
-    if (!connected) {
-      cfg.wifiRuntime.stationLinkPending = true;
-      state.stationAssociated = false;
+    if (!stationReady) {
+      state = lightweaver::advanceConnectivity(
+          state, {lightweaver::ConnectivityEvent::StationLost, now, 0});
+      cfg.wifiRuntime.stationLinkPending = false;
       cfg.wifiRuntime.stationIp = "";
       cfg.wifiRuntime.lastError = "station connection lost";
       cfg.activeIp = "";
+      cfg.activeHostname = "";
       syncWifiReadiness(cfg);
+      startStationReconnect(cfg);
       return;
     }
-    String stationIp = WiFi.localIP().toString();
-    bool needsRebind = !state.stationAssociated ||
-        (stationIp != "0.0.0.0" && stationIp != cfg.wifiRuntime.stationIp);
-    state.stationAssociated = true;
-    cfg.wifiRuntime.stationLinkPending = false;
-    cfg.wifiRuntime.stationIp = stationIp;
-    cfg.wifiRuntime.lastError = "";
-    cfg.activeTransport = WIFI_TRANSPORT_STATION;
-    cfg.activeIp = stationIp;
-    cfg.activeHostname = sanitizeHostname(cfg.wifi.hostname);
-    if (needsRebind) {
-      announceMdns(cfg.activeHostname);
-      wledRealtimeRebind();
-      if (Serial) {
-        Serial.print("WiFi station passively reacquired at ");
-        Serial.println(stationIp);
-      }
+    if (currentStationIp != cfg.wifiRuntime.stationIp) {
+      recordStationAssociation(cfg, now);
+      return;
     }
     syncWifiReadiness(cfg);
     return;
   }
 
-  if (connected && !state.stationAssociated &&
-      state.phase == lightweaver::ConnectivityPhase::Joining) {
+  if (stationReady && !state.stationAssociated &&
+      (state.phase == lightweaver::ConnectivityPhase::Joining ||
+       state.phase == lightweaver::ConnectivityPhase::Reconnecting ||
+       state.phase == lightweaver::ConnectivityPhase::RecoveryAp)) {
     recordStationAssociation(cfg, now);
     return;
   }
 
-  if (!connected && state.stationAssociated &&
+  if (!stationReady && state.stationAssociated &&
       state.phase == lightweaver::ConnectivityPhase::HandoffReady) {
     state = lightweaver::advanceConnectivity(
         state, {lightweaver::ConnectivityEvent::StationLost, now, 0});
@@ -2195,8 +2240,17 @@ void maintainConnectivity() {
     cfg.wifiRuntime.stationLinkPending = false;
     startApMode(cfg);
   } else if (previousPhase == lightweaver::ConnectivityPhase::HandoffReady &&
-             state.phase == lightweaver::ConnectivityPhase::Station && connected) {
+             state.phase == lightweaver::ConnectivityPhase::Station && stationReady) {
     retireSetupAp(cfg);
+  }
+
+  if (state.phase == lightweaver::ConnectivityPhase::RecoveryAp) {
+    ensureRecoveryAp(cfg);
+  }
+  if (state.reconnectDue &&
+      (state.phase == lightweaver::ConnectivityPhase::Reconnecting ||
+       state.phase == lightweaver::ConnectivityPhase::RecoveryAp)) {
+    startStationReconnect(cfg);
   }
 
   syncWifiReadiness(cfg);
