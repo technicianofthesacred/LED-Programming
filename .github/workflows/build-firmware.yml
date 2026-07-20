@@ -4,8 +4,8 @@ name: Build firmware binary
 # flashes to cards, and commits the complete release set back so the website
 # never ships stale or unsigned firmware. Runs in CI
 # because the ESP32 toolchain host is reachable here (it is blocked inside the
-# Claude agent sandbox). The trigger watches firmware SOURCE only, so the bot's
-# binary-only commit does not re-trigger this workflow (no loop).
+# Claude agent sandbox). The trigger watches firmware build inputs only, so the
+# bot's binary-only commit does not re-trigger this workflow (no loop).
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
     paths:
       - 'firmware/lightweaver-controller/src/**'
       - 'firmware/lightweaver-controller/platformio.ini'
-      - 'firmware/lightweaver-controller/scripts/build-factory-bin.sh'
+      - 'firmware/lightweaver-controller/scripts/**'
       - 'scripts/build-firmware-manifest.mjs'
       - 'scripts/sign-release-artifacts.mjs'
       - 'lightweaver/src/lib/firmwareRelease.js'
