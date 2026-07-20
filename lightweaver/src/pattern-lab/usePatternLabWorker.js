@@ -7,6 +7,13 @@ import {
 } from '../lib/patternLabWorkerProtocol.js';
 
 const WATCHDOG_MS = 350;
+const MIN_RENDER_INTERVAL_MS = 1000 / PATTERN_LAB_WORKER_BUDGETS.previewFps;
+
+export function cancelPatternLabWorker(worker) {
+  if (!worker || typeof worker.terminate !== 'function') return false;
+  worker.terminate();
+  return true;
+}
 
 function countVisiblePixels(geometry) {
   const hidden = geometry?.hidden || {};
@@ -37,6 +44,9 @@ export default function usePatternLabWorker({
   const sequencerRef = useRef(createPatternLabWorkerRequestSequencer());
   const workerRef = useRef(null);
   const watchdogRef = useRef(0);
+  const dispatchTimerRef = useRef(0);
+  const queuedRenderRef = useRef(null);
+  const lastDispatchAtRef = useRef(Number.NEGATIVE_INFINITY);
   const latestRenderRef = useRef(0);
   const pendingRenderRef = useRef(0);
   const mountedRef = useRef(false);
@@ -54,6 +64,26 @@ export default function usePatternLabWorker({
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) clearTimeout(watchdogRef.current);
     watchdogRef.current = 0;
+  }, []);
+
+  const clearDispatchTimer = useCallback(() => {
+    if (dispatchTimerRef.current) clearTimeout(dispatchTimerRef.current);
+    dispatchTimerRef.current = 0;
+  }, []);
+
+  const terminateCurrentWorker = useCallback((sendCancel = false) => {
+    const worker = workerRef.current;
+    if (!worker) return false;
+    const targetRequestId = pendingRenderRef.current;
+    if (sendCancel && targetRequestId) {
+      try {
+        worker.postMessage(sequencerRef.current.next('cancel', { targetRequestId }));
+      } catch {}
+    }
+    workerRef.current = null;
+    pendingRenderRef.current = 0;
+    latestRenderRef.current = 0;
+    return cancelPatternLabWorker(worker);
   }, []);
 
   const spawnWorker = useCallback(() => {
@@ -125,44 +155,19 @@ export default function usePatternLabWorker({
     return worker;
   }, [clearWatchdog, enabled]);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    spawnWorker();
-    return () => {
-      mountedRef.current = false;
-      clearWatchdog();
-      const worker = workerRef.current;
-      workerRef.current = null;
-      if (worker) {
-        try { worker.postMessage(sequencerRef.current.next('dispose')); } catch {}
-        worker.terminate();
-      }
-    };
-  }, [clearWatchdog, spawnWorker]);
+  const dispatchQueuedRender = useCallback(() => {
+    dispatchTimerRef.current = 0;
+    const payload = queuedRenderRef.current;
+    queuedRenderRef.current = null;
+    if (!payload || !mountedRef.current || !enabled) return;
 
-  useEffect(() => {
-    if (!enabled || !recipe || !geometry) return undefined;
+    if (pendingRenderRef.current) terminateCurrentWorker(true);
     const worker = spawnWorker();
-    if (!worker) return undefined;
-    const priorRequestId = pendingRenderRef.current;
-    if (priorRequestId) {
-      worker.postMessage(sequencerRef.current.next('cancel', { targetRequestId: priorRequestId }));
-    }
-    const totalSamples = countVisiblePixels(geometry);
-    const sampleCount = clampPatternLabWorkerSampleCount(Math.max(1, totalSamples), mode);
-    const request = sequencerRef.current.next('render', {
-      recipe,
-      geometry,
-      time,
-      mode,
-      sampleCount,
-      layerCount: Array.isArray(recipe.layers) ? recipe.layers.length : 0,
-      allocationBytes: sampleCount * 5,
-      renderOptions,
-      testGenerator: testGenerator(),
-    });
+    if (!worker) return;
+    const request = sequencerRef.current.next('render', payload);
     latestRenderRef.current = request.requestId;
     pendingRenderRef.current = request.requestId;
+    lastDispatchAtRef.current = performance.now();
     setResult(current => ({
       ...current,
       available: true,
@@ -175,11 +180,7 @@ export default function usePatternLabWorker({
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
       if (!mountedRef.current || latestRenderRef.current !== request.requestId) return;
-      if (workerRef.current === worker) {
-        worker.terminate();
-        workerRef.current = null;
-      }
-      pendingRenderRef.current = 0;
+      if (workerRef.current === worker) terminateCurrentWorker();
       setResult(current => ({
         ...current,
         status: 'timeout',
@@ -190,18 +191,67 @@ export default function usePatternLabWorker({
         },
       }));
     }, WATCHDOG_MS);
-    return () => clearWatchdog();
-  }, [clearWatchdog, enabled, geometry, mode, recipe, renderOptions, spawnWorker, time]);
+  }, [clearWatchdog, enabled, spawnWorker, terminateCurrentWorker]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    spawnWorker();
+    return () => {
+      mountedRef.current = false;
+      clearDispatchTimer();
+      clearWatchdog();
+      queuedRenderRef.current = null;
+      const worker = workerRef.current;
+      workerRef.current = null;
+      if (worker) {
+        try { worker.postMessage(sequencerRef.current.next('dispose')); } catch {}
+        cancelPatternLabWorker(worker);
+      }
+    };
+  }, [clearDispatchTimer, clearWatchdog, spawnWorker]);
+
+  useEffect(() => {
+    if (!enabled || !recipe || !geometry) return undefined;
+    const totalSamples = countVisiblePixels(geometry);
+    const sampleCount = clampPatternLabWorkerSampleCount(Math.max(1, totalSamples), mode);
+    queuedRenderRef.current = {
+      recipe,
+      geometry,
+      time,
+      mode,
+      sampleCount,
+      layerCount: Array.isArray(recipe.layers) ? recipe.layers.length : 0,
+      allocationBytes: sampleCount * 5,
+      renderOptions,
+      testGenerator: testGenerator(),
+    };
+    if (pendingRenderRef.current) latestRenderRef.current = 0;
+    const elapsed = performance.now() - lastDispatchAtRef.current;
+    const delay = Math.max(0, MIN_RENDER_INTERVAL_MS - elapsed);
+    if (delay === 0) dispatchQueuedRender();
+    else if (!dispatchTimerRef.current) {
+      dispatchTimerRef.current = setTimeout(dispatchQueuedRender, delay);
+    }
+    return undefined;
+  }, [dispatchQueuedRender, enabled, geometry, mode, recipe, renderOptions, time]);
 
   const cancel = useCallback(() => {
-    const worker = workerRef.current;
     const targetRequestId = pendingRenderRef.current;
-    if (!worker || !targetRequestId) return false;
-    worker.postMessage(sequencerRef.current.next('cancel', { targetRequestId }));
-    pendingRenderRef.current = 0;
+    const queued = Boolean(queuedRenderRef.current);
+    if (!targetRequestId && !queued) return false;
+    clearDispatchTimer();
+    queuedRenderRef.current = null;
     clearWatchdog();
+    if (targetRequestId) terminateCurrentWorker(true);
+    else latestRenderRef.current = 0;
+    spawnWorker();
+    setResult(current => ({
+      ...current,
+      status: current.frame ? 'frame' : 'ready',
+      requestId: null,
+    }));
     return true;
-  }, [clearWatchdog]);
+  }, [clearDispatchTimer, clearWatchdog, spawnWorker, terminateCurrentWorker]);
 
   return { ...result, cancel };
 }

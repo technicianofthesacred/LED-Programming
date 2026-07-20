@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   PATTERN_LAB_WORKER_BUDGETS,
   quantizePatternLabWorkerTime,
@@ -14,6 +14,25 @@ function clamp(value, minimum, maximum) {
 
 function mix(from, to, amount) {
   return from + (to - from) * amount;
+}
+
+const INTERACTION_SETTLE_MS = 180;
+
+function useSettledWorkerMode({ playing, recipe, time, renderOptions }) {
+  const [settled, setSettled] = useState(() => ({ recipe, time, renderOptions }));
+  const changed = settled.recipe !== recipe
+    || settled.time !== time
+    || settled.renderOptions !== renderOptions;
+
+  useEffect(() => {
+    if (playing) return undefined;
+    const timeout = setTimeout(() => {
+      setSettled({ recipe, time, renderOptions });
+    }, INTERACTION_SETTLE_MS);
+    return () => clearTimeout(timeout);
+  }, [playing, recipe, renderOptions, time]);
+
+  return playing || changed ? 'preview' : 'final';
 }
 
 function workerColorLookup(frame) {
@@ -88,14 +107,19 @@ export default function PatternLabPreview({
     destinations?.texture ?? macros.texture.crispness,
     evolutionMix,
   );
-  const workerMode = playing ? 'preview' : 'final';
-  const workerTime = quantizePatternLabWorkerTime(renderTime, workerMode);
   const renderOptions = useMemo(() => ({
     masterSpeed: speed,
     masterBrightness: brightness,
     masterSaturation: saturation,
     masterHueShift: hueShift,
   }), [brightness, hueShift, saturation, speed]);
+  const workerMode = useSettledWorkerMode({
+    playing,
+    recipe: evolutionRecipe,
+    time: renderTime,
+    renderOptions,
+  });
+  const workerTime = quantizePatternLabWorkerTime(renderTime, workerMode);
   const worker = usePatternLabWorker({
     recipe: evolutionRecipe,
     geometry,
