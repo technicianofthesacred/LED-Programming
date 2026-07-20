@@ -46,6 +46,7 @@ export const DEFAULT_PATTERN_LAB_CARD_DESCRIPTOR = deepFreeze({
     transforms: [],
     masks: [],
     capabilities: ['time', 'beat'],
+    bakeableCapabilities: [],
     targets: ['whole-piece'],
   },
   substitutions: {
@@ -91,34 +92,61 @@ function byteLength(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function budget(used, limit) {
-  const normalizedUsed = wholeBytes(used);
-  const normalizedLimit = wholeBytes(limit);
-  return deepFreeze({ used: normalizedUsed, limit: normalizedLimit, ok: normalizedUsed <= normalizedLimit });
+function optionalWholeBytes(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return Math.round(number);
 }
 
-function buildBudgets(recipe, descriptor, metrics = {}) {
-  const pixelCount = wholeBytes(metrics.pixelCount ?? recipe.estimates?.pixelCount);
-  const fps = wholeBytes(metrics.fps ?? recipe.runtime?.fps ?? 24);
-  const operationsPerFrame = wholeBytes(metrics.operationsPerFrame ?? recipe.estimates?.operationsPerFrame);
-  const stateBytes = wholeBytes(metrics.stateBytes ?? recipe.estimates?.stateBytes);
-  const framebufferBytes = wholeBytes(
-    metrics.framebufferBytes ?? recipe.estimates?.framebufferBytes ?? pixelCount * 3,
+function budget(used, limit, options = {}) {
+  const normalizedUsed = optionalWholeBytes(used);
+  const normalizedLimit = wholeBytes(limit);
+  const known = normalizedUsed !== null;
+  const minimum = wholeBytes(options.minimum);
+  return deepFreeze({
+    used: normalizedUsed,
+    limit: normalizedLimit,
+    known,
+    ok: known && normalizedUsed >= minimum && normalizedUsed <= normalizedLimit,
+  });
+}
+
+function buildBudgets(recipe, descriptor, metrics = {}, options = {}) {
+  const estimates = options.allowRecipeEstimates === false ? {} : recipe.estimates || {};
+  const runtimeFps = options.allowRecipeEstimates === false ? undefined : recipe.runtime?.fps;
+  const pixelCount = optionalWholeBytes(metrics.pixelCount ?? estimates.pixelCount);
+  const fps = optionalWholeBytes(metrics.fps ?? runtimeFps ?? estimates.fps);
+  const operationsPerFrame = optionalWholeBytes(
+    metrics.operationsPerFrame ?? estimates.operationsPerFrame,
   );
-  const nativeConfigBytes = wholeBytes(metrics.nativeConfigBytes ?? byteLength(recipe));
-  const duration = Math.max(0, finite(metrics.durationSeconds ?? recipe.evolution?.durationSeconds));
-  const lwseqBytes = estimateLwseqBytes({ pixels: pixelCount, fps, duration }).totalBytes;
-  const microSdBytes = wholeBytes(metrics.microSdBytes ?? descriptor.limits.microSdBytes);
+  const stateBytes = optionalWholeBytes(metrics.stateBytes ?? estimates.stateBytes);
+  const estimatedFramebuffer = metrics.framebufferBytes ?? estimates.framebufferBytes;
+  const framebufferBytes = optionalWholeBytes(
+    estimatedFramebuffer ?? (pixelCount === null ? null : pixelCount * 3),
+  );
+  const nativeConfigBytes = optionalWholeBytes(metrics.nativeConfigBytes ?? byteLength(recipe));
+  const duration = optionalWholeBytes(metrics.durationSeconds ?? recipe.evolution?.durationSeconds);
+  const lwseqBytes = pixelCount === null || fps === null || duration === null
+    ? null
+    : estimateLwseqBytes({ pixels: pixelCount, fps, duration }).totalBytes;
+  const microSdBytes = optionalWholeBytes(metrics.microSdBytes ?? descriptor.limits.microSdBytes);
+  const microSdKnown = lwseqBytes !== null && microSdBytes !== null;
 
   return deepFreeze({
-    pixelCount: budget(pixelCount, descriptor.limits.pixelCount),
-    fps: budget(fps, descriptor.limits.fps),
+    pixelCount: budget(pixelCount, descriptor.limits.pixelCount, { minimum: 1 }),
+    fps: budget(fps, descriptor.limits.fps, { minimum: 1 }),
     operationsPerFrame: budget(operationsPerFrame, descriptor.limits.operationsPerFrame),
     stateBytes: budget(stateBytes, descriptor.limits.stateBytes),
     framebufferBytes: budget(framebufferBytes, descriptor.limits.framebufferBytes),
     nativeConfigBytes: budget(nativeConfigBytes, descriptor.limits.nativeConfigBytes),
     lwseqBytes: budget(lwseqBytes, microSdBytes),
-    microSdBytes: deepFreeze({ required: lwseqBytes, available: microSdBytes, ok: lwseqBytes <= microSdBytes }),
+    microSdBytes: deepFreeze({
+      required: lwseqBytes,
+      available: microSdBytes,
+      known: microSdKnown,
+      ok: microSdKnown && lwseqBytes <= microSdBytes,
+    }),
   });
 }
 
@@ -221,7 +249,7 @@ function requirementReason(requirement, index, descriptor, changes) {
     code: 'required-capability-unsupported',
     message: `Required capability “${capability}” is not available on ${descriptor.id}.`,
     feature: capability,
-    bakeable: requirement.bakeable !== false,
+    bakeable: (descriptor.features.bakeableCapabilities || []).includes(capability),
   };
 }
 
@@ -288,7 +316,80 @@ export function classifyPatternLabCompatibility(recipe, options = {}) {
     throw new TypeError('Pattern Lab compatibility requires a recipe');
   }
   const descriptor = descriptorWithDefaults(options.descriptor);
-  const budgets = buildBudgets(recipe, descriptor, options.metrics);
+  const evaluation = evaluatePatternLabCompatibility(recipe, descriptor, options.metrics);
+  const { budgets, reasons, changes, nativeEligible, bakeEligible } = evaluation;
+
+  const directClassification = nativeEligible
+    ? 'live-on-card'
+    : bakeEligible
+      ? 'bake-to-card'
+      : 'studio-only';
+  let simplification = null;
+  let simplificationResolves = false;
+  if (changes.length) {
+    const frozenChanges = deepFreeze(clone(changes));
+    const variant = createPatternLabSimplificationVariant(
+      recipe,
+      frozenChanges,
+      options.simplificationVariant,
+    );
+    const variantEvaluation = evaluatePatternLabCompatibility(
+      variant,
+      descriptor,
+      options.simplificationMetrics,
+      { allowRecipeEstimates: false },
+    );
+    const resultClassification = variantEvaluation.nativeEligible
+      ? 'live-on-card'
+      : variantEvaluation.bakeEligible
+        ? 'bake-to-card'
+        : 'studio-only';
+    simplificationResolves = resultClassification !== 'studio-only';
+    simplification = deepFreeze({
+      changes: frozenChanges,
+      variant,
+      resolvesCompatibility: simplificationResolves,
+      resultClassification,
+      remainingReasons: simplificationResolves ? [] : publicReasons(variantEvaluation.reasons),
+    });
+  }
+
+  const classification = directClassification !== 'studio-only'
+    ? directClassification
+    : simplificationResolves
+      ? 'simplify-for-card'
+      : 'studio-only';
+
+  const actions = [];
+  if (bakeEligible && !nativeEligible) actions.push({ id: 'bake', label: 'Bake to card', kind: 'bake' });
+  if (simplificationResolves) {
+    actions.push({ id: 'simplify', label: 'Create simplified variant', kind: 'simplify' });
+  }
+  if (changes.some(change => change.action === 'remove-feature')) {
+    actions.push({ id: 'remove-feature', label: 'Remove unsupported feature', kind: 'remove-feature' });
+  }
+
+  return deepFreeze({
+    version: PATTERN_LAB_COMPATIBILITY_VERSION,
+    classification,
+    descriptor: { id: descriptor.id, version: descriptor.version },
+    budgets,
+    reasons: publicReasons(reasons),
+    actions: uniqueActions(actions),
+    simplification,
+  });
+}
+
+function publicReasons(reasons) {
+  return reasons.map(item => ({
+    code: item.code,
+    message: item.message,
+    ...(item.feature ? { feature: item.feature } : {}),
+  }));
+}
+
+function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
+  const budgets = buildBudgets(recipe, descriptor, metrics, options);
   const reasons = [];
   const changes = [];
 
@@ -306,67 +407,59 @@ export function classifyPatternLabCompatibility(recipe, options = {}) {
     { bakeable: true },
   ));
 
-  const nativeBudgetCodes = {
-    pixelCount: 'pixel-count-over-budget',
-    fps: 'fps-over-budget',
-    operationsPerFrame: 'operations-over-budget',
-    stateBytes: 'state-memory-over-budget',
-    framebufferBytes: 'framebuffer-over-budget',
-    nativeConfigBytes: 'native-config-over-budget',
+  const nativeBudgetRules = {
+    pixelCount: {
+      overCode: 'pixel-count-over-budget', unknownCode: 'pixel-count-unknown', bakeableWhenOver: false,
+    },
+    fps: { overCode: 'fps-over-budget', unknownCode: 'fps-unknown', bakeableWhenOver: false },
+    operationsPerFrame: {
+      overCode: 'operations-over-budget', unknownCode: 'operations-unknown', bakeableWhenOver: true,
+    },
+    stateBytes: {
+      overCode: 'state-memory-over-budget', unknownCode: 'state-memory-unknown', bakeableWhenOver: true,
+    },
+    framebufferBytes: {
+      overCode: 'framebuffer-over-budget', unknownCode: 'framebuffer-unknown', bakeableWhenOver: true,
+    },
+    nativeConfigBytes: {
+      overCode: 'native-config-over-budget', unknownCode: 'native-config-unknown', bakeableWhenOver: true,
+    },
   };
-  for (const [key, code] of Object.entries(nativeBudgetCodes)) {
-    if (!budgets[key].ok) reasons.push(reason(
-      code,
-      `${key} uses ${budgets[key].used}, above the card limit of ${budgets[key].limit}.`,
-      { bakeable: key !== 'pixelCount' },
-    ));
+  for (const [key, rule] of Object.entries(nativeBudgetRules)) {
+    if (!budgets[key].known) {
+      reasons.push(reason(
+        rule.unknownCode,
+        `${key} has no authoritative runtime estimate; card compatibility cannot be proven.`,
+        { bakeable: false },
+      ));
+    } else if (!budgets[key].ok) {
+      reasons.push(reason(
+        rule.overCode,
+        `${key} uses ${budgets[key].used}, outside the card limit of ${budgets[key].limit}.`,
+        { bakeable: rule.bakeableWhenOver },
+      ));
+    }
   }
 
   const nativeEligible = descriptor.delivery.nativeRecipe
     && reasons.length === 0
-    && Object.keys(nativeBudgetCodes).every(key => budgets[key].ok);
-  const physicalEligible = budgets.pixelCount.ok;
-  const bakeReasonsEligible = reasons.every(item => item.bakeable !== false || item.code.includes('over-budget'));
+    && Object.keys(nativeBudgetRules).every(key => budgets[key].ok);
+  const physicalEligible = budgets.pixelCount.known && budgets.pixelCount.ok;
+  const bakeReasonsEligible = reasons.every(item => item.bakeable === true);
   const bakeEligible = descriptor.delivery.lwseq
     && descriptor.delivery.microSd
     && physicalEligible
     && bakeReasonsEligible
+    && budgets.fps.ok
     && budgets.lwseqBytes.ok;
 
-  let classification;
-  if (nativeEligible) classification = 'live-on-card';
-  else if (bakeEligible) classification = 'bake-to-card';
-  else if (changes.length) classification = 'simplify-for-card';
-  else classification = 'studio-only';
-
-  const actions = [];
-  if (bakeEligible && !nativeEligible) actions.push({ id: 'bake', label: 'Bake to card', kind: 'bake' });
-  let simplification = null;
-  if (changes.length) {
-    const frozenChanges = deepFreeze(clone(changes));
-    simplification = deepFreeze({
-      changes: frozenChanges,
-      variant: createPatternLabSimplificationVariant(recipe, frozenChanges, options.simplificationVariant),
-    });
-    actions.push({ id: 'simplify', label: 'Create simplified variant', kind: 'simplify' });
-    if (changes.some(change => change.action === 'remove-feature')) {
-      actions.push({ id: 'remove-feature', label: 'Remove unsupported feature', kind: 'remove-feature' });
-    }
-  }
-
-  return deepFreeze({
-    version: PATTERN_LAB_COMPATIBILITY_VERSION,
-    classification,
-    descriptor: { id: descriptor.id, version: descriptor.version },
+  return {
     budgets,
-    reasons: reasons.map(item => ({
-      code: item.code,
-      message: item.message,
-      ...(item.feature ? { feature: item.feature } : {}),
-    })),
-    actions: uniqueActions(actions),
-    simplification,
-  });
+    reasons,
+    changes,
+    nativeEligible,
+    bakeEligible,
+  };
 }
 
 function watcherValue(value) {

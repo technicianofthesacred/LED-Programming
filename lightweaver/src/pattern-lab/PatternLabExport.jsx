@@ -13,7 +13,7 @@ const CLASSIFICATION_COPY = {
   },
   'studio-only': {
     title: 'Studio only',
-    detail: 'This recipe currently needs Studio capabilities and cannot be sent to the card safely.',
+    detail: 'Card compatibility is not proven yet. Resolve the unknown or unsupported requirements before export.',
   },
 };
 
@@ -29,7 +29,8 @@ const BUDGET_LABELS = {
 };
 
 function formatCount(value) {
-  return new Intl.NumberFormat().format(Number(value) || 0);
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'Unknown';
+  return new Intl.NumberFormat().format(Number(value));
 }
 
 function budgetValues(key, budget) {
@@ -63,6 +64,7 @@ export default function PatternLabExport({
   const actions = Array.isArray(compatibility.actions) ? compatibility.actions : [];
   const reasons = Array.isArray(compatibility.reasons) ? compatibility.reasons : [];
   const changes = compatibility.simplification?.changes || [];
+  const changesResolveCompatibility = compatibility.simplification?.resolvesCompatibility === true;
 
   return (
     <section className="plab-control-section plab-export" aria-labelledby="plab-export-heading" data-testid="pattern-lab-export">
@@ -70,7 +72,7 @@ export default function PatternLabExport({
         <span className="plab-section-index">06</span>
         <div>
           <h2 id="plab-export-heading">Card export</h2>
-          <p>Compatibility is evaluated against the firmware descriptor and real output budgets.</p>
+          <p>Compatibility is evaluated against the firmware descriptor and declared or measured output budgets.</p>
         </div>
       </div>
 
@@ -83,9 +85,15 @@ export default function PatternLabExport({
         {Object.entries(compatibility.budgets || {}).map(([key, value]) => {
           const [used, limit] = budgetValues(key, value);
           return (
-            <div key={key} data-budget-ok={value.ok ? 'true' : 'false'}>
+            <div
+              key={key}
+              data-budget-ok={value.known === false ? 'unknown' : value.ok ? 'true' : 'false'}
+            >
               <dt>{BUDGET_LABELS[key] || key}</dt>
-              <dd>{formatCount(used)} / {formatCount(limit)} <span>{value.ok ? 'Fits' : 'Over'}</span></dd>
+              <dd>
+                {formatCount(used)} / {formatCount(limit)}{' '}
+                <span>{value.known === false ? 'Unknown' : value.ok ? 'Fits' : 'Over'}</span>
+              </dd>
             </div>
           );
         })}
@@ -100,9 +108,13 @@ export default function PatternLabExport({
 
       {changes.length > 0 && (
         <details className="plab-advanced">
-          <summary>Proposed card-safe changes</summary>
+          <summary>{changesResolveCompatibility ? 'Proposed card-safe changes' : 'Optional cleanup changes'}</summary>
           <ul>{changes.map((change, index) => <li key={`${change.action}-${index}`}>{change.label}</li>)}</ul>
-          <p>Your original recipe stays unchanged. Simplify creates a separate variant.</p>
+          <p>
+            {changesResolveCompatibility
+              ? 'Your original recipe stays unchanged. Simplify creates a separately validated variant.'
+              : 'These changes do not resolve every card blocker. They are cleanup only, not a card-safe export.'}
+          </p>
         </details>
       )}
 
