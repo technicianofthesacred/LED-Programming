@@ -497,20 +497,25 @@ function clearPendingFirstPair() {
 // identity but not the /api/status fields that reveal a factory-default card, so
 // a paired card sitting on defaults would read plain green. Read status over the
 // bridge (firmware maps bridge type 'status' -> GET /api/status) to recover the
-// blank signal. A status read failure must never tear down a verified bridge —
-// callers fall back to "not blank".
-async function fetchBridgeCardBlank(host) {
+// complete readiness envelope. A status read failure must never tear down a
+// verified bridge or invent configured/ready evidence.
+async function fetchBridgeCardReadiness(host) {
   try {
-    const status = await sendCardBridgeRequest('status', {}, { host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
-    return isFactoryCardStatus(status || {});
+    return await sendCardBridgeRequest('status', {}, { host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
   } catch {
-    return false;
+    return null;
   }
 }
 
 function refreshBridgeCardBlank(host, cardId) {
-  return fetchBridgeCardBlank(host).then(blank => {
-    getSharedCardLink().dispatch({ type: 'bridge-blank', host, cardId, blank });
+  return fetchBridgeCardReadiness(host).then(readiness => {
+    getSharedCardLink().dispatch({
+      type: 'bridge-blank',
+      host,
+      cardId,
+      blank: readiness ? isFactoryCardStatus(readiness) : null,
+      readiness,
+    });
   }).catch(() => {
     /* a status probe failure leaves the verified bridge and its cardBlank as-is */
   });
@@ -723,10 +728,16 @@ export async function bootstrapCardLink() {
     const expectedCard = readPersistedCardIdentity() || null;
     const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, card) : { ok: true };
     if (comparison.ok) persistCardIdentity(card, { acknowledgedAt });
-    // Resolve blank state before the green transition so a bridged factory card
-    // lands directly on "Needs project" with no green flash.
-    const blank = comparison.ok ? await fetchBridgeCardBlank(getCardBridgeState().host) : false;
-    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, expectedCard, acknowledgedAt, blank });
+    // Resolve the complete readiness envelope before the green transition so
+    // configured, factory, and unknown cards cannot be conflated.
+    const readiness = comparison.ok
+      ? await fetchBridgeCardReadiness(getCardBridgeState().host)
+      : null;
+    const blank = readiness ? isFactoryCardStatus(readiness) : null;
+    link.dispatch({
+      type: 'card-verified', via: 'bridge', host: getCardBridgeState().host,
+      card, expectedCard, acknowledgedAt, blank, readiness,
+    });
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not
     // pay this failing re-ping on every startup. A successful bridge

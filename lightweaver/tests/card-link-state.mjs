@@ -433,6 +433,7 @@ const storedValues = new Map([
   ['lw_chip_card_host', '192.168.18.70'],
   ['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' })],
 ]);
+let bridgeStatusFails = false;
 const parentBridge = {
   postMessage(message, targetOrigin) {
     sent.push({ message, targetOrigin });
@@ -457,6 +458,17 @@ const parentBridge = {
         bridgeVersion: 1,
         outputs: [{ gpio: 16, count: 44 }],
       });
+      else if (message.type === 'status') {
+        if (bridgeStatusFails) {
+          listeners.get('message')?.({
+            origin: 'http://192.168.18.70',
+            source: parentBridge,
+            data: { app: 'LightweaverCardBridge', id: message.id, ok: false, error: 'status unavailable' },
+          });
+        } else {
+          respond(readyEnvelope('lw-001122aabbcc'));
+        }
+      }
       else respond({ ok: true });
     }, 0);
   },
@@ -600,6 +612,18 @@ assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122a
 
 await bootstrapCardLink();
 assert.equal(getCardLinkState().state, 'connected-bridge', 'bootstrap verifies the real bridge before commands');
+assert.equal(isCardLinkConnected(getCardLinkState()), true, 'complete bridged status evidence satisfies live readiness');
+assert.equal(getCardLinkState().readiness?.bootId, 'boot-1');
+
+bridgeStatusFails = true;
+await bootstrapCardLink();
+assert.equal(getCardLinkState().state, 'connected-bridge', 'failed status does not tear down verified bridge transport');
+assert.equal(getCardLinkState().cardBlank, null, 'failed bridged status keeps blank state unknown');
+assert.equal(getCardLinkState().readiness, null, 'failed bridged status keeps readiness unknown');
+assert.equal(isCardLinkConnected(getCardLinkState()), false, 'failed bridged status never reads green');
+bridgeStatusFails = false;
+await bootstrapCardLink();
+assert.equal(isCardLinkConnected(getCardLinkState()), true, 'fresh bridged status restores readiness');
 
 const fallbackResponse = await pushLivePreviewToCard(
   { patternId: 'ocean', brightness: 0.8, zone: 'zone-b', syncZones: false },
