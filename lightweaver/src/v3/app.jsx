@@ -35,11 +35,12 @@ import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectF
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
+const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
 
-const SCREEN_KEYS = ['pattern', 'playlist', 'layout', 'show', 'card'];
+const SCREEN_KEYS = ['pattern', 'pattern-lab', 'playlist', 'layout', 'show', 'card'];
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
@@ -193,6 +194,7 @@ function viewFromHash() {
 const I = {
   layout: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></svg>,
   pattern: <svg viewBox="0 0 24 24"><path d="M4 12c2-5 6-5 8 0s6 5 8 0"/><path d="M4 17c2-3 6-3 8 0s6 3 8 0"/></svg>,
+  'pattern-lab': <svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7.8 15h8.4M9.4 12h5.2"/></svg>,
   show: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2 2M16.4 16.4l2 2M18.4 5.6l-2 2M7.6 16.4l-2 2"/></svg>,
   flash: <svg viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6z"/></svg>,
   settings: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg>,
@@ -225,7 +227,7 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onP
 
 /* ---------- Left rail ---------- */
 function Rail({ view, setView, openCard }) {
-  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["playlist", "Playlist"], ["show", "Show"], ["card", "Card"]];
+  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["pattern-lab", "Pattern Lab"], ["playlist", "Playlist"], ["show", "Show"], ["card", "Card"]];
   const item = ([id, label, accessibleLabel]) => (
     <button key={id} aria-label={accessibleLabel || label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
@@ -594,7 +596,7 @@ function Shell() {
     e.target.value = '';
   }, [replaceProject]);
 
-  const Screen = { pattern: PatternScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, card: CardScreen }[view];
+  const Screen = { pattern: PatternScreen, 'pattern-lab': PatternLabScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, card: CardScreen }[view];
 
   return (
     <div className="app">
