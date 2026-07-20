@@ -11,8 +11,25 @@ test.beforeEach(async ({ page }) => {
 async function dispatchCardLinkEvent(page, event: Record<string, unknown>) {
   await page.evaluate(async linkEvent => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    getSharedCardLink().dispatch(linkEvent);
+    const link = getSharedCardLink();
+    const priorBootId = link.getState().validatedBootId;
+    link.dispatch(linkEvent);
+    // A trusted-card fixture represents the two matching full status reads
+    // required after a miss or lifecycle transition. A changed boot remains
+    // at its first envelope so restart/revalidation behavior stays observable.
+    if (linkEvent.type === 'card-verified' && linkEvent.readiness?.bootId
+      && (!priorBootId || priorBootId === linkEvent.readiness.bootId)) link.dispatch(linkEvent);
   }, event);
+}
+
+function readyStatus(cardId: string, overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+    bootId: 'boot-quality-1', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true,
+    ...overrides,
+  };
 }
 
 async function installOpenSpy(page) {
@@ -111,7 +128,8 @@ test('announces asynchronous connection states without repeating card metadata',
     type: 'card-verified',
     via: 'bridge',
     host: 'lightweaver.local',
-    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0' },
+    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-quality'),
   });
   await expect(announcement).toHaveText('Connected');
   await expect(announcement).not.toContainText(/Gallery card|440 pixels|firmware/i);
@@ -141,7 +159,8 @@ test('renders verified card behavior through the new orchestrator state', async 
     type: 'card-verified',
     via: 'bridge',
     host: 'lightweaver.local',
-    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0' },
+    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-quality'),
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
@@ -327,26 +346,35 @@ test('Bridge return does not call a successful POST independent restoration proo
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-222222222222', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-222222222222', { firmwareVersion: '1.2.3' }),
   });
   await expect(page.getByRole('dialog')).toContainText(/expected lw-441bf681feb0, but lw-222222222222 answered/i);
 
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.2', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.2' }),
   });
   await expect(page.getByRole('dialog')).toContainText(/expected firmware 1.2.3/i);
 
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'b'.repeat(40) },
+    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3', buildId: 'b'.repeat(40) }),
   });
   await expect(page.getByRole('dialog')).toContainText(/build does not match/i);
 
   await dispatchCardLinkEvent(page, {
-    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
   });
   await expect(page.getByRole('button', { name: 'Restore saved project' })).toBeVisible();
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
+  }));
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
   await expect(page.getByRole('alert')).toContainText(/independent.*(?:read-back|firmware and project evidence)|not marked.*restored/i);
@@ -372,6 +400,11 @@ test('Bridge return does not call a successful POST independent restoration proo
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'direct', host: 'lightweaver.local',
+    card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
+  });
   await page.evaluate(() => {
     (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
       const registry = JSON.parse(localStorage.getItem('lw_card_commissioning_registry_v2') || '{"flows":{}}');
@@ -417,9 +450,15 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await deliverBridgeResult(page);
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
   await dispatchCardLinkEvent(page, {
-    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
   });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
+  }));
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
   await expect(page.getByText(/staged on this exact card/i)).toBeVisible();
