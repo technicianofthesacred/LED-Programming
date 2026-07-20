@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { download } from '../lib/export.js';
 import { createArtNetSetupNotes, toMadrixFixtureCsv } from '../lib/madrixPatchExport.js';
 import { toXlightsXmodel } from '../lib/xlightsExport.js';
@@ -59,7 +59,6 @@ function budgetStatus(budget) {
 }
 
 function runAction(action, compatibility, handlers) {
-  if (action.id === 'bake') handlers.onBake?.(compatibility);
   if (action.id === 'simplify') {
     handlers.onSimplify?.(compatibility.simplification?.variant, compatibility);
   }
@@ -85,6 +84,9 @@ export default function PatternLabExport({
 }) {
   const project = useProject();
   const [layoutExportStatus, setLayoutExportStatus] = useState(null);
+  const [bakeStatus, setBakeStatus] = useState(null);
+  const bakeAbortRef = useRef(null);
+  useEffect(() => () => bakeAbortRef.current?.abort(), []);
   if (!compatibility) return null;
 
   const copy = CLASSIFICATION_COPY[compatibility.classification] || {
@@ -132,6 +134,36 @@ export default function PatternLabExport({
         error: true,
         message: error instanceof Error ? error.message : 'Layout export could not be generated.',
       });
+    }
+  }
+
+  async function bakeSequence() {
+    if (bakeAbortRef.current || typeof onBake !== 'function') return;
+    const controller = new AbortController();
+    bakeAbortRef.current = controller;
+    setBakeStatus({ state: 'rendering', message: 'Baking deterministic frames…' });
+    try {
+      const result = await onBake(compatibility, { signal: controller.signal });
+      if (!result?.bytes || !result?.sidecarJson) {
+        setBakeStatus(null);
+        return;
+      }
+      const slug = exportSlug(project.projectName);
+      download(result.bytes, `${slug}.lwseq`, 'application/octet-stream');
+      download(`${result.sidecarJson}\n`, `${slug}.lwseq.json`, 'application/json');
+      setBakeStatus({
+        state: 'complete',
+        message: `Exported ${result.sidecar.frameCount} frames for ${result.sidecar.pixelCount} pixels with verified hashes.`,
+      });
+    } catch (error) {
+      setBakeStatus({
+        state: error?.name === 'AbortError' ? 'canceled' : 'error',
+        message: error?.name === 'AbortError'
+          ? 'Bake canceled. No partial file was exported.'
+          : (error instanceof Error ? error.message : 'Pattern Lab bake failed.'),
+      });
+    } finally {
+      if (bakeAbortRef.current === controller) bakeAbortRef.current = null;
     }
   }
 
@@ -196,12 +228,25 @@ export default function PatternLabExport({
               key={action.id}
               type="button"
               className="btn"
-              onClick={() => runAction(action, compatibility, { onBake, onSimplify, onRemoveFeature })}
+              disabled={action.id === 'bake' && bakeStatus?.state === 'rendering'}
+              onClick={() => {
+                if (action.id === 'bake') void bakeSequence();
+                else runAction(action, compatibility, { onSimplify, onRemoveFeature });
+              }}
             >
-              {action.label}
+              {action.id === 'bake' && bakeStatus?.state === 'rendering' ? 'Baking…' : action.label}
             </button>
           ))}
+          {bakeStatus?.state === 'rendering' && (
+            <button type="button" className="btn" onClick={() => bakeAbortRef.current?.abort()}>Cancel bake</button>
+          )}
         </div>
+      )}
+      {bakeStatus && (
+        <p
+          data-testid="pattern-lab-bake-status"
+          role={bakeStatus.state === 'error' ? 'alert' : 'status'}
+        >{bakeStatus.message}</p>
       )}
 
       <div className="plab-runtime-cleanup">
