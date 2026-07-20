@@ -3,8 +3,36 @@ import assert from 'node:assert/strict';
 
 import {
   CARD_CONNECTION_ACTION_IDS,
+  isCardLinkConnected,
   nextCardConnectionAction,
 } from './cardConnectionFlow.js';
+
+const CARD_ID = 'lw-aabbccddeeff';
+
+function readyEnvelope(overrides = {}) {
+  return {
+    app: 'Lightweaver',
+    provisioningContractVersion: 1,
+    cardId: CARD_ID,
+    firmwareVersion: '1.0.0',
+    buildId: 'a'.repeat(40),
+    bootId: 'boot-1',
+    runtimePhase: 'ready',
+    knownGoodProject: true,
+    commandReady: true,
+    outputReady: true,
+    ...overrides,
+  };
+}
+
+function readyLink(overrides = {}) {
+  return {
+    state: 'connected-direct',
+    card: { id: CARD_ID },
+    readiness: readyEnvelope(),
+    ...overrides,
+  };
+}
 
 const secureBrowserUsb = {
   secureContext: true,
@@ -48,7 +76,7 @@ test('provides explicit legacy behavior metadata while live consumers migrate', 
   const cases = [
     [{ intent: 'blank-card', capabilities: secureBrowserUsb }, 'web-serial-install'],
     [{ intent: 'blank-card', capabilities: insecureChromeFrame }, 'supported-browser-handoff'],
-    [{ link: { state: 'connected-direct', card: { id: 'lw-a' } } }, 'connected'],
+    [{ link: readyLink() }, 'connected'],
     [{ link: { reason: 'firmware-too-old' }, capabilities: secureBrowserUsb }, 'web-serial-install'],
     [{ intent: 'blank-card', capabilities: { platform: 'macos' } }, 'supported-browser-handoff'],
     [{ link: { reason: 'native-bridge-missing' } }, 'connector-fallback'],
@@ -221,7 +249,7 @@ test('requires safe recovery when a write or recovery result is uncertain', () =
 
 test('reports ready-local-card only after a verified local connection', () => {
   assert.equal(nextCardConnectionAction({
-    link: { state: 'connected-direct', card: { id: 'lw-a' } },
+    link: readyLink(),
   }).id, 'ready-local-card');
   assert.notEqual(nextCardConnectionAction({
     link: { state: 'connected-direct', card: null },
@@ -245,25 +273,53 @@ test('offers one-tap pairing for a reachable-but-unpaired card', () => {
   assert.equal(byDiscovery.id, 'pair-local-card');
 });
 
-test('routes a paired blank card to install, not ready-local-card', () => {
+test('routes classified factory evidence to install, not ready-local-card', () => {
   const action = nextCardConnectionAction({
-    link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: true },
+    link: readyLink({
+      readiness: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
+      cardBlank: true,
+    }),
   });
   assert.equal(action.id, 'card-needs-project');
   assert.notEqual(action.id, 'ready-local-card');
 });
 
-test('a paired configured card is still ready-local-card', () => {
+test('a classified configured card is still ready-local-card', () => {
   assert.equal(nextCardConnectionAction({
-    link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: false },
+    link: readyLink({ cardBlank: false }),
   }).id, 'ready-local-card');
+});
+
+test('unknown blank state and transport-only links never become connected', () => {
+  const transportOnly = { state: 'connected-direct', card: { id: CARD_ID } };
+  const oldStatus = {
+    state: 'connected-direct',
+    card: { id: CARD_ID },
+    readiness: { app: 'Lightweaver', cardId: CARD_ID, mode: 'run' },
+  };
+
+  assert.equal(isCardLinkConnected(transportOnly), false);
+  assert.equal(isCardLinkConnected(oldStatus), false);
+  assert.notEqual(nextCardConnectionAction({ link: transportOnly }).id, 'ready-local-card');
+  assert.notEqual(nextCardConnectionAction({ link: oldStatus }).id, 'ready-local-card');
+});
+
+test('card link connection consumes classified fresh evidence', () => {
+  assert.equal(isCardLinkConnected(readyLink()), true);
+  assert.equal(isCardLinkConnected(readyLink({
+    readiness: readyEnvelope({ bootId: 'boot-2' }),
+    previousBootId: 'boot-1',
+  })), false);
+  assert.equal(isCardLinkConnected(readyLink({
+    readiness: readyEnvelope({ cardId: 'lw-other' }),
+  })), false);
 });
 
 test('all action copy is physical-action oriented and avoids implementation jargon', () => {
   const inputs = [
     { intent: 'blank-card', capabilities: secureBrowserUsb },
     { intent: 'blank-card', capabilities: insecureChromeFrame },
-    { link: { state: 'connected-direct', card: { id: 'lw-a' } } },
+    { link: readyLink() },
     { link: { reason: 'firmware-too-old' }, capabilities: secureBrowserUsb },
     { intent: 'blank-card', capabilities: { secureContext: true, topLevel: true, platform: 'macos' } },
     { link: { reason: 'native-bridge-missing' }, capabilities: { secureContext: true, topLevel: true, platform: 'macos' } },
@@ -272,7 +328,7 @@ test('all action copy is physical-action oriented and avoids implementation jarg
     { link: { reason: 'no-answer' } },
     { link: { reason: 'preview-unconfirmed' } },
     { link: { state: 'disconnected', reason: 'found-unpaired', discoveredCard: { id: 'lw-a' } }, discoveredCard: { id: 'lw-a' } },
-    { link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: true } },
+    { link: readyLink({ readiness: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }), cardBlank: true }) },
   ];
   const forbidden = /mixed content|postMessage|Web Serial|localhost|(?:\d{1,3}\.){3}\d{1,3}|Chrome is unsupported/i;
 

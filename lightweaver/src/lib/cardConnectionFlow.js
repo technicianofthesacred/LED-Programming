@@ -1,3 +1,5 @@
+import { classifyCardReadiness } from './cardReadiness.js';
+
 export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
   'ready-browser-usb',
   'escape-insecure-card-frame',
@@ -177,6 +179,25 @@ function installationRoute(capabilities) {
   return action('handoff-supported-device');
 }
 
+function classifiedLinkReadiness(link = {}, options = {}) {
+  const evidence = link.readiness ?? link.cardReadiness ?? link.status ?? link;
+  return classifyCardReadiness(evidence, {
+    expectedCardId: options.expectedCardId
+      || link.expectedCard?.id
+      || link.expectedCard?.cardId
+      || link.card?.id
+      || link.card?.cardId
+      || '',
+    previousBootId: options.previousBootId || link.previousBootId || '',
+  });
+}
+
+export function isCardLinkConnected(link = {}, options = {}) {
+  if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
+  const transportConnected = link.state === 'connected-bridge' || link.state === 'connected-direct';
+  return transportConnected && classifiedLinkReadiness(link, options).connected;
+}
+
 export function nextCardConnectionAction(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return action('recoverable-failure');
@@ -187,19 +208,22 @@ export function nextCardConnectionAction(input = {}) {
     ? input.capabilities
     : {};
   const reason = link.reason;
+  const readiness = classifiedLinkReadiness(link, {
+    expectedCardId: input.expectedCard?.id || input.expectedCard?.cardId || '',
+    previousBootId: input.previousBootId || '',
+  });
 
   if (
     (link.state === 'connected-bridge' || link.state === 'connected-direct')
-    && hasCardIdentity(link.card)
-    && link.cardBlank
+    && readiness.state === 'blank'
   ) {
     return action('card-needs-project');
   }
 
-  if (
-    (link.state === 'connected-bridge' || link.state === 'connected-direct')
-    && hasCardIdentity(link.card)
-  ) {
+  if (isCardLinkConnected(link, {
+    expectedCardId: input.expectedCard?.id || input.expectedCard?.cardId || '',
+    previousBootId: input.previousBootId || '',
+  })) {
     return action('ready-local-card');
   }
 
