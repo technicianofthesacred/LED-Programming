@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { pushLiveHardwareToCard, recoverCardLights } from '../../../lib/cardLiveControl.js';
 import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
 
@@ -9,8 +9,8 @@ const COLOR_TESTS = [
   { id: 'w', label: 'White', short: 'W', patternId: 'test-white', brightness: 0.55 },
 ];
 
-export function StripColorOrderCheck({ cardHost, controller, setController }) {
-  const [open, setOpen] = useState(false);
+export function StripColorOrderCheck({ cardHost, controller, setController, autoStart = false }) {
+  const [open, setOpen] = useState(autoStart);
   const [activeTestId, setActiveTestId] = useState('r');
   const [status, setStatus] = useState('');
   const [statusKind, setStatusKind] = useState('');
@@ -84,6 +84,13 @@ export function StripColorOrderCheck({ cardHost, controller, setController }) {
     void playTest(activeTestId);
   };
 
+  // Chained entry from the bench check: present the first color question
+  // immediately instead of waiting for a second "start" tap.
+  useEffect(() => {
+    if (autoStart) void playTest(activeTestId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only entry
+  }, []);
+
   const tryNextOrder = async () => {
     const currentIndex = COLOR_ORDERS.indexOf(colorOrder);
     const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
@@ -133,7 +140,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController }) {
               in primary copy). */}
           <span className="lwb-detail">{confirmed ? 'Colors confirmed' : 'Colors not checked yet'}</span>
         </div>
-        <button type="button" className="btn lwb-quiz-open" disabled={busy} onClick={startCheck}>Check colors</button>
+        {!open && <button type="button" className="btn lwb-quiz-open" disabled={busy} onClick={startCheck}>Check colors</button>}
       </div>
       {open && (
         <div className="lwb-quiz-body">

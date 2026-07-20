@@ -208,6 +208,31 @@ export async function readCardProjectEvidence({ host, timeoutMs = 3000, transpor
   return normalizeCardProjectEvidence(result);
 }
 
+export async function readCardStatusEnvelope({ host, timeoutMs = 3000, transport, fetchImpl = fetch } = {}) {
+  if (transport === 'bridge' || (transport !== 'direct' && isMixedContentBlocked())) {
+    return sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+      host,
+      timeoutMs,
+      retryOnTimeout: false,
+    });
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${cardHostToUrl(host)}/api/status`, {
+      method: 'GET', cache: 'no-store', signal: ctrl.signal,
+    });
+    if (!response?.ok) throw new CardPushError('readback', 'The card did not return a fresh status envelope.');
+    const result = await response.json().catch(() => null);
+    if (!result || typeof result !== 'object' || Array.isArray(result)) {
+      throw new CardPushError('readback', 'The card returned an invalid status envelope.');
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
   const current = await readFirmwareInfoToHost(host, Math.min(options.timeoutMs || 6000, 1200));
   return current ? cardConfigNeedsRebootFromInfo(current, runtimePackage) : false;

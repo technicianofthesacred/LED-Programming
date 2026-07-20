@@ -177,6 +177,22 @@ function statusCardId(status = {}) {
   return String(status?.cardId || status?.id || status?.pieceId || status?.piece?.cardId || '').trim();
 }
 
+// A card that answered /api/status but is still on factory defaults — the
+// firmware reports `mode: 'factory-flash'` and `source: 'defaults'` together
+// while unconfigured, and flips both off the moment any project/config is saved
+// (see LightweaverStorage.cpp). Either signal alone is sufficient. We do NOT
+// treat a zeroed `wiringRevision`/empty `wiringDigest` as blank: a genuinely
+// paired, command-ready card with a saved config that simply never received a
+// production wiring identity is a firmware-valid state, and flagging it blank
+// would wrongly demote a working card to "Needs project". Green "Connected" is
+// reserved for a card that actually holds the owner's project, so this demotes
+// the footer to "Needs project" even when the card is paired and reachable.
+export function isFactoryCardStatus(status = {}) {
+  if (!status || typeof status !== 'object') return false;
+  return status.mode === 'factory-flash'
+    || status.source === 'defaults';
+}
+
 async function probeCardStatusHost(host, { timeoutMs, fetchImpl, controllers, expectedCard }) {
   const ctrl = new AbortController();
   controllers.push(ctrl);

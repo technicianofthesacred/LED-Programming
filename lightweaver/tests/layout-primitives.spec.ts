@@ -6,6 +6,27 @@ async function gotoFreshLayout(page: any) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
+async function clickStripLed(page: any, stripId: string, ledIndex: number) {
+  const led = page.getByTestId(`strip-led-${stripId}-${ledIndex}`);
+  await expect(led).toBeVisible();
+  const box = await led.boundingBox();
+  if (!box) throw new Error(`LED ${ledIndex} has no pointer target.`);
+  await led.dispatchEvent('pointerdown', {
+    bubbles: true,
+    button: 0,
+    pointerId: 1,
+    clientX: box.x + box.width / 2,
+    clientY: box.y + box.height / 2,
+  });
+}
+
+async function waitForSavedStripWiring(page: any) {
+  await expect.poll(() => page.evaluate(() => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    return Boolean(layout?.strips?.length === 1 && layout?.wiring?.runs?.some((run: any) => run.source?.stripId === layout.strips[0].id));
+  })).toBe(true);
+}
+
 async function seedLegacyDefaultCircles(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
@@ -77,9 +98,6 @@ test('a fresh layout offers primitive choices and creates a centered selected ci
   expect(center.x).toBeCloseTo(320, 0);
   expect(center.y).toBeCloseTo(200, 0);
 
-  await page.getByTestId('layout-mode-size').click();
-  await expect(page.getByTestId('layout-size-panel')).toContainText('Circle');
-
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
     return saved ? [saved.layout?.starterPending, saved.layout?.strips?.length] : null;
@@ -101,24 +119,6 @@ test('an untouched fresh starter survives autosave reload, but a saved legacy ci
   await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
   await expect(page.locator('path[data-strip-path]')).toHaveCount(2);
-});
-
-test('editing the seeded geometry clears starter provenance before reload', async ({ page }) => {
-  await gotoFreshLayout(page);
-
-  await page.getByTestId('layout-mode-size').click();
-  await page.getByTestId('layout-size-density').getByRole('button', { name: '144' }).click();
-  await page.getByTestId('layout-mode-draw').click();
-  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
-
-  await expect.poll(() => page.evaluate(() => {
-    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
-    return saved ? [saved.layout?.starterPending, saved.layout?.strips?.length] : null;
-  })).toEqual([false, 2]);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
-  await expect(page.locator('.la-strip-row')).toHaveCount(2);
 });
 
 test('importing artwork clears starter provenance before reload', async ({ page }) => {
@@ -148,7 +148,7 @@ async function readAutosaveStrips(page: any) {
   });
 }
 
-test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs input', async ({ page }) => {
+test('"+ Add strip" offers icon tiles and preserves size during manual LED entry', async ({ page }) => {
   await gotoFreshLayout(page);
 
   const picker = page.getByTestId('layout-primitive-picker');
@@ -167,9 +167,9 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
   await expect(chooser.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
   await expect(chooser.getByRole('button', { name: 'Import vector', exact: true })).toBeVisible();
 
-  // The LEDs input is the ground truth: a 120-LED strip at 60 LEDs/m arrives
-  // 2 m long — svgLength = (count / density) × 1000 mm × pxPerMm.
+  // Manual count is a fine-tune: it preserves the chosen physical size.
   await chooser.getByLabel('New strip LEDs').fill('120');
+  await expect(chooser.getByLabel('New strip size in metres')).toHaveValue('1.00');
   await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
 
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
@@ -187,7 +187,7 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
     JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
   const circle = layout.strips.find((s: any) => s.name === 'Circle');
   expect(circle.pixelCount).toBe(120);
-  const expectedLength = (120 / layout.density) * 1000 * layout.pxPerMm;
+  const expectedLength = 1000 * layout.pxPerMm;
   expect(Math.abs(circle.svgLength - expectedLength)).toBeLessThan(1);
 
   // Import vector reuses the existing hidden SVG input (native file chooser).
@@ -195,6 +195,285 @@ test('"+ Add strip" offers icon tiles and sizes the new shape from the LEDs inpu
   const fileChooserPromise = page.waitForEvent('filechooser');
   await chooser.getByRole('button', { name: 'Import vector', exact: true }).click();
   expect(await fileChooserPromise).toBeTruthy();
+});
+
+test('Add strip appears before the LED strips inventory heading', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  const order = await page.locator('body').evaluate(panel => {
+    const add = panel.querySelector('[data-testid="layout-add-strip"]');
+    const heading = Array.from(panel.querySelectorAll('.ttl')).find(node => node.textContent?.trim() === 'LED strips');
+    return add && heading ? Boolean(add.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING) : false;
+  });
+
+  expect(order).toBe(true);
+});
+
+test('an expanded strip lets the maker choose its reel density', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+
+  const density = page.getByTestId('strip-density-control');
+  await expect(density).toBeVisible();
+  await expect(density.getByRole('button', { name: '60 LEDs/m' })).toHaveAttribute('aria-pressed', 'true');
+  await density.getByRole('button', { name: '144 LEDs/m' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? layout.stripDensities?.[strip.id] : null;
+  }).toBe(144);
+
+  await expect(page.getByText(/Count follows size at this strip's density/)).toHaveCount(0);
+});
+
+test('physical strip values can be typed and density is chosen before creating a strip', async ({ page }) => {
+  await gotoFreshLayout(page);
+
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByLabel('Starting strip LEDs').fill('120');
+  const starterDensity = page.getByTestId('primitive-density-control');
+  await starterDensity.getByRole('button', { name: '96 LEDs/m' }).click();
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id]] : null;
+  }).toEqual([120, 96]);
+
+  const size = page.getByLabel('Strip length in metres');
+  await size.fill('0.5');
+  await size.press('Tab');
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength / layout.pxPerMm / 1000] : null;
+  }).toEqual([48, 0.5]);
+
+  const ledCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await ledCount.fill('60');
+  await ledCount.press('Enter');
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    return strips?.[0]?.pixelCount;
+  }).toBe(60);
+});
+
+test('the Add strip chooser sets density before the new shape is drawn', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  await page.getByTestId('layout-add-strip').click();
+  const chooser = page.getByTestId('layout-add-strip-chooser');
+  await chooser.getByLabel('New strip LEDs').fill('144');
+  const density = page.getByTestId('add-strip-density-control');
+  await density.getByRole('button', { name: '144 LEDs/m' }).click();
+  await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.find((item: any) => item.name === 'Circle');
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id]] : null;
+  }).toEqual([144, 144]);
+});
+
+test('the physical creation controls keep LEDs, size, and density linked', async ({ page }) => {
+  await gotoFreshLayout(page);
+
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByLabel('Starting strip LEDs').fill('60');
+  await picker.getByTestId('primitive-density-control').getByRole('button', { name: '30 LEDs/m' }).click();
+  await expect(picker.getByLabel('Starting strip size in metres')).toHaveValue('2.00');
+  await picker.getByLabel('Starting strip size in metres').fill('1.5');
+  await picker.getByLabel('Starting strip size in metres').press('Tab');
+  await expect(picker.getByLabel('Starting strip LEDs')).toHaveValue('45');
+  await picker.getByRole('button', { name: 'Create line' }).click();
+
+  await expect.poll(async () => {
+    const layout = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
+    const strip = layout?.strips?.[0];
+    return strip ? [strip.pixelCount, layout.stripDensities?.[strip.id], strip.svgLength / layout.pxPerMm / 1000] : null;
+  }).toEqual([45, 30, 1.5]);
+});
+
+test('the Add strip controls match the selected-strip physical controls', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+
+  const chooser = page.getByTestId('layout-add-strip-chooser');
+  await expect(chooser.getByRole('button', { name: 'One new LED fewer' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'One new LED more' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Make new strip smaller' })).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'Make new strip bigger' })).toBeVisible();
+  await expect(chooser.getByLabel('New strip GPIO output')).toBeVisible();
+
+  const ledBox = await chooser.getByLabel('New strip LEDs').boundingBox();
+  const sizeBox = await chooser.getByLabel('New strip size in metres').boundingBox();
+  const gpioBox = await chooser.getByLabel('New strip GPIO output').boundingBox();
+  const densityBox = await chooser.getByTestId('add-strip-density-control').boundingBox();
+  expect(Math.abs((ledBox?.y ?? 0) - (sizeBox?.y ?? 0))).toBeLessThanOrEqual(2);
+  expect(Math.abs((gpioBox?.y ?? 0) - (densityBox?.y ?? 0))).toBeLessThanOrEqual(2);
+
+  const size = chooser.getByLabel('New strip size in metres');
+  await chooser.getByRole('button', { name: 'One new LED more' }).click();
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('61');
+  await expect(size).toHaveValue('1.00');
+
+  await chooser.getByRole('button', { name: 'Make new strip bigger' }).click();
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('67');
+  await expect(size).toHaveValue('1.11');
+
+  await chooser.getByLabel('New strip GPIO output').selectOption('17');
+  await chooser.getByTestId('add-strip-density-control').getByRole('button', { name: '30 LEDs/m' }).click();
+  await expect(size).toHaveValue('1.11');
+  await expect(chooser.getByLabel('New strip LEDs')).toHaveValue('33');
+
+  await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = saved?.layout?.strips?.find((item: any) => item.name === 'Circle');
+    const run = saved?.layout?.wiring?.runs?.find((item: any) => item.source?.stripId === strip?.id);
+    const output = saved?.layout?.wiring?.outputs?.find((item: any) => item.runIds?.includes(run?.id));
+    return output?.pin;
+  })).toBe(17);
+});
+
+test('size controls recalculate LEDs while manual LED entry preserves size', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  let starting: any = null;
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    starting = strips?.[0] ?? null;
+    return Boolean(starting?.svgLength > 0);
+  }).toBe(true);
+
+  await page.getByRole('button', { name: 'Make strip bigger' }).click();
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    const strip = strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength > starting.svgLength] : null;
+  }).toEqual([Math.round(starting.pixelCount / 0.9), true]);
+
+  const linked = (await readAutosaveStrips(page))?.[0];
+  await page.getByRole('button', { name: 'One LED more' }).click();
+  await expect.poll(async () => {
+    const strips = await readAutosaveStrips(page);
+    const strip = strips?.[0];
+    return strip ? [strip.pixelCount, strip.svgLength] : null;
+  }).toEqual([linked.pixelCount + 1, linked.svgLength]);
+
+  const actions = page.getByLabel('Strip actions');
+  await expect(actions.getByRole('button', { name: 'Flip path direction' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Duplicate strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Remove strip' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: 'Calibrate scale from LED count' })).toHaveCount(0);
+  await expect(page.getByText(/Drag on canvas to move/)).toHaveCount(0);
+});
+
+test('GPIO picker groups strips by output and assigns the selected strip to that wire', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+  await expect(page.locator('.la-strip-row')).toHaveCount(2);
+
+  const firstStrip = page.locator('[data-strip-id]').first();
+  if (!await firstStrip.locator('.la-strip-detail').isVisible()) await firstStrip.locator('.la-strip-row').click();
+  const gpio = page.getByLabel('GPIO output');
+  await expect(gpio).toBeVisible();
+  await gpio.selectOption('17');
+  await expect(gpio).toHaveValue('17');
+
+  await expect(page.getByTestId('gpio-group-17')).toContainText('GPIO 17');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return saved?.layout?.wiring?.outputs?.map((output: any) => ({ pin: output.pin, runIds: output.runIds }));
+  })).toEqual(expect.arrayContaining([
+    expect.objectContaining({ pin: 16, runIds: expect.any(Array) }),
+    expect.objectContaining({ pin: 17, runIds: expect.any(Array) }),
+  ]));
+});
+
+test('GPIO picker unlocks verified wiring and applies the chosen pin', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    saved.layout.wiring.locked = true;
+    saved.layout.wiring.verified = true;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(saved));
+  });
+  await page.reload();
+
+  const strip = page.locator('[data-strip-id]').first();
+  if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
+  const gpio = page.getByLabel('GPIO output');
+  await gpio.selectOption('17');
+  await expect(gpio).toHaveValue('17');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return [saved?.layout?.wiring?.locked, saved?.layout?.wiring?.outputs?.[0]?.pin];
+  })).toEqual([false, 17]);
+});
+
+test('GPIO picker reconciles a run after the strip LED count is reduced', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  const strip = page.locator('[data-strip-id]').first();
+  if (!await strip.locator('.la-strip-detail').isVisible()) await strip.locator('.la-strip-row').click();
+
+  const ledCount = page.getByRole('spinbutton', { name: 'Strip LED count', exact: true });
+  await ledCount.fill('12');
+  await ledCount.press('Tab');
+  await page.getByLabel('GPIO output').selectOption('17');
+
+  await expect(page.getByLabel('GPIO output')).toHaveValue('17');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('Draw strip rows drag into first-to-last wiring order', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+
+  const rows = page.locator('.la-strip-row');
+  await expect(rows).toHaveCount(2);
+  await rows.nth(1).dragTo(rows.nth(0));
+
+  await expect(rows.first()).toContainText('Line 2');
+  await expect.poll(async () => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return saved?.layout?.wiring?.outputs?.[0]?.runIds;
+  })).toEqual(['run-strip-2', 'run-strip-1']);
+});
+
+test('dropping below a Draw strip places the row after it', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Line', exact: true }).click();
+
+  const rows = page.locator('.la-strip-row');
+  const targetBox = await rows.nth(1).boundingBox();
+  if (!targetBox) throw new Error('Expected a second strip row.');
+  await rows.nth(0).dragTo(rows.nth(1), { targetPosition: { x: 24, y: targetBox.height - 2 } });
+
+  await expect(rows.first()).toContainText('Line 2');
 });
 
 test('the Size + control grows a strip ~23% about a fixed center', async ({ page }) => {
@@ -294,15 +573,214 @@ test('resized geometry persists across reload', async ({ page }) => {
     (element: SVGGraphicsElement) => element.getBBox().width);
   expect(Math.abs(width - grown)).toBeLessThan(2);
 
-  // The expanded row's Size readout shows the persisted length as a physical
-  // fact: metres at the current scale plus the LED count it holds.
+  // The expanded row keeps the persisted physical length directly editable.
   await page.locator('.la-strip-row').click();
   const layout = await page.evaluate(() =>
     JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout);
   const meters = grown / layout.pxPerMm / 1000;
   const metersText = meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
-  await expect(page.getByTestId('strip-size-readout'))
-    .toHaveText(`${metersText} m · ${layout.strips[0].pixelCount} LEDs`);
+  const readout = page.getByTestId('strip-size-readout');
+  await expect(readout.getByRole('spinbutton', { name: 'Strip length in metres' })).toHaveValue(metersText);
+  await expect(readout).toContainText('m');
+});
+
+test('Set first LED anchors the specifically clicked LED dot', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('spinbutton', { name: 'Starting strip size in metres' }).fill('0.1');
+  await picker.getByRole('spinbutton', { name: 'Starting strip size in metres' }).blur();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  if (await page.getByLabel('Strip actions').count() === 0) await page.locator('.la-strip-row').first().click();
+
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  const activeFirstLedButton = page.getByRole('button', { name: 'Cancel first LED selection' });
+  await expect(activeFirstLedButton).toBeVisible();
+  await expect(activeFirstLedButton).toHaveClass(/active/);
+  await expect.poll(() => activeFirstLedButton.evaluate(node => getComputedStyle(node).boxShadow)).not.toBe('none');
+  await expect.poll(() => page.locator('path[data-strip-path]').evaluate(node =>
+    getComputedStyle(node.ownerSVGElement!).cursor)).toBe('crosshair');
+  const markerBefore = await page.getByTestId('first-led-marker').evaluate(marker => {
+    const transform = marker.transform.baseVal.consolidate()?.matrix;
+    return transform ? [transform.e, transform.f] : null;
+  });
+  const stripId = await page.locator('path[data-strip-path]').getAttribute('data-strip-path');
+  const target = await page.locator(`[data-testid^="strip-led-${stripId}-"]`).evaluateAll(nodes => {
+    const candidate = nodes.map(node => {
+      const circle = node.querySelector('circle');
+      if (!circle) return null;
+      const rect = circle.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return hit && node.contains(hit) ? {
+        index: Number(node.getAttribute('data-testid')?.split('-').pop()),
+        x: x + rect.width * 1.5,
+        y,
+        ledX: Number(circle.getAttribute('cx')),
+        ledY: Number(circle.getAttribute('cy')),
+      } : null;
+    }).find(candidate => candidate && candidate.index > 0);
+    if (!candidate) throw new Error('No rendered LED accepts a real pointer hit.');
+    return candidate;
+  });
+  await page.mouse.click(target.x, target.y);
+
+  await expect.poll(async () => page.evaluate(id => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    return layout?.wiring?.runs?.find((run: any) => run.source?.stripId === id)?.seamLed;
+  }, stripId)).toBe(target.index);
+  await expect(page.getByRole('button', { name: 'Set first LED' })).toBeVisible();
+  await expect.poll(() => page.getByTestId('first-led-marker').evaluate(marker => {
+    const transform = marker.transform.baseVal.consolidate()?.matrix;
+    return transform ? [transform.e, transform.f] : null;
+  })).toEqual([target.ledX, target.ledY]);
+  expect([target.ledX, target.ledY]).not.toEqual(markerBefore);
+});
+
+test('Set first LED repairs a stale run range left by an LED count change', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+  await expect.poll(() => page.evaluate(() => Boolean(localStorage.getItem('lw_autosave_v3')))).toBe(true);
+
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const run = project.layout.wiring.runs.find((item: any) => item.source?.stripId === strip.id);
+    run.source.to = strip.pixelCount + 20;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, lastLed: strip.pixelCount - 1 };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, seeded.stripId, 2);
+
+  await expect.poll(() => page.evaluate(({ stripId }) => {
+    const layout = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout;
+    const run = layout?.wiring?.runs?.find((item: any) => item.source?.stripId === stripId);
+    return run ? [run.source.from, run.source.to, run.seamLed] : null;
+  }, seeded)).toEqual([0, seeded.lastLed, 2]);
+  await expect(page.getByRole('button', { name: 'Set first LED' })).toBeVisible();
+});
+
+test('Set first LED targets the split run containing the clicked light', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const runIndex = project.layout.wiring.runs.findIndex((item: any) => item.source?.stripId === strip.id);
+    const original = project.layout.wiring.runs[runIndex];
+    const middle = Math.floor((strip.pixelCount - 1) / 2);
+    const first = { ...original, id: `${original.id}-head`, source: { ...original.source, from: 0, to: middle }, seamLed: null };
+    const second = { ...original, id: `${original.id}-tail`, source: { ...original.source, from: middle + 1, to: strip.pixelCount - 1 }, seamLed: null };
+    project.layout.wiring.runs.splice(runIndex, 1, first, second);
+    project.layout.wiring.outputs.forEach((output: any) => {
+      output.runIds = output.runIds.flatMap((id: string) => id === original.id ? [first.id, second.id] : [id]);
+    });
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, targetLed: Math.min(strip.pixelCount - 1, middle + 2), firstRunId: first.id, secondRunId: second.id };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, seeded.stripId, seeded.targetLed);
+
+  await expect.poll(() => page.evaluate(({ firstRunId, secondRunId }) => {
+    const runs = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.layout?.wiring?.runs || [];
+    return [runs.find((run: any) => run.id === firstRunId)?.seamLed, runs.find((run: any) => run.id === secondRunId)?.seamLed];
+  }, seeded)).toEqual([null, seeded.targetLed]);
+  const marker = await page.getByTestId('first-led-marker').evaluate(node => {
+    const matrix = node.transform.baseVal.consolidate()?.matrix;
+    return matrix ? [matrix.e, matrix.f] : null;
+  });
+  const target = await page.getByTestId(`strip-led-${seeded.stripId}-${seeded.targetLed}`).locator('circle').first().evaluate(circle => [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))]);
+  expect(marker).toEqual(target);
+});
+
+test('a rejected first LED change stays armed and explains the wiring error', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await waitForSavedStripWiring(page);
+  const stripId = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    project.layout.wiring.outputs[0].pin = 999;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return project.layout.strips[0].id;
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+  await page.getByRole('button', { name: 'Set first LED' }).click();
+  await clickStripLed(page, stripId, 2);
+
+  await expect(page.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Unsupported output pin 999');
+});
+
+test('the first LED marker starts at the data-input end of a reversed strip', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Create line' }).click();
+  await waitForSavedStripWiring(page);
+  const seeded = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    const strip = project.layout.strips[0];
+    const run = project.layout.wiring.runs.find((item: any) => item.source?.stripId === strip.id);
+    run.physicalDirection = 'source-reverse';
+    run.seamLed = null;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return { stripId: strip.id, lastLed: strip.pixelCount - 1 };
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.la-strip-row').click();
+
+  const marker = await page.getByTestId('first-led-marker').evaluate(node => {
+    const matrix = node.transform.baseVal.consolidate()?.matrix;
+    return matrix ? [matrix.e, matrix.f] : null;
+  });
+  const target = await page.getByTestId(`strip-led-${seeded.stripId}-${seeded.lastLed}`).locator('circle').first().evaluate(circle => [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))]);
+  expect(marker).toEqual(target);
+});
+
+test('the selected first LED is the only endpoint marker in Draw mode', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+
+  await expect(page.getByTestId('first-led-marker')).toBeVisible();
+  await expect(page.locator('circle[fill="oklch(0.745 0.095 150)"]')).toHaveCount(0);
+  await expect(page.locator('circle[stroke="oklch(0.800 0.130 72)"]')).toHaveCount(0);
+});
+
+test('Set first LED binds the 1 marker to the strip whose button was armed', async ({ page }) => {
+  await gotoFreshLayout(page);
+  const picker = page.getByTestId('layout-primitive-picker');
+  await picker.getByRole('button', { name: 'Circle', exact: true }).click();
+  await picker.getByRole('button', { name: 'Create circle' }).click();
+  await page.getByTestId('layout-add-strip').click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Circle', exact: true }).click();
+
+  const strips = page.locator('[data-strip-id]');
+  await expect(strips).toHaveCount(2);
+  const firstStrip = strips.first();
+  await expect(strips.nth(1).locator('.la-strip-row')).toHaveClass(/sel/);
+  await firstStrip.getByRole('button', { name: 'Set first LED' }).click();
+
+  await expect(firstStrip.locator('.la-strip-row')).toHaveClass(/sel/);
+  await expect(firstStrip.getByRole('button', { name: 'Cancel first LED selection' })).toBeVisible();
 });
 
 test('Free draw keeps the existing manual path workflow', async ({ page }) => {

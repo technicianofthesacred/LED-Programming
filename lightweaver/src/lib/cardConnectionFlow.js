@@ -1,7 +1,11 @@
+import { classifyCardReadiness } from './cardReadiness.js';
+
 export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
   'ready-browser-usb',
   'escape-insecure-card-frame',
   'ready-local-card',
+  'pair-local-card',
+  'card-needs-project',
   'needs-card-update',
   'launch-native-bridge',
   'install-native-bridge',
@@ -26,9 +30,21 @@ const ACTION_COPY = Object.freeze({
   }),
   'ready-local-card': Object.freeze({
     legacyId: 'connected',
-    title: 'Lightweaver card ready',
+    title: 'Ready for light check',
     explanation: 'Studio verified the connected card and can control it now.',
     primaryLabel: 'Continue',
+  }),
+  'pair-local-card': Object.freeze({
+    legacyId: 'reconnect-known-card',
+    title: 'Pair this Lightweaver card',
+    explanation: 'Studio found a Lightweaver card on this network. Pair it once so only this card receives your commands.',
+    primaryLabel: 'Connect',
+  }),
+  'card-needs-project': Object.freeze({
+    legacyId: 'connected',
+    title: 'Blank — load a project',
+    explanation: 'Install your project so the card plays your design instead of its factory defaults.',
+    primaryLabel: 'Install your project',
   }),
   'needs-card-update': Object.freeze({
     legacyId: 'web-serial-install',
@@ -74,7 +90,12 @@ const ACTION_COPY = Object.freeze({
   }),
 });
 
-const UPDATE_REASONS = new Set(['identity-missing', 'firmware-too-old']);
+const UPDATE_REASONS = new Set([
+  'identity-missing',
+  'firmware-too-old',
+  'wrong-firmware-version',
+  'wrong-firmware-build',
+]);
 const TRANSIENT_REASONS = new Set([
   'popup-blocked',
   'no-answer',
@@ -163,6 +184,27 @@ function installationRoute(capabilities) {
   return action('handoff-supported-device');
 }
 
+function classifiedLinkReadiness(link = {}, options = {}) {
+  const evidence = link.readiness ?? link.cardReadiness ?? link.status ?? link;
+  const expectedCard = options.expectedCard || link.expectedCard || link.card || null;
+  return classifyCardReadiness(evidence, {
+    expectedCard,
+    expectedCardId: options.expectedCardId
+      || link.expectedCard?.id
+      || link.expectedCard?.cardId
+      || link.card?.id
+      || link.card?.cardId
+      || '',
+    previousBootId: options.previousBootId || link.previousBootId || '',
+  });
+}
+
+export function isCardLinkConnected(link = {}, options = {}) {
+  if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
+  const transportConnected = link.state === 'connected-bridge' || link.state === 'connected-direct';
+  return transportConnected && classifiedLinkReadiness(link, options).connected;
+}
+
 export function nextCardConnectionAction(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return action('recoverable-failure');
@@ -173,11 +215,22 @@ export function nextCardConnectionAction(input = {}) {
     ? input.capabilities
     : {};
   const reason = link.reason;
+  const readiness = classifiedLinkReadiness(link, {
+    expectedCardId: input.expectedCard?.id || input.expectedCard?.cardId || '',
+    previousBootId: input.previousBootId || '',
+  });
 
   if (
     (link.state === 'connected-bridge' || link.state === 'connected-direct')
-    && hasCardIdentity(link.card)
+    && readiness.state === 'blank'
   ) {
+    return action('card-needs-project');
+  }
+
+  if (isCardLinkConnected(link, {
+    expectedCardId: input.expectedCard?.id || input.expectedCard?.cardId || '',
+    previousBootId: input.previousBootId || '',
+  })) {
     return action('ready-local-card');
   }
 
@@ -218,9 +271,15 @@ export function nextCardConnectionAction(input = {}) {
     });
   }
 
+  if (reason === 'found-unpaired' || (input.discoveredCard && !hasCardIdentity(input.rememberedCard))) {
+    return action('pair-local-card', {
+      secondaryAction: { id: 'adopt-discovered-card', label: 'Use this card instead' },
+    });
+  }
+
   if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
 
-  if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge') {
+  if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge' || link.state === 'revalidating') {
     return action('recoverable-failure', {
       title: 'Connecting to the Lightweaver card',
       explanation: 'Keep the card powered and leave its page open while Studio checks it.',

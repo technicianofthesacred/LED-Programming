@@ -1,328 +1,206 @@
 /* ============================================================
-   lw-wire.css — Wire-mode commissioning panel restructure
-   (plan changes 1, 2, 3, 4, 5, 6, 7, 8, 13, 14).
+   lw-wire.css — Wire-mode single-next-action panel.
    Consumes the v3 token set (src/v3/v3-styles.css). No new
    palette tokens, no hex; class prefix lww-.
    Imported by src/components/layout/modes/WireModePanel.jsx.
    ============================================================ */
 
-/* ---------- intro: one title + one sentence ---------- */
+/* ---------- top: Wire-derived plan summary ---------- */
 
-.lww-intro {
-  display: grid;
-  gap: 4px;
-  padding: 2px 0 14px;
+.lww-plan-head {
+  position: static;
+  padding: 0 0 10px;
+}
+
+.lww-plan-head .meta {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.lww-intro > strong {
+.lww-plan-summary {
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.lww-plan-strip {
+  cursor: default;
+}
+
+.la-gpio-group .lww-plan-strip:hover {
+  background: transparent;
+}
+
+/* ---------- status line + over-budget warning ---------- */
+
+.lww-status {
+  margin: 0 0 4px;
   color: var(--text-hi);
-  font-size: 17px;
-  font-weight: 700;
-  text-wrap: balance;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 
-.lww-intro > p {
+.lww-power-warning {
+  margin: 0 0 4px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- middle: single primary flow area ---------- */
+
+.lww-flow {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  min-width: 0;
+  margin: 6px 0 12px;
+}
+
+.lww-flow > section {
+  justify-self: stretch;
+}
+
+.lww-flow-message {
   margin: 0;
   color: var(--text-mid);
   font-size: 12.5px;
   line-height: 1.5;
-  max-width: 52ch;
 }
 
-/* ---------- summary block spacing (tiles + diagram + rail) ---------- */
-
-.lww-summary {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 4px;
-  min-width: 0;
+.lww-flow-title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
 }
-
-.lww-step-region {
-  min-width: 0;
-}
-
-/* ---------- shared: 44px primary action ---------- */
 
 .lww-cta {
   min-height: 44px;
   padding: 10px 16px;
 }
 
-/* ---------- step 1: wire-count chooser cards ---------- */
-
-.lww-review-note {
-  margin: 0 0 10px;
-  color: var(--warn);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.lww-choices {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-/* Container query, not viewport: the panel is a fixed ~320px column on
-   desktop (.la-wire-panel has container-type: inline-size), so a viewport
-   query would never fire there (redesign change 20). */
-@container (max-width: 520px) {
-  .lww-choices {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-.lww-choice {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-  min-height: 44px;
-  min-width: 0;
-  padding: 12px 8px 10px;
-  background: var(--bg-elev-2);
-  border: 1px solid var(--border-hair);
-  border-radius: 12px;
-  color: var(--text-mid);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-}
-
-.lww-choice:hover:not(:disabled) {
-  border-color: var(--border);
-  color: var(--text-hi);
-}
-
-.lww-choice:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.lww-choice.is-selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev-2));
-  color: var(--text-hi);
-}
-
-.lww-choice-glyph {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  color: var(--text-faint);
-}
-
-.lww-choice:hover:not(:disabled) .lww-choice-glyph,
-.lww-choice.is-selected .lww-choice-glyph {
-  color: var(--accent);
-}
-
-.lww-choice-title {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.lww-choice-cap {
-  font-size: 10.5px;
-  line-height: 1.3;
-  color: var(--text-faint);
-}
-
-/* ---------- mini wiring diagram ---------- */
-
-.lww-diagram {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-  /* Marker colors mirror the physical bench check: the card lights the
-     first LED blue and the last LED red. Same physical-marker tokens as the
-     bench wizard illustration (lw-bench.css) so the two surfaces match. */
-  --lww-led-first: var(--physical-start-marker);
-  --lww-led-last: var(--physical-end-marker);
-}
-
-.lww-diagram-out {
-  min-width: 0;
-}
-
-.lww-diagram-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.lww-diagram-card {
-  flex: none;
-  width: 44px;
-  height: 30px;
-  border: 1.5px solid var(--text-mid);
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  font: 8px var(--font-mono);
-  letter-spacing: 0.08em;
-  color: var(--text-mid);
-}
-
-.lww-diagram-wire {
-  flex: 1 1 18px;
-  min-width: 12px;
-  height: 0;
-  border-top: 2px solid var(--accent);
-}
-
-.lww-diagram-gap {
-  flex: none;
-  width: 10px;
-  height: 0;
-  border-top: 2px dashed var(--border);
-}
-
-.lww-diagram-strip {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
-  border: 1px solid var(--border-hair);
-  border-radius: 6px;
-  background: var(--bg-elev-2);
-}
-
-.lww-diagram-strip.is-verified {
-  border-color: color-mix(in srgb, var(--ok) 55%, var(--border-hair));
-  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elev-2));
-}
-
-.lww-diagram-strip.is-inactive {
-  border-style: dashed;
-  background: transparent;
-}
-
-.lww-diagram-strip i {
-  width: 5px;
-  height: 10px;
-  border-radius: 1.5px;
-  background: var(--border);
-}
-
-.lww-diagram-strip.is-verified i {
-  background: color-mix(in srgb, var(--ok) 45%, var(--border));
-}
-
-.lww-diagram-strip i.is-first {
-  background: var(--lww-led-first);
-}
-
-.lww-diagram-strip i.is-last {
-  background: var(--lww-led-last);
-}
-
-.lww-diagram-empty {
-  flex: none;
-  color: var(--text-faint);
-  font-size: 10.5px;
-}
-
-.lww-diagram-cap {
-  margin: 6px 0 0;
-  color: var(--text-faint);
-  font-size: 10.5px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------- step 2: quiet expert card ---------- */
-
-.lww-expert {
-  margin-top: 12px;
-  border: 1px solid var(--border-hair);
-  border-radius: 12px;
-  background: var(--bg-elev);
-  padding: 0 14px;
-}
-
-.lww-expert > summary {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 10px 0;
-  color: var(--text-mid);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.lww-expert > summary:hover {
-  color: var(--text-hi);
-}
-
-.lww-expert > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--r-sm);
-}
-
-.lww-expert[open] > summary {
-  color: var(--text-hi);
-  border-bottom: 1px solid var(--border-hair);
-}
-
-.lww-expert-body {
-  display: grid;
-  gap: 12px;
-  padding: 12px 0 14px;
-}
-
-.lww-expert-note {
-  margin: 0;
-  color: var(--text-faint);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-/* ---------- step 3: auto-wire suggestion card ---------- */
-
-.lww-auto-note {
-  margin: 0 0 12px;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-/* ---------- step 5: ready line ---------- */
-
 .lww-install-ready {
-  margin: 0 0 12px;
-  color: var(--text-mid);
+  margin: 0;
+  color: var(--ok);
   font-size: 12.5px;
   line-height: 1.5;
 }
 
-.lww-install-ready.is-ready {
-  color: var(--ok);
+/* ---------- advanced: quiet, specialist-only disclosure ---------- */
+
+.lww-advanced-tools {
+  min-width: 0;
+  margin-top: 4px;
+  border-top: 1px solid var(--border-hair);
 }
 
-/* ---------- motion ---------- */
-
-@media (prefers-reduced-motion: no-preference) {
-  .lww-choice {
-    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
-  }
-  .lww-diagram-strip,
-  .lww-diagram-strip i {
-    transition: border-color 0.2s ease, background-color 0.2s ease;
-  }
+.lww-advanced-tools > summary,
+.lww-custom-mapping > summary,
+.lww-card-hardware > summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--text-mid);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-/* ── Narrow-container header compacts (after base rules to win the cascade) ── */
-@container (max-width: 480px) {
-  .lww-intro { padding-bottom: 8px; }
-  .lww-intro > strong { font-size: 15px; }
-  .lww-summary { gap: 6px; }
-  .lww-diagram { gap: 4px; }
-  .lww-diagram-cap { margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lww-advanced-tools > summary:hover,
+.lww-custom-mapping > summary:hover,
+.lww-card-hardware > summary:hover {
+  color: var(--text-hi);
+}
+
+.lww-advanced-tools-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 0 8px;
+}
+
+.lww-custom-mapping,
+.lww-card-hardware {
+  min-width: 0;
+  border-top: 1px solid var(--border-hair);
+}
+
+.lww-specialist-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.lww-cable-jumps {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.lww-cable-jump-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+}
+
+.lww-cable-jump-row > span { display: grid; min-width: 0; gap: 2px; }
+.lww-cable-jump-row strong { color: var(--text-hi); font-size: 11px; }
+.lww-cable-jump-row small { overflow: hidden; color: var(--text-mid); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.lww-unlock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-mid);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ---------- card hardware ---------- */
+
+.lww-power-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.lww-power-fields label { display: grid; gap: 4px; color: var(--text-mid); font-size: 10px; }
+.lww-power-fields input {
+  width: 100%; height: 28px; min-width: 0; padding: 0 7px;
+  color: var(--text-hi); background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.lww-power-fields input:focus { outline: none; border-color: var(--accent); }
+.lww-power-headroom {
+  margin: 8px 0 0;
+  color: var(--text-mid);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.lww-power-headroom.is-over { color: var(--danger); }
+
+@container (max-width: 320px) {
+  .lww-plan-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .lww-plan-head .meta {
+    max-width: 100%;
+  }
+
+  .lww-specialist-actions,
+  .lww-power-fields {
+    grid-template-columns: 1fr;
+  }
 }

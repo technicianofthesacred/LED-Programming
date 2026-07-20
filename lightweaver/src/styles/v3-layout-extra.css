@@ -40,16 +40,61 @@
    Lives directly under the row, indented to the row's content column. */
 .la-strip-detail {
   display: flex; flex-direction: column; gap: 8px;
-  margin: 2px 10px 8px 10px; padding: 10px 12px;
-  background: var(--bg-elev);
-  border-radius: var(--r-md);
+  margin: 2px 0 8px; padding: 9px 12px;
+  background: var(--bg-app);
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0 0 var(--r-md) var(--r-md);
 }
 .la-strip-detail .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .la-strip-detail .row > .k { color: var(--text-mid); width: 52px; flex-shrink: 0; }
+.la-gpio-group { margin: 0; padding: 0; border: 0; min-width: 0; }
+.la-gpio-group + .la-gpio-group { margin-top: 10px; }
+.la-gpio-group-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 7px 10px 5px; border-bottom: 1px solid var(--border-hair);
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 10px; letter-spacing: .055em;
+}
+.la-gpio-group-head span:last-child { color: var(--text-faint); font-size: 9px; letter-spacing: .03em; }
+.la-strip-output-row { position: relative; min-height: 28px; }
+.la-gpio-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
+.la-gpio-wrap::after {
+  content: '⌄'; position: absolute; right: 7px; top: 50%; transform: translateY(-53%);
+  color: var(--text-faint); font-family: var(--font-mono); font-size: 12px; pointer-events: none;
+}
+.la-gpio-select {
+  appearance: none; height: 26px; min-width: 76px; padding: 0 22px 0 8px;
+  color: var(--text-hi); background: var(--bg-elev-2); border: 1px solid var(--border);
+  border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+}
+.la-gpio-select:hover, .la-gpio-select:focus { border-color: var(--accent-line); outline: none; }
+.la-gpio-button {
+  height: 26px; min-width: 66px; padding: 0 8px; justify-content: center;
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 11px;
+  border-color: var(--border-soft); background: var(--bg-elev);
+}
+.la-gpio-button:hover, .la-gpio-button[aria-expanded="true"] { color: var(--text-hi); border-color: var(--accent-line); }
+.la-gpio-popover {
+  position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; width: 184px;
+  padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-elev-2); box-shadow: 0 14px 32px -12px rgba(0,0,0,.7);
+}
+.la-gpio-popover > span { display: block; margin: 1px 2px 7px; color: var(--text-faint); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.la-gpio-popover [role="group"] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.la-gpio-popover .btn { height: 27px; padding: 0 6px; justify-content: center; color: var(--text-mid); font-family: var(--font-mono); font-size: 11px; }
+.la-gpio-popover .btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 .la-strip-detail .move-grid { display: grid; grid-template-columns: 52px 1fr 1fr; align-items: center; gap: 8px; }
 .la-strip-detail .move-grid label { display: flex; align-items: center; gap: 5px; color: var(--text-mid); font-size: 12px; }
 .la-strip-detail .hint { color: var(--text-faint); font-size: 11px; padding-left: 0; line-height: 1.45; }
 .la-strip-detail .presets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-left: 60px; }
+.la-strip-density { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.la-strip-density .btn {
+  min-width: 43px; height: 26px; padding: 0 7px; justify-content: center;
+  color: var(--text-faint); font-family: var(--font-mono); font-size: 11px;
+}
+.la-strip-density .btn:hover { color: var(--text-hi); border-color: var(--border); }
+.la-strip-density .btn.is-selected {
+  color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft);
+}
 .la-strip-detail input[type=number] {
   width: 100%; min-width: 0; height: 28px; text-align: right;
   background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
@@ -57,7 +102,28 @@
 }
 .la-strip-detail input[type=number]:focus { outline: none; border-color: var(--accent); }
 .la-strip-detail input[type=range].lw { flex: 1; min-width: 0; }
-.la-strip-detail .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.la-strip-detail .actions { display: flex; align-items: center; justify-content: space-between; }
+.la-strip-actions-left, .la-strip-actions-right { display: flex; align-items: center; gap: 5px; }
+.la-strip-detail .actions .btn {
+  width: 34px; min-width: 34px; height: 28px; padding: 0; justify-content: center;
+  color: var(--text-mid);
+}
+.la-strip-detail .actions .btn:hover { color: var(--text-hi); }
+.la-strip-detail .actions .btn.active,
+.la-strip-detail .actions .btn[aria-pressed="true"] {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent), 0 0 14px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+.la-strip-detail .actions .btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.la-strip-detail .actions .btn.danger:hover { color: var(--danger); }
+.la-led-count-field { display: inline-flex; align-items: stretch; overflow: hidden; background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm); }
+.la-led-count-field .btn { width: 24px; min-width: 24px; height: 28px; padding: 0; justify-content: center; border: 0; border-radius: 0; color: var(--text-faint); font-size: 15px; }
+.la-led-count-field .btn:first-child { border-right: 1px solid var(--border-soft); }
+.la-led-count-field .btn:last-child { border-left: 1px solid var(--border-soft); }
+.la-led-count-field .btn:hover { color: var(--text-hi); background: var(--bg-elev); }
+.la-led-count-field input[type=number] { width: 50px; min-width: 0; height: 28px; padding: 0 5px; border: 0; border-radius: 0; background: transparent; text-align: center; }
 
 /* strip-row expandable affordance */
 .la-strip-row { cursor: pointer; }
@@ -156,7 +222,7 @@
 .la-empty .cta { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 20px; border-radius: var(--r-md); background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; }
 .la-empty .cta svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; color: var(--on-accent); }
 
-/* ── Canvas wire-path overlay (chop/link route drawn on the artwork) ──────
+/* ── Canvas wire-path overlay (split/canonical route drawn on artwork) ───
    Ported from main.css into the v3 token idiom — warm accent strands, no blue.
    --wire-color is set inline per segment from the strip's own color. */
 .lw-wire-canvas-segment {
@@ -168,16 +234,6 @@
   opacity: 0.42;
   filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
   pointer-events: none;
-}
-.lw-wire-canvas-segment-hit {
-  fill: none;
-  stroke: var(--accent);
-  stroke-opacity: 0.001;
-  stroke-width: 18;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  cursor: pointer;
-  pointer-events: visibleStroke;
 }
 .lw-route-badge { pointer-events: none; }
 .lw-route-badge circle { fill: var(--accent); stroke: var(--bg-canvas); stroke-width: 1.5; }
@@ -428,7 +484,159 @@
   font-size: 15px; line-height: 1;
 }
 .la-size-readout {
-  flex: 1; text-align: center;
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
   font-family: var(--font-mono); font-size: 12px; color: var(--text-hi);
   white-space: nowrap;
+}
+.la-size-readout input[type=number] {
+  width: 56px; min-width: 0; height: 26px; padding: 0 5px; text-align: right;
+  color: var(--text-hi); background: var(--bg-app); border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm); font: inherit;
+}
+.la-size-readout input[type=number]:focus { border-color: var(--accent); outline: none; }
+.la-strip-physical-row {
+  gap: 10px; align-items: center; justify-content: flex-start;
+  padding: 4px 6px; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+}
+.la-strip-physical-field { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.la-strip-physical-field + .la-strip-physical-field { padding-left: 10px; border-left: 1px solid var(--border-soft); }
+.la-strip-physical-field > .k { color: var(--text-mid); font-size: 11px; flex-shrink: 0; }
+.la-strip-physical-field .la-size-ctrl { gap: 3px; }
+.la-strip-physical-field .la-size-ctrl .btn,
+.la-strip-physical-field .lw-led-nudge .btn {
+  width: 22px; min-width: 22px; height: 28px;
+}
+.la-strip-physical-field .la-size-readout { flex: 0 1 auto; gap: 3px; }
+.la-strip-physical-field .la-size-readout input[type=number] { width: 44px; height: 28px; }
+
+/* Draw strip controls form one instrument panel, not a stack of loose black
+   controls. The GPIO group owns the surface; its rows are simply sections. */
+.la-gpio-group {
+  overflow: visible;
+  background: color-mix(in oklab, var(--bg-panel) 84%, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+}
+.la-gpio-group + .la-gpio-group { margin-top: 8px; }
+.la-gpio-group-head {
+  padding: 8px 10px 6px;
+  background: color-mix(in oklab, var(--bg-panel) 92%, var(--bg-app));
+  border-radius: calc(var(--r-md) - 1px) calc(var(--r-md) - 1px) 0 0;
+}
+.la-gpio-group .la-strip-row {
+  min-height: 36px;
+  background: transparent;
+  border-radius: 0;
+}
+.la-gpio-group .la-strip-row:hover { background: var(--bg-sel); }
+.la-gpio-group .la-strip-row.sel { background: var(--bg-sel); }
+.la-gpio-group .la-strip-row {
+  transition: transform 180ms cubic-bezier(.25, 1, .5, 1), opacity 120ms ease-out, background-color 150ms ease-out, box-shadow 180ms cubic-bezier(.25, 1, .5, 1);
+}
+.la-gpio-group .la-strip-row.is-dragging {
+  opacity: .45 !important; transform: scale(.985); cursor: grabbing;
+  box-shadow: 0 8px 18px -12px oklch(.08 .004 75 / .9);
+}
+.la-gpio-group .la-strip-row.is-drop-target { background: var(--accent-soft); }
+.la-gpio-group .la-strip-row.is-dropped { animation: la-strip-row-land 220ms cubic-bezier(.25, 1, .5, 1); }
+.la-wire-n { display: inline-flex; align-items: center; gap: 4px; }
+.la-wire-n svg { opacity: .45; transition: opacity 150ms ease-out, transform 180ms cubic-bezier(.25, 1, .5, 1); }
+.la-strip-row:hover .la-wire-n svg, .la-strip-row.is-dragging .la-wire-n svg { opacity: 1; transform: translateY(-1px); }
+@keyframes la-strip-row-land {
+  0% { transform: scale(.985); opacity: .6; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .la-gpio-group .la-strip-row, .la-wire-n svg { transition-duration: .01ms; }
+  .la-gpio-group .la-strip-row.is-dropped { animation-duration: .01ms; }
+}
+.la-strip-detail {
+  gap: 0;
+  margin: 0;
+  padding: 6px 8px 8px;
+  background: transparent;
+  border-top: 1px solid var(--border-hair);
+  border-radius: 0;
+}
+.la-strip-detail .actions {
+  min-height: 34px;
+  padding: 3px 5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-bottom: 0;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+.la-strip-detail .actions .btn {
+  background: color-mix(in oklab, var(--bg-panel) 78%, var(--bg-elev));
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+}
+.la-strip-physical-row {
+  gap: 8px;
+  margin: 0;
+  padding: 5px 6px;
+  background: color-mix(in oklab, var(--bg-elev) 88%, var(--bg-panel));
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-hair);
+  border-bottom: 0;
+  border-radius: 0;
+}
+.lw-shape-chooser .la-add-strip-physical-row,
+.lw-shape-chooser .la-add-strip-output-row {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+.la-strip-output-row {
+  gap: 5px;
+  margin: 0;
+  padding: 5px 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-hair);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+}
+.la-strip-output-row .la-strip-density { flex: 1; flex-wrap: nowrap; gap: 3px; }
+.la-strip-output-row .la-strip-density .btn { flex: 1; min-width: 0; padding: 0 3px; }
+.la-led-count-field,
+.la-strip-detail .la-size-readout input[type=number] {
+  background: var(--bg-panel);
+  border-color: var(--border);
+}
+.la-strip-detail .la-led-count-field input[type=number] { background: var(--bg-panel); }
+.la-gpio-button {
+  gap: 4px;
+  background: var(--bg-elev-2);
+  border-color: var(--border);
+}
+.la-gpio-popover {
+  background: var(--bg-panel);
+  border-color: var(--border);
+  box-shadow: 0 16px 32px -16px oklch(0.08 0.004 75 / .9);
+}
+.la-gpio-popover .btn { background: var(--bg-elev); border-color: var(--border-soft); }
+.la-gpio-error {
+  margin-top: 5px; padding: 5px 7px;
+  color: var(--warn); background: color-mix(in oklab, var(--warn) 10%, var(--bg-elev));
+  border: 1px solid color-mix(in oklab, var(--warn) 32%, var(--border));
+  border-radius: var(--r-sm); font-size: 10px; line-height: 1.35;
+}
+.la-primitive-physical {
+  display: flex; flex-direction: column; align-items: stretch; gap: 7px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft);
+}
+.la-primitive-dimensions { display: flex; align-items: center; gap: 10px; }
+.la-primitive-physical label { display: flex; align-items: center; gap: 6px; color: var(--text-mid); font-size: 11px; }
+.la-primitive-physical input[type=number] {
+  width: 52px; height: 26px; padding: 0 6px; text-align: right; color: var(--text-hi);
+  background: var(--bg-app); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: 11px;
+}
+.la-primitive-density, .lw-shape-density { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.la-primitive-density button, .lw-shape-density .btn {
+  min-width: 38px; height: 24px; padding: 0 5px; color: var(--text-faint); border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm); font-family: var(--font-mono); font-size: 10px;
+}
+.la-primitive-density button.is-selected, .lw-shape-density .btn.is-selected {
+  color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft);
 }

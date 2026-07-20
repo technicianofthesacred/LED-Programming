@@ -136,15 +136,6 @@
                 <span>Strip type</span>
                 <select id="empty-led-type"></select>
               </label>
-              <label class="empty-strip-field">
-                <span>Density</span>
-                <select id="empty-density">
-                  <option value="30">30 /m</option>
-                  <option value="60" selected>60 /m</option>
-                  <option value="96">96 /m</option>
-                  <option value="144">144 /m</option>
-                </select>
-              </label>
             </div>
 
             <div class="empty-shapes">
@@ -183,6 +174,21 @@
               <input type="range" id="empty-leds" min="10" max="500" value="144" step="1" />
               <span id="empty-leds-val">144</span>
             </label>
+            <div class="empty-density-control" aria-label="LED density">
+              <span class="empty-density-label">LEDs per metre</span>
+              <div class="density-presets" role="group" aria-label="Choose LED density">
+                <button type="button" class="density-preset" data-density="30">30</button>
+                <button type="button" class="density-preset active" data-density="60" aria-pressed="true">60</button>
+                <button type="button" class="density-preset" data-density="96">96</button>
+                <button type="button" class="density-preset" data-density="144">144</button>
+                <button type="button" class="density-preset" data-density="custom">Custom</button>
+              </div>
+              <label id="empty-custom-density-wrap" class="empty-custom-density" hidden>
+                <span class="sr-only">Custom LEDs per metre</span>
+                <input id="empty-custom-density" type="number" min="1" max="1000" value="60" inputmode="numeric" /> LEDs/m
+              </label>
+            </div>
+            <p id="empty-length-note" class="empty-length-note">≈ 2.40 m at 60 LEDs/m</p>
           </div>
         </div>
       </div>

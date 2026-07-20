@@ -37,8 +37,12 @@ for (const field of ['app', 'state', 'activationId', 'cardId', 'firmwareVersion'
 }
 assert.match(statusJson, /NVS_CANDIDATE_CONFIG_KEY/, 'candidate identity must come from the staged package, not active runtime guesses');
 
-assert.match(runtime, /LW_DISCOVERY_BATCH_SIZE\s*=\s*4/, 'wire discovery must cap a batch at four GPIOs');
-assert.match(runtime, /"assignments"/, 'discovery must return color-to-GPIO assignments');
+assert.match(runtime, /LW_DISCOVERY_STEP_COUNT\s*=\s*LW_APPROVED_OUTPUT_GPIO_COUNT/,
+  'wire discovery must expose exactly the approved GPIOs as sequential steps');
+assert.match(runtime, /"pin"/, 'discovery must return the one active GPIO');
+for (const field of ['step', 'stepCount', 'brightnessLimit', 'pixelLimit', 'nextStep']) {
+  assert.match(runtime, new RegExp(`doc\\["${field}"\\]`), `discovery must report ${field}`);
+}
 assert.match(runtime, /"remainingProbationMs"|remainingProbationMs/, 'status must expose the card-owned probation time');
 assert.match(runtime, /setupSafeDiscoveryOutputs[\s\S]*addLedsForPin/, 'discovery assignments must drive real LED outputs');
 

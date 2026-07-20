@@ -29,7 +29,7 @@ export function useLayoutStrips(ctx) {
     stripCountOverrides,
     // Per-strip density map (id → LEDs/m) being introduced in a parallel
     // change; read defensively — absent entries fall back to the global density.
-    stripDensities,
+    stripDensities, setStripDensities,
     layerGroups, setLayerGroups, setLayerOrder,
     pushLayoutHistory,
     selectStrip, selectStrips, clearLayoutSelection,
@@ -138,7 +138,7 @@ export function useLayoutStrips(ctx) {
   // count override is needed and later resizes recount cleanly.
   // Each new strip is nudged +24px per existing strip so it never lands exactly
   // on top of another one.
-  const addPrimitiveStrip = useCallback((type, ledCount) => {
+  const addPrimitiveStrip = useCallback((type, ledCount, ledsPerM, lengthM) => {
     const id = nextStripId(strips);
     const offset = 24 * strips.length;
     const definition = createPrimitiveStripDefinition({
@@ -149,6 +149,9 @@ export function useLayoutStrips(ctx) {
       color: nextColor(),
     });
     // No count given (legacy callers): derive it from the default shape size.
+    const effectiveDensity = Number.isFinite(Number(ledsPerM)) && Number(ledsPerM) > 0
+      ? Number(ledsPerM)
+      : densityFor(id);
     const count = Number.isFinite(Number(ledCount)) && Number(ledCount) > 0
       ? Math.round(Number(ledCount))
       : physicalCountForLength(definition.svgLength, id);
@@ -156,10 +159,10 @@ export function useLayoutStrips(ctx) {
     // strip's density. Only the minimum-length clamp applies here: the
     // physical strip is as long as it is, even if that overflows the artwork
     // (the resize clamps still stop runaway ± growth afterwards).
-    const targetLen = Math.max(
-      MIN_STRIP_SVG_LENGTH,
-      (count / densityFor(id)) * 1000 * safePxPerMm,
-    );
+    const physicalLength = Number.isFinite(Number(lengthM)) && Number(lengthM) > 0
+      ? Number(lengthM)
+      : count / effectiveDensity;
+    const targetLen = Math.max(MIN_STRIP_SVG_LENGTH, physicalLength * 1000 * safePxPerMm);
     const sized = (definition.svgLength > 0 && Number.isFinite(targetLen) && targetLen !== definition.svgLength)
       ? scaleStripGeometry(definition, targetLen / definition.svgLength)
       : definition;
@@ -174,10 +177,12 @@ export function useLayoutStrips(ctx) {
       y: offset,
     });
     pushLayoutHistory();
+    setStripDensities(prev => ({ ...prev, [id]: effectiveDensity }));
     setStrips(prev => [...prev, strip]);
     selectStrip(id);
     scrollToStrip(id);
-  }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStrips, selectStrip, scrollToStrip, physicalCountForLength, densityFor, safePxPerMm]);
+    return id;
+  }, [strips, viewBox, rebuildStrip, nextColor, pushLayoutHistory, setStripDensities, setStrips, selectStrip, scrollToStrip, physicalCountForLength, densityFor, safePxPerMm]);
 
   // Uniform resize of a strip's geometry about its own center (Draw panel
   // − / + Size control). Same shape as reverseStrip: history push + setStrips,
@@ -195,7 +200,13 @@ export function useLayoutStrips(ctx) {
       : svgPathLength(s.pathData);
     if (!(currentLen > 0)) return;
     const vb = parsedVb(viewBox);
-    const maxLen = MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h);
+    // A strip sized from its real LED count can legitimately start larger than
+    // the artwork. Give the ± control room to grow that strip twice over while
+    // retaining the canvas-relative guard for ordinary artwork paths.
+    const maxLen = Math.max(
+      MAX_STRIP_LENGTH_ARTWORK_FACTOR * Math.max(vb.w, vb.h),
+      currentLen * 2,
+    );
     const nextLen = currentLen * factor;
     // Directional clamps: never grow past the artwork cap, never shrink into a
     // degenerate dot — but always allow moving back TOWARD the valid range

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
-import { rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
+import { adoptDiscoveredCardBridgeIdentity, rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
   isLocalCardHost,
@@ -162,8 +162,10 @@ export function CardConnectionCenter({
     try {
       if (link.transport === 'direct' && link.discoveredCard?.id) {
         await adoptDiscoveredDirectCard();
+      } else if (!rememberedCard?.id) {
+        await adoptDiscoveredCardBridgeIdentity(link.host);
       } else {
-        rePairDiscoveredCardBridgeIdentity(link.host);
+        await rePairDiscoveredCardBridgeIdentity(link.host);
       }
       setFailure('');
     } catch (error) {
@@ -229,6 +231,10 @@ export function CardConnectionCenter({
     switch (action.id) {
       case 'ready-local-card':
         return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
+      case 'pair-local-card':
+        return <button type="button" className="btn primary" onClick={useDiscoveredCard}>Connect</button>;
+      case 'card-needs-project':
+        return <button type="button" className="btn primary" onClick={openInstall}>Install your project</button>;
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':

@@ -7,9 +7,11 @@ import {
   CARD_COMMISSIONING_STORAGE_KEY,
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
+  acknowledgeCommissionedCardFromStatus,
   beginCardCommissioning,
   beginCardRestorationMutation,
   bindCardWiringActivationEvidence,
+  beginCardLightCheckMutation,
   cardIdFromEspMac,
   completeCardInstall,
   markCardProjectRestored,
@@ -21,8 +23,11 @@ import {
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
   claimCardRestoration,
+  claimCardLightCheckMutation,
   inspectCardCommissioning,
+  preflightCardCommissioningMutation,
   verifyCardRestorationMutation,
+  verifyCardLightCheckMutation,
 } from './cardCommissioningFlow.js';
 
 function memoryStorage() {
@@ -63,6 +68,16 @@ const installed = {
   buildId: 'a'.repeat(40),
 };
 const productionJobId = 'lotus-gate-batch-42';
+
+function readyStatus(overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: installed.cardId, firmwareVersion: installed.firmwareVersion,
+    buildId: installed.buildId, bootId: 'boot-fresh', runtimePhase: 'ready',
+    knownGoodProject: true, commandReady: true, outputReady: true,
+    ...overrides,
+  };
+}
 
 function acceptedBridgeResult(flow, overrides = {}) {
   return {
@@ -236,6 +251,127 @@ test('rejects a wrong card, firmware version, or build before project restoratio
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: 'b'.repeat(40),
   });
   assert.deepEqual(wrongBuild, { ok: false, reason: 'wrong-firmware-build' });
+});
+
+test('saved commissioning acknowledgement never authorizes restore without a fresh exact command-ready preflight', () => {
+  const flow = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-live-preflight-123', now: 10,
+  }), installed, { now: 20 }), {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 }).flow;
+
+  assert.equal(flow.cardAcknowledgedAt, 30, 'the resumable acknowledgement remains saved');
+  assert.deepEqual(preflightCardCommissioningMutation(flow, null), { ok: false, reason: 'checking-card' });
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ commandReady: false })).reason, 'card-not-ready');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ cardId: 'lw-ffffffffffff' })).reason, 'wrong-card');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ buildId: 'b'.repeat(40) })).reason, 'wrong-firmware-build');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus()).ok, true);
+
+  const lightCheck = {
+    ...flow,
+    stage: 'check-lights',
+    project: { ...flow.project, restoredAt: 40, restoredFingerprint: flow.project.fingerprint },
+  };
+  assert.equal(
+    preflightCardCommissioningMutation(lightCheck, readyStatus()).ok,
+    true,
+    'fresh exact readiness also authorizes one leased light-check mutation',
+  );
+});
+
+test('light-check hardware mutations require one fenced cross-tab lease', async () => {
+  const storage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const setup = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-light-lease-123456', now: 10,
+  }), installed, { now: 20 }), {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 }).flow;
+  const lightCheck = {
+    ...setup,
+    stage: 'check-lights',
+    updatedAt: 40,
+    project: { ...setup.project, restoredAt: 40, restoredFingerprint: setup.project.fingerprint },
+  };
+  await writeCardCommissioning(lightCheck, { storage, sessionStorage, locks: null });
+
+  const first = await claimCardLightCheckMutation(lightCheck, {
+    storage, sessionStorage, ownerId: 'light-check-tab-a-1234', locks: null,
+  });
+  assert.equal(first.ok, true);
+  assert.deepEqual(await claimCardLightCheckMutation(lightCheck, {
+    storage, sessionStorage, ownerId: 'light-check-tab-b-1234', locks: null,
+  }), { ok: false, reason: 'light-check-in-progress' });
+  const mutation = await beginCardLightCheckMutation(lightCheck, first.lease, { storage, locks: null });
+  assert.equal(mutation.ok, true);
+  assert.equal(verifyCardLightCheckMutation(lightCheck, first.lease.id, mutation.fencingToken, { storage }), true);
+  assert.equal(verifyCardLightCheckMutation(lightCheck, first.lease.id, 'wrong-fence-token-1', { storage }), false);
+});
+
+test('a background station-transport detection auto-advances with the same verification as the manual acknowledge', () => {
+  const ready = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-detect-1234567890', now: 10,
+  }), installed, { now: 20 });
+  const joined = confirmCardSetupNetworkJoined(ready, { now: 25 });
+
+  const auto = acknowledgeCommissionedCardFromStatus(joined, {
+    cardId: installed.cardId,
+    firmwareVersion: installed.firmwareVersion,
+    buildId: installed.buildId,
+    wifi: { transport: 'station' },
+  }, { now: 30 });
+  const manual = acknowledgeCommissionedCard(joined, {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 });
+
+  assert.equal(auto.ok, true);
+  assert.equal(auto.flow.networkState, 'connected');
+  assert.equal(auto.flow.cardAcknowledgedAt, 30);
+  assert.deepEqual(auto.flow, manual.flow);
+});
+
+test('a card still on its setup AP (no station transport) is never mistaken for on-home-network', () => {
+  const ready = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-detect-ap-12345678', now: 10,
+  }), installed, { now: 20 });
+
+  for (const transport of ['ap', 'softap', 'softAP', '', undefined]) {
+    const result = acknowledgeCommissionedCardFromStatus(ready, {
+      cardId: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: installed.buildId,
+      wifi: transport === undefined ? undefined : { transport },
+    });
+    assert.deepEqual(result, { ok: false, reason: 'not-on-home-network' });
+  }
+});
+
+test('detection auto-advance rejects a wrong card, firmware version, or build like the manual gate', () => {
+  const ready = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-detect-wrong-1234', now: 10,
+  }), installed, { now: 20 });
+  const base = { firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, wifi: { transport: 'station' } };
+
+  assert.deepEqual(acknowledgeCommissionedCardFromStatus(ready, { ...base, cardId: 'lw-ffffffffffff' }), { ok: false, reason: 'wrong-card' });
+  assert.deepEqual(acknowledgeCommissionedCardFromStatus(ready, { ...base, cardId: installed.cardId, firmwareVersion: '1.2.2' }), { ok: false, reason: 'wrong-firmware-version' });
+  assert.deepEqual(acknowledgeCommissionedCardFromStatus(ready, { ...base, cardId: installed.cardId, buildId: 'b'.repeat(40) }), { ok: false, reason: 'wrong-firmware-build' });
+});
+
+test('detection auto-advance is a no-op outside the set-up-card stage', () => {
+  const install = beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-detect-stage-1234', now: 10,
+  });
+  assert.equal(install.stage, 'install-safely');
+  assert.deepEqual(acknowledgeCommissionedCardFromStatus(install, {
+    cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+    wifi: { transport: 'station' },
+  }), { ok: false, reason: 'not-awaiting-card' });
 });
 
 test('a POST success or echoed expected values cannot mark a project restored', () => {

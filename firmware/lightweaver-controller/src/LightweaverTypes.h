@@ -5,6 +5,7 @@
 #include <SD.h>
 
 #include "LightweaverOutputColorConfig.h"
+#include "LightweaverProvisioningPolicy.h"
 
 #ifndef LW_MAX_PIXELS
 #define LW_MAX_PIXELS 1024
@@ -201,6 +202,9 @@ struct ZoneConfig {
 struct RuntimeConfig {
   String mode = "factory-flash";
   RuntimeSource source = SOURCE_DEFAULTS;
+  bool configValid = false;
+  bool knownGoodProject = false;
+  ProvisioningPhase runtimePhase = ProvisioningPhase::Factory;
   String pieceId;
   String pieceName = "Lightweaver";
   uint32_t projectRevision = 0;

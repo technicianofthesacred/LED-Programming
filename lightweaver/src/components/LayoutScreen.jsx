@@ -2,10 +2,8 @@ import { useState } from 'react';
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
 import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
-import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
-import { SizeModePanel } from './layout/modes/SizeModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
 import { useProject } from '../state/ProjectContext.jsx';
@@ -20,12 +18,14 @@ import { useProject } from '../state/ProjectContext.jsx';
 export function LayoutScreen({ connected, cardHost }) {
   const state = useLayoutState();
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [firstLedPicker, setFirstLedPicker] = useState(null);
+  const [firstLedError, setFirstLedError] = useState(null);
+  const [firstLedMarkerRunId, setFirstLedMarkerRunId] = useState(null);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
     strips, layers, hidden,
     viewBox, svgText,
-    patchBoard,
     selectStrip, toggleStripSel, togglePathSelection,
     layoutHistLen, layoutFutLen,
     doUndo, doRedo,
@@ -42,8 +42,7 @@ export function LayoutScreen({ connected, cardHost }) {
     setHoveredLayerId, hoveredSubPathId, setHoveredSubPathId,
     // wire
     wireOverlayMode, setWireOverlayMode,
-    setSelectedWirePatchId, setLinkRouteIds, linkRouteStartedRef,
-    chopStripAtEvent, toggleRoutePatch,
+    chopStripAtEvent,
     // canvas + preview
     showLight, setShowLight, showLeds, setShowLeds,
     glowMode, setGlowMode, directedGlow, setDirectedGlow,
@@ -61,9 +60,61 @@ export function LayoutScreen({ connected, cardHost }) {
     // import
     dragOver, fileRef, loadRef,
     handleFile, handleDragOver, handleDragLeave, handleDrop, saveProject, handleLoad, importAccept,
-    // mode (Draw | Size | Wire)
+    // mode (Draw | Wire)
     mode, setMode,
   } = state;
+
+  const beginFirstLedPicker = stripId => {
+    selectStrip(stripId);
+    setFirstLedError(null);
+    setFirstLedPicker({ stripId, ledIndex: null });
+  };
+  const cancelFirstLedPicker = () => {
+    setFirstLedError(null);
+    setFirstLedPicker(null);
+  };
+  const pickFirstLed = (stripId, ledIndex) => {
+    if (firstLedPicker?.stripId !== stripId) return;
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.pixels?.[ledIndex]) {
+      setFirstLedError({ stripId, message: 'That light is outside this strip.' });
+      return;
+    }
+    let pickedRunId = null;
+    const result = updateWiring(draft => {
+      if (draft.locked) {
+        draft.locked = false;
+        draft.verified = false;
+        draft.runs.forEach(run => { run.verified = false; });
+      }
+      const runs = draft.runs.filter(item => item.type === 'strip' && item.source?.stripId === stripId);
+      if (!runs.length) throw new Error('This strip is not connected to a GPIO output yet.');
+
+      // A normal Draw strip owns one complete run. LED-count and size edits can
+      // leave that run's old range behind, so repair it before validation.
+      // Advanced split strips remain split; the clicked LED identifies the run.
+      let run;
+      if (runs.length === 1) {
+        [run] = runs;
+        run.source.from = 0;
+        run.source.to = strip.pixels.length - 1;
+      } else {
+        run = runs.find(item => ledIndex >= item.source.from && ledIndex <= item.source.to);
+      }
+      if (!run) throw new Error('That light is not covered by this strip’s wiring runs.');
+      pickedRunId = run.id;
+      run.seamLed = ledIndex;
+    }, { changeKind: 'seam' });
+    if (!result.ok) {
+      setFirstLedError({ stripId, message: result.errors?.[0]?.message || 'The first LED could not be changed.' });
+      return;
+    }
+    setFirstLedMarkerRunId(pickedRunId);
+    setFirstLedError(null);
+    setFirstLedPicker(null);
+  };
+
+  const markerRun = wiring.runs.find(run => run.id === firstLedMarkerRunId && run.type === 'strip' && run.source.stripId === selStripId);
 
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
@@ -77,12 +128,9 @@ export function LayoutScreen({ connected, cardHost }) {
     wire: {
       wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
       wiring, compiledWiring,
-      selectedWiringRunId: wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
-      onControllerAnchorMove: event => {
-        if (!svgRef.current || wiring.locked) return;
-        const point = svgPt(svgRef.current, event.clientX, event.clientY);
-        updateWiring(draft => { draft.controllerAnchor = { x: point.x, y: point.y }; }, { changeKind: 'controller-anchor' });
-      },
+      firstLedPicker,
+      onFirstLedPick: pickFirstLed,
+      selectedWiringRunId: markerRun?.id || wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
       onSeamMove: (runId, event) => {
         if (!svgRef.current || wiring.locked) return;
         const point = svgPt(svgRef.current, event.clientX, event.clientY);
@@ -109,7 +157,7 @@ export function LayoutScreen({ connected, cardHost }) {
       handleSvgMouseUp, handleSvgMouseLeave, handleContextMenu, handleWheel,
       handleDragOver, handleDragLeave, handleDrop,
       startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
-      toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
+      togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
     },
   };
 
@@ -149,45 +197,8 @@ export function LayoutScreen({ connected, cardHost }) {
             </>
           )}
 
-          {/* Draw / Chop / Link tools */}
-          {/* Split / Link are wire concerns — surfaced only in Wire mode
-              (plan's canvas behavior matrix: chop/link overlays are Wire only). */}
-          {mode === 'wire' && (
-            <>
-              <button
-                className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
-                title="Split one physical strip where the wire jumps to a new spot."
-                onClick={() => {
-                  setDrawMode(false);
-                  setGhostPt(null);
-                  setWireOverlayMode(m => m === 'chop' ? 'idle' : 'chop');
-                }}>
-                Split
-              </button>
-              <button
-                className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
-                title="Join two strips into one continuous run."
-                onClick={() => {
-                  setDrawMode(false);
-                  setGhostPt(null);
-                  setSelectedWirePatchId(null);
-                  setWireOverlayMode(m => {
-                    const nextMode = m === 'link' ? 'idle' : 'link';
-                    if (nextMode === 'link') {
-                      const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
-                      setLinkRouteIds(currentRows);
-                      linkRouteStartedRef.current = false;
-                    } else {
-                      setLinkRouteIds([]);
-                      linkRouteStartedRef.current = false;
-                    }
-                    return nextMode;
-                  });
-                }}>
-                Link
-              </button>
-            </>
-          )}
+          {/* Split and cable-jump tools live inside Test & Install's closed
+              Advanced section so the normal toolbar stays task-focused. */}
           </div>
 
           {/* Undo / Redo */}
@@ -287,8 +298,13 @@ export function LayoutScreen({ connected, cardHost }) {
           <ModeSwitch mode={mode} setMode={setMode}/>
         </div>
         <div className={`la-mode-content is-${mode}`}>
-          {mode === 'draw' && <DrawModePanel state={state}/>} 
-          {mode === 'size' && <SizeModePanel state={state}/>} 
+          {mode === 'draw' && (
+            <DrawModePanel state={state}
+                           firstLedPicker={firstLedPicker}
+                           firstLedError={firstLedError}
+                           onBeginFirstLedPicker={beginFirstLedPicker}
+                           onCancelFirstLedPicker={cancelFirstLedPicker}/>
+          )}
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>
       </aside>

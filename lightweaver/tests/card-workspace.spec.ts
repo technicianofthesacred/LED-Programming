@@ -9,8 +9,27 @@ async function dispatchCardLink(page, events) {
   await page.evaluate(async (nextEvents) => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
     const link = getSharedCardLink();
-    for (const event of nextEvents) link.dispatch(event);
+    for (const event of nextEvents) {
+      const priorBootId = link.getState().validatedBootId;
+      link.dispatch(event);
+      // UI fixtures that establish a trusted card represent the stable pair of
+      // full status observations required after any background miss/lifecycle.
+      // A changed boot is intentionally left at its first envelope so restart
+      // UI remains under revalidation.
+      if (event.type === 'card-verified' && event.readiness?.bootId
+        && (!priorBootId || priorBootId === event.readiness.bootId)) link.dispatch(event);
+    }
   }, events);
+}
+
+function readyStatus(cardId: string, overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    bootId: 'boot-1', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true,
+    ...overrides,
+  };
 }
 
 async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed') {
@@ -64,6 +83,25 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
   }, progress);
 }
 
+async function connectCommissioningCard(page) {
+  const status = readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.evaluate((freshStatus) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: freshStatus.cardId,
+      firmwareVersion: freshStatus.firmwareVersion, buildId: freshStatus.buildId,
+    }));
+  }, status);
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: status.buildId },
+    expectedCard: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: status.buildId },
+    readiness: status,
+  }]);
+}
+
 test('wide desktop footer keeps card identity, telemetry, and test controls in separate regions', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
@@ -80,6 +118,9 @@ test('wide desktop footer keeps card identity, telemetry, and test controls in s
       firmwareVersion: '1.0.0',
       buildId: 'gallery-release-build-with-a-long-identity',
     },
+    readiness: readyStatus('lw-aabbccddeeff', {
+      buildId: 'gallery-release-build-with-a-long-identity',
+    }),
   }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
   await expect(page.locator('.card-status-summary')).toBeVisible();
@@ -128,12 +169,80 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
 });
 
+test('reality-driven detection replaces the dead 192.168.4.1 link with the restore path once the card rejoins the LAN', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+
+  // While the card is still on its setup AP (unreachable on the LAN — the
+  // beforeEach aborts every card host) the dead-AP fallback link is the only
+  // setup affordance and the restore path is not yet offered.
+  const setupLink = page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  await expect(setupLink).toBeVisible();
+  await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
+
+  // The card leaves its AP and rejoins home WiFi: it now answers /api/status in
+  // station transport with its exact identity. The background detection poll must
+  // observe this and auto-advance — no manual "Reconnect installed card" click.
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'a'.repeat(40),
+      wifi: { transport: 'station', ip: '192.168.18.70' },
+    }),
+  }));
+
+  // The dead 192.168.4.1 link is gone and the verified restore path is reachable
+  // without any manual reconnect.
+  await expect(setupLink).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible({ timeout: 10_000 });
+});
+
+test('a wrong card answering on the LAN never auto-advances setup past the identity gate', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+
+  // A different card (mismatched identity) answers /api/status in station
+  // transport. The safety gate must reject it: the detection poll keeps waiting
+  // and never offers the restore path.
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-ffffffffffff',
+      firmwareVersion: '9.9.9',
+      buildId: 'f'.repeat(40),
+      wifi: { transport: 'station', ip: '192.168.18.71' },
+    }),
+  }));
+
+  await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  // Give the poll several cycles; the mismatched card must never unlock restore.
+  await page.waitForTimeout(3_000);
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
+});
+
 test('retained pre-install card identity cannot bypass the explicit WiFi handoff', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await dispatchCardLink(page, [{
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: '2026-01-01T00:00:00.000Z',
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
   }]);
   await seedCommissioningFlow(page, 'wifi');
 
@@ -146,6 +255,7 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: new Date(Date.now() + 5_000).toISOString(),
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
   }]);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 });
@@ -165,6 +275,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'test');
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await connectCommissioningCard(page);
   steps = page.getByTestId('card-setup-steps').locator('li');
   await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
   await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
@@ -186,6 +297,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
 
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'test');
+  await connectCommissioningCard(page);
   await page.getByRole('button', { name: 'Test lights', exact: true }).click();
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   await page.getByRole('button', { name: 'No, restore working setup', exact: true }).click();
@@ -196,6 +308,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
 test('installed check-lights progress runs a bounded marker test and restores the working look on rejection', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'test-installed');
+  await connectCommissioningCard(page);
   await page.evaluate(() => {
     (window as any).__commissioningMarkerStarts = [];
     (window as any).__commissioningMarkerStops = 0;
@@ -215,6 +328,56 @@ test('installed check-lights progress runs a bounded marker test and restores th
   await expect(page.getByText(/working look is restored/i)).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningMarkerStops)).toBe(1);
   await expect(page.getByRole('button', { name: 'Start bounded marker test', exact: true })).toBeVisible();
+});
+
+test('light-check hardware mutations stay locked after loss until two stable exact status envelopes', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test');
+  await connectCommissioningCard(page);
+  await page.evaluate(() => {
+    (window as any).__lightMutationCalls = { activate: 0, confirm: 0, rollback: 0 };
+    (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => {
+      (window as any).__lightMutationCalls.activate += 1;
+      return { state: 'testing', activationId };
+    };
+    (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => {
+      (window as any).__lightMutationCalls.confirm += 1;
+      return { state: 'known-good', activationId };
+    };
+    (window as any).__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => {
+      (window as any).__lightMutationCalls.rollback += 1;
+      return { state: 'known-good', activationId };
+    };
+  });
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+
+  await dispatchCardLink(page, [{ type: 'direct-ping-missed', host: 'lightweaver.local' }]);
+  const start = page.getByRole('button', { name: 'Start 90-second light test', exact: true });
+  await expect(start).toBeDisabled();
+  await start.evaluate((button: HTMLButtonElement) => button.click());
+  await expect.poll(() => page.evaluate(() => (window as any).__lightMutationCalls.activate)).toBe(0);
+
+  const stable = readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' });
+  const recovery = {
+    type: 'direct-ping-ok', host: 'lightweaver.local', readiness: stable,
+    card: { id: stable.cardId, firmwareVersion: stable.firmwareVersion, buildId: stable.buildId },
+    expectedCard: { id: stable.cardId, firmwareVersion: stable.firmwareVersion, buildId: stable.buildId },
+  };
+  await dispatchCardLink(page, [recovery, recovery]);
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__lightMutationCalls.activate)).toBe(1);
+
+  await dispatchCardLink(page, [{ type: 'direct-ping-missed', host: 'lightweaver.local' }]);
+  const confirm = page.getByRole('button', { name: 'Yes, every output is correct', exact: true });
+  const rollback = page.getByRole('button', { name: 'No, restore working setup', exact: true });
+  await expect(confirm).toBeDisabled();
+  await expect(rollback).toBeDisabled();
+  await confirm.evaluate((button: HTMLButtonElement) => button.click());
+  await rollback.evaluate((button: HTMLButtonElement) => button.click());
+  await expect.poll(() => page.evaluate(() => (window as any).__lightMutationCalls)).toEqual({
+    activate: 1, confirm: 0, rollback: 0,
+  });
 });
 
 test('Card replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {
@@ -276,6 +439,24 @@ test('disconnected Card overview shows the ordered setup path and Connect as pri
   const batch = page.getByTestId('card-batch-link');
   await expect(batch).toContainText('Making many cards?');
   await expect(batch.getByRole('button', { name: 'Batch production', exact: true })).toBeVisible();
+});
+
+test('direct discovery never auto-adopts; only the explicit pair action persists identity', async ({ page }) => {
+  const status = readyStatus('lw-explicit-pair');
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Found — pair/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_card_identity_v1'))).toBeNull();
+
+  await page.getByTestId('card-link-status').click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-explicit-pair');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
 });
 
 test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCard when absent', async ({ page }) => {
@@ -355,16 +536,11 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
 test('connected Card overview identifies the card and makes Save to card primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
-  await page.evaluate(async () => {
-    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    const link = getSharedCardLink();
-    link.dispatch({
-      type: 'card-verified',
-      via: 'bridge',
-      host: link.getState().host || 'lightweaver.local',
-      card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    });
-  });
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge',
+    card: { id: 'lw-gallery-card', name: 'Gallery card' },
+    readiness: readyStatus('lw-gallery-card'),
+  }]);
 
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
   await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
@@ -373,19 +549,46 @@ test('connected Card overview identifies the card and makes Save to card primary
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 });
 
+test('Card overview distinguishes checking, blank, and ready evidence', async ({ page }) => {
+  let status: any = {
+    app: 'Lightweaver', cardId: 'lw-overview-state',
+    firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+  };
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, {
+    version: 1, id: 'lw-overview-state', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+  });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: 'lw-overview-state', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    expectedCard: { id: 'lw-overview-state', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    readiness: status,
+  }]);
+  await expect(page.getByTestId('card-detected-state')).toContainText('Checking card');
+
+  status = readyStatus('lw-overview-state', {
+    runtimePhase: 'factory', knownGoodProject: false, commandReady: false,
+  });
+  await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
+
+  status = readyStatus('lw-overview-state');
+  await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');
+});
+
 test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
-  await page.evaluate(async () => {
-    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    const link = getSharedCardLink();
-    link.dispatch({
-      type: 'card-verified',
-      via: 'bridge',
-      host: link.getState().host || 'lightweaver.local',
-      card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    });
-  });
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge',
+    card: { id: 'lw-gallery-card', name: 'Gallery card' },
+    readiness: readyStatus('lw-gallery-card'),
+  }]);
   await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 
@@ -411,14 +614,23 @@ for (const cardState of [
     action: 'Connecting…',
   },
   {
-    name: 'restarting',
+    name: 'stopped responding',
     events: [
-      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' } },
+      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery') },
       { type: 'bridge-ping-missed', host: 'lightweaver.local' },
       { type: 'bridge-ping-missed', host: 'lightweaver.local' },
     ],
-    copy: /card is restarting/i,
-    action: 'Card restarting…',
+    copy: /card stopped responding/i,
+    action: 'Card stopped responding',
+  },
+  {
+    name: 'revalidating after restart',
+    events: [
+      { type: 'card-verified', via: 'direct', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery') },
+      { type: 'card-verified', via: 'direct', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery', { bootId: 'boot-2' }) },
+    ],
+    copy: /card restarted.*verifying/i,
+    action: 'Card restarted — verifying',
   },
   {
     name: 'wrong card',
@@ -454,6 +666,9 @@ for (const cardState of [
   test(`Card overview preserves the ${cardState.name} state and recovery action`, async ({ page }) => {
     await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+    if (cardState.name === 'revalidating after restart') {
+      await page.route('**/api/status', () => new Promise(() => {}));
+    }
     await dispatchCardLink(page, cardState.events);
 
     await expect(page.getByTestId('card-detected-state')).toContainText(cardState.copy);

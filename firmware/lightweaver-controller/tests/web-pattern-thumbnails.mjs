@@ -12,20 +12,28 @@ import path from 'node:path';
 const srcDir = path.resolve(import.meta.dirname, '../src');
 const webSource = fs.readFileSync(path.join(srcDir, 'LightweaverWeb.cpp'), 'utf8');
 const storageSource = fs.readFileSync(path.join(srcDir, 'LightweaverStorage.cpp'), 'utf8');
+const patternsSource = fs.readFileSync(path.join(srcDir, 'LightweaverPatterns.cpp'), 'utf8');
 
-// --- Factory look ids: parsed from applyDefaultRuntimeConfig (single source
-// --- of truth — no hardcoded id list in this test).
+// Factory cards deliberately carry no project playlist. Thumbnail coverage is
+// exercised against an explicit valid configured playlist instead.
 const defaultsStart = storageSource.indexOf('void applyDefaultRuntimeConfig(');
 assert.ok(defaultsStart >= 0, 'LightweaverStorage.cpp should define applyDefaultRuntimeConfig');
 const defaultsRegion = storageSource.slice(defaultsStart);
-const idsArrayMatch = defaultsRegion.match(/const char\* ids\[\]\s*=\s*\{([\s\S]*?)\};/);
-assert.ok(idsArrayMatch, 'applyDefaultRuntimeConfig should declare the factory ids[] array');
-const factoryIds = [...idsArrayMatch[1].matchAll(/"([a-z0-9-]+)"/g)].map(m => m[1]);
-assert.ok(
-  factoryIds.length >= 30,
-  `expected at least 30 factory look ids, parsed ${factoryIds.length}`,
-);
-assert.equal(new Set(factoryIds).size, factoryIds.length, 'factory ids must be unique');
+assert.match(defaultsRegion, /config\.lookCount\s*=\s*0/,
+  'factory defaults must not claim a configured project playlist');
+const configuredLookIds = [
+  'aurora', 'plasma', 'fire', 'ocean', 'ripple', 'lava',
+  'rainbow', 'sparkle', 'twinkle', 'meteor', 'chase', 'scanner',
+  'breathe', 'candle', 'ember', 'lightning', 'neon', 'matrix',
+  'heartbeat', 'stained', 'confetti', 'warp', 'pulse-ring', 'blocks',
+  'bloom', 'calm', 'drift', 'wave', 'sunset', 'warm-white',
+];
+assert.equal(new Set(configuredLookIds).size, configuredLookIds.length,
+  'configured fixture ids must be unique');
+for (const id of configuredLookIds) {
+  assert.ok(patternsSource.includes(`patternId == "${id}"`),
+    `configured fixture pattern ${id} must be supported by firmware`);
+}
 
 // --- Slice LightweaverWeb.cpp into the two page-serving regions.
 // Match definitions ("() {"), not the forward declarations near the top.
@@ -40,18 +48,27 @@ const advancedRegion = webSource.slice(advancedStart, advancedEnd);
 
 // --- Every factory id must have a swatch rule on BOTH pages.
 const missingSwatchIds = (region) =>
-  factoryIds.filter(id => !region.includes(`.sw-${id}{`));
+  configuredLookIds.filter(id => !region.includes(`.sw-${id}{`));
 
 assert.deepEqual(
   missingSwatchIds(rootRegion),
   [],
-  'customer page (handleRoot) is missing .sw-<id> preview rules for these factory looks',
+  'customer page (handleRoot) is missing .sw-<id> preview rules for configured looks',
 );
 assert.deepEqual(
   missingSwatchIds(advancedRegion),
   [],
-  'advanced page (handleAdvancedRoot) is missing .sw-<id> preview rules for these factory looks',
+  'advanced page (handleAdvancedRoot) is missing .sw-<id> preview rules for configured looks',
 );
+
+const patternsHandler = webSource.slice(
+  webSource.indexOf('void handlePatterns() {'),
+  webSource.indexOf('void handleCaptiveProbe()', webSource.indexOf('void handlePatterns() {')),
+);
+assert.match(patternsHandler, /cfg\.lookCount \? cfg\.looks\[\*currentLookIndexPtr\]\.id : ""/,
+  'a zero-look factory card must report no current project pattern');
+assert.match(patternsHandler, /for \(uint8_t i = 0; i < cfg\.lookCount; i\+\+\)/,
+  'pattern API must serialize only explicitly configured looks');
 
 // The customer page's custom-color tile keeps its class rule (the live hue is
 // layered on top via the swatchHtml inline-style special case).

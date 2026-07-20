@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../../lib/cardRuntimeProject.js';
-import { pushConfigToCard, readCardProjectEvidence } from '../../lib/cardPushClient.js';
+import { pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from '../../lib/cardPushClient.js';
 import {
   activateAndWaitForCardWiring,
   confirmCardWiringCandidate,
   readCardWiringCandidateEvidence,
   rollbackCardWiringCandidate,
 } from '../../lib/cardWiringSafety.js';
-import { isCardLinkConnected } from '../../lib/cardLink.js';
+import { getCardLinkState, isCardLinkConnected, reportCardStatusEnvelope, reportDirectCardStatus } from '../../lib/cardLink.js';
+import { canPushDirectlyToCard, discoverCardStatus } from '../../lib/cardConnection.js';
 import { compileWiring } from '../../lib/wiringCompiler.js';
 import { createWiringChaseSession } from '../../lib/wiringChase.js';
 import {
@@ -16,13 +17,17 @@ import {
   CARD_COMMISSIONING_STAGES,
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
+  acknowledgeCommissionedCardFromStatus,
   bindCardWiringActivationEvidence,
+  beginCardLightCheckMutation,
   beginCardRestorationMutation,
+  claimCardLightCheckMutation,
   claimCardRestoration,
   clearCardCommissioning,
   completeCardInstall,
   confirmCardSetupNetworkJoined,
   markCardProjectRestored,
+  preflightCardCommissioningMutation,
   readCardCommissioning,
   readCardRestorationAttempt,
   recordCardRestorationResponse,
@@ -30,6 +35,7 @@ import {
   releaseCardRestoration,
   returnCardProjectToSetupAfterLightCheck,
   verifyCardRestorationMutation,
+  verifyCardLightCheckMutation,
   resumeInstalledCardAfterInterruption,
   stageCardProjectForPhysicalCheck,
   writeCardCommissioning,
@@ -117,6 +123,7 @@ export function CardCommissioningPanel({
   const [initialState] = useState(() => inspectCardCommissioning());
   const [flow, setFlow] = useState(initialState.flow);
   const [restoreState, setRestoreState] = useState('idle');
+  const [detection, setDetection] = useState({ state: 'idle' });
   const [lightCheckState, setLightCheckState] = useState('idle');
   const [lightCheckNotice, setLightCheckNotice] = useState('');
   const markerSessionRef = useRef(null);
@@ -179,9 +186,21 @@ export function CardCommissioningPanel({
   }, [flow, link]);
 
   const interruptedInstallEvidence = useMemo(() => {
-    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id) return null;
+    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id || !isCardLinkConnected(link)) return null;
     return resumeInstalledCardAfterInterruption(flow, link.card);
-  }, [flow, link?.card]);
+  }, [flow, link]);
+
+  const restorePreflight = useMemo(() => {
+    if (!flow?.cardAcknowledgedAt) return { ok: false, reason: 'checking-card' };
+    if (!isCardLinkConnected(link)) return { ok: false, reason: 'checking-card' };
+    return preflightCardCommissioningMutation(flow, link.readiness);
+  }, [flow, link]);
+
+  const lightCheckPreflight = useMemo(() => {
+    if (flow?.stage !== 'check-lights' || !flow.cardAcknowledgedAt) return { ok: false, reason: 'checking-card' };
+    if (!isCardLinkConnected(link) || !link.validatedBootId) return { ok: false, reason: 'checking-card' };
+    return preflightCardCommissioningMutation(flow, link.readiness);
+  }, [flow, link]);
 
   useEffect(() => {
     if (!interruptedInstallEvidence?.ok) return;
@@ -199,6 +218,70 @@ export function CardCommissioningPanel({
     } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
   }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
 
+  // Reality-driven auto-advance: while the wizard is waiting for the card to
+  // rejoin home WiFi (stage 'set-up-card', not yet acknowledged), poll the LAN
+  // for the EXPECTED card by identity. Once it answers /api/status in station
+  // transport, advance the same verified acknowledge transition the manual
+  // button uses — no click required. Only runs on http/file pages that can
+  // actually reach the card; on HTTPS the bridge/link path stays the only route.
+  const expectedCardId = flow?.stage === 'set-up-card' ? flow.expectedCard?.id : '';
+  const pollHost = link?.host;
+  useEffect(() => {
+    if (!expectedCardId || flow?.cardAcknowledgedAt || !canPushDirectlyToCard()) {
+      setDetection(prev => (prev.state === 'idle' ? prev : { state: 'idle' }));
+      return undefined;
+    }
+    let active = true;
+    let timer = null;
+    const flowId = flow.flowId;
+    setDetection(prev => (prev.state === 'found' ? prev : { state: 'searching' }));
+    const poll = async () => {
+      if (!active) return;
+      let result = null;
+      try {
+        result = await discoverCardStatus({
+          preferredHost: pollHost,
+          expectedCard: { id: expectedCardId },
+          timeoutMs: 1500,
+          persist: true,
+        });
+      } catch { result = null; }
+      if (!active) return;
+      if (result?.connected) {
+        // The poll proved THIS host reachable for the expected card (discoverCardStatus
+        // gated on the expected id). Feed it into the shared card link so restore(),
+        // which targets link.host, reaches the host the poll actually used rather than
+        // a stale remembered address — the same connected-link guarantee the manual
+        // acknowledge path gives restore. allowAdopt is safe because the reached card
+        // was already identity-matched (id gate above + strict id+fw+build in
+        // acknowledgeCommissionedCardFromStatus below); reportDirectCardStatus also
+        // persists that identity + stored host so the passive useCardStatus feed
+        // converges on it, and its own comparison gate still refuses to overwrite a
+        // different persisted pairing. Only done on the acknowledge paths (where
+        // restore can follow), never on an identity/firmware-rejected poll.
+        const propagateProvenHost = () => reportDirectCardStatus({
+          connected: true, host: result.host, status: result.status, allowAdopt: true,
+        });
+        // Re-read authority so we acknowledge against the freshest generation
+        // (another tab or the setup-joined click may have advanced it).
+        const current = readCardCommissioning({ flowId }) || flow;
+        if (current?.cardAcknowledgedAt) { propagateProvenHost(); if (active) setDetection({ state: 'found' }); return; }
+        const ack = acknowledgeCommissionedCardFromStatus(current, result.status);
+        if (ack.ok) {
+          try {
+            await writeCardCommissioning(ack.flow);
+            propagateProvenHost();
+            if (active) { setFlow(ack.flow); setDetection({ state: 'found' }); }
+            return;
+          } catch { /* stale generation — listener re-syncs; retry below */ }
+        }
+      }
+      if (active) timer = window.setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => { active = false; if (timer != null) window.clearTimeout(timer); };
+  }, [expectedCardId, flow?.cardAcknowledgedAt, flow?.flowId, pollHost]);
+
   if (!flow && lightCheckState === 'complete') return (
     <div className="card-commissioning" aria-live="polite">
       <CardCommissioningSteps stage="check-lights" />
@@ -211,10 +294,30 @@ export function CardCommissioningPanel({
 
   const restore = async () => {
     if (restoreState === 'working' || !flow.cardAcknowledgedAt) return;
+    if (!restorePreflight.ok) {
+      setFailure('Checking card. Reconnect the exact installed card before restoring the saved project.');
+      return;
+    }
     setRestoreState('working');
     setFailure('');
     let lease = null;
     try {
+      const freshStatus = await readCardStatusEnvelope({
+        host: link.host,
+        transport: link.transport,
+        timeoutMs: 3000,
+      });
+      if (link.validatedBootId && freshStatus?.bootId !== link.validatedBootId) {
+        throw new Error('Card restarted — verifying. Wait for Studio to finish checking it before restoring the project.');
+      }
+      const freshPreflight = preflightCardCommissioningMutation(flow, freshStatus);
+      if (!freshPreflight.ok) {
+        throw new Error(freshPreflight.reason === 'wrong-card'
+          ? 'Wrong card. Reconnect the exact installed card before restoring the project.'
+          : freshPreflight.reason === 'wrong-firmware-version' || freshPreflight.reason === 'wrong-firmware-build'
+            ? 'The connected card firmware does not match the verified installation. Update or reconnect the expected card.'
+            : 'Checking card. The card is not command-ready, so Studio refused to restore the project.');
+      }
       const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
         ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
         : readProjectEvidence;
@@ -261,6 +364,12 @@ export function CardCommissioningPanel({
         allowLayoutChange: true,
       });
       await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
+      const refreshedStatus = await readCardStatusEnvelope({
+        host: link.host, transport: link.transport, timeoutMs: 3000,
+      }).catch(() => null);
+      if (refreshedStatus) {
+        reportCardStatusEnvelope({ host: link.host, transport: link.transport, status: refreshedStatus });
+      }
       if (response?.state === 'staged') {
         const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
         const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
@@ -311,22 +420,76 @@ export function CardCommissioningPanel({
     }
   };
 
+  const acquireFreshLightCheckMutation = async () => {
+    const observed = getCardLinkState();
+    if (!isCardLinkConnected(observed) || !observed.validatedBootId) {
+      throw new Error('Checking card. Reconnect and revalidate the exact installed card before changing the light test.');
+    }
+    const generation = observed.operationGeneration || 0;
+    const bootId = observed.validatedBootId;
+    const status = await readCardStatusEnvelope({
+      host: observed.host, transport: observed.transport, timeoutMs: 3000,
+    });
+    const current = getCardLinkState();
+    if (!isCardLinkConnected(current)
+      || current.host !== observed.host
+      || (current.operationGeneration || 0) !== generation
+      || current.validatedBootId !== bootId
+      || status?.bootId !== bootId) {
+      throw new Error('Card restarted or stopped answering. Wait for two stable checks before changing the light test.');
+    }
+    const preflight = preflightCardCommissioningMutation(flow, status);
+    if (!preflight.ok) {
+      throw new Error('Checking card. The exact installed card and firmware must be command-ready before changing the light test.');
+    }
+    const claim = await claimCardLightCheckMutation(flow);
+    if (!claim.ok) throw new Error('Another Studio tab is changing this light check. Wait for it to finish, then try again.');
+    try {
+      const mutation = await beginCardLightCheckMutation(flow, claim.lease);
+      const assertAuthority = () => {
+        const latest = getCardLinkState();
+        if (!mutation.ok
+          || !verifyCardLightCheckMutation(flow, claim.lease.id, mutation.fencingToken)
+          || !isCardLinkConnected(latest)
+          || latest.host !== observed.host
+          || latest.validatedBootId !== bootId
+          || (latest.operationGeneration || 0) !== generation) {
+          throw new Error('Card readiness changed before the light-check command. Nothing was changed.');
+        }
+      };
+      assertAuthority();
+      return { lease: claim.lease, host: observed.host, assertAuthority };
+    } catch (error) {
+      await releaseCardRestoration(flow.flowId, claim.lease.id).catch(() => false);
+      throw error;
+    }
+  };
+
   const startLightCheck = async () => {
     const activationId = flow.project.pendingActivationId;
     if (lightCheckState !== 'idle') return;
     setFailure('');
     setLightCheckNotice('');
     setLightCheckState('starting');
+    let mutationAuthority = null;
     try {
+      mutationAuthority = await acquireFreshLightCheckMutation();
       if (!activationId) {
         const frame = commissioningMarkerFrame(flow.project.snapshot);
         if (!frame.length) throw new Error('The saved project has no LED outputs to test.');
         const startMarkers = window.__LW_START_COMMISSIONING_MARKERS_FOR_TEST__;
-        const session = typeof startMarkers === 'function'
-          ? await startMarkers(frame, { host: link.host })
-          : createWiringChaseSession({ host: link.host });
+        let session;
+        if (typeof startMarkers === 'function') {
+          mutationAuthority.assertAuthority();
+          session = await startMarkers(frame, { host: mutationAuthority.host });
+        } else {
+          session = createWiringChaseSession({ host: mutationAuthority.host });
+        }
         markerSessionRef.current = session;
-        if (typeof startMarkers !== 'function') await session.show(frame);
+        if (typeof startMarkers !== 'function') {
+          mutationAuthority.assertAuthority();
+          await session.show(frame);
+        }
         markerTimeoutRef.current = window.setTimeout(() => {
           const active = markerSessionRef.current;
           markerSessionRef.current = null;
@@ -341,7 +504,8 @@ export function CardCommissioningPanel({
       const activate = typeof window.__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
         ? window.__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__
         : activateAndWaitForCardWiring;
-      const status = await activate(activationId, { host: link.host, timeoutMs: 18000 });
+      mutationAuthority.assertAuthority();
+      const status = await activate(activationId, { host: mutationAuthority.host, timeoutMs: 18000 });
       if (status?.state !== 'testing' || status?.activationId !== activationId) {
         throw new Error('The card did not start the exact temporary wiring test.');
       }
@@ -352,6 +516,10 @@ export function CardCommissioningPanel({
       if (session) await session.stop().catch(() => {});
       setFailure(error?.message || 'The bounded light test did not start. The previous working setup remains protected.');
       setLightCheckState('idle');
+    } finally {
+      if (mutationAuthority?.lease) {
+        await releaseCardRestoration(flow.flowId, mutationAuthority.lease.id).catch(() => false);
+      }
     }
   };
 
@@ -361,12 +529,15 @@ export function CardCommissioningPanel({
     setFailure('');
     setLightCheckNotice('');
     setLightCheckState(visible ? 'confirming' : 'restoring');
+    let mutationAuthority = null;
     try {
+      mutationAuthority = await acquireFreshLightCheckMutation();
       if (!activationId) {
         if (markerTimeoutRef.current != null) window.clearTimeout(markerTimeoutRef.current);
         markerTimeoutRef.current = null;
         const session = markerSessionRef.current;
         markerSessionRef.current = null;
+        mutationAuthority.assertAuthority();
         await session?.stop?.();
         if (visible) {
           await clearCardCommissioning({ flowId: flow.flowId });
@@ -381,7 +552,8 @@ export function CardCommissioningPanel({
         const confirm = typeof window.__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
           ? window.__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__
           : confirmCardWiringCandidate;
-        const status = await confirm(activationId, { host: link.host });
+        mutationAuthority.assertAuthority();
+        const status = await confirm(activationId, { host: mutationAuthority.host });
         if (status?.state !== 'known-good' || (status?.activationId && status.activationId !== activationId)) {
           throw new Error('The card did not confirm the exact temporary wiring.');
         }
@@ -391,7 +563,8 @@ export function CardCommissioningPanel({
         const rollback = typeof window.__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
           ? window.__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__
           : rollbackCardWiringCandidate;
-        const status = await rollback(activationId, { host: link.host });
+        mutationAuthority.assertAuthority();
+        const status = await rollback(activationId, { host: mutationAuthority.host });
         if (status?.state !== 'known-good' || (status?.activationId && status.activationId !== activationId)) {
           throw new Error('The card did not restore the previous working wiring.');
         }
@@ -403,6 +576,10 @@ export function CardCommissioningPanel({
     } catch (error) {
       setFailure(error?.message || 'The card could not finish the wiring check. It will restore the previous setup when the test window ends.');
       setLightCheckState('testing');
+    } finally {
+      if (mutationAuthority?.lease) {
+        await releaseCardRestoration(flow.flowId, mutationAuthority.lease.id).catch(() => false);
+      }
     }
   };
 
@@ -422,27 +599,35 @@ export function CardCommissioningPanel({
       {flow.stage === 'set-up-card' && (
         <>
           <h3>Set up card</h3>
-          {flow.networkState === 'setup-required' && (
+          {!flow.cardAcknowledgedAt && detection.state === 'found' && (
+            <div className="card-commissioning-network">
+              <p aria-live="polite"><strong>Card is back on your network — continuing…</strong></p>
+            </div>
+          )}
+          {!flow.cardAcknowledgedAt && detection.state !== 'found' && flow.networkState === 'setup-required' && (
             <div className="card-commissioning-network">
               <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>Lightweaver-XXXX</strong>. The setup address only works while that network is joined.</p>
               <button type="button" className="btn primary" onClick={confirmSetupNetwork}>I’ve joined Lightweaver-XXXX</button>
+              {detection.state === 'searching' && <p role="status">Looking for {flow.expectedCard.id} on your network…</p>}
             </div>
           )}
-          {flow.networkState === 'setup-joined' && (
+          {!flow.cardAcknowledgedAt && detection.state !== 'found' && flow.networkState === 'setup-joined' && (
             <div className="card-commissioning-network">
-              <p><strong>Lightweaver-XXXX joined.</strong> Now open the card at 192.168.4.1, choose its permanent Wi-Fi, and return here. This progress stays saved while networks change.</p>
-              <a className="btn primary" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open 192.168.4.1 Wi-Fi setup</a>
+              <p><strong>Lightweaver-XXXX joined.</strong> If the card is still on its setup network, open it at 192.168.4.1, choose its permanent Wi-Fi, and return here. Once it rejoins your network Studio continues automatically. This progress stays saved while networks change.</p>
+              <a className="btn" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open 192.168.4.1 Wi-Fi setup</a>
+              <p role="status">{detection.state === 'searching' ? `Waiting for the card to rejoin your network — looking for ${flow.expectedCard.id}…` : 'Waiting for the card to rejoin your network…'}</p>
             </div>
           )}
           {!flow.cardAcknowledgedAt ? (
             <>
-              <p>{identityFailure || 'Reconnect the installed card. Studio will continue only when the exact card, firmware version, and firmware build answer.'}</p>
-              <button type="button" className="btn primary" onClick={onReconnect} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
+              <p>{identityFailure || 'Studio continues automatically once the exact card, firmware version, and firmware build answer on your network. You can also reconnect the installed card manually.'}</p>
+              <button type="button" className="btn" onClick={onReconnect} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
             </>
           ) : (
             <>
               <p>The exact installed card and firmware build are verified. Restore the saved Studio revision that contains its GPIO outputs, LED map, zones, patterns, playlist, and controls.</p>
-              <button type="button" className="btn primary" onClick={restore} disabled={restoreState === 'working'}>{restoreState === 'working' ? 'Restoring saved project…' : 'Restore saved project'}</button>
+              {!restorePreflight.ok && <p role="status">Checking card. Restore stays locked until the exact installed card and firmware are command-ready.</p>}
+              <button type="button" className="btn primary" onClick={restore} disabled={restoreState === 'working' || !restorePreflight.ok}>{restoreState === 'working' ? 'Restoring saved project…' : 'Restore saved project'}</button>
             </>
           )}
         </>
@@ -450,6 +635,7 @@ export function CardCommissioningPanel({
       {flow.stage === 'check-lights' && (
         <>
           <h3>Check lights</h3>
+          {!lightCheckPreflight.ok && <p role="status">Checking card. Light-check controls stay locked until the exact card is stable and command-ready.</p>}
           <p>{flow.project.pendingActivationId
             ? 'The saved Studio project revision is staged on this exact card. The bounded physical light check will test its GPIO wiring before making it permanent.'
             : 'The saved Studio project revision is installed on this exact card. Continue to the bounded physical light check.'}</p>
@@ -459,14 +645,14 @@ export function CardCommissioningPanel({
                 <>
                   <p>Check every connected output. Do you see a <strong>blue first pixel and red final pixel</strong>, with the expected LEDs between them?</p>
                   <div className="card-connection-actions">
-                    <button type="button" className="btn primary" onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
-                    <button type="button" className="btn" onClick={() => finishLightCheck(false)}>No, restore working setup</button>
+                    <button type="button" className="btn primary" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
+                    <button type="button" className="btn" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(false)}>No, restore working setup</button>
                   </div>
                 </>
               ) : (
                 <>
                   <p>The test lasts at most 90 seconds. Until you confirm the real LEDs, the card keeps the previous working wiring ready to restore automatically.</p>
-                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle'} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded light test…' : 'Start 90-second light test'}</button>
+                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle' || !lightCheckPreflight.ok} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded light test…' : 'Start 90-second light test'}</button>
                 </>
               )}
             </div>
@@ -476,14 +662,14 @@ export function CardCommissioningPanel({
                 <>
                   <p>Check every connected output. Do you see a <strong>blue first pixel and red final pixel</strong>, with green LEDs between them?</p>
                   <div className="card-connection-actions">
-                    <button type="button" className="btn primary" onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
-                    <button type="button" className="btn" onClick={() => finishLightCheck(false)}>No, restore working look</button>
+                    <button type="button" className="btn primary" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
+                    <button type="button" className="btn" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(false)}>No, restore working look</button>
                   </div>
                 </>
               ) : (
                 <>
                   <p>This marker frame runs for at most 30 seconds, then releases the card back to its normal working look automatically.</p>
-                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle'} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded marker test…' : 'Start bounded marker test'}</button>
+                  <button type="button" className="btn primary" disabled={lightCheckState !== 'idle' || !lightCheckPreflight.ok} onClick={startLightCheck}>{lightCheckState === 'starting' ? 'Starting bounded marker test…' : 'Start bounded marker test'}</button>
                 </>
               )}
               {lightCheckNotice && <p role="status">{lightCheckNotice}</p>}

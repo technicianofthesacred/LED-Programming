@@ -99,6 +99,18 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-sm); }
 [role="button"]:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Numeric values are direct-entry fields. Purpose-built +/- controls sit beside
+   values that need nudging, so native browser steppers only add visual noise. */
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 @media (pointer: coarse) {
   button, [role="button"], input, select { min-height: 44px; min-width: 44px; }
 }
@@ -547,6 +559,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; bo
 .card-status-control.is-connected .card-status-dot { background: var(--ok); }
 .card-status-control.is-connecting .card-status-dot,
 .card-status-control.is-recovering .card-status-dot { background: var(--accent); }
+/* Paired-but-blank and reachable-but-unpaired are actionable, not "all good" —
+   an amber dot keeps them visibly distinct from green Connected. */
+.card-status-control.is-needs-project,
+.card-status-control.is-found-pair { background: var(--bg-sel); border-color: var(--accent-line); }
+.card-status-control.is-needs-project .card-status-dot,
+.card-status-control.is-found-pair .card-status-dot { background: var(--warn); }
 .card-status-copy {
   min-width: 0; max-width: 58%; overflow: hidden; flex: 0 1 auto;
   display: inline-flex; align-items: center; gap: 7px;

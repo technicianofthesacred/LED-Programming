@@ -1,4 +1,5 @@
 import { isCardWiringCandidateReadback } from './cardWiringSafety.js';
+import { classifyCardReadiness } from './cardReadiness.js';
 
 export const CARD_COMMISSIONING_STAGES = Object.freeze([
   'connect-card',
@@ -214,6 +215,48 @@ export function acknowledgeCommissionedCard(flow, card = {}, { now = Date.now() 
       lastConnectionIssue: '',
     },
   };
+}
+
+export function preflightCardCommissioningMutation(flow, status = null) {
+  requireFlow(flow);
+  if (!flow.cardAcknowledgedAt || !['set-up-card', 'check-lights'].includes(flow.stage)) {
+    return { ok: false, reason: 'mutation-not-authorized' };
+  }
+  if (!status || typeof status !== 'object' || Array.isArray(status)) {
+    return { ok: false, reason: 'checking-card' };
+  }
+  const readiness = classifyCardReadiness(status, { expectedCard: flow.expectedCard });
+  if (readiness.reason === 'unexpected-card') return { ok: false, reason: 'wrong-card' };
+  if (readiness.reason === 'unexpected-firmware-version') return { ok: false, reason: 'wrong-firmware-version' };
+  if (readiness.reason === 'unexpected-firmware-build') return { ok: false, reason: 'wrong-firmware-build' };
+  if (!readiness.connected) {
+    return {
+      ok: false,
+      reason: readiness.state === 'checking' || readiness.state === 'revalidating'
+        ? 'checking-card'
+        : 'card-not-ready',
+    };
+  }
+  return { ok: true, readiness };
+}
+
+// Reality-driven auto-advance: when a background LAN poll finds the expected
+// card answering /api/status in station transport (proving it left its setup AP
+// and rejoined home WiFi), advance the exact same verified transition the manual
+// "Reconnect installed card" button uses. This runs a STRICTER check than the
+// manual path — it additionally requires wifi.transport === 'station' so an AP-mode
+// card can never be mistaken for an on-home-network card — then delegates identity
+// verification (exact id + firmwareVersion + buildId) to acknowledgeCommissionedCard.
+export function acknowledgeCommissionedCardFromStatus(flow, status = {}, { now = Date.now() } = {}) {
+  requireFlow(flow);
+  if (flow.stage !== 'set-up-card') return { ok: false, reason: 'not-awaiting-card' };
+  const transport = String(status?.wifi?.transport || status?.transport || '').toLowerCase();
+  if (transport !== 'station') return { ok: false, reason: 'not-on-home-network' };
+  return acknowledgeCommissionedCard(flow, {
+    id: status.cardId || status.id,
+    firmwareVersion: status.firmwareVersion,
+    buildId: status.buildId || status.firmwareBuild || status.build,
+  }, { now });
 }
 
 export function resumeInstalledCardAfterInterruption(flow, card = {}, { now = Date.now() } = {}) {
@@ -571,6 +614,86 @@ export async function claimCardRestoration(flow, { storage = defaultStorage(), s
   const verified = parseRegistry(storage, timestamp).registry.flows[flow.flowId]?.restoreLease;
   return verified?.id === ownerId ? { ok: true, lease } : { ok: false, reason: 'restore-in-progress' };
   });
+}
+
+export async function claimCardLightCheckMutation(flow, {
+  storage = defaultStorage(), sessionStorage = defaultSessionStorage(), ownerId = makeFlowId(),
+  now = Date.now, locks, indexedDB,
+} = {}) {
+  requireFlow(flow);
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
+    const timestamp = now();
+    const { registry } = parseRegistry(storage, timestamp);
+    const baseRevision = registry.revision;
+    const entry = registry.flows[flow.flowId];
+    const authoritative = entry?.flow;
+    const authoritativeGeneration = authoritative?.registryGeneration ?? 0;
+    if (!entry || authoritative.project.fingerprint !== flow.project.fingerprint
+      || authoritative.expectedCard?.id !== flow.expectedCard?.id) return { ok: false, reason: 'missing-flow' };
+    if ((flow.registryGeneration ?? 0) !== authoritativeGeneration) return { ok: false, reason: 'stale-flow' };
+    if (authoritative.stage !== 'check-lights' || !authoritative.cardAcknowledgedAt) {
+      return { ok: false, reason: 'not-eligible' };
+    }
+    if (entry.restoreLease && Number(entry.restoreLease.expiresAt) > timestamp) {
+      return { ok: false, reason: 'light-check-in-progress' };
+    }
+    const lease = {
+      id: ownerId, state: 'claimed', flowId: flow.flowId,
+      flowGeneration: authoritativeGeneration, cardId: flow.expectedCard.id,
+      projectFingerprint: flow.project.fingerprint, expiresAt: timestamp + RESTORE_LEASE_MS,
+    };
+    entry.restoreLease = lease;
+    registry.revision = baseRevision + 1;
+    assertOwner?.();
+    if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) {
+      throw new Error('Card setup registry changed during light-check claim.');
+    }
+    persistRegistry(storage, registry);
+    sessionStorage?.setItem?.(CARD_COMMISSIONING_ACTIVE_KEY, flow.flowId);
+    const verified = parseRegistry(storage, timestamp).registry.flows[flow.flowId]?.restoreLease;
+    return verified?.id === ownerId ? { ok: true, lease } : { ok: false, reason: 'light-check-in-progress' };
+  });
+}
+
+export async function beginCardLightCheckMutation(flow, lease, {
+  storage = defaultStorage(), now = Date.now, locks, indexedDB,
+} = {}) {
+  requireFlow(flow);
+  return withRegistryMutation({ storage, locks, indexedDB }, assertOwner => {
+    const timestamp = now();
+    const { registry } = parseRegistry(storage, timestamp);
+    const baseRevision = registry.revision;
+    const entry = registry.flows[flow.flowId];
+    if (!entry?.restoreLease || entry.restoreLease.id !== lease?.id || entry.restoreLease.state !== 'claimed'
+      || (flow.registryGeneration ?? 0) !== (entry.flow.registryGeneration ?? 0)
+      || entry.restoreLease.flowGeneration !== (entry.flow.registryGeneration ?? 0)
+      || entry.flow.stage !== 'check-lights' || !entry.flow.cardAcknowledgedAt) {
+      return { ok: false, reason: 'light-check-claim-lost' };
+    }
+    const fencingToken = makeFlowId();
+    entry.restoreLease = { ...entry.restoreLease, state: 'mutating', fencingToken };
+    registry.revision = baseRevision + 1;
+    assertOwner?.();
+    if (parseRegistry(storage, timestamp).registry.revision !== baseRevision) {
+      throw new Error('Card setup registry changed before the light-check mutation.');
+    }
+    persistRegistry(storage, registry);
+    return { ok: true, fencingToken };
+  });
+}
+
+export function verifyCardLightCheckMutation(flow, leaseId, fencingToken, {
+  storage = defaultStorage(), now = Date.now(),
+} = {}) {
+  const entry = parseRegistry(storage, now).registry.flows[flow?.flowId];
+  const lease = entry?.restoreLease;
+  return Boolean(lease && lease.id === leaseId && lease.state === 'mutating'
+    && lease.fencingToken === fencingToken
+    && lease.flowGeneration === (entry.flow.registryGeneration ?? 0)
+    && (flow.registryGeneration ?? 0) === (entry.flow.registryGeneration ?? 0)
+    && entry.flow.stage === 'check-lights' && entry.flow.cardAcknowledgedAt
+    && lease.cardId === flow.expectedCard?.id
+    && lease.projectFingerprint === flow.project?.fingerprint && lease.expiresAt > now);
 }
 
 export async function beginCardRestorationMutation(flow, lease, { storage = defaultStorage(), now = Date.now, locks, indexedDB } = {}) {

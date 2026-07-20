@@ -18,7 +18,6 @@ assert.match(storage, /next\.segments\[segment\]\.reversed != active\.segments\[
 assert.match(storage, /segment\["direction"\] = source\.reversed \? "reverse" : "forward";/);
 assert.match(runtime, /for \(uint8_t segmentIndex = 0; segmentIndex < output\.segmentCount; segmentIndex\+\+\)[\s\S]*physicalIndex = segment\.reversed[\s\S]*segmentStart \+ segment\.count - 1 - offset[\s\S]*physicalLeds\[physicalIndex\]/);
 assert.match(runtime, /config\.segmentCount = 1;[\s\S]*config\.segments\[0\]\.count = config\.pixels;/, 'SD profiles must receive a full forward segment');
-assert.match(storage, /config\.outputs\[0\]\.segmentCount = 1;[\s\S]*config\.outputs\[0\]\.segments\[0\]\.count = 44;/, 'factory defaults must receive a full forward segment');
 
 function copyCompiled(logical, output) {
   const physical = Array(logical.length).fill('dark');
@@ -56,6 +55,15 @@ assert.deepEqual(
   copyCompiled(['blue', 'dim', 'red', 'blue', 'dim', 'red'], twoReverseRuns),
   ['red', 'dim', 'blue', 'red', 'dim', 'blue'],
   'firmware reverses inside each segment exactly once without reversing run order',
+);
+
+const explicitKnownGoodOutput = compile(['forward']);
+assert.equal(explicitKnownGoodOutput.pin, 16);
+assert.deepEqual(explicitKnownGoodOutput.segments.map(segment => segment.direction), ['forward']);
+assert.deepEqual(
+  copyCompiled(['blue', 'dim', 'red'], explicitKnownGoodOutput),
+  ['blue', 'dim', 'red'],
+  'an explicit configured known-good output receives a full forward segment',
 );
 
 const mixed = compile(['forward', 'reverse']);

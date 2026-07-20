@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { svgPt } from '../../../lib/layoutGeometry.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 
@@ -15,9 +15,6 @@ export function useLayoutWire(ctx) {
   const { wiring, updateWiring } = useProject();
   const [wireOverlayMode, setWireOverlayMode] = useState('idle');
   const [selectedWireCut, setSelectedWireCut] = useState(null);
-  const [selectedWirePatchId, setSelectedWirePatchId] = useState(null);
-  const [linkRouteIds, setLinkRouteIds] = useState([]);
-  const linkRouteStartedRef = useRef(false);
 
   const nearestLedIndex = useCallback((event, strip) => {
     if (!svgRef.current || !strip?.pixels?.length) return null;
@@ -88,28 +85,10 @@ export function useLayoutWire(ctx) {
     if (result.ok) setSelectedWireCut({ ...activeCut, cutLed: next });
   }, [selectedWireCut, updateWiring, wiring.locked]);
 
-  const toggleRoutePatch = useCallback(runId => {
-    if (wireOverlayMode !== 'link' || wiring.locked) return;
-    setLinkRouteIds(previous => {
-      const route = linkRouteStartedRef.current ? previous : [];
-      const next = route.includes(runId) ? route.filter(id => id !== runId) : [...route, runId];
-      linkRouteStartedRef.current = true;
-      updateWiring(draft => {
-        const output = draft.outputs.find(item => item.runIds.includes(runId)) || draft.outputs[0];
-        const rest = output.runIds.filter(id => !next.includes(id));
-        output.runIds = [...next, ...rest];
-      }, { changeKind: 'route' });
-      setSelectedWirePatchId(runId);
-      return next;
-    });
-  }, [updateWiring, wireOverlayMode, wiring.locked]);
-
   return {
     wireOverlayMode, setWireOverlayMode,
     selectedWireCut, setSelectedWireCut,
-    selectedWirePatchId, setSelectedWirePatchId,
-    linkRouteIds, setLinkRouteIds, linkRouteStartedRef,
-    nearestLedIndex, chopStripAtEvent, toggleRoutePatch,
+    nearestLedIndex, chopStripAtEvent,
     nudgeSelectedWireCut, deleteSelectedWireCut,
   };
 }

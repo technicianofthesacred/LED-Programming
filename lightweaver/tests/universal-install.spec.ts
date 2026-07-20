@@ -153,10 +153,18 @@ test('an interrupted browser install inspects the exact result and never flashes
 
   await page.evaluate(async () => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    getSharedCardLink().dispatch({
+    const event = {
       type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
       card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    });
+      readiness: {
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
+        bootId: 'boot-install-recovery', runtimePhase: 'ready', knownGoodProject: true,
+        commandReady: true, outputReady: true,
+      },
+    };
+    getSharedCardLink().dispatch(event);
+    getSharedCardLink().dispatch(event);
   });
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
 });

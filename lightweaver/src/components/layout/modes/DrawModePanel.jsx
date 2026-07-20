@@ -9,9 +9,11 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   STRIP_COLORS,
+  DENSITY_OPTIONS,
   stripSourceKey,
   clampLedCount,
   svgPathLength,
@@ -25,13 +27,15 @@ import {
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
 import { PrimitiveStarter } from './PrimitiveStarter.jsx';
+import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
+import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
 import '../../../styles/lw-draw.css';
 
+// Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
 function startedFromDragHandle(e) {
   return !!e.target?.closest?.('[data-drag-handle="true"]');
 }
 
-// Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
 function formatMetersValue(meters) {
   return meters >= 10 ? meters.toFixed(1) : meters.toFixed(2);
 }
@@ -70,7 +74,13 @@ const SHAPE_ICONS = {
 // references nearly the entire bundle, so grouped props would be noise). No
 // handler is renamed and no logic is restructured — this is a pure move.
 
-export function DrawModePanel({ state }) {
+export function DrawModePanel({
+  state,
+  firstLedPicker,
+  firstLedError,
+  onBeginFirstLedPicker,
+  onCancelFirstLedPicker,
+}) {
   const {
     strips, layers, hidden, setHidden,
     svgText, pxPerMm, density,
@@ -85,12 +95,11 @@ export function DrawModePanel({ state }) {
     expandedStrips, setExpandedStrips,
     stripListRef,
     // size
-    getLedCount, resampleStrip, setStripCount,
-    calibrateScaleFromStrip,
+    getLedCount, resampleStrip, setStripCount, stripDensity, setStripPhysical,
     // strips
     updateStrip, removeStrip, reverseStrip, renameStrip, duplicateStrip,
     addPrimitiveStrip, scaleStrip,
-    addStripsToGroup, groupSelectedStrips, mergeSelectedStrips, reorderStripRows,
+    addStripsToGroup, groupSelectedStrips, mergeSelectedStrips,
     usbLedConnected,
     // artwork
     expandedLayers, setExpandedLayers,
@@ -115,6 +124,7 @@ export function DrawModePanel({ state }) {
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
   } = state;
+  const { wiring, updateWiring, standaloneController, patchBoard, setPatchBoard } = useProject();
 
   // "+ Add strip" shape chooser — icon tiles (Line / Circle / Square / Free
   // draw / Import vector) plus one LEDs input. The count is the strip the
@@ -122,6 +132,39 @@ export function DrawModePanel({ state }) {
   // strip's fixed density. Ephemeral view state.
   const [addChooserOpen, setAddChooserOpen] = useState(false);
   const [addLedCount, setAddLedCount] = useState(60);
+  const [addDensity, setAddDensity] = useState(density);
+  const [addLengthM, setAddLengthM] = useState(1);
+  const [addLengthDraft, setAddLengthDraft] = useState('1.00');
+  const [addGpio, setAddGpio] = useState(16);
+  const [pendingAddGpio, setPendingAddGpio] = useState(null);
+  const [gpioError, setGpioError] = useState('');
+  const [droppedStripIds, setDroppedStripIds] = useState([]);
+
+  const setLinkedAddCount = rawValue => {
+    const count = clampLedCount(rawValue);
+    setAddLedCount(count);
+  };
+  const setLinkedAddDensity = nextDensity => {
+    const nextCount = clampLedCount(Math.round(addLengthM * nextDensity));
+    setAddDensity(nextDensity);
+    setAddLedCount(nextCount);
+  };
+  const scaleAddStrip = factor => {
+    const nextLength = Math.max(0.001, addLengthM * factor);
+    setAddLengthM(nextLength);
+    setAddLedCount(clampLedCount(Math.round(nextLength * addDensity)));
+    setAddLengthDraft(formatMetersValue(nextLength));
+  };
+  const commitAddLength = () => {
+    const nextLength = Number(addLengthDraft);
+    if (!Number.isFinite(nextLength) || nextLength <= 0) {
+      setAddLengthDraft(formatMetersValue(addLengthM));
+      return;
+    }
+    setAddLengthM(nextLength);
+    setAddLedCount(clampLedCount(Math.round(nextLength * addDensity)));
+    setAddLengthDraft(formatMetersValue(nextLength));
+  };
 
   const pickAddShape = (key) => {
     setAddChooserOpen(false);
@@ -139,7 +182,8 @@ export function DrawModePanel({ state }) {
       setDrawMode(true);
       return;
     }
-    addPrimitiveStrip(key, clampLedCount(addLedCount));
+    const stripId = addPrimitiveStrip(key, clampLedCount(addLedCount), addDensity, addLengthM);
+    setPendingAddGpio({ stripId, pin: addGpio });
   };
 
   const addShapeTiles = [
@@ -147,12 +191,240 @@ export function DrawModePanel({ state }) {
     { key: 'import', label: 'Import vector' },
   ];
 
+  const stripById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
+  const stripRuns = useMemo(() => new Map(
+    wiring.runs
+      .filter(run => run.type === 'strip' && stripById.has(run.source?.stripId))
+      .map(run => [run.source.stripId, run]),
+  ), [wiring.runs, stripById]);
+  // Strips split into multiple runs (Advanced wiring) have no single run to
+  // bind row controls to; their direction/seam edits stay in Advanced wiring.
+  const splitStripIds = useMemo(() => {
+    const counts = new Map();
+    wiring.runs.forEach(run => {
+      if (run.type !== 'strip' || !run.source?.stripId) return;
+      counts.set(run.source.stripId, (counts.get(run.source.stripId) || 0) + 1);
+    });
+    return new Set([...counts.keys()].filter(id => counts.get(id) > 1));
+  }, [wiring.runs]);
+  const outputForStrip = stripId => wiring.outputs.find(output => output.runIds.includes(stripRuns.get(stripId)?.id)) || wiring.outputs[0];
+
+  // The Draw list is the physical wiring overview. Each GPIO gets a compact
+  // group and the rows inside it are the data order from the card outward.
+  const gpioGroups = useMemo(() => {
+    const assigned = new Set();
+    const groups = wiring.outputs.map(output => {
+      // Dedupe per strip: a split strip has several runs but one physical row.
+      const seen = new Set();
+      const groupStrips = output.runIds
+        .map(runId => wiring.runs.find(run => run.id === runId))
+        .filter(run => run?.type === 'strip')
+        .map(run => stripById.get(run.source.stripId))
+        .filter(strip => strip && !seen.has(strip.id) && seen.add(strip.id));
+      groupStrips.forEach(strip => assigned.add(strip.id));
+      return { output, strips: groupStrips };
+    });
+    const unassigned = orderedStrips.filter(strip => !assigned.has(strip.id));
+    if (unassigned.length && groups[0]) groups[0] = { ...groups[0], strips: [...groups[0].strips, ...unassigned] };
+    return groups.filter(group => group.strips.length);
+  }, [orderedStrips, stripById, wiring]);
+
+  const makeRunForStrip = strip => ({
+    id: `run-${strip.id}`,
+    type: 'strip',
+    source: { stripId: strip.id, from: 0, to: Math.max(0, strip.pixelCount - 1) },
+    directionPolicy: 'flexible',
+    physicalDirection: 'source-forward',
+    seamLed: null,
+    verified: false,
+  });
+
+  // The visible Wire editor owns reconciliation. Test & Install only reports
+  // an incomplete plan; opening it must never repair or assign physical runs.
+  useEffect(() => {
+    if (wiring.locked) return;
+    const stripIds = new Set(strips.map(strip => strip.id));
+    const validStripRuns = wiring.runs.filter(run => run.type === 'strip' && stripIds.has(run.source?.stripId));
+    const staleRunIds = new Set(wiring.runs.filter(run => run.type === 'strip' && !stripIds.has(run.source?.stripId)).map(run => run.id));
+    const referencedRunIds = new Set(wiring.outputs.flatMap(output => output.runIds));
+    const orphanedStripRuns = validStripRuns.filter(run => !referencedRunIds.has(run.id));
+    const coveredStripIds = new Set(validStripRuns.map(run => run.source.stripId));
+    const missingStrips = strips.filter(strip => !coveredStripIds.has(strip.id));
+    const knownRunIds = new Set(wiring.runs.map(run => run.id));
+    const hasStaleReferences = wiring.outputs.some(output => output.runIds.some(runId => !knownRunIds.has(runId) || staleRunIds.has(runId)));
+    if (wiring.outputs.length && !staleRunIds.size && !orphanedStripRuns.length && !missingStrips.length && !hasStaleReferences) return;
+
+    updateWiring(draft => {
+      draft.runs = draft.runs.filter(run => !staleRunIds.has(run.id));
+      const retainedRunIds = new Set(draft.runs.map(run => run.id));
+      draft.outputs.forEach(output => {
+        output.runIds = output.runIds.filter(runId => retainedRunIds.has(runId));
+      });
+      if (!draft.outputs.length) draft.outputs.push({ id: 'out1', name: 'Output 1', pin: 16, runIds: [] });
+      const primary = draft.outputs[0];
+      const assignedRunIds = new Set(draft.outputs.flatMap(output => output.runIds));
+      for (const run of orphanedStripRuns) {
+        if (!retainedRunIds.has(run.id) || assignedRunIds.has(run.id)) continue;
+        primary.runIds.push(run.id);
+        assignedRunIds.add(run.id);
+      }
+      for (const strip of missingStrips) {
+        if (draft.runs.some(run => run.type === 'strip' && run.source?.stripId === strip.id)) continue;
+        const run = makeRunForStrip(strip);
+        const baseId = run.id;
+        let suffix = 2;
+        while (draft.runs.some(item => item.id === run.id)) run.id = `${baseId}-${suffix++}`;
+        draft.runs.push(run);
+        primary.runIds.push(run.id);
+      }
+    }, { changeKind: 'geometry' });
+  }, [strips, updateWiring, wiring.locked, wiring.runs, wiring.outputs]);
+
+  const ensureRunsForAllStrips = draft => {
+    const known = new Set(draft.runs.filter(run => run.type === 'strip').map(run => run.source?.stripId));
+    const primary = draft.outputs[0];
+    const stripsById = new Map(strips.map(strip => [strip.id, strip]));
+    draft.runs.forEach(run => {
+      if (run.type !== 'strip') return;
+      const strip = stripsById.get(run.source?.stripId);
+      if (!strip) return;
+      const lastLed = Math.max(0, strip.pixelCount - 1);
+      // The default, whole-strip run must track manual LED-count corrections.
+      // Advanced split runs keep their range, but are clamped if it now falls
+      // beyond the shortened strip.
+      if (run.id === `run-${strip.id}`) {
+        run.source = { ...run.source, from: 0, to: lastLed };
+        return;
+      }
+      const from = Math.min(lastLed, Math.max(0, Number(run.source?.from) || 0));
+      const to = Math.min(lastLed, Math.max(from, Number(run.source?.to) || from));
+      run.source = { ...run.source, from, to };
+    });
+    strips.forEach(strip => {
+      if (known.has(strip.id)) return;
+      const run = makeRunForStrip(strip);
+      draft.runs.push(run);
+      primary.runIds.push(run.id);
+    });
+  };
+
+  const nextOutputId = outputs => {
+    let number = 1;
+    while (outputs.some(output => output.id === `out${number}`)) number += 1;
+    return `out${number}`;
+  };
+
+  const assignStripGpio = (stripId, pin) => {
+    const selectedPin = Number(pin);
+    const result = updateWiring(draft => {
+      // A direct Draw-mode assignment is an intentional edit to the physical
+      // plan. Reopen the plan first, so selecting a GPIO always applies and
+      // invalidates the previous bench verification in the same undo step.
+      if (draft.locked) {
+        draft.locked = false;
+        draft.verified = false;
+        draft.runs.forEach(item => { item.verified = false; });
+      }
+      ensureRunsForAllStrips(draft);
+      const run = draft.runs.find(item => item.type === 'strip' && item.source?.stripId === stripId);
+      const source = draft.outputs.find(output => output.runIds.includes(run?.id));
+      const target = draft.outputs.find(output => output.pin === selectedPin);
+      if (!run || !source || source === target) return;
+
+      if (target) {
+        source.runIds = source.runIds.filter(runId => runId !== run.id);
+        target.runIds.push(run.id);
+        if (!source.runIds.length && draft.outputs.length > 1) draft.outputs = draft.outputs.filter(output => output.id !== source.id);
+        return;
+      }
+
+      if (source.runIds.length === 1) {
+        source.pin = selectedPin;
+        return;
+      }
+      if (draft.outputs.length >= CARD_HARDWARE_CAPABILITIES.maxOutputs) throw new Error(`This card supports up to ${CARD_HARDWARE_CAPABILITIES.maxOutputs} GPIO outputs.`);
+      source.runIds = source.runIds.filter(runId => runId !== run.id);
+      draft.outputs.push({ id: nextOutputId(draft.outputs), name: `Output ${draft.outputs.length + 1}`, pin: selectedPin, runIds: [run.id] });
+    }, { changeKind: 'gpio' });
+    if (result.ok) {
+      setGpioError('');
+    } else {
+      setGpioError(wiring.locked
+        ? 'Unlock wiring in Test & Install before changing GPIO.'
+        : result.errors?.[0]?.message || 'That GPIO assignment could not be changed.');
+    }
+  };
+
+  const moveStripsInGpioOrder = (draggedStripIds, targetStripId, placement = 'before') => {
+    const ids = (draggedStripIds || []).filter(id => id && id !== targetStripId);
+    if (!ids.length) return;
+    updateWiring(draft => {
+      ensureRunsForAllStrips(draft);
+      const runsByStrip = new Map(draft.runs.filter(run => run.type === 'strip').map(run => [run.source.stripId, run]));
+      const targetRun = runsByStrip.get(targetStripId);
+      const targetOutput = draft.outputs.find(output => output.runIds.includes(targetRun?.id));
+      const movedRuns = ids.map(id => runsByStrip.get(id)).filter(Boolean);
+      if (!targetOutput || !movedRuns.length) return;
+      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(runId => !movedRuns.some(run => run.id === runId)); });
+      const targetIndex = targetOutput.runIds.indexOf(targetRun.id);
+      const insertAt = targetIndex < 0
+        ? targetOutput.runIds.length
+        : targetIndex + (placement === 'after' ? 1 : 0);
+      targetOutput.runIds.splice(insertAt, 0, ...movedRuns.map(run => run.id));
+      draft.outputs = draft.outputs.filter(output => output.runIds.length || output.id === targetOutput.id);
+    }, { changeKind: 'route' });
+  };
+
+  // Reopen a locked plan so a Draw-mode edit always applies — same rationale
+  // as assignStripGpio: direct edits here are intentional physical changes.
+  const unlockDraft = draft => {
+    if (!draft.locked) return;
+    draft.locked = false;
+    draft.verified = false;
+    draft.runs.forEach(item => { item.verified = false; });
+  };
+
+  // Wiring direction: which end of the strip the data cable enters. Distinct
+  // from reverseStrip, which flips the drawn path itself.
+  const toggleRunDirection = run => updateWiring(draft => {
+    unlockDraft(draft);
+    const target = draft.runs.find(item => item.id === run.id);
+    if (!target || target.type !== 'strip') return;
+    if (target.directionPolicy === 'fixed') throw new Error('This run has a fixed physical direction.');
+    target.physicalDirection = target.physicalDirection === 'source-reverse' ? 'source-forward' : 'source-reverse';
+  }, { changeKind: 'direction', runIds: [run.id] });
+
+  const gpioChoicesForStrip = stripId => {
+    const output = outputForStrip(stripId);
+    const controlPins = new Set(activeBoardGpios([], standaloneController?.controls).map(item => item.pin));
+    const canCreateOutput = output?.runIds.length <= 1 || wiring.outputs.length < CARD_HARDWARE_CAPABILITIES.maxOutputs;
+    return CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => ({
+      pin,
+      disabled: controlPins.has(pin) || (pin !== output?.pin && !wiring.outputs.some(item => item.pin === pin) && !canCreateOutput),
+    }));
+  };
+  const addGpioChoices = () => {
+    const controlPins = new Set(activeBoardGpios([], standaloneController?.controls).map(item => item.pin));
+    const canCreateOutput = wiring.outputs.length < CARD_HARDWARE_CAPABILITIES.maxOutputs;
+    return CARD_HARDWARE_CAPABILITIES.supportedOutputPins.map(pin => ({
+      pin,
+      disabled: controlPins.has(pin) || (!wiring.outputs.some(output => output.pin === pin) && !canCreateOutput),
+    }));
+  };
+
+  useEffect(() => {
+    if (!pendingAddGpio || !strips.some(strip => strip.id === pendingAddGpio.stripId)) return;
+    assignStripGpio(pendingAddGpio.stripId, pendingAddGpio.pin);
+    setPendingAddGpio(null);
+  }, [pendingAddGpio, strips]);
+
   return (
     <>
 
         {starterLayoutActive && !drawMode && !pendingDraw && (
           <PrimitiveStarter
             currentPixelCount={totalLeds || 37}
+            defaultDensity={density}
             onImport={() => fileRef.current?.click()}
             onCreate={createStarterPrimitive}
             onFreeDraw={() => {
@@ -703,7 +975,7 @@ export function DrawModePanel({ state }) {
 
               {existingStrip && (
                 <div className="la-insp-actions">
-                  <button className="btn" onClick={() => reverseStrip(existingStrip.id)} title="Flip pixel 0 from start to end">↔ Reverse</button>
+                  <button className="btn" onClick={() => reverseStrip(existingStrip.id)} title="Flip the drawing path so pixel 0 swaps ends">↔ Flip path direction</button>
                   <button className="btn danger" onClick={() => removeStrip(existingStrip.id)}>Remove</button>
                 </div>
               )}
@@ -717,13 +989,6 @@ export function DrawModePanel({ state }) {
         {strips.length > 0 && !starterLayoutActive && (
           <>
             <div className="panel-divider"/>
-            <div className="panel-head">
-              <span className="ttl">LED strips</span>
-              <span className="meta">
-                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
-                {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
-              </span>
-            </div>
             {/* Always-visible add path (bench test: users never found Duplicate
                 or the pencil after the first strip). */}
             <button type="button" className="btn la-add-strip" data-testid="layout-add-strip"
@@ -747,18 +1012,79 @@ export function DrawModePanel({ state }) {
                     </button>
                   ))}
                 </div>
-                <div className="lw-shape-count">
-                  <span className="lw-shape-count-label">LEDs</span>
-                  <input type="number" min="1" max={LED_COUNT_MAX} step="1"
-                         value={addLedCount}
-                         aria-label="New strip LEDs"
-                         inputMode="numeric"
-                         onFocus={e => e.target.select()}
-                         onChange={e => setAddLedCount(clampLedCount(e.target.value))}/>
-                  <span className="lw-shape-count-note">
-                    ≈ {formatMetersValue(clampLedCount(addLedCount) / density)} m at {density} LEDs/m
-                  </span>
+                <div className="row la-strip-physical-row la-add-strip-physical-row">
+                  <div className="la-strip-physical-field">
+                    <span className="k">LEDs</span>
+                    <div className="la-led-count-field">
+                      <button type="button" className="btn" aria-label="One new LED fewer"
+                              onClick={() => setLinkedAddCount(addLedCount - 1)}>−</button>
+                      <input type="number" min="1" max={LED_COUNT_MAX} step="1"
+                             value={addLedCount}
+                             aria-label="New strip LEDs"
+                             inputMode="numeric"
+                             onFocus={e => e.target.select()}
+                             onChange={e => setLinkedAddCount(e.target.value)}/>
+                      <button type="button" className="btn" aria-label="One new LED more"
+                              onClick={() => setLinkedAddCount(addLedCount + 1)}>+</button>
+                    </div>
+                  </div>
+                  <div className="la-strip-physical-field">
+                    <span className="k">Size</span>
+                    <div className="la-size-ctrl">
+                      <button type="button" className="btn" aria-label="Make new strip smaller"
+                              onClick={() => scaleAddStrip(0.9)}>−</button>
+                      <label className="la-size-readout">
+                        <input type="number" min="0.001" step="0.001"
+                               value={addLengthDraft}
+                               aria-label="New strip size in metres"
+                               inputMode="decimal"
+                               onFocus={e => e.target.select()}
+                               onChange={e => setAddLengthDraft(e.target.value)}
+                               onBlur={commitAddLength}
+                               onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/>
+                        <span>m</span>
+                      </label>
+                      <button type="button" className="btn" aria-label="Make new strip bigger"
+                              onClick={() => scaleAddStrip(1 / 0.9)}>+</button>
+                    </div>
+                  </div>
                 </div>
+                <div className="row la-strip-output-row la-add-strip-output-row">
+                  <div className="la-gpio-wrap">
+                    <select className="la-gpio-select" aria-label="New strip GPIO output"
+                            value={addGpio} onChange={event => setAddGpio(Number(event.target.value))}>
+                      {addGpioChoices().map(({ pin, disabled }) => (
+                        <option key={pin} value={pin} disabled={disabled}>GPIO {pin}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="la-strip-density" data-testid="add-strip-density-control"
+                       role="group" aria-label="New strip density">
+                    {DENSITY_OPTIONS.map(option => (
+                      <button key={option} type="button"
+                              className={`btn${addDensity === option ? ' is-selected' : ''}`}
+                              aria-label={`${option} LEDs/m`}
+                              aria-pressed={addDensity === option}
+                              onClick={() => setLinkedAddDensity(option)}>{option}/m</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="panel-head">
+              <span className="ttl">LED strips</span>
+              <span className="meta">
+                {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
+                {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
+              </span>
+            </div>
+            {patchBoard?.dataWireCountNeedsReview && (
+              <div className="lw-legacy-confirm" role="alert" data-testid="legacy-gpio-confirm">
+                <span>Older project — confirm each strip&apos;s GPIO looks right.</span>
+                <button type="button" className="btn"
+                        onClick={() => setPatchBoard(current => ({ ...current, dataWireCountNeedsReview: false }))}>
+                  Looks right
+                </button>
               </div>
             )}
             {selectedStrips.length > 1 && (
@@ -792,24 +1118,36 @@ export function DrawModePanel({ state }) {
               </div>
             )}
             <div ref={stripListRef} className="layers" style={{ flex: '0 0 auto', minHeight: 0, paddingBottom: 4 }}>
-              {/* List order = chain order; the row badge is the strip's chain position. */}
-              {orderedStrips.map((s, i) => {
+              {/* GPIO groups are physical data chains, ordered from the card outward. */}
+              {gpioGroups.map(({ output, strips: groupedStrips }) => (
+                <section key={output.id} className="la-gpio-group" data-testid={`gpio-group-${output.pin}`}>
+                  <div className="la-gpio-group-head">
+                    <span>GPIO {output.pin}</span>
+                    <span>first → last</span>
+                  </div>
+                  {groupedStrips.map((s, i) => {
                 const isSel = s.id === selStripId;
                 const isBatchSel = selectedStripIds.includes(s.id);
                 const isOpen = !!expandedStrips[s.id];
+                const selectedDensity = stripDensity(s.id);
+                const densityChoices = DENSITY_OPTIONS.includes(selectedDensity)
+                  ? DENSITY_OPTIONS
+                  : [...DENSITY_OPTIONS, selectedDensity].sort((a, b) => a - b);
+                const run = stripRuns.get(s.id);
+                const isSplit = splitStripIds.has(s.id);
                 return (
                   <div key={s.id} data-strip-id={s.id}>
                   <div
-                       className={`la-strip-row${isSel ? ' sel' : ''}`}
+                       className={`la-strip-row${isSel ? ' sel' : ''}${droppedStripIds.includes(s.id) ? ' is-dropped' : ''}${stripGroupDragOver === `strip:${s.id}` ? ' is-drop-target' : ''}`}
                        draggable
                        onDragStart={e => {
-                         if (!startedFromDragHandle(e)) { e.preventDefault(); return; }
                          const ids = selectedStripIds.includes(s.id) ? selectedStripIds : [s.id];
                          e.dataTransfer.effectAllowed = 'move';
                          e.dataTransfer.setData('application/x-lightweaver-strip', JSON.stringify(ids));
                          e.dataTransfer.setData('text/plain', ids.join(','));
-                         // Do NOT setState here — re-rendering the row during dragstart
-                         // cancels the native HTML5 drag. The ids ride in dataTransfer.
+                         // Preserve the native drag session, so this uses a direct class
+                         // rather than React state for the lift feedback.
+                         e.currentTarget.classList.add('is-dragging');
                        }}
                        onDragOver={e => {
                          if (!Array.from(e.dataTransfer.types).includes('application/x-lightweaver-strip')) return;
@@ -822,10 +1160,17 @@ export function DrawModePanel({ state }) {
                          if (!draggedStripIds.length) return;
                          e.preventDefault();
                          e.stopPropagation();
-                         reorderStripRows(draggedStripIds, s.id);
+                         const bounds = e.currentTarget.getBoundingClientRect();
+                         const placement = e.clientY > bounds.top + bounds.height / 2 ? 'after' : 'before';
+                         moveStripsInGpioOrder(draggedStripIds, s.id, placement);
+                         setDroppedStripIds(draggedStripIds);
+                         window.setTimeout(() => setDroppedStripIds([]), 220);
                          setStripGroupDragOver(null);
                        }}
-                       onDragEnd={() => setStripGroupDragOver(null)}
+                       onDragEnd={e => {
+                         e.currentTarget.classList.remove('is-dragging');
+                         setStripGroupDragOver(null);
+                       }}
                        style={{ opacity: hidden[s.id] ? 0.4 : 1,
                                 outline: stripGroupDragOver === `strip:${s.id}` ? '1px solid var(--accent)' : undefined,
                                 outlineOffset: -1 }}
@@ -834,7 +1179,9 @@ export function DrawModePanel({ state }) {
                          selectStrip(s.id);
                          setExpandedStrips(ex => ({ ...ex, [s.id]: !ex[s.id] }));
                        }}>
-                      <span data-drag-handle="true" className="la-wire-n" title="Drag to reorder" style={{ flexShrink: 0, cursor: 'grab', color: isBatchSel ? 'var(--accent)' : undefined }}>{String(i + 1).padStart(2, '0')}</span>
+                      <span className="la-wire-n" title="Click and drag to change wiring order" style={{ flexShrink: 0, cursor: 'grab', color: isBatchSel ? 'var(--accent)' : undefined }}>
+                        {String(i + 1).padStart(2, '0')}<DragHandleIcon/>
+                      </span>
                       <span className="layer-swatch" style={{ borderRadius: '50%', background: s.color,
                                      boxShadow: isSel ? `0 0 8px ${s.color}` : undefined }}/>
                       <InlineRename value={s.name} onCommit={n => renameStrip(s.id, n)}
@@ -844,83 +1191,138 @@ export function DrawModePanel({ state }) {
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
-                        <div className="hint">Drag on canvas to move · − / + to resize · arrow keys to nudge</div>
-                        {/* Size — uniform resize about the strip's own center.
-                            Physical-first: resizing recounts the LEDs (length ×
-                            density) unless the count was hand-pinned. */}
-                        <div className="row">
-                          <span className="k">Size</span>
-                          <div className="la-size-ctrl">
-                            <button type="button" className="btn" aria-label="Make strip smaller"
-                                    title="Shrink 10%"
-                                    onClick={() => scaleStrip(s.id, 0.9)}>−</button>
-                            <span className="la-size-readout" data-testid="strip-size-readout">
-                              {formatMetersValue(stripMeters(
-                                (Number.isFinite(s.svgLength) && s.svgLength > 0)
-                                  ? s.svgLength
-                                  : svgPathLength(s.pathData),
-                                pxPerMm))} m · {s.pixelCount} LED{s.pixelCount !== 1 ? 's' : ''}
-                            </span>
-                            <button type="button" className="btn" aria-label="Make strip bigger"
-                                    title="Grow 10%"
-                                    onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>
+                        <div className="actions" aria-label="Strip actions">
+                          <div className="la-strip-actions-left">
+                            <button className="btn" aria-label="Flip path direction" title="Flip the drawing path so pixel 0 swaps ends"
+                                    onClick={() => reverseStrip(s.id)}>↔</button>
+                            {run && (
+                              <button className="btn" aria-label={`Reverse data direction of ${s.name}`}
+                                      title={isSplit
+                                        ? 'Strip is split into multiple runs — set direction per run in Advanced wiring'
+                                        : 'Reverse which end of this strip the data cable enters'}
+                                      aria-pressed={run.physicalDirection === 'source-reverse'}
+                                      disabled={isSplit || run.directionPolicy === 'fixed'}
+                                      onClick={() => toggleRunDirection(run)}>⇄</button>
+                            )}
+                            {stripRuns.get(s.id) && (
+                              <button className={`btn${firstLedPicker?.stripId === s.id ? ' active' : ''}`}
+                                      aria-label={firstLedPicker?.stripId === s.id
+                                        ? 'Cancel first LED selection'
+                                        : 'Set first LED'}
+                                      title={firstLedPicker?.stripId === s.id
+                                        ? 'Cancel first LED selection'
+                                        : 'Choose which physical LED is first'}
+                                      onClick={() => {
+                                        if (firstLedPicker?.stripId !== s.id) onBeginFirstLedPicker(s.id);
+                                        else onCancelFirstLedPicker();
+                                      }}>◎</button>
+                            )}
+                            <button className="btn" aria-label={hidden[s.id] ? 'Show strip' : 'Hide strip'}
+                                    title={hidden[s.id] ? 'Show strip' : 'Hide strip'}
+                                    onClick={() => setHidden(h => ({ ...h, [s.id]: !h[s.id] }))}>
+                              {hidden[s.id] ? <EyeOffIcon/> : <EyeIcon/>}
+                            </button>
+                          </div>
+                          <div className="la-strip-actions-right">
+                            <button className="btn" aria-label="Duplicate strip" title="Duplicate strip"
+                                    onClick={() => duplicateStrip(s.id)}>
+                              <svg aria-hidden="true" viewBox="0 0 16 16"><rect x="5" y="2" width="8" height="9" rx="1"/><path d="M3 5v8a1 1 0 0 0 1 1h6"/></svg>
+                            </button>
+                            <button className="btn danger" aria-label="Remove strip" title="Remove strip"
+                                    onClick={() => removeStrip(s.id)}>×</button>
                           </div>
                         </div>
-                        {/* LED count — a fine-tune nudge, not a free dial: the
-                            count follows size × density; ± is for calibrating
-                            cut strips or miscounts (hand-pins the count). */}
-                        <div className="row">
-                          <span className="k">LEDs</span>
-                          <div className="lw-led-nudge">
-                            <button type="button" className="btn" aria-label="One LED fewer" title="Nudge the count down 1"
-                                    onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 1))}>−</button>
-                            <input type="number" min="1" max={LED_COUNT_MAX} step="1"
-                                   value={s.pixelCount}
-                                   aria-label="Strip LED count"
-                                   inputMode="numeric"
-                                   style={{ width: 72 }}
-                                   onFocus={e => e.target.select()}
-                                   onClick={e => e.target.select()}
-                                   onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
-                                   onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
-                                   onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
-                            <button type="button" className="btn" aria-label="One LED more" title="Nudge the count up 1"
-                                    onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 1))}>+</button>
+                        {firstLedError?.stripId === s.id && (
+                          <div className="la-gpio-error" role="alert">{firstLedError.message}</div>
+                        )}
+                        {/* Size is physical truth and recounts LEDs; LED count is
+                            a direct cut-strip correction that keeps size. */}
+                        <div className="row la-strip-physical-row">
+                          <div className="la-strip-physical-field">
+                            <span className="k">LEDs</span>
+                            <div className="la-led-count-field" role="group" aria-label="LED count tuning">
+                              <button type="button" className="btn" aria-label="One LED fewer" title="Subtract one LED without changing size"
+                                      onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount - 1))}>−</button>
+                              <input type="number" min="1" max={LED_COUNT_MAX} step="1"
+                                     value={s.pixelCount}
+                                     aria-label="Strip LED count"
+                                     inputMode="numeric"
+                                     onFocus={e => e.target.select()}
+                                     onClick={e => e.target.select()}
+                                     onChange={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                     onBlur={e => setStripCount(s.id, clampLedCount(e.target.value))}
+                                     onKeyDown={e => { if (e.key === 'Enter') setStripCount(s.id, clampLedCount(e.target.value)); }}/>
+                              <button type="button" className="btn" aria-label="One LED more" title="Add one LED without changing size"
+                                      onClick={() => setStripCount(s.id, clampLedCount(s.pixelCount + 1))}>+</button>
+                            </div>
                           </div>
-                          <button className="btn" style={{ padding: '0 6px' }}
-                                  title="I physically counted this strip's LEDs — set this count as ground truth and calibrate the overall scale to match."
-                                  onClick={() => calibrateScaleFromStrip(s.id, s.pixelCount)}>Set real count</button>
+                          <div className="la-strip-physical-field">
+                            <span className="k">Size</span>
+                            <div className="la-size-ctrl">
+                              <button type="button" className="btn" aria-label="Make strip smaller"
+                                      title="Shrink 10%"
+                                      onClick={() => scaleStrip(s.id, 0.9)}>−</button>
+                              <label className="la-size-readout" data-testid="strip-size-readout">
+                                <input type="number" min="0.001" step="0.001"
+                                       key={`${s.id}:${s.svgLength}:${pxPerMm}`}
+                                       defaultValue={formatMetersValue(stripMeters(
+                                         (Number.isFinite(s.svgLength) && s.svgLength > 0)
+                                           ? s.svgLength
+                                           : svgPathLength(s.pathData),
+                                         pxPerMm))}
+                                       aria-label="Strip length in metres"
+                                       inputMode="decimal"
+                                       onFocus={e => e.target.select()}
+                                       onBlur={e => {
+                                         const value = Number(e.target.value);
+                                         if (Number.isFinite(value) && value > 0) setStripPhysical(s.id, { lengthM: value });
+                                       }}
+                                       onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}/>
+                                <span>m</span>
+                              </label>
+                              <button type="button" className="btn" aria-label="Make strip bigger"
+                                      title="Grow 10%"
+                                      onClick={() => scaleStrip(s.id, 1 / 0.9)}>+</button>
+                            </div>
+                          </div>
                         </div>
-                        <div className="hint">Count follows size at this strip's density — nudge ± only to match the real strip.</div>
+                        <div className="row la-strip-output-row">
+                          <div className="la-gpio-wrap">
+                            <select className="la-gpio-select" aria-label="GPIO output"
+                                    value={outputForStrip(s.id)?.pin ?? 16}
+                                    onChange={event => assignStripGpio(s.id, Number(event.target.value))}>
+                              {gpioChoicesForStrip(s.id).map(({ pin, disabled }) => (
+                                <option key={pin} value={pin} disabled={disabled}>GPIO {pin}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="la-strip-density" data-testid="strip-density-control"
+                               role="group" aria-label={`${s.name} reel density`}>
+                            {densityChoices.map(d => (
+                              <button key={d} type="button"
+                                      className={`btn${selectedDensity === d ? ' is-selected' : ''}`}
+                                      aria-label={`${d} LEDs/m`}
+                                      aria-pressed={selectedDensity === d}
+                                      title={`${d} LEDs per metre`}
+                                      onClick={() => setStripPhysical(s.id, { ledsPerM: d })}>
+                                {d}/m
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {gpioError && <div className="la-gpio-error" role="alert">{gpioError}</div>}
                         {usbLedConnected && (
                           <div className="hint" style={{ color: s.pixelCount > usbLedMaxPixels ? 'var(--accent)' : 'var(--text-faint)' }}>
                             USB direct cap {usbLedMaxPixels} LEDs.
                           </div>
                         )}
-                        {/* Strip actions */}
-                        <div className="actions">
-                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
-                                  onClick={() => reverseStrip(s.id)}>
-                            ↔ Reverse
-                          </button>
-                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
-                                  onClick={() => setHidden(h => ({ ...h, [s.id]: !h[s.id] }))}>
-                            {hidden[s.id] ? 'Show' : 'Hide'}
-                          </button>
-                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
-                                  onClick={() => duplicateStrip(s.id)}>
-                            Duplicate
-                          </button>
-                          <button className="btn" style={{ flex: 1, justifyContent: 'center' }}
-                                  onClick={() => removeStrip(s.id)}>
-                            Remove
-                          </button>
-                        </div>
                       </div>
                     )}
                   </div>
                 );
-              })}
+                  })}
+                </section>
+              ))}
             </div>
           </>
         )}

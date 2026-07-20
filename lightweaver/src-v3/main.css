@@ -113,6 +113,18 @@ body {
 
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 input, select, textarea { font: inherit; color: inherit; user-select: auto; }
+
+/* Native numeric steppers do not belong in Lightweaver's calibrated controls. */
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .cm-editor, .cm-content, .cm-line, [contenteditable="true"] { user-select: text; }
 
 /* ── App shell ───────────────────────────────────────────────────── */

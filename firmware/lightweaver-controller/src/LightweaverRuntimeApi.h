@@ -1,6 +1,13 @@
 #pragma once
 
 #include <Arduino.h>
+#include "LightweaverProvisioningPolicy.h"
+
+struct FactoryResetResult {
+  bool accepted = false;
+  bool pendingVerification = false;
+  String message;
+};
 
 void runtimeSetBrightness(float value01);     // 0.02..1.0
 void runtimeSetSpeed(float speed);             // 0.25..4.0
@@ -32,7 +39,16 @@ bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternI
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
 
 void runtimeSetLedColorOrder(const String& order);
+bool runtimeCanSetLedColorOrder(const String& order);
 String runtimeGetLedColorOrder();
+bool runtimeControlTargetExists(const String& targetId);
+bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patternId);
+bool runtimeCanStepPattern(int8_t direction);
+uint8_t runtimeAffectedOutputCount(const String& targetId, bool syncZones, ProvisioningOutputScope scope);
+String runtimeAffectedOutputId(const String& targetId, bool syncZones,
+                               ProvisioningOutputScope scope, uint8_t affectedIndex);
+uint32_t runtimeAdvanceStateRevision();
+uint32_t runtimeStateRevision();
 void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();
@@ -56,8 +72,16 @@ float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
 String runtimeCardId();
+String runtimeBootId();
+const char* runtimeProvisioningPhase();
+bool runtimeCommandReady();
+bool runtimeOutputReady();
+bool runtimeConfigValid();
+bool runtimeKnownGoodProject();
+void runtimeMarkRestartPending();
 String runtimeFirmwareInfo();
-void runtimeFactoryReset();
+FactoryResetResult runtimeFactoryReset();
+bool runtimeFinalizeFactoryResetRadio(String& message);
 void runtimeResetWifi();
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
 

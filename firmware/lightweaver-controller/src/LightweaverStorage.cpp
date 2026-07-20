@@ -183,6 +183,9 @@ void resetZone(ZoneConfig& zone) {
 void resetConfig(RuntimeConfig& config) {
   config.mode = "factory-flash";
   config.source = SOURCE_DEFAULTS;
+  config.configValid = false;
+  config.knownGoodProject = false;
+  config.runtimePhase = ProvisioningPhase::Factory;
   config.pieceId = "";
   config.pieceName = "Lightweaver";
   config.projectRevision = 0;
@@ -191,9 +194,9 @@ void resetConfig(RuntimeConfig& config) {
   config.productionJobDigest = "";
   config.wiringRevision = 0;
   config.wiringDigest = "";
-  config.startupLookId = "aurora";
-  config.ledColorOrder = "RGB";
-  config.brightnessLimit = 0.65f;
+  config.startupLookId = "";
+  config.ledColorOrder = "";
+  config.brightnessLimit = 0.0f;
   resetOutputColor(config.outputColor);
   config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
@@ -394,8 +397,8 @@ bool loadJsonString(const String& json, RuntimeConfig& config, RuntimeSource sou
 }
 
 bool supportedOutputPin(int pin) {
-  return pin == 16 || pin == 17 || pin == 18 || pin == 21 ||
-         pin == 38 || pin == 39 || pin == 40 || pin == 48;
+  return pin >= 0 && pin <= UINT8_MAX &&
+         isApprovedProvisioningOutputGpio(static_cast<uint8_t>(pin));
 }
 
 bool isLowerHex(const String& value) {
@@ -472,7 +475,10 @@ bool isSafeProductionJobId(const String& value) {
   return true;
 }
 
-bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, String& message) {
+bool validateRuntimeConfigJsonStrict(const String& json,
+                                     RuntimeConfig& parsed,
+                                     String& message,
+                                     RuntimeSource source = SOURCE_NVS) {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, json);
   if (error) {
@@ -743,7 +749,7 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     }
   }
 
-  return loadJsonString(json, parsed, SOURCE_NVS, message);
+  return loadJsonString(json, parsed, source, message);
 }
 
 bool loadSdConfig(RuntimeConfig& config, String& message) {
@@ -758,45 +764,44 @@ bool loadSdConfig(RuntimeConfig& config, String& message) {
   }
   String json = profileFile.readString();
   profileFile.close();
-  return loadJsonString(json, config, SOURCE_SD, message);
+  bool valid = validateRuntimeConfigJsonStrict(json, config, message, SOURCE_SD);
+  if (valid) config.source = SOURCE_SD;
+  return valid;
 }
 
-bool loadNvsConfigKey(const char* key, RuntimeConfig& config, String& message) {
+ProvisioningStorageState readNvsString(Preferences& prefs,
+                                       const char* key,
+                                       String& value,
+                                       String& message) {
+  if (!prefs.isKey(key)) return ProvisioningStorageState::Absent;
+  if (prefs.getType(key) != PT_STR) {
+    message = String("nvs value has invalid type: ") + key;
+    return ProvisioningStorageState::Error;
+  }
+  value = prefs.getString(key, "");
+  if (!value.length()) {
+    message = String("nvs value read failed or empty: ") + key;
+    return ProvisioningStorageState::Error;
+  }
+  return ProvisioningStorageState::Present;
+}
+
+ProvisioningStorageState loadNvsConfigKeyStrict(const char* key,
+                                                RuntimeConfig& config,
+                                                bool& configParsed,
+                                                String& message) {
+  configParsed = false;
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) {
     message = "nvs unavailable";
-    return false;
+    return ProvisioningStorageState::Error;
   }
-  String json = prefs.getString(key, "");
+  String json;
+  ProvisioningStorageState state = readNvsString(prefs, key, json, message);
   prefs.end();
-  if (!json.length()) {
-    message = "nvs empty";
-    return false;
-  }
-  return loadJsonString(json, config, SOURCE_NVS, message);
-}
-
-bool loadNvsConfigKeyStrict(const char* key, RuntimeConfig& config, String& message) {
-  Preferences prefs;
-  if (!prefs.begin(NVS_NAMESPACE, true)) {
-    message = "nvs unavailable";
-    return false;
-  }
-  String json = prefs.getString(key, "");
-  prefs.end();
-  if (!json.length()) {
-    message = "nvs empty";
-    return false;
-  }
-  return validateRuntimeConfigJsonStrict(json, config, message);
-}
-
-bool nvsConfigKeyHasValue(const char* key) {
-  Preferences prefs;
-  if (!prefs.begin(NVS_NAMESPACE, true)) return false;
-  bool present = prefs.getString(key, "").length() > 0;
-  prefs.end();
-  return present;
+  if (state != ProvisioningStorageState::Present) return state;
+  configParsed = validateRuntimeConfigJsonStrict(json, config, message);
+  return ProvisioningStorageState::Present;
 }
 
 WiringCandidateState readCandidateState(Preferences& prefs) {
@@ -931,26 +936,38 @@ String makeActivationId() {
   return String(id);
 }
 
-bool migrateLegacyKnownGood(String& message) {
+ProvisioningStorageState migrateLegacyKnownGood(String& message) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) {
     message = "nvs migration open failed";
-    return false;
+    return ProvisioningStorageState::Error;
   }
-  String knownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
-  if (knownGood.length()) {
+  String knownGood;
+  ProvisioningStorageState knownGoodState =
+      readNvsString(prefs, NVS_KNOWN_GOOD_CONFIG_KEY, knownGood, message);
+  if (knownGoodState == ProvisioningStorageState::Present) {
     prefs.end();
-    return true;
+    return ProvisioningStorageState::Present;
   }
-  String legacy = prefs.getString(NVS_LEGACY_CONFIG_KEY, "");
-  if (!legacy.length()) {
+  if (knownGoodState == ProvisioningStorageState::Error) {
     prefs.end();
-    return true;
+    return ProvisioningStorageState::Error;
+  }
+  String legacy;
+  ProvisioningStorageState legacyState =
+      readNvsString(prefs, NVS_LEGACY_CONFIG_KEY, legacy, message);
+  if (legacyState == ProvisioningStorageState::Absent) {
+    prefs.end();
+    return ProvisioningStorageState::Absent;
+  }
+  if (legacyState == ProvisioningStorageState::Error) {
+    prefs.end();
+    return ProvisioningStorageState::Error;
   }
   bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy) == legacy.length();
   prefs.end();
   if (!ok) message = "known-good migration failed; legacy config preserved";
-  return ok;
+  return ok ? ProvisioningStorageState::Present : ProvisioningStorageState::Error;
 }
 
 const char* candidateStateLabel(WiringCandidateState state) {
@@ -976,57 +993,46 @@ void overlayNvsWifi(RuntimeConfig& config) {
   config.wifi.password = String(doc["password"] | config.wifi.password.c_str());
   config.wifi.hostname = String(doc["hostname"] | config.wifi.hostname.c_str());
 }
+
+void setRuntimeLoadTruth(RuntimeConfig& config,
+                         RuntimeLoadResult& result,
+                         bool configValid,
+                         bool knownGoodProject,
+                         bool corruptionDetected) {
+  ProvisioningPhase phase = provisioningPhaseForLoad(
+      configValid, knownGoodProject, corruptionDetected);
+  config.configValid = configValid;
+  config.knownGoodProject = knownGoodProject;
+  config.runtimePhase = phase;
+  result.configValid = configValid;
+  result.knownGoodProject = knownGoodProject;
+  result.runtimePhase = phase;
+}
 }
 
 void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   resetConfig(config);
   config.source = SOURCE_DEFAULTS;
   config.mode = "factory-flash";
+  config.pieceId = "";
   config.pieceName = "Lightweaver";
-  config.startupLookId = "aurora";
-  config.ledColorOrder = "RGB";
-  config.brightnessLimit = 0.65f;
-  config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
-  config.outputCount = 1;
-  config.outputs[0].id = "out1";
-  config.outputs[0].name = "Output 1";
-  config.outputs[0].pin = 16;
-  config.outputs[0].pixels = 44;
-  config.outputs[0].start = 0;
-  config.outputs[0].segmentCount = 1;
-  config.outputs[0].segments[0].id = "out1-full";
-  config.outputs[0].segments[0].count = 44;
-  config.outputs[0].segments[0].reversed = false;
-  config.outputs[0].enabled = true;
-
-  const char* ids[] = {
-    "aurora", "plasma", "fire", "ocean", "ripple", "lava",
-    "rainbow", "sparkle", "twinkle", "meteor", "chase", "scanner",
-    "breathe", "candle", "ember", "lightning", "neon", "matrix",
-    "heartbeat", "stained", "confetti", "warp", "pulse-ring", "blocks",
-    "bloom", "calm", "drift", "wave", "sunset", "warm-white"
-  };
-  const char* labels[] = {
-    "Aurora", "Plasma", "Fire", "Ocean", "Ripple", "Lava Lamp",
-    "Rainbow", "Sparkle", "Twinkle", "Meteor", "Color Chase", "Scanner",
-    "Breathe", "Candle", "Ember", "Lightning", "Neon", "Digital Rain",
-    "Heartbeat", "Stained Glass", "Confetti", "Warp Speed", "Pulse Ring", "Color Blocks",
-    "Bloom", "Calm", "Drift", "Wave", "Sunset", "Warm White"
-  };
-  for (uint8_t i = 0; i < 30; i++) {
-    config.looks[i].id = ids[i];
-    config.looks[i].label = labels[i];
-    config.looks[i].mode = String(ids[i]) == "warm-white" ? "preset" : "procedural";
-    config.looks[i].preset = ids[i];
-    config.looks[i].brightness = 0.65f;
-  }
-  config.lookCount = 30;
-
-  ensureDefaultZone(config);
+  config.projectRevision = 0;
+  config.projectFingerprint = "";
+  config.productionJobId = "";
+  config.productionJobDigest = "";
+  config.wiringRevision = 0;
+  config.wiringDigest = "";
+  config.startupLookId = "";
+  config.ledColorOrder = "";
+  config.brightnessLimit = 0.0f;
+  config.maxMilliamps = LW_FACTORY_BEACON_MAX_MILLIAMPS;
+  config.outputCount = 0;
+  config.lookCount = 0;
+  config.zoneCount = 0;
 }
 
 void ensureDefaultZone(RuntimeConfig& config) {
-  if (config.zoneCount > 0) return;
+  if (config.zoneCount > 0 || config.outputCount == 0) return;
   // Default zone: one zone "all" covering every pixel on every output.
   // This keeps single-strip cards behaving exactly as before; the multi-zone
   // capability only surfaces when someone splits or adds a second output.
@@ -1038,7 +1044,6 @@ void ensureDefaultZone(RuntimeConfig& config) {
   z.ranges[0].start = 0;
   uint16_t total = 0;
   for (uint8_t i = 0; i < config.outputCount; i++) total += config.outputs[i].pixels;
-  if (total == 0) total = 44;
   z.ranges[0].count = total;
   z.patternId = "aurora";
   z.brightness = 1.0f;
@@ -1058,48 +1063,87 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 
   // Upgrade in place: copy the legacy config before consulting candidate
   // state. The legacy key is intentionally retained as a downgrade fallback.
-  if (!migrateLegacyKnownGood(message)) {
-    result.message = message;
+  ProvisioningStorageState migrationState = migrateLegacyKnownGood(message);
+  if (provisioningStorageReadFailed(migrationState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = message + "; safe defaults loaded";
+    return result;
   }
 
   WiringCandidateState state = WIRING_CANDIDATE_NONE;
   {
     Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, true)) {
-      state = readCandidateState(prefs);
-      if (!validateCandidateMetadataForBoot(prefs, state, message)) {
-        prefs.end();
-        applyDefaultRuntimeConfig(config);
-        ensureDefaultZone(config);
-        result.ok = true;
-        result.safeMode = true;
-        result.source = SOURCE_DEFAULTS;
-        result.message = message + "; safe defaults loaded";
-        return result;
-      }
-      prefs.end();
+    if (!prefs.begin(NVS_NAMESPACE, true)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "nvs candidate state read failed; safe defaults loaded";
+      return result;
     }
+    state = readCandidateState(prefs);
+    if (!validateCandidateMetadataForBoot(prefs, state, message)) {
+      prefs.end();
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = message + "; safe defaults loaded";
+      return result;
+    }
+    prefs.end();
   }
 
   if (state == WIRING_CANDIDATE_NONE) {
     Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, false)) {
-      bool cleaned = finalizeCommittedPromotion(prefs);
-      prefs.end();
-      if (!cleaned) {
-        applyDefaultRuntimeConfig(config);
-        ensureDefaultZone(config);
-        result.ok = true;
-        result.safeMode = true;
-        result.source = SOURCE_DEFAULTS;
-        result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
-        return result;
-      }
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "nvs committed cleanup open failed; safe defaults loaded";
+      return result;
+    }
+    bool cleaned = finalizeCommittedPromotion(prefs);
+    prefs.end();
+    if (!cleaned) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
+      return result;
     }
   }
 
   if (state == WIRING_CANDIDATE_BOOTING) {
-    if (loadNvsConfigKeyStrict(NVS_CANDIDATE_CONFIG_KEY, config, message)) {
+    bool candidateValid = false;
+    ProvisioningStorageState candidateState = loadNvsConfigKeyStrict(
+        NVS_CANDIDATE_CONFIG_KEY, config, candidateValid, message);
+    if (provisioningStorageReadFailed(candidateState)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = message + "; safe defaults loaded";
+      return result;
+    }
+    if (candidateState == ProvisioningStorageState::Present && candidateValid) {
       Preferences prefs;
       bool marked = prefs.begin(NVS_NAMESPACE, false) &&
                     writeCandidateState(prefs, WIRING_CANDIDATE_AWAITING_CONFIRMATION);
@@ -1110,6 +1154,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
         result.ok = true;
         result.source = SOURCE_NVS;
         result.bootedCandidate = true;
+        setRuntimeLoadTruth(config, result, true, false, false);
         result.message = "candidate loaded for wiring probation";
         return result;
       }
@@ -1123,6 +1168,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       result.ok = true;
       result.safeMode = true;
       result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
       result.message = "candidate rollback failed; safe defaults loaded: " + rollbackMessage;
       return result;
     }
@@ -1136,22 +1182,36 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       result.ok = true;
       result.safeMode = true;
       result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
       result.message = "candidate rollback failed; safe defaults loaded: " + message;
       return result;
     }
   }
 
-  bool knownGoodPresent = nvsConfigKeyHasValue(NVS_KNOWN_GOOD_CONFIG_KEY);
-  if (loadNvsConfigKeyStrict(NVS_KNOWN_GOOD_CONFIG_KEY, config, message)) {
+  bool knownGoodValid = false;
+  ProvisioningStorageState knownGoodState = loadNvsConfigKeyStrict(
+      NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message);
+  if (provisioningStorageReadFailed(knownGoodState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = message + "; safe defaults loaded";
+    return result;
+  }
+  if (knownGoodState == ProvisioningStorageState::Present && knownGoodValid) {
     overlayNvsWifi(config);
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_NVS;
+    setRuntimeLoadTruth(config, result, true, true, false);
     result.message = "known-good config loaded";
     return result;
   }
 
-  if (knownGoodPresent) {
+  if (knownGoodState == ProvisioningStorageState::Present) {
     // A present-but-invalid canonical slot is corruption, not absence. Do not
     // silently boot SD or reconnect using saved WiFi: use compiled-safe wiring
     // and the setup AP so recovery remains local and deterministic.
@@ -1160,7 +1220,19 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     result.ok = true;
     result.safeMode = true;
     result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
     result.message = String("malformed known-good; safe defaults loaded: ") + message;
+    return result;
+  }
+
+  if (!provisioningMayFallBackToSd(migrationState, knownGoodState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = "known-good storage changed during boot; safe defaults loaded";
     return result;
   }
 
@@ -1169,7 +1241,9 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_SD;
-    result.message = message;
+    bool sdKnownGood = provisioningSdProjectKnownGood(true, false);
+    setRuntimeLoadTruth(config, result, true, sdKnownGood, false);
+    result.message = "strict SD project loaded without persisted identity acceptance";
     return result;
   }
   applyDefaultRuntimeConfig(config);
@@ -1177,6 +1251,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   ensureDefaultZone(config);
   result.ok = true;
   result.source = SOURCE_DEFAULTS;
+  setRuntimeLoadTruth(config, result, false, false, false);
   result.message = "compiled defaults loaded";
   return result;
 }
@@ -1254,6 +1329,9 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.activeTransport = preservedTransport;
   config.activeIp = preservedIp;
   config.activeHostname = preservedHostname;
+  config.configValid = true;
+  config.knownGoodProject = true;
+  config.runtimePhase = ProvisioningPhase::Ready;
   message = "saved to internal flash";
   return true;
 }
@@ -1413,8 +1491,10 @@ WiringSafetyStatus getRuntimeWiringSafetyStatus() {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) return status;
   status.candidateState = readCandidateState(prefs);
-  status.hasKnownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "").length() > 0;
-  status.hasCandidate = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "").length() > 0;
+  status.hasKnownGood = prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) &&
+                        prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "").length() > 0;
+  status.hasCandidate = prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) &&
+                        prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "").length() > 0;
   if (status.hasCandidate) status.activationId = prefs.getString(NVS_CANDIDATE_ID_KEY, "");
   status.bootedCandidate = status.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
   status.discoveryActive = prefs.getBool(NVS_DISCOVERY_ACTIVE_KEY, false);
@@ -1604,12 +1684,21 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
 
 String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint16_t totalPixels, uint8_t currentLookIndex) {
   JsonDocument doc;
+  doc["app"] = "Lightweaver";
   char cardId[16] = {};
   snprintf(cardId, sizeof(cardId), "lw-%012llx",
            static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
   doc["cardId"] = cardId;
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
+  doc["bootId"] = runtimeBootId();
+  doc["uptimeMs"] = millis();
+  doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
+  doc["runtimePhase"] = runtimeProvisioningPhase();
+  doc["commandReady"] = runtimeCommandReady();
+  doc["outputReady"] = runtimeOutputReady();
+  doc["configValid"] = config.configValid;
+  doc["knownGoodProject"] = config.knownGoodProject;
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["ok"] = errorCode == ERROR_NONE;
@@ -1618,6 +1707,10 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["source"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["runtimeSource"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
+  doc["projectRevision"] = config.projectRevision;
+  doc["projectFingerprint"] = config.projectFingerprint;
+  doc["productionJobId"] = config.productionJobId;
+  doc["productionJobDigest"] = config.productionJobDigest;
   uint32_t remainingProbationMs = runtimeWiringProbationRemainingMs();
   doc["wiringProbation"]["active"] = remainingProbationMs > 0;
   doc["wiringProbation"]["remainingMs"] = remainingProbationMs;

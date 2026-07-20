@@ -12,6 +12,7 @@ import {
   readPersistedCardIdentity,
   requireExpectedCardIdentity,
 } from './cardIdentity.js';
+import { classifyCardReadiness } from './cardReadiness.js';
 
 // Message types that command the hardware (write state, push config, reboot,
 // repair the LED output, stream live frames). These require a card origin we've
@@ -438,6 +439,10 @@ export function getCardBridgeState() {
     discoveredCard: bridgeDiscoveredCard,
     identityError: bridgeIdentityError,
     identityVerified,
+    // Monotonic target generation. A card-page reload can keep the same
+    // WindowProxy, host, and card identity, so consumers need this to revoke
+    // readiness evidence from the previous page lifecycle.
+    lifecycle: bridgeLifecycle,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
@@ -456,8 +461,32 @@ function requireDiscoveredBridgeCard(rawHost = bridgeHost) {
   return bridgeDiscoveredCard;
 }
 
-export function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+async function reverifyDiscoveredBridgeCard(rawHost = bridgeHost) {
   const identity = requireDiscoveredBridgeCard(rawHost);
+  const host = normalizeCardHost(rawHost || bridgeHost);
+  const lifecycle = bridgeLifecycle;
+  const status = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+    host,
+    retryOnTimeout: false,
+  });
+  const readiness = classifyCardReadiness(status || {}, { expectedCard: identity });
+  if (readiness.state === 'checking' || readiness.state === 'identity-mismatch') {
+    throw bridgeError(
+      'Studio could not reverify the full card status before pairing it.',
+      readiness.reason === 'unexpected-card' ? 'wrong-card'
+        : readiness.reason === 'unexpected-firmware-version' ? 'wrong-firmware-version'
+          : readiness.reason === 'unexpected-firmware-build' ? 'wrong-firmware-build'
+            : 'identity-missing',
+    );
+  }
+  if (bridgeLifecycle !== lifecycle || normalizeCardHost(bridgeHost) !== host || bridgeDiscoveredCard?.id !== identity.id) {
+    throw bridgeError('The card page changed while Studio was pairing it.', 'stale-host');
+  }
+  return identity;
+}
+
+export async function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = await reverifyDiscoveredBridgeCard(rawHost);
   const expected = readPersistedCardIdentity();
   if (expected?.id) {
     const comparison = compareCardIdentity(expected, identity);
@@ -474,8 +503,8 @@ export function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
   return identity;
 }
 
-export function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
-  const identity = requireDiscoveredBridgeCard(rawHost);
+export async function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
+  const identity = await reverifyDiscoveredBridgeCard(rawHost);
   if (!adoptExpectedCardIdentity(identity)) {
     throw bridgeError('Could not replace the paired Lightweaver identity.', 'identity-storage');
   }

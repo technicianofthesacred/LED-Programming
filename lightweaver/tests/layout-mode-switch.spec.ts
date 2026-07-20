@@ -1,9 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// Phase 2 step 6 (docs/layout-redesign-plan.md) — the Draw | Size | Wire mode
-// switch + hash sync + cancelActiveTool. Draw mode renders the existing side
-// panel verbatim; Size renders the real Size panel (step 8); Wire renders the
-// real Wire panel (step 9), so the old `layout-wire-stub` is gone.
+// Draw | Wire mode switch + hash sync + cancelActiveTool.
 
 async function gotoLayout(page: any, hash = '#screen=layout') {
   await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
@@ -11,37 +8,46 @@ async function gotoLayout(page: any, hash = '#screen=layout') {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
-test('keyboard 1/2/3 update the hash mode param and the active segment', async ({ page }) => {
+test('keyboard 1/2 update the hash mode param and the active segment', async ({ page }) => {
   await gotoLayout(page);
 
   await expect(page.getByTestId('layout-mode-switch')).toBeVisible();
+  await expect(page.getByTestId('layout-mode-draw')).toHaveText('Wire');
+  await expect(page.getByTestId('layout-mode-wire')).toHaveText('Test & Install');
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'false');
-
   await page.keyboard.press('2');
-  await expect(page).toHaveURL(/mode=size/);
-  await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-mode-draw')).not.toHaveClass(/on/);
-  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
-
-  await page.keyboard.press('3');
   await expect(page).toHaveURL(/mode=wire/);
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
+  await expect(page.getByTestId('layout-mode-draw')).not.toHaveClass(/on/);
   await expect(page.getByTestId('layout-mode-wire')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('layout-mode-size')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
 
   await page.keyboard.press('1');
   await expect(page).toHaveURL(/mode=draw/);
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-size-panel')).toHaveCount(0);
   await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 });
 
-test('the three equal mode tabs live at the top of the inspector and tint each section', async ({ page }) => {
+test('Test & Install keeps card hardware advanced and Size is not a layout mode', async ({ page }) => {
+  await gotoLayout(page);
+  await expect(page.getByTestId('layout-mode-size')).toHaveCount(0);
+
+  await page.getByTestId('layout-mode-wire').click();
+  const advanced = page.getByTestId('advanced-installation-tools');
+  await expect(advanced).toHaveJSProperty('open', false);
+  await advanced.locator('summary').first().click();
+  // The supply inputs live behind the nested Card hardware disclosure.
+  const power = page.getByTestId('wire-power-section');
+  await expect(power).toBeVisible();
+  await expect(power).toHaveJSProperty('open', false);
+  await power.locator('summary').click();
+  await expect(page.getByLabel('Power supply amps')).toBeVisible();
+  await expect(page.getByLabel('Milliamps per LED')).toBeVisible();
+});
+
+test('the two equal mode tabs live at the top of the inspector', async ({ page }) => {
   await gotoLayout(page);
 
   const inspector = page.locator('.la > .side');
@@ -53,14 +59,24 @@ test('the three equal mode tabs live at the top of the inspector and tint each s
     buttons.map(button => Math.round(button.getBoundingClientRect().width)));
   expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
 
-  const tintFor = async (mode: 'draw' | 'size' | 'wire') => {
+  const tintFor = async (mode: 'draw' | 'wire') => {
     await page.getByTestId(`layout-mode-${mode}`).click();
     return inspector.locator('.la-mode-content').evaluate(element => getComputedStyle(element).backgroundImage);
   };
   const drawTint = await tintFor('draw');
-  const sizeTint = await tintFor('size');
   const wireTint = await tintFor('wire');
-  expect(new Set([drawTint, sizeTint, wireTint]).size).toBe(3);
+  expect(wireTint).toBe(drawTint);
+});
+
+test('both active mode tabs use the existing orange accent', async ({ page }) => {
+  await gotoLayout(page);
+
+  const activeBackground = (mode: 'draw' | 'wire') =>
+    page.getByTestId(`layout-mode-${mode}`).evaluate(element => getComputedStyle(element).backgroundColor);
+
+  const wireSetupAccent = await activeBackground('draw');
+  await page.getByTestId('layout-mode-wire').click();
+  await expect.poll(() => activeBackground('wire')).toBe(wireSetupAccent);
 });
 
 test('reloading with #screen=layout&mode=wire opens directly in Wire mode', async ({ page }) => {
@@ -68,11 +84,11 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
 
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
-  await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
+  // Unverified wiring lands on the single LED-check CTA.
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
 });
 
-test('switching modes and activating Wire tools suspend the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
+test('switching modes and activating the split tool suspend the in-progress strip until Wire resumes or Cancel clears it', async ({ page }) => {
   await gotoLayout(page);
 
   const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
@@ -90,8 +106,7 @@ test('switching modes and activating Wire tools suspend the in-progress strip un
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
   await page.keyboard.press('2');
-  await expect(page.getByTestId('layout-mode-size')).toHaveClass(/on/);
-  await expect(page.getByTestId('layout-size-panel')).toBeVisible();
+  await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
   await expect(page.locator('.la-draw-hint')).toHaveCount(0);
 
   await page.keyboard.press('1');
@@ -102,13 +117,9 @@ test('switching modes and activating Wire tools suspend the in-progress strip un
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
   await page.getByTestId('layout-mode-wire').click();
-  await page.getByTitle('Split one physical strip where the wire jumps to a new spot.').click();
-  await page.getByTestId('layout-mode-draw').click();
-  await drawBtn.click();
-  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
-
-  await page.getByTestId('layout-mode-wire').click();
-  await page.getByTitle('Join two strips into one continuous run.').click();
+  await page.getByText('Advanced installation tools', { exact: true }).click();
+  await page.getByText('Custom mapping', { exact: true }).click();
+  await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
   await page.getByTestId('layout-mode-draw').click();
   await drawBtn.click();
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');

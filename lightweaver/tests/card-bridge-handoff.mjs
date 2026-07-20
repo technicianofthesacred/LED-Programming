@@ -76,8 +76,15 @@ const parentBridge = {
           id: message.id,
           ok: true,
           response: message.type === 'firmware-info'
-            ? { cardId: firmwareCardId, firmwareVersion: '1.0.0' }
-            : { ok: true, fromParentBridge: true },
+            ? { cardId: firmwareCardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) }
+            : message.type === 'status'
+              ? {
+                  app: 'Lightweaver', provisioningContractVersion: 1,
+                  cardId: firmwareCardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+                  bootId: 'boot-handoff', runtimePhase: 'ready', knownGoodProject: true,
+                  commandReady: true, outputReady: true, fromParentBridge: true,
+                }
+              : { ok: true, fromParentBridge: true },
         },
       });
     };
@@ -178,8 +185,8 @@ await assert.rejects(
   error => error?.reason === 'identity-missing',
 );
 assert.equal(messages.length, messagesBeforeReloadControl, 'reload lock sends no privileged command');
-assert.throws(() => adoptDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
-assert.throws(() => rePairDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+await assert.rejects(adoptDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
+await assert.rejects(rePairDiscoveredCardBridgeIdentity('192.168.18.70'), error => error?.reason === 'identity-missing');
 assert.equal(typeof releaseFirmwareResponse, 'function', 'fresh identity response is delayed by the regression harness');
 delayFirmwareResponse = false;
 releaseFirmwareResponse();
