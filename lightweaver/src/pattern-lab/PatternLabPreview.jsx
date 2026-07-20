@@ -1,6 +1,12 @@
+import { useMemo } from 'react';
+import {
+  PATTERN_LAB_WORKER_BUDGETS,
+  quantizePatternLabWorkerTime,
+} from '../lib/patternLabWorkerProtocol.js';
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { sampleEvolution } from '../lib/patternLabEvolution.js';
 import { PatternPreview } from '../v3/PatternPreview.jsx';
+import usePatternLabWorker from './usePatternLabWorker.js';
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -8,6 +14,29 @@ function clamp(value, minimum, maximum) {
 
 function mix(from, to, amount) {
   return from + (to - from) * amount;
+}
+
+function workerColorLookup(frame) {
+  if (!frame?.colors?.length || !frame?.indices?.length) return null;
+  const { colors, indices } = frame;
+  return index => {
+    let low = 0;
+    let high = indices.length - 1;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (indices[middle] < index) low = middle + 1;
+      else high = middle;
+    }
+    let selected = low;
+    if (selected > 0 && Math.abs(indices[selected - 1] - index) <= Math.abs(indices[selected] - index)) {
+      selected -= 1;
+    }
+    return {
+      r: colors[selected * 3],
+      g: colors[selected * 3 + 1],
+      b: colors[selected * 3 + 2],
+    };
+  };
 }
 
 export default function PatternLabPreview({
@@ -59,36 +88,75 @@ export default function PatternLabPreview({
     destinations?.texture ?? macros.texture.crispness,
     evolutionMix,
   );
+  const workerMode = playing ? 'preview' : 'final';
+  const workerTime = quantizePatternLabWorkerTime(renderTime, workerMode);
+  const renderOptions = useMemo(() => ({
+    masterSpeed: speed,
+    masterBrightness: brightness,
+    masterSaturation: saturation,
+    masterHueShift: hueShift,
+  }), [brightness, hueShift, saturation, speed]);
+  const worker = usePatternLabWorker({
+    recipe: evolutionRecipe,
+    geometry,
+    time: workerTime,
+    mode: workerMode,
+    renderOptions,
+    enabled: !thumbnail,
+  });
+  const workerFunction = useMemo(() => workerColorLookup(worker.frame), [worker.frame]);
+  const displayGeometry = useMemo(() => {
+    if (!workerFunction) return geometry;
+    return {
+      ...geometry,
+      strips: geometry.strips.map(strip => ({
+        ...strip,
+        patternId: null,
+        speed: 1,
+        brightness: 1,
+        hueShift: 0,
+      })),
+    };
+  }, [geometry, workerFunction]);
+  const workerSampleLimit = workerMode === 'preview'
+    ? PATTERN_LAB_WORKER_BUDGETS.previewSamples
+    : PATTERN_LAB_WORKER_BUDGETS.finalSamples;
 
   return (
     <div
       className={`plab-mapped-preview${thumbnail ? ' plab-mapped-preview-thumbnail' : ''}`}
       data-testid={thumbnail ? 'pattern-lab-variation-preview' : 'pattern-lab-mapped-preview'}
       aria-hidden={thumbnail ? 'true' : undefined}
+      data-worker-available={thumbnail ? 'false' : String(worker.available)}
+      data-worker-state={thumbnail ? 'static' : worker.status}
+      data-worker-request-id={worker.requestId ?? undefined}
+      data-worker-frame-id={worker.frameRequestId ?? undefined}
+      data-worker-sample-limit={workerSampleLimit}
     >
       <PatternPreview
         patternId={patternId}
         playing={playing}
         controlledTime={renderTime}
+        compiledFn={workerFunction}
         params={recipe.base.params}
         palette={recipe.palette}
-        strips={geometry.strips}
-        viewBox={geometry.viewBox}
-        svgText={geometry.svgText}
-        hidden={geometry.hidden}
-        bpm={geometry.bpm}
-        masterSpeed={speed}
-        masterBrightness={brightness}
-        masterSaturation={saturation}
-        masterHueShift={hueShift}
-        gammaEnabled={geometry.gammaEnabled}
-        gammaValue={geometry.gammaValue}
-        symSettings={geometry.symSettings}
-        audioBands={geometry.audioBands}
+        strips={displayGeometry.strips}
+        viewBox={displayGeometry.viewBox}
+        svgText={displayGeometry.svgText}
+        hidden={displayGeometry.hidden}
+        bpm={displayGeometry.bpm}
+        masterSpeed={workerFunction ? 1 : speed}
+        masterBrightness={workerFunction ? 1 : brightness}
+        masterSaturation={workerFunction ? 1 : saturation}
+        masterHueShift={workerFunction ? 0 : hueShift}
+        gammaEnabled={workerFunction ? false : displayGeometry.gammaEnabled}
+        gammaValue={displayGeometry.gammaValue}
+        symSettings={workerFunction ? null : displayGeometry.symSettings}
+        audioBands={workerFunction ? null : displayGeometry.audioBands}
         motionSmoothing={thumbnail ? 'off' : geometry.motionSmoothing}
         glow={clamp(1.4 - texture * 0.72, 0.5, 1.4)}
         dotSize={clamp(3.25 - shapeScale * 0.5 + texture * 0.18, 1.5, 3.3)}
-        targetFps={thumbnail ? 8 : 30}
+        targetFps={thumbnail ? 8 : PATTERN_LAB_WORKER_BUDGETS.previewFps}
       />
     </div>
   );
