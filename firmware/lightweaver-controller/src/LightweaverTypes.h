@@ -5,6 +5,7 @@
 #include <SD.h>
 
 #include "LightweaverOutputColorConfig.h"
+#include "LightweaverRecipe.h"
 #include "LightweaverProvisioningPolicy.h"
 #include "LightweaverConnectivityPolicy.h"
 
@@ -160,6 +161,8 @@ struct LookConfig {
   LookZoneConfig zones[LW_MAX_ZONES];
   uint8_t zoneCount = 0;
   bool hasZoneLooks = false;
+  bool hasNativeRecipe = false;
+  lightweaver::NativeRecipe nativeRecipe;
 };
 
 struct WifiConfig {

@@ -1,6 +1,7 @@
 #include "LightweaverStorage.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverOutputColorParser.h"
+#include "LightweaverRecipe.h"
 #include <new>
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
@@ -151,6 +152,20 @@ void resetLook(LookConfig& look) {
   for (uint8_t i = 0; i < LW_MAX_ZONES; i++) resetLookZone(look.zones[i]);
   look.zoneCount = 0;
   look.hasZoneLooks = false;
+  look.hasNativeRecipe = false;
+  look.nativeRecipe = lightweaver::NativeRecipe{};
+}
+
+void synchronizeNativeRecipes(const RuntimeConfig& config) {
+  lightweaver::clearNativeRecipes();
+  for (uint8_t index = 0; index < config.lookCount; index++) {
+    const LookConfig& look = config.looks[index];
+    if (!look.hasNativeRecipe) continue;
+    lightweaver::registerNativeRecipe(look.id.c_str(), look.nativeRecipe);
+    if (look.preset.length() && look.preset != look.id) {
+      lightweaver::registerNativeRecipe(look.preset.c_str(), look.nativeRecipe);
+    }
+  }
 }
 
 void resetWifi(WifiConfig& wifi) {
@@ -306,6 +321,17 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
     look.fadeOutMs = lookJson["fadeOutMs"] | 320;
     look.fadeInMs = lookJson["fadeInMs"] | 420;
     look.brightness = clampUnit(lookJson["brightness"] | 0.65f);
+    JsonVariantConst recipeValue = lookJson["nativeRecipe"];
+    if (recipeValue.isNull()) recipeValue = lookJson["recipe"];
+    if (!recipeValue.isNull()) {
+      lightweaver::RecipeParseError recipeError;
+      if (lightweaver::parseNativeRecipeV1(
+              recipeValue, measureJson(recipeValue), look.nativeRecipe, recipeError)) {
+        look.hasNativeRecipe = true;
+        look.mode = "procedural";
+        look.preset = look.id;
+      }
+    }
     JsonArray lookZones = lookJson["zones"].as<JsonArray>();
     if (!lookZones.isNull()) {
       for (JsonVariant lookZoneValue : lookZones) {
@@ -684,6 +710,18 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     }
     lookIds[lookCount++] = id;
     (void)preset;
+    JsonVariantConst recipeValue = look["nativeRecipe"];
+    if (recipeValue.isNull()) recipeValue = look["recipe"];
+    if (!recipeValue.isNull()) {
+      lightweaver::NativeRecipe nativeRecipe;
+      lightweaver::RecipeParseError recipeError;
+      if (!lightweaver::parseNativeRecipeV1(
+              recipeValue, measureJson(recipeValue), nativeRecipe, recipeError)) {
+        message = String(recipeError.path ? recipeError.path : "recipe") + " " +
+                  (recipeError.message ? recipeError.message : "is invalid");
+        return false;
+      }
+    }
   }
   String startup = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
   bool startupFound = false;
@@ -1059,6 +1097,10 @@ void ensureDefaultZone(RuntimeConfig& config) {
 }
 
 RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
+  struct ActiveRecipeSyncGuard {
+    RuntimeConfig& config;
+    ~ActiveRecipeSyncGuard() { synchronizeNativeRecipes(config); }
+  } recipeSync{config};
   String message;
   RuntimeLoadResult result;
 
@@ -1335,6 +1377,7 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.configValid = true;
   config.knownGoodProject = true;
   config.runtimePhase = ProvisioningPhase::Ready;
+  synchronizeNativeRecipes(config);
   message = "saved to internal flash";
   return true;
 }
@@ -1753,6 +1796,8 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["limits"]["zones"] = LW_MAX_ZONES;
   doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
   doc["limits"]["configStorageBytes"] = NVS_STRING_LIMIT;
+  lightweaver::writeNativeRecipeCapabilities(
+      doc["recipeCapabilities"].to<JsonObject>(), LW_FIRMWARE_VERSION, LW_BUILD_ID);
   doc["piece"]["name"] = config.pieceName;
   doc["led"]["pixels"] = totalPixels;
   doc["led"]["colorOrder"] = config.ledColorOrder;
