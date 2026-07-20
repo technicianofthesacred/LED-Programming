@@ -14,5 +14,10 @@ assert.ok(image.includes(Buffer.from(manifest.buildId)), 'factory image must con
 assert.match(platformio, /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/);
 assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.sha \}\}/);
 assert.match(workflow, /--build-id "\$\{GITHUB_SHA\}"/);
+assert.match(
+  workflow,
+  /'firmware\/lightweaver-controller\/scripts\/\*\*'/,
+  'every firmware build middleware change must trigger a fresh signed release',
+);
 
 console.log('release-build-identity tests passed');
