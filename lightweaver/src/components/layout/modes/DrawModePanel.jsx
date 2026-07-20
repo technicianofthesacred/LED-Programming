@@ -244,31 +244,41 @@ export function DrawModePanel({
   useEffect(() => {
     if (wiring.locked) return;
     const stripIds = new Set(strips.map(strip => strip.id));
-    const staleRunIds = new Set(wiring.runs
-      .filter(run => run.type === 'strip' && !stripIds.has(run.source?.stripId))
-      .map(run => run.id));
-    const coveredStripIds = new Set(wiring.runs
-      .filter(run => run.type === 'strip' && stripIds.has(run.source?.stripId))
-      .map(run => run.source.stripId));
+    const validStripRuns = wiring.runs.filter(run => run.type === 'strip' && stripIds.has(run.source?.stripId));
+    const staleRunIds = new Set(wiring.runs.filter(run => run.type === 'strip' && !stripIds.has(run.source?.stripId)).map(run => run.id));
+    const referencedRunIds = new Set(wiring.outputs.flatMap(output => output.runIds));
+    const orphanedStripRuns = validStripRuns.filter(run => !referencedRunIds.has(run.id));
+    const coveredStripIds = new Set(validStripRuns.map(run => run.source.stripId));
     const missingStrips = strips.filter(strip => !coveredStripIds.has(strip.id));
-    if (!staleRunIds.size && !missingStrips.length) return;
+    const knownRunIds = new Set(wiring.runs.map(run => run.id));
+    const hasStaleReferences = wiring.outputs.some(output => output.runIds.some(runId => !knownRunIds.has(runId) || staleRunIds.has(runId)));
+    if (wiring.outputs.length && !staleRunIds.size && !orphanedStripRuns.length && !missingStrips.length && !hasStaleReferences) return;
 
     updateWiring(draft => {
       draft.runs = draft.runs.filter(run => !staleRunIds.has(run.id));
+      const retainedRunIds = new Set(draft.runs.map(run => run.id));
       draft.outputs.forEach(output => {
-        output.runIds = output.runIds.filter(runId => !staleRunIds.has(runId));
+        output.runIds = output.runIds.filter(runId => retainedRunIds.has(runId));
       });
       if (!draft.outputs.length) draft.outputs.push({ id: 'out1', name: 'Output 1', pin: 16, runIds: [] });
+      const primary = draft.outputs[0];
+      const assignedRunIds = new Set(draft.outputs.flatMap(output => output.runIds));
+      for (const run of orphanedStripRuns) {
+        if (!retainedRunIds.has(run.id) || assignedRunIds.has(run.id)) continue;
+        primary.runIds.push(run.id);
+        assignedRunIds.add(run.id);
+      }
       for (const strip of missingStrips) {
+        if (draft.runs.some(run => run.type === 'strip' && run.source?.stripId === strip.id)) continue;
         const run = makeRunForStrip(strip);
         const baseId = run.id;
         let suffix = 2;
         while (draft.runs.some(item => item.id === run.id)) run.id = `${baseId}-${suffix++}`;
         draft.runs.push(run);
-        draft.outputs[0].runIds.push(run.id);
+        primary.runIds.push(run.id);
       }
     }, { changeKind: 'geometry' });
-  }, [strips, updateWiring, wiring.locked, wiring.runs]);
+  }, [strips, updateWiring, wiring.locked, wiring.runs, wiring.outputs]);
 
   const ensureRunsForAllStrips = draft => {
     const known = new Set(draft.runs.filter(run => run.type === 'strip').map(run => run.source?.stripId));

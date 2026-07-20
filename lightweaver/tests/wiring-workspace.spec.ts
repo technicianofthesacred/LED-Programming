@@ -323,6 +323,34 @@ test('Test & Install reports a missing run without repairing it; Wire owns recon
   expect(repaired.layout.wiring.outputs[0].runIds).toContain(repairedRun.id);
 });
 
+test('Wire reattaches an orphaned strip run without duplicating it or looping back from Test & Install', async ({ page }) => {
+  await seedDefaultCircles(page, { mode: 'draw' });
+  const project = await saveProject(page);
+  const orphanRun = project.layout.wiring.runs.find((run: any) => run.type === 'strip' && run.source.stripId === 'default-inner-circle');
+  project.layout.wiring.outputs.forEach((output: any) => {
+    output.runIds = output.runIds.filter((runId: string) => runId !== orphanRun.id);
+  });
+  if (project.layout.patchBoard) project.layout.patchBoard.dataWireCountNeedsReview = false;
+  const orphanedWiring = structuredClone(project.layout.wiring);
+  await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
+  await page.goto('/?fixture=orphan-run#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Finish the setup in Wire' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit in Wire' })).toBeVisible();
+  expect((await saveProject(page)).layout.wiring).toEqual(orphanedWiring);
+
+  await page.getByRole('button', { name: 'Edit in Wire' }).click();
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  const repaired = await saveProject(page);
+  const matchingRuns = repaired.layout.wiring.runs.filter((run: any) => run.type === 'strip' && run.source.stripId === 'default-inner-circle');
+  expect(matchingRuns).toHaveLength(1);
+  expect(matchingRuns[0].id).toBe(orphanRun.id);
+  expect(repaired.layout.wiring.outputs[0].runIds).toContain(orphanRun.id);
+
+  await page.getByTestId('layout-mode-wire').click();
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit in Wire' })).toHaveCount(0);
+});
+
 test('physical LED check requires the visibility acknowledgement before the chase starts', async ({ page }) => {
   await installFrameCard(page);
   await gotoWire(page);
