@@ -6,6 +6,7 @@ export default function PatternLabVariants({
   variantSeeds,
   geometry,
   previewTime,
+  renderPreviews = true,
   comparison,
   seedLocked,
   onComparison,
@@ -47,12 +48,13 @@ export default function PatternLabVariants({
             aria-pressed={recipe?.seed === seed}
             onClick={() => onSelectSeed(seed)}
           >
-            {recipe && geometry && (
+            {renderPreviews && recipe && geometry && (
               <PatternLabPreview
                 recipe={{ ...recipe, seed }}
                 previewTime={previewTime}
                 geometry={geometry}
                 thumbnail
+                seedPreview
               />
             )}
             <span>Variation {index + 1}</span>

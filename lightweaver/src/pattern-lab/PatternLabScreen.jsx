@@ -179,6 +179,8 @@ export default function PatternLabScreen() {
   const mobileDrawer = useMobileDrawer();
   const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
   const previewDuration = draft?.evolution?.durationSeconds ?? 600;
+  const seedPreviewSelected = comparison === 'draft'
+    && Boolean(draft && sourceRecipe && !draft.evolution.enabled && draft.seed !== sourceRecipe.seed);
 
   useEffect(() => {
     const state = readPatternLabDraftState();
@@ -400,7 +402,7 @@ export default function PatternLabScreen() {
   return (
     <main className="screen plab-screen" data-testid="pattern-lab-screen">
       <div className="plab-scroll">
-        <header className="plab-header">
+        <header className="plab-header" inert={mobileDrawer && drawerOpen ? '' : undefined}>
           <div>
             <span className="plab-kicker">Separate creative workspace</span>
             <h1>Pattern Lab</h1>
@@ -412,7 +414,7 @@ export default function PatternLabScreen() {
           </div>
         </header>
 
-        <ol className="plab-workflow" aria-label="Pattern Lab workflow">
+        <ol className="plab-workflow" aria-label="Pattern Lab workflow" inert={mobileDrawer && drawerOpen ? '' : undefined}>
           {WORKFLOW.map(([number, title, description], index) => (
             <li key={title} className={index === 0 ? 'current' : ''} aria-current={index === 0 ? 'step' : undefined}>
               <span className="plab-step-number">{number}</span>
@@ -422,7 +424,7 @@ export default function PatternLabScreen() {
         </ol>
 
         <section className="plab-workspace" aria-label="Pattern authoring workspace">
-          <div className="plab-preview">
+          <div className="plab-preview" inert={mobileDrawer && drawerOpen ? '' : undefined}>
             <div className="plab-preview-bar">
               <span>{previewRecipe ? <strong data-testid="pattern-lab-draft-name">{previewRecipe.name}</strong> : 'Artwork preview'}</span>
               <div className="plab-preview-meta">
@@ -441,7 +443,13 @@ export default function PatternLabScreen() {
             </div>
             <div className="plab-stage">
               {previewRecipe ? (
-                <PatternLabPreview recipe={previewRecipe} previewTime={previewTime} playing={playing} geometry={geometry} />
+                <PatternLabPreview
+                  recipe={previewRecipe}
+                  previewTime={previewTime}
+                  playing={playing}
+                  geometry={geometry}
+                  seedPreview={seedPreviewSelected}
+                />
               ) : (
                 <>
                   <SculpturePlaceholder />
@@ -505,6 +513,7 @@ export default function PatternLabScreen() {
               variantSeeds={variantSeeds}
               geometry={geometry}
               previewTime={previewTime}
+              renderPreviews={!mobileDrawer || drawerOpen}
               comparison={comparison}
               seedLocked={seedLocked}
               onComparison={setComparison}

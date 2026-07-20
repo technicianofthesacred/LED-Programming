@@ -207,25 +207,42 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   const trigger = page.getByRole('button', { name: 'Pattern controls', exact: true });
+  const preview = page.locator('.plab-preview');
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await trigger.click();
+  await expect(preview).toHaveAttribute('inert', '');
   await page.getByLabel('Base pattern').selectOption('aurora');
+  await expect(page.getByTestId('pattern-lab-variation-preview')).toHaveCount(4);
   await page.getByRole('button', { name: 'Close pattern controls' }).click();
 
   const previewBox = await page.getByTestId('pattern-lab-mapped-preview').boundingBox();
   expect(previewBox).not.toBeNull();
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByLabel('Pattern Lab controls')).toHaveAttribute('aria-hidden', 'true');
+  await expect(preview).not.toHaveAttribute('inert', '');
+  await expect(page.getByTestId('pattern-lab-variation-preview')).toHaveCount(0);
   await trigger.click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByLabel('Pattern Lab controls')).not.toHaveAttribute('aria-hidden', 'true');
   await expect(page.getByLabel('Pattern Lab controls')).toHaveAttribute('role', 'dialog');
+
+  const backdropBox = await page.getByRole('button', { name: 'Dismiss pattern controls' }).boundingBox();
+  expect(backdropBox).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+  const drawerBox = await page.getByLabel('Pattern Lab controls').boundingBox();
+  expect(drawerBox).not.toBeNull();
+  expect(drawerBox?.x).toBe(0);
+  expect(drawerBox?.width).toBe(390);
+  expect(Math.round((drawerBox?.y || 0) + (drawerBox?.height || 0))).toBe(844);
 
   const saveHeight = await page.getByRole('button', { name: 'Save private draft' }).evaluate(element => {
     return Number.parseFloat(getComputedStyle(element).height);
   });
   expect(saveHeight).toBeGreaterThanOrEqual(44);
   await page.getByRole('button', { name: 'Close pattern controls' }).click();
+  const playHeight = await page.getByRole('button', { name: 'Play', exact: true }).evaluate(element => {
+    return Number.parseFloat(getComputedStyle(element).height);
+  });
+  expect(playHeight).toBeGreaterThanOrEqual(44);
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByText('Advanced controls')).not.toHaveAttribute('open', '');
 });
@@ -235,6 +252,13 @@ test('renders four mapped seed previews and does not mutate the draft until one 
   const variants = page.getByTestId('pattern-lab-variants');
   await expect(variants.getByTestId('pattern-lab-variation-preview')).toHaveCount(4);
   await expect(variants.locator('canvas')).toHaveCount(4);
+  const mainCanvas = page.getByTestId('pattern-lab-mapped-preview').locator('canvas');
+  await page.waitForTimeout(350);
+  const mainBefore = await mainCanvas.evaluate(canvas => canvas.toDataURL());
+  await expect.poll(async () => {
+    const signatures = await variants.locator('canvas').evaluateAll(canvases => canvases.map(canvas => canvas.toDataURL()));
+    return new Set(signatures).size;
+  }).toBe(4);
   const seedBefore = await page.getByTestId('pattern-lab-seed').textContent();
   const optionsBefore = await variants.locator('[data-seed]').evaluateAll(elements => elements.map(element => element.getAttribute('data-seed')));
 
@@ -245,6 +269,7 @@ test('renders four mapped seed previews and does not mutate the draft until one 
 
   await page.getByRole('button', { name: 'Select variation 2' }).click();
   await expect(page.getByTestId('pattern-lab-seed')).not.toHaveText(seedBefore || '1');
+  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(mainBefore);
   await page.getByRole('checkbox', { name: 'Lock seed choices' }).check();
   await expect(page.getByRole('button', { name: 'New variation' })).toBeDisabled();
 });

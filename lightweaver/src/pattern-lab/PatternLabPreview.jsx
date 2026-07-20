@@ -10,10 +10,25 @@ function mix(from, to, amount) {
   return from + (to - from) * amount;
 }
 
-export default function PatternLabPreview({ recipe, previewTime, playing = false, geometry, thumbnail = false }) {
+export default function PatternLabPreview({
+  recipe,
+  previewTime,
+  playing = false,
+  geometry,
+  thumbnail = false,
+  seedPreview = false,
+}) {
   const patternId = recipe.base.patternId;
   const macros = resolvePatternLabMacros(recipe);
-  const evolution = recipe.evolution.enabled ? sampleEvolution(recipe, previewTime) : null;
+  const evolutionRecipe = seedPreview && !recipe.evolution.enabled
+    ? { ...recipe, evolution: { ...recipe.evolution, enabled: true } }
+    : recipe;
+  const renderTime = seedPreview
+    ? evolutionRecipe.evolution.durationSeconds / 2
+    : previewTime;
+  const evolution = evolutionRecipe.evolution.enabled
+    ? sampleEvolution(evolutionRecipe, renderTime)
+    : null;
   const evolutionMix = evolution?.change ?? 0;
   const destinations = evolution?.destinations;
 
@@ -54,7 +69,7 @@ export default function PatternLabPreview({ recipe, previewTime, playing = false
       <PatternPreview
         patternId={patternId}
         playing={playing}
-        controlledTime={previewTime}
+        controlledTime={renderTime}
         params={recipe.base.params}
         palette={recipe.palette}
         strips={geometry.strips}

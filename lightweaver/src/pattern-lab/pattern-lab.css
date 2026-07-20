@@ -625,8 +625,8 @@
   }
   .plab-drawer-backdrop {
     position: fixed;
-    z-index: 70;
-    inset: 0 0 32px 56px;
+    z-index: 100;
+    inset: 0;
     display: block;
     border: 0;
     background: color-mix(in srgb, var(--bg-canvas) 68%, transparent);
@@ -635,11 +635,11 @@
   .plab-empty { width: calc(100% - 24px); padding: 20px; }
   .plab-controls {
     position: fixed;
-    z-index: 71;
+    z-index: 101;
     right: 0;
-    bottom: 32px;
-    left: 56px;
-    max-height: min(78dvh, 680px);
+    bottom: 0;
+    left: 0;
+    max-height: min(82dvh, 680px);
     display: flex;
     overflow-y: auto;
     border: 1px solid var(--border-soft);
@@ -661,6 +661,7 @@
   .plab-control-section,
   .plab-private-library { padding: 18px 14px; }
   .plab-actions { position: sticky; padding: 14px; }
+  .plab-play { min-height: 44px; }
   .plab-actions .btn,
   .plab-field select,
   .plab-variation,
