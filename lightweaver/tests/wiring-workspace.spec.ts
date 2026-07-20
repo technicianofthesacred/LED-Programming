@@ -1051,12 +1051,20 @@ test('the primary flow states its card requirement inline and clears it when the
   await expect(banner).toContainText('This check lights the real LEDs — use Connect Lightweaver in the footer first.');
   await page.evaluate(async () => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    getSharedCardLink().dispatch({
+    const event = {
       type: 'card-verified',
       via: 'direct',
       host: 'lightweaver.local',
-      card: { id: 'lw-banner-test', name: 'Bench card', pixelCount: 44, firmwareVersion: '1.0.0' },
-    });
+      card: { id: 'lw-banner-test', name: 'Bench card', pixelCount: 44, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+      readiness: {
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-banner-test', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+        bootId: 'boot-banner-test', runtimePhase: 'ready', knownGoodProject: true,
+        commandReady: true, outputReady: true,
+      },
+    };
+    getSharedCardLink().dispatch(event);
+    getSharedCardLink().dispatch(event);
   });
   await expect(banner).toHaveCount(0);
 });

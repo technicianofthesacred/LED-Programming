@@ -660,7 +660,12 @@ test('Recover lights asks for physical confirmation and offers wire discovery wh
   await page.route('**/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ cardId: 'lw-recovery-test', firmwareVersion: '1.0.0', led: { pixels: 44 } }),
+    body: JSON.stringify({
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: 'lw-recovery-test', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-recovery-test', runtimePhase: 'ready', knownGoodProject: true,
+      commandReady: true, outputReady: true, led: { pixels: 44 },
+    }),
   }));
   await page.route('**/api/wiring/status', route => route.fulfill({
     status: 200,
