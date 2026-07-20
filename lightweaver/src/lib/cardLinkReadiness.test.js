@@ -106,6 +106,14 @@ test('direct status reporting feeds the fresh envelope to live consumers', (t) =
     status: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
     allowAdopt: true,
   });
+  assert.equal(getCardLinkState().cardBlank, null, 'first complete recovery envelope only establishes its boot candidate');
+  reportDirectCardStatus({
+    connected: true,
+    host: 'lightweaver.local',
+    card: { id: CARD_ID },
+    status: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
+    allowAdopt: true,
+  });
   assert.equal(getCardLinkState().cardBlank, true);
   assert.equal(isCardLinkConnected(getCardLinkState()), false);
 });

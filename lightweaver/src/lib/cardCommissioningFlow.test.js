@@ -11,6 +11,7 @@ import {
   beginCardCommissioning,
   beginCardRestorationMutation,
   bindCardWiringActivationEvidence,
+  beginCardLightCheckMutation,
   cardIdFromEspMac,
   completeCardInstall,
   markCardProjectRestored,
@@ -22,9 +23,11 @@ import {
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
   claimCardRestoration,
+  claimCardLightCheckMutation,
   inspectCardCommissioning,
   preflightCardCommissioningMutation,
   verifyCardRestorationMutation,
+  verifyCardLightCheckMutation,
 } from './cardCommissioningFlow.js';
 
 function memoryStorage() {
@@ -264,6 +267,47 @@ test('saved commissioning acknowledgement never authorizes restore without a fre
   assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ cardId: 'lw-ffffffffffff' })).reason, 'wrong-card');
   assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ buildId: 'b'.repeat(40) })).reason, 'wrong-firmware-build');
   assert.equal(preflightCardCommissioningMutation(flow, readyStatus()).ok, true);
+
+  const lightCheck = {
+    ...flow,
+    stage: 'check-lights',
+    project: { ...flow.project, restoredAt: 40, restoredFingerprint: flow.project.fingerprint },
+  };
+  assert.equal(
+    preflightCardCommissioningMutation(lightCheck, readyStatus()).ok,
+    true,
+    'fresh exact readiness also authorizes one leased light-check mutation',
+  );
+});
+
+test('light-check hardware mutations require one fenced cross-tab lease', async () => {
+  const storage = memoryStorage();
+  const sessionStorage = memoryStorage();
+  const setup = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-light-lease-123456', now: 10,
+  }), installed, { now: 20 }), {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 }).flow;
+  const lightCheck = {
+    ...setup,
+    stage: 'check-lights',
+    updatedAt: 40,
+    project: { ...setup.project, restoredAt: 40, restoredFingerprint: setup.project.fingerprint },
+  };
+  await writeCardCommissioning(lightCheck, { storage, sessionStorage, locks: null });
+
+  const first = await claimCardLightCheckMutation(lightCheck, {
+    storage, sessionStorage, ownerId: 'light-check-tab-a-1234', locks: null,
+  });
+  assert.equal(first.ok, true);
+  assert.deepEqual(await claimCardLightCheckMutation(lightCheck, {
+    storage, sessionStorage, ownerId: 'light-check-tab-b-1234', locks: null,
+  }), { ok: false, reason: 'light-check-in-progress' });
+  const mutation = await beginCardLightCheckMutation(lightCheck, first.lease, { storage, locks: null });
+  assert.equal(mutation.ok, true);
+  assert.equal(verifyCardLightCheckMutation(lightCheck, first.lease.id, mutation.fencingToken, { storage }), true);
+  assert.equal(verifyCardLightCheckMutation(lightCheck, first.lease.id, 'wrong-fence-token-1', { storage }), false);
 });
 
 test('a background station-transport detection auto-advances with the same verification as the manual acknowledge', () => {

@@ -15,7 +15,6 @@
 // wired to cardBridge's change events for the app to subscribe to.
 import {
   CARD_BRIDGE_CHANGED_EVENT,
-  adoptDiscoveredCardBridgeIdentity,
   bootstrapCardBridgeFromOpener,
   getCardBridgeState,
   openCardBridge,
@@ -64,17 +63,26 @@ export function initialCardLinkState(host = '') {
     expectedCard: null,
     validatedBootId: '',
     candidateBootId: '',
+    requiresStableRevalidation: false,
+    revalidationGeneration: 0,
     operationGeneration: 0,
   };
 }
 
-function clearedLiveEvidence(prev, additions = {}) {
+function clearedLiveEvidence(prev, additions = {}, {
+  requireStable = true,
+  clearValidatedBoot = false,
+} = {}) {
   return {
     ...prev,
     readiness: null,
     cardBlank: null,
-    validatedBootId: '',
+    validatedBootId: clearValidatedBoot ? '' : prev.validatedBootId,
     candidateBootId: '',
+    requiresStableRevalidation: requireStable,
+    revalidationGeneration: requireStable
+      ? (prev.revalidationGeneration || 0) + 1
+      : (prev.revalidationGeneration || 0),
     acknowledgedAt: '',
     activity: 'idle',
     operationGeneration: (prev.operationGeneration || 0) + 1,
@@ -103,22 +111,46 @@ function applyStatusEnvelope(prev, event, transport, host) {
   }
 
   const incomingBootId = classified.bootId || '';
-  if (prev.validatedBootId && incomingBootId && incomingBootId !== prev.validatedBootId) {
-    if (!(prev.state === 'revalidating' && prev.candidateBootId === incomingBootId)) {
-      return clearedLiveEvidence(prev, {
-        state: 'revalidating', reason: 'card-restarted', transport, host,
-        card, expectedCard, candidateBootId: incomingBootId, missedPings: 0,
-      });
+  const completeEnvelope = classified.state !== 'checking' && Boolean(incomingBootId);
+  if (!completeEnvelope) {
+    return clearedLiveEvidence(prev, {
+      state: 'revalidating', reason: 'checking-card', transport, host,
+      card, expectedCard, missedPings: 0,
+    });
+  }
+
+  const bootChanged = Boolean(prev.validatedBootId && incomingBootId !== prev.validatedBootId);
+  const needsStablePair = prev.requiresStableRevalidation
+    || prev.state === 'reconnecting'
+    || prev.state === 'reconnecting-bridge'
+    || prev.state === 'revalidating'
+    || bootChanged;
+  if (needsStablePair) {
+    if (!prev.candidateBootId) {
+      return {
+        ...clearedLiveEvidence(prev, {
+          state: 'revalidating', reason: bootChanged ? 'card-restarted' : 'checking-card',
+          transport, host, card, expectedCard, candidateBootId: incomingBootId, missedPings: 0,
+        }),
+        // Starting a candidate inside an existing recovery generation must not
+        // mint another generation or invalidate the operation twice.
+        revalidationGeneration: prev.requiresStableRevalidation
+          ? prev.revalidationGeneration
+          : (prev.revalidationGeneration || 0) + 1,
+        operationGeneration: prev.requiresStableRevalidation
+          ? prev.operationGeneration
+          : (prev.operationGeneration || 0) + 1,
+      };
+    }
+    if (incomingBootId !== prev.candidateBootId) {
+      // Responses can arrive out of order across a reboot. Neither the prior
+      // boot nor an unrelated newer boot is evidence for the candidate already
+      // under validation; ignore it without clearing/replacing that candidate.
+      return prev;
     }
   }
 
-  const recovering = prev.state === 'reconnecting'
-    || prev.state === 'reconnecting-bridge'
-    || prev.state === 'revalidating';
-  const completeEnvelope = classified.state !== 'checking';
-  const nextState = recovering && !completeEnvelope
-    ? 'revalidating'
-    : (transport === 'bridge' ? 'connected-bridge' : 'connected-direct');
+  const nextState = transport === 'bridge' ? 'connected-bridge' : 'connected-direct';
   const blank = typeof classified.blank === 'boolean' ? classified.blank : null;
   const acknowledgedAt = classified.connected || classified.state === 'blank'
     ? (event.acknowledgedAt || new Date().toISOString())
@@ -137,6 +169,7 @@ function applyStatusEnvelope(prev, event, transport, host) {
     cardBlank: blank,
     validatedBootId: completeEnvelope ? incomingBootId : prev.validatedBootId,
     candidateBootId: '',
+    requiresStableRevalidation: false,
     acknowledgedAt,
     bridgeLifecycle: transport === 'bridge' ? (event.bridgeLifecycle ?? prev.bridgeLifecycle ?? null) : null,
   };
@@ -173,7 +206,12 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       )) return prev;
       if (prev.state === 'connecting' && prev.transport === via && prev.host === host) return prev;
       return {
-        ...(host !== prev.host ? clearedLiveEvidence(prev) : prev),
+        ...(host !== prev.host
+          ? clearedLiveEvidence(prev, {}, {
+            clearValidatedBoot: true,
+            requireStable: Boolean(prev.validatedBootId || prev.requiresStableRevalidation),
+          })
+          : prev),
         state: 'connecting', reason: '', transport: via, host, missedPings: 0,
         ...(host !== prev.host ? {
           card: null,
@@ -197,7 +235,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         state: 'connecting', reason: '', transport: 'bridge', host, missedPings: 0,
         card: null,
         bridgeLifecycle: event.bridgeLifecycle ?? null,
-      });
+      }, { requireStable: Boolean(prev.validatedBootId || prev.requiresStableRevalidation) });
     }
     case 'card-verified': {
       if (!event.card?.id) return clearedLiveEvidence(prev, { state: 'disconnected', reason: 'identity-missing', transport: '', missedPings: 0, card: null });
@@ -332,6 +370,14 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         state: 'disconnected', reason, transport: event.transport || 'direct', host, missedPings: 0, card: null,
         ...(event.discoveredCard ? { discoveredCard: event.discoveredCard } : {}),
       });
+    }
+    case 'bridge-discovered': {
+      if (!event.card?.id) return prev;
+      return clearedLiveEvidence(prev, {
+        state: 'disconnected', reason: 'found-unpaired', transport: 'bridge', host,
+        missedPings: 0, card: null, discoveredCard: event.card,
+        bridgeLifecycle: event.bridgeLifecycle ?? prev.bridgeLifecycle ?? null,
+      }, { requireStable: Boolean(prev.validatedBootId || prev.requiresStableRevalidation) });
     }
     case 'operation-started':
       return prev.activity === 'pending' ? prev : { ...prev, activity: 'pending' };
@@ -564,7 +610,7 @@ export function createCardLink({
     if (state.state === 'connected-bridge') {
       clearConnectTimer();
       if (prev.state !== 'connected-bridge') writeBridgeWasActive(true);
-      if (!pingTimer && !pinging) schedulePing();
+      if (!pinging && (prev.state === 'revalidating' || !pingTimer)) schedulePing();
       stopDirectKeepalive();
     } else if (state.state === 'reconnecting-bridge') {
       if (prev.state !== 'reconnecting-bridge') {
@@ -582,15 +628,15 @@ export function createCardLink({
       clearConnectTimer();
       if (state.transport === 'bridge') {
         stopDirectKeepalive();
-        if (!pingTimer && !pinging) schedulePing(0);
+        if (!pinging && (prev.state !== 'revalidating' || !pingTimer)) schedulePing(0);
       } else {
         stopKeepalive();
-        if (!directPingTimer && !directPinging) scheduleDirectPing(0);
+        if (!directPinging && (prev.state !== 'revalidating' || !directPingTimer)) scheduleDirectPing(0);
       }
     } else if (state.state === 'connected-direct') {
       clearConnectTimer();
       stopKeepalive();
-      if (!directPingTimer && !directPinging) scheduleDirectPing();
+      if (!directPinging && (prev.state === 'revalidating' || !directPingTimer)) scheduleDirectPing();
     } else if (state.state === 'reconnecting' && state.transport === 'direct') {
       clearConnectTimer();
       stopKeepalive();
@@ -639,14 +685,6 @@ export function createCardLink({
 
 // ── shared browser instance ────────────────────────────────────────────────
 let sharedLink = null;
-let pendingFirstPairHost = '';
-let pendingFirstPairTimer = null;
-
-function clearPendingFirstPair() {
-  pendingFirstPairHost = '';
-  if (pendingFirstPairTimer) clearTimeout(pendingFirstPairTimer);
-  pendingFirstPairTimer = null;
-}
 
 // The bridge is the ONLY live transport on HTTPS (led.mandalacodes.com), where
 // the browser blocks direct HTTP to the card. Its verify/keepalive carries card
@@ -705,36 +743,11 @@ export function getSharedCardLink() {
   win?.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, (event) => {
     const detail = event?.detail || {};
     if (detail.connected && detail.verified) {
-      if (pendingFirstPairHost && detail.discoveredCard?.id && !readPersistedCardIdentity()) {
-        const host = pendingFirstPairHost;
-        clearPendingFirstPair();
-        const lifecycle = detail.lifecycle;
-        const discoveredCard = detail.discoveredCard;
-        void (async () => {
-          try {
-            const readiness = await fetchBridgeCardReadiness(host);
-            const classified = classifyCardReadiness(readiness || {}, { expectedCard: discoveredCard });
-            if (classified.state === 'checking' || classified.state === 'identity-mismatch') {
-              const error = new Error('Studio could not reverify the full card status before pairing.');
-              error.reason = readinessReason(classified) || 'identity-missing';
-              throw error;
-            }
-            const bridge = getCardBridgeState();
-            if (bridge.lifecycle !== lifecycle || bridge.host !== host || bridge.discoveredCard?.id !== discoveredCard.id) {
-              const error = new Error('The card page changed while Studio was pairing it.');
-              error.reason = 'stale-host';
-              throw error;
-            }
-            const card = await adoptDiscoveredCardBridgeIdentity(host);
-            sharedLink.dispatch({
-              type: 'card-verified', via: 'bridge', host, card, expectedCard: card,
-              readiness, blank: classified.blank, bridgeLifecycle: lifecycle,
-              acknowledgedAt: new Date().toISOString(),
-            });
-          } catch (error) {
-            sharedLink.dispatch({ type: 'bridge-lost', reason: error?.reason || 'identity-missing', host });
-          }
-        })();
+      if (detail.discoveredCard?.id && !readPersistedCardIdentity()) {
+        sharedLink.dispatch({
+          type: 'bridge-discovered', host: detail.host,
+          card: detail.discoveredCard, bridgeLifecycle: detail.lifecycle,
+        });
         return;
       }
       if (detail.card?.id) {
@@ -963,15 +976,8 @@ export async function bootstrapCardLink() {
 // the CARD_BRIDGE_CHANGED_EVENT wiring above.
 export function connectCardLink(rawHost = '') {
   const link = getSharedCardLink();
-  const host = rawHost || readStoredCardHost();
-  clearPendingFirstPair();
-  if (!readPersistedCardIdentity()) {
-    pendingFirstPairHost = host;
-    pendingFirstPairTimer = setTimeout(clearPendingFirstPair, CARD_LINK_CONNECT_TIMEOUT_MS);
-  }
   const opened = openCardBridge(rawHost);
   if (!opened) {
-    clearPendingFirstPair();
     link.dispatch({ type: 'bridge-lost', reason: 'popup-blocked' });
     return null;
   }

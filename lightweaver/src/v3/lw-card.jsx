@@ -86,6 +86,13 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
       primary: { label: 'Card restarted — verifying', disabled: true },
       secondary: { label: 'Open support', section: 'support' },
     };
+  } else if (state === 'revalidating') {
+    presentation = {
+      tone: 'connecting',
+      message: 'Checking card. Studio is waiting for two stable exact status checks before commands resume.',
+      primary: { label: 'Checking card', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
   } else if (state === 'reconnecting-bridge' || state === 'reconnecting') {
     presentation = {
       tone: 'connecting',
