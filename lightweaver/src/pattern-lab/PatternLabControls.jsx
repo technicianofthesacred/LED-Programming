@@ -26,6 +26,7 @@ export default function PatternLabControls({
   selectedPatternId,
   onPatternChange,
   onMacroChange,
+  onPaletteChange,
   onAdvancedChange,
 }) {
   const technical = recipe ? resolvePatternLabMacros(recipe) : null;
@@ -86,6 +87,34 @@ export default function PatternLabControls({
             );
           })}
         </div>
+
+        {recipe && (
+          <div className="plab-palette-control">
+            <div className="plab-palette-heading">
+              <span><strong>Palette</strong><small>Tap a color to shape the atmosphere</small></span>
+              <button
+                type="button"
+                className="btn"
+                aria-label="Rotate palette"
+                onClick={() => onPaletteChange?.([...recipe.palette.slice(1), recipe.palette[0]])}
+              >Rotate</button>
+            </div>
+            <div className="plab-palette-swatches">
+              {recipe.palette.map((color, index) => (
+                <label key={`${index}-${color}`}>
+                  <input
+                    type="color"
+                    aria-label={`Palette color ${index + 1}`}
+                    value={color}
+                    onChange={event => onPaletteChange?.(recipe.palette.map((item, colorIndex) => (
+                      colorIndex === index ? event.target.value : item
+                    )))}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
 
         {recipe ? (
           <details className="plab-advanced">

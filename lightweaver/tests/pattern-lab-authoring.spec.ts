@@ -129,6 +129,23 @@ test('derives offline audio lanes locally and marks the recipe as bake-only', as
   expect(cleaned.requirements).not.toContainEqual(expect.objectContaining({ capability: 'offline-analysis' }));
 });
 
+test('edits and rotates the palette with simple color controls', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('gradient');
+  const first = page.getByLabel('Palette color 1');
+  await first.fill('#ff0000');
+  await expect(first).toHaveValue('#ff0000');
+  const secondBefore = await page.getByLabel('Palette color 2').inputValue();
+  await page.getByRole('button', { name: 'Rotate palette' }).click();
+  await expect(page.getByLabel('Palette color 1')).not.toHaveValue('#ff0000');
+  await expect(page.getByLabel('Palette color 1')).toHaveValue(secondBefore);
+
+  const pending = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const exportedPath = await (await pending).path();
+  const exported = JSON.parse(await readFile(exportedPath!, 'utf8'));
+  expect(exported.palette.at(-1)).toBe('#ff0000');
+});
+
 test('Play advances one bounded journey clock and Pause preserves it', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('aurora');
   await page.getByRole('checkbox', { name: /Long Evolution/ }).check();

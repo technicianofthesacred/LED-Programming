@@ -587,6 +587,12 @@ export default function PatternLabScreen() {
     setMessage('');
   }
 
+  function changePalette(palette) {
+    setDraft(current => current ? { ...current, palette: [...palette] } : current);
+    setComparison('draft');
+    setMessage('');
+  }
+
   function changeEvolution(name, value) {
     setDraft(current => current ? { ...current, evolution: { ...current.evolution, [name]: value } } : current);
     if (name === 'durationSeconds') setPreviewTime(current => Math.min(current, value));
@@ -911,6 +917,7 @@ export default function PatternLabScreen() {
                   : draft?.base?.patternId || ''}
                 onPatternChange={choosePattern}
                 onMacroChange={changeMacro}
+                onPaletteChange={changePalette}
                 onAdvancedChange={changeAdvanced}
               />
             </div>
