@@ -22,7 +22,7 @@ import {
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
-import { readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
+import { cardHostToUrl, isFactoryCardStatus, readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
 import {
   compareCardIdentity,
   normalizeCardIdentity,
@@ -103,8 +103,23 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         state: transport === 'direct' ? 'connected-direct' : 'connected-bridge',
         reason: '', transport, host, missedPings: 0,
         card: event.card,
+        // The bridge transport carries identity only, so a bridge verify may not
+        // yet know whether the card is blank; treat an absent flag as false and
+        // let a follow-up 'bridge-blank' refine it once /api/status returns.
+        cardBlank: Boolean(event.blank),
         acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
       };
+    }
+    case 'bridge-blank': {
+      // Late blank-state refinement for the bridge path: the card answered
+      // /api/status after the green transition. Only touch an established bridge
+      // link for the same card/host, and return the same reference when nothing
+      // changes so subscribers do not re-render.
+      if (prev.state !== 'connected-bridge' && prev.state !== 'reconnecting-bridge') return prev;
+      if (prev.host !== host || prev.card?.id !== event.cardId) return prev;
+      const blank = Boolean(event.blank);
+      if (prev.cardBlank === blank) return prev;
+      return { ...prev, cardBlank: blank };
     }
     case 'bridge-ping-ok': {
       if (!prev.card?.id) return prev;
@@ -153,18 +168,23 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
             directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           };
         } else if (!event.allowAdopt) {
+          // A card answered but this origin has no persisted pairing. NOT green —
+          // the footer offers a one-tap pair instead of quietly adopting the
+          // first card it sees (a wrong-card hazard on a shared network).
           return {
             ...prev,
-            state: 'disconnected', reason: 'never-connected', transport: 'direct', host, missedPings: 0,
+            state: 'disconnected', reason: 'found-unpaired', transport: 'direct', host, missedPings: 0,
             discoveredCard: event.card,
             card: null,
             directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           };
         }
-        if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id) return prev;
+        const blank = Boolean(event.blank);
+        if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id && prev.cardBlank === blank) return prev;
         return {
           ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0,
           card: event.card,
+          cardBlank: blank,
           discoveredCard: null,
           expectedCard: event.card,
           directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
@@ -209,6 +229,7 @@ export function cardLinkReasonText(reason = '') {
     case 'popup-blocked': return 'The browser blocked the card page window — allow popups and try again.';
     case 'no-answer': return 'Could not reach the card.';
     case 'card-unreachable': return 'No card found on this network.';
+    case 'found-unpaired': return 'Lightweaver found — tap Connect to pair.';
     case 'identity-missing': return 'This card needs a firmware update before Studio can verify it.';
     case 'wrong-card': return 'This is a different Lightweaver card.';
     case 'firmware-too-old': return 'This card firmware needs an update.';
@@ -378,6 +399,47 @@ function clearPendingFirstPair() {
   pendingFirstPairTimer = null;
 }
 
+// The bridge is the ONLY live transport on HTTPS (led.mandalacodes.com), where
+// the browser blocks direct HTTP to the card. Its verify/keepalive carries card
+// identity but not the /api/status fields that reveal a factory-default card, so
+// a paired card sitting on defaults would read plain green. Read status over the
+// bridge (firmware maps bridge type 'status' -> GET /api/status) to recover the
+// blank signal. A status read failure must never tear down a verified bridge —
+// callers fall back to "not blank".
+async function fetchBridgeCardBlank(host) {
+  try {
+    const status = await sendCardBridgeRequest('status', {}, { host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS });
+    return isFactoryCardStatus(status || {});
+  } catch {
+    return false;
+  }
+}
+
+function refreshBridgeCardBlank(host, cardId) {
+  return fetchBridgeCardBlank(host).then(blank => {
+    getSharedCardLink().dispatch({ type: 'bridge-blank', host, cardId, blank });
+  }).catch(() => {
+    /* a status probe failure leaves the verified bridge and its cardBlank as-is */
+  });
+}
+
+// Direct-transport blank read used only at explicit adopt/pair time. The passive
+// poll already computes blank from the status it fetched; adopt re-reads it so
+// the just-paired card lands with the correct cardBlank on its first render
+// instead of flashing green for one poll interval before demoting.
+async function probeDirectCardBlank(host, fetchImpl) {
+  try {
+    const fetcher = fetchImpl || globalThis.fetch;
+    if (typeof fetcher !== 'function') return false;
+    const response = await fetcher(`${cardHostToUrl(host)}/api/status`);
+    if (!response?.ok) return false;
+    const status = await response.json().catch(() => null);
+    return isFactoryCardStatus(status || {});
+  } catch {
+    return false;
+  }
+}
+
 export function getSharedCardLink() {
   if (sharedLink) return sharedLink;
   sharedLink = createCardLink({ host: browserWindow() ? readStoredCardHost() : '' });
@@ -400,10 +462,22 @@ export function getSharedCardLink() {
         const expectedCard = readPersistedCardIdentity() || null;
         const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, detail.card) : { ok: true };
         if (comparison.ok) persistCardIdentity(detail.card, { acknowledgedAt });
+        const prevLink = sharedLink.getState();
         sharedLink.dispatch({
           type: 'card-verified', via: 'bridge', host: detail.host,
           card: detail.card, expectedCard, acknowledgedAt,
         });
+        // The change event carries identity only, so read /api/status over the
+        // bridge to resolve blank state. Only kick this on the TRANSITION into a
+        // green bridge link for this card: a status read itself dispatches a
+        // bridge-change (which re-enters this handler), so refreshing on every
+        // bridge-change would recurse forever. A wrong-card dispatch above stays
+        // disconnected and is skipped by the connected-bridge check.
+        const nowLink = sharedLink.getState();
+        const wasLinked = prevLink.state === 'connected-bridge' && prevLink.card?.id === detail.card.id;
+        if (comparison.ok && nowLink.state === 'connected-bridge' && !wasLinked) {
+          void refreshBridgeCardBlank(detail.host, detail.card.id);
+        }
       } else if (detail.identityError) {
         sharedLink.dispatch({ type: 'bridge-lost', reason: detail.identityError, host: detail.host });
       } else {
@@ -456,9 +530,10 @@ export function reportDirectCardStatus({
       rememberCardHost(host);
       writeStoredCardHost(host);
     }
+    const blank = isFactoryCardStatus(status || {});
     link.dispatch({
       type: 'direct-status', connected: true, host, card: identity, expectedCard,
-      acknowledgedAt, allowAdopt,
+      acknowledgedAt, allowAdopt, blank,
     });
     return;
   }
@@ -500,6 +575,10 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   const verifyOptions = { expected: discoveredCard };
   if (fetchImpl) verifyOptions.fetchImpl = fetchImpl;
   const verified = await verifyExpectedCardAtHost(state.host, verifyOptions);
+  // Read blank state here (before the authority/discovery gates re-check, which
+  // stay the last thing before dispatch) so the paired card renders with the
+  // correct cardBlank immediately instead of flashing green for one poll.
+  const blank = await probeDirectCardBlank(state.host, fetchImpl);
   if (persistedIdentityAuthorityToken(readPersistedCardIdentity()) !== snapshot.persistedAuthority) {
     const error = new Error('The paired card changed in another tab while this check was running. Review the card now shown and try again.');
     error.reason = 'stale-identity';
@@ -522,7 +601,7 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   writeStoredCardHost(state.host);
   link.dispatch({
     type: 'direct-status', connected: true, host: state.host, card: verified,
-    expectedCard: verified, allowAdopt: true, acknowledgedAt,
+    expectedCard: verified, allowAdopt: true, acknowledgedAt, blank,
   });
   return verified;
 }
@@ -551,7 +630,10 @@ export async function bootstrapCardLink() {
     const expectedCard = readPersistedCardIdentity() || null;
     const comparison = expectedCard?.id ? compareCardIdentity(expectedCard, card) : { ok: true };
     if (comparison.ok) persistCardIdentity(card, { acknowledgedAt });
-    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, expectedCard, acknowledgedAt });
+    // Resolve blank state before the green transition so a bridged factory card
+    // lands directly on "Needs project" with no green flash.
+    const blank = comparison.ok ? await fetchBridgeCardBlank(getCardBridgeState().host) : false;
+    link.dispatch({ type: 'card-verified', via: 'bridge', host: getCardBridgeState().host, card, expectedCard, acknowledgedAt, blank });
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not
     // pay this failing re-ping on every startup. A successful bridge

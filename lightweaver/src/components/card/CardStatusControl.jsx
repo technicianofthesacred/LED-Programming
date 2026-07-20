@@ -12,7 +12,13 @@ export function cardConnectionStatus(link = {}) {
   if (link.activity === 'recovering' || link.state === 'reconnecting-bridge') return 'Recovering';
   if (link.activity === 'failed' || ATTENTION_REASONS.has(link.reason)) return 'Needs attention';
   if (link.activity === 'pending' || link.state === 'connecting') return 'Connecting';
+  // A paired, reachable card that is still on factory defaults is genuinely
+  // linked (writes will pass the identity guard) but has no project installed —
+  // so it is not green "Connected", it is "Needs project".
+  if (isCardLinkConnected(link) && link.cardBlank) return 'Needs project';
   if (isCardLinkConnected(link)) return 'Connected';
+  // A card answered but this origin has never paired it — actionable, not green.
+  if (link.reason === 'found-unpaired') return 'Found — pair';
   return 'Not connected';
 }
 
@@ -37,7 +43,7 @@ export function CardStatusControl({ link, onOpen, open = false }) {
     <>
       <button
         type="button"
-        className={`card-status-control is-${status.toLowerCase().replace(/\s+/g, '-')}`}
+        className={`card-status-control is-${status.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`}
         onClick={onOpen}
         aria-label={accessibleName}
         aria-haspopup="dialog"

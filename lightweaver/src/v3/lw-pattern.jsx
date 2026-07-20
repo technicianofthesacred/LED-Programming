@@ -1053,7 +1053,14 @@ import { PatternPreview } from './PatternPreview.jsx';
         if (sequence !== livePreviewSeq.current) return;
         setStatusKind('err');
         setRecoveryConfirmation('');
-        setStatus(error?.message || `LED repair could not reach ${cardHostToUrl(cardHost)}. Check power and WiFi, then turn on Use local card.`);
+        if (error?.reason === 'identity-missing' || error?.reason === 'wrong-card') {
+          // The write guard refuses an unpaired/wrong card. Surface it as the
+          // one-tap pair affordance instead of a tiny reach-failure line.
+          openConnectionCenter();
+          setStatus('Pair this Lightweaver card before sending lights — tap Connect in the card panel.');
+        } else {
+          setStatus(error?.message || `LED repair could not reach ${cardHostToUrl(cardHost)}. Check power and WiFi, then turn on Use local card.`);
+        }
       }
     };
 
@@ -1089,6 +1096,10 @@ import { PatternPreview } from './PatternPreview.jsx';
       } catch (error) {
         if (error?.reason === 'mixed-content') {
           offerCardHandoff(nextPackage, 'The browser blocked direct local-card access from this public page. Open the card installer to apply this split on the card.');
+        } else if (error?.reason === 'identity-missing' || error?.reason === 'wrong-card') {
+          openConnectionCenter();
+          setStatusKind('err');
+          setStatus('Pair this Lightweaver card before sending lights — tap Connect in the card panel.');
         } else {
           setStatusKind('err');
           setStatus(error?.message || `Could not apply split preview to the card at ${cardHostToUrl(cardHost)}.`);

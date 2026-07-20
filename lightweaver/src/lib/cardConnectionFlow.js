@@ -2,6 +2,8 @@ export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
   'ready-browser-usb',
   'escape-insecure-card-frame',
   'ready-local-card',
+  'pair-local-card',
+  'card-needs-project',
   'needs-card-update',
   'launch-native-bridge',
   'install-native-bridge',
@@ -29,6 +31,18 @@ const ACTION_COPY = Object.freeze({
     title: 'Lightweaver card ready',
     explanation: 'Studio verified the connected card and can control it now.',
     primaryLabel: 'Continue',
+  }),
+  'pair-local-card': Object.freeze({
+    legacyId: 'reconnect-known-card',
+    title: 'Pair this Lightweaver card',
+    explanation: 'Studio found a Lightweaver card on this network. Pair it once so only this card receives your commands.',
+    primaryLabel: 'Connect',
+  }),
+  'card-needs-project': Object.freeze({
+    legacyId: 'connected',
+    title: 'This card is blank',
+    explanation: 'Install your project so the card plays your design instead of its factory defaults.',
+    primaryLabel: 'Install your project',
   }),
   'needs-card-update': Object.freeze({
     legacyId: 'web-serial-install',
@@ -177,6 +191,14 @@ export function nextCardConnectionAction(input = {}) {
   if (
     (link.state === 'connected-bridge' || link.state === 'connected-direct')
     && hasCardIdentity(link.card)
+    && link.cardBlank
+  ) {
+    return action('card-needs-project');
+  }
+
+  if (
+    (link.state === 'connected-bridge' || link.state === 'connected-direct')
+    && hasCardIdentity(link.card)
   ) {
     return action('ready-local-card');
   }
@@ -215,6 +237,12 @@ export function nextCardConnectionAction(input = {}) {
       title: 'Finish card setup',
       explanation: 'Join the Lightweaver setup network, finish Wi-Fi setup, then return to Studio.',
       primaryLabel: 'Continue',
+    });
+  }
+
+  if (reason === 'found-unpaired' || (input.discoveredCard && !hasCardIdentity(input.rememberedCard))) {
+    return action('pair-local-card', {
+      secondaryAction: { id: 'adopt-discovered-card', label: 'Use this card instead' },
     });
   }
 

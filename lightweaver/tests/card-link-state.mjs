@@ -19,6 +19,9 @@ import {
   previewResponseUsedZoneFallback,
   pushLivePreviewToCard,
 } from '../src/lib/cardLiveControl.js';
+import { isFactoryCardStatus } from '../src/lib/cardConnection.js';
+import { requireExpectedCardIdentity } from '../src/lib/cardIdentity.js';
+import { nextCardConnectionAction } from '../src/lib/cardConnectionFlow.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -142,9 +145,82 @@ const passiveUnpairedCard = reduceCardLink(initial, {
   card: { id: 'lw-passive-discovery' },
 });
 assert.equal(passiveUnpairedCard.state, 'disconnected');
-assert.equal(passiveUnpairedCard.reason, 'never-connected');
+assert.equal(passiveUnpairedCard.reason, 'found-unpaired');
 assert.equal(passiveUnpairedCard.discoveredCard.id, 'lw-passive-discovery');
 assert.equal(isCardLinkConnected(passiveUnpairedCard), false, 'background polling never adopts a first card');
+
+// A paired card reporting factory/blank stays connected but carries cardBlank.
+const blankPaired = reduceCardLink(initial, {
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: true,
+});
+assert.equal(blankPaired.state, 'connected-direct');
+assert.equal(isCardLinkConnected(blankPaired), true);
+assert.equal(blankPaired.cardBlank, true);
+const configuredPaired = reduceCardLink(initial, {
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
+});
+assert.equal(configuredPaired.cardBlank, false);
+// A blank→configured transition must return a NEW object, not the short-circuited prev.
+const afterInstall = reduceCardLink(blankPaired, {
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
+});
+assert.notEqual(afterInstall, blankPaired);
+assert.equal(afterInstall.cardBlank, false);
+
+// ── isFactoryCardStatus: raw /api/status blank detection ────────────────────
+// A blank card is identified by the firmware's factory signals — mode
+// 'factory-flash' or source 'defaults' (set together while unconfigured, both
+// cleared on the first saved config). Wiring revision/digest are NOT a blank
+// signal: a genuinely paired card with a saved config can be unversioned
+// (wiringRevision 0, empty digest) and must stay command-ready, not "blank".
+assert.equal(isFactoryCardStatus({ mode: 'factory-flash' }), true, 'factory-flash mode is blank');
+assert.equal(isFactoryCardStatus({ source: 'defaults' }), true, 'defaults source is blank');
+assert.equal(isFactoryCardStatus({ source: 'defaults', wiringRevision: 0, wiringDigest: '' }), true, 'defaults source with zeroed wiring is blank');
+assert.equal(isFactoryCardStatus({ source: 'internal-flash', mode: 'website-flash', wiringRevision: 0, wiringDigest: '' }), false, 'a saved-but-unversioned config is command-ready, not blank');
+assert.equal(isFactoryCardStatus({ wiringRevision: 0, wiringDigest: '' }), false, 'zeroed wiring alone is not a blank signal');
+assert.equal(isFactoryCardStatus({ mode: 'run', source: 'project', wiringRevision: 3, wiringDigest: 'd'.repeat(64) }), false, 'a configured card is not blank');
+assert.equal(isFactoryCardStatus({ wiringRevision: 2, wiringDigest: 'abc' }), false, 'a real revision + digest is not blank');
+assert.equal(isFactoryCardStatus(null), false, 'a missing status is not blank');
+
+// A paired blank card routes the Connection Center to install, NOT green ready.
+assert.equal(nextCardConnectionAction({
+  link: { state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: true },
+}).id, 'card-needs-project', 'blank paired card offers install, not ready-local-card');
+assert.equal(nextCardConnectionAction({
+  link: { state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: false },
+}).id, 'ready-local-card', 'a configured paired card is ready');
+
+// ── bridge transport carries blank state too (the only live path on HTTPS) ──
+// A bridged card-verified with a known blank status is "needs project", never
+// plain green — this is the led.mandalacodes.com case the direct poll misses.
+const bridgedBlank = reduceCardLink(bridgeReadyOnly, {
+  type: 'card-verified', via: 'bridge', host: '192.168.4.1',
+  card: { id: 'lw-bridge-blank' }, blank: true,
+});
+assert.equal(bridgedBlank.state, 'connected-bridge');
+assert.equal(bridgedBlank.cardBlank, true, 'a bridged factory card is blank, not plain green');
+assert.equal(nextCardConnectionAction({ link: bridgedBlank }).id, 'card-needs-project');
+// A verify that did not yet know blank state defaults to not-blank, then a
+// follow-up 'bridge-blank' (status read completed) refines it.
+const bridgedUnknown = reduceCardLink(bridgeReadyOnly, {
+  type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-bridge-x' },
+});
+assert.equal(bridgedUnknown.cardBlank, false, 'unknown blank state defaults to not-blank');
+const refinedBlank = reduceCardLink(bridgedUnknown, {
+  type: 'bridge-blank', host: '192.168.4.1', cardId: 'lw-bridge-x', blank: true,
+});
+assert.equal(refinedBlank.cardBlank, true, 'a late bridge-blank demotes the bridge link');
+assert.equal(nextCardConnectionAction({ link: refinedBlank }).id, 'card-needs-project');
+// A stale bridge-blank (wrong card or host) or an unchanged value is ignored.
+assert.equal(reduceCardLink(refinedBlank, { type: 'bridge-blank', host: '192.168.4.1', cardId: 'other', blank: false }), refinedBlank);
+assert.equal(reduceCardLink(refinedBlank, { type: 'bridge-blank', host: 'other.local', cardId: 'lw-bridge-x', blank: false }), refinedBlank);
+assert.equal(reduceCardLink(refinedBlank, { type: 'bridge-blank', host: '192.168.4.1', cardId: 'lw-bridge-x', blank: true }), refinedBlank);
+// A bridge-blank has no meaning without an established bridge link.
+assert.equal(reduceCardLink(initial, { type: 'bridge-blank', host: '192.168.4.1', cardId: 'lw-bridge-x', blank: true }), initial);
+
 assert.equal(reduceCardLink(direct, {
   type: 'direct-status', connected: true, host: '192.168.18.70', card: { id: 'lw-001122aabbcc' },
   expectedCard: { id: 'lw-001122aabbcc' },
@@ -541,5 +617,110 @@ await waitFor(() => storedValues.has('lw_card_identity_v1'), 2000, 'explicit Con
 assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-001122aabbcc');
 await waitFor(() => getCardLinkState().state === 'connected-bridge', 2000, 'first-pair verified connection');
 getSharedCardLink().destroy();
+
+// ── honest-connection contract: read path and write guard must agree ────────
+// The confirmed root-cause bug was that a reachable-but-unpaired card showed a
+// green "Connected" indicator while EVERY hardware command died with a pairing
+// error. These assertions lock the indicator (reducer) and the write guard
+// (requireExpectedCardIdentity) to the same precondition: a persisted pairing.
+storedValues.delete('lw_card_identity_v1');
+
+// (a) A passive poll (allowAdopt:false) of a card this origin has never paired
+// is discovered but NOT connected — reason found-unpaired.
+const honestLink = createCardLink({ host: '192.168.18.72' });
+honestLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-honest-01' }, allowAdopt: false,
+});
+assert.equal(honestLink.getState().state, 'disconnected', 'passive poll of an unpaired card is not connected');
+assert.equal(honestLink.getState().reason, 'found-unpaired');
+assert.equal(isCardLinkConnected(honestLink.getState()), false, 'an unpaired card must never read as green');
+assert.equal(honestLink.getState().discoveredCard.id, 'lw-honest-01');
+
+// The write guard refuses that same unpaired card — proving the OLD green
+// indicator was a lie: it claimed ready while every command would throw.
+assert.throws(
+  () => requireExpectedCardIdentity({ id: 'lw-honest-01' }, {}),
+  error => error?.reason === 'identity-missing',
+  'unpaired write path throws identity-missing — the state the indicator must reflect',
+);
+
+// (d) That identity-missing condition surfaces the one-tap pair affordance.
+assert.equal(nextCardConnectionAction({
+  link: honestLink.getState(),
+  discoveredCard: honestLink.getState().discoveredCard,
+  rememberedCard: null,
+}).id, 'pair-local-card', 'a found-unpaired / identity-missing state offers pairing');
+
+// (b) The explicit Connect (adopt) path verifies + persists identity, flips the
+// indicator green, AND makes the write guard pass — read and write now agree.
+const honestVerified = await adoptDiscoveredDirectCard({
+  link: honestLink,
+  fetchImpl: async (url) => ({
+    ok: /\/api\/firmware-info$/.test(String(url)),
+    json: async () => ({
+      app: 'Lightweaver', cardId: 'lw-honest-01', firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      piece: { name: 'Honest card' },
+    }),
+  }),
+});
+assert.equal(honestVerified.id, 'lw-honest-01');
+assert.equal(honestLink.getState().state, 'connected-direct', 'after Connect the card is genuinely linked');
+assert.equal(isCardLinkConnected(honestLink.getState()), true, 'a paired card reads green');
+assert.equal(Boolean(honestLink.getState().cardBlank), false, 'a configured paired card is not blank');
+assert.equal(JSON.parse(storedValues.get('lw_card_identity_v1')).id, 'lw-honest-01', 'Connect persisted the pairing');
+// The write guard that killed commands before now passes for the paired card.
+assert.doesNotThrow(
+  () => requireExpectedCardIdentity({ id: 'lw-honest-01' }, {}),
+  'after pairing, the hardware write guard accepts the card',
+);
+assert.equal(nextCardConnectionAction({
+  link: honestLink.getState(),
+}).id, 'ready-local-card', 'the paired configured card presents as ready');
+honestLink.destroy();
+
+// (c) A paired card that answers with a factory/blank status stays linked but is
+// surfaced as "needs project", never plain green.
+const blankLink = createCardLink({ host: '192.168.18.72' });
+blankLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-honest-01' }, expectedCard: { id: 'lw-honest-01' },
+  blank: isFactoryCardStatus({ mode: 'factory-flash', source: 'defaults', wiringRevision: 0, wiringDigest: '' }),
+});
+assert.equal(blankLink.getState().state, 'connected-direct');
+assert.equal(blankLink.getState().cardBlank, true, 'a factory status marks the paired card blank');
+assert.equal(nextCardConnectionAction({
+  link: blankLink.getState(),
+}).id, 'card-needs-project', 'a blank card is routed to install, not advertised as ready');
+blankLink.destroy();
+
+// (e) Adopting a blank card on the DIRECT path re-reads /api/status so the
+// paired card lands with cardBlank set on its first render — no green flash.
+storedValues.delete('lw_card_identity_v1');
+const blankAdoptLink = createCardLink({ host: '192.168.18.72' });
+blankAdoptLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank-adopt' }, allowAdopt: false,
+});
+assert.equal(blankAdoptLink.getState().reason, 'found-unpaired');
+await adoptDiscoveredDirectCard({
+  link: blankAdoptLink,
+  fetchImpl: async (url) => {
+    const u = String(url);
+    if (/\/api\/firmware-info$/.test(u)) return {
+      ok: true,
+      json: async () => ({ app: 'Lightweaver', cardId: 'lw-blank-adopt', firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) }),
+    };
+    if (/\/api\/status$/.test(u)) return {
+      ok: true,
+      json: async () => ({ cardId: 'lw-blank-adopt', mode: 'factory-flash', source: 'defaults' }),
+    };
+    return { ok: false };
+  },
+});
+assert.equal(blankAdoptLink.getState().state, 'connected-direct');
+assert.equal(blankAdoptLink.getState().cardBlank, true, 'adopting a blank card sets cardBlank immediately');
+assert.equal(nextCardConnectionAction({ link: blankAdoptLink.getState() }).id, 'card-needs-project');
+blankAdoptLink.destroy();
 
 console.log('card-link-state tests passed');

@@ -31,6 +31,8 @@ test('exports the exact approved orchestrator vocabulary', () => {
     'ready-browser-usb',
     'escape-insecure-card-frame',
     'ready-local-card',
+    'pair-local-card',
+    'card-needs-project',
     'needs-card-update',
     'launch-native-bridge',
     'install-native-bridge',
@@ -227,6 +229,36 @@ test('reports ready-local-card only after a verified local connection', () => {
   }).id, 'ready-local-card');
 });
 
+test('offers one-tap pairing for a reachable-but-unpaired card', () => {
+  const byReason = nextCardConnectionAction({
+    link: { state: 'disconnected', reason: 'found-unpaired', discoveredCard: { id: 'lw-found' } },
+    discoveredCard: { id: 'lw-found' },
+  });
+  assert.equal(byReason.id, 'pair-local-card');
+  assert.equal(byReason.secondaryAction?.id, 'adopt-discovered-card');
+
+  const byDiscovery = nextCardConnectionAction({
+    link: { state: 'disconnected', reason: 'card-unreachable' },
+    discoveredCard: { id: 'lw-found' },
+    rememberedCard: null,
+  });
+  assert.equal(byDiscovery.id, 'pair-local-card');
+});
+
+test('routes a paired blank card to install, not ready-local-card', () => {
+  const action = nextCardConnectionAction({
+    link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: true },
+  });
+  assert.equal(action.id, 'card-needs-project');
+  assert.notEqual(action.id, 'ready-local-card');
+});
+
+test('a paired configured card is still ready-local-card', () => {
+  assert.equal(nextCardConnectionAction({
+    link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: false },
+  }).id, 'ready-local-card');
+});
+
 test('all action copy is physical-action oriented and avoids implementation jargon', () => {
   const inputs = [
     { intent: 'blank-card', capabilities: secureBrowserUsb },
@@ -239,6 +271,8 @@ test('all action copy is physical-action oriented and avoids implementation jarg
     { link: { reason: 'wrong-card' } },
     { link: { reason: 'no-answer' } },
     { link: { reason: 'preview-unconfirmed' } },
+    { link: { state: 'disconnected', reason: 'found-unpaired', discoveredCard: { id: 'lw-a' } }, discoveredCard: { id: 'lw-a' } },
+    { link: { state: 'connected-direct', card: { id: 'lw-a' }, cardBlank: true } },
   ];
   const forbidden = /mixed content|postMessage|Web Serial|localhost|(?:\d{1,3}\.){3}\d{1,3}|Chrome is unsupported/i;
 

@@ -254,7 +254,9 @@ function Rail({ view, setView, openCard }) {
 /* One compact status control opens the shared Connection Center. Transport and
    host diagnostics stay out of routine chrome. */
 function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
-  const connected = isCardLinkConnected(link);
+  // A blank (factory-default) card is linked but has no project to push to, so
+  // it must not advertise a live push rate.
+  const connected = isCardLinkConnected(link) && !link.cardBlank;
   return (
     <footer className="status-bar">
       <div className="sb-card">

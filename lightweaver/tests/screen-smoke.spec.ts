@@ -204,7 +204,7 @@ test('working-card choice opens the card popup path', async ({ page }) => {
     return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ cardId: 'lw-direct-card', cardName: 'Direct card', led: { pixels: 44 } }),
+      body: JSON.stringify({ cardId: 'lw-direct-card', cardName: 'Direct card', led: { pixels: 44 }, source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef' }),
     });
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
@@ -219,21 +219,31 @@ test('working-card choice opens the card popup path', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Direct card.*Connected/i })).toBeVisible();
 });
 
-test('background direct discovery stays unpaired until the explicit working-card choice', async ({ page }) => {
+test('background direct discovery stays unpaired until an explicit one-tap pair', async ({ page }) => {
+  const passiveCard = { cardId: 'lw-passive-card', cardName: 'Passive card', led: { pixels: 44 }, firmwareVersion: '1.4.0', source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef' };
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ cardId: 'lw-passive-card', cardName: 'Passive card', led: { pixels: 44 } }),
+    body: JSON.stringify(passiveCard),
+  }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(passiveCard),
   }));
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_card_identity_v1'))).toBeNull();
+  // A reachable-but-unpaired card is actionable, never green "Connected".
   await expect(page.getByTestId('card-link-status')).not.toHaveAccessibleName(/Connected/);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Found . pair/);
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await page.getByRole('button', { name: 'My card already lights up' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toContainText('Pair this Lightweaver card');
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-passive-card');
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
 });
@@ -243,7 +253,7 @@ test('direct wrong-card adoption is explicit and reverifies before Connected', a
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ cardId: 'lw-direct-found', cardName: 'Found direct card' }),
+    body: JSON.stringify({ cardId: 'lw-direct-found', cardName: 'Found direct card', source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef' }),
   }));
   await page.route('http://lightweaver.local/api/firmware-info', route => {
     firmwareChecks += 1;
@@ -275,6 +285,37 @@ test('direct wrong-card adoption is explicit and reverifies before Connected', a
   await expect.poll(() => firmwareChecks).toBeGreaterThan(0);
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-direct-found');
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
+test('a paired card reporting a factory status surfaces "Needs project", not green', async ({ page }) => {
+  // The card is paired (identity persisted) and reachable — so the write guard
+  // would pass — but it answers with a factory/blank status. The footer must
+  // say "Needs project" and route the user to install, never plain "Connected".
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      cardId: 'lw-blank-card', cardName: 'Blank card', firmwareVersion: '1.4.0',
+      mode: 'factory-flash', source: 'defaults', wiringRevision: 0, wiringDigest: '',
+    }),
+  }));
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-blank-card', name: 'Blank card', hostname: 'lightweaver',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const status = page.getByTestId('card-link-status');
+  await expect(status).toHaveAccessibleName(/Needs project/);
+  await expect(status).not.toHaveAccessibleName(/· Connected/);
+
+  await status.click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toContainText('This card is blank');
+  await expect(dialog.getByRole('button', { name: 'Install your project' })).toBeVisible();
 });
 
 test('blank-card choice reaches Flash install when Web Serial is supported', async ({ page }) => {

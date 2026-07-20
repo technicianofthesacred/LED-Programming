@@ -229,6 +229,10 @@ export function CardConnectionCenter({
     switch (action.id) {
       case 'ready-local-card':
         return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
+      case 'pair-local-card':
+        return <button type="button" className="btn primary" onClick={useDiscoveredCard}>Connect</button>;
+      case 'card-needs-project':
+        return <button type="button" className="btn primary" onClick={openInstall}>Install your project</button>;
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':
