@@ -78,6 +78,7 @@ function exportSlug(name) {
 
 export default function PatternLabExport({
   compatibility,
+  recipe,
   onBake,
   onSimplify,
   onRemoveFeature,
@@ -181,6 +182,10 @@ export default function PatternLabExport({
         <strong>{copy.title}</strong>
         <span>{copy.detail}</span>
       </div>
+
+      {recipe?.offlineAudio && (
+        <p className="plab-export-audio-status">Offline audio lanes included · Bake only</p>
+      )}
 
       <dl className="plab-export-budgets" aria-label="Card compatibility budgets">
         {Object.entries(compatibility.budgets || {}).map(([key, value]) => {

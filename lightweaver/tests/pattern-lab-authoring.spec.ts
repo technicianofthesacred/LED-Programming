@@ -105,6 +105,7 @@ test('derives offline audio lanes locally and marks the recipe as bake-only', as
   const tools = page.getByTestId('pattern-lab-runtime-tools');
   await page.getByText('Card compatibility & diagnostics').click();
   await expect(tools.getByRole('listitem').filter({ hasText: 'Bake to card' })).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByTestId('pattern-lab-export')).toContainText('Offline audio lanes included · Bake only');
 
   const recipeDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export recipe' }).click();

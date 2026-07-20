@@ -485,6 +485,13 @@
 .plab-export-status[data-classification="live-on-card"] { border-left-color: var(--ok); }
 .plab-export-status[data-classification="studio-only"] { border-left-color: var(--danger); }
 
+.plab-export-audio-status {
+  margin-top: 8px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
 .plab-export-budgets {
   display: grid;
   gap: 6px;

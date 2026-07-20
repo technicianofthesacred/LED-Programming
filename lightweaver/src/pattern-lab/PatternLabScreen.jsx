@@ -948,6 +948,7 @@ export default function PatternLabScreen() {
                   </ul>
                   <PatternLabExport
                     compatibility={compatibility}
+                    recipe={draft}
                     onBake={bakeForCard}
                     onSimplify={simplifyForCard}
                     onRemoveFeature={removeUnsupportedFeatures}
