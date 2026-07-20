@@ -79,6 +79,7 @@ bool runtimeOutputReady();
 bool runtimeConfigValid();
 bool runtimeKnownGoodProject();
 void runtimeMarkRestartPending();
+void runtimeSetWifiTransitionPending(bool pending);
 String runtimeFirmwareInfo();
 FactoryResetResult runtimeFactoryReset();
 bool runtimeFinalizeFactoryResetRadio(String& message);

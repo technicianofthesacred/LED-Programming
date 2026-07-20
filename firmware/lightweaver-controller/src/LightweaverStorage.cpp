@@ -205,6 +205,7 @@ void resetConfig(RuntimeConfig& config) {
   config.lookCount = 0;
   resetControls(config.controls);
   resetWifi(config.wifi);
+  config.wifiRuntime = WifiRuntimeState{};
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = "";
   config.activeHostname = "";
@@ -1320,12 +1321,14 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     return false;
   }
   WifiConfig preservedWifi = config.wifi;
+  WifiRuntimeState preservedWifiRuntime = config.wifiRuntime;
   WifiTransport preservedTransport = config.activeTransport;
   String preservedIp = config.activeIp;
   String preservedHostname = config.activeHostname;
   config = *parsed;
   delete parsed;
   config.wifi = preservedWifi;
+  config.wifiRuntime = preservedWifiRuntime;
   config.activeTransport = preservedTransport;
   config.activeIp = preservedIp;
   config.activeHostname = preservedHostname;
@@ -1651,33 +1654,63 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
     message = String("json parse failed: ") + err.c_str();
     return false;
   }
-  String ssid = String(doc["ssid"] | "");
-  if (!ssid.length()) {
-    message = "wifi ssid missing";
+  if (!doc.is<JsonObject>()) {
+    message = "wifi json must be an object";
     return false;
   }
-  String password = String(doc["password"] | "");
-  String hostname = String(doc["hostname"] | "lightweaver");
+  JsonObject wifiObject = doc.as<JsonObject>();
+  if (!doc["ssid"].is<const char*>()) {
+    message = "wifi ssid must be a string";
+    return false;
+  }
+  JsonVariantConst passwordValue = wifiObject["password"];
+  if (!passwordValue.isUnbound() &&
+      !passwordValue.is<const char*>()) {
+    message = "wifi password must be a string";
+    return false;
+  }
+  JsonVariantConst hostnameValue = wifiObject["hostname"];
+  if (!hostnameValue.isUnbound() &&
+      !hostnameValue.is<const char*>()) {
+    message = "wifi hostname must be a string";
+    return false;
+  }
+  WifiConfig candidate;
+  candidate.ssid = doc["ssid"].as<const char*>();
+  candidate.password = doc["password"].is<const char*>()
+      ? String(doc["password"].as<const char*>()) : String();
+  candidate.hostname = doc["hostname"].is<const char*>()
+      ? String(doc["hostname"].as<const char*>()) : String("lightweaver");
+  if (candidate.ssid.length() == 0 || candidate.ssid.length() > 32) {
+    message = "wifi ssid must be 1..32 bytes";
+    return false;
+  }
+  if (candidate.password.length() > 63) {
+    message = "wifi password must be at most 63 bytes";
+    return false;
+  }
+  if (candidate.hostname.length() == 0 || candidate.hostname.length() > 32) {
+    message = "wifi hostname must be 1..32 bytes";
+    return false;
+  }
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) {
     message = "nvs write open failed";
     return false;
   }
   JsonDocument out;
-  out["ssid"] = ssid;
-  out["password"] = password;
-  out["hostname"] = hostname;
+  out["ssid"] = candidate.ssid;
+  out["password"] = candidate.password;
+  out["hostname"] = candidate.hostname;
   String serialized;
   serializeJson(out, serialized);
-  bool ok = prefs.putString(NVS_WIFI_KEY, serialized) > 0;
+  bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
   prefs.end();
   if (!ok) {
     message = "nvs write failed";
     return false;
   }
-  config.wifi.ssid = ssid;
-  config.wifi.password = password;
-  config.wifi.hostname = hostname;
+  config.wifi = candidate;
   message = "wifi credentials saved";
   return true;
 }
@@ -1771,9 +1804,32 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   lwOutput["calibration"]["blue"] = runtimeOutputCalibrationBlue();
   lwOutput["measuredFps"] = runtimeOutputMeasuredFps();
   lwOutput["dithering"] = runtimeOutputDithering();
+  const lightweaver::ConnectivityState& wifiState = config.wifiRuntime.connectivity;
+  const char* wifiPhase = "setup-ap";
+  switch (wifiState.phase) {
+    case lightweaver::ConnectivityPhase::Joining: wifiPhase = "joining"; break;
+    case lightweaver::ConnectivityPhase::HandoffReady: wifiPhase = "handoff-ready"; break;
+    case lightweaver::ConnectivityPhase::Station: wifiPhase = "station"; break;
+    case lightweaver::ConnectivityPhase::Reconnecting: wifiPhase = "reconnecting"; break;
+    case lightweaver::ConnectivityPhase::RecoveryAp: wifiPhase = "recovery-ap"; break;
+    case lightweaver::ConnectivityPhase::SetupAp: break;
+  }
+  bool wifiTransition = wifiState.phase == lightweaver::ConnectivityPhase::Joining ||
+      wifiState.phase == lightweaver::ConnectivityPhase::HandoffReady ||
+      wifiState.phase == lightweaver::ConnectivityPhase::Reconnecting ||
+      wifiState.phase == lightweaver::ConnectivityPhase::RecoveryAp;
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["hostname"] = config.activeHostname;
   doc["wifi"]["ip"] = config.activeIp;
+  doc["wifi"]["phase"] = wifiPhase;
+  doc["wifi"]["transitionPending"] = wifiTransition;
+  doc["wifi"]["apActive"] = wifiState.apActive;
+  doc["wifi"]["stationIp"] = config.wifiRuntime.stationIp;
+  doc["wifi"]["handoffGeneration"] = wifiState.generation;
+  doc["wifi"]["phaseStartedMs"] = wifiState.phaseStartedMs;
+  doc["wifi"]["lastAttemptMs"] = wifiState.lastAttemptMs;
+  doc["wifi"]["attemptCount"] = config.wifiRuntime.attemptCount;
+  doc["wifi"]["lastError"] = config.wifiRuntime.lastError;
   doc["wifi"]["configured"] = config.wifi.ssid.length() > 0;
   String output;
   serializeJson(doc, output);

@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWledJsonApi.h"
 #include "LightweaverWledRealtime.h"
+#include "LightweaverConnectivityPolicy.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -29,6 +30,12 @@ size_t runtimeRequestExpectedLength = 0;
 size_t runtimeRequestBodyLimit = 0;
 bool runtimeRequestBodyReady = false;
 bool runtimeRequestBodyRejected = false;
+bool apTeardownScheduled = false;
+uint32_t apTeardownGeneration = 0;
+
+void startApMode(RuntimeConfig& config);
+void beginStationJoin(RuntimeConfig& config, uint32_t generation);
+void scheduleApTeardown(uint32_t generation);
 
 // Bridge protocol version — the card-page postMessage bridge contract shared
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
@@ -893,7 +900,7 @@ void handleAdvancedRoot() {
               "if(!ssid){m.textContent='Choose a network or type its name first.';m.className='note err';return}"
               "btn.disabled=true;m.textContent='Saving…';m.className='note';"
               "try{const r=await post('/api/wifi',{ssid:ssid,password:$('pw').value,hostname:$('hn').value});"
-              "if(r.ok){m.textContent='Saved. Rebooting — reconnect to your home WiFi and open '+($('hn').value||'lightweaver')+'.local';m.className='note ok'}"
+              "if(r.ok){m.textContent='Saved. Joining your home WiFi now — this setup network stays available during handoff. Then open '+($('hn').value||'lightweaver')+'.local';m.className='note ok'}"
               "else{m.textContent=r.error||'Save failed';m.className='note err';btn.disabled=false}}catch(e){m.textContent=e.message;m.className='note err';btn.disabled=false}};");
   } else {
     page += F("let patterns=[],currentId='',blackoutOn=false;"
@@ -1205,10 +1212,50 @@ void handleWifiPost() {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
-  runtimeMarkRestartPending();
-  server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\"}");
-  delay(400);
-  ESP.restart();
+  uint32_t generation = runtimeConfigPtr->wifiRuntime.connectivity.generation + 1U;
+  if (generation == 0) generation = 1;
+  beginStationJoin(*runtimeConfigPtr, generation);
+  JsonDocument response;
+  response["ok"] = true;
+  response["accepted"] = true;
+  response["transition"] = "joining";
+  response["handoffGeneration"] = generation;
+  response["message"] = message;
+  String body;
+  serializeJson(response, body);
+  server.send(202, "application/json", body);
+}
+
+void handleWifiHandoffAck() {
+  sendCors();
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
+    return;
+  }
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+  if (error || !doc.is<JsonObject>() ||
+      !doc["handoffGeneration"].is<uint32_t>()) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"handoffGeneration must be an unsigned integer\"}");
+    return;
+  }
+  uint32_t generation = doc["handoffGeneration"].as<uint32_t>();
+  const lightweaver::ConnectivityState& state =
+      runtimeConfigPtr->wifiRuntime.connectivity;
+  if (generation == 0 || generation != state.generation ||
+      state.phase != lightweaver::ConnectivityPhase::HandoffReady) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"handoff generation is not current\"}");
+    return;
+  }
+  bool stationOrigin = WiFi.status() == WL_CONNECTED &&
+      server.client().localIP() == WiFi.localIP();
+  if (!stationOrigin) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"acknowledgement must arrive through the station interface\"}");
+    return;
+  }
+  server.send(200, "application/json", "{\"ok\":true,\"accepted\":true}");
+  server.client().flush();
+  scheduleApTeardown(generation);
 }
 
 void handleWifiScan() {
@@ -1825,150 +1872,12 @@ void announceMdns(const String& hostname) {
   }
 }
 
-bool tryStationJoin(RuntimeConfig& config) {
-  if (config.wifi.ssid.length() == 0) return false;
-  String hostname = sanitizeHostname(config.wifi.hostname);
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.setHostname(hostname.c_str());
-  WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
-  if (Serial) {
-    Serial.print("Joining WiFi ");
-    Serial.print(config.wifi.ssid);
-    Serial.print(" as ");
-    Serial.println(hostname);
-  }
-
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(250);
-  }
-  if (WiFi.status() != WL_CONNECTED) {
-    if (Serial) Serial.println("WiFi join failed, falling back to AP");
-    WiFi.disconnect(true, true);
-    return false;
-  }
-  config.activeTransport = WIFI_TRANSPORT_STATION;
-  config.activeIp = WiFi.localIP().toString();
-  config.activeHostname = hostname;
-  if (Serial) {
-    Serial.print("WiFi joined: ");
-    Serial.print(config.activeIp);
-    Serial.print(" / ");
-    Serial.print(hostname);
-    Serial.println(".local");
-  }
-  announceMdns(hostname);
-  return true;
-}
-
-// While in AP fallback with saved credentials (wrong password, router was
-// down, out of range at boot), periodically retry the home network so the
-// card heals itself when the router comes back. Non-blocking state machine:
-// WiFi.begin() once in WIFI_AP_STA (the setup AP + captive portal stay up
-// during the attempt), then poll WiFi.status() across loop() iterations with
-// a deadline — never freezes rendering the way the boot-time 15s wait would.
-// All time comparisons are wrap-safe signed differences, matching the
-// recoveryHoldUntilMs pattern in main.cpp.
-void maintainApFallbackRejoin(RuntimeConfig& cfg, uint32_t now) {
-  static uint32_t nextAttemptAtMs = 60000;   // first retry ~60s after boot
-  static uint32_t attemptDeadlineMs = 0;
-  static uint32_t lastPollMs = 0;
-  static bool attemptActive = false;
-
-  if (cfg.wifi.ssid.length() == 0) return;
-  if (int32_t(now - lastPollMs) < 500) return;
-  lastPollMs = now;
-
-  if (!attemptActive) {
-    if (int32_t(now - nextAttemptAtMs) < 0) return;
-    String hostname = sanitizeHostname(cfg.wifi.hostname);
-    WiFi.mode(WIFI_AP_STA);  // keep the setup AP alive while we try
-    WiFi.setSleep(false);
-    WiFi.setHostname(hostname.c_str());
-    WiFi.begin(cfg.wifi.ssid.c_str(), cfg.wifi.password.c_str());
-    attemptActive = true;
-    attemptDeadlineMs = now + 15000;
-    if (Serial) Serial.println("AP fallback: retrying saved WiFi");
-    return;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    attemptActive = false;
-    String hostname = sanitizeHostname(cfg.wifi.hostname);
-    // Joined the home network — tear down the setup AP + captive DNS and run
-    // as a plain station, the same end state as a successful boot-time join.
-    if (dnsServerActive) {
-      dnsServer.stop();
-      dnsServerActive = false;
-    }
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-    cfg.activeTransport = WIFI_TRANSPORT_STATION;
-    cfg.activeIp = WiFi.localIP().toString();
-    cfg.activeHostname = hostname;
-    announceMdns(hostname);
-    wledRealtimeRebind();
-    if (Serial) {
-      Serial.print("AP fallback: joined ");
-      Serial.print(cfg.wifi.ssid);
-      Serial.print(" at ");
-      Serial.println(cfg.activeIp);
-    }
-    return;
-  }
-
-  if (int32_t(now - attemptDeadlineMs) >= 0) {
-    attemptActive = false;
-    WiFi.disconnect(false, false);  // stop this STA attempt; AP stays up
-    nextAttemptAtMs = now + 60000;  // try again in ~60s
-    if (Serial) Serial.println("AP fallback: retry failed, next attempt in 60s");
-  }
-}
-
-// Called every loop() (throttled internally). When the STA link drops and
-// re-associates, the mDNS responder and the realtime UDP socket bound to the
-// old association are dead — so lightweaver.local stops resolving even though
-// the card is back online. Detect the (re)connect and refresh IP, re-announce
-// mDNS, and rebind realtime. In AP fallback mode, periodically retry the
-// saved home network instead.
-void maintainConnectivity() {
-  if (!runtimeConfigPtr) return;
-  RuntimeConfig& cfg = *runtimeConfigPtr;
-  if (cfg.activeTransport != WIFI_TRANSPORT_STATION) {
-    if (cfg.activeTransport == WIFI_TRANSPORT_AP) {
-      maintainApFallbackRejoin(cfg, millis());
-    }
-    return;
-  }
-  static uint32_t lastCheck = 0;
-  static bool wasConnected = true;
-  uint32_t now = millis();
-  if (now - lastCheck < 3000) return;
-  lastCheck = now;
-  bool nowConnected = WiFi.status() == WL_CONNECTED;
-  if (nowConnected) {
-    String ip = WiFi.localIP().toString();
-    if (!wasConnected || (ip != "0.0.0.0" && ip != cfg.activeIp)) {
-      cfg.activeIp = ip;
-      String hostname = cfg.activeHostname.length()
-                          ? cfg.activeHostname
-                          : sanitizeHostname(cfg.wifi.hostname);
-      announceMdns(hostname);
-      wledRealtimeRebind();
-      if (Serial) { Serial.print("WiFi reacquired: "); Serial.println(ip); }
-    }
-  }
-  wasConnected = nowConnected;
-}
-
 void startApMode(RuntimeConfig& config) {
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(config.wifi.ssid.length() ? WIFI_AP_STA : WIFI_AP);
   WiFi.setSleep(false);
   String ssid = apSsid();
   WiFi.softAP(ssid.c_str());
+  config.wifiRuntime.connectivity.apActive = true;
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = WiFi.softAPIP().toString();
   config.activeHostname = "";
@@ -1984,6 +1893,151 @@ void startApMode(RuntimeConfig& config) {
   if (dnsServerActive) {
     if (Serial) Serial.println("Captive DNS up");
   }
+}
+
+bool wifiPhaseIsPending(lightweaver::ConnectivityPhase phase) {
+  return phase == lightweaver::ConnectivityPhase::Joining ||
+         phase == lightweaver::ConnectivityPhase::HandoffReady ||
+         phase == lightweaver::ConnectivityPhase::Reconnecting ||
+         phase == lightweaver::ConnectivityPhase::RecoveryAp;
+}
+
+void syncWifiReadiness(const RuntimeConfig& config) {
+  runtimeSetWifiTransitionPending(
+      wifiPhaseIsPending(config.wifiRuntime.connectivity.phase));
+}
+
+void startStationAttempt(RuntimeConfig& config) {
+  String hostname = sanitizeHostname(config.wifi.hostname);
+  WiFi.mode(config.wifiRuntime.connectivity.apActive ? WIFI_AP_STA : WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.setHostname(hostname.c_str());
+  WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
+  config.wifiRuntime.attemptCount++;
+  if (Serial) Serial.println("WiFi station association started");
+}
+
+void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
+  if (!config.wifiRuntime.connectivity.apActive) startApMode(config);
+  apTeardownScheduled = false;
+  apTeardownGeneration = 0;
+  config.wifiRuntime.attemptCount = 0;
+  WiFi.disconnect(false, false);
+  config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
+      config.wifiRuntime.connectivity,
+      {lightweaver::ConnectivityEvent::CredentialsAccepted, millis(), generation});
+  config.wifiRuntime.stationIp = "";
+  config.wifiRuntime.lastError = "";
+  config.activeTransport = WIFI_TRANSPORT_AP;
+  config.activeIp = WiFi.softAPIP().toString();
+  config.activeHostname = "";
+  syncWifiReadiness(config);
+  startStationAttempt(config);
+}
+
+void scheduleApTeardown(uint32_t generation) {
+  apTeardownGeneration = generation;
+  apTeardownScheduled = true;
+}
+
+void retireSetupAp(RuntimeConfig& config) {
+  if (dnsServerActive) {
+    dnsServer.stop();
+    dnsServerActive = false;
+  }
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  config.wifiRuntime.connectivity.apActive = false;
+  config.activeTransport = WIFI_TRANSPORT_STATION;
+  config.activeIp = config.wifiRuntime.stationIp;
+}
+
+void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
+  config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
+      config.wifiRuntime.connectivity,
+      {lightweaver::ConnectivityEvent::StationAssociated, now, 0});
+  config.wifiRuntime.stationIp = WiFi.localIP().toString();
+  config.wifiRuntime.lastError = "";
+  config.activeTransport = WIFI_TRANSPORT_STATION;
+  config.activeIp = config.wifiRuntime.stationIp;
+  config.activeHostname = sanitizeHostname(config.wifi.hostname);
+  announceMdns(config.activeHostname);
+  wledRealtimeRebind();
+  syncWifiReadiness(config);
+  if (Serial) {
+    Serial.print("WiFi station associated at ");
+    Serial.println(config.wifiRuntime.stationIp);
+  }
+}
+
+void maintainConnectivity() {
+  if (!runtimeConfigPtr) return;
+  RuntimeConfig& cfg = *runtimeConfigPtr;
+  lightweaver::ConnectivityState& state = cfg.wifiRuntime.connectivity;
+  uint32_t now = millis();
+
+  if (apTeardownScheduled) {
+    apTeardownScheduled = false;
+    if (WiFi.status() == WL_CONNECTED &&
+        state.phase == lightweaver::ConnectivityPhase::HandoffReady &&
+        apTeardownGeneration != 0 && apTeardownGeneration == state.generation) {
+      state = lightweaver::advanceConnectivity(
+          state, {lightweaver::ConnectivityEvent::StationOriginAck,
+                  now, apTeardownGeneration});
+      retireSetupAp(cfg);
+      syncWifiReadiness(cfg);
+    }
+    apTeardownGeneration = 0;
+  }
+
+  static uint32_t lastPollMs = 0;
+  if (uint32_t(now - lastPollMs) < 250) return;
+  lastPollMs = now;
+
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if (connected && !state.stationAssociated &&
+      (state.phase == lightweaver::ConnectivityPhase::Joining ||
+       state.phase == lightweaver::ConnectivityPhase::Reconnecting ||
+       state.phase == lightweaver::ConnectivityPhase::RecoveryAp)) {
+    bool apWasActive = state.apActive;
+    recordStationAssociation(cfg, now);
+    if (state.phase == lightweaver::ConnectivityPhase::Station && apWasActive) {
+      retireSetupAp(cfg);
+    }
+    return;
+  }
+
+  if (!connected && state.stationAssociated) {
+    state = lightweaver::advanceConnectivity(
+        state, {lightweaver::ConnectivityEvent::StationLost, now, 0});
+    cfg.wifiRuntime.stationIp = "";
+    cfg.wifiRuntime.lastError = "station connection lost";
+    syncWifiReadiness(cfg);
+    if (state.reconnectDue) startStationAttempt(cfg);
+    return;
+  }
+
+  lightweaver::ConnectivityPhase previousPhase = state.phase;
+  state = lightweaver::advanceConnectivity(
+      state, {lightweaver::ConnectivityEvent::Tick, now, 0});
+
+  if (previousPhase == lightweaver::ConnectivityPhase::Joining &&
+      state.phase == lightweaver::ConnectivityPhase::SetupAp) {
+    WiFi.disconnect(false, false);
+    cfg.wifiRuntime.stationIp = "";
+    cfg.wifiRuntime.lastError = "station association timed out";
+    startApMode(cfg);
+  } else if (previousPhase == lightweaver::ConnectivityPhase::HandoffReady &&
+             state.phase == lightweaver::ConnectivityPhase::Station && connected) {
+    retireSetupAp(cfg);
+  } else if (previousPhase == lightweaver::ConnectivityPhase::Reconnecting &&
+             state.phase == lightweaver::ConnectivityPhase::RecoveryAp) {
+    startApMode(cfg);
+  }
+
+  if (state.reconnectDue && cfg.wifi.ssid.length()) startStationAttempt(cfg);
+  syncWifiReadiness(cfg);
 }
 }
 
@@ -2016,9 +2070,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   totalPixelsPtr = &totalPixels;
   currentLookIndexPtr = &currentLookIndex;
 
-  if (!tryStationJoin(config)) {
-    startApMode(config);
-  }
+  startApMode(config);
+  if (config.wifi.ssid.length()) beginStationJoin(config, 1);
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_OPTIONS, handleOptions);
@@ -2038,6 +2091,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/wiring/discover", HTTP_POST, handleWiringDiscover);
   server.on("/api/wifi", HTTP_OPTIONS, handleOptions);
   server.on("/api/wifi", HTTP_POST, handleWifiPost);
+  server.on("/api/wifi/handoff-ack", HTTP_OPTIONS, handleOptions);
+  server.on("/api/wifi/handoff-ack", HTTP_POST, handleWifiHandoffAck);
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/api/reboot", HTTP_OPTIONS, handleOptions);
   server.on("/api/reboot", HTTP_POST, handleReboot);

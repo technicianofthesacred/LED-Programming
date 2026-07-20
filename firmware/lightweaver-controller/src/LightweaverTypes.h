@@ -6,6 +6,7 @@
 
 #include "LightweaverOutputColorConfig.h"
 #include "LightweaverProvisioningPolicy.h"
+#include "LightweaverConnectivityPolicy.h"
 
 #ifndef LW_MAX_PIXELS
 #define LW_MAX_PIXELS 1024
@@ -167,6 +168,15 @@ struct WifiConfig {
   String hostname = "lightweaver";
 };
 
+// Live network truth is intentionally separate from WifiConfig: credentials
+// are durable and private, while this state is transient and safe to expose.
+struct WifiRuntimeState {
+  lightweaver::ConnectivityState connectivity;
+  String stationIp;
+  String lastError;
+  uint32_t attemptCount = 0;
+};
+
 // A contiguous run of pixels on the global LED buffer.
 // Multiple ranges per zone let a single zone span discontinuous segments
 // (e.g. two physical strips chained behind one logical "outer ring").
@@ -227,6 +237,7 @@ struct RuntimeConfig {
   uint8_t lookCount = 0;
   ControlsConfig controls;
   WifiConfig wifi;
+  WifiRuntimeState wifiRuntime;
   WifiTransport activeTransport = WIFI_TRANSPORT_AP;
   String activeIp;
   String activeHostname;

@@ -27,9 +27,15 @@ enum class ConnectivityEvent {
 };
 
 struct ConnectivityInput {
-  ConnectivityEvent event = ConnectivityEvent::Tick;
-  std::uint32_t nowMs = 0;
-  std::uint32_t generation = 0;
+  ConnectivityEvent event;
+  std::uint32_t nowMs;
+  std::uint32_t generation;
+
+  constexpr ConnectivityInput(
+      ConnectivityEvent eventValue = ConnectivityEvent::Tick,
+      std::uint32_t nowValue = 0,
+      std::uint32_t generationValue = 0)
+      : event(eventValue), nowMs(nowValue), generation(generationValue) {}
 };
 
 struct ConnectivityState {
@@ -48,7 +54,7 @@ constexpr bool elapsed(std::uint32_t nowMs,
   return static_cast<std::uint32_t>(nowMs - startedMs) >= durationMs;
 }
 
-constexpr ConnectivityState advanceConnectivity(
+inline ConnectivityState advanceConnectivity(
     const ConnectivityState& current,
     const ConnectivityInput& input) {
   ConnectivityState next = current;

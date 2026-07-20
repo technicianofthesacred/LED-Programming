@@ -109,6 +109,7 @@ uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
 bool restartTransitionPending = false;
+bool wifiTransitionPending = false;
 String bootId;
 uint32_t cardStateRevision = 0;
 ErrorCode errorCode = ERROR_NONE;
@@ -1635,7 +1636,7 @@ String runtimeCardId() {
 String runtimeBootId() { return bootId; }
 
 bool runtimeTransitionPending() {
-  if (restartTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
+  if (restartTransitionPending || wifiTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
       wiringProbationActive || runtimeRecoveryAfterRestartPending()) {
     return true;
   }
@@ -1677,6 +1678,10 @@ bool runtimeCommandReady() {
 void runtimeMarkRestartPending() {
   restartTransitionPending = true;
   if (ledOutputsReady) clearPhysicalLeds();
+}
+
+void runtimeSetWifiTransitionPending(bool pending) {
+  wifiTransitionPending = pending;
 }
 
 String runtimeFirmwareInfo() {
