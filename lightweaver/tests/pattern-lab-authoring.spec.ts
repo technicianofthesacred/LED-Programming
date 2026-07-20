@@ -131,6 +131,8 @@ test('derives offline audio lanes locally and marks the recipe as bake-only', as
 
 test('edits and rotates the palette with simple color controls', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('gradient');
+  const tools = page.getByTestId('pattern-lab-runtime-tools');
+  const originalSource = JSON.parse(await tools.getAttribute('data-source-recipe-snapshot') || 'null');
   const first = page.getByLabel('Palette color 1');
   await first.fill('#ff0000');
   await expect(first).toHaveValue('#ff0000');
@@ -144,6 +146,13 @@ test('edits and rotates the palette with simple color controls', async ({ page }
   const exportedPath = await (await pending).path();
   const exported = JSON.parse(await readFile(exportedPath!, 'utf8'));
   expect(exported.palette.at(-1)).toBe('#ff0000');
+
+  await page.getByRole('button', { name: 'Save private draft' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Open Gradient/ }).click();
+  const reopenedSource = JSON.parse(await tools.getAttribute('data-source-recipe-snapshot') || 'null');
+  expect(reopenedSource.palette).toEqual(originalSource.palette);
+  expect(reopenedSource.palette).not.toEqual(exported.palette);
 });
 
 test('Play advances one bounded journey clock and Pause preserves it', async ({ page }) => {

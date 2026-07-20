@@ -178,11 +178,14 @@ function withEvolutionDisabled(recipe) {
 
 function sourceFromRecipe(recipe) {
   const stateful = PATTERN_LAB_GENERATOR_IDS.includes(recipe.base?.kind);
-  const source = recipeFromPattern(stateful ? 'aurora' : recipe.base.patternId, { palette: recipe.palette });
+  const source = recipeFromPattern(stateful ? 'aurora' : recipe.base.patternId, {
+    ...(Array.isArray(recipe.sourcePalette) ? { palette: recipe.sourcePalette } : {}),
+  });
   return withEvolutionDisabled({
     ...source,
     id: recipe.id,
     name: recipe.name,
+    sourcePalette: cloneRecipe(recipe.sourcePalette || source.palette),
     ...(stateful ? {
       base: {
         ...cloneRecipe(recipe.base),
@@ -548,13 +551,14 @@ export default function PatternLabScreen() {
     }
     const generatorId = patternId.startsWith('generator:') ? patternId.slice('generator:'.length) : '';
     const stateful = PATTERN_LAB_GENERATOR_IDS.includes(generatorId);
-    const source = stateful
+    const selected = stateful
       ? withEvolutionDisabled({
           ...recipeFromPattern('aurora', { palette: project.palette }),
           name: GENERATOR_NAMES[generatorId],
           base: { kind: generatorId, patternId: 'aurora', params: { advanced: {} } },
         })
       : withEvolutionDisabled(recipeFromPattern(patternId, { palette: project.palette }));
+    const source = { ...selected, sourcePalette: cloneRecipe(selected.palette) };
     setSourceRecipe(source);
     setDraft(cloneRecipe(source));
     setComparison('draft');
