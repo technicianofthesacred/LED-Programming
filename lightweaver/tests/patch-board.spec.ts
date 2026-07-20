@@ -169,6 +169,15 @@ test('Advanced installation tools are collapsed and Split still cuts a run', asy
   await clickStripPathAt(page, 0.45);
   await expect(page.getByText('Selected split')).toBeVisible();
   expect((await exportProject(page, tmp, 'after-split.json')).layout.wiring.runs.filter((run: any) => run.type === 'strip')).toHaveLength(2);
+  await expect(page.locator('.lww-plan-head .meta')).toContainText('1 strip ·');
+  const runSelector = page.getByLabel('Physical run');
+  await expect(runSelector.locator('option')).toHaveCount(2);
+  await runSelector.selectOption({ index: 1 });
+  await page.getByLabel('Physical DATA IN').selectOption('source-reverse');
+  const editedRuns = (await exportProject(page, tmp, 'after-second-run-edit.json')).layout.wiring.runs
+    .filter((run: any) => run.type === 'strip')
+    .sort((a: any, b: any) => a.source.from - b.source.from);
+  expect(editedRuns.map((run: any) => run.physicalDirection)).toEqual(['source-forward', 'source-reverse']);
   await page.getByRole('button', { name: 'Move split later' }).click();
   await page.getByRole('button', { name: 'Merge split runs' }).click();
 

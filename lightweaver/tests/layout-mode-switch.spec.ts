@@ -65,7 +65,7 @@ test('the two equal mode tabs live at the top of the inspector', async ({ page }
   };
   const drawTint = await tintFor('draw');
   const wireTint = await tintFor('wire');
-  expect(drawTint).not.toBe(wireTint);
+  expect(wireTint).toBe(drawTint);
 });
 
 test('both active mode tabs use the existing orange accent', async ({ page }) => {
@@ -88,7 +88,7 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
   await expect(page.getByTestId('start-led-check')).toBeVisible();
 });
 
-test('switching modes and activating Wire tools suspend the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
+test('switching modes and activating the split tool suspend the in-progress strip until Wire resumes or Cancel clears it', async ({ page }) => {
   await gotoLayout(page);
 
   const drawBtn = page.getByTitle('Draw a new LED strip path on the artwork.');
@@ -120,14 +120,6 @@ test('switching modes and activating Wire tools suspend the in-progress strip un
   await page.getByText('Advanced installation tools', { exact: true }).click();
   await page.getByText('Custom mapping', { exact: true }).click();
   await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
-  await page.getByTestId('layout-mode-draw').click();
-  await drawBtn.click();
-  await expect(page.locator('.la-draw-hint')).toContainText('2 points');
-
-  await page.getByTestId('layout-mode-wire').click();
-  await page.getByText('Advanced installation tools', { exact: true }).click();
-  await page.getByText('Custom mapping', { exact: true }).click();
-  await page.getByRole('button', { name: 'Add a cable jump' }).click();
   await page.getByTestId('layout-mode-draw').click();
   await drawBtn.click();
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');

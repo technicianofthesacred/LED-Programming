@@ -26,7 +26,6 @@ export function LayoutScreen({ connected, cardHost }) {
     // context passthroughs + composer-level derived (chrome + canvas only)
     strips, layers, hidden,
     viewBox, svgText,
-    patchBoard,
     selectStrip, toggleStripSel, togglePathSelection,
     layoutHistLen, layoutFutLen,
     doUndo, doRedo,
@@ -43,7 +42,7 @@ export function LayoutScreen({ connected, cardHost }) {
     setHoveredLayerId, hoveredSubPathId, setHoveredSubPathId,
     // wire
     wireOverlayMode, setWireOverlayMode,
-    chopStripAtEvent, toggleRoutePatch,
+    chopStripAtEvent,
     // canvas + preview
     showLight, setShowLight, showLeds, setShowLeds,
     glowMode, setGlowMode, directedGlow, setDirectedGlow,
@@ -158,7 +157,7 @@ export function LayoutScreen({ connected, cardHost }) {
       handleSvgMouseUp, handleSvgMouseLeave, handleContextMenu, handleWheel,
       handleDragOver, handleDragLeave, handleDrop,
       startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
-      toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
+      togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
     },
   };
 

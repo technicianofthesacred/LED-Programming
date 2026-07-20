@@ -222,7 +222,7 @@
 .la-empty .cta { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 20px; border-radius: var(--r-md); background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 12.5px; }
 .la-empty .cta svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; color: var(--on-accent); }
 
-/* ── Canvas wire-path overlay (chop/link route drawn on the artwork) ──────
+/* ── Canvas wire-path overlay (split/canonical route drawn on artwork) ───
    Ported from main.css into the v3 token idiom — warm accent strands, no blue.
    --wire-color is set inline per segment from the strip's own color. */
 .lw-wire-canvas-segment {
@@ -234,16 +234,6 @@
   opacity: 0.42;
   filter: drop-shadow(0 0 4px var(--wire-color, var(--accent)));
   pointer-events: none;
-}
-.lw-wire-canvas-segment-hit {
-  fill: none;
-  stroke: var(--accent);
-  stroke-opacity: 0.001;
-  stroke-width: 18;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  cursor: pointer;
-  pointer-events: visibleStroke;
 }
 .lw-route-badge { pointer-events: none; }
 .lw-route-badge circle { fill: var(--accent); stroke: var(--bg-canvas); stroke-width: 1.5; }

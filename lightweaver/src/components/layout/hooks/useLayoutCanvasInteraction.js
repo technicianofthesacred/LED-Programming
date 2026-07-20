@@ -88,7 +88,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const { deleteSelectedVectorPaths, deleteLayer, createLayerGroup, addAllStrips, artworkHTML } = artworkApi;
   const {
     wireOverlayMode, selectedWireCut,
-    setWireOverlayMode, setSelectedWireCut, setLinkRouteIds,
+    setWireOverlayMode, setSelectedWireCut,
     deleteSelectedWireCut,
   } = wireApi;
 
@@ -117,7 +117,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const [mode, setModeState] = useState(() => parseModeFromHash());
 
   // Clears every in-progress tool's ephemeral state (draw waypoints/ghost/
-  // pending-name panel + the wire chop/link overlay) without touching any
+  // pending-name panel + the wire split overlay) without touching any
   // persisted/undoable state. Called before every mode switch, and by the
   // Escape handler's draw-cancel branch.
   const cancelActiveTool = useCallback(() => {
@@ -126,9 +126,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     setGhostPt(null);
     setPendingDraw(null);
     setWireOverlayMode('idle');
-    setLinkRouteIds([]);
     setSelectedWireCut(null);
-  }, [setWireOverlayMode, setLinkRouteIds, setSelectedWireCut]);
+  }, [setWireOverlayMode, setSelectedWireCut]);
 
   const setMode = useCallback((nextMode) => {
     if (!LAYOUT_MODES.includes(nextMode) || nextMode === mode) return;
@@ -137,11 +136,10 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     setDrawMode(false);
     setGhostPt(null);
     setWireOverlayMode('idle');
-    setLinkRouteIds([]);
     setSelectedWireCut(null);
     setModeState(nextMode);
     mergeModeIntoHash(nextMode);
-  }, [mode, setWireOverlayMode, setLinkRouteIds, setSelectedWireCut]);
+  }, [mode, setWireOverlayMode, setSelectedWireCut]);
 
   // ── Rubber-band lasso — coords stored in CLIENT (viewport px), not SVG ──────
   const [rubberBand, setRubberBand] = useState(null); // {x1,y1,x2,y2} client px
@@ -665,10 +663,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   }, [wiring, compiledWiring, strips, hidden]);
 
   const visibleWirePathCanvasSegments = useMemo(
-    () => wireOverlayMode === 'link'
-      ? wirePathCanvasSegments
-      : wirePathCanvasSegments.filter(segment => segment.showWhenIdle),
-    [wireOverlayMode, wirePathCanvasSegments],
+    () => wirePathCanvasSegments.filter(segment => segment.showWhenIdle),
+    [wirePathCanvasSegments],
   );
 
   const wireRouteJumps = useMemo(() => {

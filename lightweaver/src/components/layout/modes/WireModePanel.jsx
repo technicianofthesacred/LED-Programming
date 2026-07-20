@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { download, toWLEDLedmap } from '../../../lib/export.js';
-import { mainChain, normalizePatchBoard } from '../../../lib/patchBoard.js';
+import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
 import { WiringPreflight } from '../wire/WiringPreflight.jsx';
@@ -33,7 +33,6 @@ export function WireModePanel({ state, connected, cardHost }) {
     strips, selStripId, pxPerMm,
     selectedWireCut, nudgeSelectedWireCut, deleteSelectedWireCut, setStripCounts,
     wireOverlayMode, setWireOverlayMode,
-    setSelectedWirePatchId, setLinkRouteIds, linkRouteStartedRef,
     setDrawMode, setGhostPt, setMode,
   } = state;
   const {
@@ -43,6 +42,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [mutationError, setMutationError] = useState('');
   const [showAssembly, setShowAssembly] = useState(false);
   const [pinError, setPinError] = useState('');
+  const [selectedCustomRunId, setSelectedCustomRunId] = useState('');
   const [psuAmpsDraft, setPsuAmpsDraft] = useState(() => String(readPowerSupplySettings(standaloneController).psuAmps));
   const [milliampsDraft, setMilliampsDraft] = useState(() => String(readPowerSupplySettings(standaloneController).milliampsPerPixel));
   // True while the guided LED check owns the primary flow area — the bench
@@ -68,28 +68,6 @@ export function WireModePanel({ state, connected, cardHost }) {
         }),
     chains: wiring.outputs.map(output => ({ id: output.id, name: output.name || output.id, rowIds: output.runIds.filter(id => runsById.get(id)?.type !== 'cable') })),
   }, strips), [wiring, strips, stripsById, runsById]);
-  useEffect(() => {
-    if (wiring.locked) return;
-    const stripIds = new Set(strips.map(strip => strip.id));
-    const stale = wiring.runs.some(run => run.type === 'strip' && !stripIds.has(run.source.stripId));
-    const covered = new Set(wiring.runs.filter(run => run.type === 'strip' && stripIds.has(run.source.stripId)).map(run => run.source.stripId));
-    const missing = strips.filter(strip => !covered.has(strip.id));
-    if (!stale && !missing.length) return;
-    updateWiring(draft => {
-      const staleIds = new Set(draft.runs.filter(run => run.type === 'strip' && !stripIds.has(run.source.stripId)).map(run => run.id));
-      draft.runs = draft.runs.filter(run => !staleIds.has(run.id));
-      draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => !staleIds.has(id)); });
-      for (const strip of missing) {
-        const id = nextRunId(draft.runs, `run-${strip.id}`);
-        draft.runs.push({
-          id, type: 'strip', source: { stripId: strip.id, from: 0, to: Math.max(0, strip.pixelCount - 1) },
-          directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null, verified: false,
-        });
-        draft.outputs[0].runIds.push(id);
-      }
-    }, { changeKind: 'geometry' });
-  }, [strips, updateWiring, wiring]);
-
   const mutate = (callback, options = {}) => {
     const result = updateWiring(callback, options);
     if (!result.ok) setMutationError(result.errors?.[0]?.message || 'Wiring change rejected.');
@@ -142,31 +120,66 @@ export function WireModePanel({ state, connected, cardHost }) {
     download(toWLEDLedmap(compiledWiring.pixels), 'ledmap.json', 'application/json');
   };
 
-  // Canvas overlay tools (same handlers as the toolbar's Split/Link buttons).
+  // Canvas overlay tool for the specialist split workflow.
   const toggleSplitTool = () => {
     setDrawMode(false);
     setGhostPt(null);
     setWireOverlayMode(mode => mode === 'chop' ? 'idle' : 'chop');
   };
-  const toggleLinkTool = () => {
-    setDrawMode(false);
-    setGhostPt(null);
-    setSelectedWirePatchId(null);
-    setWireOverlayMode(mode => {
-      const nextMode = mode === 'link' ? 'idle' : 'link';
-      if (nextMode === 'link') {
-        const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
-        setLinkRouteIds(currentRows);
-        linkRouteStartedRef.current = false;
-      } else {
-        setLinkRouteIds([]);
-        linkRouteStartedRef.current = false;
-      }
-      return nextMode;
-    });
-  };
 
-  const selectedRun = wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId);
+  const selectedStripRuns = useMemo(
+    () => wiring.runs.filter(run => run.type === 'strip' && run.source.stripId === selStripId),
+    [wiring.runs, selStripId],
+  );
+  const selectedRun = selectedStripRuns.find(run => run.id === selectedCustomRunId) || selectedStripRuns[0];
+  useEffect(() => {
+    setSelectedCustomRunId(current => selectedStripRuns.some(run => run.id === current) ? current : selectedStripRuns[0]?.id || '');
+  }, [selectedStripRuns]);
+  const selectedRunPlacement = useMemo(() => {
+    if (!selectedRun) return null;
+    const output = wiring.outputs.find(item => item.runIds.includes(selectedRun.id));
+    const index = output?.runIds.indexOf(selectedRun.id) ?? -1;
+    if (!output || index < 0) return null;
+    const followingRun = output.runIds
+      .slice(index + 1)
+      .map(id => runsById.get(id))
+      .find(run => run && run.type !== 'cable');
+    const hasImmediateCable = runsById.get(output.runIds[index + 1])?.type === 'cable';
+    return { output, canAddCable: Boolean(followingRun && !hasImmediateCable) };
+  }, [selectedRun, wiring.outputs, runsById]);
+  const runName = run => run?.type === 'strip'
+    ? (stripsById.get(run.source.stripId)?.name || run.source.stripId)
+    : run?.type === 'inactive' ? 'Reserved LEDs' : run?.id || 'Unknown run';
+  const cableJumps = useMemo(() => wiring.outputs.flatMap(output => output.runIds.flatMap((runId, index) => {
+    const run = runsById.get(runId);
+    if (run?.type !== 'cable') return [];
+    const previousRun = output.runIds.slice(0, index).reverse().map(id => runsById.get(id)).find(item => item && item.type !== 'cable');
+    const followingRun = output.runIds.slice(index + 1).map(id => runsById.get(id)).find(item => item && item.type !== 'cable');
+    return [{ run, previousRun, followingRun }];
+  })), [wiring.outputs, runsById]);
+  const addCableJump = () => {
+    if (!selectedRunPlacement?.canAddCable) return;
+    mutate(draft => {
+      const output = draft.outputs.find(item => item.id === selectedRunPlacement.output.id);
+      const outputIndex = output?.runIds.indexOf(selectedRun.id) ?? -1;
+      if (!output || outputIndex < 0) throw new Error('Select a strip that is followed by another physical run.');
+      const followingRun = output.runIds.slice(outputIndex + 1)
+        .map(id => draft.runs.find(run => run.id === id))
+        .find(run => run && run.type !== 'cable');
+      if (!followingRun || draft.runs.find(run => run.id === output.runIds[outputIndex + 1])?.type === 'cable') {
+        throw new Error('This strip does not have an available following run.');
+      }
+      const id = nextRunId(draft.runs, 'cable-jump');
+      const cable = { id, type: 'cable', verified: false };
+      const runIndex = draft.runs.findIndex(run => run.id === selectedRun.id);
+      draft.runs.splice(runIndex + 1, 0, cable);
+      output.runIds.splice(outputIndex + 1, 0, id);
+    }, { changeKind: 'route' });
+  };
+  const removeCableJump = runId => mutate(draft => {
+    draft.runs = draft.runs.filter(run => run.id !== runId);
+    draft.outputs.forEach(output => { output.runIds = output.runIds.filter(id => id !== runId); });
+  }, { changeKind: 'route' });
   const installController = useMemo(() => ({
     ...standaloneController,
     outputs: compiledWiring.outputs.map(output => ({ id: output.id, name: output.name, pin: output.pin, pixels: output.count })),
@@ -257,9 +270,13 @@ export function WireModePanel({ state, connected, cardHost }) {
     return applyStripCountUpdates([update]);
   };
 
-  const mappingReady = compiledWiring.ok;
+  const stripIds = new Set(strips.map(strip => strip.id));
+  const mappedStripIds = new Set(wiring.runs.filter(run => run.type === 'strip' && stripIds.has(run.source.stripId)).map(run => run.source.stripId));
+  const mappingCoversEveryStrip = mappedStripIds.size === stripIds.size
+    && !wiring.runs.some(run => run.type === 'strip' && !stripIds.has(run.source.stripId));
+  const mappingReady = compiledWiring.ok && mappingCoversEveryStrip;
   const physicallyVerified = Boolean(wiring.verified && wiring.runs.every(run => run.verified));
-  const stripRunCount = wiring.runs.filter(run => run.type === 'strip').length;
+  const physicalStripCount = mappedStripIds.size;
   const colorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
   const colorConfirmed = Boolean(
     standaloneController?.led?.colorOrderConfirmed
@@ -294,7 +311,7 @@ export function WireModePanel({ state, connected, cardHost }) {
     milliampsPerPixel,
     ...next,
   }));
-  const stripWord = stripRunCount === 1 ? 'strip' : 'strips';
+  const stripWord = physicalStripCount === 1 ? 'strip' : 'strips';
   const editInWire = () => {
     setDrawMode(false);
     setGhostPt(null);
@@ -305,7 +322,7 @@ export function WireModePanel({ state, connected, cardHost }) {
     <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
       <div className="panel-head lww-plan-head">
         <span className="ttl">Test &amp; Install</span>
-        <span className="meta">{stripRunCount} {stripWord} · {compiledWiring.totalPixels} LEDs · from Wire</span>
+        <span className="meta">{physicalStripCount} {stripWord} · {compiledWiring.totalPixels} LEDs · from Wire</span>
       </div>
       <WiringPlanSummary wiring={wiring} strips={strips}/>
       {powerEstimate.status === 'over' && (
@@ -402,8 +419,23 @@ export function WireModePanel({ state, connected, cardHost }) {
             <summary>Custom mapping</summary>
             <div className="lww-specialist-actions">
               <button className="btn" disabled={wiring.locked} aria-pressed={wireOverlayMode === 'chop'} onClick={toggleSplitTool}>Split a strip mid-wire</button>
-              <button className="btn" disabled={wiring.locked} aria-pressed={wireOverlayMode === 'link'} onClick={toggleLinkTool}>Add a cable jump</button>
+              <button
+                className="btn"
+                disabled={wiring.locked || !selectedRunPlacement?.canAddCable}
+                title={selectedRunPlacement?.canAddCable ? 'Insert a zero-address cable jump after the selected strip.' : 'Select a strip that has another physical run after it.'}
+                onClick={addCableJump}
+              >Add a cable jump</button>
             </div>
+            {cableJumps.length > 0 && (
+              <div className="lww-cable-jumps" aria-label="Cable jumps">
+                {cableJumps.map(({ run, previousRun, followingRun }) => (
+                  <div className="lww-cable-jump-row" data-testid="cable-jump-row" key={run.id}>
+                    <span><strong>Cable jump</strong><small>{runName(previousRun)} → {runName(followingRun)}</small></span>
+                    <button type="button" className="btn btn-ghost" disabled={wiring.locked} aria-label="Remove cable jump" onClick={() => removeCableJump(run.id)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="lw-wiring-additions">
               <button className="btn" disabled={wiring.locked} aria-label="Add skipped LEDs" onClick={addInactive}>Add skipped LEDs</button>
             </div>
@@ -421,6 +453,11 @@ export function WireModePanel({ state, connected, cardHost }) {
             {selectedRun?.type === 'strip' && splitStripIds.has(selectedRun.source.stripId) && (
               <div className="lw-wiring-range">
               <strong>Custom source range</strong>
+              <label>Physical run
+                <select aria-label="Physical run" value={selectedRun.id} onChange={event => setSelectedCustomRunId(event.target.value)}>
+                  {selectedStripRuns.map(run => <option key={run.id} value={run.id}>LEDs {run.source.from}–{run.source.to}</option>)}
+                </select>
+              </label>
               <label>Start LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.from} onChange={event => updateSelectedRange('from', event.target.value)}/></label>
               <label>End LED <input type="number" min="0" disabled={wiring.locked} value={selectedRun.source.to} onChange={event => updateSelectedRange('to', event.target.value)}/></label>
               <label>Direction policy

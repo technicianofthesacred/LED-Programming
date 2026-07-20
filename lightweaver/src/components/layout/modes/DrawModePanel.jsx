@@ -239,6 +239,37 @@ export function DrawModePanel({
     verified: false,
   });
 
+  // The visible Wire editor owns reconciliation. Test & Install only reports
+  // an incomplete plan; opening it must never repair or assign physical runs.
+  useEffect(() => {
+    if (wiring.locked) return;
+    const stripIds = new Set(strips.map(strip => strip.id));
+    const staleRunIds = new Set(wiring.runs
+      .filter(run => run.type === 'strip' && !stripIds.has(run.source?.stripId))
+      .map(run => run.id));
+    const coveredStripIds = new Set(wiring.runs
+      .filter(run => run.type === 'strip' && stripIds.has(run.source?.stripId))
+      .map(run => run.source.stripId));
+    const missingStrips = strips.filter(strip => !coveredStripIds.has(strip.id));
+    if (!staleRunIds.size && !missingStrips.length) return;
+
+    updateWiring(draft => {
+      draft.runs = draft.runs.filter(run => !staleRunIds.has(run.id));
+      draft.outputs.forEach(output => {
+        output.runIds = output.runIds.filter(runId => !staleRunIds.has(runId));
+      });
+      if (!draft.outputs.length) draft.outputs.push({ id: 'out1', name: 'Output 1', pin: 16, runIds: [] });
+      for (const strip of missingStrips) {
+        const run = makeRunForStrip(strip);
+        const baseId = run.id;
+        let suffix = 2;
+        while (draft.runs.some(item => item.id === run.id)) run.id = `${baseId}-${suffix++}`;
+        draft.runs.push(run);
+        draft.outputs[0].runIds.push(run.id);
+      }
+    }, { changeKind: 'geometry' });
+  }, [strips, updateWiring, wiring.locked, wiring.runs]);
+
   const ensureRunsForAllStrips = draft => {
     const known = new Set(draft.runs.filter(run => run.type === 'strip').map(run => run.source?.stripId));
     const primary = draft.outputs[0];
@@ -309,7 +340,7 @@ export function DrawModePanel({
       setGpioError('');
     } else {
       setGpioError(wiring.locked
-        ? 'Unlock wiring in Wire before changing GPIO.'
+        ? 'Unlock wiring in Test & Install before changing GPIO.'
         : result.errors?.[0]?.message || 'That GPIO assignment could not be changed.');
     }
   };

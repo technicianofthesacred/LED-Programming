@@ -1,7 +1,6 @@
 import {
   rgbCss,
   pointsAttr,
-  actionablePolylinePoints,
   parsedVb,
 } from '../../../lib/layoutGeometry.js';
 import {
@@ -61,7 +60,7 @@ export function LayoutCanvas({
     handleSvgMouseUp, handleSvgMouseLeave, handleContextMenu, handleWheel,
     handleDragOver, handleDragLeave, handleDrop,
     startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
-    toggleRoutePatch, togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
+    togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
   } = interactionHandlers;
   const handleCanvasPointerDown = event => {
     if (!firstLedPicker) {
@@ -360,22 +359,9 @@ export function LayoutCanvas({
             })}
 
             {mode === 'wire' && !isEditingGesture && visibleWirePathCanvasSegments.length > 0 && (
-              <g
-                className="lw-wire-canvas-segments"
-                style={{ pointerEvents: wireOverlayMode === 'link' ? 'auto' : 'none' }}
-              >
+              <g className="lw-wire-canvas-segments" style={{ pointerEvents: 'none' }}>
                 {visibleWirePathCanvasSegments.map(segment => (
                   <g key={segment.id}>
-                    {wireOverlayMode === 'link' && (
-                      <polyline
-                        points={pointsAttr(actionablePolylinePoints(segment.points))}
-                        className="lw-wire-canvas-segment-hit"
-                        onClick={event => {
-                          event.stopPropagation();
-                          toggleRoutePatch(segment.patchId);
-                        }}
-                      />
-                    )}
                     <polyline
                       points={pointsAttr(segment.points)}
                       className="lw-wire-canvas-segment"

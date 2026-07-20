@@ -258,6 +258,71 @@ test('Test & Install owns neither wire count nor ordering and keeps specialist t
   await expect(page.getByRole('button', { name: 'Add a cable jump' })).toBeVisible();
 });
 
+test('Custom mapping inserts and removes a zero-address cable jump without changing Wire order', async ({ page }) => {
+  await seedDefaultCircles(page, { mode: 'draw' });
+  await page.locator('[data-strip-id="default-outer-circle"] .la-strip-row').click();
+  await switchMode(page, 'wire');
+  await openCustomMapping(page);
+
+  const addJump = page.getByRole('button', { name: 'Add a cable jump' });
+  await expect(addJump).toBeEnabled();
+  await addJump.click();
+  const jumpRow = page.getByTestId('cable-jump-row');
+  await expect(jumpRow).toContainText('Outer circle → Inner circle');
+
+  const inserted = await saveProject(page);
+  const outputRunIds = inserted.layout.wiring.outputs[0].runIds;
+  const runsById = new Map(inserted.layout.wiring.runs.map((run: any) => [run.id, run]));
+  expect(outputRunIds.map((id: string) => (runsById.get(id) as any)?.type)).toEqual(['strip', 'cable', 'strip']);
+  expect(inserted.layout.wiring.runs.map((run: any) => run.type)).toEqual(['strip', 'cable', 'strip']);
+  expect(inserted.layout.wiring.runs.find((run: any) => run.type === 'cable')?.count).toBeUndefined();
+  expect(outputRunIds
+    .map((id: string) => runsById.get(id) as any)
+    .filter((run: any) => run?.type === 'strip')
+    .map((run: any) => run.source.stripId))
+    .toEqual(['default-outer-circle', 'default-inner-circle']);
+  await expect(planMeta(page)).toHaveText('2 strips · 44 LEDs · from Wire');
+
+  await jumpRow.getByRole('button', { name: 'Remove cable jump' }).click();
+  await expect(jumpRow).toHaveCount(0);
+  const removed = await saveProject(page);
+  expect(removed.layout.wiring.runs.some((run: any) => run.type === 'cable')).toBe(false);
+  const removedRunsById = new Map(removed.layout.wiring.runs.map((run: any) => [run.id, run]));
+  expect(removed.layout.wiring.outputs[0].runIds.map((id: string) => (removedRunsById.get(id) as any)?.source?.stripId))
+    .toEqual(['default-outer-circle', 'default-inner-circle']);
+
+  await switchMode(page, 'draw');
+  await page.locator('[data-strip-id="default-inner-circle"] .la-strip-row').click();
+  await switchMode(page, 'wire');
+  await openCustomMapping(page);
+  await expect(page.getByRole('button', { name: 'Add a cable jump' })).toBeDisabled();
+});
+
+test('Test & Install reports a missing run without repairing it; Wire owns reconciliation', async ({ page }) => {
+  await seedDefaultCircles(page, { mode: 'draw' });
+  const project = await saveProject(page);
+  const missingRunId = project.layout.wiring.runs.find((run: any) => run.type === 'strip' && run.source.stripId === 'default-inner-circle').id;
+  project.layout.wiring.runs = project.layout.wiring.runs.filter((run: any) => run.id !== missingRunId);
+  project.layout.wiring.outputs.forEach((output: any) => {
+    output.runIds = output.runIds.filter((runId: string) => runId !== missingRunId);
+  });
+  const missingWiring = structuredClone(project.layout.wiring);
+  await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
+  await page.goto('/?fixture=missing-run#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Finish the setup in Wire' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Edit in Wire' })).toBeVisible();
+
+  const unchanged = await saveProject(page);
+  expect(unchanged.layout.wiring).toEqual(missingWiring);
+
+  await page.getByRole('button', { name: 'Edit in Wire' }).click();
+  await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
+  const repaired = await saveProject(page);
+  const repairedRun = repaired.layout.wiring.runs.find((run: any) => run.type === 'strip' && run.source.stripId === 'default-inner-circle');
+  expect(repairedRun).toBeTruthy();
+  expect(repaired.layout.wiring.outputs[0].runIds).toContain(repairedRun.id);
+});
+
 test('physical LED check requires the visibility acknowledgement before the chase starts', async ({ page }) => {
   await installFrameCard(page);
   await gotoWire(page);

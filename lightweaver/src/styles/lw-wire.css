@@ -138,6 +138,28 @@
   padding-bottom: 8px;
 }
 
+.lww-cable-jumps {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.lww-cable-jump-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+}
+
+.lww-cable-jump-row > span { display: grid; min-width: 0; gap: 2px; }
+.lww-cable-jump-row strong { color: var(--text-hi); font-size: 11px; }
+.lww-cable-jump-row small { overflow: hidden; color: var(--text-mid); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
 .lww-unlock {
   display: flex;
   align-items: center;

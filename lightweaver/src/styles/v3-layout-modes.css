@@ -15,7 +15,6 @@
 .la-mode-switch { width: 100%; box-sizing: border-box; }
 .la-mode-switch button { flex: 1 1 0; min-width: 0; }
 .la-mode-switch[data-mode="draw"] { --mode-accent: var(--accent); }
-.la-mode-switch[data-mode="size"] { --mode-accent: oklch(0.72 0.08 155); }
 .la-mode-switch[data-mode="wire"] { --mode-accent: var(--accent); }
 .la-mode-switch button.on { background: var(--mode-accent); }
 .la-mode-content {
@@ -27,8 +26,7 @@
   overflow-y: auto;
   background-image: linear-gradient(180deg, color-mix(in oklab, var(--mode-tint) 7%, transparent), transparent 190px);
 }
-.la-mode-content.is-size { --mode-tint: oklch(0.72 0.08 155); }
-.la-mode-content.is-wire { --mode-tint: oklch(0.72 0.08 225); }
+.la-mode-content.is-wire { --mode-tint: var(--accent); }
 .tb-group { display: inline-flex; align-items: center; gap: 4px; }
 .la-sheet-handle { display: none; }
 
