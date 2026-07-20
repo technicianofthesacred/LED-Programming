@@ -1,4 +1,20 @@
 import { test, expect } from '@playwright/test';
+import { readdirSync, readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const SRC_DIR = fileURLToPath(new URL('../src/', import.meta.url));
+const APP_SOURCE = readFileSync(resolve(SRC_DIR, 'v3/app.jsx'), 'utf8');
+const LAB_SOURCE = readFileSync(resolve(SRC_DIR, 'pattern-lab/PatternLabScreen.jsx'), 'utf8');
+const LAB_CSS = readFileSync(resolve(SRC_DIR, 'pattern-lab/pattern-lab.css'), 'utf8');
+
+function sourceFilesUnder(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) return sourceFilesUnder(path);
+    return /\.[cm]?[jt]sx?$/.test(entry.name) ? [path] : [];
+  });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -6,12 +22,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('Pattern Lab is an isolated lazy Studio route', async ({ page }) => {
-  await page.goto('/#screen=layout', { waitUntil: 'networkidle' });
-
-  const initialResources = await page.evaluate(() =>
-    performance.getEntriesByType('resource').map(entry => entry.name),
-  );
-  expect(initialResources.some(url => /PatternLabScreen|pattern-lab\.css/.test(url))).toBe(false);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
   const patterns = page.getByRole('button', { name: 'Patterns', exact: true });
   await expect(patterns).toBeVisible();
@@ -21,12 +32,29 @@ test('Pattern Lab is an isolated lazy Studio route', async ({ page }) => {
   await expect(page.getByTestId('pattern-lab-screen')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Pattern Lab' })).toBeVisible();
   await expect(patterns).toBeVisible();
+});
 
-  const loadedResources = await page.evaluate(() =>
-    performance.getEntriesByType('resource').map(entry => entry.name),
-  );
-  expect(loadedResources.some(url => /PatternLabScreen/.test(url))).toBe(true);
-  expect(loadedResources.some(url => /pattern-lab\.css/.test(url))).toBe(true);
+test('Pattern Lab keeps one lazy route descriptor and owns its stylesheet', () => {
+  expect(APP_SOURCE).toMatch(/lazy\(\(\)\s*=>\s*import\(['"]\.\.\/pattern-lab\/PatternLabScreen\.jsx['"]\)\)/);
+  expect(APP_SOURCE).toContain('const STUDIO_SCREENS');
+  expect(APP_SOURCE).toContain('const SCREEN_BY_ID');
+
+  const styleImporters = sourceFilesUnder(SRC_DIR)
+    .filter(file => readFileSync(file, 'utf8').includes("import './pattern-lab.css'"))
+    .map(file => relative(SRC_DIR, file));
+  expect(styleImporters).toEqual(['pattern-lab/PatternLabScreen.jsx']);
+});
+
+test('Pattern Lab shell exposes its current step and decorative preview safely', async ({ page }) => {
+  expect(LAB_SOURCE).toContain("aria-current={index === 0 ? 'step' : undefined}");
+  expect(LAB_CSS).not.toMatch(/color:\s*var\(--text-faint\)/);
+  expect(LAB_CSS).not.toMatch(/(?:^|[;{]\s*)color:\s*var\(--accent\)/m);
+
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  const workflow = page.getByRole('list', { name: 'Pattern Lab workflow' });
+  await expect(workflow.locator('li').first()).toHaveAttribute('aria-current', 'step');
+  await expect(page.locator('svg.plab-sculpture')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('svg.plab-sculpture')).toHaveAttribute('focusable', 'false');
 });
 
 test('existing Studio routes remain available beside Pattern Lab', async ({ page }) => {

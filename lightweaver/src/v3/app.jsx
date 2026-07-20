@@ -40,7 +40,16 @@ const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ 
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
 
-const SCREEN_KEYS = ['pattern', 'pattern-lab', 'playlist', 'layout', 'show', 'card'];
+const STUDIO_SCREENS = [
+  { id: 'layout', label: 'Layout', Component: LayoutScreen },
+  { id: 'pattern', label: 'Patterns', Component: PatternScreen },
+  { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },
+  { id: 'playlist', label: 'Playlist', Component: PlaylistScreen },
+  { id: 'show', label: 'Show', Component: ShowScreen },
+  { id: 'card', label: 'Card', Component: CardScreen },
+];
+const SCREEN_KEYS = STUDIO_SCREENS.map(screen => screen.id);
+const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
@@ -227,15 +236,14 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onP
 
 /* ---------- Left rail ---------- */
 function Rail({ view, setView, openCard }) {
-  const main = [["layout", "Layout"], ["pattern", "Patterns"], ["pattern-lab", "Pattern Lab"], ["playlist", "Playlist"], ["show", "Show"], ["card", "Card"]];
-  const item = ([id, label, accessibleLabel]) => (
-    <button key={id} aria-label={accessibleLabel || label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
+  const item = ({ id, label }) => (
+    <button key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
   return (
     <aside className="rail">
-      {main.map(item)}
+      {STUDIO_SCREENS.map(item)}
       <div className="spring" />
       {/* Workshop entry for manufacturing workers who type the bare domain.
           Kept at the bottom, visually secondary, and NOT part of the normal
@@ -596,7 +604,7 @@ function Shell() {
     e.target.value = '';
   }, [replaceProject]);
 
-  const Screen = { pattern: PatternScreen, 'pattern-lab': PatternLabScreen, playlist: PlaylistScreen, layout: LayoutScreen, show: ShowScreen, card: CardScreen }[view];
+  const Screen = SCREEN_BY_ID[view];
 
   return (
     <div className="app">

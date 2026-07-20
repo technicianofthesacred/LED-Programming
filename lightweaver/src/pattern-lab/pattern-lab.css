@@ -26,7 +26,7 @@
 
 .plab-kicker,
 .plab-section-label {
-  color: var(--accent);
+  color: var(--text-mid);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
@@ -56,7 +56,7 @@
   gap: 10px;
   padding: 13px 0 3px;
   border-top: 1px solid var(--border-soft);
-  color: var(--text-lo);
+  color: var(--text-mid);
   font-size: 11.5px;
   line-height: 1.45;
 }
@@ -94,13 +94,13 @@
   min-width: 0;
   padding: 13px 14px;
   border-right: 1px solid var(--border-hair);
-  color: var(--text-faint);
+  color: var(--text-mid);
 }
 
 .plab-workflow li:first-child { padding-left: 0; }
 .plab-workflow li:last-child { border-right: 0; }
-.plab-workflow li.current { color: var(--text-mid); }
-.plab-workflow li.current .plab-step-number { color: var(--accent); }
+.plab-workflow li.current { color: var(--text-hi); }
+.plab-workflow li.current .plab-step-number { color: var(--text-hi); }
 .plab-workflow strong { display: block; color: inherit; font-size: 11.5px; font-weight: 600; }
 .plab-workflow small { display: block; max-width: 27ch; margin-top: 2px; font-size: 10.5px; line-height: 1.4; }
 .plab-step-number { font-family: var(--font-mono); font-size: 9.5px; }
@@ -140,7 +140,7 @@
 
 .plab-preview-state,
 .plab-control-heading span:last-child {
-  color: var(--text-faint);
+  color: var(--text-mid);
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 400;
@@ -204,12 +204,12 @@
 .plab-empty-rule { width: 38px; height: 2px; margin-bottom: 18px; background: var(--accent); }
 .plab-empty h2 { font-size: 20px; font-weight: 570; letter-spacing: -.025em; }
 .plab-empty p { margin: 8px 0 18px; color: var(--text-mid); line-height: 1.6; }
-.plab-empty small { margin-top: 10px; color: var(--text-faint); font-size: 10px; }
+.plab-empty small { margin-top: 10px; color: var(--text-mid); font-size: 10px; }
 
 .plab-controls { min-width: 0; display: flex; flex-direction: column; background: var(--bg-panel); }
 .plab-disabled-controls { display: grid; gap: 17px; padding: 20px 18px; opacity: .48; }
 .plab-slider { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; color: var(--text-mid); font-size: 11.5px; }
-.plab-slider output { color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; }
+.plab-slider output { color: var(--text-mid); font-family: var(--font-mono); font-size: 9.5px; }
 .plab-slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
 .plab-slider input:disabled { cursor: not-allowed; }
 
@@ -222,9 +222,9 @@
 }
 
 .plab-evolution-preview > div:not(.plab-timeline) { display: flex; justify-content: space-between; gap: 12px; }
-.plab-evolution-preview > div span { color: var(--text-lo); font-size: 11px; }
+.plab-evolution-preview > div span { color: var(--text-mid); font-size: 11px; }
 .plab-evolution-preview > div strong { color: var(--text-hi); font-size: 12px; }
-.plab-evolution-preview p { color: var(--text-faint); font-size: 10.5px; line-height: 1.5; }
+.plab-evolution-preview p { color: var(--text-mid); font-size: 10.5px; line-height: 1.5; }
 .plab-timeline { height: 4px; overflow: hidden; border-radius: 2px; background: var(--bg-elev); }
 .plab-timeline span { display: block; width: 62%; height: 100%; opacity: .45; background: var(--accent); }
 

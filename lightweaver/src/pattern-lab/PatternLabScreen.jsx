@@ -10,7 +10,7 @@ const WORKFLOW = [
 
 function SculpturePlaceholder() {
   return (
-    <svg className="plab-sculpture" viewBox="0 0 640 420" role="img" aria-label="Mapped sculpture preview placeholder">
+    <svg className="plab-sculpture" viewBox="0 0 640 420" aria-hidden="true" focusable="false">
       <defs>
         <linearGradient id="plab-path" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="var(--text-faint)" />
@@ -58,7 +58,7 @@ export default function PatternLabScreen() {
 
         <ol className="plab-workflow" aria-label="Pattern Lab workflow">
           {WORKFLOW.map(([number, title, description], index) => (
-            <li key={title} className={index === 0 ? 'current' : ''}>
+            <li key={title} className={index === 0 ? 'current' : ''} aria-current={index === 0 ? 'step' : undefined}>
               <span className="plab-step-number">{number}</span>
               <span><strong>{title}</strong><small>{description}</small></span>
             </li>
