@@ -11,11 +11,18 @@ import {
   validatePatternLabWorkerGeometry,
   validatePatternLabWorkerRenderRequest,
 } from '../lib/patternLabWorkerProtocol.js';
+import {
+  PATTERN_LAB_GENERATOR_IDS,
+  getPatternLabGenerator,
+  measurePatternLabGeneratorStateBytes,
+  resolvePatternLabGeneratorInputs,
+} from '../lib/patternLabGenerators.js';
 
 let initialized = false;
 let staticGeometry = null;
 let staticGeneration = 0;
 const cancelledRequests = new Set();
+let generatorRuntime = null;
 
 function reply(type, requestId, payload = {}, transfer = []) {
   globalThis.postMessage(createPatternLabWorkerReply(type, requestId, payload), transfer);
@@ -73,6 +80,38 @@ function wait(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(milliseconds) || 0)));
 }
 
+function disposeGeneratorRuntime() {
+  if (!generatorRuntime) return;
+  generatorRuntime.generator.dispose(generatorRuntime.state);
+  generatorRuntime = null;
+}
+
+function statefulPattern(recipe, indices) {
+  const generatorId = recipe?.base?.kind;
+  if (!PATTERN_LAB_GENERATOR_IDS.includes(generatorId)) {
+    disposeGeneratorRuntime();
+    return null;
+  }
+  const generator = getPatternLabGenerator(generatorId);
+  const inputs = resolvePatternLabGeneratorInputs(generatorId, recipe);
+  const seed = Number(recipe?.seed) >>> 0;
+  const signature = `${generatorId}:${seed}:${indices.length}:${JSON.stringify(inputs)}`;
+  const targetTime = Math.max(0, Number(recipe?.time) || 0);
+  if (!generatorRuntime || generatorRuntime.signature !== signature
+    || targetTime < generatorRuntime.time) {
+    disposeGeneratorRuntime();
+    generatorRuntime = {
+      generator,
+      signature,
+      state: generator.initialize({ sampleCount: indices.length, seed }),
+      time: 0,
+    };
+  }
+  generator.update(targetTime - generatorRuntime.time, generatorRuntime.state, inputs);
+  generatorRuntime.time = targetTime;
+  return generatorRuntime;
+}
+
 async function renderRequest(requestId, payload) {
   const startedAt = performance.now();
   if (!Number.isSafeInteger(payload.generation) || payload.generation !== staticGeneration) {
@@ -101,11 +140,24 @@ async function renderRequest(requestId, payload) {
   const indices = sampledIndices(geometry.visiblePixelCount, validated.sampleCount);
   const recipe = payload.recipe || {};
   const options = payload.renderOptions || {};
+  const stateful = statefulPattern({ ...recipe, time: payload.time }, indices);
+  const activeFn = stateful
+    ? (index, x, y, _time, _cycle, _count, _palette, _beat, _beatSin, _params, _stripId, stripProgress) => {
+      const sampleIndex = Math.max(0, Math.min(indices.length - 1, Math.round(index)));
+      return stateful.generator.render(sampleIndex, {
+        x,
+        y,
+        stripProgress,
+        index: sampleIndex,
+        sourceIndex: indices[sampleIndex],
+      }, stateful.state);
+    }
+    : compileAuthoritativePattern(recipe.base?.patternId, indices, geometry.visiblePixelCount);
   const frame = renderPixelFrame({
     t: Number(payload.time) || 0,
     strips: sampledStrips(geometry, indices),
     patternId: recipe.base?.patternId,
-    activeFn: compileAuthoritativePattern(recipe.base?.patternId, indices, geometry.visiblePixelCount),
+    activeFn,
     params: recipe.base?.params || {},
     paletteNorm: normalizePalette(recipe.palette),
     bpm: geometry.bpm,
@@ -127,6 +179,11 @@ async function renderRequest(requestId, payload) {
     colors[index * 3 + 2] = color.b;
   });
   const allocatedBytes = colors.byteLength + indices.byteLength;
+  const generatorStateBytes = stateful ? measurePatternLabGeneratorStateBytes(stateful.state) : 0;
+  const totalAllocationBytes = validated.allocationBytes + generatorStateBytes;
+  if (totalAllocationBytes > PATTERN_LAB_WORKER_BUDGETS.maxAllocationBytes) {
+    throw new RangeError(`Pattern Lab worker allocation exceeds ${PATTERN_LAB_WORKER_BUDGETS.maxAllocationBytes} bytes`);
+  }
   const elapsedMs = performance.now() - startedAt;
   const warningMs = validated.mode === 'export'
     ? PATTERN_LAB_WORKER_BUDGETS.exportWarningMs
@@ -149,8 +206,13 @@ async function renderRequest(requestId, payload) {
   reply('stats', requestId, {
     elapsedMs,
     sampleCount: indices.length,
-    allocatedBytes: validated.allocationBytes,
+    allocatedBytes: totalAllocationBytes,
     outputBytes: allocatedBytes,
+    ...(stateful ? {
+      generatorId: stateful.generator.id,
+      generatorStateBytes,
+      generatorElapsedSeconds: stateful.state.elapsedSeconds,
+    } : {}),
   });
 }
 
@@ -162,6 +224,7 @@ async function handleMessage(message) {
         throw new RangeError('Pattern Lab worker geometry generation must be a positive safe integer');
       }
       const nextGeometry = validatePatternLabWorkerGeometry(payload.geometry);
+      disposeGeneratorRuntime();
       staticGeometry = nextGeometry;
       staticGeneration = payload.generation;
       initialized = true;
@@ -181,6 +244,7 @@ async function handleMessage(message) {
       return;
     }
     if (type === 'dispose') {
+      disposeGeneratorRuntime();
       staticGeometry = null;
       staticGeneration = 0;
       initialized = false;
