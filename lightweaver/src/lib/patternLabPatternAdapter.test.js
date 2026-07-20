@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { PALETTE_DEFAULT } from '../data.js';
+import { CUSTOM_PATTERNS_KEY } from './customPatterns.js';
 import { compilePattern, normalizePalette, renderPixelFrame } from './frameEngine.js';
 import { recipeFromPattern, renderPatternLabRecipeFrame } from './patternLabPatternAdapter.js';
 import { parseParamsFromCode } from './patternParams.js';
 import { getPatternById } from './patternRegistry.js';
 
 const FIXED_TIME = 137.25;
-const FIXED_SEED = 424242;
 const FIXED_PALETTE = ['#16002f', '#2962ff', '#00d7b7', '#ffe266'];
 const FIXED_LAYOUT = [
   {
@@ -59,7 +60,6 @@ function directFrame(patternId, context = {}) {
 
 function wrappedFrame(patternId, context = {}, params = defaultParams(patternId)) {
   const recipe = recipeFromPattern(patternId, { palette: FIXED_PALETTE });
-  recipe.seed = FIXED_SEED;
   recipe.base.params = params;
   return renderPatternLabRecipeFrame(recipe, {
     t: FIXED_TIME,
@@ -104,6 +104,78 @@ test('recipeFromPattern rejects unknown source patterns', () => {
     () => recipeFromPattern('does-not-exist'),
     { name: 'RangeError', message: 'Unknown pattern: does-not-exist' },
   );
+});
+
+test('omitted and empty palettes preserve the existing Lightweaver default output', () => {
+  for (const sourceContext of [undefined, { palette: [] }]) {
+    const recipe = recipeFromPattern('gradient', sourceContext);
+    const frameContext = { t: FIXED_TIME, strips: FIXED_LAYOUT };
+
+    assert.deepEqual(recipe.palette, PALETTE_DEFAULT);
+    assert.deepEqual(
+      renderPatternLabRecipeFrame(recipe, frameContext),
+      renderPixelFrame({ ...frameContext, patternId: 'gradient' }),
+    );
+  }
+});
+
+test('recipe rendering ignores global function and blend overrides from context', () => {
+  const recipe = recipeFromPattern('gradient', { palette: FIXED_PALETTE });
+  const frameContext = { t: FIXED_TIME, strips: FIXED_LAYOUT };
+  const expected = renderPatternLabRecipeFrame(recipe, frameContext);
+
+  assert.deepEqual(renderPatternLabRecipeFrame(recipe, {
+    ...frameContext,
+    patternId: 'candle',
+    params: { unexpected: 1 },
+    paletteNorm: normalizePalette(['#ffffff', '#ffffff']),
+    activeFn: () => ({ r: 255, g: 255, b: 255 }),
+    blendPatternId: 'fire',
+    blendFn: () => ({ r: 255, g: 0, b: 0 }),
+    blendAmount: 1,
+    blendType: 'dissolve',
+  }), expected);
+});
+
+test('custom registry patterns are rejected until recipes can embed their source', () => {
+  const originalStorage = globalThis.localStorage;
+  const custom = {
+    id: 'custom_mutable',
+    name: 'Mutable custom source',
+    code: 'return { r: 1, g: 2, b: 3 };',
+    custom: true,
+  };
+  globalThis.localStorage = {
+    getItem(key) {
+      return key === CUSTOM_PATTERNS_KEY ? JSON.stringify([custom]) : null;
+    },
+  };
+
+  try {
+    assert.throws(
+      () => recipeFromPattern(custom.id),
+      { name: 'RangeError', message: `Pattern Lab recipes require a built-in pattern: ${custom.id}` },
+    );
+    assert.throws(
+      () => renderPatternLabRecipeFrame({
+        ...recipeFromPattern('gradient'),
+        base: { kind: 'lightweaver-pattern', patternId: custom.id, params: {} },
+      }, { strips: FIXED_LAYOUT }),
+      { name: 'RangeError', message: `Pattern Lab recipes require a built-in pattern: ${custom.id}` },
+    );
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
+test('legacy wrapped patterns intentionally ignore recipe seed', () => {
+  const recipe = recipeFromPattern('sparkle', { palette: FIXED_PALETTE });
+  const context = { t: FIXED_TIME, strips: FIXED_LAYOUT };
+  const first = renderPatternLabRecipeFrame({ ...recipe, seed: 1 }, context);
+  const second = renderPatternLabRecipeFrame({ ...recipe, seed: 0xffffffff }, context);
+
+  assert.deepEqual(second, first);
 });
 
 test('palette-aware pattern keeps every representative pixel unchanged', () => {
