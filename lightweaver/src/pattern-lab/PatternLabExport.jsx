@@ -28,6 +28,14 @@ const BUDGET_LABELS = {
   microSdBytes: 'microSD capacity',
 };
 
+const BUDGET_STATUS_LABELS = {
+  unknown: 'Unknown',
+  invalid: 'Invalid',
+  'too-low': 'Too low',
+  'over-limit': 'Over limit',
+  fits: 'Fits',
+};
+
 function formatCount(value) {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'Unknown';
   return new Intl.NumberFormat().format(Number(value));
@@ -36,6 +44,12 @@ function formatCount(value) {
 function budgetValues(key, budget) {
   if (key === 'microSdBytes') return [budget.required, budget.available];
   return [budget.used, budget.limit];
+}
+
+function budgetStatus(budget) {
+  if (BUDGET_STATUS_LABELS[budget.status]) return budget.status;
+  if (budget.known === false) return 'unknown';
+  return budget.ok ? 'fits' : 'over-limit';
 }
 
 function runAction(action, compatibility, handlers) {
@@ -84,15 +98,17 @@ export default function PatternLabExport({
       <dl className="plab-export-budgets" aria-label="Card compatibility budgets">
         {Object.entries(compatibility.budgets || {}).map(([key, value]) => {
           const [used, limit] = budgetValues(key, value);
+          const status = budgetStatus(value);
+          const usedLabel = used === null && status === 'invalid' ? 'Invalid' : formatCount(used);
           return (
             <div
               key={key}
-              data-budget-ok={value.known === false ? 'unknown' : value.ok ? 'true' : 'false'}
+              data-budget-status={status}
             >
               <dt>{BUDGET_LABELS[key] || key}</dt>
               <dd>
-                {formatCount(used)} / {formatCount(limit)}{' '}
-                <span>{value.known === false ? 'Unknown' : value.ok ? 'Fits' : 'Over'}</span>
+                {usedLabel} / {formatCount(limit)}{' '}
+                <span>{BUDGET_STATUS_LABELS[status]}</span>
               </dd>
             </div>
           );

@@ -91,15 +91,52 @@ test('partial resource estimates remain studio only instead of permitting a bake
 });
 
 test('zero or over-budget FPS cannot be baked to the card', () => {
-  for (const fps of [0, 60]) {
+  for (const [fps, expectedStatus] of [[0, 'too-low'], [60, 'over-limit']]) {
     const result = classifyPatternLabCompatibility(
       recipe({ base: { kind: 'particles', params: {} } }),
       { metrics: { ...FIT_METRICS, fps } },
     );
     assert.equal(result.classification, 'studio-only', `fps ${fps} must fail closed`);
     assert.equal(result.budgets.fps.ok, false);
+    assert.equal(result.budgets.fps.status, expectedStatus);
     assert.ok(!result.actions.some(action => action.id === 'bake'));
   }
+});
+
+test('budget status distinguishes missing, invalid, too-low, fitting, and over-limit values', () => {
+  const cases = [
+    [undefined, 'unknown', 'pixel-count-unknown'],
+    [-1, 'invalid', 'pixel-count-invalid'],
+    [0, 'too-low', 'pixel-count-too-low'],
+    [10, 'fits', null],
+    [1025, 'over-limit', 'pixel-count-over-budget'],
+    [Number.POSITIVE_INFINITY, 'invalid', 'pixel-count-invalid'],
+  ];
+
+  for (const [pixelCount, status, reasonCode] of cases) {
+    const metrics = { ...FIT_METRICS, pixelCount };
+    if (pixelCount === undefined) delete metrics.pixelCount;
+    const result = classifyPatternLabCompatibility(recipe(), { metrics });
+    assert.equal(result.budgets.pixelCount.status, status, String(pixelCount));
+    assert.equal(result.budgets.pixelCount.ok, status === 'fits', String(pixelCount));
+    if (reasonCode) assert.ok(result.reasons.some(reason => reason.code === reasonCode));
+  }
+});
+
+test('unsafe numeric extremes fail closed without reporting an overflowing sequence size', () => {
+  const invalidInput = classifyPatternLabCompatibility(recipe(), {
+    metrics: { ...FIT_METRICS, pixelCount: Number.MAX_SAFE_INTEGER + 1 },
+  });
+  const unsafeSequence = classifyPatternLabCompatibility(recipe(), {
+    metrics: { ...FIT_METRICS, pixelCount: Number.MAX_SAFE_INTEGER },
+  });
+
+  assert.equal(invalidInput.budgets.pixelCount.status, 'invalid');
+  assert.equal(unsafeSequence.budgets.pixelCount.status, 'over-limit');
+  assert.equal(unsafeSequence.budgets.lwseqBytes.status, 'invalid');
+  assert.equal(unsafeSequence.budgets.lwseqBytes.used, null);
+  assert.equal(unsafeSequence.budgets.microSdBytes.required, null);
+  assert.equal(unsafeSequence.classification, 'studio-only');
 });
 
 test('classifies an unsupported native generator as bake to card when lwseq fits', () => {
@@ -194,12 +231,24 @@ test('reports every explicit native and sequence budget including the 3968-byte 
     'lwseqBytes',
     'microSdBytes',
   ]);
-  assert.deepEqual(result.budgets.pixelCount, { used: 10, limit: 1024, known: true, ok: true });
-  assert.deepEqual(result.budgets.fps, { used: 20, limit: 30, known: true, ok: true });
-  assert.deepEqual(result.budgets.framebufferBytes, { used: 30, limit: 196608, known: true, ok: true });
-  assert.deepEqual(result.budgets.nativeConfigBytes, { used: 400, limit: 3968, known: true, ok: true });
-  assert.deepEqual(result.budgets.lwseqBytes, { used: 6064, limit: 10_000, known: true, ok: true });
-  assert.deepEqual(result.budgets.microSdBytes, { required: 6064, available: 10_000, known: true, ok: true });
+  assert.deepEqual(result.budgets.pixelCount, {
+    used: 10, limit: 1024, known: true, status: 'fits', ok: true,
+  });
+  assert.deepEqual(result.budgets.fps, {
+    used: 20, limit: 30, known: true, status: 'fits', ok: true,
+  });
+  assert.deepEqual(result.budgets.framebufferBytes, {
+    used: 30, limit: 196608, known: true, status: 'fits', ok: true,
+  });
+  assert.deepEqual(result.budgets.nativeConfigBytes, {
+    used: 400, limit: 3968, known: true, status: 'fits', ok: true,
+  });
+  assert.deepEqual(result.budgets.lwseqBytes, {
+    used: 6064, limit: 10_000, known: true, status: 'fits', ok: true,
+  });
+  assert.deepEqual(result.budgets.microSdBytes, {
+    required: 6064, available: 10_000, known: true, status: 'fits', ok: true,
+  });
   assert.ok(Object.values(result.budgets).every(Object.isFrozen));
 });
 
@@ -228,21 +277,37 @@ test('firmware descriptor overrides drive decisions and preserve descriptor vers
 
 test('descriptor pattern and layer capabilities drive native decisions', () => {
   const descriptor = structuredClone(DEFAULT_PATTERN_LAB_CARD_DESCRIPTOR);
-  descriptor.features.patterns.push('future-native-pattern');
+  descriptor.features.patterns.push('gradient');
   descriptor.limits.layers = 1;
   const native = classifyPatternLabCompatibility(recipe({
-    base: { kind: 'lightweaver-pattern', patternId: 'future-native-pattern', params: {} },
+    base: { kind: 'lightweaver-pattern', patternId: 'gradient', params: {} },
   }), { descriptor, metrics: FIT_METRICS });
   const layered = classifyPatternLabCompatibility(recipe({
     layers: [
-      { id: 'a', kind: 'lightweaver-pattern' },
-      { id: 'b', kind: 'lightweaver-pattern' },
+      { id: 'a', generator: { kind: 'lightweaver-pattern', patternId: 'aurora' } },
+      { id: 'b', generator: { kind: 'lightweaver-pattern', patternId: 'ocean' } },
     ],
   }), { descriptor, metrics: FIT_METRICS });
 
   assert.equal(native.classification, 'live-on-card');
   assert.equal(layered.classification, 'bake-to-card');
   assert.ok(layered.reasons.some(reason => reason.code === 'layers-over-budget'));
+});
+
+test('malformed or incomplete layer generators fail closed', () => {
+  const malformedLayers = [
+    {},
+    { generator: {} },
+    { generator: { kind: 'lightweaver-pattern' } },
+    { generator: { kind: 'lightweaver-pattern', patternId: 'not-a-built-in-pattern' } },
+  ];
+
+  for (const layer of malformedLayers) {
+    const result = classifyPatternLabCompatibility(recipe({ layers: [layer] }), { metrics: FIT_METRICS });
+    assert.equal(result.classification, 'studio-only');
+    assert.ok(result.reasons.some(reason => reason.code.startsWith('layer-generator-')));
+    assert.ok(!result.actions.some(action => action.id === 'bake'));
+  }
 });
 
 test('known unsupported target restrictions offer an explicit simplified variant', () => {
@@ -313,6 +378,40 @@ test('simplification variants apply explicit path changes without mutating their
   assert.ok(Object.isFrozen(variant));
 });
 
+test('simplification rejects dangerous or non-schema paths without polluting prototypes', () => {
+  const source = recipe({
+    requirements: [{
+      capability: 'unsafe-input',
+      required: true,
+      simplification: {
+        action: 'replace-feature',
+        label: 'Unsafe change',
+        path: ['__proto__', 'patternLabPolluted'],
+        value: true,
+      },
+    }],
+  });
+
+  try {
+    assert.throws(() => createPatternLabSimplificationVariant(source, [{
+      action: 'replace-feature',
+      label: 'Unsafe direct change',
+      path: ['constructor', 'prototype', 'patternLabPolluted'],
+      value: true,
+    }]), /allowed schema path/);
+    const result = classifyPatternLabCompatibility(source, {
+      metrics: FIT_METRICS,
+      simplificationMetrics: FIT_METRICS,
+    });
+    assert.equal(result.classification, 'studio-only');
+    assert.equal(result.simplification, null);
+    assert.equal(Object.prototype.patternLabPolluted, undefined);
+    assert.equal({}.patternLabPolluted, undefined);
+  } finally {
+    delete Object.prototype.patternLabPolluted;
+  }
+});
+
 test('simplification removes multiple array entries without index drift', () => {
   const source = recipe({
     requirements: [
@@ -326,6 +425,24 @@ test('simplification removes multiple array entries without index drift', () => 
     { action: 'remove-feature', label: 'Remove audio', path: ['requirements', 1], remove: true },
   ]);
 
+  assert.deepEqual(variant.requirements, [{ capability: 'time', required: true }]);
+});
+
+test('array removals stay descending when replacement operations are interleaved', () => {
+  const source = recipe({
+    requirements: [
+      { capability: 'live-camera', required: true },
+      { capability: 'live-audio', required: true },
+      { capability: 'time', required: true },
+    ],
+  });
+  const variant = createPatternLabSimplificationVariant(source, [
+    { action: 'remove-feature', label: 'Remove camera', path: ['requirements', 0], remove: true },
+    { action: 'replace-feature', label: 'Use ocean', path: ['base', 'patternId'], value: 'ocean' },
+    { action: 'remove-feature', label: 'Remove audio', path: ['requirements', 1], remove: true },
+  ]);
+
+  assert.equal(variant.base.patternId, 'ocean');
   assert.deepEqual(variant.requirements, [{ capability: 'time', required: true }]);
 });
 

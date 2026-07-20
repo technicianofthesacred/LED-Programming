@@ -2,6 +2,7 @@ import { CARD_HARDWARE_CAPABILITIES } from './cardRuntimeContract.js';
 import { CORE_CARD_PATTERN_BANK } from './cardPatternBank.js';
 import { CARD_CONFIG_STORAGE_LIMIT_BYTES } from './cardStoragePayload.js';
 import { estimateLwseqBytes } from './standaloneController.js';
+import { isBuiltInPattern } from './patternRegistry.js';
 
 export const PATTERN_LAB_COMPATIBILITY_VERSION = 1;
 export const PATTERN_LAB_COMPATIBILITY_CLASSIFICATIONS = Object.freeze([
@@ -92,46 +93,86 @@ function byteLength(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function optionalWholeBytes(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) return null;
-  return Math.round(number);
+function parseWholeMetric(value) {
+  if (value === null || value === undefined || value === '') {
+    return { value: null, status: 'unknown' };
+  }
+  let number;
+  try {
+    number = Number(value);
+  } catch {
+    return { value: null, status: 'invalid' };
+  }
+  const rounded = Math.round(number);
+  if (!Number.isFinite(number) || number < 0 || !Number.isSafeInteger(rounded)) {
+    return { value: null, status: 'invalid' };
+  }
+  return { value: rounded, status: 'value' };
 }
 
-function budget(used, limit, options = {}) {
-  const normalizedUsed = optionalWholeBytes(used);
+function budget(metric, limit, options = {}) {
   const normalizedLimit = wholeBytes(limit);
-  const known = normalizedUsed !== null;
   const minimum = wholeBytes(options.minimum);
+  if (metric.status === 'unknown' || metric.status === 'invalid') {
+    return deepFreeze({
+      used: null,
+      limit: normalizedLimit,
+      known: false,
+      status: metric.status,
+      ok: false,
+    });
+  }
+  const status = metric.value < minimum
+    ? 'too-low'
+    : metric.value > normalizedLimit
+      ? 'over-limit'
+      : 'fits';
   return deepFreeze({
-    used: normalizedUsed,
+    used: metric.value,
     limit: normalizedLimit,
-    known,
-    ok: known && normalizedUsed >= minimum && normalizedUsed <= normalizedLimit,
+    known: true,
+    status,
+    ok: status === 'fits',
   });
+}
+
+function derivedMetric(inputs, compute) {
+  if (inputs.some(metric => metric.status === 'invalid')) return { value: null, status: 'invalid' };
+  if (inputs.some(metric => metric.status === 'unknown')) return { value: null, status: 'unknown' };
+  return parseWholeMetric(compute(...inputs.map(metric => metric.value)));
 }
 
 function buildBudgets(recipe, descriptor, metrics = {}, options = {}) {
   const estimates = options.allowRecipeEstimates === false ? {} : recipe.estimates || {};
   const runtimeFps = options.allowRecipeEstimates === false ? undefined : recipe.runtime?.fps;
-  const pixelCount = optionalWholeBytes(metrics.pixelCount ?? estimates.pixelCount);
-  const fps = optionalWholeBytes(metrics.fps ?? runtimeFps ?? estimates.fps);
-  const operationsPerFrame = optionalWholeBytes(
+  const pixelCount = parseWholeMetric(metrics.pixelCount ?? estimates.pixelCount);
+  const fps = parseWholeMetric(metrics.fps ?? runtimeFps ?? estimates.fps);
+  const operationsPerFrame = parseWholeMetric(
     metrics.operationsPerFrame ?? estimates.operationsPerFrame,
   );
-  const stateBytes = optionalWholeBytes(metrics.stateBytes ?? estimates.stateBytes);
+  const stateBytes = parseWholeMetric(metrics.stateBytes ?? estimates.stateBytes);
   const estimatedFramebuffer = metrics.framebufferBytes ?? estimates.framebufferBytes;
-  const framebufferBytes = optionalWholeBytes(
-    estimatedFramebuffer ?? (pixelCount === null ? null : pixelCount * 3),
+  const framebufferBytes = estimatedFramebuffer === null || estimatedFramebuffer === undefined
+    ? derivedMetric([pixelCount], pixels => pixels * 3)
+    : parseWholeMetric(estimatedFramebuffer);
+  const nativeConfigBytes = parseWholeMetric(metrics.nativeConfigBytes ?? byteLength(recipe));
+  const duration = parseWholeMetric(metrics.durationSeconds ?? recipe.evolution?.durationSeconds);
+  const lwseqBytes = derivedMetric(
+    [pixelCount, fps, duration],
+    (pixels, framesPerSecond, durationSeconds) => estimateLwseqBytes({
+      pixels,
+      fps: framesPerSecond,
+      duration: durationSeconds,
+    }).totalBytes,
   );
-  const nativeConfigBytes = optionalWholeBytes(metrics.nativeConfigBytes ?? byteLength(recipe));
-  const duration = optionalWholeBytes(metrics.durationSeconds ?? recipe.evolution?.durationSeconds);
-  const lwseqBytes = pixelCount === null || fps === null || duration === null
-    ? null
-    : estimateLwseqBytes({ pixels: pixelCount, fps, duration }).totalBytes;
-  const microSdBytes = optionalWholeBytes(metrics.microSdBytes ?? descriptor.limits.microSdBytes);
-  const microSdKnown = lwseqBytes !== null && microSdBytes !== null;
+  const microSdBytes = parseWholeMetric(metrics.microSdBytes ?? descriptor.limits.microSdBytes);
+  const microSdStatus = lwseqBytes.status === 'invalid' || microSdBytes.status === 'invalid'
+    ? 'invalid'
+    : lwseqBytes.status === 'unknown' || microSdBytes.status === 'unknown'
+      ? 'unknown'
+      : lwseqBytes.value > microSdBytes.value
+        ? 'over-limit'
+        : 'fits';
 
   return deepFreeze({
     pixelCount: budget(pixelCount, descriptor.limits.pixelCount, { minimum: 1 }),
@@ -140,12 +181,13 @@ function buildBudgets(recipe, descriptor, metrics = {}, options = {}) {
     stateBytes: budget(stateBytes, descriptor.limits.stateBytes),
     framebufferBytes: budget(framebufferBytes, descriptor.limits.framebufferBytes),
     nativeConfigBytes: budget(nativeConfigBytes, descriptor.limits.nativeConfigBytes),
-    lwseqBytes: budget(lwseqBytes, microSdBytes),
+    lwseqBytes: budget(lwseqBytes, microSdBytes.value ?? 0),
     microSdBytes: deepFreeze({
-      required: lwseqBytes,
-      available: microSdBytes,
-      known: microSdKnown,
-      ok: microSdKnown && lwseqBytes <= microSdBytes,
+      required: lwseqBytes.status === 'value' ? lwseqBytes.value : null,
+      available: microSdBytes.status === 'value' ? microSdBytes.value : null,
+      known: microSdStatus === 'fits' || microSdStatus === 'over-limit',
+      status: microSdStatus,
+      ok: microSdStatus === 'fits',
     }),
   });
 }
@@ -154,6 +196,37 @@ function normalizeTransforms(layer) {
   if (Array.isArray(layer?.transforms)) return layer.transforms;
   if (layer?.transform) return [layer.transform];
   return [];
+}
+
+function layerGeneratorIssue(layer, index) {
+  if (!layer || typeof layer !== 'object' || !Object.hasOwn(layer, 'generator')) return reason(
+    'layer-generator-missing',
+    `Layer ${index + 1} has no concrete generator.`,
+    { bakeable: false },
+  );
+  const generator = layer.generator;
+  if (!generator || typeof generator !== 'object' || !Object.hasOwn(generator, 'kind')) return reason(
+    'layer-generator-incomplete',
+    `Layer ${index + 1} has no generator kind.`,
+    { bakeable: false },
+  );
+  const kind = typeof generator.kind === 'string' ? generator.kind.trim() : '';
+  if (!kind) return reason(
+    'layer-generator-incomplete',
+    `Layer ${index + 1} has no generator kind.`,
+    { bakeable: false },
+  );
+  if (kind === 'lightweaver-pattern') {
+    const patternId = Object.hasOwn(generator, 'patternId') && typeof generator.patternId === 'string'
+      ? generator.patternId.trim()
+      : '';
+    if (!patternId || !isBuiltInPattern(patternId)) return reason(
+      'layer-generator-pattern-invalid',
+      `Layer ${index + 1} needs a concrete built-in Lightweaver pattern.`,
+      { bakeable: false },
+    );
+  }
+  return null;
 }
 
 function collectRecipeFeatures(recipe) {
@@ -173,12 +246,13 @@ function collectRecipeFeatures(recipe) {
     label: 'pattern',
   });
   for (const [index, layer] of (recipe.layers || []).entries()) {
-    const generator = layer.generator?.kind || layer.generatorKind || layer.kind;
+    if (layerGeneratorIssue(layer, index)) continue;
+    const generator = layer.generator.kind.trim();
     if (generator) features.push({
       category: 'generators', value: generator, path: ['layers', index, 'generator', 'kind'],
       code: 'generator-not-native', label: 'generator',
     });
-    const patternId = layer.generator?.patternId || layer.patternId;
+    const patternId = layer.generator.patternId;
     if (generator === 'lightweaver-pattern' && patternId) features.push({
       category: 'patterns', value: patternId, path: ['layers', index, 'generator', 'patternId'],
       code: 'pattern-not-native', label: 'pattern',
@@ -254,17 +328,17 @@ function requirementReason(requirement, index, descriptor, changes) {
 }
 
 function applyChange(target, change) {
-  const path = Array.isArray(change.path) ? change.path : [];
-  if (!path.length) throw new TypeError('Simplification change requires a path');
+  if (!isAllowedSimplificationChange(target, change)) {
+    throw new TypeError('Simplification change must use an allowed schema path with own properties');
+  }
+  const path = change.path;
   let parent = target;
   for (let index = 0; index < path.length - 1; index += 1) {
     const key = path[index];
-    const nextKey = path[index + 1];
-    if (!parent[key] || typeof parent[key] !== 'object') parent[key] = typeof nextKey === 'number' ? [] : {};
     parent = parent[key];
   }
   const key = path.at(-1);
-  if (change.remove) {
+  if (Object.hasOwn(change, 'remove') && change.remove === true) {
     if (Array.isArray(parent)) parent.splice(Number(key), 1);
     else delete parent[key];
   } else {
@@ -272,17 +346,66 @@ function applyChange(target, change) {
   }
 }
 
+const DANGEROUS_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
+const SIMPLIFICATION_PATHS = [
+  ['base', 'kind'],
+  ['base', 'patternId'],
+  ['layers', '#'],
+  ['layers', '#', 'generator', 'kind'],
+  ['layers', '#', 'generator', 'patternId'],
+  ['layers', '#', 'blendMode'],
+  ['layers', '#', 'transforms', '#', 'kind'],
+  ['layers', '#', 'transform', 'kind'],
+  ['layers', '#', 'mask', 'kind'],
+  ['targets', '#'],
+  ['targets', '#', 'kind'],
+  ['requirements', '#'],
+];
+
+function pathMatchesSchema(path, schemaPath) {
+  return path.length === schemaPath.length && path.every((segment, index) => (
+    schemaPath[index] === '#'
+      ? Number.isInteger(segment) && segment >= 0
+      : segment === schemaPath[index]
+  ));
+}
+
+function isAllowedSimplificationChange(target, change) {
+  if (!change || typeof change !== 'object' || !Object.hasOwn(change, 'path') || !Array.isArray(change.path)) {
+    return false;
+  }
+  const path = change.path;
+  if (!path.length || path.some(segment => (
+    typeof segment === 'string' && DANGEROUS_PATH_SEGMENTS.has(segment)
+  ))) return false;
+  if (!SIMPLIFICATION_PATHS.some(schemaPath => pathMatchesSchema(path, schemaPath))) return false;
+  if (!(Object.hasOwn(change, 'remove') && change.remove === true) && !Object.hasOwn(change, 'value')) return false;
+
+  let current = target;
+  for (const segment of path) {
+    if (!current || typeof current !== 'object' || !Object.hasOwn(current, segment)) return false;
+    current = current[segment];
+  }
+  return true;
+}
+
 function changesInSafeApplicationOrder(changes) {
-  return [...changes].sort((left, right) => {
-    if (!left.remove || !right.remove) return 0;
-    const leftPath = Array.isArray(left.path) ? left.path : [];
-    const rightPath = Array.isArray(right.path) ? right.path : [];
-    const sameArray = JSON.stringify(leftPath.slice(0, -1)) === JSON.stringify(rightPath.slice(0, -1));
-    const leftIndex = leftPath.at(-1);
-    const rightIndex = rightPath.at(-1);
-    if (!sameArray || !Number.isInteger(leftIndex) || !Number.isInteger(rightIndex)) return 0;
-    return rightIndex - leftIndex;
+  const arrayRemovals = [];
+  const otherChanges = [];
+  for (const change of changes) {
+    const path = Object.hasOwn(change, 'path') && Array.isArray(change.path) ? change.path : [];
+    if (Object.hasOwn(change, 'remove') && change.remove === true && Number.isInteger(path.at(-1))) {
+      arrayRemovals.push(change);
+    } else {
+      otherChanges.push(change);
+    }
+  }
+  arrayRemovals.sort((left, right) => {
+    const leftParent = JSON.stringify(left.path.slice(0, -1));
+    const rightParent = JSON.stringify(right.path.slice(0, -1));
+    return leftParent.localeCompare(rightParent) || right.path.at(-1) - left.path.at(-1);
   });
+  return [...otherChanges, ...arrayRemovals];
 }
 
 export function createPatternLabSimplificationVariant(recipe, changes, options = {}) {
@@ -393,6 +516,10 @@ function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
   const reasons = [];
   const changes = [];
 
+  for (const [index, layer] of (recipe.layers || []).entries()) {
+    const issue = layerGeneratorIssue(layer, index);
+    if (issue) reasons.push(issue);
+  }
   for (const feature of collectRecipeFeatures(recipe)) {
     const unsupported = featureReason(feature, descriptor, changes);
     if (unsupported) reasons.push(unsupported);
@@ -409,33 +536,71 @@ function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
 
   const nativeBudgetRules = {
     pixelCount: {
-      overCode: 'pixel-count-over-budget', unknownCode: 'pixel-count-unknown', bakeableWhenOver: false,
+      overCode: 'pixel-count-over-budget',
+      unknownCode: 'pixel-count-unknown',
+      invalidCode: 'pixel-count-invalid',
+      tooLowCode: 'pixel-count-too-low',
+      bakeableWhenOver: false,
     },
-    fps: { overCode: 'fps-over-budget', unknownCode: 'fps-unknown', bakeableWhenOver: false },
+    fps: {
+      overCode: 'fps-over-budget',
+      unknownCode: 'fps-unknown',
+      invalidCode: 'fps-invalid',
+      tooLowCode: 'fps-too-low',
+      bakeableWhenOver: false,
+    },
     operationsPerFrame: {
-      overCode: 'operations-over-budget', unknownCode: 'operations-unknown', bakeableWhenOver: true,
+      overCode: 'operations-over-budget',
+      unknownCode: 'operations-unknown',
+      invalidCode: 'operations-invalid',
+      tooLowCode: 'operations-too-low',
+      bakeableWhenOver: true,
     },
     stateBytes: {
-      overCode: 'state-memory-over-budget', unknownCode: 'state-memory-unknown', bakeableWhenOver: true,
+      overCode: 'state-memory-over-budget',
+      unknownCode: 'state-memory-unknown',
+      invalidCode: 'state-memory-invalid',
+      tooLowCode: 'state-memory-too-low',
+      bakeableWhenOver: true,
     },
     framebufferBytes: {
-      overCode: 'framebuffer-over-budget', unknownCode: 'framebuffer-unknown', bakeableWhenOver: true,
+      overCode: 'framebuffer-over-budget',
+      unknownCode: 'framebuffer-unknown',
+      invalidCode: 'framebuffer-invalid',
+      tooLowCode: 'framebuffer-too-low',
+      bakeableWhenOver: true,
     },
     nativeConfigBytes: {
-      overCode: 'native-config-over-budget', unknownCode: 'native-config-unknown', bakeableWhenOver: true,
+      overCode: 'native-config-over-budget',
+      unknownCode: 'native-config-unknown',
+      invalidCode: 'native-config-invalid',
+      tooLowCode: 'native-config-too-low',
+      bakeableWhenOver: true,
     },
   };
   for (const [key, rule] of Object.entries(nativeBudgetRules)) {
-    if (!budgets[key].known) {
+    if (budgets[key].status === 'unknown') {
       reasons.push(reason(
         rule.unknownCode,
         `${key} has no authoritative runtime estimate; card compatibility cannot be proven.`,
         { bakeable: false },
       ));
-    } else if (!budgets[key].ok) {
+    } else if (budgets[key].status === 'invalid') {
+      reasons.push(reason(
+        rule.invalidCode,
+        `${key} is not a finite safe non-negative integer.`,
+        { bakeable: false },
+      ));
+    } else if (budgets[key].status === 'too-low') {
+      reasons.push(reason(
+        rule.tooLowCode,
+        `${key} is below the minimum usable value.`,
+        { bakeable: false },
+      ));
+    } else if (budgets[key].status === 'over-limit') {
       reasons.push(reason(
         rule.overCode,
-        `${key} uses ${budgets[key].used}, outside the card limit of ${budgets[key].limit}.`,
+        `${key} uses ${budgets[key].used}, above the card limit of ${budgets[key].limit}.`,
         { bakeable: rule.bakeableWhenOver },
       ));
     }
@@ -456,7 +621,7 @@ function evaluatePatternLabCompatibility(recipe, descriptor, metrics, options) {
   return {
     budgets,
     reasons,
-    changes,
+    changes: changes.filter(change => isAllowedSimplificationChange(recipe, change)),
     nativeEligible,
     bakeEligible,
   };
