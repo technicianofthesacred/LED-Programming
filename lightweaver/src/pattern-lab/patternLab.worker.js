@@ -14,6 +14,7 @@ import {
 
 let initialized = false;
 let staticGeometry = null;
+let staticGeneration = 0;
 const cancelledRequests = new Set();
 
 function reply(type, requestId, payload = {}, transfer = []) {
@@ -74,6 +75,9 @@ function wait(milliseconds) {
 
 async function renderRequest(requestId, payload) {
   const startedAt = performance.now();
+  if (!Number.isSafeInteger(payload.generation) || payload.generation !== staticGeneration) {
+    throw new RangeError('Pattern Lab worker render generation does not match initialized geometry');
+  }
   const geometry = validatePatternLabWorkerGeometry(staticGeometry);
   const requestedSamples = clampPatternLabWorkerSampleCount(geometry.visiblePixelCount, payload.mode);
   const validated = validatePatternLabWorkerRenderRequest({
@@ -136,6 +140,7 @@ async function renderRequest(requestId, payload) {
   reply('frame', requestId, {
     mode: validated.mode,
     time: Number(payload.time) || 0,
+    generation: staticGeneration,
     totalSamples: geometry.visiblePixelCount,
     sampleCount: indices.length,
     colors: colors.buffer,
@@ -153,9 +158,15 @@ async function handleMessage(message) {
   const { type, requestId, payload = {} } = message || {};
   try {
     if (type === 'initialize') {
-      staticGeometry = validatePatternLabWorkerGeometry(payload.geometry);
+      if (!Number.isSafeInteger(payload.generation) || payload.generation < 1) {
+        throw new RangeError('Pattern Lab worker geometry generation must be a positive safe integer');
+      }
+      const nextGeometry = validatePatternLabWorkerGeometry(payload.geometry);
+      staticGeometry = nextGeometry;
+      staticGeneration = payload.generation;
       initialized = true;
       reply('ready', requestId, {
+        generation: staticGeneration,
         budgets: PATTERN_LAB_WORKER_BUDGETS,
         sourcePixelCount: staticGeometry.sourcePixelCount,
         visiblePixelCount: staticGeometry.visiblePixelCount,
@@ -171,6 +182,8 @@ async function handleMessage(message) {
     }
     if (type === 'dispose') {
       staticGeometry = null;
+      staticGeneration = 0;
+      initialized = false;
       reply('stats', requestId, { disposed: true });
       globalThis.close();
       return;

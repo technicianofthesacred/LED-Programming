@@ -86,6 +86,7 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
             requestId: 2,
             payload: {
               mode: 'preview',
+              generation: 1,
               recipe: { base: { patternId: 'aurora', params: {} }, palette: ['#102040', '#f09030'], layers: [] },
               time: 12.5,
               renderOptions: {
@@ -100,7 +101,9 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
         if (event.data?.type === 'frame') resolve(event.data.payload);
       });
     });
-    worker.postMessage({ type: 'initialize', requestId: 1, payload: { geometry: transferred.geometry } }, transferred.transfer);
+    worker.postMessage({
+      type: 'initialize', requestId: 1, payload: { geometry: transferred.geometry, generation: 1 },
+    }, transferred.transfer);
     const payload = await frame;
     worker.terminate();
 
@@ -224,7 +227,7 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
     };
     worker.onerror = event => errors.push(event.message);
     worker.postMessage({
-      type: 'initialize', requestId: 1, payload: { geometry: initial.geometry },
+      type: 'initialize', requestId: 1, payload: { geometry: initial.geometry, generation: 1 },
     }, initial.transfer);
     await Promise.race([ready, new Promise(resolve => setTimeout(resolve, 2000))]);
     worker.postMessage({
@@ -232,6 +235,7 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
       requestId: 2,
       payload: {
         mode: 'preview',
+        generation: 1,
         layerCount: 0,
         testGenerator: { kind: 'delay', milliseconds: 180 },
       },
@@ -242,13 +246,14 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
     worker.postMessage({
       type: 'initialize',
       requestId: 4,
-      payload: { geometry: forged.geometry },
+      payload: { geometry: forged.geometry, generation: 2 },
     }, forged.transfer);
     worker.postMessage({
       type: 'render',
       requestId: 5,
       payload: {
         mode: 'final',
+        generation: 1,
         layerCount: 0,
         allocationBytes: 1,
         recipe: { base: { patternId: 'aurora', params: {} }, palette: ['#000000', '#ffffff'] },
@@ -287,7 +292,7 @@ test('terminates a genuine synchronous export render and replaces the worker cle
         if (event.data?.type === 'ready') resolve();
       }, { once: true });
       worker.postMessage({
-        type: 'initialize', requestId: 1, payload: { geometry: initial.geometry },
+        type: 'initialize', requestId: 1, payload: { geometry: initial.geometry, generation: 1 },
       }, initial.transfer);
     });
     worker.postMessage({
@@ -295,6 +300,7 @@ test('terminates a genuine synchronous export render and replaces the worker cle
       requestId: 2,
       payload: {
         mode: 'export',
+        generation: 1,
         layerCount: 0,
         recipe: { base: { patternId: 'aurora', params: {} }, palette: ['#000000', '#ffffff'] },
       },
@@ -307,7 +313,7 @@ test('terminates a genuine synchronous export render and replaces the worker cle
     replacement.onmessage = event => replacementReplies.push(event.data);
     const replacementGeometry = clonePatternLabWorkerGeometryForTransfer(compact);
     replacement.postMessage({
-      type: 'initialize', requestId: 3, payload: { geometry: replacementGeometry.geometry },
+      type: 'initialize', requestId: 3, payload: { geometry: replacementGeometry.geometry, generation: 2 },
     }, replacementGeometry.transfer);
     await new Promise(resolve => setTimeout(resolve, 150));
     replacement.terminate();
@@ -418,6 +424,127 @@ test('terminates every worker and clears queued rendering when the preview unmou
   }));
   expect(atUnmount.terminated).toBe(atUnmount.created);
   expect(afterWait.renderPosts).toBe(atUnmount.renderPosts);
+});
+
+test('replaces live geometry without mapping an old frame and falls back safely on invalid geometry', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const lifecycle = { created: 0, terminated: 0 };
+    class GeometryWorker extends NativeWorker {
+      constructor(url: URL | string, options?: WorkerOptions) {
+        super(url, options);
+        lifecycle.created += 1;
+      }
+
+      set onmessage(handler: ((this: Worker, ev: MessageEvent) => unknown) | null) {
+        super.onmessage = handler ? event => {
+          if (event.data?.type === 'frame') {
+            setTimeout(() => handler.call(this, event), 120);
+            return;
+          }
+          handler.call(this, event);
+        } : null;
+      }
+
+      terminate() {
+        lifecycle.terminated += 1;
+        super.terminate();
+      }
+    }
+    Object.defineProperty(window, 'Worker', { configurable: true, value: GeometryWorker });
+    Object.defineProperty(window, '__LW_PATTERN_LAB_GEOMETRY_LIFECYCLE__', { value: lifecycle });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    const ReactModule = await import('/node_modules/.vite/deps/react.js');
+    const React = ReactModule.default || ReactModule;
+    const ReactDomClient = await import('/node_modules/.vite/deps/react-dom_client.js');
+    const createRoot = ReactDomClient.createRoot || ReactDomClient.default.createRoot;
+    const { default: usePatternLabWorker } = await import('/src/pattern-lab/usePatternLabWorker.js');
+    const host = document.createElement('div');
+    host.id = 'pattern-lab-worker-harness-host';
+    document.body.append(host);
+    const root = createRoot(host);
+    const recipe = {
+      base: { patternId: 'aurora', params: {} },
+      palette: ['#102040', '#f09030'],
+      layers: [],
+    };
+    const stableRenderOptions = {
+      masterSpeed: 1,
+      masterBrightness: 1,
+      masterSaturation: 1,
+      masterHueShift: 0,
+    };
+    function Harness({ geometry }: { geometry: Record<string, unknown> }) {
+      const result = usePatternLabWorker({
+        recipe,
+        geometry,
+        time: 4,
+        mode: 'final',
+        renderOptions: stableRenderOptions,
+      });
+      return React.createElement('div', {
+        id: 'pattern-lab-worker-harness',
+        'data-status': result.status,
+        'data-frame': result.frameRequestId ?? '',
+        'data-generation': result.geometryGeneration ?? '',
+        'data-error': result.error?.message ?? '',
+      });
+    }
+    const render = (geometry: Record<string, unknown>) => {
+      root.render(React.createElement(Harness, { geometry }));
+    };
+    Object.defineProperty(window, '__LW_PATTERN_LAB_GEOMETRY_HARNESS__', {
+      value: { render, unmount: () => root.unmount() },
+    });
+    render({
+      strips: [{ id: 'a', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
+      hidden: {},
+    });
+  });
+  const harness = page.locator('#pattern-lab-worker-harness');
+  await expect(harness).toHaveAttribute('data-status', 'frame');
+  const firstFrame = await harness.getAttribute('data-frame');
+  const firstGeneration = await harness.getAttribute('data-generation');
+
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __LW_PATTERN_LAB_GEOMETRY_HARNESS__: { render: (geometry: Record<string, unknown>) => void };
+    }).__LW_PATTERN_LAB_GEOMETRY_HARNESS__.render({
+      strips: [{ id: 'b', pixels: [
+        { x: 10, y: 10 }, { x: 11, y: 11 }, { x: 12, y: 12 }, { x: 13, y: 13 },
+      ] }],
+      hidden: {},
+    });
+  });
+  await expect.poll(async () => harness.getAttribute('data-generation')).not.toBe(firstGeneration);
+  expect(await harness.getAttribute('data-frame')).toBe('');
+  await expect(harness).toHaveAttribute('data-status', 'frame');
+  expect(await harness.getAttribute('data-frame')).not.toBe(firstFrame);
+  const validCounts = await page.evaluate(() => {
+    const lifecycle = (window as typeof window & {
+      __LW_PATTERN_LAB_GEOMETRY_LIFECYCLE__: { created: number; terminated: number };
+    }).__LW_PATTERN_LAB_GEOMETRY_LIFECYCLE__;
+    return { created: lifecycle.created, terminated: lifecycle.terminated };
+  });
+  expect(validCounts.created - validCounts.terminated).toBe(1);
+
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __LW_PATTERN_LAB_GEOMETRY_HARNESS__: { render: (geometry: Record<string, unknown>) => void };
+    }).__LW_PATTERN_LAB_GEOMETRY_HARNESS__.render({ strips: [], hidden: {} });
+  });
+  await expect(harness).toHaveAttribute('data-status', 'fallback');
+  await expect(harness).toHaveAttribute('data-frame', '');
+  await expect(harness).toHaveAttribute('data-error', /visible source pixel/i);
+  const invalidCounts = await page.evaluate(() => {
+    const lifecycle = (window as typeof window & {
+      __LW_PATTERN_LAB_GEOMETRY_LIFECYCLE__: { created: number; terminated: number };
+    }).__LW_PATTERN_LAB_GEOMETRY_LIFECYCLE__;
+    return { created: lifecycle.created, terminated: lifecycle.terminated };
+  });
+  expect(invalidCounts.created).toBe(invalidCounts.terminated);
 });
 
 test('falls back to the existing mapped renderer when Worker is unavailable', async ({ page }) => {

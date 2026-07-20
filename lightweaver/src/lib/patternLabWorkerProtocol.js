@@ -314,13 +314,27 @@ export function validatePatternLabWorkerRenderRequest(input = {}) {
   return { mode, sampleCount, layerCount, allocationBytes };
 }
 
-export function validatePatternLabWorkerFrameReply(reply, latestRequestId, visiblePixelCount) {
-  if (!shouldAcceptPatternLabWorkerReply(reply, latestRequestId) || reply.type !== 'frame') {
+export function validatePatternLabWorkerFrameReply(reply, pending) {
+  if (!pending || !positiveRequestId(pending.id) || !RENDER_MODES.includes(pending.mode)
+    || !Number.isSafeInteger(pending.visiblePixelCount) || pending.visiblePixelCount < 1
+    || !Number.isSafeInteger(pending.expectedSampleCount) || pending.expectedSampleCount < 1
+    || pending.expectedSampleCount !== clampPatternLabWorkerSampleCount(
+      pending.visiblePixelCount,
+      pending.mode,
+    )
+    || !Number.isFinite(pending.time)
+    || !positiveRequestId(pending.generation)) {
+    throw new RangeError('Malformed Pattern Lab worker pending frame contract');
+  }
+  if (!shouldAcceptPatternLabWorkerReply(reply, pending.id) || reply.type !== 'frame') {
     throw new RangeError('Malformed Pattern Lab worker frame identity');
   }
   const payload = reply.payload;
-  if (!payload || !RENDER_MODES.includes(payload.mode)) {
+  if (!payload || payload.mode !== pending.mode) {
     throw new RangeError('Malformed Pattern Lab worker frame mode');
+  }
+  if (payload.time !== pending.time || payload.generation !== pending.generation) {
+    throw new RangeError('Malformed Pattern Lab worker frame generation');
   }
   if (!(payload.colors instanceof ArrayBuffer) || !(payload.indices instanceof ArrayBuffer)) {
     throw new RangeError('Malformed Pattern Lab worker frame buffers');
@@ -331,16 +345,14 @@ export function validatePatternLabWorkerFrameReply(reply, latestRequestId, visib
   }
   const colors = new Uint8ClampedArray(payload.colors);
   const indices = new Uint32Array(payload.indices);
-  const maximum = payload.mode === 'preview'
-    ? PATTERN_LAB_WORKER_BUDGETS.previewSamples
-    : PATTERN_LAB_WORKER_BUDGETS.finalSamples;
-  if (indices.length < 1 || indices.length > maximum || colors.length !== indices.length * 3
-    || payload.sampleCount !== indices.length || payload.totalSamples !== visiblePixelCount) {
+  if (indices.length !== pending.expectedSampleCount || colors.length !== indices.length * 3
+    || payload.sampleCount !== pending.expectedSampleCount
+    || payload.totalSamples !== pending.visiblePixelCount) {
     throw new RangeError('Malformed Pattern Lab worker frame sample counts');
   }
   let previous = -1;
   for (const index of indices) {
-    if (index <= previous || index >= visiblePixelCount) {
+    if (index <= previous || index >= pending.visiblePixelCount) {
       throw new RangeError('Malformed Pattern Lab worker frame indices');
     }
     previous = index;

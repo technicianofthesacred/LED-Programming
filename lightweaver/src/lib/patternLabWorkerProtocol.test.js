@@ -164,29 +164,49 @@ test('render validation rejects layer and typed-allocation overflow', () => {
 });
 
 test('strict frame validation accepts bounded Uint32 indices and rejects malformed buffers', () => {
+  const pending = {
+    id: 9,
+    mode: 'preview',
+    expectedSampleCount: 2,
+    visiblePixelCount: 2,
+    time: 12.5,
+    generation: 3,
+  };
   const valid = {
     type: 'frame',
     requestId: 9,
     payload: {
       mode: 'preview',
+      time: 12.5,
+      generation: 3,
       sampleCount: 2,
-      totalSamples: 500,
+      totalSamples: 2,
       colors: new Uint8ClampedArray([1, 2, 3, 4, 5, 6]).buffer,
-      indices: new Uint32Array([0, 499]).buffer,
+      indices: new Uint32Array([0, 1]).buffer,
     },
   };
-  const frame = validatePatternLabWorkerFrameReply(valid, 9, 500);
+  const frame = validatePatternLabWorkerFrameReply(valid, pending);
   assert.deepEqual([...frame.colors], [1, 2, 3, 4, 5, 6]);
-  assert.deepEqual([...frame.indices], [0, 499]);
+  assert.deepEqual([...frame.indices], [0, 1]);
 
   for (const payload of [
     { ...valid.payload, colors: new ArrayBuffer(5) },
-    { ...valid.payload, indices: new Uint16Array([0, 499]).buffer },
+    { ...valid.payload, indices: new Uint16Array([0, 1]).buffer },
     { ...valid.payload, indices: new Uint32Array([10, 9]).buffer },
     { ...valid.payload, indices: new Uint32Array([9, 9]).buffer },
-    { ...valid.payload, indices: new Uint32Array([0, 500]).buffer },
+    { ...valid.payload, indices: new Uint32Array([0, 2]).buffer },
     { ...valid.payload, colors: new ArrayBuffer(PATTERN_LAB_WORKER_BUDGETS.maxFrameBytes + 1) },
+    {
+      ...valid.payload,
+      sampleCount: 1,
+      colors: new Uint8ClampedArray([1, 2, 3]).buffer,
+      indices: new Uint32Array([0]).buffer,
+    },
+    { ...valid.payload, mode: 'final' },
+    { ...valid.payload, time: 12.6 },
+    { ...valid.payload, generation: 4 },
   ]) {
-    assert.throws(() => validatePatternLabWorkerFrameReply({ ...valid, payload }, 9, 500));
+    assert.throws(() => validatePatternLabWorkerFrameReply({ ...valid, payload }, pending));
   }
+  assert.throws(() => validatePatternLabWorkerFrameReply(valid, { ...pending, id: 10 }));
 });
