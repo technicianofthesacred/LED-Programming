@@ -1817,11 +1817,13 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   bool wifiTransition = wifiState.phase == lightweaver::ConnectivityPhase::Joining ||
       wifiState.phase == lightweaver::ConnectivityPhase::HandoffReady ||
       wifiState.phase == lightweaver::ConnectivityPhase::Reconnecting ||
-      wifiState.phase == lightweaver::ConnectivityPhase::RecoveryAp;
+      wifiState.phase == lightweaver::ConnectivityPhase::RecoveryAp ||
+      config.wifiRuntime.stationLinkPending;
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["hostname"] = config.activeHostname;
   doc["wifi"]["ip"] = config.activeIp;
-  doc["wifi"]["phase"] = wifiPhase;
+  doc["wifi"]["transition"] = wifiPhase;
+  doc["wifi"]["phase"] = wifiPhase;  // diagnostic alias retained for early clients
   doc["wifi"]["transitionPending"] = wifiTransition;
   doc["wifi"]["apActive"] = wifiState.apActive;
   doc["wifi"]["stationIp"] = config.wifiRuntime.stationIp;

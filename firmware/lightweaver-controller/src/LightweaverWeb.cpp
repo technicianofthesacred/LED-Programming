@@ -1904,7 +1904,8 @@ bool wifiPhaseIsPending(lightweaver::ConnectivityPhase phase) {
 
 void syncWifiReadiness(const RuntimeConfig& config) {
   runtimeSetWifiTransitionPending(
-      wifiPhaseIsPending(config.wifiRuntime.connectivity.phase));
+      wifiPhaseIsPending(config.wifiRuntime.connectivity.phase) ||
+      config.wifiRuntime.stationLinkPending);
 }
 
 void startStationAttempt(RuntimeConfig& config) {
@@ -1929,6 +1930,7 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
       {lightweaver::ConnectivityEvent::CredentialsAccepted, millis(), generation});
   config.wifiRuntime.stationIp = "";
   config.wifiRuntime.lastError = "";
+  config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = WiFi.softAPIP().toString();
   config.activeHostname = "";
@@ -1949,6 +1951,7 @@ void retireSetupAp(RuntimeConfig& config) {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   config.wifiRuntime.connectivity.apActive = false;
+  config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = config.wifiRuntime.stationIp;
 }
@@ -1959,6 +1962,7 @@ void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
       {lightweaver::ConnectivityEvent::StationAssociated, now, 0});
   config.wifiRuntime.stationIp = WiFi.localIP().toString();
   config.wifiRuntime.lastError = "";
+  config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = config.wifiRuntime.stationIp;
   config.activeHostname = sanitizeHostname(config.wifi.hostname);
@@ -1996,25 +2000,57 @@ void maintainConnectivity() {
   lastPollMs = now;
 
   bool connected = WiFi.status() == WL_CONNECTED;
-  if (connected && !state.stationAssociated &&
-      (state.phase == lightweaver::ConnectivityPhase::Joining ||
-       state.phase == lightweaver::ConnectivityPhase::Reconnecting ||
-       state.phase == lightweaver::ConnectivityPhase::RecoveryAp)) {
-    bool apWasActive = state.apActive;
-    recordStationAssociation(cfg, now);
-    if (state.phase == lightweaver::ConnectivityPhase::Station && apWasActive) {
-      retireSetupAp(cfg);
+
+  // Completed handoff is deliberately passive in Task 2. The ESP32 SDK owns
+  // auto-reconnect; we only make the outage observable/fail-closed and refresh
+  // bindings when the link returns. Active retry cadence + recovery AP belong
+  // to the later connectivity-recovery task.
+  if (state.phase == lightweaver::ConnectivityPhase::Station) {
+    if (!connected) {
+      cfg.wifiRuntime.stationLinkPending = true;
+      state.stationAssociated = false;
+      cfg.wifiRuntime.stationIp = "";
+      cfg.wifiRuntime.lastError = "station connection lost";
+      cfg.activeIp = "";
+      syncWifiReadiness(cfg);
+      return;
     }
+    String stationIp = WiFi.localIP().toString();
+    bool needsRebind = !state.stationAssociated ||
+        (stationIp != "0.0.0.0" && stationIp != cfg.wifiRuntime.stationIp);
+    state.stationAssociated = true;
+    cfg.wifiRuntime.stationLinkPending = false;
+    cfg.wifiRuntime.stationIp = stationIp;
+    cfg.wifiRuntime.lastError = "";
+    cfg.activeTransport = WIFI_TRANSPORT_STATION;
+    cfg.activeIp = stationIp;
+    cfg.activeHostname = sanitizeHostname(cfg.wifi.hostname);
+    if (needsRebind) {
+      announceMdns(cfg.activeHostname);
+      wledRealtimeRebind();
+      if (Serial) {
+        Serial.print("WiFi station passively reacquired at ");
+        Serial.println(stationIp);
+      }
+    }
+    syncWifiReadiness(cfg);
     return;
   }
 
-  if (!connected && state.stationAssociated) {
+  if (connected && !state.stationAssociated &&
+      state.phase == lightweaver::ConnectivityPhase::Joining) {
+    recordStationAssociation(cfg, now);
+    return;
+  }
+
+  if (!connected && state.stationAssociated &&
+      state.phase == lightweaver::ConnectivityPhase::HandoffReady) {
     state = lightweaver::advanceConnectivity(
         state, {lightweaver::ConnectivityEvent::StationLost, now, 0});
     cfg.wifiRuntime.stationIp = "";
     cfg.wifiRuntime.lastError = "station connection lost";
     syncWifiReadiness(cfg);
-    if (state.reconnectDue) startStationAttempt(cfg);
+    startStationAttempt(cfg);
     return;
   }
 
@@ -2027,16 +2063,13 @@ void maintainConnectivity() {
     WiFi.disconnect(false, false);
     cfg.wifiRuntime.stationIp = "";
     cfg.wifiRuntime.lastError = "station association timed out";
+    cfg.wifiRuntime.stationLinkPending = false;
     startApMode(cfg);
   } else if (previousPhase == lightweaver::ConnectivityPhase::HandoffReady &&
              state.phase == lightweaver::ConnectivityPhase::Station && connected) {
     retireSetupAp(cfg);
-  } else if (previousPhase == lightweaver::ConnectivityPhase::Reconnecting &&
-             state.phase == lightweaver::ConnectivityPhase::RecoveryAp) {
-    startApMode(cfg);
   }
 
-  if (state.reconnectDue && cfg.wifi.ssid.length()) startStationAttempt(cfg);
   syncWifiReadiness(cfg);
 }
 }

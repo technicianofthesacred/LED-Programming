@@ -175,6 +175,7 @@ struct WifiRuntimeState {
   String stationIp;
   String lastError;
   uint32_t attemptCount = 0;
+  bool stationLinkPending = false;
 };
 
 // A contiguous run of pixels on the global LED buffer.

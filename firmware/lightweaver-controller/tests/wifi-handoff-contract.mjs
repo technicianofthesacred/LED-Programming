@@ -30,6 +30,8 @@ assert.match(web, /#include "LightweaverConnectivityPolicy\.h"/,
   'firmware orchestration must use the native-tested connectivity policy');
 assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*ConnectivityState[\s\S]*stationIp[\s\S]*lastError[\s\S]*attemptCount[\s\S]*};/,
   'transient WiFi truth must be separate from saved credentials and include transition/retry metadata');
+assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*bool stationLinkPending\s*=\s*false/,
+  'completed-station link loss must have a passive readiness interlock without changing policy phase');
 assert.match(types, /struct RuntimeConfig\s*{[\s\S]*WifiConfig wifi;[\s\S]*WifiRuntimeState wifiRuntime;/,
   'runtime configuration must carry live WiFi truth separately from WifiConfig');
 
@@ -111,6 +113,12 @@ assert.match(associated, /announceMdns[\s\S]*wledRealtimeRebind/,
   'association must refresh mDNS and existing realtime binding');
 assert.match(connectivity, /kHandoffGraceMs|advanceConnectivity[\s\S]*Tick/,
   'a still-associated station may retire the AP after the tested grace period');
+assert.match(connectivity, /state\.phase\s*==\s*lightweaver::ConnectivityPhase::Station[\s\S]*stationLinkPending\s*=\s*true[\s\S]*stationAssociated\s*=\s*false/,
+  'completed Station loss must demote readiness while leaving the policy in Station');
+assert.match(connectivity, /state\.phase\s*==\s*lightweaver::ConnectivityPhase::Station[\s\S]*stationLinkPending\s*=\s*false[\s\S]*announceMdns[\s\S]*wledRealtimeRebind/,
+  'passive SDK station reacquisition must refresh IP and network bindings');
+assert.doesNotMatch(connectivity, /ConnectivityPhase::RecoveryAp|ConnectivityPhase::Reconnecting|kRecoveryApThresholdMs|kReconnectCadenceMs/,
+  'Task 2 must not orchestrate active post-handoff retry or recovery AP behavior');
 
 assert.match(runtimeApi, /void\s+runtimeSetWifiTransitionPending\s*\(bool pending\)/,
   'web orchestration must expose a dedicated WiFi readiness interlock');
@@ -125,7 +133,7 @@ assert.doesNotMatch(wifiSetter, /clearPhysicalLeds|FastLED|blackout|restartTrans
 
 const status = functionBody(storage, /String\s+runtimeStatusJson\s*\(/);
 for (const field of [
-  'phase', 'transitionPending', 'apActive', 'stationIp',
+  'transition', 'phase', 'transitionPending', 'apActive', 'stationIp',
   'handoffGeneration', 'phaseStartedMs', 'lastAttemptMs',
   'attemptCount', 'lastError',
 ]) {
