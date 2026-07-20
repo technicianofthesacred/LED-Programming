@@ -19,6 +19,15 @@ const SECTION_RECIPE = {
   estimates: { pixelCount: 1, operationsPerFrame: 1, stateBytes: 1, framebufferBytes: 3 },
 };
 
+const BLACK_RECIPE = {
+  ...SECTION_RECIPE,
+  id: 'black-frame-source',
+  name: 'Black frame source',
+  base: { kind: 'lightweaver-pattern', patternId: 'gradient', params: {} },
+  palette: ['#000000', '#000000'],
+  targets: [{ kind: 'whole-piece', id: 'all' }],
+};
+
 test.beforeEach(async ({ page }) => {
   cardMutationRequests = [];
   const blockCard = async (route: Route) => {
@@ -131,4 +140,40 @@ test('fails closed when a draft layer has no authoritative runtime estimates', a
   await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('State memoryUnknown');
   await expect(compatibility).toContainText('has no concrete generator');
   await expect(page.getByTestId('pattern-lab-diagnostics')).toHaveCount(0);
+});
+
+test('explains when every visible strip has zero brightness', async ({ page }) => {
+  await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
+  await page.evaluate(key => {
+    const project = JSON.parse(localStorage.getItem(key) || '{}');
+    project.layout.strips = project.layout.strips.map((strip: Record<string, unknown>) => ({
+      ...strip,
+      brightness: 0,
+    }));
+    localStorage.setItem(key, JSON.stringify(project));
+  }, AUTOSAVE_KEY);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
+  const diagnostics = page.getByTestId('pattern-lab-diagnostics');
+  await diagnostics.locator(':scope > summary').click();
+
+  await expect(diagnostics).toContainText('Every visible strip has zero brightness.');
+  await expect(diagnostics).not.toContainText('No known mask, brightness, gamma, power, output, or target issue was detected.');
+});
+
+test('explains an observed all-black preview frame without inventing invalid output', async ({ page }) => {
+  await page.getByLabel('Import recipe').setInputFiles({
+    name: 'black-frame-source.lwrecipe.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(BLACK_RECIPE)),
+  });
+  await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
+  await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
+  const diagnostics = page.getByTestId('pattern-lab-diagnostics');
+  await diagnostics.locator(':scope > summary').click();
+
+  await expect(diagnostics).toContainText('Every sampled pixel in the last preview frame is black.');
+  await expect(diagnostics).not.toContainText('The generator returned an invalid or non-finite color.');
+  await expect(diagnostics).not.toContainText('No known mask, brightness, gamma, power, output, or target issue was detected.');
 });

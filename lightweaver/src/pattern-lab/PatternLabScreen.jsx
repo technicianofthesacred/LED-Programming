@@ -6,7 +6,7 @@ import {
   createPatternLabDiagnosticsSnapshot,
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
-import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
+import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
@@ -54,6 +54,36 @@ function geometryPixelCount(geometry) {
     if (!Number.isSafeInteger(count)) return null;
   }
   return count > 0 ? count : null;
+}
+
+function visibleGeometryPixelCount(geometry) {
+  const visible = (geometry?.strips || []).filter(strip => !geometry?.hidden?.[strip.id]);
+  if (!visible.length) return null;
+  return geometryPixelCount({ strips: visible });
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function previewMasterBrightness(recipe, previewTime) {
+  const macroBrightness = resolvePatternLabMacros(recipe).energy.brightness;
+  const evolution = recipe?.evolution?.enabled ? sampleEvolution(recipe, previewTime) : null;
+  const amount = evolution?.change ?? 0;
+  const destination = Math.min(
+    macroBrightness,
+    evolution?.destinations?.brightness ?? macroBrightness,
+  );
+  return clamp(macroBrightness + (destination - macroBrightness) * amount, 0.08, 1);
+}
+
+function allVisibleStripBrightnessZero(geometry, masterBrightness) {
+  const visible = (geometry?.strips || []).filter(strip => !geometry?.hidden?.[strip.id]);
+  return visible.length > 0 && visible.every(strip => {
+    const stripBrightness = Number(strip?.brightness);
+    const normalized = Number.isFinite(stripBrightness) ? stripBrightness : 1;
+    return normalized * masterBrightness <= 0.01;
+  });
 }
 
 function hasKnownStatelessRuntime(recipe) {
@@ -252,6 +282,7 @@ export default function PatternLabScreen() {
   const patterns = useMemo(() => listBuiltInPatterns(), []);
   const importRef = useRef(null);
   const drawerRef = useRef(null);
+  const previewStageRef = useRef(null);
   const drawerTriggerRef = useRef(null);
   const drawerCloseRef = useRef(null);
   const [sourceRecipe, setSourceRecipe] = useState(null);
@@ -266,6 +297,12 @@ export default function PatternLabScreen() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [variationRound, setVariationRound] = useState(0);
   const [seedLocked, setSeedLocked] = useState(false);
+  const [previewFrameSignals, setPreviewFrameSignals] = useState({
+    recipeId: null,
+    frameObserved: false,
+    sampledPixelCount: null,
+    blackPixelCount: null,
+  });
   const mobileDrawer = useMobileDrawer();
   const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
   const previewDuration = draft?.evolution?.durationSeconds ?? 600;
@@ -329,6 +366,87 @@ export default function PatternLabScreen() {
     project.motionSmoothing,
   ]);
 
+  useEffect(() => {
+    const root = previewStageRef.current;
+    const recipeId = previewRecipe?.id ?? null;
+    setPreviewFrameSignals({
+      recipeId,
+      frameObserved: false,
+      sampledPixelCount: null,
+      blackPixelCount: null,
+    });
+    if (!root || !recipeId) return undefined;
+
+    const scratch = document.createElement('canvas');
+    scratch.width = 64;
+    scratch.height = 64;
+    const context = scratch.getContext('2d', { willReadFrequently: true });
+    let timeout = 0;
+    let disposed = false;
+    let remainingAttempts = 4;
+
+    const inspect = () => {
+      timeout = 0;
+      if (disposed || !context) return;
+      const preview = root.querySelector('[data-testid="pattern-lab-mapped-preview"]');
+      const canvas = preview?.querySelector('canvas');
+      const glowCanvas = canvas?._glow;
+      const sampledPixelCount = visibleGeometryPixelCount(geometry);
+      if (!glowCanvas?.width || !glowCanvas?.height || sampledPixelCount === null) {
+        if (remainingAttempts > 0) {
+          remainingAttempts -= 1;
+          timeout = window.setTimeout(inspect, 320);
+        }
+        return;
+      }
+      try {
+        context.clearRect(0, 0, scratch.width, scratch.height);
+        context.drawImage(glowCanvas, 0, 0, scratch.width, scratch.height);
+        const pixels = context.getImageData(0, 0, scratch.width, scratch.height).data;
+        let hasVisibleOutput = false;
+        for (let index = 3; index < pixels.length; index += 4) {
+          if (pixels[index] > 0) {
+            hasVisibleOutput = true;
+            break;
+          }
+        }
+        setPreviewFrameSignals(current => {
+          const next = {
+            recipeId,
+            frameObserved: true,
+            sampledPixelCount,
+            blackPixelCount: hasVisibleOutput ? null : sampledPixelCount,
+          };
+          return current.recipeId === next.recipeId
+            && current.frameObserved === next.frameObserved
+            && current.sampledPixelCount === next.sampledPixelCount
+            && current.blackPixelCount === next.blackPixelCount
+            ? current
+            : next;
+        });
+      } catch {
+        // Canvas telemetry is optional. Leave the frame signals unknown when
+        // the browser refuses a pixel read rather than inventing a cause.
+      }
+    };
+    const scheduleInspection = () => {
+      if (timeout) return;
+      timeout = window.setTimeout(inspect, 320);
+    };
+    const observer = new MutationObserver(scheduleInspection);
+    observer.observe(root, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['data-worker-frame-id', 'data-worker-state'],
+    });
+    scheduleInspection();
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.clearTimeout(timeout);
+    };
+  }, [geometry, previewRecipe]);
+
   const variantSeeds = useMemo(
     () => Array.from({ length: 4 }, (_, index) => deriveSeed(sourceRecipe?.seed ?? 1, index + variationRound * 4)),
     [sourceRecipe?.seed, variationRound],
@@ -341,6 +459,10 @@ export default function PatternLabScreen() {
     () => draft ? compatibilityFor(draft, geometry) : null,
     [draft, geometry],
   );
+  const diagnosticMasterBrightness = draft ? previewMasterBrightness(draft, previewTime) : 1;
+  const diagnosticFrameSignals = previewFrameSignals.recipeId === draft?.id
+    ? previewFrameSignals
+    : { frameObserved: false, sampledPixelCount: null, blackPixelCount: null };
   const diagnostics = useMemo(() => (
     draft
       && Number.isSafeInteger(runtimeMetrics?.stateBytes)
@@ -357,12 +479,34 @@ export default function PatternLabScreen() {
       recipeId: draft.id,
       seed: draft.seed,
       evolution: draft.evolution?.character,
+      signals: {
+        frameObserved: diagnosticFrameSignals.frameObserved,
+        blackPixelCount: diagnosticFrameSignals.blackPixelCount ?? 'unknown',
+        invalidOutputCount: 'unknown',
+        gammaInput: project.gammaEnabled ? 'unknown' : 'not-enabled',
+        powerLimited: 'unknown',
+        maskAlpha: (draft.layers || []).some(layer => layer?.mask) ? 'unknown' : 'not-present',
+        zeroOpacityLayerCount: (draft.layers || []).filter(layer => Number(layer?.opacity) <= 0.01).length,
+      },
     },
     darkness: {
-      brightness: resolvePatternLabMacros(draft).energy.brightness,
+      brightness: diagnosticMasterBrightness,
+      allStripBrightnessZero: allVisibleStripBrightnessZero(geometry, diagnosticMasterBrightness),
+      frameObserved: diagnosticFrameSignals.frameObserved,
+      sampledPixelCount: diagnosticFrameSignals.sampledPixelCount,
+      blackPixelCount: diagnosticFrameSignals.blackPixelCount,
       targetMatched: (draft.targets || []).every(target => target?.kind === 'whole-piece'),
     },
-  }) : null, [draft, geometry, playing, previewTime, runtimeMetrics]);
+  }) : null, [
+    diagnosticFrameSignals,
+    diagnosticMasterBrightness,
+    draft,
+    geometry,
+    playing,
+    previewTime,
+    project.gammaEnabled,
+    runtimeMetrics,
+  ]);
 
   function choosePattern(patternId) {
     if (!patternId) {
@@ -595,7 +739,7 @@ export default function PatternLabScreen() {
                 >Controls</button>
               </div>
             </div>
-            <div className="plab-stage">
+            <div className="plab-stage" ref={previewStageRef}>
               {previewRecipe ? (
                 <PatternLabPreview
                   recipe={previewRecipe}

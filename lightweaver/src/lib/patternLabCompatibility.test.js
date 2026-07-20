@@ -531,3 +531,19 @@ test('dark-output explanations cover masks, brightness, gamma, power, invalid ou
   assert.ok(explanations.every(item => item.message && item.action));
   assert.ok(Object.isFrozen(explanations));
 });
+
+test('dark-output explanations distinguish zero strip brightness and an observed black frame', () => {
+  const explanations = explainPatternLabDarkness({
+    allStripBrightnessZero: true,
+    frameObserved: true,
+    sampledPixelCount: 12,
+    blackPixelCount: 12,
+  });
+
+  assert.deepEqual(explanations.map(item => item.code), [
+    'strip-brightness-zero',
+    'frame-all-black',
+  ]);
+  assert.match(explanations[0].message, /Every visible strip has zero brightness/);
+  assert.match(explanations[1].message, /Every sampled pixel in the last preview frame is black/);
+});

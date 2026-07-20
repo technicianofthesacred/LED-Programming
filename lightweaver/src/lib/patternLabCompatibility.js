@@ -689,6 +689,9 @@ export function explainPatternLabDarkness(inputs = {}) {
   if (finite(inputs.brightness, 1) <= 0.01) explanations.push({
     code: 'brightness-zero', message: 'Layer or master brightness is at zero.', action: 'Raise Energy, layer opacity, or master brightness.',
   });
+  if (inputs.allStripBrightnessZero) explanations.push({
+    code: 'strip-brightness-zero', message: 'Every visible strip has zero brightness.', action: 'Raise brightness on at least one visible strip.',
+  });
   if (inputs.gammaEnabled && finite(inputs.gammaInput, 1) < 0.01) explanations.push({
     code: 'gamma-crushed-low-values', message: 'Gamma maps this very low input close to black.', action: 'Raise the source level or compare with gamma disabled.',
   });
@@ -697,6 +700,11 @@ export function explainPatternLabDarkness(inputs = {}) {
   });
   if (inputs.invalidOutput || finite(inputs.invalidOutputCount) > 0) explanations.push({
     code: 'invalid-output', message: 'The generator returned an invalid or non-finite color.', action: 'Inspect the failing generator and last valid frame.',
+  });
+  if (inputs.frameObserved
+    && finite(inputs.sampledPixelCount) > 0
+    && finite(inputs.blackPixelCount, -1) === finite(inputs.sampledPixelCount)) explanations.push({
+    code: 'frame-all-black', message: 'Every sampled pixel in the last preview frame is black.', action: 'Check the palette, generator parameters, and preview time.',
   });
   if (inputs.targetMatched === false || finite(inputs.unsupportedTargetCount) > 0) explanations.push({
     code: 'target-not-matched', message: 'This pixel is outside the active or supported target.', action: 'Inspect section, group, and target selection.',
