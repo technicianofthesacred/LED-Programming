@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadJsonFile } from '../lib/downloadFile.js';
+import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
-import { readPatternLabDrafts, savePatternLabDraft } from '../lib/patternLabStorage.js';
-import { listBuiltInPatterns } from '../lib/patternRegistry.js';
+import { readPatternLabDraftState, savePatternLabDraft } from '../lib/patternLabStorage.js';
+import { isBuiltInPattern, listBuiltInPatterns } from '../lib/patternRegistry.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import PatternLabControls from './PatternLabControls.jsx';
 import PatternLabEvolution from './PatternLabEvolution.jsx';
+import PatternLabLayers from './PatternLabLayers.jsx';
 import PatternLabPreview from './PatternLabPreview.jsx';
 import PatternLabVariants from './PatternLabVariants.jsx';
 import './pattern-lab.css';
@@ -17,6 +19,9 @@ const WORKFLOW = [
   ['03', 'Evolve', 'Build a five-to-fifteen-minute journey.'],
   ['04', 'Save', 'Keep a private, repeatable variation.'],
 ];
+const MAX_IMPORT_BYTES = 256 * 1024;
+const MAX_IMPORT_NODES = 2000;
+const MAX_IMPORT_DEPTH = 12;
 
 function cloneRecipe(recipe) {
   return JSON.parse(JSON.stringify(recipe));
@@ -42,6 +47,73 @@ function deriveSeed(seed, index) {
   value = Math.imul(value, 0x846ca68b);
   value ^= value >>> 16;
   return value >>> 0;
+}
+
+function validateImportDocument(value) {
+  const errors = [];
+  const add = (path, message) => {
+    if (errors.length < 4) errors.push(`${path}: ${message}`);
+  };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    add('$', 'must be a recipe object');
+    return errors;
+  }
+  if (Number(value.version) !== 1) add('$.version', 'must be 1');
+  if (typeof value.id !== 'string' || !value.id.trim()) add('$.id', 'must be a non-empty string');
+  if (!isBuiltInPattern(value.base?.patternId)) add('$.base.patternId', 'must name a built-in Lightweaver pattern');
+  if (!PATTERN_LAB_EVOLUTION_CHARACTERS.includes(value.evolution?.character)) {
+    add('$.evolution.character', 'must be one of the six supported characters');
+  }
+  if (!Array.isArray(value.layers) || value.layers.length > 3) add('$.layers', 'must contain at most 3 layers');
+  if (Array.isArray(value.targets) && value.targets.length > 64) add('$.targets', 'must contain at most 64 targets');
+  if (Array.isArray(value.requirements) && value.requirements.length > 64) add('$.requirements', 'must contain at most 64 entries');
+  if (Array.isArray(value.provenance) && value.provenance.length > 64) add('$.provenance', 'must contain at most 64 entries');
+  if (value.base?.params && Object.keys(value.base.params).length > 64) add('$.base.params', 'must contain at most 64 parameters');
+  if (!Array.isArray(value.palette) || value.palette.length < 2 || value.palette.length > 8) add('$.palette', 'must contain 2 to 8 colors');
+  if (!Number.isFinite(Number(value.evolution?.durationSeconds))
+    || Number(value.evolution.durationSeconds) < 300
+    || Number(value.evolution.durationSeconds) > 900) {
+    add('$.evolution.durationSeconds', 'must be between 300 and 900');
+  }
+  if (!Number.isFinite(Number(value.evolution?.change))
+    || Number(value.evolution.change) < 0
+    || Number(value.evolution.change) > 1) {
+    add('$.evolution.change', 'must be between 0 and 1');
+  }
+
+  let nodes = 0;
+  const stack = [[value, 0]];
+  while (stack.length && errors.length < 4) {
+    const [current, depth] = stack.pop();
+    nodes += 1;
+    if (nodes > MAX_IMPORT_NODES) {
+      add('$', `must contain at most ${MAX_IMPORT_NODES} values`);
+      break;
+    }
+    if (depth > MAX_IMPORT_DEPTH) {
+      add('$', `must not exceed ${MAX_IMPORT_DEPTH} levels`);
+      break;
+    }
+    if (current && typeof current === 'object') {
+      for (const nested of Object.values(current)) stack.push([nested, depth + 1]);
+    } else if (typeof current === 'string' && current.length > 20000) {
+      add('$', 'contains a string that is too long');
+      break;
+    }
+  }
+  return errors;
+}
+
+function useMobileDrawer() {
+  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 640px)');
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+  return mobile;
 }
 
 function safeFilename(name) {
@@ -72,6 +144,9 @@ export default function PatternLabScreen() {
   const project = useProject();
   const patterns = useMemo(() => listBuiltInPatterns(), []);
   const importRef = useRef(null);
+  const drawerRef = useRef(null);
+  const drawerTriggerRef = useRef(null);
+  const drawerCloseRef = useRef(null);
   const [sourceRecipe, setSourceRecipe] = useState(null);
   const [draft, setDraft] = useState(null);
   const [comparison, setComparison] = useState('draft');
@@ -81,18 +156,50 @@ export default function PatternLabScreen() {
   const [draftState, setDraftState] = useState('loading');
   const [message, setMessage] = useState('');
   const [importErrors, setImportErrors] = useState([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [variationRound, setVariationRound] = useState(0);
+  const [seedLocked, setSeedLocked] = useState(false);
+  const mobileDrawer = useMobileDrawer();
+  const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
+  const previewDuration = draft?.evolution?.durationSeconds ?? 600;
 
   useEffect(() => {
-    try {
-      setDrafts(readPatternLabDrafts());
-      setDraftState('ready');
-    } catch {
-      setDraftState('error');
-    }
+    const state = readPatternLabDraftState();
+    setDrafts(state.drafts);
+    setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
   }, []);
 
+  useEffect(() => {
+    if (!playing || !previewRecipe) return undefined;
+    let frame = 0;
+    let lastCommit = performance.now();
+    const advance = now => {
+      if (now - lastCommit >= 30) {
+        const elapsed = Math.min((now - lastCommit) / 1000, 0.1);
+        setPreviewTime(current => (current + elapsed) % previewDuration);
+        lastCommit = now;
+      }
+      frame = requestAnimationFrame(advance);
+    };
+    frame = requestAnimationFrame(advance);
+    return () => cancelAnimationFrame(frame);
+  }, [playing, previewDuration, Boolean(previewRecipe)]);
+
+  useEffect(() => {
+    if (!mobileDrawer || !drawerOpen) return undefined;
+    drawerCloseRef.current?.focus();
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') closeDrawer();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [drawerOpen, mobileDrawer]);
+
   const geometry = useMemo(() => ({
-    strips: project.strips,
+    strips: project.strips.map(strip => {
+      const { patternId: _patternId, compiledFn: _compiledFn, patternFn: _patternFn, ...geometryStrip } = strip;
+      return { ...geometryStrip, patternId: null };
+    }),
     viewBox: project.viewBox,
     svgText: project.svgText,
     hidden: project.hidden,
@@ -115,10 +222,9 @@ export default function PatternLabScreen() {
     project.motionSmoothing,
   ]);
 
-  const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
   const variantSeeds = useMemo(
-    () => Array.from({ length: 4 }, (_, index) => deriveSeed(sourceRecipe?.seed ?? 1, index)),
-    [sourceRecipe?.seed],
+    () => Array.from({ length: 4 }, (_, index) => deriveSeed(sourceRecipe?.seed ?? 1, index + variationRound * 4)),
+    [sourceRecipe?.seed, variationRound],
   );
 
   function choosePattern(patternId) {
@@ -135,6 +241,8 @@ export default function PatternLabScreen() {
     setPlaying(false);
     setMessage('');
     setImportErrors([]);
+    setVariationRound(0);
+    setSeedLocked(false);
   }
 
   function changeMacro(name, value) {
@@ -156,6 +264,55 @@ export default function PatternLabScreen() {
     setMessage('');
   }
 
+  function createNewVariations() {
+    if (!seedLocked) setVariationRound(round => round + 1);
+  }
+
+  function closeDrawer() {
+    setDrawerOpen(false);
+    requestAnimationFrame(() => drawerTriggerRef.current?.focus());
+  }
+
+  function trapDrawerFocus(event) {
+    if (!mobileDrawer || !drawerOpen || event.key !== 'Tab') return;
+    const focusable = [...drawerRef.current.querySelectorAll(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [href], [tabindex]:not([tabindex="-1"])',
+    )].filter(element => element.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function changeLayers(layers) {
+    setDraft(current => current ? { ...current, layers: cloneRecipe(layers) } : current);
+    setComparison('draft');
+    setMessage('');
+  }
+
+  function addLayer() {
+    setDraft(current => {
+      if (!current || current.layers.length >= 3) return current;
+      const index = current.layers.length + 1;
+      return {
+        ...current,
+        layers: [...current.layers, {
+          id: `layer-${current.id}-${index}`,
+          name: `Layer ${index}`,
+          blendMode: 'normal',
+          opacity: 0.65,
+        }],
+      };
+    });
+    setComparison('draft');
+  }
+
   function openDraft(saved) {
     const normalized = normalizePatternLabRecipe(saved);
     setSourceRecipe(sourceFromRecipe(normalized));
@@ -165,6 +322,8 @@ export default function PatternLabScreen() {
     setPlaying(false);
     setMessage(`Opened ${normalized.name}`);
     setImportErrors([]);
+    setVariationRound(0);
+    setSeedLocked(false);
   }
 
   function saveDraft() {
@@ -172,7 +331,9 @@ export default function PatternLabScreen() {
     try {
       const saved = savePatternLabDraft(normalizePatternLabRecipe(draft));
       setDraft(saved);
-      setDrafts(readPatternLabDrafts());
+      const state = readPatternLabDraftState();
+      setDrafts(state.drafts);
+      setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
       setMessage(`Saved privately — ${saved.name}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not save this private draft.');
@@ -190,7 +351,18 @@ export default function PatternLabScreen() {
     event.target.value = '';
     if (!file) return;
     try {
+      if (file.size > MAX_IMPORT_BYTES) {
+        setImportErrors([`file: must be smaller than ${Math.round(MAX_IMPORT_BYTES / 1024)} KB`]);
+        setMessage('');
+        return;
+      }
       const temporary = JSON.parse(await file.text());
+      const validationErrors = validateImportDocument(temporary);
+      if (validationErrors.length) {
+        setImportErrors(validationErrors);
+        setMessage('');
+        return;
+      }
       const normalized = normalizePatternLabRecipe(temporary);
       const source = sourceFromRecipe(normalized);
       setSourceRecipe(source);
@@ -199,6 +371,8 @@ export default function PatternLabScreen() {
       setPreviewTime(0);
       setImportErrors([]);
       setMessage(`Imported ${normalized.name}. Save when you want to keep it privately.`);
+      setVariationRound(0);
+      setSeedLocked(false);
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'The file is not a valid Pattern Lab recipe.';
       setImportErrors([detail].slice(0, 4));
@@ -237,6 +411,15 @@ export default function PatternLabScreen() {
               <div className="plab-preview-meta">
                 <span>{previewRecipe ? 'Mapped to current artwork' : 'No source selected'}</span>
                 <button type="button" className="plab-play" disabled={!previewRecipe} aria-pressed={playing} onClick={() => setPlaying(value => !value)}>{playing ? 'Pause' : 'Play'}</button>
+                <button
+                  ref={drawerTriggerRef}
+                  type="button"
+                  className="plab-drawer-trigger"
+                  aria-label="Pattern controls"
+                  aria-expanded={drawerOpen}
+                  aria-controls="plab-controls-drawer"
+                  onClick={() => setDrawerOpen(open => !open)}
+                >Controls</button>
               </div>
             </div>
             <div className="plab-stage">
@@ -249,17 +432,40 @@ export default function PatternLabScreen() {
                     <span className="plab-empty-rule" aria-hidden="true" />
                     <h2>Begin with a pattern</h2>
                     <p>Choose a built-in look in the inspector. Pattern Lab makes a private copy you can stretch into a longer, less repetitive experience.</p>
-                    <button type="button" className="btn primary" onClick={() => document.getElementById('plab-base-pattern')?.focus()}>Choose below</button>
+                    <button type="button" className="btn primary" onClick={() => {
+                      if (mobileDrawer) setDrawerOpen(true);
+                      requestAnimationFrame(() => document.getElementById('plab-base-pattern')?.focus());
+                    }}>Choose pattern</button>
                   </div>
                 </>
               )}
             </div>
           </div>
 
-          <aside className="plab-controls" aria-label="Pattern Lab controls">
+          {mobileDrawer && drawerOpen && (
+            <button className="plab-drawer-backdrop" type="button" aria-label="Dismiss pattern controls" onClick={closeDrawer} />
+          )}
+          <aside
+            ref={drawerRef}
+            id="plab-controls-drawer"
+            className={`plab-controls${drawerOpen ? ' drawer-open' : ''}`}
+            aria-label="Pattern Lab controls"
+            role={mobileDrawer ? 'dialog' : undefined}
+            aria-modal={mobileDrawer && drawerOpen ? 'true' : undefined}
+            aria-hidden={mobileDrawer && !drawerOpen ? 'true' : undefined}
+            inert={mobileDrawer && !drawerOpen ? '' : undefined}
+            onKeyDown={trapDrawerFocus}
+          >
             <div className="plab-control-heading">
               <span>Pattern inspector</span>
               <span>{draft ? 'Private draft' : 'Choose below'}</span>
+              <button
+                ref={drawerCloseRef}
+                type="button"
+                className="plab-drawer-close"
+                aria-label="Close pattern controls"
+                onClick={closeDrawer}
+              >Close</button>
             </div>
             <div id="plab-pattern-select">
               <PatternLabControls
@@ -280,10 +486,24 @@ export default function PatternLabScreen() {
               recipe={draft}
               sourceSeed={sourceRecipe?.seed}
               variantSeeds={variantSeeds}
+              geometry={geometry}
+              previewTime={previewTime}
               comparison={comparison}
+              seedLocked={seedLocked}
               onComparison={setComparison}
               onSelectSeed={chooseSeed}
+              onSeedLock={setSeedLocked}
+              onNewVariations={createNewVariations}
             />
+            {draft && (
+              <div className="plab-layer-inspector">
+                <PatternLabLayers
+                  layers={draft.layers}
+                  onAddLayer={addLayer}
+                  onLayersChange={changeLayers}
+                />
+              </div>
+            )}
 
             <section className="plab-private-library" aria-labelledby="plab-private-heading">
               <div className="plab-library-heading">
@@ -291,7 +511,8 @@ export default function PatternLabScreen() {
                 <span>{drafts.length}</span>
               </div>
               {draftState === 'loading' && <p>Loading private drafts…</p>}
-              {draftState === 'error' && <p role="alert">Private drafts could not be loaded.</p>}
+              {draftState === 'unavailable' && <p role="alert">Private draft storage is unavailable in this browser.</p>}
+              {draftState === 'unrecoverable' && <p role="alert">Private drafts could not be recovered. Existing data was left untouched.</p>}
               {draftState === 'ready' && drafts.length === 0 && <p>No saved drafts yet. Your first save stays only in this browser.</p>}
               {drafts.length > 0 && (
                 <ul>

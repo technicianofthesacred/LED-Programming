@@ -160,6 +160,9 @@
 }
 
 .plab-play[aria-pressed="true"] { border-color: var(--accent); }
+.plab-drawer-trigger,
+.plab-drawer-close,
+.plab-drawer-backdrop { display: none; }
 
 .plab-stage {
   position: relative;
@@ -177,6 +180,17 @@
 .plab-mapped-preview {
   position: absolute;
   inset: 0;
+}
+
+.plab-mapped-preview-thumbnail {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 66px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border-hair);
+  background: var(--bg-canvas);
+  pointer-events: none;
 }
 
 .plab-sculpture {
@@ -330,10 +344,23 @@
 }
 
 .plab-advanced summary {
-  min-height: 32px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   color: var(--text-mid);
   font-size: 10.5px;
   cursor: pointer;
+}
+
+.plab-advanced-disabled > span {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--text-mid);
+  font-size: 10.5px;
+  opacity: .55;
 }
 
 .plab-advanced dl {
@@ -423,10 +450,10 @@
 }
 
 .plab-variation {
-  min-height: 48px;
+  min-height: 110px;
   display: grid;
   place-items: start;
-  padding: 8px 10px;
+  padding: 0;
   border: 1px solid var(--border-soft);
   border-radius: var(--r-sm);
   background: var(--bg-elev);
@@ -437,8 +464,40 @@
 }
 
 .plab-variation[aria-pressed="true"] { border-color: var(--accent); }
-.plab-variation span { font-size: 10.5px; font-weight: 600; }
-.plab-variation small { color: var(--text-mid); font-family: var(--font-mono); font-size: 8.5px; }
+.plab-variation > span { padding: 7px 9px 0; font-size: 10.5px; font-weight: 600; }
+.plab-variation > small { padding: 0 9px 8px; color: var(--text-mid); font-family: var(--font-mono); font-size: 8.5px; }
+
+.plab-seed-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.plab-seed-actions label {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-mid);
+  font-size: 10px;
+}
+
+.plab-seed-actions input { width: 18px; height: 18px; accent-color: var(--accent); }
+.plab-seed-actions .btn { min-height: 40px; }
+.plab-seed-note { margin-top: 7px; color: var(--text-mid); font-size: 9.5px; line-height: 1.4; }
+
+.plab-layer-inspector {
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.plab-layers { margin-top: 0; padding-block: 7px 14px; border-top: 0; }
+.plab-layer-stack { display: grid; gap: 12px; padding-bottom: 4px; }
+.plab-layer-stack > p { color: var(--text-mid); font-size: 10px; line-height: 1.45; }
+.plab-layer { display: grid; gap: 12px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); }
+.plab-layer legend { padding-inline: 4px; color: var(--text-hi); font-size: 10px; font-weight: 600; }
 
 .plab-library-heading {
   display: flex;
@@ -551,9 +610,53 @@
   .plab-preview { min-height: 410px; }
   .plab-preview-bar { padding-inline: 12px; }
   .plab-preview-meta > span { display: none; }
+  .plab-drawer-trigger,
+  .plab-drawer-close {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding-inline: 12px;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--r-sm);
+    background: var(--bg-elev);
+    color: var(--text-hi);
+    font: inherit;
+  }
+  .plab-drawer-backdrop {
+    position: fixed;
+    z-index: 70;
+    inset: 0 0 32px 56px;
+    display: block;
+    border: 0;
+    background: color-mix(in srgb, var(--bg-canvas) 68%, transparent);
+  }
   .plab-stage { min-height: 365px; }
   .plab-empty { width: calc(100% - 24px); padding: 20px; }
-  .plab-controls { display: flex; }
+  .plab-controls {
+    position: fixed;
+    z-index: 71;
+    right: 0;
+    bottom: 32px;
+    left: 56px;
+    max-height: min(78dvh, 680px);
+    display: flex;
+    overflow-y: auto;
+    border: 1px solid var(--border-soft);
+    border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    box-shadow: 0 -18px 60px color-mix(in srgb, var(--bg-canvas) 72%, transparent);
+    transform: translateY(calc(100% + 40px));
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .plab-controls.drawer-open {
+    transform: translateY(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .plab-control-heading { min-height: 56px; }
+  .plab-control-heading > span:last-of-type { display: none; }
   .plab-control-body { border-right: 0; }
   .plab-control-section,
   .plab-private-library { padding: 18px 14px; }

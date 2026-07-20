@@ -24,14 +24,19 @@ function normalizeEnvelope(value) {
   return value.drafts.map(normalizePatternLabRecipe);
 }
 
-function readPatternLabDraftState(options = {}) {
+export function readPatternLabDraftState(options = {}) {
   const storage = storageFrom(options);
   if (!storage) return { status: 'unavailable', drafts: [] };
   let recoveryFailed = false;
   for (const key of [PATTERN_LAB_DRAFTS_KEY, PATTERN_LAB_DRAFTS_BACKUP_KEY]) {
+    let raw;
     try {
-      const raw = storage.getItem(key);
-      if (!raw) continue;
+      raw = storage.getItem(key);
+    } catch {
+      return { status: 'unavailable', drafts: [] };
+    }
+    if (!raw) continue;
+    try {
       return { status: 'restored', drafts: normalizeEnvelope(JSON.parse(raw)) };
     } catch {
       recoveryFailed = true;
@@ -67,11 +72,15 @@ export function savePatternLabDraft(draft, options = {}) {
   const normalized = normalizePatternLabRecipe(draft);
   assertPatternLabJsonSafe(normalized);
   const state = readPatternLabDraftState(options);
+  if (state.status === 'unavailable') {
+    throw new Error('Pattern Lab private storage is unavailable');
+  }
   if (state.status === 'unrecoverable') {
     throw new Error('Cannot save Pattern Lab draft because existing drafts could not be recovered');
   }
   const current = state.drafts;
-  writePatternLabDrafts([normalized, ...current.filter(item => item.id !== normalized.id)], options);
+  const written = writePatternLabDrafts([normalized, ...current.filter(item => item.id !== normalized.id)], options);
+  if (written === false) throw new Error('Pattern Lab private storage is unavailable');
   return normalized;
 }
 

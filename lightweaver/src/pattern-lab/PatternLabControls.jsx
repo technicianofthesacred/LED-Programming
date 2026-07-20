@@ -59,17 +59,22 @@ export default function PatternLabControls({ patterns, recipe, selectedPatternId
           })}
         </div>
 
-        <details className="plab-advanced" disabled={!recipe}>
-          <summary>Advanced controls</summary>
-          {technical ? (
+        {recipe ? (
+          <details className="plab-advanced">
+            <summary>Advanced controls</summary>
             <dl>
               <div><dt>Speed</dt><dd>{technical.movement.speedMultiplier.toFixed(2)}×</dd></div>
               <div><dt>Spatial scale</dt><dd>{technical.shape.spatialScale.toFixed(2)}×</dd></div>
               <div><dt>Detail</dt><dd>{technical.texture.detailScale.toFixed(2)}×</dd></div>
               <div><dt>Brightness ceiling</dt><dd>{Math.round(technical.energy.brightness * 100)}%</dd></div>
             </dl>
-          ) : <p>Choose a pattern to inspect its technical values.</p>}
-        </details>
+          </details>
+        ) : (
+          <div className="plab-advanced plab-advanced-disabled">
+            <span aria-disabled="true">Advanced controls</span>
+            <p>Choose a pattern to inspect its technical values.</p>
+          </div>
+        )}
       </section>
     </div>
   );

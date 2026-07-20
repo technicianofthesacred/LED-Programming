@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPatternLabRecipe } from './patternLabRecipe.js';
-import { PATTERN_LAB_DRAFTS_BACKUP_KEY, PATTERN_LAB_DRAFTS_KEY, deletePatternLabDraft, readPatternLabDrafts, savePatternLabDraft, writePatternLabDrafts } from './patternLabStorage.js';
+import { PATTERN_LAB_DRAFTS_BACKUP_KEY, PATTERN_LAB_DRAFTS_KEY, deletePatternLabDraft, readPatternLabDraftState, readPatternLabDrafts, savePatternLabDraft, writePatternLabDrafts } from './patternLabStorage.js';
 
 function memoryStorage() {
   const data = new Map(), writes = [];
@@ -142,4 +142,32 @@ test('default storage acquisition safely handles a throwing browser getter', () 
     if (descriptor) Object.defineProperty(globalThis, 'window', descriptor);
     else delete globalThis.window;
   }
+});
+
+test('exposes unavailable and unrecoverable read states', () => {
+  assert.deepEqual(readPatternLabDraftState({ storage: null }), { status: 'unavailable', drafts: [] });
+  assert.deepEqual(readPatternLabDraftState({ storage: { getItem() { throw new DOMException('blocked', 'SecurityError'); } } }), { status: 'unavailable', drafts: [] });
+
+  const storage = memoryStorage();
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, '{bad-primary');
+  storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, '{bad-backup');
+  assert.deepEqual(readPatternLabDraftState({ storage }), { status: 'unrecoverable', drafts: [] });
+});
+
+test('save reports unavailable and failed primary writes instead of returning success', () => {
+  assert.throws(
+    () => savePatternLabDraft(createPatternLabRecipe({ id: 'unavailable' }), { storage: null }),
+    /storage.*unavailable/i,
+  );
+
+  const data = new Map();
+  const storage = {
+    getItem: key => data.get(key) ?? null,
+    setItem() { throw new DOMException('Private write blocked', 'QuotaExceededError'); },
+  };
+  assert.throws(
+    () => savePatternLabDraft(createPatternLabRecipe({ id: 'write-failure' }), { storage }),
+    /private write blocked/i,
+  );
+  assert.equal(data.size, 0);
 });

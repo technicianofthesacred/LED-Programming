@@ -370,6 +370,7 @@ export function PatternPreview({
   motionSmoothing = 'soft',
   targetFps = 60,
   heat = false,
+  controlledTime = null,
 }) {
   const canvasRef = useRef(null);
   const rafRef    = useRef(0);
@@ -506,7 +507,7 @@ export function PatternPreview({
     perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, symOverlay, audioBands, vb, heat,
-    motionSmoothing, targetFps,
+    motionSmoothing, targetFps, controlledTime,
     onFrame, onFps, onTick,
   };
 
@@ -545,10 +546,14 @@ export function PatternPreview({
       const p = propsRef.current;
       const dt = Math.min((now - last) / 1000, 0.1); last = now;
 
-      if (p.playing) {
+      const hasControlledTime = p.controlledTime !== null
+        && p.controlledTime !== undefined
+        && Number.isFinite(Number(p.controlledTime));
+      if (p.playing && !hasControlledTime) {
         tRef.current += dt * (p.speed ?? 1);
         p.onTick?.(tRef.current);
       }
+      const renderTime = hasControlledTime ? Number(p.controlledTime) : tRef.current;
 
       fpsRef.current.count++;
       if (now - fpsRef.current.last >= 500) {
@@ -567,7 +572,7 @@ export function PatternPreview({
         const renderDt = lastRenderRef.current
           ? Math.min((now - lastRenderRef.current) / 1000, 0.25)
           : dt;
-        const pixels = renderFrame(canvas, tRef.current, {
+        const pixels = renderFrame(canvas, renderTime, {
           ...p,
           previousPixels: previousPixelsRef.current,
           frameDt: renderDt,
