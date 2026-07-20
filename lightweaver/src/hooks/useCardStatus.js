@@ -52,7 +52,7 @@ export function useCardStatus({
       timeoutMs: Math.max(timeoutMs, 12000),
       persist: true,
     });
-    setState(prev => reduceCardConnectionState(prev, { ...result, allowAdopt: true }, { now: Date.now(), missLimit }));
+    setState(prev => reduceCardConnectionState(prev, { ...result, allowAdopt: false }, { now: Date.now(), missLimit }));
     return result;
   }, [enabled, missLimit, timeoutMs]);
 

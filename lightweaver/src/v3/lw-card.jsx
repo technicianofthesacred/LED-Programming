@@ -46,6 +46,9 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   const state = cardLink?.state || (ready ? 'connected-direct' : 'disconnected');
   const reason = cardLink?.reason || '';
   const activity = cardLink?.activity || 'idle';
+  const verifiedTransport = Boolean(cardLink?.card?.id && (
+    state === 'connected-direct' || state === 'connected-bridge'
+  ));
   const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Save to card', 'Test lights'];
   let currentSetupIndex = ready ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
@@ -76,11 +79,18 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
       primary: { label: 'Reconnect card', action: 'connect' },
       secondary: { label: 'Open support', section: 'support' },
     };
-  } else if (state === 'reconnecting-bridge' || reason === 'card-restarting') {
+  } else if (state === 'revalidating' && reason === 'card-restarted') {
     presentation = {
       tone: 'connecting',
-      message: `${identity || 'The Lightweaver card'} is restarting. Studio is waiting for it to answer again.`,
-      primary: { label: 'Card restarting…', disabled: true },
+      message: 'Card restarted — verifying the exact card, firmware, and project before commands resume.',
+      primary: { label: 'Card restarted — verifying', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (state === 'reconnecting-bridge' || state === 'reconnecting') {
+    presentation = {
+      tone: 'connecting',
+      message: 'Card stopped responding. Studio is reconnecting and will require fresh status before commands resume.',
+      primary: { label: 'Card stopped responding', disabled: true },
       secondary: { label: 'Open support', section: 'support' },
     };
   } else if (activity === 'recovering') {
@@ -99,11 +109,25 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
       primary: { label: activity === 'pending' ? 'Card operation in progress…' : 'Connecting…', disabled: true },
       secondary: { label: 'Open support', section: 'support' },
     };
+  } else if (verifiedTransport && cardLink?.cardBlank === true) {
+    presentation = {
+      tone: 'failure',
+      message: 'Blank — load a project before using this card.',
+      primary: { label: 'Load a project', section: 'install' },
+      secondary: { label: 'Open support', section: 'support' },
+    };
   } else if (ready) {
     presentation = {
       tone: 'connected',
-      message: `${identity || 'A Lightweaver card'} is connected and available to inspect.`,
+      message: `${identity || 'A Lightweaver card'} is connected and ready for light check.`,
       primary: { label: 'Save to card', section: 'settings' },
+    };
+  } else if (verifiedTransport) {
+    presentation = {
+      tone: 'connecting',
+      message: 'Checking card. Studio is waiting for complete identity, project, and command readiness evidence.',
+      primary: { label: 'Checking card', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
     };
   } else if (reason && reason !== 'never-connected') {
     const updateNeeded = reason === 'firmware-too-old' || reason === 'identity-missing';

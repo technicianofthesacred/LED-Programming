@@ -23,6 +23,7 @@ import {
   writeCardCommissioning,
   claimCardRestoration,
   inspectCardCommissioning,
+  preflightCardCommissioningMutation,
   verifyCardRestorationMutation,
 } from './cardCommissioningFlow.js';
 
@@ -64,6 +65,16 @@ const installed = {
   buildId: 'a'.repeat(40),
 };
 const productionJobId = 'lotus-gate-batch-42';
+
+function readyStatus(overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: installed.cardId, firmwareVersion: installed.firmwareVersion,
+    buildId: installed.buildId, bootId: 'boot-fresh', runtimePhase: 'ready',
+    knownGoodProject: true, commandReady: true, outputReady: true,
+    ...overrides,
+  };
+}
 
 function acceptedBridgeResult(flow, overrides = {}) {
   return {
@@ -237,6 +248,22 @@ test('rejects a wrong card, firmware version, or build before project restoratio
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: 'b'.repeat(40),
   });
   assert.deepEqual(wrongBuild, { ok: false, reason: 'wrong-firmware-build' });
+});
+
+test('saved commissioning acknowledgement never authorizes restore without a fresh exact command-ready preflight', () => {
+  const flow = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-live-preflight-123', now: 10,
+  }), installed, { now: 20 }), {
+    id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
+  }, { now: 30 }).flow;
+
+  assert.equal(flow.cardAcknowledgedAt, 30, 'the resumable acknowledgement remains saved');
+  assert.deepEqual(preflightCardCommissioningMutation(flow, null), { ok: false, reason: 'checking-card' });
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ commandReady: false })).reason, 'card-not-ready');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ cardId: 'lw-ffffffffffff' })).reason, 'wrong-card');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus({ buildId: 'b'.repeat(40) })).reason, 'wrong-firmware-build');
+  assert.equal(preflightCardCommissioningMutation(flow, readyStatus()).ok, true);
 });
 
 test('a background station-transport detection auto-advances with the same verification as the manual acknowledge', () => {

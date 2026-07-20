@@ -155,3 +155,20 @@ test('only complete fresh readiness evidence for the expected card is connected'
   assert.equal(typeof result.reason, 'string');
   assert.equal(Object.isFrozen(result), true);
 });
+
+test('exact expected firmware and build are part of live readiness', () => {
+  const status = readyEnvelope();
+  assert.equal(classifyCardReadiness(status, {
+    expectedCard: {
+      id: status.cardId,
+      firmwareVersion: status.firmwareVersion,
+      buildId: status.buildId,
+    },
+  }).connected, true);
+  assert.equal(classifyCardReadiness(status, {
+    expectedCard: { id: status.cardId, firmwareVersion: '0.9.0', buildId: status.buildId },
+  }).reason, 'unexpected-firmware-version');
+  assert.equal(classifyCardReadiness(status, {
+    expectedCard: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: 'old-build' },
+  }).reason, 'unexpected-firmware-build');
+});

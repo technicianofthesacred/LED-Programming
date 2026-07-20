@@ -30,7 +30,7 @@ const ACTION_COPY = Object.freeze({
   }),
   'ready-local-card': Object.freeze({
     legacyId: 'connected',
-    title: 'Lightweaver card ready',
+    title: 'Ready for light check',
     explanation: 'Studio verified the connected card and can control it now.',
     primaryLabel: 'Continue',
   }),
@@ -42,7 +42,7 @@ const ACTION_COPY = Object.freeze({
   }),
   'card-needs-project': Object.freeze({
     legacyId: 'connected',
-    title: 'This card is blank',
+    title: 'Blank — load a project',
     explanation: 'Install your project so the card plays your design instead of its factory defaults.',
     primaryLabel: 'Install your project',
   }),
@@ -90,7 +90,12 @@ const ACTION_COPY = Object.freeze({
   }),
 });
 
-const UPDATE_REASONS = new Set(['identity-missing', 'firmware-too-old']);
+const UPDATE_REASONS = new Set([
+  'identity-missing',
+  'firmware-too-old',
+  'wrong-firmware-version',
+  'wrong-firmware-build',
+]);
 const TRANSIENT_REASONS = new Set([
   'popup-blocked',
   'no-answer',
@@ -181,7 +186,9 @@ function installationRoute(capabilities) {
 
 function classifiedLinkReadiness(link = {}, options = {}) {
   const evidence = link.readiness ?? link.cardReadiness ?? link.status ?? link;
+  const expectedCard = options.expectedCard || link.expectedCard || link.card || null;
   return classifyCardReadiness(evidence, {
+    expectedCard,
     expectedCardId: options.expectedCardId
       || link.expectedCard?.id
       || link.expectedCard?.cardId
@@ -272,7 +279,7 @@ export function nextCardConnectionAction(input = {}) {
 
   if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
 
-  if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge') {
+  if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge' || link.state === 'revalidating') {
     return action('recoverable-failure', {
       title: 'Connecting to the Lightweaver card',
       explanation: 'Keep the card powered and leave its page open while Studio checks it.',

@@ -133,24 +133,36 @@ assert.equal(isCardLinkConnected(wrongBridgeCard), false);
 // steady-state pings return the same reference (no re-render churn)
 assert.equal(reduceCardLink(bridged, { type: 'bridge-ping-ok' }), bridged);
 
-// ── reducer: missed pings disconnect at the limit, not before ───────────────
+// ── reducer: a miss is visible immediately; only full status can recover ────
 const missOnce = reduceCardLink(bridged, { type: 'bridge-ping-missed' });
-assert.equal(missOnce.state, 'connected-bridge');
+assert.equal(missOnce.state, 'reconnecting-bridge');
 assert.equal(missOnce.missedPings, 1);
 const recovered = reduceCardLink(missOnce, { type: 'bridge-ping-ok' });
-assert.equal(recovered.state, 'connected-bridge');
-assert.equal(recovered.missedPings, 0);
+assert.equal(recovered.state, 'reconnecting-bridge');
+const partialRecovery = reduceCardLink(missOnce, {
+  type: 'bridge-ping-ok', host: bridged.host, card: bridged.card,
+  expectedCard: bridged.card,
+  readiness: { app: 'Lightweaver', cardId: bridged.card.id, firmwareVersion: '1.0.0', buildId: 'old' },
+});
+assert.equal(partialRecovery.state, 'revalidating', 'partial bridge status after misses never restores the link');
+assert.equal(isCardLinkConnected(partialRecovery), false);
+const recoveredWithStatus = reduceCardLink(missOnce, {
+  type: 'bridge-ping-ok', host: bridged.host, card: bridged.card,
+  expectedCard: bridged.card, readiness: readyEnvelope(bridged.card.id),
+});
+assert.equal(recoveredWithStatus.state, 'connected-bridge');
+assert.equal(recoveredWithStatus.missedPings, 0);
 
 let dropped = bridged;
 for (let i = 0; i < CARD_LINK_PING_MISS_LIMIT; i += 1) {
   dropped = reduceCardLink(dropped, { type: 'bridge-ping-missed' });
 }
 assert.equal(dropped.state, 'reconnecting-bridge');
-assert.equal(dropped.reason, 'card-restarting');
-assert.equal(cardLinkStatusText(dropped), 'Card restarting…');
+assert.equal(dropped.reason, 'card-stopped-answering');
+assert.equal(cardLinkStatusText(dropped), 'Card stopped responding — reconnecting…');
 const returnedAfterReboot = reduceCardLink(dropped, { type: 'bridge-ping-ok' });
-assert.equal(returnedAfterReboot.state, 'connected-bridge');
-assert.equal(returnedAfterReboot.missedPings, 0);
+assert.notEqual(returnedAfterReboot.state, 'connected-bridge', 'transport-only ping cannot restore green');
+assert.equal(isCardLinkConnected(returnedAfterReboot), false);
 
 // a missed ping while there is no bridge is meaningless
 assert.equal(reduceCardLink(initial, { type: 'bridge-ping-missed' }), initial);
@@ -179,6 +191,36 @@ const direct = reduceCardLink(initial, {
 assert.equal(direct.state, 'connected-direct');
 assert.equal(direct.transport, 'direct');
 assert.equal(isCardLinkConnected(direct), true);
+const directOperation = reduceCardLink(direct, { type: 'operation-started' });
+const rebootSeen = reduceCardLink(directOperation, {
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  card: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+  expectedCard: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+  readiness: readyEnvelope('lw-001122aabbcc', { bootId: 'boot-2' }),
+});
+assert.equal(rebootSeen.state, 'revalidating');
+assert.equal(rebootSeen.readiness, null, 'boot change immediately clears command/project evidence');
+assert.equal(rebootSeen.cardBlank, null);
+assert.equal(rebootSeen.activity, 'idle', 'boot change invalidates pending operation authority');
+assert.ok(rebootSeen.operationGeneration > directOperation.operationGeneration);
+assert.equal(isCardLinkConnected(rebootSeen), false);
+const rebootRevalidated = reduceCardLink(rebootSeen, {
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  card: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+  expectedCard: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+  readiness: readyEnvelope('lw-001122aabbcc', { bootId: 'boot-2' }),
+});
+assert.equal(rebootRevalidated.state, 'connected-direct');
+assert.equal(isCardLinkConnected(rebootRevalidated), true);
+
+const wrongBuildDirect = reduceCardLink(direct, {
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  card: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'b'.repeat(40) },
+  expectedCard: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+  readiness: readyEnvelope('lw-001122aabbcc', { buildId: 'b'.repeat(40) }),
+});
+assert.equal(wrongBuildDirect.state, 'disconnected');
+assert.equal(wrongBuildDirect.reason, 'wrong-firmware-build');
 const wrongDirectCard = reduceCardLink(initial, {
   type: 'direct-status',
   connected: true,
@@ -348,10 +390,10 @@ assert.equal(cardLinkStatusText(bridged), 'Live via card page');
 assert.equal(cardLinkStatusText(direct), 'Live direct');
 assert.equal(
   cardLinkStatusText({ state: 'connected-bridge', card: { id: 'lw-checking' } }),
-  'Checking card readiness…',
+  'Checking card',
   'transport alone never reports Live',
 );
-assert.equal(cardLinkStatusText(bridgedBlank), 'Card needs a project');
+assert.equal(cardLinkStatusText(bridgedBlank), 'Blank — load a project');
 assert.equal(cardLinkStatusText(connecting), 'Looking for the card…');
 assert.equal(cardLinkStatusText(closed), cardLinkReasonText('card-page-closed'));
 
@@ -359,14 +401,16 @@ assert.equal(cardLinkStatusText(closed), cardLinkReasonText('card-page-closed'))
 let pingCount = 0;
 let failPings = false;
 const link = createCardLink({
-  sendRequest: async () => {
+  sendRequest: async (type, payload) => {
     pingCount += 1;
     if (failPings) {
       const error = new Error('timeout');
       error.reason = 'bridge-timeout';
       throw error;
     }
-    return { ok: true };
+    assert.equal(type, 'status', 'bridge keepalive always reads the full status envelope');
+    assert.equal(payload.cache, 'no-store');
+    return readyEnvelope('lw-test');
   },
   pingIntervalMs: 5,
   pingTimeoutMs: 5,
@@ -375,7 +419,7 @@ const link = createCardLink({
 });
 const seen = [];
 const unsubscribe = link.subscribe(state => seen.push(state.state));
-link.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' } });
+link.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' }, readiness: readyEnvelope('lw-test') });
 assert.equal(link.getState().state, 'connected-bridge');
 await waitFor(() => pingCount >= 2, 2000, 'two keepalive pings');
 assert.equal(link.getState().state, 'connected-bridge');
@@ -501,7 +545,7 @@ const parentBridge = {
       else if (message.type === 'firmware-info') respond({
         cardId: 'lw-001122aabbcc',
         firmwareVersion: '1.0.0',
-        buildId: 'test',
+        buildId: 'a'.repeat(40),
         bridgeVersion: 1,
         outputs: [{ gpio: 16, count: 44 }],
       });
@@ -560,7 +604,7 @@ const delayedDirectAdoption = adoptDiscoveredDirectCard({
     await directVerificationGate;
     return {
       ok: true,
-      json: async () => ({ cardId: 'lw-delayed-a', cardName: 'Delayed A' }),
+      json: async () => readyEnvelope('lw-delayed-a', { cardName: 'Delayed A' }),
     };
   },
 });
@@ -599,7 +643,7 @@ async function assertPersistedAuthorityRace({ initialIdentity, nextIdentity, lab
       await gate;
       return {
         ok: true,
-        json: async () => ({ cardId: 'lw-cross-tab-a', cardName: 'Cross-tab A' }),
+        json: async () => readyEnvelope('lw-cross-tab-a', { cardName: 'Cross-tab A' }),
       };
     },
   });
@@ -863,6 +907,7 @@ await adoptDiscoveredDirectCard({
     if (/\/api\/status$/.test(u)) return {
       ok: true,
       json: async () => readyEnvelope('lw-blank-adopt', {
+        firmwareVersion: '1.4.0',
         runtimePhase: 'factory', knownGoodProject: false,
         mode: 'factory-flash', source: 'defaults',
       }),
@@ -883,9 +928,10 @@ const directPingLink = createCardLink({
   host: '192.168.1.100',
   directPingIntervalMs: 50,
   pingTimeoutMs: 100,
-  fetchImpl: async (url) => {
+  fetchImpl: async (url, options) => {
     if (/\/api\/status/.test(String(url))) {
-      return { ok: true, json: async () => ({ cardId: 'lw-ping-test', firmwareVersion: '1.4.0' }) };
+      assert.equal(options.cache, 'no-store');
+      return { ok: true, json: async () => readyEnvelope('lw-ping-test') };
     }
     return { ok: false };
   },
@@ -893,6 +939,7 @@ const directPingLink = createCardLink({
 directPingLink.dispatch({
   type: 'direct-status', connected: true, host: '192.168.1.100',
   card: { id: 'lw-ping-test' }, expectedCard: { id: 'lw-ping-test' }, blank: false,
+  readiness: readyEnvelope('lw-ping-test'),
 });
 assert.equal(directPingLink.getState().state, 'connected-direct', 'start connected-direct');
 assert.equal(directPingLink.getState().missedPings, 0);

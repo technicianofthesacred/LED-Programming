@@ -1,4 +1,5 @@
 import { isCardWiringCandidateReadback } from './cardWiringSafety.js';
+import { classifyCardReadiness } from './cardReadiness.js';
 
 export const CARD_COMMISSIONING_STAGES = Object.freeze([
   'connect-card',
@@ -214,6 +215,29 @@ export function acknowledgeCommissionedCard(flow, card = {}, { now = Date.now() 
       lastConnectionIssue: '',
     },
   };
+}
+
+export function preflightCardCommissioningMutation(flow, status = null) {
+  requireFlow(flow);
+  if (!flow.cardAcknowledgedAt || flow.stage !== 'set-up-card') {
+    return { ok: false, reason: 'not-awaiting-restore' };
+  }
+  if (!status || typeof status !== 'object' || Array.isArray(status)) {
+    return { ok: false, reason: 'checking-card' };
+  }
+  const readiness = classifyCardReadiness(status, { expectedCard: flow.expectedCard });
+  if (readiness.reason === 'unexpected-card') return { ok: false, reason: 'wrong-card' };
+  if (readiness.reason === 'unexpected-firmware-version') return { ok: false, reason: 'wrong-firmware-version' };
+  if (readiness.reason === 'unexpected-firmware-build') return { ok: false, reason: 'wrong-firmware-build' };
+  if (!readiness.connected) {
+    return {
+      ok: false,
+      reason: readiness.state === 'checking' || readiness.state === 'revalidating'
+        ? 'checking-card'
+        : 'card-not-ready',
+    };
+  }
+  return { ok: true, readiness };
 }
 
 // Reality-driven auto-advance: when a background LAN poll finds the expected

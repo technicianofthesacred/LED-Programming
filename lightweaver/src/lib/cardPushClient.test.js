@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readCardProjectEvidence } from './cardPushClient.js';
+import { readCardProjectEvidence, readCardStatusEnvelope } from './cardPushClient.js';
+
+test('status preflight performs an uncached full status GET', async () => {
+  let call;
+  const status = { app: 'Lightweaver', cardId: 'lw-aabbccddeeff', commandReady: true };
+  assert.equal(await readCardStatusEnvelope({
+    host: '192.168.4.1', transport: 'direct',
+    fetchImpl: async (url, init) => {
+      call = { url, init };
+      return { ok: true, json: async () => status };
+    },
+  }), status);
+  assert.match(call.url, /\/api\/status$/);
+  assert.equal(call.init.method, 'GET');
+  assert.equal(call.init.cache, 'no-store');
+});
 
 test('project evidence reader performs an uncached independent branded firmware-info GET', async () => {
   let call;

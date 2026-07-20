@@ -63,6 +63,7 @@ function classifiedResult(state, normalized, reason, additions = {}) {
 
 export function classifyCardReadiness(raw = {}, {
   expectedCardId = '',
+  expectedCard = null,
   previousBootId = '',
 } = {}) {
   const normalized = normalizeCardReadiness(raw);
@@ -80,11 +81,19 @@ export function classifyCardReadiness(raw = {}, {
   ) {
     return classifiedResult('checking', normalized, 'evidence-incomplete');
   }
-  const expected = cleanText(expectedCardId, 64);
+  const expected = cleanText(expectedCard?.id ?? expectedCard?.cardId ?? expectedCardId, 64);
   if (expected && normalized.cardId !== expected) {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-card', {
       blank: !normalized.knownGoodProject || normalized.runtimePhase === 'factory',
     });
+  }
+  const expectedFirmwareVersion = cleanText(expectedCard?.firmwareVersion, 48);
+  if (expectedFirmwareVersion && normalized.firmwareVersion !== expectedFirmwareVersion) {
+    return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-version');
+  }
+  const expectedBuildId = cleanText(expectedCard?.buildId, 96);
+  if (expectedBuildId && normalized.buildId !== expectedBuildId) {
+    return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-build');
   }
   if (!normalized.knownGoodProject || normalized.runtimePhase === 'factory') {
     return classifiedResult('blank', normalized, 'factory', { blank: true });

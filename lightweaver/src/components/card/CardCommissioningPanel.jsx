@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../state/ProjectContext.jsx';
 import { buildCardRuntimePackageFromProject } from '../../lib/cardRuntimeProject.js';
-import { pushConfigToCard, readCardProjectEvidence } from '../../lib/cardPushClient.js';
+import { pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from '../../lib/cardPushClient.js';
 import {
   activateAndWaitForCardWiring,
   confirmCardWiringCandidate,
   readCardWiringCandidateEvidence,
   rollbackCardWiringCandidate,
 } from '../../lib/cardWiringSafety.js';
-import { isCardLinkConnected, reportDirectCardStatus } from '../../lib/cardLink.js';
+import { isCardLinkConnected, reportCardStatusEnvelope, reportDirectCardStatus } from '../../lib/cardLink.js';
 import { canPushDirectlyToCard, discoverCardStatus } from '../../lib/cardConnection.js';
 import { compileWiring } from '../../lib/wiringCompiler.js';
 import { createWiringChaseSession } from '../../lib/wiringChase.js';
@@ -25,6 +25,7 @@ import {
   completeCardInstall,
   confirmCardSetupNetworkJoined,
   markCardProjectRestored,
+  preflightCardCommissioningMutation,
   readCardCommissioning,
   readCardRestorationAttempt,
   recordCardRestorationResponse,
@@ -182,9 +183,15 @@ export function CardCommissioningPanel({
   }, [flow, link]);
 
   const interruptedInstallEvidence = useMemo(() => {
-    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id) return null;
+    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id || !isCardLinkConnected(link)) return null;
     return resumeInstalledCardAfterInterruption(flow, link.card);
-  }, [flow, link?.card]);
+  }, [flow, link]);
+
+  const restorePreflight = useMemo(() => {
+    if (!flow?.cardAcknowledgedAt) return { ok: false, reason: 'checking-card' };
+    if (!isCardLinkConnected(link)) return { ok: false, reason: 'checking-card' };
+    return preflightCardCommissioningMutation(flow, link.readiness);
+  }, [flow, link]);
 
   useEffect(() => {
     if (!interruptedInstallEvidence?.ok) return;
@@ -278,10 +285,30 @@ export function CardCommissioningPanel({
 
   const restore = async () => {
     if (restoreState === 'working' || !flow.cardAcknowledgedAt) return;
+    if (!restorePreflight.ok) {
+      setFailure('Checking card. Reconnect the exact installed card before restoring the saved project.');
+      return;
+    }
     setRestoreState('working');
     setFailure('');
     let lease = null;
     try {
+      const freshStatus = await readCardStatusEnvelope({
+        host: link.host,
+        transport: link.transport,
+        timeoutMs: 3000,
+      });
+      if (link.validatedBootId && freshStatus?.bootId !== link.validatedBootId) {
+        throw new Error('Card restarted — verifying. Wait for Studio to finish checking it before restoring the project.');
+      }
+      const freshPreflight = preflightCardCommissioningMutation(flow, freshStatus);
+      if (!freshPreflight.ok) {
+        throw new Error(freshPreflight.reason === 'wrong-card'
+          ? 'Wrong card. Reconnect the exact installed card before restoring the project.'
+          : freshPreflight.reason === 'wrong-firmware-version' || freshPreflight.reason === 'wrong-firmware-build'
+            ? 'The connected card firmware does not match the verified installation. Update or reconnect the expected card.'
+            : 'Checking card. The card is not command-ready, so Studio refused to restore the project.');
+      }
       const selectedReadback = typeof window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ === 'function'
         ? window.__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__
         : readProjectEvidence;
@@ -328,6 +355,12 @@ export function CardCommissioningPanel({
         allowLayoutChange: true,
       });
       await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
+      const refreshedStatus = await readCardStatusEnvelope({
+        host: link.host, transport: link.transport, timeoutMs: 3000,
+      }).catch(() => null);
+      if (refreshedStatus) {
+        reportCardStatusEnvelope({ host: link.host, transport: link.transport, status: refreshedStatus });
+      }
       if (response?.state === 'staged') {
         const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
         const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
@@ -516,7 +549,8 @@ export function CardCommissioningPanel({
           ) : (
             <>
               <p>The exact installed card and firmware build are verified. Restore the saved Studio revision that contains its GPIO outputs, LED map, zones, patterns, playlist, and controls.</p>
-              <button type="button" className="btn primary" onClick={restore} disabled={restoreState === 'working'}>{restoreState === 'working' ? 'Restoring saved project…' : 'Restore saved project'}</button>
+              {!restorePreflight.ok && <p role="status">Checking card. Restore stays locked until the exact installed card and firmware are command-ready.</p>}
+              <button type="button" className="btn primary" onClick={restore} disabled={restoreState === 'working' || !restorePreflight.ok}>{restoreState === 'working' ? 'Restoring saved project…' : 'Restore saved project'}</button>
             </>
           )}
         </>

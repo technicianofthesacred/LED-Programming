@@ -163,7 +163,7 @@ export function CardConnectionCenter({
       if (link.transport === 'direct' && link.discoveredCard?.id) {
         await adoptDiscoveredDirectCard();
       } else {
-        rePairDiscoveredCardBridgeIdentity(link.host);
+        await rePairDiscoveredCardBridgeIdentity(link.host);
       }
       setFailure('');
     } catch (error) {

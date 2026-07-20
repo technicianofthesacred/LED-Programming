@@ -6,10 +6,15 @@ const ATTENTION_REASONS = new Set([
   'identity-missing',
   'popup-blocked',
   'wrong-card',
+  'wrong-firmware-version',
+  'wrong-firmware-build',
 ]);
 
 export function cardConnectionStatus(link = {}) {
-  if (link.activity === 'recovering' || link.state === 'reconnecting-bridge') return 'Recovering';
+  if (link.state === 'revalidating' && link.reason === 'card-restarted') return 'Card restarted — verifying';
+  if (link.state === 'reconnecting' || link.state === 'reconnecting-bridge') return 'Card stopped responding';
+  if (link.reason === 'wrong-card') return 'Wrong card';
+  if (link.activity === 'recovering') return 'Recovering';
   if (link.activity === 'failed' || ATTENTION_REASONS.has(link.reason)) return 'Needs attention';
   if (link.activity === 'pending' || link.state === 'connecting') return 'Connecting';
   // A paired, reachable card that is still on factory defaults is genuinely
@@ -21,7 +26,7 @@ export function cardConnectionStatus(link = {}) {
   );
   if (verifiedTransport && link.cardBlank === true) return 'Needs project';
   if (isCardLinkConnected(link)) return 'Connected';
-  if (verifiedTransport) return 'Connecting';
+  if (verifiedTransport || link.state === 'revalidating') return 'Checking card';
   // A card answered but this origin has never paired it — actionable, not green.
   if (link.reason === 'found-unpaired') return 'Found — pair';
   return 'Not connected';

@@ -13,6 +13,16 @@ async function dispatchCardLink(page, events) {
   }, events);
 }
 
+function readyStatus(cardId: string, overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    bootId: 'boot-1', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true,
+    ...overrides,
+  };
+}
+
 async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed') {
   await page.evaluate(async requestedProgress => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
@@ -80,6 +90,9 @@ test('wide desktop footer keeps card identity, telemetry, and test controls in s
       firmwareVersion: '1.0.0',
       buildId: 'gallery-release-build-with-a-long-identity',
     },
+    readiness: readyStatus('lw-aabbccddeeff', {
+      buildId: 'gallery-release-build-with-a-long-identity',
+    }),
   }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
   await expect(page.locator('.card-status-summary')).toBeVisible();
@@ -201,6 +214,7 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: '2026-01-01T00:00:00.000Z',
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
   }]);
   await seedCommissioningFlow(page, 'wifi');
 
@@ -213,6 +227,7 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: new Date(Date.now() + 5_000).toISOString(),
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
   }]);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 });
@@ -345,6 +360,24 @@ test('disconnected Card overview shows the ordered setup path and Connect as pri
   await expect(batch.getByRole('button', { name: 'Batch production', exact: true })).toBeVisible();
 });
 
+test('direct discovery never auto-adopts; only the explicit pair action persists identity', async ({ page }) => {
+  const status = readyStatus('lw-explicit-pair');
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Found — pair/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_card_identity_v1'))).toBeNull();
+
+  await page.getByTestId('card-link-status').click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-explicit-pair');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
 test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCard when absent', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
@@ -422,16 +455,11 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
 test('connected Card overview identifies the card and makes Save to card primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
-  await page.evaluate(async () => {
-    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    const link = getSharedCardLink();
-    link.dispatch({
-      type: 'card-verified',
-      via: 'bridge',
-      host: link.getState().host || 'lightweaver.local',
-      card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    });
-  });
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge',
+    card: { id: 'lw-gallery-card', name: 'Gallery card' },
+    readiness: readyStatus('lw-gallery-card'),
+  }]);
 
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
   await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
@@ -440,19 +468,41 @@ test('connected Card overview identifies the card and makes Save to card primary
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 });
 
+test('Card overview distinguishes checking, blank, and ready evidence', async ({ page }) => {
+  let status: any = {
+    app: 'Lightweaver', cardId: 'lw-overview-state',
+    firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+  };
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, {
+    version: 1, id: 'lw-overview-state', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+  });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-detected-state')).toContainText('Checking card');
+
+  status = readyStatus('lw-overview-state', {
+    runtimePhase: 'factory', knownGoodProject: false, commandReady: false,
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
+
+  status = readyStatus('lw-overview-state');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');
+});
+
 test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
-  await page.evaluate(async () => {
-    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    const link = getSharedCardLink();
-    link.dispatch({
-      type: 'card-verified',
-      via: 'bridge',
-      host: link.getState().host || 'lightweaver.local',
-      card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    });
-  });
+  await dispatchCardLink(page, [{
+    type: 'card-verified', via: 'bridge',
+    card: { id: 'lw-gallery-card', name: 'Gallery card' },
+    readiness: readyStatus('lw-gallery-card'),
+  }]);
   await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 
@@ -478,14 +528,23 @@ for (const cardState of [
     action: 'Connecting…',
   },
   {
-    name: 'restarting',
+    name: 'stopped responding',
     events: [
-      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' } },
+      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery') },
       { type: 'bridge-ping-missed', host: 'lightweaver.local' },
       { type: 'bridge-ping-missed', host: 'lightweaver.local' },
     ],
-    copy: /card is restarting/i,
-    action: 'Card restarting…',
+    copy: /card stopped responding/i,
+    action: 'Card stopped responding',
+  },
+  {
+    name: 'revalidating after restart',
+    events: [
+      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery') },
+      { type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card: { id: 'lw-gallery', name: 'Gallery card' }, readiness: readyStatus('lw-gallery', { bootId: 'boot-2' }) },
+    ],
+    copy: /card restarted.*verifying/i,
+    action: 'Card restarted — verifying',
   },
   {
     name: 'wrong card',
