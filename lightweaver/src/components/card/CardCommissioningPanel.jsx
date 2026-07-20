@@ -8,7 +8,8 @@ import {
   readCardWiringCandidateEvidence,
   rollbackCardWiringCandidate,
 } from '../../lib/cardWiringSafety.js';
-import { isCardLinkConnected } from '../../lib/cardLink.js';
+import { isCardLinkConnected, reportDirectCardStatus } from '../../lib/cardLink.js';
+import { canPushDirectlyToCard, discoverCardStatus } from '../../lib/cardConnection.js';
 import { compileWiring } from '../../lib/wiringCompiler.js';
 import { createWiringChaseSession } from '../../lib/wiringChase.js';
 import {
@@ -16,6 +17,7 @@ import {
   CARD_COMMISSIONING_STAGES,
   adaptCardRestorationReadback,
   acknowledgeCommissionedCard,
+  acknowledgeCommissionedCardFromStatus,
   bindCardWiringActivationEvidence,
   beginCardRestorationMutation,
   claimCardRestoration,
@@ -117,6 +119,7 @@ export function CardCommissioningPanel({
   const [initialState] = useState(() => inspectCardCommissioning());
   const [flow, setFlow] = useState(initialState.flow);
   const [restoreState, setRestoreState] = useState('idle');
+  const [detection, setDetection] = useState({ state: 'idle' });
   const [lightCheckState, setLightCheckState] = useState('idle');
   const [lightCheckNotice, setLightCheckNotice] = useState('');
   const markerSessionRef = useRef(null);
@@ -198,6 +201,70 @@ export function CardCommissioningPanel({
       setFlow(cardAcknowledgement.flow);
     } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
   }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
+
+  // Reality-driven auto-advance: while the wizard is waiting for the card to
+  // rejoin home WiFi (stage 'set-up-card', not yet acknowledged), poll the LAN
+  // for the EXPECTED card by identity. Once it answers /api/status in station
+  // transport, advance the same verified acknowledge transition the manual
+  // button uses — no click required. Only runs on http/file pages that can
+  // actually reach the card; on HTTPS the bridge/link path stays the only route.
+  const expectedCardId = flow?.stage === 'set-up-card' ? flow.expectedCard?.id : '';
+  const pollHost = link?.host;
+  useEffect(() => {
+    if (!expectedCardId || flow?.cardAcknowledgedAt || !canPushDirectlyToCard()) {
+      setDetection(prev => (prev.state === 'idle' ? prev : { state: 'idle' }));
+      return undefined;
+    }
+    let active = true;
+    let timer = null;
+    const flowId = flow.flowId;
+    setDetection(prev => (prev.state === 'found' ? prev : { state: 'searching' }));
+    const poll = async () => {
+      if (!active) return;
+      let result = null;
+      try {
+        result = await discoverCardStatus({
+          preferredHost: pollHost,
+          expectedCard: { id: expectedCardId },
+          timeoutMs: 1500,
+          persist: true,
+        });
+      } catch { result = null; }
+      if (!active) return;
+      if (result?.connected) {
+        // The poll proved THIS host reachable for the expected card (discoverCardStatus
+        // gated on the expected id). Feed it into the shared card link so restore(),
+        // which targets link.host, reaches the host the poll actually used rather than
+        // a stale remembered address — the same connected-link guarantee the manual
+        // acknowledge path gives restore. allowAdopt is safe because the reached card
+        // was already identity-matched (id gate above + strict id+fw+build in
+        // acknowledgeCommissionedCardFromStatus below); reportDirectCardStatus also
+        // persists that identity + stored host so the passive useCardStatus feed
+        // converges on it, and its own comparison gate still refuses to overwrite a
+        // different persisted pairing. Only done on the acknowledge paths (where
+        // restore can follow), never on an identity/firmware-rejected poll.
+        const propagateProvenHost = () => reportDirectCardStatus({
+          connected: true, host: result.host, status: result.status, allowAdopt: true,
+        });
+        // Re-read authority so we acknowledge against the freshest generation
+        // (another tab or the setup-joined click may have advanced it).
+        const current = readCardCommissioning({ flowId }) || flow;
+        if (current?.cardAcknowledgedAt) { propagateProvenHost(); if (active) setDetection({ state: 'found' }); return; }
+        const ack = acknowledgeCommissionedCardFromStatus(current, result.status);
+        if (ack.ok) {
+          try {
+            await writeCardCommissioning(ack.flow);
+            propagateProvenHost();
+            if (active) { setFlow(ack.flow); setDetection({ state: 'found' }); }
+            return;
+          } catch { /* stale generation — listener re-syncs; retry below */ }
+        }
+      }
+      if (active) timer = window.setTimeout(poll, 2500);
+    };
+    void poll();
+    return () => { active = false; if (timer != null) window.clearTimeout(timer); };
+  }, [expectedCardId, flow?.cardAcknowledgedAt, flow?.flowId, pollHost]);
 
   if (!flow && lightCheckState === 'complete') return (
     <div className="card-commissioning" aria-live="polite">
@@ -422,22 +489,29 @@ export function CardCommissioningPanel({
       {flow.stage === 'set-up-card' && (
         <>
           <h3>Set up card</h3>
-          {flow.networkState === 'setup-required' && (
+          {!flow.cardAcknowledgedAt && detection.state === 'found' && (
+            <div className="card-commissioning-network">
+              <p aria-live="polite"><strong>Card is back on your network — continuing…</strong></p>
+            </div>
+          )}
+          {!flow.cardAcknowledgedAt && detection.state !== 'found' && flow.networkState === 'setup-required' && (
             <div className="card-commissioning-network">
               <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>Lightweaver-XXXX</strong>. The setup address only works while that network is joined.</p>
               <button type="button" className="btn primary" onClick={confirmSetupNetwork}>I’ve joined Lightweaver-XXXX</button>
+              {detection.state === 'searching' && <p role="status">Looking for {flow.expectedCard.id} on your network…</p>}
             </div>
           )}
-          {flow.networkState === 'setup-joined' && (
+          {!flow.cardAcknowledgedAt && detection.state !== 'found' && flow.networkState === 'setup-joined' && (
             <div className="card-commissioning-network">
-              <p><strong>Lightweaver-XXXX joined.</strong> Now open the card at 192.168.4.1, choose its permanent Wi-Fi, and return here. This progress stays saved while networks change.</p>
-              <a className="btn primary" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open 192.168.4.1 Wi-Fi setup</a>
+              <p><strong>Lightweaver-XXXX joined.</strong> If the card is still on its setup network, open it at 192.168.4.1, choose its permanent Wi-Fi, and return here. Once it rejoins your network Studio continues automatically. This progress stays saved while networks change.</p>
+              <a className="btn" href="http://192.168.4.1" target="_blank" rel="noopener noreferrer">Open 192.168.4.1 Wi-Fi setup</a>
+              <p role="status">{detection.state === 'searching' ? `Waiting for the card to rejoin your network — looking for ${flow.expectedCard.id}…` : 'Waiting for the card to rejoin your network…'}</p>
             </div>
           )}
           {!flow.cardAcknowledgedAt ? (
             <>
-              <p>{identityFailure || 'Reconnect the installed card. Studio will continue only when the exact card, firmware version, and firmware build answer.'}</p>
-              <button type="button" className="btn primary" onClick={onReconnect} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
+              <p>{identityFailure || 'Studio continues automatically once the exact card, firmware version, and firmware build answer on your network. You can also reconnect the installed card manually.'}</p>
+              <button type="button" className="btn" onClick={onReconnect} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
             </>
           ) : (
             <>

@@ -216,6 +216,25 @@ export function acknowledgeCommissionedCard(flow, card = {}, { now = Date.now() 
   };
 }
 
+// Reality-driven auto-advance: when a background LAN poll finds the expected
+// card answering /api/status in station transport (proving it left its setup AP
+// and rejoined home WiFi), advance the exact same verified transition the manual
+// "Reconnect installed card" button uses. This runs a STRICTER check than the
+// manual path — it additionally requires wifi.transport === 'station' so an AP-mode
+// card can never be mistaken for an on-home-network card — then delegates identity
+// verification (exact id + firmwareVersion + buildId) to acknowledgeCommissionedCard.
+export function acknowledgeCommissionedCardFromStatus(flow, status = {}, { now = Date.now() } = {}) {
+  requireFlow(flow);
+  if (flow.stage !== 'set-up-card') return { ok: false, reason: 'not-awaiting-card' };
+  const transport = String(status?.wifi?.transport || status?.transport || '').toLowerCase();
+  if (transport !== 'station') return { ok: false, reason: 'not-on-home-network' };
+  return acknowledgeCommissionedCard(flow, {
+    id: status.cardId || status.id,
+    firmwareVersion: status.firmwareVersion,
+    buildId: status.buildId || status.firmwareBuild || status.build,
+  }, { now });
+}
+
 export function resumeInstalledCardAfterInterruption(flow, card = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.source !== 'web-serial' || flow.stage !== 'install-safely' || !flow.installTarget) {

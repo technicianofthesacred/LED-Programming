@@ -128,6 +128,73 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
 });
 
+test('reality-driven detection replaces the dead 192.168.4.1 link with the restore path once the card rejoins the LAN', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+
+  // While the card is still on its setup AP (unreachable on the LAN — the
+  // beforeEach aborts every card host) the dead-AP fallback link is the only
+  // setup affordance and the restore path is not yet offered.
+  const setupLink = page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  await expect(setupLink).toBeVisible();
+  await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
+
+  // The card leaves its AP and rejoins home WiFi: it now answers /api/status in
+  // station transport with its exact identity. The background detection poll must
+  // observe this and auto-advance — no manual "Reconnect installed card" click.
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'a'.repeat(40),
+      wifi: { transport: 'station', ip: '192.168.18.70' },
+    }),
+  }));
+
+  // The dead 192.168.4.1 link is gone and the verified restore path is reachable
+  // without any manual reconnect.
+  await expect(setupLink).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible({ timeout: 10_000 });
+});
+
+test('a wrong card answering on the LAN never auto-advances setup past the identity gate', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+
+  // A different card (mismatched identity) answers /api/status in station
+  // transport. The safety gate must reject it: the detection poll keeps waiting
+  // and never offers the restore path.
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-ffffffffffff',
+      firmwareVersion: '9.9.9',
+      buildId: 'f'.repeat(40),
+      wifi: { transport: 'station', ip: '192.168.18.71' },
+    }),
+  }));
+
+  await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
+  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  // Give the poll several cycles; the mismatched card must never unlock restore.
+  await page.waitForTimeout(3_000);
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
+});
+
 test('retained pre-install card identity cannot bypass the explicit WiFi handoff', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await dispatchCardLink(page, [{
