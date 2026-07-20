@@ -11,6 +11,9 @@ struct RuntimeLoadResult {
   RuntimeSource source = SOURCE_DEFAULTS;
   bool bootedCandidate = false;
   bool safeMode = false;
+  bool configValid = false;
+  bool knownGoodProject = false;
+  ProvisioningPhase runtimePhase = ProvisioningPhase::Factory;
   String message;
 };
 

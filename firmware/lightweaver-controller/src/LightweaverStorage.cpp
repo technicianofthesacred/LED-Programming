@@ -183,6 +183,9 @@ void resetZone(ZoneConfig& zone) {
 void resetConfig(RuntimeConfig& config) {
   config.mode = "factory-flash";
   config.source = SOURCE_DEFAULTS;
+  config.configValid = false;
+  config.knownGoodProject = false;
+  config.runtimePhase = ProvisioningPhase::Factory;
   config.pieceId = "";
   config.pieceName = "Lightweaver";
   config.projectRevision = 0;
@@ -976,6 +979,21 @@ void overlayNvsWifi(RuntimeConfig& config) {
   config.wifi.password = String(doc["password"] | config.wifi.password.c_str());
   config.wifi.hostname = String(doc["hostname"] | config.wifi.hostname.c_str());
 }
+
+void setRuntimeLoadTruth(RuntimeConfig& config,
+                         RuntimeLoadResult& result,
+                         bool configValid,
+                         bool knownGoodProject,
+                         bool corruptionDetected) {
+  ProvisioningPhase phase = provisioningPhaseForLoad(
+      configValid, knownGoodProject, corruptionDetected);
+  config.configValid = configValid;
+  config.knownGoodProject = knownGoodProject;
+  config.runtimePhase = phase;
+  result.configValid = configValid;
+  result.knownGoodProject = knownGoodProject;
+  result.runtimePhase = phase;
+}
 }
 
 void applyDefaultRuntimeConfig(RuntimeConfig& config) {
@@ -1074,6 +1092,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
         result.ok = true;
         result.safeMode = true;
         result.source = SOURCE_DEFAULTS;
+        setRuntimeLoadTruth(config, result, false, false, true);
         result.message = message + "; safe defaults loaded";
         return result;
       }
@@ -1092,6 +1111,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
         result.ok = true;
         result.safeMode = true;
         result.source = SOURCE_DEFAULTS;
+        setRuntimeLoadTruth(config, result, false, false, true);
         result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
         return result;
       }
@@ -1110,6 +1130,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
         result.ok = true;
         result.source = SOURCE_NVS;
         result.bootedCandidate = true;
+        setRuntimeLoadTruth(config, result, true, false, false);
         result.message = "candidate loaded for wiring probation";
         return result;
       }
@@ -1123,6 +1144,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       result.ok = true;
       result.safeMode = true;
       result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
       result.message = "candidate rollback failed; safe defaults loaded: " + rollbackMessage;
       return result;
     }
@@ -1136,6 +1158,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       result.ok = true;
       result.safeMode = true;
       result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
       result.message = "candidate rollback failed; safe defaults loaded: " + message;
       return result;
     }
@@ -1147,6 +1170,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_NVS;
+    setRuntimeLoadTruth(config, result, true, true, false);
     result.message = "known-good config loaded";
     return result;
   }
@@ -1160,6 +1184,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     result.ok = true;
     result.safeMode = true;
     result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
     result.message = String("malformed known-good; safe defaults loaded: ") + message;
     return result;
   }
@@ -1169,6 +1194,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_SD;
+    setRuntimeLoadTruth(config, result, true, true, false);
     result.message = message;
     return result;
   }
@@ -1177,6 +1203,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   ensureDefaultZone(config);
   result.ok = true;
   result.source = SOURCE_DEFAULTS;
+  setRuntimeLoadTruth(config, result, false, false, false);
   result.message = "compiled defaults loaded";
   return result;
 }
@@ -1254,6 +1281,9 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.activeTransport = preservedTransport;
   config.activeIp = preservedIp;
   config.activeHostname = preservedHostname;
+  config.configValid = true;
+  config.knownGoodProject = true;
+  config.runtimePhase = ProvisioningPhase::Ready;
   message = "saved to internal flash";
   return true;
 }
@@ -1604,12 +1634,21 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
 
 String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint16_t totalPixels, uint8_t currentLookIndex) {
   JsonDocument doc;
+  doc["app"] = "Lightweaver";
   char cardId[16] = {};
   snprintf(cardId, sizeof(cardId), "lw-%012llx",
            static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
   doc["cardId"] = cardId;
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
+  doc["bootId"] = runtimeBootId();
+  doc["uptimeMs"] = millis();
+  doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
+  doc["runtimePhase"] = runtimeProvisioningPhase();
+  doc["commandReady"] = runtimeCommandReady();
+  doc["outputReady"] = runtimeOutputReady();
+  doc["configValid"] = config.configValid;
+  doc["knownGoodProject"] = config.knownGoodProject;
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["ok"] = errorCode == ERROR_NONE;
@@ -1618,6 +1657,10 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["source"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["runtimeSource"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
+  doc["projectRevision"] = config.projectRevision;
+  doc["projectFingerprint"] = config.projectFingerprint;
+  doc["productionJobId"] = config.productionJobId;
+  doc["productionJobDigest"] = config.productionJobDigest;
   uint32_t remainingProbationMs = runtimeWiringProbationRemainingMs();
   doc["wiringProbation"]["active"] = remainingProbationMs > 0;
   doc["wiringProbation"]["remainingMs"] = remainingProbationMs;

@@ -1021,6 +1021,7 @@ void handleConfigPost() {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
+  runtimeMarkRestartPending();
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
 }
 
@@ -1416,6 +1417,20 @@ void handleControlPost() {
   // (under sync rules — see runtime API). Visitors using the basic page never
   // send `zone`; the designer surface does.
   String zoneTarget = hasControlField(doc, "zone") ? controlString(doc, "zone") : String("");
+  if (!runtimeControlTargetExists(zoneTarget)) {
+    server.send(422, "application/json", "{\"ok\":false,\"error\":\"unknown zone\"}");
+    return;
+  }
+  uint8_t affectedOutputCount = runtimeAffectedOutputCount(zoneTarget);
+  if (affectedOutputCount == 0) {
+    server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
+    return;
+  }
+  if (hasControlField(doc, "colorOrder") &&
+      !runtimeCanSetLedColorOrder(controlString(doc, "colorOrder"))) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid color order\"}");
+    return;
+  }
   bool hasRevision = hasControlField(doc, "revision");
   uint32_t confirmedRevision = 0;
   if (hasRevision) {
@@ -1436,10 +1451,32 @@ void handleControlPost() {
     JsonDocument rejected;
     rejected["ok"] = false;
     rejected["cardId"] = runtimeCardId();
-    rejected["error"] = "pattern or zone is no longer available";
+    rejected["error"] = "unknown pattern";
     String body;
     serializeJson(rejected, body);
     server.send(422, "application/json", body);
+    return;
+  }
+
+  bool operationApplied =
+      hasControlField(doc, "syncZones") ||
+      hasControlField(doc, "colorOrder") ||
+      hasControlField(doc, "brightness") ||
+      hasControlField(doc, "speed") ||
+      hasControlField(doc, "hueShift") ||
+      hasControlField(doc, "blackout") ||
+      (hasControlField(doc, "next") && controlBool(doc, "next")) ||
+      (hasControlField(doc, "previous") && controlBool(doc, "previous")) ||
+      patternRequested ||
+      hasControlField(doc, "hue") ||
+      hasControlField(doc, "saturation") ||
+      hasControlField(doc, "breathe") ||
+      hasControlField(doc, "drift") ||
+      hasControlField(doc, "driftMin") ||
+      hasControlField(doc, "driftMax") ||
+      (hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream"));
+  if (!operationApplied) {
+    server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
 
@@ -1470,7 +1507,15 @@ void handleControlPost() {
   JsonDocument out;
   out["ok"] = !patternRequested || patternApplied;
   out["cardId"] = runtimeCardId();
+  out["stateRevision"] = runtimeAdvanceStateRevision();
+  out["affectedOutputCount"] = affectedOutputCount;
+  JsonArray affectedOutputs = out["affectedOutputs"].to<JsonArray>();
+  for (uint8_t index = 0; index < affectedOutputCount; index++) {
+    affectedOutputs.add(runtimeAffectedOutputId(zoneTarget, index));
+  }
   if (hasRevision) {
+    // Backward-compatible client correlation. The independently generated
+    // stateRevision above is the card-owned evidence for the applied change.
     out["revision"] = confirmedRevision;
     out["confirmedRevision"] = confirmedRevision;
   }

@@ -104,6 +104,10 @@ uint32_t wiringProbationDeadlineMs = 0;
 bool safeDiscoveryMode = false;
 uint8_t safeDiscoveryBatchIndex = 0;
 bool runtimeSafeMode = false;
+bool webRuntimeServing = false;
+bool restartTransitionPending = false;
+String bootId;
+uint32_t cardStateRevision = 0;
 ErrorCode errorCode = ERROR_NONE;
 
 File sequenceFile;
@@ -184,6 +188,7 @@ uint16_t clampPixels(int value);
 float clampUnit(float value);
 void startWiringProbation(bool bootedCandidate);
 void rollbackCandidateBeforeRestart(const char* reason);
+void initializeBootIdentity();
 
 template<uint8_t DATA_PIN>
 bool addLedsForOrder(CRGB* start, uint16_t count) {
@@ -192,6 +197,7 @@ bool addLedsForOrder(CRGB* start, uint16_t count) {
 }
 
 void setup() {
+  initializeBootIdentity();
   Serial.begin(115200);
   uint32_t serialWaitStart = millis();
   while (!Serial && millis() - serialWaitStart < 2000) {
@@ -224,6 +230,7 @@ void setup() {
   safeDiscoveryBatchIndex = wiringSafety.discoveryBatchIndex;
   setupLightweaverControls(controls, controlState);
   setupLightweaverWeb(runtimeConfig, errorCode, totalPixels, currentLookIndex);
+  webRuntimeServing = true;
 
   if (safeDiscoveryMode) {
     if (!setupSafeDiscoveryOutputs(wiringSafety.discoveryBatchIndex)) {
@@ -1302,6 +1309,66 @@ uint8_t applyToZones(const String& targetId, Fn fn) {
   return touched;
 }
 
+bool runtimeControlTargetExists(const String& targetId) {
+  if (targetId.length() == 0) return runtimeConfig.zoneCount > 0;
+  for (uint8_t index = 0; index < runtimeConfig.zoneCount; index++) {
+    if (runtimeConfig.zones[index].id == targetId) return true;
+  }
+  return false;
+}
+
+bool zoneAffectsOutput(const ZoneConfig& zone, const OutputConfig& output) {
+  uint32_t outputStart = output.start;
+  uint32_t outputEnd = outputStart + output.pixels;
+  for (uint8_t rangeIndex = 0; rangeIndex < zone.rangeCount; rangeIndex++) {
+    uint32_t rangeStart = zone.ranges[rangeIndex].start;
+    uint32_t rangeEnd = rangeStart + zone.ranges[rangeIndex].count;
+    if (rangeStart < outputEnd && outputStart < rangeEnd) return true;
+  }
+  return false;
+}
+
+uint8_t runtimeAffectedOutputCount(const String& targetId) {
+  if (targetId.length() == 0) return outputCount;
+  const ZoneConfig* zone = nullptr;
+  for (uint8_t index = 0; index < runtimeConfig.zoneCount; index++) {
+    if (runtimeConfig.zones[index].id == targetId) {
+      zone = &runtimeConfig.zones[index];
+      break;
+    }
+  }
+  if (!zone) return 0;
+  uint8_t affected = 0;
+  for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
+    if (zoneAffectsOutput(*zone, outputs[outputIndex])) affected++;
+  }
+  return affected;
+}
+
+String runtimeAffectedOutputId(const String& targetId, uint8_t affectedIndex) {
+  uint8_t found = 0;
+  for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
+    bool affected = targetId.length() == 0;
+    if (!affected) {
+      for (uint8_t zoneIndex = 0; zoneIndex < runtimeConfig.zoneCount; zoneIndex++) {
+        if (runtimeConfig.zones[zoneIndex].id == targetId) {
+          affected = zoneAffectsOutput(runtimeConfig.zones[zoneIndex], outputs[outputIndex]);
+          break;
+        }
+      }
+    }
+    if (affected && found++ == affectedIndex) return outputs[outputIndex].id;
+  }
+  return String("");
+}
+
+uint32_t runtimeAdvanceStateRevision() {
+  cardStateRevision = cardStateRevision == UINT32_MAX ? 1 : cardStateRevision + 1;
+  return cardStateRevision;
+}
+
+uint32_t runtimeStateRevision() { return cardStateRevision; }
+
 void runtimeSetBrightness(float value01) {
   if (value01 < 0.02f) value01 = 0.02f;
   if (value01 > 1.0f) value01 = 1.0f;
@@ -1447,6 +1514,14 @@ uint32_t runtimeWiringProbationRemainingMs() {
   return remaining > 0 ? static_cast<uint32_t>(remaining) : 0;
 }
 
+void initializeBootIdentity() {
+  char value[32] = {};
+  snprintf(value, sizeof(value), "boot-%08lx-%012llx",
+           static_cast<unsigned long>(esp_random()),
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
+  bootId = value;
+}
+
 String runtimeCardId() {
   char cardId[16] = {};
   snprintf(cardId, sizeof(cardId), "lw-%012llx",
@@ -1454,12 +1529,64 @@ String runtimeCardId() {
   return String(cardId);
 }
 
+String runtimeBootId() { return bootId; }
+
+bool runtimeTransitionPending() {
+  if (restartTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
+      wiringProbationActive || runtimeRecoveryAfterRestartPending()) {
+    return true;
+  }
+  WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+  return safety.discoveryActive ||
+         safety.candidateState == WIRING_CANDIDATE_BOOTING ||
+         safety.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
+}
+
+ProvisioningPhase runtimeReportedProvisioningPhase() {
+  if (errorCode != ERROR_NONE || runtimeTransitionPending()) {
+    return ProvisioningPhase::Recovering;
+  }
+  return runtimeConfig.runtimePhase;
+}
+
+const char* runtimeProvisioningPhase() {
+  return provisioningPhaseLabel(runtimeReportedProvisioningPhase());
+}
+
+bool runtimeOutputReady() { return ledOutputsReady; }
+bool runtimeConfigValid() { return runtimeConfig.configValid; }
+bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
+
+bool runtimeCommandReady() {
+  bool transitionPending = runtimeTransitionPending() || errorCode != ERROR_NONE;
+  ProvisioningReadinessInputs inputs;
+  inputs.phase = transitionPending
+      ? ProvisioningPhase::Recovering
+      : runtimeConfig.runtimePhase;
+  inputs.configValid = runtimeConfig.configValid;
+  inputs.knownGoodProject = runtimeConfig.knownGoodProject;
+  inputs.webServing = webRuntimeServing;
+  inputs.outputReady = ledOutputsReady;
+  inputs.transitionPending = transitionPending;
+  return provisioningCommandReady(inputs);
+}
+
+void runtimeMarkRestartPending() { restartTransitionPending = true; }
+
 String runtimeFirmwareInfo() {
   JsonDocument doc;
   doc["app"] = "Lightweaver";
   doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
+  doc["bootId"] = runtimeBootId();
+  doc["uptimeMs"] = millis();
+  doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
+  doc["runtimePhase"] = runtimeProvisioningPhase();
+  doc["commandReady"] = runtimeCommandReady();
+  doc["outputReady"] = runtimeOutputReady();
+  doc["configValid"] = runtimeConfigValid();
+  doc["knownGoodProject"] = runtimeKnownGoodProject();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["build"] = __DATE__ " " __TIME__;
@@ -1487,7 +1614,6 @@ String runtimeFirmwareInfo() {
   doc["limits"]["zones"] = LW_MAX_ZONES;
   doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
   doc["limits"]["configStorageBytes"] = 3968;
-  doc["uptimeMs"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["rssi"] = WiFi.RSSI();
   doc["wifi"]["ip"] = runtimeConfig.activeIp;
@@ -1661,6 +1787,11 @@ void runtimeSetLedColorOrder(const String& order) {
   ledColorOrder = normalized;
   runtimeConfig.ledColorOrder = normalized;
 }
+bool runtimeCanSetLedColorOrder(const String& order) {
+  String normalized = order;
+  normalized.toUpperCase();
+  return isValidLedColorOrder(normalized);
+}
 String runtimeGetLedColorOrder() { return ledColorOrder; }
 
 void runtimeSetSyncZones(bool on) { runtimeConfig.syncZones = on; }
@@ -1777,6 +1908,9 @@ bool runtimeConfirmWiringCandidate(const String& activationId, String& message) 
   if (confirmed) {
     wiringProbationActive = false;
     wiringProbationDeadlineMs = 0;
+    runtimeConfig.configValid = true;
+    runtimeConfig.knownGoodProject = true;
+    runtimeConfig.runtimePhase = ProvisioningPhase::Ready;
   }
   return confirmed;
 }

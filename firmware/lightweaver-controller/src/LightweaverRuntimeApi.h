@@ -32,7 +32,13 @@ bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternI
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
 
 void runtimeSetLedColorOrder(const String& order);
+bool runtimeCanSetLedColorOrder(const String& order);
 String runtimeGetLedColorOrder();
+bool runtimeControlTargetExists(const String& targetId);
+uint8_t runtimeAffectedOutputCount(const String& targetId);
+String runtimeAffectedOutputId(const String& targetId, uint8_t affectedIndex);
+uint32_t runtimeAdvanceStateRevision();
+uint32_t runtimeStateRevision();
 void runtimeSetSyncZones(bool on);
 bool runtimeGetSyncZones();
 String runtimeZonesJson();
@@ -56,6 +62,13 @@ float runtimeGetSpeed();
 int16_t runtimeGetHueShift();
 bool runtimeIsBlackedOut();
 String runtimeCardId();
+String runtimeBootId();
+const char* runtimeProvisioningPhase();
+bool runtimeCommandReady();
+bool runtimeOutputReady();
+bool runtimeConfigValid();
+bool runtimeKnownGoodProject();
+void runtimeMarkRestartPending();
 String runtimeFirmwareInfo();
 void runtimeFactoryReset();
 void runtimeResetWifi();
