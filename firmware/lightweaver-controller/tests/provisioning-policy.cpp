@@ -66,6 +66,50 @@ int main() {
   assert(isApprovedProvisioningOutputGpio(21));
   assert(!isApprovedProvisioningOutputGpio(38));
 
+  static_assert(LW_FACTORY_BEACON_PIXEL_LIMIT == 8,
+                "factory beacon must remain bounded to eight pixels");
+  static_assert(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT <= 24,
+                "factory beacon must remain dim");
+  static_assert(LW_FACTORY_BEACON_MAX_MILLIAMPS <= 100,
+                "factory beacon must retain a conservative current ceiling");
+  for (size_t step = 0; step < LW_APPROVED_OUTPUT_GPIO_COUNT; step++) {
+    assert(factoryBeaconPinForStep(step) == LW_APPROVED_OUTPUT_GPIOS[step]);
+  }
+  assert(factoryBeaconPinForStep(LW_APPROVED_OUTPUT_GPIO_COUNT) ==
+         LW_APPROVED_OUTPUT_GPIOS[0]);
+
+  FactoryBeaconOwnershipInputs beacon{};
+  beacon.phase = ProvisioningPhase::Factory;
+  beacon.outputReady = true;
+  assert(factoryBeaconMayOwnOutput(beacon));
+  beacon.commandActivity = true;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+  beacon.commandActivity = false;
+  beacon.wifiTransition = true;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+  beacon.wifiTransition = false;
+  beacon.candidateActive = true;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+  beacon.candidateActive = false;
+  beacon.discoveryActive = true;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+  beacon.discoveryActive = false;
+  beacon.recoveryActive = true;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+  beacon.recoveryActive = false;
+  beacon.phase = ProvisioningPhase::Ready;
+  assert(!factoryBeaconMayOwnOutput(beacon));
+
+  assert(factoryBeaconPulseOn(0));
+  assert(!factoryBeaconPulseOn(150));
+  assert(factoryBeaconPulseOn(250));
+  assert(!factoryBeaconPulseOn(400));
+
+  assert(provisioningFactoryResetMayComplete(false, false, true));
+  assert(provisioningFactoryResetMayComplete(true, true, true));
+  assert(!provisioningFactoryResetMayComplete(true, false, true));
+  assert(!provisioningFactoryResetMayComplete(false, false, false));
+
   assert(provisioningZoneSelected(0, false, 0, false));
   assert(!provisioningZoneSelected(1, false, 0, false));
   assert(provisioningZoneSelected(0, false, 0, true));

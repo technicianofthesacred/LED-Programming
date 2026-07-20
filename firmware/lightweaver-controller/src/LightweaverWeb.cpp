@@ -826,7 +826,7 @@ void handleAdvancedRoot() {
     page += F("<div class='card' id='wiring-safety-card'><h2>Wiring safety</h2>"
               "<p class='note' id='wiring-safe-status'>Checking the working setup…</p>"
               "<div class='row'><button class='primary' id='restore-wiring'>Restore working setup</button><button id='find-wire'>Find my LED wire</button></div>"
-              "<p class='note'>Restore cancels an unconfirmed wiring change. Wire finder tests safe LED ports in groups of four.</p>"
+              "<p class='note'>Restore cancels an unconfirmed wiring change. Wire finder tests one approved LED port at a time.</p>"
               "</div>");
 
     page += F("<details><summary>Settings</summary><div class='body'>"
@@ -948,7 +948,7 @@ void handleAdvancedRoot() {
               "$('blackout').onclick=async()=>{blackoutOn=!blackoutOn;$('blackout').classList.toggle('primary',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
               "const refreshWiringSafety=async()=>{try{const s=await get('/api/wiring/status');const el=$('wiring-safe-status');el.textContent=s.state==='testing'?'Testing new wiring — confirm it in Studio before the timer ends.':s.state==='staged'?'New wiring is staged but the working setup is still active.':'Current setup is safe.';el.className='note '+(s.state==='known-good'?'ok':'')}catch(_){}};"
               "$('restore-wiring').onclick=async()=>{const el=$('wiring-safe-status');try{el.textContent='Restoring the working setup…';const r=await post('/api/recover-lights',{patternId:'warm-white',brightness:.65,syncZones:true});if(r.rebooting){el.textContent='Working setup selected. The card is rebooting and will show warm white after restart.'}else if(r.diagnostics&&r.diagnostics.frameSubmitted){el.textContent='Working setup restored and recovery light sent.'}else{el.textContent='Working setup selected, but no recovery frame was submitted.'}el.className='note '+((r.rebooting||(r.diagnostics&&r.diagnostics.frameSubmitted))?'ok':'err')}catch(e){el.textContent=e.message;el.className='note err'}};"
-              "$('find-wire').onclick=async()=>{const el=$('wiring-safe-status');try{const d=await post('/api/wiring/discover',{batch:0});const a=d.assignments||d.outputs||[];el.textContent=d.rebooting||d.requiresReboot?'Card is restarting into wire discovery. Reconnect, then match the persistent LED color in Studio: '+a.map(x=>(x.label||x.color)+' = GPIO '+x.pin).join(' · '):'Watch the LEDs, then match the color in Studio: '+a.map(x=>(x.label||x.color)+' = GPIO '+x.pin).join(' · ')}catch(e){el.textContent=e.message;el.className='note err'}};"
+              "$('find-wire').onclick=async()=>{const el=$('wiring-safe-status');try{const d=await post('/api/wiring/discover',{step:0});el.textContent=(d.rebooting||d.requiresReboot?'Card is restarting into wire discovery. Reconnect, then watch':'Watch')+' the dim amber pulse on GPIO '+d.pin+' (step '+(d.step+1)+' of '+d.stepCount+'). Confirm what you observe before trying step '+(d.nextStep+1)+'.'}catch(e){el.textContent=e.message;el.className='note err'}};"
               "$('identify').onclick=()=>{post('/api/identify',{});const m=$('set-msg');m.textContent='Watch the strip — it will flash 3 times.';m.className='note ok';setTimeout(()=>m.textContent='',3000)};"
               "$('reboot').onclick=async()=>{if(!confirm('Reboot the card? Everything stays saved; the strip will go dark for ~5 seconds.'))return;const m=$('set-msg');m.textContent='Rebooting…';m.className='note';await post('/api/reboot',{})};"
               "$('change-wifi').onclick=()=>{if(!confirm('Reset WiFi only? Patterns and piece name stay. Card reboots into setup mode — you will need to rejoin it from a phone (Lightweaver-XXXX) to enter new WiFi credentials.'))return;const m=$('set-msg');m.textContent='Resetting WiFi…';m.className='note';post('/api/reset-wifi',{})};"
@@ -1159,12 +1159,14 @@ void handleWiringDiscover() {
       return;
     }
   }
-  long batchValue = doc["batch"] | 0L;
-  if (batchValue < 0 || batchValue > 255) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"discovery batch out of range\"}");
+  long stepValue = doc["step"].is<long>()
+      ? doc["step"].as<long>()
+      : (doc["batch"] | 0L);
+  if (stepValue < 0 || stepValue > 255) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"discovery step out of range\"}");
     return;
   }
-  uint8_t batch = static_cast<uint8_t>(batchValue);
+  uint8_t step = static_cast<uint8_t>(stepValue);
   String body;
   bool shouldReboot = false;
   bool ok = false;
@@ -1180,7 +1182,7 @@ void handleWiringDiscover() {
     serializeJson(response, body);
     shouldReboot = ok;
   } else {
-    body = runtimeSafeDiscoveryOutput(batch);
+    body = runtimeSafeDiscoveryOutput(step);
     JsonDocument response;
     if (!deserializeJson(response, body)) {
       ok = response["ok"] | false;
@@ -1203,6 +1205,7 @@ void handleWifiPost() {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
+  runtimeMarkRestartPending();
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\"}");
   delay(400);
   ESP.restart();
@@ -1239,6 +1242,7 @@ void handleWifiScan() {
 
 void handleReboot() {
   sendCors();
+  runtimeMarkRestartPending();
   server.send(200, "application/json", "{\"ok\":true,\"message\":\"rebooting\"}");
   delay(150);
   ESP.restart();
@@ -1669,13 +1673,20 @@ void handleFactoryReset() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
     return;
   }
-  server.send(200, "application/json", "{\"ok\":true,\"message\":\"erasing all settings and rebooting\"}");
+  String message;
+  if (!runtimeFactoryReset(message)) {
+    server.send(500, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
+    return;
+  }
+  server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message +
+              "\",\"source\":\"defaults\",\"knownGoodProject\":false,\"runtimePhase\":\"factory\"}");
   delay(200);
-  runtimeFactoryReset();
+  ESP.restart();
 }
 
 void handleResetWifi() {
   sendCors();
+  runtimeMarkRestartPending();
   server.send(200, "application/json", "{\"ok\":true,\"message\":\"wiping wifi and rebooting into setup\"}");
   delay(200);
   runtimeResetWifi();

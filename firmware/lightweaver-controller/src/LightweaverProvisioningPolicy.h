@@ -7,6 +7,10 @@ constexpr uint8_t LW_PROVISIONING_CONTRACT_VERSION = 1;
 constexpr uint8_t LW_APPROVED_OUTPUT_GPIOS[] = {16, 17, 18, 21};
 constexpr size_t LW_APPROVED_OUTPUT_GPIO_COUNT =
     sizeof(LW_APPROVED_OUTPUT_GPIOS) / sizeof(LW_APPROVED_OUTPUT_GPIOS[0]);
+constexpr uint16_t LW_FACTORY_BEACON_PIXEL_LIMIT = 8;
+constexpr uint8_t LW_FACTORY_BEACON_BRIGHTNESS_LIMIT = 20;
+constexpr uint32_t LW_FACTORY_BEACON_MAX_MILLIAMPS = 100;
+constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 1200;
 
 enum class ProvisioningPhase : uint8_t {
   Factory = 0,
@@ -39,6 +43,16 @@ struct ProvisioningOperationScopeInputs {
   bool globalOutputs = false;
   bool selectedZones = false;
   bool syncStateChanged = false;
+};
+
+struct FactoryBeaconOwnershipInputs {
+  ProvisioningPhase phase = ProvisioningPhase::Factory;
+  bool outputReady = false;
+  bool commandActivity = false;
+  bool wifiTransition = false;
+  bool candidateActive = false;
+  bool discoveryActive = false;
+  bool recoveryActive = false;
 };
 
 constexpr ProvisioningPhase provisioningPhaseForLoad(
@@ -104,6 +118,33 @@ inline bool isApprovedProvisioningOutputGpio(uint8_t gpio) {
     if (LW_APPROVED_OUTPUT_GPIOS[index] == gpio) return true;
   }
   return false;
+}
+
+constexpr uint8_t factoryBeaconPinForStep(size_t step) {
+  return LW_APPROVED_OUTPUT_GPIOS[step % LW_APPROVED_OUTPUT_GPIO_COUNT];
+}
+
+constexpr bool factoryBeaconPulseOn(uint32_t elapsedInStepMs) {
+  return elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS < 120 ||
+         (elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS >= 240 &&
+          elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS < 360);
+}
+
+constexpr bool factoryBeaconMayOwnOutput(
+    const FactoryBeaconOwnershipInputs& input) {
+  return input.phase == ProvisioningPhase::Factory &&
+         input.outputReady &&
+         !input.commandActivity &&
+         !input.wifiTransition &&
+         !input.candidateActive &&
+         !input.discoveryActive &&
+         !input.recoveryActive;
+}
+
+constexpr bool provisioningFactoryResetMayComplete(bool sdConfigExists,
+                                                   bool sdConfigRemoved,
+                                                   bool nvsCleared) {
+  return (!sdConfigExists || sdConfigRemoved) && nvsCleared;
 }
 
 constexpr bool provisioningZoneSelected(size_t zoneIndex,

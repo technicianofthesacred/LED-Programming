@@ -74,7 +74,7 @@ bool runtimeConfigValid();
 bool runtimeKnownGoodProject();
 void runtimeMarkRestartPending();
 String runtimeFirmwareInfo();
-void runtimeFactoryReset();
+bool runtimeFactoryReset(String& message);
 void runtimeResetWifi();
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
 

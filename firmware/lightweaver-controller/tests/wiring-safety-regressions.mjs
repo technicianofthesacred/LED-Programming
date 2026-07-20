@@ -62,6 +62,38 @@ test('confirming an already-promoted activation is retry-safe', () => {
 test('malformed or rejected discovery returns non-2xx', () => {
   const discoveryHandler = body(web, 'void handleWiringDiscover()', 'void handleWifiPost()');
   assert.match(discoveryHandler, /deserializeJson[\s\S]*server\.send\(400/);
-  assert.match(discoveryHandler, /batchValue\s*<\s*0|batchValue\s*>/);
+  assert.match(discoveryHandler, /stepValue\s*<\s*0|stepValue\s*>/);
   assert.match(discoveryHandler, /server\.send\(ok\s*\?\s*200\s*:\s*400/);
+});
+
+test('discovery is one approved assignment per rebooted step and never persists project wiring', () => {
+  const discovery = body(main, 'String runtimeSafeDiscoveryOutput(', 'bool runtimeStopSafeDiscovery(');
+  assert.match(discovery, /LW_DISCOVERY_STEP_COUNT/);
+  assert.match(discovery, /factoryBeaconPinForStep\(stepIndex\)/);
+  assert.match(discovery, /doc\["pin"\]/);
+  assert.match(discovery, /doc\["step"\]/);
+  assert.match(discovery, /doc\["stepCount"\]/);
+  assert.match(discovery, /doc\["brightnessLimit"\]/);
+  assert.match(discovery, /doc\["pixelLimit"\]/);
+  assert.match(discovery, /doc\["nextStep"\]/);
+  assert.doesNotMatch(discovery, /saveRuntimeConfigJson|stageRuntimeConfigJson|NVS_KNOWN_GOOD_CONFIG_KEY/);
+  assert.doesNotMatch(discovery, /assignments\.add|for\s*\([^)]*DISCOVERY_OUTPUT/,
+    'a discovery response must not expose multiple active assignments');
+});
+
+test('factory reset refuses to claim completion when SD config removal fails', () => {
+  const runtimeReset = body(main, 'bool runtimeFactoryReset(', 'void runtimeResetWifi(');
+  assert.match(runtimeReset, /SD\.begin\(LW_SD_CS\)/,
+    'factory reset must mount SD even when normal boot loaded known-good NVS first');
+  assert.match(runtimeReset, /SD\.exists\("\/lightweaver\.json"\)/);
+  assert.match(runtimeReset, /SD\.remove\("\/lightweaver\.json"\)/);
+  assert.match(runtimeReset, /sd[^"\n]*remove|remove[^"\n]*sd/i);
+  assert.ok(runtimeReset.indexOf('SD.remove') < runtimeReset.indexOf('prefs.clear'),
+    'SD removal must succeed before NVS is erased');
+  assert.ok(runtimeReset.indexOf('SD.begin') < runtimeReset.indexOf('SD.exists'),
+    'SD must be mounted before reset decides whether a config exists');
+  const webReset = body(web, 'void handleFactoryReset()', 'void handleResetWifi()');
+  assert.match(webReset, /runtimeFactoryReset\(message\)/);
+  assert.match(webReset, /server\.send\(500/);
+  assert.match(webReset, /ESP\.restart\(\)/);
 });

@@ -39,21 +39,23 @@ assert.match(api, /runtimeActivateWiringCandidate\(const String& activationId, S
 assert.match(api, /runtimeConfirmWiringCandidate\(const String& activationId, String& message\)/);
 assert.match(api, /runtimeRollbackWiringCandidate\(const String& activationId, String& message\)/);
 assert.doesNotMatch(main, /MIRROR_OUTPUT_PINS/, 'normal runtime must register only explicitly configured outputs');
-assert.match(main, /LW_DISCOVERY_BATCH_SIZE\s*=\s*4/, 'safe discovery must expose no more than four GPIOs per batch');
+assert.match(main, /LW_DISCOVERY_STEP_COUNT\s*=\s*LW_APPROVED_OUTPUT_GPIO_COUNT/,
+  'safe discovery must expose the approved GPIOs as sequential steps');
 assert.match(main, /LW_DISCOVERY_PIXELS_PER_OUTPUT/);
-assert.match(main, /bool setupSafeDiscoveryOutputs\(uint8_t batchIndex\)/);
+assert.match(main, /bool setupSafeDiscoveryOutputs\(uint8_t stepIndex\)/);
 assert.match(main, /setupSafeDiscoveryOutputs\(wiringSafety\.discoveryBatchIndex\)/,
-  'boot must register the persisted discovery batch instead of normal outputs');
+  'boot must register the persisted discovery step instead of normal outputs');
 assert.match(main, /if \(safeDiscoveryMode\)[\s\S]*showSafeDiscoveryFrame\(\)[\s\S]*return;/,
-  'discovery mode must continuously hold the physical color assignments');
+  'discovery mode must continuously hold the sole physical assignment');
 
-const discoverySetupStart = main.indexOf('bool setupSafeDiscoveryOutputs(uint8_t batchIndex) {');
-const discoverySetupEnd = main.indexOf('void showSafeDiscoveryFrame()', discoverySetupStart);
+const discoverySetupStart = main.indexOf('bool setupSafeDiscoveryOutputs(uint8_t stepIndex) {');
+const discoverySetupEnd = main.indexOf('void showFactoryBeaconFrame()', discoverySetupStart);
 assert.ok(discoverySetupStart > -1 && discoverySetupEnd > discoverySetupStart);
 const discoverySetup = main.slice(discoverySetupStart, discoverySetupEnd);
-assert.match(discoverySetup, /start \+ LW_DISCOVERY_BATCH_SIZE/);
-assert.match(discoverySetup, /addLedsForPin/);
-assert.match(discoverySetup, /discoveryPinAvailable\(DISCOVERY_OUTPUT_PINS\[i\]\)/,
+assert.match(discoverySetup, /factoryBeaconPinForStep\(stepIndex\)/);
+assert.equal((discoverySetup.match(/addLedsForPin\(/g) || []).length, 1,
+  'discovery must register exactly one approved controller per rebooted step');
+assert.match(discoverySetup, /discoveryPinAvailable\(pin\)/,
   'discovery must never drive a GPIO currently assigned to a physical control');
 // Discovery brightness is now applied through the central transmit path:
 // setup renders via showSafeDiscoveryFrame(), whose transmit call pins the
@@ -68,11 +70,11 @@ assert.match(discoveryFrame, /transmitPhysicalLeds\(LW_DISCOVERY_BRIGHTNESS/,
 assert.match(main, /void transmitPhysicalLeds\(uint8_t brightnessByte[^]*?FastLED\.setBrightness\(brightnessByte\)/,
   'the central transmit path must apply the requested brightness byte');
 
-const safeDiscoveryStart = main.indexOf('String runtimeSafeDiscoveryOutput(uint8_t batchIndex)');
+const safeDiscoveryStart = main.indexOf('String runtimeSafeDiscoveryOutput(uint8_t stepIndex)');
 const safeDiscoveryEnd = main.indexOf('bool runtimeStopSafeDiscovery', safeDiscoveryStart);
 assert.ok(safeDiscoveryStart > -1 && safeDiscoveryEnd > safeDiscoveryStart);
 assert.match(main.slice(safeDiscoveryStart, safeDiscoveryEnd), /setRuntimeWiringDiscoveryBatch/,
-  'requesting discovery must persist the batch for a reboot into discovery-only controllers');
+  'requesting discovery must persist the step for a reboot into one discovery-only controller');
 
 for (const field of ['"state"', '"currentOutputs"', '"remainingProbationMs"', '"nextStep"', '"outputsReady"']) {
   assert.ok(main.includes(field), `canonical wiring status must include ${field}`);

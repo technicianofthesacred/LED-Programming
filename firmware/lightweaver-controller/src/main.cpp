@@ -59,11 +59,9 @@ CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
 
-constexpr uint8_t LW_DISCOVERY_BATCH_SIZE = 4;
-constexpr uint16_t LW_DISCOVERY_PIXELS_PER_OUTPUT = 32;
-constexpr uint8_t LW_DISCOVERY_BRIGHTNESS = 24;
-constexpr uint8_t DISCOVERY_OUTPUT_PINS[] = {16, 17, 18, 21, 38, 39, 40, 48};
-constexpr uint8_t DISCOVERY_OUTPUT_PIN_COUNT = sizeof(DISCOVERY_OUTPUT_PINS) / sizeof(DISCOVERY_OUTPUT_PINS[0]);
+constexpr uint8_t LW_DISCOVERY_STEP_COUNT = LW_APPROVED_OUTPUT_GPIO_COUNT;
+constexpr uint16_t LW_DISCOVERY_PIXELS_PER_OUTPUT = LW_FACTORY_BEACON_PIXEL_LIMIT;
+constexpr uint8_t LW_DISCOVERY_BRIGHTNESS = LW_FACTORY_BEACON_BRIGHTNESS_LIMIT;
 
 OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
@@ -103,6 +101,8 @@ bool wiringProbationActive = false;
 uint32_t wiringProbationDeadlineMs = 0;
 bool safeDiscoveryMode = false;
 uint8_t safeDiscoveryBatchIndex = 0;
+bool factoryBeaconMode = false;
+uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
 bool restartTransitionPending = false;
@@ -142,9 +142,10 @@ uint8_t driftHueMax = 255;
 void applyRuntimeConfig(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
-bool setupSafeDiscoveryOutputs(uint8_t batchIndex);
+bool setupFactoryBeaconOutputs();
+bool setupSafeDiscoveryOutputs(uint8_t stepIndex);
+void showFactoryBeaconFrame();
 void showSafeDiscoveryFrame();
-void appendDiscoveryAssignments(JsonArray assignments, uint8_t batchIndex);
 bool discoveryPinAvailable(uint8_t pin);
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
 void handleControlEvent(ControlEventType event);
@@ -240,6 +241,20 @@ void setup() {
       fail(ERROR_PIN, "safe discovery output setup failed");
       return;
     }
+  } else if (runtimeConfig.runtimePhase == ProvisioningPhase::Factory) {
+    if (runtimeRecoveryAfterRestartPending()) {
+      String recoveryMessage;
+      if (!clearRuntimeRecoveryAfterRestart(recoveryMessage)) {
+        fail(ERROR_CONFIG, "factory recovery marker clear failed");
+        return;
+      }
+    }
+    factoryBeaconMode = true;
+    if (!setupFactoryBeaconOutputs()) {
+      factoryBeaconMode = false;
+      fail(ERROR_PIN, "factory beacon output setup failed");
+      return;
+    }
   } else {
     setupWledRealtime(leds, totalPixels);
     if (!setupLedOutputs()) {
@@ -270,7 +285,8 @@ void setup() {
   // the visible low-brightness known-good state instead of silently re-entering
   // whatever failed — a homeowner sees the piece is alive and can recover it.
   esp_reset_reason_t resetReason = esp_reset_reason();
-  if (!safeDiscoveryMode && (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
+  if (!safeDiscoveryMode && !factoryBeaconMode &&
+      (resetReason == ESP_RST_BROWNOUT || resetReason == ESP_RST_PANIC ||
       resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_INT_WDT ||
       resetReason == ESP_RST_WDT)) {
     if (Serial) {
@@ -316,6 +332,12 @@ void loop() {
 
   if (safeDiscoveryMode) {
     showSafeDiscoveryFrame();
+    delay(10);
+    return;
+  }
+
+  if (factoryBeaconMode) {
+    showFactoryBeaconFrame();
     delay(10);
     return;
   }
@@ -565,64 +587,102 @@ bool setupLedOutputs() {
   return true;
 }
 
-bool setupSafeDiscoveryOutputs(uint8_t batchIndex) {
+bool setupFactoryBeaconOutputs() {
   ledOutputsReady = false;
-  uint8_t batchCount = (DISCOVERY_OUTPUT_PIN_COUNT + LW_DISCOVERY_BATCH_SIZE - 1) /
-                       LW_DISCOVERY_BATCH_SIZE;
-  if (batchIndex >= batchCount) return false;
+  FastLED.setDither(false);
+  FastLED.setCorrection(TypicalLEDStrip);
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, LW_FACTORY_BEACON_MAX_MILLIAMPS);
+  for (uint8_t i = 0; i < LW_APPROVED_OUTPUT_GPIO_COUNT; i++) {
+    if (!discoveryPinAvailable(LW_APPROVED_OUTPUT_GPIOS[i])) continue;
+    uint16_t bufferStart = uint16_t(i) * LW_FACTORY_BEACON_PIXEL_LIMIT;
+    if (!addLedsForPin(LW_APPROVED_OUTPUT_GPIOS[i], physicalLeds + bufferStart,
+                       LW_FACTORY_BEACON_PIXEL_LIMIT)) {
+      return false;
+    }
+  }
+  FastLED.clear(false);
+  ledOutputsReady = true;
+  clearPhysicalLeds();
+  return true;
+}
+
+bool setupSafeDiscoveryOutputs(uint8_t stepIndex) {
+  ledOutputsReady = false;
+  if (stepIndex >= LW_DISCOVERY_STEP_COUNT) return false;
+  uint8_t pin = factoryBeaconPinForStep(stepIndex);
+  if (!discoveryPinAvailable(pin)) return false;
 
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
-  uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
-  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
-  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
-  uint8_t registered = 0;
-  for (uint8_t i = start; i < end; i++) {
-    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
-    uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
-    if (!addLedsForPin(DISCOVERY_OUTPUT_PINS[i], physicalLeds + bufferStart,
-                       LW_DISCOVERY_PIXELS_PER_OUTPUT)) {
-      return false;
-    }
-    registered++;
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, LW_FACTORY_BEACON_MAX_MILLIAMPS);
+  if (!addLedsForPin(pin, physicalLeds, LW_FACTORY_BEACON_PIXEL_LIMIT)) {
+    return false;
   }
-  if (registered == 0) return false;
   FastLED.clear(false);
   ledOutputsReady = true;
+  safeDiscoveryStartedAtMs = millis();
+  clearPhysicalLeds();
   showSafeDiscoveryFrame();
   return true;
 }
 
-void showSafeDiscoveryFrame() {
-  if (!ledOutputsReady) return;
-  static const CRGB colors[LW_DISCOVERY_BATCH_SIZE] = {
-    CRGB::Red, CRGB::Green, CRGB::Blue, CRGB(255, 96, 0)
-  };
-  uint8_t start = safeDiscoveryBatchIndex * LW_DISCOVERY_BATCH_SIZE;
-  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
-  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
-  for (uint8_t i = start; i < end; i++) {
-    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
-    uint16_t bufferStart = uint16_t(i - start) * LW_DISCOVERY_PIXELS_PER_OUTPUT;
-    CRGB physicalColor = outputColorPipeline.transform(colors[i - start], computeColorOrderCode(ledColorOrder));
-    fill_solid(physicalLeds + bufferStart, LW_DISCOVERY_PIXELS_PER_OUTPUT, physicalColor);
+void showFactoryBeaconFrame() {
+  static uint8_t lastStep = UINT8_MAX;
+  static bool lastPulseOn = false;
+  static bool blackHeld = false;
+  WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+  FactoryBeaconOwnershipInputs ownership;
+  ownership.phase = runtimeConfig.runtimePhase;
+  ownership.outputReady = ledOutputsReady;
+  ownership.commandActivity = frameSourceIsStreaming() || identifyActive;
+  ownership.wifiTransition = restartTransitionPending;
+  ownership.candidateActive = safety.candidateState != WIRING_CANDIDATE_NONE || safety.hasCandidate;
+  ownership.discoveryActive = safety.discoveryActive;
+  ownership.recoveryActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
+  if (!factoryBeaconMayOwnOutput(ownership)) {
+    if (!blackHeld) clearPhysicalLeds();
+    blackHeld = true;
+    return;
   }
-  transmitPhysicalLeds(LW_DISCOVERY_BRIGHTNESS, OUTPUT_LOCAL);
+  blackHeld = false;
+
+  uint32_t now = millis();
+  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % LW_APPROVED_OUTPUT_GPIO_COUNT);
+  uint32_t elapsedInStep = now % LW_FACTORY_BEACON_STEP_MS;
+  bool pulseOn = factoryBeaconPulseOn(elapsedInStep);
+  uint8_t activePin = factoryBeaconPinForStep(step);
+  (void)activePin;
+  if (step != lastStep) {
+    // FastLED cannot unregister controllers. Electrically retire the previous
+    // approved output by transmitting black to every registered controller
+    // before any data is placed in the next pin's private buffer slice.
+    clearPhysicalLeds();
+    lastStep = step;
+    lastPulseOn = false;
+  }
+  if (pulseOn == lastPulseOn) return;
+  fill_solid(physicalLeds, LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT,
+             CRGB::Black);
+  if (pulseOn) {
+    uint16_t bufferStart = uint16_t(step) * LW_FACTORY_BEACON_PIXEL_LIMIT;
+    fill_solid(physicalLeds + bufferStart, LW_FACTORY_BEACON_PIXEL_LIMIT,
+               CRGB(255, 96, 24));
+  }
+  transmitPhysicalLeds(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT, OUTPUT_LOCAL);
+  lastPulseOn = pulseOn;
 }
 
-void appendDiscoveryAssignments(JsonArray assignments, uint8_t batchIndex) {
-  static const char* colors[LW_DISCOVERY_BATCH_SIZE] = {
-    "red", "green", "blue", "amber"
-  };
-  uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
-  uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
-  if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
-  for (uint8_t i = start; i < end; i++) {
-    if (!discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) continue;
-    JsonObject assignment = assignments.add<JsonObject>();
-    assignment["pin"] = DISCOVERY_OUTPUT_PINS[i];
-    assignment["color"] = colors[i - start];
+void showSafeDiscoveryFrame() {
+  static bool lastPulseOn = false;
+  if (!ledOutputsReady) return;
+  bool pulseOn = factoryBeaconPulseOn(millis() - safeDiscoveryStartedAtMs);
+  if (pulseOn == lastPulseOn) return;
+  fill_solid(physicalLeds, LW_FACTORY_BEACON_PIXEL_LIMIT, CRGB::Black);
+  if (pulseOn) {
+    fill_solid(physicalLeds, LW_FACTORY_BEACON_PIXEL_LIMIT, CRGB(255, 96, 24));
   }
+  transmitPhysicalLeds(LW_DISCOVERY_BRIGHTNESS, OUTPUT_LOCAL);
+  lastPulseOn = pulseOn;
 }
 
 bool discoveryPinAvailable(uint8_t pin) {
@@ -1106,8 +1166,9 @@ void transmitPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass)
 }
 
 void clearPhysicalLeds() {
-  uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
-  fill_solid(physicalLeds, limit, CRGB::Black);
+  // Clear the complete fixed buffer, including factory-beacon slices which
+  // are intentionally separate from the zero-output project runtime.
+  fill_solid(physicalLeds, LW_MAX_PIXELS, CRGB::Black);
   transmitPhysicalLeds(0, OUTPUT_LOCAL);
 }
 
@@ -1604,7 +1665,10 @@ bool runtimeCommandReady() {
   return provisioningCommandReady(inputs);
 }
 
-void runtimeMarkRestartPending() { restartTransitionPending = true; }
+void runtimeMarkRestartPending() {
+  restartTransitionPending = true;
+  if (ledOutputsReady) clearPhysicalLeds();
+}
 
 String runtimeFirmwareInfo() {
   JsonDocument doc;
@@ -1727,19 +1791,38 @@ String runtimeFirmwareInfo() {
   return out;
 }
 
-void runtimeFactoryReset() {
+bool runtimeFactoryReset(String& message) {
+  runtimeMarkRestartPending();
+  bool sdMounted = SD.begin(LW_SD_CS);
+  bool sdConfigExists = sdMounted && SD.exists("/lightweaver.json");
+  bool sdConfigRemoved = !sdConfigExists || SD.remove("/lightweaver.json");
+  if (sdConfigExists && !sdConfigRemoved) {
+    restartTransitionPending = false;
+    message = "sd /lightweaver.json removal failed; factory reset not completed";
+    return false;
+  }
+
   Preferences prefs;
+  bool nvsCleared = false;
   if (prefs.begin("lightweaver", false)) {
-    prefs.clear();
+    nvsCleared = prefs.clear();
     prefs.end();
   }
-  delay(200);
-  ESP.restart();
+  if (!provisioningFactoryResetMayComplete(
+          sdConfigExists, sdConfigRemoved, nvsCleared)) {
+    restartTransitionPending = false;
+    message = "nvs erase failed after sd cleanup; factory reset not completed";
+    return false;
+  }
+  WiFi.disconnect(true, true);
+  message = "factory storage erased; rebooting blank";
+  return true;
 }
 
 // Wipe only the WiFi key. Keeps piece name, hostname, and pattern config.
 // Card reboots into AP setup mode for new WiFi credentials.
 void runtimeResetWifi() {
+  runtimeMarkRestartPending();
   Preferences prefs;
   if (prefs.begin("lightweaver", false)) {
     prefs.remove("wifi");
@@ -1866,7 +1949,9 @@ String runtimeWiringSafetyStatus() {
   JsonDocument doc;
   if (deserializeJson(doc, stored)) doc["ok"] = false;
   WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
-  const char* state = runtimeSafeMode ? "safe-mode" : "known-good";
+  const char* state = runtimeSafeMode
+      ? "safe-mode"
+      : runtimeConfig.runtimePhase == ProvisioningPhase::Factory ? "factory" : "known-good";
   const char* nextStep = "stage-candidate";
   if (safety.candidateState == WIRING_CANDIDATE_STAGED) {
     state = "staged";
@@ -1876,7 +1961,7 @@ String runtimeWiringSafetyStatus() {
     state = "testing";
     nextStep = "confirm-or-rollback";
   }
-  if (safety.discoveryActive) nextStep = "choose-discovery-result-or-next-batch";
+  if (safety.discoveryActive) nextStep = "confirm-observed-pin-or-request-next-step";
   doc["state"] = state;
   doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
@@ -1922,10 +2007,12 @@ String runtimeWiringSafetyStatus() {
   if (safety.discoveryActive) {
     JsonObject discovery = doc["discovery"].to<JsonObject>();
     discovery["active"] = true;
-    discovery["batchIndex"] = safety.discoveryBatchIndex;
-    discovery["maxBatch"] = LW_DISCOVERY_BATCH_SIZE;
-    JsonArray assignments = discovery["assignments"].to<JsonArray>();
-    appendDiscoveryAssignments(assignments, safety.discoveryBatchIndex);
+    discovery["pin"] = factoryBeaconPinForStep(safety.discoveryBatchIndex);
+    discovery["step"] = safety.discoveryBatchIndex;
+    discovery["stepCount"] = LW_DISCOVERY_STEP_COUNT;
+    discovery["brightnessLimit"] = LW_DISCOVERY_BRIGHTNESS;
+    discovery["pixelLimit"] = LW_DISCOVERY_PIXELS_PER_OUTPUT;
+    discovery["nextStep"] = (safety.discoveryBatchIndex + 1) % LW_DISCOVERY_STEP_COUNT;
   }
   String out;
   serializeJson(doc, out);
@@ -1933,7 +2020,9 @@ String runtimeWiringSafetyStatus() {
 }
 
 bool runtimeActivateWiringCandidate(const String& activationId, String& message) {
-  return activateStagedRuntimeConfig(activationId, message);
+  bool activated = activateStagedRuntimeConfig(activationId, message);
+  if (activated) runtimeMarkRestartPending();
+  return activated;
 }
 
 bool runtimeConfirmWiringCandidate(const String& activationId, String& message) {
@@ -1957,45 +2046,47 @@ bool runtimeRollbackWiringCandidate(const String& activationId, String& message)
   return rolledBack;
 }
 
-String runtimeSafeDiscoveryOutput(uint8_t batchIndex) {
+String runtimeSafeDiscoveryOutput(uint8_t stepIndex) {
   JsonDocument doc;
-  uint8_t batchCount = (DISCOVERY_OUTPUT_PIN_COUNT + LW_DISCOVERY_BATCH_SIZE - 1) /
-                       LW_DISCOVERY_BATCH_SIZE;
-  if (batchIndex >= batchCount) {
+  if (stepIndex >= LW_DISCOVERY_STEP_COUNT) {
     doc["ok"] = false;
-    doc["error"] = "discovery batch out of range";
+    doc["error"] = "discovery step out of range";
   } else if (wiringProbationActive) {
     doc["ok"] = false;
     doc["error"] = "confirm or roll back the wiring candidate before discovery";
   } else {
-    uint8_t start = batchIndex * LW_DISCOVERY_BATCH_SIZE;
-    uint8_t end = start + LW_DISCOVERY_BATCH_SIZE;
-    if (end > DISCOVERY_OUTPUT_PIN_COUNT) end = DISCOVERY_OUTPUT_PIN_COUNT;
-    uint8_t available = 0;
-    for (uint8_t i = start; i < end; i++) {
-      if (discoveryPinAvailable(DISCOVERY_OUTPUT_PINS[i])) available++;
-    }
-    if (available == 0) {
+    WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
+    uint8_t pin = factoryBeaconPinForStep(stepIndex);
+    if (safety.candidateState != WIRING_CANDIDATE_NONE || safety.hasCandidate) {
       doc["ok"] = false;
-      doc["error"] = "every GPIO in this discovery batch is assigned to a control";
+      doc["error"] = "confirm or roll back the wiring candidate before discovery";
+    } else if (!discoveryPinAvailable(pin)) {
+      doc["ok"] = false;
+      doc["error"] = "the GPIO for this discovery step is assigned to a control";
+    } else {
+      String message;
+      if (!setRuntimeWiringDiscoveryBatch(stepIndex, message)) {
+        doc["ok"] = false;
+        doc["error"] = message;
+      } else {
+        runtimeMarkRestartPending();
+        doc["ok"] = true;
+        doc["state"] = "rebooting-for-discovery";
+        doc["pin"] = pin;
+        doc["step"] = stepIndex;
+        doc["stepCount"] = LW_DISCOVERY_STEP_COUNT;
+        doc["brightnessLimit"] = LW_DISCOVERY_BRIGHTNESS;
+        doc["pixelLimit"] = LW_DISCOVERY_PIXELS_PER_OUTPUT;
+        doc["nextStep"] = (stepIndex + 1) % LW_DISCOVERY_STEP_COUNT;
+        doc["requiresReboot"] = true;
+        doc["requiresConfirmation"] = true;
+        doc["persistsWiring"] = false;
+      }
+    }
+    if (!(doc["ok"] | false)) {
       String out;
       serializeJson(doc, out);
       return out;
-    }
-    String message;
-    if (!setRuntimeWiringDiscoveryBatch(batchIndex, message)) {
-      doc["ok"] = false;
-      doc["error"] = message;
-    } else {
-      doc["ok"] = true;
-      doc["state"] = "rebooting-for-discovery";
-      doc["batchIndex"] = batchIndex;
-      doc["batchCount"] = batchCount;
-      doc["maxBatch"] = LW_DISCOVERY_BATCH_SIZE;
-      doc["requiresReboot"] = true;
-      doc["nextStep"] = "reboot-and-reconnect";
-      JsonArray assignments = doc["assignments"].to<JsonArray>();
-      appendDiscoveryAssignments(assignments, batchIndex);
     }
   }
   String out;
@@ -2004,10 +2095,13 @@ String runtimeSafeDiscoveryOutput(uint8_t batchIndex) {
 }
 
 bool runtimeStopSafeDiscovery(String& message) {
-  return clearRuntimeWiringDiscovery(message);
+  bool stopped = clearRuntimeWiringDiscovery(message);
+  if (stopped) runtimeMarkRestartPending();
+  return stopped;
 }
 
 String runtimeRecoverLights(const String& patternId, float brightness, bool syncZones) {
+  if (factoryBeaconMode) clearPhysicalLeds();
   String id = patternId.length() ? patternId : String("warm-white");
   bool isWhiteTestRecovery = id == "test-white" || id == "white";
   float visibleBrightness = brightness;

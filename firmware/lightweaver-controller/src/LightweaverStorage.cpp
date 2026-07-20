@@ -194,9 +194,9 @@ void resetConfig(RuntimeConfig& config) {
   config.productionJobDigest = "";
   config.wiringRevision = 0;
   config.wiringDigest = "";
-  config.startupLookId = "aurora";
-  config.ledColorOrder = "RGB";
-  config.brightnessLimit = 0.65f;
+  config.startupLookId = "";
+  config.ledColorOrder = "";
+  config.brightnessLimit = 0.0f;
   resetOutputColor(config.outputColor);
   config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
@@ -1014,51 +1014,25 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   resetConfig(config);
   config.source = SOURCE_DEFAULTS;
   config.mode = "factory-flash";
+  config.pieceId = "";
   config.pieceName = "Lightweaver";
-  config.startupLookId = "aurora";
-  config.ledColorOrder = "RGB";
-  config.brightnessLimit = 0.65f;
-  config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
-  config.outputCount = 1;
-  config.outputs[0].id = "out1";
-  config.outputs[0].name = "Output 1";
-  config.outputs[0].pin = 16;
-  config.outputs[0].pixels = 44;
-  config.outputs[0].start = 0;
-  config.outputs[0].segmentCount = 1;
-  config.outputs[0].segments[0].id = "out1-full";
-  config.outputs[0].segments[0].count = 44;
-  config.outputs[0].segments[0].reversed = false;
-  config.outputs[0].enabled = true;
-
-  const char* ids[] = {
-    "aurora", "plasma", "fire", "ocean", "ripple", "lava",
-    "rainbow", "sparkle", "twinkle", "meteor", "chase", "scanner",
-    "breathe", "candle", "ember", "lightning", "neon", "matrix",
-    "heartbeat", "stained", "confetti", "warp", "pulse-ring", "blocks",
-    "bloom", "calm", "drift", "wave", "sunset", "warm-white"
-  };
-  const char* labels[] = {
-    "Aurora", "Plasma", "Fire", "Ocean", "Ripple", "Lava Lamp",
-    "Rainbow", "Sparkle", "Twinkle", "Meteor", "Color Chase", "Scanner",
-    "Breathe", "Candle", "Ember", "Lightning", "Neon", "Digital Rain",
-    "Heartbeat", "Stained Glass", "Confetti", "Warp Speed", "Pulse Ring", "Color Blocks",
-    "Bloom", "Calm", "Drift", "Wave", "Sunset", "Warm White"
-  };
-  for (uint8_t i = 0; i < 30; i++) {
-    config.looks[i].id = ids[i];
-    config.looks[i].label = labels[i];
-    config.looks[i].mode = String(ids[i]) == "warm-white" ? "preset" : "procedural";
-    config.looks[i].preset = ids[i];
-    config.looks[i].brightness = 0.65f;
-  }
-  config.lookCount = 30;
-
-  ensureDefaultZone(config);
+  config.projectRevision = 0;
+  config.projectFingerprint = "";
+  config.productionJobId = "";
+  config.productionJobDigest = "";
+  config.wiringRevision = 0;
+  config.wiringDigest = "";
+  config.startupLookId = "";
+  config.ledColorOrder = "";
+  config.brightnessLimit = 0.0f;
+  config.maxMilliamps = LW_FACTORY_BEACON_MAX_MILLIAMPS;
+  config.outputCount = 0;
+  config.lookCount = 0;
+  config.zoneCount = 0;
 }
 
 void ensureDefaultZone(RuntimeConfig& config) {
-  if (config.zoneCount > 0) return;
+  if (config.zoneCount > 0 || config.outputCount == 0) return;
   // Default zone: one zone "all" covering every pixel on every output.
   // This keeps single-strip cards behaving exactly as before; the multi-zone
   // capability only surfaces when someone splits or adds a second output.
@@ -1070,7 +1044,6 @@ void ensureDefaultZone(RuntimeConfig& config) {
   z.ranges[0].start = 0;
   uint16_t total = 0;
   for (uint8_t i = 0; i < config.outputCount; i++) total += config.outputs[i].pixels;
-  if (total == 0) total = 44;
   z.ranges[0].count = total;
   z.patternId = "aurora";
   z.brightness = 1.0f;
