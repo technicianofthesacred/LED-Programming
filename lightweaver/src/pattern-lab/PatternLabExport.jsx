@@ -80,14 +80,23 @@ export default function PatternLabExport({
   compatibility,
   recipe,
   onBake,
+  onUseInProject,
   onSimplify,
   onRemoveFeature,
 }) {
   const project = useProject();
   const [layoutExportStatus, setLayoutExportStatus] = useState(null);
   const [bakeStatus, setBakeStatus] = useState(null);
+  const [completedBakeResult, setCompletedBakeResult] = useState(null);
+  const [handoffStatus, setHandoffStatus] = useState(null);
   const bakeAbortRef = useRef(null);
   useEffect(() => () => bakeAbortRef.current?.abort(), []);
+  useEffect(() => {
+    bakeAbortRef.current?.abort();
+    setCompletedBakeResult(null);
+    setBakeStatus(null);
+    setHandoffStatus(null);
+  }, [recipe]);
   if (!compatibility) return null;
 
   const copy = CLASSIFICATION_COPY[compatibility.classification] || {
@@ -152,6 +161,7 @@ export default function PatternLabExport({
       const slug = exportSlug(project.projectName);
       download(result.bytes, `${slug}.lwseq`, 'application/octet-stream');
       download(`${result.sidecarJson}\n`, `${slug}.lwseq.json`, 'application/json');
+      setCompletedBakeResult(result);
       setBakeStatus({
         state: 'complete',
         message: `Exported ${result.sidecar.frameCount} frames for ${result.sidecar.pixelCount} pixels with verified hashes.`,
@@ -167,6 +177,37 @@ export default function PatternLabExport({
       if (bakeAbortRef.current === controller) bakeAbortRef.current = null;
     }
   }
+
+  async function useInProject() {
+    if (typeof onUseInProject !== 'function') return;
+    setHandoffStatus({ state: 'adding', message: 'Adding the reviewed item…' });
+    try {
+      const result = await onUseInProject({ bakeResult: completedBakeResult });
+      if (!result?.ok) {
+        setHandoffStatus({
+          state: 'error',
+          message: result?.message || 'This pattern could not be added to the project.',
+        });
+        return;
+      }
+      setHandoffStatus({ state: 'complete', message: result.message });
+    } catch (error) {
+      setHandoffStatus({
+        state: 'error',
+        message: error instanceof Error ? error.message : 'This pattern could not be added to the project.',
+      });
+    }
+  }
+
+  const handoffReady = compatibility.classification === 'live-on-card'
+    || (compatibility.classification === 'bake-to-card' && completedBakeResult);
+  const handoffReviewCopy = compatibility.classification === 'live-on-card'
+    ? `A new saved look named “${recipe?.name || 'Untitled pattern'}” will be added and selected. Existing looks stay unchanged.`
+    : compatibility.classification === 'bake-to-card'
+      ? (completedBakeResult
+          ? `A new sequence asset named “${recipe?.name || 'Untitled pattern'}” and a verified controller package will be added. Existing project items stay unchanged.`
+          : 'Bake this exact recipe first. The completed sequence will be verified again before anything is added.')
+      : 'This recipe is not ready to add. Use the compatibility guidance above to create a card-safe version.';
 
   return (
     <section className="plab-control-section plab-export" aria-labelledby="plab-export-heading" data-testid="pattern-lab-export">
@@ -253,6 +294,46 @@ export default function PatternLabExport({
           role={bakeStatus.state === 'error' ? 'alert' : 'status'}
         >{bakeStatus.message}</p>
       )}
+
+      <div className="plab-project-handoff" data-testid="pattern-lab-project-handoff">
+        <div>
+          <h3>Use in Project</h3>
+          <p>Review the exact addition before Pattern Lab changes your active project.</p>
+        </div>
+        {handoffStatus?.state !== 'review' && handoffStatus?.state !== 'adding' && (
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => setHandoffStatus({ state: 'review', message: handoffReviewCopy })}
+          >Review Use in Project</button>
+        )}
+        {(handoffStatus?.state === 'review' || handoffStatus?.state === 'adding') && (
+          <div className="plab-handoff-review" role="group" aria-label="Confirm Use in Project">
+            <strong>Confirm project addition</strong>
+            <p>{handoffReviewCopy}</p>
+            <div className="plab-export-actions">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!handoffReady || handoffStatus.state === 'adding'}
+                onClick={() => void useInProject()}
+              >{handoffStatus.state === 'adding' ? 'Adding…' : 'Add to project'}</button>
+              <button
+                type="button"
+                className="btn"
+                disabled={handoffStatus.state === 'adding'}
+                onClick={() => setHandoffStatus(null)}
+              >Cancel</button>
+            </div>
+          </div>
+        )}
+        {handoffStatus && !['review', 'adding'].includes(handoffStatus.state) && (
+          <p
+            data-testid="pattern-lab-handoff-status"
+            role={handoffStatus.state === 'error' ? 'alert' : 'status'}
+          >{handoffStatus.message}</p>
+        )}
+      </div>
 
       <div className="plab-runtime-cleanup">
         <h3>Layout and lighting software</h3>

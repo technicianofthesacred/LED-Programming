@@ -128,7 +128,9 @@ intended mapped strip/artwork. In particular, confirm a native recipe matches
 Studio and a complex baked recipe plays in the correct physical order for the
 full intended duration.
 
-The pure handoff contract can create a new project look or sequence asset
-without overwriting built-ins or existing looks. The visible **Use in Project**
-confirmation/persistence surface is still a release task; until it is wired,
-use recipe and `.lwseq` exports as the supported handoff.
+**Use in Project** always opens an inline review before changing the active
+project. A live-compatible recipe adds and selects a new saved look without
+overwriting built-ins or existing looks. A bake-compatible recipe requires a
+completed bake of that exact draft, adds only bounded sequence metadata to the
+project, and downloads the verified controller package that carries the actual
+`.lwseq` bytes and hash sidecar. Canceling the review changes nothing.

@@ -525,7 +525,7 @@
 
 .plab-export-audio-status {
   margin-top: 8px;
-  color: var(--accent);
+  color: var(--text-hi);
   font-family: var(--font-mono);
   font-size: 9px;
 }
@@ -574,6 +574,28 @@
 .plab-export-actions { margin-top: 12px; }
 .plab-export-actions .btn,
 .plab-diagnostic-playback .btn { min-height: 40px; }
+
+.plab-project-handoff {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border-soft));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-elev));
+}
+
+.plab-project-handoff h3,
+.plab-handoff-review strong { color: var(--text-hi); font-size: 11px; }
+.plab-project-handoff p { color: var(--text-mid); font-size: 9.5px; line-height: 1.5; }
+.plab-project-handoff > .btn { min-height: 42px; justify-content: center; }
+
+.plab-handoff-review {
+  display: grid;
+  gap: 5px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
 
 .plab-runtime-cleanup {
   display: grid;

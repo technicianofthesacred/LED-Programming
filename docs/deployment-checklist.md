@@ -116,9 +116,9 @@ Browser/operator gate:
 - [ ] Confirm Advanced Graph, Shader Bake, and card Art-Net recording remain
   disabled by default. Do not enable card-side recording for release.
 - [ ] Confirm the visible Use in Project confirmation adds a new asset and
-  never overwrites a built-in or existing look. Until that UI is connected,
-  recipe/`.lwseq` export is the supported handoff and the branch is not ready
-  for release.
+  never overwrites a built-in or existing look. For a baked recipe, also open
+  the downloaded controller package and confirm its sequence file and sidecar
+  match the asset metadata stored in the project.
 
 Physical ESP32-S3 gate — required; automation cannot replace it:
 

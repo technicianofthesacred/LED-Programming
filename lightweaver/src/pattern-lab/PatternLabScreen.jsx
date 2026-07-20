@@ -9,6 +9,7 @@ import {
 import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
 import { bakePatternLabRecipe } from '../lib/lwseqBake.js';
 import { OFFLINE_AUDIO_CAPABILITY } from '../lib/offlineAudioLanes.js';
+import { applyPatternLabHandoff, createPatternLabHandoff } from '../lib/patternLabHandoff.js';
 import {
   PATTERN_LAB_GENERATOR_IDS,
   estimatePatternLabGeneratorBudgets,
@@ -785,6 +786,51 @@ export default function PatternLabScreen() {
     });
   }
 
+  async function useInProject({ bakeResult = null } = {}) {
+    if (!draft || !compatibility) {
+      return { ok: false, message: 'Choose and validate a Pattern Lab recipe first.' };
+    }
+    const result = await createPatternLabHandoff({
+      recipe: draft,
+      compatibility,
+      bakeResult,
+      controller: project.standaloneController,
+    });
+    if (result.kind === 'blocked') {
+      return {
+        ok: false,
+        message: result.reasons?.[0]?.message || 'This pattern is not ready to add to the project.',
+      };
+    }
+    const nextController = await applyPatternLabHandoff(project.standaloneController, result);
+    if (nextController === project.standaloneController) {
+      return { ok: false, message: 'The project rejected this addition. Nothing was changed.' };
+    }
+    const applied = project.setStandaloneController(nextController);
+    if (applied?.ok !== true) {
+      const firstError = applied?.errors?.[0];
+      return {
+        ok: false,
+        message: (typeof firstError === 'string' ? firstError : firstError?.message)
+          || 'The project could not accept this addition. Nothing was changed.',
+      };
+    }
+    if (result.kind === 'sequence') {
+      const downloaded = await downloadJsonFile(
+        `${result.asset.id}.lightweaver-controller.json`,
+        result.package,
+        { preferPicker: false },
+      );
+      return {
+        ok: true,
+        message: downloaded
+          ? `Added ${result.asset.label} as a sequence asset and downloaded its verified controller package.`
+          : `Added ${result.asset.label} as a sequence asset. Download its controller package again before loading the card.`,
+      };
+    }
+    return { ok: true, message: `Added and selected ${result.look.label} in the project.` };
+  }
+
   async function importRecipe(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -981,6 +1027,7 @@ export default function PatternLabScreen() {
                     compatibility={compatibility}
                     recipe={draft}
                     onBake={bakeForCard}
+                    onUseInProject={useInProject}
                     onSimplify={simplifyForCard}
                     onRemoveFeature={removeUnsupportedFeatures}
                   />

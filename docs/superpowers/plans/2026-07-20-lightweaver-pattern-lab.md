@@ -436,11 +436,11 @@ Run: `cd lightweaver && node --test src/lib/lwseqBake.test.js && node tests/stan
 - Modify: `lightweaver/src/pattern-lab/PatternLabExport.jsx`
 - Test: `lightweaver/tests/pattern-lab-handoff.spec.ts`
 
-- [ ] **Step 1: Test no-mutation failure paths**
+- [x] **Step 1: Test no-mutation failure paths**
 
 Invalid, canceled, unsupported, and failed exports leave both the current project serialization and Lab draft unchanged.
 
-- [ ] **Step 2: Implement validated handoff results**
+- [x] **Step 2: Implement validated handoff results**
 
 Return one of:
 
@@ -452,7 +452,7 @@ Return one of:
 
 Built-ins and existing looks are never overwritten. Successful handoff creates a new named look or sequence asset.
 
-- [ ] **Step 3: Add confirmation and verify**
+- [x] **Step 3: Add confirmation and verify**
 
 Use in Project shows exactly what will be added. Run the handoff Playwright and unit tests.
 
@@ -583,11 +583,10 @@ Implement recording from known Studio render frames first. Card-side Art-Net-to-
 ## Task 17: Full verification, provenance, and release
 
 **Status 2026-07-21:** operator guidance, provenance, roadmap, TODO, and the
-deployment/physical acceptance gate are documented. Tasks 1–10 and 12–16 have
-source implementations on the isolated branch. Task 11's immutable handoff
-contract exists, but its visible Use in Project confirmation/persistence action
-remains open. Full integrated automation and real-card physical parity remain
-unchecked release gates below.
+deployment/physical acceptance gate are documented. Tasks 1–16 have source
+implementations on the isolated branch, including the confirmed Use in Project
+look/sequence handoff. Full integrated automation and real-card physical parity
+remain unchecked release gates below.
 
 **Files:**
 - Create: `docs/pattern-lab-user-guide.md`

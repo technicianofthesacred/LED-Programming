@@ -188,9 +188,10 @@ accepted or deployed**. Before integration, complete the automated and
 real-card gates in the [Pattern Lab deployment checklist](deployment-checklist.md#pattern-lab-release-acceptance).
 Native preview/card parity, long microSD playback, rollback on the intended
 card, output color/calibration, and phone-on-LAN behavior remain required.
-The visible Use in Project confirmation/persistence surface is also still open;
-the current supported handoffs are private recipes, deterministic `.lwseq`,
-and lighting-software exports.
+The visible Use in Project flow now reviews the exact addition, preserves the
+Lab draft, and adds either a collision-safe saved look or bounded sequence
+asset. Sequence bytes remain in the separately downloaded, hash-verified
+controller package rather than bloating project autosave.
 
 ### Plan status
 
@@ -277,7 +278,7 @@ through its own narrow, current-main branch and verification gate.
 - [x] Add local offline-audio lanes, explicit compatibility/resource diagnostics, deterministic physical-order `LWSEQ1` baking, and xLights/MADRIX/Art-Net exports.
 - [x] Add explicit Preview on Lights ownership and rollback plus a bounded ESP32-S3 native recipe parser/registry/capability surface.
 - [x] Keep graph, shader, and card Art-Net recording paths disabled by default and behind canonical artifact gates.
-- [ ] Connect the validated look/sequence handoff contract to a visible Use in Project confirmation and project persistence action.
+- [x] Connect the validated look/sequence handoff contract to a visible Use in Project confirmation and project persistence action.
 - [ ] Complete full automated verification and real ESP32-S3/strip physical parity before merge, signing, or deployment.
 
 ## Open — user/hardware actions
