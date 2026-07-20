@@ -197,11 +197,14 @@ test('downloads xLights, MADRIX, and Art-Net setup files from verified physical 
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
 
   const downloads = [
-    ['Export xLights model', '.xmodel', /<custommodel .*name="Export &amp; Sculpture"/],
-    ['Export MADRIX fixture CSV', '.madrix-fixtures.csv', /^Product,Display Name,Fixture ID/m],
-    ['Export Art-Net setup notes', '.artnet-setup.txt', /^# Lightweaver Art-Net Setup/m],
+    ['Export xLights model', '.xmodel', [
+      /<custommodel .*name="Export &amp; Sculpture".*CustomStrings="1" NodeStart1="1" Controller="[^"]+"/,
+      /<ControllerConnection Port="1" Protocol="ws2811"\/>/,
+    ]],
+    ['Export MADRIX fixture CSV', '.madrix-fixtures.csv', [/^Product,Display Name,Fixture ID/m]],
+    ['Export Art-Net setup notes', '.artnet-setup.txt', [/^# Lightweaver Art-Net Setup/m]],
   ] as const;
-  for (const [label, suffix, content] of downloads) {
+  for (const [label, suffix, contentChecks] of downloads) {
     const pending = page.waitForEvent('download');
     await page.getByRole('button', { name: label, exact: true }).click();
     const download = await pending;
@@ -209,7 +212,7 @@ test('downloads xLights, MADRIX, and Art-Net setup files from verified physical 
     const stream = await download.createReadStream();
     let body = '';
     for await (const chunk of stream) body += chunk.toString();
-    expect(body).toMatch(content);
+    for (const content of contentChecks) expect(body).toMatch(content);
   }
   await expect(page.getByTestId('pattern-lab-layout-export-status')).toContainText('Exported Art-Net setup notes');
 });

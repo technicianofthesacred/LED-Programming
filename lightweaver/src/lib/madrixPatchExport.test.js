@@ -56,6 +56,30 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+function parseCsvLine(line) {
+  const fields = [];
+  let field = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === ',' && !quoted) {
+      fields.push(field);
+      field = '';
+    } else {
+      field += character;
+    }
+  }
+  fields.push(field);
+  return fields;
+}
+
 test('exports an exact MADRIX fixture-list CSV with rollover, physical order, outputs, groups, and direction', () => {
   const input = deepFreeze(fixture());
   const before = JSON.stringify(input);
@@ -112,4 +136,28 @@ test('MADRIX export validates addressing bounds and fails closed for unknown wir
   assert.throws(() => toMadrixFixtureCsv({ ...valid, artnet: { ...valid.artnet, startChannel: 505 } }), /channel/i);
   assert.throws(() => toMadrixFixtureCsv({ ...valid, artnet: { ...valid.artnet, channelsPerUniverse: 511 } }), /divisible by 3|channels per universe/i);
   assert.throws(() => toMadrixFixtureCsv({ ...valid, artnet: { ...valid.artnet, startUniverse: 32767 } }), /universe.*range/i);
+
+  const withCable = fixture();
+  withCable.wiring.outputs[0].runIds.push('jump');
+  withCable.wiring.runs.push({ id: 'jump', type: 'cable', verified: false });
+  assert.throws(() => toMadrixFixtureCsv(withCable), /send-ready|locked.*verified|physical wiring/i);
+});
+
+test('MADRIX coordinates round-trip every finite source number without precision loss', () => {
+  const input = fixture();
+  input.strips[0].pixels[0] = {
+    x: 0.12345678912345678,
+    y: -98765.43210987654,
+    z: Number.MIN_VALUE,
+  };
+
+  const firstFixture = parseCsvLine(toMadrixFixtureCsv(input).split('\n')[1]);
+  assert.equal(Number(firstFixture[3]), input.strips[0].pixels[0].x);
+  assert.equal(Number(firstFixture[4]), input.strips[0].pixels[0].y);
+  assert.equal(Number(firstFixture[5]), input.strips[0].pixels[0].z);
+
+  const overflow = fixture();
+  overflow.strips[0].pixels[0].x = Number.MAX_VALUE;
+  overflow.strips[0].offsetX = Number.MAX_VALUE;
+  assert.throws(() => toMadrixFixtureCsv(overflow), /coordinate x.*finite|finite.*x/i);
 });

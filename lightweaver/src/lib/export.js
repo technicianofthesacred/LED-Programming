@@ -104,9 +104,12 @@ export function pixelsFromPatchBoard(patchBoard, strips = []) {
   return expandPatchBoard(patchBoard, strips).pixels;
 }
 
-export function pixelsFromWiring(wiring, strips = [], groups = [], capabilities) {
+export function pixelsFromWiring(wiring, strips = [], groups = [], capabilities, options = {}) {
   const compiled = compileWiring({ wiring, strips, groups, capabilities });
   if (!compiled.ok) throw new Error(compiled.errors.map(error => error.message).join(' '));
+  if (options.requireSendReady === true && compiled.sendReady !== true) {
+    throw new Error('Compiled physical wiring is not send-ready; lock and verify every run before export.');
+  }
   return compiled.pixels;
 }
 
@@ -131,11 +134,51 @@ export function remapFrameToWiring(framePixels = [], compiledWiring, strips = []
   return remapFrameToPatchBoard(framePixels, compiledWiring?.pixels || [], strips);
 }
 
+export function dmxAddressForPixel(pixelIndex, options = {}) {
+  const integer = (value, label, minimum = 0) => {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < minimum) {
+      throw new RangeError(`${label} must be a safe integer of at least ${minimum}`);
+    }
+    return number;
+  };
+  const index = integer(pixelIndex, 'DMX pixel index');
+  const startUniverse = integer(options.startUniverse ?? 0, 'DMX start universe');
+  const startChannel = integer(options.startChannel ?? 0, 'DMX start channel');
+  const channelsPerPixel = integer(options.channelsPerPixel ?? 3, 'DMX channels per pixel', 1);
+  const channelsPerUniverse = options.channelsPerUniverse == null
+    ? null
+    : integer(options.channelsPerUniverse, 'DMX channels per universe', 1);
+  const maxUniverse = options.maxUniverse == null
+    ? Number.MAX_SAFE_INTEGER
+    : integer(options.maxUniverse, 'DMX maximum universe');
+  if (startUniverse > maxUniverse) {
+    throw new RangeError(`DMX universe ${startUniverse} is outside the 0-${maxUniverse} range`);
+  }
+  if (channelsPerUniverse != null && startChannel >= channelsPerUniverse) {
+    throw new RangeError('DMX start channel must be inside its universe');
+  }
+  const absoluteChannel = startChannel + index * channelsPerPixel;
+  if (!Number.isSafeInteger(absoluteChannel)) {
+    throw new RangeError('DMX address exceeds safe integer precision');
+  }
+  const universe = startUniverse + (channelsPerUniverse == null
+    ? 0
+    : Math.floor(absoluteChannel / channelsPerUniverse));
+  if (!Number.isSafeInteger(universe) || universe > maxUniverse) {
+    throw new RangeError(`DMX universe ${universe} is outside the 0-${maxUniverse} range`);
+  }
+  return {
+    universe,
+    channel: channelsPerUniverse == null ? absoluteChannel : absoluteChannel % channelsPerUniverse,
+  };
+}
+
 export function toDmxCsv(frames = []) {
   const rows = ['frame,channel,value'];
   frames.forEach((frame, frameIndex) => {
     frame.forEach((px, i) => {
-      const base = i * 3 + 1;
+      const base = dmxAddressForPixel(i, { startChannel: 1, channelsPerUniverse: null }).channel;
       rows.push(`${frameIndex},${base},${px.r}`);
       rows.push(`${frameIndex},${base + 1},${px.g}`);
       rows.push(`${frameIndex},${base + 2},${px.b}`);

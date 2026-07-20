@@ -1,4 +1,4 @@
-import { pixelsFromWiring } from './export.js';
+import { dmxAddressForPixel, pixelsFromWiring } from './export.js';
 
 const MAX_ARTNET_UNIVERSE = 32_767;
 const MADRIX_PRODUCT = 'Generic RGB Light 3 Channels';
@@ -15,11 +15,6 @@ function requirePhysicalWiring(wiring) {
   if (!wiring || !Array.isArray(wiring.outputs) || !wiring.outputs.length
     || !Array.isArray(wiring.runs) || !wiring.runs.length) {
     throw new TypeError('A known physical wiring model is required for fixture export');
-  }
-  if (wiring.locked !== true || wiring.verified !== true
-    || wiring.runs.some(run => run.type !== 'cable' && run.verified !== true)
-    || (wiring.migrationWarnings || []).length) {
-    throw new TypeError('Physical wiring must be locked, verified, and free of migration warnings');
   }
 }
 
@@ -81,26 +76,15 @@ function finiteCoordinate(value, axis, fallback = 0) {
 function sourcePosition(pixel, strip) {
   const source = strip?.pixels?.[pixel.sourceLed];
   if (!source) throw new TypeError(`Wiring pixel ${pixel.index} has no known source coordinate`);
-  const x = finiteCoordinate(source.x, 'x')
-    + finiteCoordinate(strip.offsetX ?? strip.x, 'x offset');
-  const y = finiteCoordinate(source.y, 'y')
-    + finiteCoordinate(strip.offsetY ?? strip.y, 'y offset');
-  const z = finiteCoordinate(source.z, 'z')
-    + finiteCoordinate(strip.offsetZ ?? strip.z, 'z offset');
-  return { x, y, z };
-}
-
-function addressForIndex(index, artnet) {
-  const absoluteChannel = artnet.startChannel + index * 3;
-  const universe = artnet.startUniverse
-    + Math.floor(absoluteChannel / artnet.channelsPerUniverse);
-  if (universe > MAX_ARTNET_UNIVERSE) {
-    throw new RangeError(`Art-Net universe ${universe} is outside the 0-${MAX_ARTNET_UNIVERSE} range`);
-  }
-  return {
-    universe,
-    channel: absoluteChannel % artnet.channelsPerUniverse,
+  const sum = (value, offset, axis) => {
+    const result = finiteCoordinate(value, axis) + finiteCoordinate(offset, `${axis} offset`);
+    if (!Number.isFinite(result)) throw new TypeError(`Fixture coordinate ${axis} must remain finite after offset`);
+    return Object.is(result, -0) ? 0 : result;
   };
+  const x = sum(source.x, strip.offsetX ?? strip.x, 'x');
+  const y = sum(source.y, strip.offsetY ?? strip.y, 'y');
+  const z = sum(source.z, strip.offsetZ ?? strip.z, 'z');
+  return { x, y, z };
 }
 
 function directionForRun(run) {
@@ -112,7 +96,13 @@ export function compileFixturePatch(input = {}) {
   const strips = Array.isArray(input.strips) ? input.strips : [];
   const groups = Array.isArray(input.groups) ? input.groups : [];
   const artnet = normalizeArtNet(input.artnet);
-  const physicalPixels = pixelsFromWiring(input.wiring, strips, groups);
+  const physicalPixels = pixelsFromWiring(
+    input.wiring,
+    strips,
+    groups,
+    undefined,
+    { requireSendReady: true },
+  );
   if (!physicalPixels.length) throw new TypeError('Physical wiring contains no addressable pixels');
 
   const stripsById = new Map(strips.map(strip => [String(strip.id), strip]));
@@ -126,7 +116,13 @@ export function compileFixturePatch(input = {}) {
     const outputId = String(pixel.outputId || '');
     const outputPixel = outputOffsets.get(outputId) || 0;
     outputOffsets.set(outputId, outputPixel + 1);
-    const address = addressForIndex(pixel.index, artnet);
+    const address = dmxAddressForPixel(pixel.index, {
+      startUniverse: artnet.startUniverse,
+      startChannel: artnet.startChannel,
+      channelsPerUniverse: artnet.channelsPerUniverse,
+      channelsPerPixel: 3,
+      maxUniverse: MAX_ARTNET_UNIVERSE,
+    });
     if (pixel.inactive) continue;
     const strip = stripsById.get(String(pixel.stripId));
     const run = runsById.get(String(pixel.runId));
@@ -164,8 +160,7 @@ function csvField(value) {
 }
 
 function coordinate(value) {
-  const rounded = Math.round(value * 1_000_000) / 1_000_000;
-  return String(Object.is(rounded, -0) ? 0 : rounded);
+  return String(Object.is(value, -0) ? 0 : value);
 }
 
 export function toMadrixFixtureCsv(input = {}) {

@@ -51,6 +51,29 @@ function fixture() {
         },
       ],
     },
+    xlights: {
+      controllerName: 'Gallery & Card',
+      protocol: 'ws2815',
+      firstPort: 3,
+    },
+  };
+}
+
+function parseAttributes(source) {
+  return Object.fromEntries(
+    [...source.matchAll(/([A-Za-z][A-Za-z0-9]*)="([^"]*)"/g)]
+      .map(([, name, value]) => [name, value]),
+  );
+}
+
+function parseXmodelMetadata(xml) {
+  const root = xml.match(/^<custommodel\s+([^>]+)>/m);
+  const connection = xml.match(/<ControllerConnection\s+([^>]+)\/>/);
+  assert.ok(root, 'custommodel root must parse');
+  assert.ok(connection, 'ControllerConnection child must parse');
+  return {
+    model: parseAttributes(root[1]),
+    connection: parseAttributes(connection[1]),
   };
 }
 
@@ -65,7 +88,8 @@ test('exports deterministic standards-compatible xLights custom-model XML in phy
   const before = JSON.stringify(input);
   const expected = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    '<custommodel name="Temple &amp; &quot;Bloom&quot;" CustomWidth="3" CustomHeight="2" Depth="3" StringType="RGB Nodes" Transparency="0" PixelSize="2" ModelBrightness="0" Antialias="1" CustomModel=",,;1,,3|,,6;,2,|5,4,;,," SourceVersion="Lightweaver 1">',
+    '<custommodel name="Temple &amp; &quot;Bloom&quot;" CustomWidth="3" CustomHeight="2" Depth="3" StringType="RGB Nodes" Transparency="0" PixelSize="2" ModelBrightness="0" Antialias="1" CustomStrings="2" NodeStart1="1" NodeStart2="4" Controller="Gallery &amp; Card" CustomModel=",,;1,,3|,,6;,2,|5,4,;,," SourceVersion="Lightweaver 1">',
+    '  <ControllerConnection Port="3" Protocol="ws2815"/>',
     '  <subModel name="Output Port &quot;A&quot; · forward" layout="horizontal" type="ranges" line0="1-3"/>',
     '  <subModel name="Output Port,B · reverse" layout="horizontal" type="ranges" line0="4-6"/>',
     '  <subModel name="Group Outer &amp; Halo" layout="horizontal" type="ranges" line0="1-3"/>',
@@ -77,6 +101,24 @@ test('exports deterministic standards-compatible xLights custom-model XML in phy
   assert.equal(toXlightsXmodel(input), expected);
   assert.equal(toXlightsXmodel(input), expected, 'bytes must be deterministic');
   assert.equal(JSON.stringify(input), before, 'export must not mutate the project');
+
+  const metadata = parseXmodelMetadata(toXlightsXmodel(input));
+  assert.deepEqual(
+    {
+      controller: metadata.model.Controller,
+      strings: metadata.model.CustomStrings,
+      outputStarts: [metadata.model.NodeStart1, metadata.model.NodeStart2],
+      firstPort: metadata.connection.Port,
+      protocol: metadata.connection.Protocol,
+    },
+    {
+      controller: 'Gallery &amp; Card',
+      strings: '2',
+      outputStarts: ['1', '4'],
+      firstPort: '3',
+      protocol: 'ws2815',
+    },
+  );
 });
 
 test('xLights export fails closed for unknown wiring and lossy or invalid coordinates', () => {
@@ -91,6 +133,11 @@ test('xLights export fails closed for unknown wiring and lossy or invalid coordi
   const nonFinite = fixture();
   nonFinite.strips[0].pixels[0].z = Number.NaN;
   assert.throws(() => toXlightsXmodel(nonFinite), /finite.*z|coordinate/i);
+
+  const withCable = fixture();
+  withCable.wiring.outputs[0].runIds.push('jump');
+  withCable.wiring.runs.push({ id: 'jump', type: 'cable', verified: false });
+  assert.throws(() => toXlightsXmodel(withCable), /send-ready|locked.*verified|physical wiring/i);
 
   const large = fixture();
   large.strips = [{

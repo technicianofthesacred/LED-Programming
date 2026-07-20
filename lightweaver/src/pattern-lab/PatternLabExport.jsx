@@ -107,6 +107,11 @@ export default function PatternLabExport({
       ...(activeController?.artnet || {}),
       targetIp: activeController?.ip || '',
     },
+    xlights: {
+      controllerName: activeController?.name || 'Lightweaver Controller',
+      protocol: String(activeController?.led?.type || 'ws2811').trim().toLowerCase(),
+      firstPort: 1,
+    },
   };
 
   function exportLayout(kind) {

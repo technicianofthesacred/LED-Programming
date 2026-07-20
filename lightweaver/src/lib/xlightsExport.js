@@ -98,12 +98,48 @@ function customModelData(fixtures) {
   };
 }
 
+function xlightsConnectionMetadata(input, fixtures) {
+  const outputEntries = (input.wiring?.outputs || []).map((output, wiringIndex) => {
+    const nodes = fixtures
+      .map((fixture, index) => ({ fixture, nodeId: index + 1 }))
+      .filter(item => item.fixture.outputId === String(output.id));
+    return { output, wiringIndex, nodes };
+  }).filter(entry => entry.nodes.length > 0);
+  if (!outputEntries.length) throw new TypeError('xLights export requires at least one active physical output');
+  for (let index = 1; index < outputEntries.length; index += 1) {
+    if (outputEntries[index].wiringIndex !== outputEntries[index - 1].wiringIndex + 1) {
+      throw new TypeError('xLights cannot preserve non-consecutive active controller output ports in one custom model');
+    }
+  }
+  const configuredFirstPort = Number(input.xlights?.firstPort ?? 1);
+  if (!Number.isSafeInteger(configuredFirstPort) || configuredFirstPort < 1) {
+    throw new RangeError('xLights first controller port must be a positive integer');
+  }
+  const firstPort = configuredFirstPort + outputEntries[0].wiringIndex;
+  const protocol = String(input.xlights?.protocol || 'ws2811').trim().toLowerCase();
+  if (!protocol) throw new TypeError('xLights controller protocol is required');
+  return {
+    controllerName: String(input.xlights?.controllerName || '').trim(),
+    firstPort,
+    protocol,
+    outputEntries,
+  };
+}
+
 export function toXlightsXmodel(input = {}) {
   const { fixtures } = compileFixturePatch({ ...input, artnet: undefined });
   const model = customModelData(fixtures);
+  const connection = xlightsConnectionMetadata(input, fixtures);
+  const stringAttributes = connection.outputEntries
+    .map((entry, index) => ` NodeStart${index + 1}="${entry.nodes[0].nodeId}"`)
+    .join('');
+  const controllerAttribute = connection.controllerName
+    ? ` Controller="${xmlAttribute(connection.controllerName, 'controller name')}"`
+    : '';
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<custommodel name="${xmlAttribute(input.name || 'Untitled Project', 'model name')}" CustomWidth="${model.width}" CustomHeight="${model.height}" Depth="${model.depth}" StringType="RGB Nodes" Transparency="0" PixelSize="2" ModelBrightness="0" Antialias="1" CustomModel="${xmlAttribute(model.data, 'custom model data')}" SourceVersion="Lightweaver 1">`,
+    `<custommodel name="${xmlAttribute(input.name || 'Untitled Project', 'model name')}" CustomWidth="${model.width}" CustomHeight="${model.height}" Depth="${model.depth}" StringType="RGB Nodes" Transparency="0" PixelSize="2" ModelBrightness="0" Antialias="1" CustomStrings="${connection.outputEntries.length}"${stringAttributes}${controllerAttribute} CustomModel="${xmlAttribute(model.data, 'custom model data')}" SourceVersion="Lightweaver 1">`,
+    `  <ControllerConnection Port="${connection.firstPort}" Protocol="${xmlAttribute(connection.protocol, 'controller protocol')}"/>`,
   ];
 
   for (const output of input.wiring.outputs) {

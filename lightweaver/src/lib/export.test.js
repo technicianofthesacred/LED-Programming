@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pixelsFromPatchBoard, remapFrameToPatchBoard, toWLEDLedmap } from './export.js';
+import {
+  dmxAddressForPixel,
+  pixelsFromPatchBoard,
+  remapFrameToPatchBoard,
+  toDmxCsv,
+  toWLEDLedmap,
+} from './export.js';
 
 const strips = [{
   id: 'outer',
@@ -49,4 +55,28 @@ test('remapFrameToPatchBoard emits frame colors in mapped order and black for of
     { r: 0, g: 0, b: 0 },
     { r: 1, g: 0, b: 0 },
   ]);
+});
+
+test('shared DMX address calculation rolls RGB pixels across Art-Net universes', () => {
+  const options = {
+    startUniverse: 7,
+    startChannel: 504,
+    channelsPerUniverse: 510,
+    channelsPerPixel: 3,
+    maxUniverse: 32767,
+  };
+
+  assert.deepEqual(dmxAddressForPixel(0, options), { universe: 7, channel: 504 });
+  assert.deepEqual(dmxAddressForPixel(1, options), { universe: 7, channel: 507 });
+  assert.deepEqual(dmxAddressForPixel(2, options), { universe: 8, channel: 0 });
+  assert.throws(
+    () => dmxAddressForPixel(2, { ...options, startUniverse: 32767 }),
+    /universe.*range/i,
+  );
+
+  assert.equal(
+    toDmxCsv([[{ r: 1, g: 2, b: 3 }, { r: 4, g: 5, b: 6 }]]),
+    'frame,channel,value\n0,1,1\n0,2,2\n0,3,3\n0,4,4\n0,5,5\n0,6,6',
+    'the existing flat DMX export remains 1-based',
+  );
 });
